@@ -1,0 +1,120 @@
+/**
+ * @file lazyPages.ts
+ * @description Lazy-loaded page components for route code splitting
+ * @feature routing
+ */
+
+import { lazy } from 'react';
+
+// ============================================================================
+// FEATURE PAGES
+// ============================================================================
+
+/**
+ * Dashboard page - Fleet overview with stats and map
+ */
+export const LazyDashboardPage = lazy(() =>
+  import('@/features/dashboard').then((m) => ({ default: m.DashboardPage }))
+);
+
+/**
+ * Robots list page - All robots with filtering
+ */
+export const LazyRobotsPage = lazy(() =>
+  import('@/features/robots').then((m) => ({ default: m.RobotsPage }))
+);
+
+/**
+ * Robot detail page - Single robot view
+ */
+export const LazyRobotDetailPage = lazy(() =>
+  import('@/features/robots').then((m) => ({ default: m.RobotDetailPage }))
+);
+
+/**
+ * Tasks list page - All tasks with filtering
+ */
+export const LazyTasksPage = lazy(() =>
+  import('@/features/tasks').then((m) => ({ default: m.TasksPage }))
+);
+
+/**
+ * Task detail page - Single task view
+ */
+export const LazyTaskDetailPage = lazy(() =>
+  import('@/features/tasks').then((m) => ({ default: m.TaskDetailPage }))
+);
+
+/**
+ * A2A page - Agent-to-Agent communication (legacy, replaced by ChatPage)
+ */
+export const LazyA2APage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.A2APage }))
+);
+
+/**
+ * A2A Chat page - Main chat interface
+ */
+export const LazyA2AChatPage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.ChatPage }))
+);
+
+/**
+ * Orchestrator Chat page - Chat with intelligent agent routing
+ */
+export const LazyOrchestratorChatPage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.OrchestratorChatPage }))
+);
+
+/**
+ * A2A Agent List page - All registered agents
+ */
+export const LazyA2AAgentListPage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.AgentListPage }))
+);
+
+/**
+ * A2A Agent Detail page - Single agent details
+ */
+export const LazyA2AAgentDetailPage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.AgentDetailPage }))
+);
+
+/**
+ * A2A Task List page - All tasks with filtering
+ */
+export const LazyA2ATaskListPage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.TaskListPage }))
+);
+
+/**
+ * A2A Events page - Event viewer for A2A interactions
+ */
+export const LazyA2AEventsPage = lazy(() =>
+  import('@/features/a2a').then((m) => ({ default: m.EventsPage }))
+);
+
+// ============================================================================
+// STANDALONE PAGES
+// ============================================================================
+
+/**
+ * Settings page - User preferences and app configuration
+ */
+export const LazySettingsPage = lazy(() =>
+  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+);
+
+/**
+ * Landing page - Public marketing page
+ */
+export const LazyLandingPage = lazy(() =>
+  import('@/pages/LandingPage').then((m) => ({ default: m.LandingPage }))
+);
+
+/**
+ * Login page - Authentication
+ */
+export const LazyLoginPage = lazy(() =>
+  import('@/features/auth').then((m) => ({ default: m.LoginPage }))
+);

@@ -1,0 +1,296 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Setup Core Infrastructure (Foundation Phase)",
+        "description": "Establish the foundational shared infrastructure including UI components, common hooks, API client, and state management store.",
+        "details": "Implement the following modules as defined in Phase 0:\n- **shared/components/ui**: Implement primitive UI elements like `Button`, `Card`, `Input`, `Modal`, `Badge` with Tailwind CSS for styling.\n- **shared/hooks**: Create base hooks such as `useApi`, `useDebounce`, `useWebSocket`, `useLocalStorage`.\n- **api/client**: Set up an Axios instance with interceptors for handling authentication tokens, errors, and retries.\n- **store/createStore**: Implement a Zustand factory with middleware for devtools and persistence, ensuring it produces typed stores.",
+        "testStrategy": "Utilize Vitest for unit tests on all implemented components and hooks. Mock API calls using MSW for `api/client` tests to ensure correct token handling and error responses. Verify that the Zustand store factory produces typed stores and integrates with devtools/persistence as expected.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": "2",
+        "title": "Implement User Authentication & Authorization",
+        "description": "Develop the full authentication flow including user login, token management, and role-based access control (RBAC).",
+        "details": "Implement the following modules as defined in Phase 1:\n- **auth/store**: Create an authentication Zustand store to manage token state.\n- **auth/api**: Implement API calls for login, logout, and token refresh endpoints.\n- **auth/hooks**: Develop `useAuth()` hook for authentication state management.\n- **UI Components**: Create `LoginForm`, `LogoutButton` components using `shared/ui` primitives.\n- **ProtectedRoute**: Implement a component to guard routes based on authentication status.\n- **AuthProvider**: Establish a React context provider for authentication state.\n- **LoginPage**: Develop the login page that utilizes the `LoginForm` and `useAuth()` hook.",
+        "testStrategy": "Perform unit tests for `auth/store`, `auth/api` (with mocked API), and `auth/hooks`. Use React Testing Library for `LoginForm`, `LogoutButton`, and `ProtectedRoute` components. Test critical scenarios including happy path (valid credentials, successful login, token stored), edge cases (empty fields, malformed email), and error cases (invalid credentials, network failure) as per PRD's critical test scenarios.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": "3",
+        "title": "Develop Core Robot Management Features",
+        "description": "Implement essential CRUD operations and status display for individual robot entities within the platform.",
+        "details": "Implement the following modules as defined in Phase 2:\n- **robots/types**: Define TypeScript types for `Robot`, `RobotStatus`, `RobotTelemetry`, `RobotCommand`, `CommandInterpretation`, etc.\n- **robots/store**: Create a Zustand store for robot data, supporting CRUD operations and filtering.\n- **robots/api**: Implement API calls for listing, getting, and sending commands to robots.\n- **robots/hooks**: Develop `useRobotList()` and `useRobot()` hooks for data fetching and state management.\n- **UI Components**: Create `RobotStatusBadge` (color-coded status), `RobotCard`, `RobotList` (paginated grid/list), and `RobotDetailPanel` (comprehensive single robot view) using `shared/ui` primitives.\n- **Pages**: Develop `RobotsPage` for listing and `RobotDetailPage` for individual robot details.",
+        "testStrategy": "Conduct unit tests for `robots/types`, `robots/store`, `robots/api` (with mocked API), and `robots/hooks`. Use React Testing Library for UI components such as `RobotStatusBadge`, `RobotCard`, `RobotList`, and `RobotDetailPanel`. Critical test scenarios include fetching and displaying robot list (happy path), handling empty lists, and API failures, ensuring real-time status updates are reflected.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "2"
+        ],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": "4",
+        "title": "Implement Task Lifecycle Management",
+        "description": "Enable viewing, tracking, and basic management (cancel/pause) of tasks assigned to robots.",
+        "details": "Implement the following modules as defined in Phase 3:\n- **tasks/types**: Define TypeScript types for `Task`, `TaskStatus`, `TaskStep`, etc., dependent on `robots/types`.\n- **tasks/store**: Create a Zustand store for task data.\n- **tasks/api**: Implement API calls for listing tasks, getting task details, and actions like cancelling or pausing tasks.\n- **tasks/hooks**: Develop `useTask()` and `useTaskQueue()` hooks.\n- **UI Components**: Create `TaskCard`, `TaskList` (with filtering), and `TaskTimeline` (step-by-step progress) components using `shared/ui` primitives.\n- **Pages**: Develop `TasksPage` to display the task list and provide detailed views.",
+        "testStrategy": "Perform unit tests for `tasks/types`, `tasks/store`, `tasks/api` (mocked), and `tasks/hooks`. Use React Testing Library for UI components (`TaskCard`, `TaskList`, `TaskTimeline`) to verify correct data display and state transitions. Ensure that task status updates and actions like cancel/pause are correctly handled and reflected in the UI.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "3"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T00:08:11.439Z"
+      },
+      {
+        "id": "5",
+        "title": "Develop Real-time Telemetry & Monitoring",
+        "description": "Integrate WebSocket-based real-time telemetry to display battery levels and sensor data for robots.",
+        "details": "Implement the following features as part of Phase 4:\n- **telemetry/hooks**: Implement `useTelemetryStream()` using the `shared/hooks/useWebSocket` to connect to real-time telemetry feeds and consume data dependent on `robots/types`.\n- **UI Components**: Create a `BatteryGauge` component to visually represent battery levels with warnings, and a `SensorGrid` component to display key sensor readings in a readable format. These components should use `shared/ui` primitives and connect to the `useTelemetryStream()` hook. Ensure updates occur at 5-10 second intervals.",
+        "testStrategy": "Unit test `useTelemetryStream()` hook with mocked WebSocket connections, simulating various telemetry data streams and disconnections. Use React Testing Library for `BatteryGauge` and `SensorGrid` components to verify correct visual representation and real-time updates based on incoming data. Test warning thresholds for battery levels.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "3"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T00:15:11.601Z"
+      },
+      {
+        "id": "6",
+        "title": "Implement Safety & Alert System",
+        "description": "Integrate critical safety features including an emergency stop button and a comprehensive alert notification system.",
+        "details": "Implement the following modules/features as part of Phase 4:\n- **alerts/types**: Define TypeScript types for `Alert`, `AlertSeverity`, dependent on `robots/types`.\n- **alerts/store**: Create a Zustand store for alert management.\n- **alerts/hooks**: Develop `useAlerts()` hook for alert management.\n- **UI Components**: Create `AlertBanner` (for critical/warning/info events), `AlertList` (displaying all active alerts), and an `EmergencyStopButton` (always-visible, sending immediate stop command via `robots/api`) using `shared/ui` primitives. Ensure alerts are displayed by severity and require acknowledgment for critical events.",
+        "testStrategy": "Unit test `alerts/types`, `alerts/store`, `alerts/hooks`. Use React Testing Library for `AlertBanner`, `AlertList`, and `EmergencyStopButton`. Critical test scenarios for E-stop include tapping to immediately send a stop command, requiring confirmation to resume, and handling offline states by queuing commands. Test alert display based on severity, acknowledgment functionality, and integration with `robots/api` for the E-stop.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "3",
+          "5"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T00:31:38.387Z"
+      },
+      {
+        "id": "7",
+        "title": "Build Natural Language Command Interface",
+        "description": "Develop the user interface for inputting and interpreting natural language commands for robots.",
+        "details": "Implement the following modules/features as part of Phase 5:\n- **command/api**: Implement API calls for `sendCommand()` including VLA interpretation, dependent on `api/client` and `robots/types`.\n- **command/hooks**: Develop `useCommand()` hook, dependent on `command/api` and `robots/hooks`.\n- **UI Components**: Create a `CommandBar` for natural language text input, `CommandPreview` to display the VLA model's interpretation (action type, objects, confidence), `CommandConfirmation` modal for user confirmation before execution, and `CommandHistory` to log and search past commands. These components should use `shared/ui` primitives.",
+        "testStrategy": "Unit test `command/api` (mocked API) and `command/hooks`. Use React Testing Library for `CommandBar`, `CommandPreview`, `CommandConfirmation`, and `CommandHistory`. Critical test scenarios include entering a command, displaying its interpretation, confirming execution, and logging history. Test edge cases like low confidence interpretations, ambiguous commands, VLA timeout, and blocked/prohibited actions with appropriate user feedback.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "3",
+          "5"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T01:00:59.810Z"
+      },
+      {
+        "id": "8",
+        "title": "Implement Safety Simulation Preview",
+        "description": "Integrate a 2D/3D preview functionality for planned robot actions to enhance safety and user confidence.",
+        "details": "Implement the `Safety Simulation Preview` feature as an advanced part of the Command Interface (Phase 5):\n- Integrate `Three.js` (chosen for its lighter weight and community support) for rendering the 2D/3D preview.\n- Utilize planned action data from `command/hooks` and current robot position/environment data (potentially from `telemetry/components` and `robots/hooks`) to generate an animated preview of the robot's path and actions.\n- The preview should highlight potential hazards and show grip points for manipulation tasks.\n- Start with a 2D path preview and iterate towards 3D simulation, as per risk mitigation strategies.",
+        "testStrategy": "Conduct integration tests to ensure the simulation preview accurately reflects the planned action based on command interpretation. Visually inspect the 2D/3D animations for correctness. Test hazard highlighting and grip point visualization. Test with various command types and environmental conditions. Validate that the preview updates dynamically with changes in planned actions.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "5",
+          "7"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T01:25:17.077Z"
+      },
+      {
+        "id": "9",
+        "title": "Develop Fleet Overview Dashboard & Map",
+        "description": "Create a high-level fleet monitoring dashboard and an interactive map to visualize robot positions and aggregate statuses.",
+        "details": "Implement the following modules/features as defined in Phase 6:\n- **fleet/hooks**: Develop `useFleetStatus()` hook, dependent on `robots/hooks` and `alerts/hooks`, to aggregate fleet-wide data.\n- **UI Components**: Create `FleetStats` for displaying KPI cards (robot counts by status, alert count, utilization metrics) using `shared/ui` primitives.\n- **FleetMap**: Implement an interactive 2D map using `Leaflet.js` to render floor plans and plot robot markers. Support zoom/pan and cluster markers for large fleets.\n- **ZoneOverlay**: Develop a component to display operational zones or exclusion areas on the `FleetMap`.\n- **FleetDashboard page**: Assemble `FleetStats`, `FleetMap`, `CommandBar` (from Task 7), and `AlertBanner` (from Task 6) into a comprehensive dashboard view.",
+        "testStrategy": "Unit test `fleet/hooks` for correct data aggregation. Use React Testing Library for `FleetStats` components. For `FleetMap` and `ZoneOverlay`, perform integration tests to verify correct rendering of floor plans, accurate plotting of robot positions, marker clustering, and interactive features (zoom/pan). Ensure `FleetDashboard` correctly displays aggregated data and integrates other components.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "3",
+          "6"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T02:02:29.577Z"
+      },
+      {
+        "id": "10",
+        "title": "Enhance Cross-Platform UI & Application Polish",
+        "description": "Implement responsive layouts, dark mode support, offline capabilities, and finalize application routing for a production-ready experience.",
+        "details": "Implement the following features as defined in Phase 7:\n- **Responsive Layouts**: Apply adaptive layouts for mobile, tablet, and desktop viewing across all pages, using breakpoints to adjust column counts (1/2/3).\n- **Navigation Components**: Create `MobileNav` and `Sidebar` components.\n- **Theme Switching**: Implement `ThemeProvider` with dark mode support (system-preference-aware with user override) using `shared/utils`.\n- **Offline Support**: Implement an offline indicator and caching mechanism using `shared/hooks/useOffline` and the global `store` to cache robot states and queue commands for syncing on reconnect.\n- **Layouts**: Create `DashboardLayout`, `AuthLayout`, and `MobileLayout` that incorporate navigation and core components.\n- **App Routing**: Finalize `app/Router` with lazy loading for all feature pages and integrating the new layouts.",
+        "testStrategy": "Perform extensive end-to-end (E2E) testing with Playwright to verify responsive layouts across different viewport sizes. Test dark mode functionality, ensuring correct theme application based on system preference and user override. Validate offline support by simulating network disconnections: verify offline indicator, cached data display, and command queuing/syncing on reconnect. Test all routing and lazy loading works as expected. Accessibility testing with `axe-core` should be integrated for all UI components and pages.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-14T02:29:12.553Z"
+      },
+      {
+        "id": "11",
+        "title": "Authentication & User Management (Full Stack)",
+        "description": "Implement complete authentication system with user registration, password management, and account settings across frontend and server.",
+        "details": "**Full-Stack Feature spanning Frontend + Server**\n\n## Frontend (`app/src/features/auth/`)\n- **Registration UI**: Create `RegistrationForm`, `RegisterPage` using types from `auth.types.ts` (`RegisterRequest`)\n- **Password Reset UI**: Create `ForgotPasswordForm`, `ResetPasswordForm`, `ForgotPasswordPage`, `ResetPasswordPage`\n- **Account Settings**: Create `AccountSettingsPanel`, `ChangePasswordForm`, `AccountPage`\n- **auth/api**: Wire registration endpoint `POST /auth/register`, password reset endpoints\n- **auth/store**: Add registration, password reset, account settings actions to `authStore.ts`\n- **auth/hooks**: Add `useRegistration()`, `usePasswordReset()`, `useAccountSettings()` hooks\n\n## Server (`server/src/`)\n- **Auth routes**: `POST /auth/register`, `POST /auth/forgot-password`, `POST /auth/reset-password`, `POST /auth/change-password`\n- **AuthService**: User CRUD, password hashing with bcrypt, JWT token generation\n- **Auth middleware**: JWT validation on protected routes\n- **Database**: User model with Prisma schema\n\n**Key Files:**\n- Frontend: `app/src/features/auth/types/auth.types.ts`, `app/src/features/auth/api/authApi.ts`, `app/src/features/auth/store/authStore.ts`\n- Server: Create `server/src/routes/auth.routes.ts`, `server/src/services/AuthService.ts`, `server/src/middleware/auth.middleware.ts`\n- Server: Update `server/prisma/schema.prisma` with User model",
+        "testStrategy": "Frontend: Unit test auth store actions, React Testing Library for form components, E2E test registration/password reset flows. Server: Supertest for auth endpoints, test password hashing, test JWT validation, test token refresh flow.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "2"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "12",
+        "title": "Alerts System (Full Stack)",
+        "description": "Implement comprehensive alerts system with history, acknowledgment, and real-time push across frontend, server, and robot client.",
+        "details": "**Full-Stack Feature spanning Frontend + Server + Robot**\n\n## Frontend (`app/src/features/alerts/`)\n- **Alert History**: Create `AlertHistoryPanel`, `AlertsPage` with pagination\n- **Filters**: Create `AlertFilters` component (by severity, source, date range)\n- **Acknowledgment UI**: Add acknowledge button/action to alert components\n- **alerts/api**: Create `alertsApi.ts` with CRUD endpoints, wire to server\n- **alerts/store**: Update `alertsStore.ts` to fetch from API, add pagination state\n- **alerts/hooks**: Update `useAlerts()` to fetch from API, add `useAlertHistory()` hook\n\n## Server (`server/src/`)\n- **Alert routes**: `GET /api/alerts`, `POST /api/alerts`, `POST /api/alerts/:id/acknowledge`, `GET /api/alerts/history`\n- **AlertService**: Alert management, severity handling, acknowledgment logic\n- **WebSocket**: Push new alerts via existing WebSocket to connected clients\n- **Database**: Alert model with severity, source, acknowledged status\n\n## Robot Client (`robot-agent/src/`)\n- **Alert emission**: Enhance `robot/telemetry.ts` to emit alert events (errors, warnings, battery low)\n- **State tracking**: Update `robot/state.ts` to track alert conditions\n- **A2A events**: Send alert events to server via existing A2A protocol\n\n**Key Files:**\n- Frontend: `app/src/features/alerts/store/alertsStore.ts`, create `app/src/features/alerts/api/alertsApi.ts`\n- Server: Create `server/src/routes/alert.routes.ts`, `server/src/services/AlertService.ts`\n- Robot: `robot-agent/src/robot/telemetry.ts`, `robot-agent/src/robot/state.ts`",
+        "testStrategy": "Frontend: Test API fetches alerts, test acknowledgment UI, test history pagination. Server: Test alert CRUD, test WebSocket push, test filtering. Robot: Test alert emission on error conditions, test battery low alerts.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "6"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "13",
+        "title": "Zone Management (Full Stack)",
+        "description": "Implement zone management for fleet operations with zone editor, validation, and robot zone awareness.",
+        "details": "**Full-Stack Feature spanning Frontend + Server + Robot**\n\n## Frontend (`app/src/features/fleet/`)\n- **Zone Editor**: Add zone drawing/editing mode to `FleetMap.tsx`\n- **Zone CRUD UI**: Create `ZoneEditor`, `ZoneConfigPanel`, `ZoneFormModal` components\n- **Zone Display**: Enhance `ZoneOverlay` to show zones with different colors by type\n- **fleet/api**: Create `fleetApi.ts` with zone CRUD endpoints\n- **fleet/store**: Create `zoneStore.ts` with Zustand for zone state\n- **fleet/hooks**: Create `useZones()`, `useZoneManagement()` hooks\n\n## Server (`server/src/`)\n- **Zone routes**: `GET /api/zones`, `POST /api/zones`, `PUT /api/zones/:id`, `DELETE /api/zones/:id`\n- **ZoneService**: Zone validation, overlap detection, coordinate handling\n- **Database**: Zone model with type (operational, exclusion, charging, staging), coordinates (polygon), color\n\n## Robot Client (`robot-agent/src/`)\n- **Zone awareness**: Update `tools/navigation.ts` to check zones before navigation\n- **Exclusion zones**: Prevent navigation into exclusion zones\n- **Current zone reporting**: Update `robot/state.ts` to report current zone (already has `zone` field)\n- **Zone events**: Emit events when entering/exiting zones\n\n**Key Files:**\n- Frontend: `app/src/features/fleet/components/FleetMap.tsx`, `app/src/features/fleet/types/fleet.types.ts`\n- Server: Create `server/src/routes/zone.routes.ts`, `server/src/services/ZoneService.ts`\n- Robot: `robot-agent/src/tools/navigation.ts`, `robot-agent/src/robot/state.ts`",
+        "testStrategy": "Frontend: Test zone CRUD operations, test zone editor drawing, test zone display on map. Server: Test coordinate validation, test zone type enforcement, test overlap detection. Robot: Test zone-aware navigation, test exclusion zone blocking.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "9"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "14",
+        "title": "User Settings & Preferences (Full Stack)",
+        "description": "Build complete settings feature with user preferences, notifications, and appearance settings across frontend and server.",
+        "details": "**Full-Stack Feature spanning Frontend + Server**\n\n## Frontend (`app/src/features/settings/`)\n- **Settings Page**: Create `SettingsPage` with tabbed navigation (appearance, notifications, security, profile)\n- **Settings Types**: Define `UserPreferences`, `NotificationSettings`, `AppSettings` in `settings.types.ts`\n- **Settings Components**: Create `GeneralSettings`, `NotificationSettings`, `AppearanceSettings`, `SecuritySettings`, `ProfileSettings`\n- **settings/api**: Create `settingsApi.ts` with `GET/PUT /api/settings`\n- **settings/store**: Expand beyond `themeStore.ts` to include all user preferences\n- **settings/hooks**: Create `useSettings()`, `useNotificationSettings()` hooks\n\n## Server (`server/src/`)\n- **Settings routes**: `GET /api/settings`, `PUT /api/settings`, notification preferences endpoints\n- **SettingsService**: User-specific settings management, defaults for new users\n- **Database**: UserSettings model tied to User\n\n**Note**: Robot client not affected - robot config via environment variables\n\n**Key Files:**\n- Frontend: `app/src/features/settings/store/themeStore.ts`, create `app/src/features/settings/types/settings.types.ts`\n- Server: Create `server/src/routes/settings.routes.ts`, `server/src/services/SettingsService.ts`\n- Server: Update `server/prisma/schema.prisma` with UserSettings model",
+        "testStrategy": "Frontend: Test settings store persistence, test tab navigation, test each settings section updates store. Server: Test settings CRUD per user, test default settings for new users, test settings validation.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "2",
+          "11"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "15",
+        "title": "NL Command Interpretation (Full Stack)",
+        "description": "Implement natural language command interpretation with LLM integration, safety classification, and command history.",
+        "details": "**Full-Stack Feature spanning Frontend + Server + Robot**\n\n## Frontend (`app/src/features/command/`)\n- **Wire to Server**: Update `commandApi.ts` to call server interpretation API instead of mock\n- **Command UI**: `CommandBar`, `CommandPreview`, `CommandConfirmation` already exist - wire to real API\n- **Command History**: Ensure `CommandHistory` component fetches from server API\n\n## Server (`server/src/`)\n- **Command routes**: `POST /api/command/interpret`, `GET /api/command/history`\n- **CommandInterpreter**: LLM integration (OpenAI/Anthropic) for NL interpretation\n- **Safety classification**: Classify commands as safe/caution/dangerous\n- **Confidence scoring**: Return confidence level (0-1) for interpretations\n- **Command history**: Store and retrieve command history with pagination\n\n## Robot Client (`robot-agent/src/`)\n- **Existing capability**: Already has Genkit/Gemini integration in `agent/agent-executor.ts`\n- **Server delegation**: Server can either interpret centrally or delegate to robot's Genkit\n- **Command execution**: Robot executes interpreted commands via existing tools\n\n**Key Files:**\n- Frontend: `app/src/features/command/api/commandApi.ts` - wire to server\n- Server: Create `server/src/routes/command.routes.ts`, `server/src/services/CommandInterpreter.ts`\n- Robot: `robot-agent/src/agent/agent-executor.ts` - already handles NL via Genkit",
+        "testStrategy": "Frontend: Test command submission, test interpretation display, test history loading. Server: Test LLM interpretation, test confidence scores, test safety classification, test timeout handling. Robot: Test command execution via tools.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "7"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "16",
+        "title": "Database Persistence Layer (Server)",
+        "description": "Add database persistence to the server - currently all data is in-memory and lost on restart.",
+        "details": "**Server-Only Feature**\n\n## Server (`server/src/`)\n- **Database choice**: SQLite for development, PostgreSQL option for production\n- **ORM setup**: Add Prisma for TypeScript-first database access\n- **Schema design**: Create tables for:\n  - Users (auth)\n  - Robots (registration, status)\n  - Conversations (A2A protocol)\n  - Messages (conversation history)\n  - Tasks (A2A tasks)\n  - Alerts\n  - Zones\n  - UserSettings\n- **Migrations**: Set up Prisma migration system\n- **Service updates**: Replace in-memory Maps with database queries\n\n**Current State** (in-memory, data lost on restart):\n- `ConversationManager.ts` uses Maps for conversations, tasks, events, agents\n- `RobotManager.ts` uses Map for robots\n\n**Key Files:**\n- Create: `server/prisma/schema.prisma` - Full database schema\n- Create: `server/src/db/client.ts` - Prisma client setup\n- Update: `server/src/services/ConversationManager.ts` - Replace Maps with DB\n- Update: `server/src/services/RobotManager.ts` - Replace Maps with DB\n- Update: `server/package.json` - Add prisma, @prisma/client",
+        "testStrategy": "Test data persists across server restarts. Test all CRUD operations work with database. Test migrations run successfully. Test connection handling. Test data integrity constraints.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "17",
+        "title": "Testing Infrastructure (Full Stack)",
+        "description": "Set up comprehensive testing infrastructure across frontend, server, and robot client.",
+        "details": "**Full-Stack Feature spanning Frontend + Server + Robot**\n\n## Frontend (`app/src/`)\n- **Test framework**: Configure Vitest for unit testing\n- **Component testing**: React Testing Library setup\n- **API mocking**: MSW (Mock Service Worker) for API mocking\n- **Test utilities**: Create `renderWithProviders`, `mockStore` helpers\n- **Coverage**: Configure c8 for coverage reporting\n- **Initial tests**: Auth, robots, tasks stores and components\n\n## Server (`server/src/`)\n- **Test framework**: Vitest or Jest configuration\n- **API testing**: Supertest for HTTP endpoint testing\n- **Database mocking**: Test database or Prisma mocking\n- **Test utilities**: Auth helpers, request builders\n- **Coverage**: Coverage reporting configuration\n\n## Robot Client (`robot-agent/src/`)\n- **Test framework**: Vitest or Jest configuration\n- **Unit tests**: Tests for state management, telemetry generation\n- **Tool tests**: Tests for navigation, manipulation tools\n- **Mock A2A**: Mock server for A2A protocol testing\n\n**Key Files:**\n- Frontend: Create `app/vitest.config.ts`, `app/src/test/setup.ts`, `app/src/test/utils.tsx`, `app/src/mocks/handlers.ts`\n- Server: Create `server/vitest.config.ts`, `server/src/__tests__/`\n- Robot: Create `robot-agent/vitest.config.ts`, `robot-agent/src/__tests__/`",
+        "testStrategy": "Meta: Ensure all test runners work with `npm test` in each package. Verify coverage reports generate. Test MSW intercepts API calls. Verify test utilities work. Ensure CI/CD integration possible.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "18",
+        "title": "Offline Support & Sync (Full Stack)",
+        "description": "Implement offline capabilities with state caching, command queuing, and sync-on-reconnect.",
+        "details": "**Full-Stack Feature spanning Frontend + Server**\n\n## Frontend (`app/src/`)\n- **Network detection**: Create `useOffline()` hook using navigator.onLine and online/offline events\n- **State caching**: Cache robot states, task states using IndexedDB or localStorage\n- **Command queue**: Implement command queue in `commandStore.ts` for offline execution\n- **Sync on reconnect**: Auto-sync queued commands when connection restores\n- **UI Components**: Create `OfflineIndicator`, `SyncStatus`, `QueuedCommandsPanel`\n\n## Server (`server/src/`)\n- **Sync endpoint**: `POST /api/sync` to receive queued commands\n- **Conflict resolution**: Handle conflicts when server state changed while offline\n- **Batch processing**: Process multiple queued commands efficiently\n\n**Note**: Robot client not affected - direct connection assumed\n\n**Key Files:**\n- Frontend: Create `app/src/shared/hooks/useOffline.ts`, `app/src/shared/components/OfflineIndicator.tsx`\n- Frontend: Update `app/src/features/command/store/commandStore.ts` - Add command queue\n- Server: Create sync endpoint for offline command processing",
+        "testStrategy": "Frontend: Simulate network disconnection, verify cached data displays, test command queuing, test auto-sync on reconnect. Server: Test sync endpoint, test conflict resolution, test batch processing.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "3",
+          "7"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "19",
+        "title": "Session Security (Full Stack)",
+        "description": "Implement advanced session security with timeout detection, remember me, and account lockout.",
+        "details": "**Full-Stack Feature spanning Frontend + Server**\n\n## Frontend (`app/src/features/auth/`)\n- **Session timeout**: Implement idle detection with auto-logout after inactivity\n- **Timeout warning**: Create session timeout warning modal before logout\n- **Remember me**: Add \"Remember Me\" checkbox to `LoginForm.tsx` (type already in `LoginRequest`)\n- **Idle detection**: Use `react-idle-timer` or custom hook in `AuthProvider.tsx`\n\n## Server (`server/src/`)\n- **Token refresh**: Implement refresh token rotation\n- **Session expiry**: Configure short-lived access tokens (15min) + longer refresh tokens\n- **Remember me**: Extend refresh token lifetime when remember me is checked (14 days vs 1 day)\n- **Account lockout**: Lock account after N failed login attempts (error type `ACCOUNT_LOCKED` exists)\n- **Lockout recovery**: Implement lockout timeout or admin unlock\n\n**Note**: Robot client not affected - robots use URL-based registration, no user auth\n\n**Key Files:**\n- Frontend: `app/src/features/auth/components/LoginForm.tsx`, `app/src/app/providers/AuthProvider.tsx`\n- Frontend: `app/src/features/auth/store/authStore.ts` - Add session timeout logic\n- Server: Update `server/src/services/AuthService.ts` - Add lockout logic\n- Server: Update `server/src/middleware/auth.middleware.ts` - Token validation",
+        "testStrategy": "Frontend: Test session timeout triggers logout, test warning modal appears, test idle detection resets. Server: Test token refresh flow, test remember me extends session, test account locks after failed attempts, test lockout recovery.",
+        "priority": "medium",
+        "dependencies": [
+          "1",
+          "2",
+          "11"
+        ],
+        "status": "pending",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2025-12-21T00:00:00.000Z",
+      "taskCount": 19,
+      "completedCount": 10,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}

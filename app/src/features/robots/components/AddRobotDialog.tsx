@@ -1,0 +1,115 @@
+/**
+ * @file AddRobotDialog.tsx
+ * @description Dialog for adding a new robot via URL
+ * @feature robots
+ */
+
+import { memo, useState, type FormEvent } from 'react';
+import { Modal } from '@/shared/components/ui/Modal';
+import { Button } from '@/shared/components/ui/Button';
+import { Input } from '@/shared/components/ui/Input';
+import { Spinner } from '@/shared/components/ui/Spinner';
+import { useRobotsStore } from '../store/robotsStore';
+import type { Robot } from '../types/robots.types';
+
+interface AddRobotDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess?: (robot: Robot) => void;
+}
+
+/**
+ * Add robot dialog component
+ */
+export const AddRobotDialog = memo(function AddRobotDialog({
+  isOpen,
+  onClose,
+  onSuccess,
+}: AddRobotDialogProps) {
+  const [url, setUrl] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const registerRobot = useRobotsStore((s) => s.registerRobot);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!url.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const robot = await registerRobot(url.trim());
+      setUrl('');
+      onSuccess?.(robot);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add robot');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    if (!isLoading) {
+      setUrl('');
+      setError(null);
+      onClose();
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="Add Robot"
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label
+            htmlFor="robot-url"
+            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+          >
+            Robot URL
+          </label>
+          <Input
+            id="robot-url"
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="http://localhost:41243"
+            disabled={isLoading}
+            className="w-full"
+          />
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            Enter the base URL of the robot agent. The robot will self-register
+            and provide its capabilities via the A2A protocol.
+          </p>
+        </div>
+
+        {error && (
+          <div className="p-3 bg-red-50/50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg text-sm border border-red-100 dark:border-red-900/30">
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleClose}
+            disabled={isLoading}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={!url.trim() || isLoading}
+          >
+            {isLoading ? <Spinner size="sm" /> : 'Add Robot'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+});
