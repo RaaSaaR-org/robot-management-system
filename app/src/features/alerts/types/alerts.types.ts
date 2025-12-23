@@ -101,6 +101,31 @@ export interface CreateAlertRequest {
 }
 
 // ============================================================================
+// HISTORY TYPES
+// ============================================================================
+
+/**
+ * Pagination state for alert history.
+ */
+export interface AlertHistoryPagination {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+/**
+ * Filters for alert history.
+ */
+export interface AlertHistoryFilters {
+  severity?: AlertSeverity[];
+  source?: AlertSource[];
+  acknowledged?: boolean;
+  startDate?: string;
+  endDate?: string;
+}
+
+// ============================================================================
 // STATE TYPES
 // ============================================================================
 
@@ -110,24 +135,54 @@ export interface CreateAlertRequest {
 export interface AlertsState {
   /** All active alerts */
   alerts: Alert[];
-  /** Loading state */
+  /** Loading state for active alerts */
   isLoading: boolean;
+  /** Error message if fetch failed */
+  error: string | null;
+
+  /** Alert history (all alerts including acknowledged) */
+  history: Alert[];
+  /** History pagination */
+  historyPagination: AlertHistoryPagination;
+  /** History filters */
+  historyFilters: AlertHistoryFilters;
+  /** Loading state for history */
+  isHistoryLoading: boolean;
+
+  /** Alert counts by severity */
+  alertCounts: Record<AlertSeverity, number>;
 }
 
 /**
  * Alerts store actions.
  */
 export interface AlertsActions {
-  /** Add a new alert */
+  /** Add a new alert (local only) */
   addAlert: (request: CreateAlertRequest) => Alert;
+  /** Add alert from server (e.g., WebSocket) */
+  addAlertFromServer: (alert: Alert) => void;
   /** Remove an alert by ID */
   removeAlert: (id: string) => void;
   /** Acknowledge an alert (for critical alerts) */
   acknowledgeAlert: (id: string) => void;
+  /** Acknowledge alert via API */
+  acknowledgeAlertAsync: (id: string) => Promise<void>;
   /** Clear all alerts */
   clearAllAlerts: () => void;
   /** Clear only acknowledged alerts */
   clearAcknowledgedAlerts: () => void;
+
+  /** Fetch active alerts from server */
+  fetchActiveAlerts: () => Promise<void>;
+  /** Fetch alert history from server */
+  fetchAlertHistory: (page?: number) => Promise<void>;
+  /** Update history filters */
+  setHistoryFilters: (filters: AlertHistoryFilters) => void;
+  /** Fetch alert counts */
+  fetchAlertCounts: () => Promise<void>;
+
+  /** Reset store to initial state */
+  reset: () => void;
 }
 
 /**

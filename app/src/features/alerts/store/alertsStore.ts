@@ -1,8 +1,8 @@
 /**
  * @file alertsStore.ts
- * @description Zustand store for alert management
+ * @description Zustand store for alert management with API integration
  * @feature alerts
- * @dependencies zustand, immer, @/features/alerts/types
+ * @dependencies zustand, immer, @/features/alerts/types, @/features/alerts/api
  * @stateAccess useAlertsStore (read/write)
  */
 
@@ -16,8 +16,10 @@ import type {
   AlertsState,
   AlertsStore,
   CreateAlertRequest,
+  AlertHistoryFilters,
 } from '../types/alerts.types';
 import { ALERT_SEVERITY_PRIORITY } from '../types/alerts.types';
+import { alertsApi } from '../api/alertsApi';
 
 // ============================================================================
 // HELPERS
@@ -71,6 +73,24 @@ function sortAlerts(alerts: Alert[]): Alert[] {
 const initialState: AlertsState = {
   alerts: [],
   isLoading: false,
+  error: null,
+
+  history: [],
+  historyPagination: {
+    page: 1,
+    pageSize: 20,
+    total: 0,
+    totalPages: 0,
+  },
+  historyFilters: {},
+  isHistoryLoading: false,
+
+  alertCounts: {
+    critical: 0,
+    error: 0,
+    warning: 0,
+    info: 0,
+  },
 };
 
 // ============================================================================
@@ -79,11 +99,11 @@ const initialState: AlertsState = {
 
 export const useAlertsStore = create<AlertsStore>()(
   devtools(
-    immer((set) => ({
+    immer((set, get) => ({
       ...initialState,
 
       // --------------------------------------------------------------------
-      // ACTIONS
+      // LOCAL ACTIONS
       // --------------------------------------------------------------------
 
       addAlert: (request: CreateAlertRequest): Alert => {
@@ -107,6 +127,16 @@ export const useAlertsStore = create<AlertsStore>()(
         return alert;
       },
 
+      addAlertFromServer: (alert: Alert): void => {
+        set((state) => {
+          // Check if alert already exists
+          const exists = state.alerts.some((a) => a.id === alert.id);
+          if (!exists) {
+            state.alerts = sortAlerts([...state.alerts, alert]);
+          }
+        });
+      },
+
       removeAlert: (id: string): void => {
         set((state) => {
           state.alerts = state.alerts.filter((a) => a.id !== id);
@@ -123,6 +153,27 @@ export const useAlertsStore = create<AlertsStore>()(
         });
       },
 
+      acknowledgeAlertAsync: async (id: string): Promise<void> => {
+        try {
+          const updatedAlert = await alertsApi.acknowledgeAlert(id);
+          set((state) => {
+            const index = state.alerts.findIndex((a) => a.id === id);
+            if (index !== -1) {
+              state.alerts[index] = updatedAlert;
+            }
+            // Also update in history if present
+            const historyIndex = state.history.findIndex((a) => a.id === id);
+            if (historyIndex !== -1) {
+              state.history[historyIndex] = updatedAlert;
+            }
+          });
+        } catch (error) {
+          console.error('Failed to acknowledge alert:', error);
+          // Still update locally as fallback
+          get().acknowledgeAlert(id);
+        }
+      },
+
       clearAllAlerts: (): void => {
         set((state) => {
           state.alerts = [];
@@ -133,6 +184,90 @@ export const useAlertsStore = create<AlertsStore>()(
         set((state) => {
           state.alerts = state.alerts.filter((a) => !a.acknowledged);
         });
+      },
+
+      // --------------------------------------------------------------------
+      // API ACTIONS
+      // --------------------------------------------------------------------
+
+      fetchActiveAlerts: async (): Promise<void> => {
+        set((state) => {
+          state.isLoading = true;
+          state.error = null;
+        });
+
+        try {
+          const alerts = await alertsApi.getActiveAlerts();
+          set((state) => {
+            state.alerts = sortAlerts(alerts);
+            state.isLoading = false;
+          });
+        } catch (error) {
+          set((state) => {
+            state.isLoading = false;
+            state.error = error instanceof Error ? error.message : 'Failed to fetch alerts';
+          });
+        }
+      },
+
+      fetchAlertHistory: async (page?: number): Promise<void> => {
+        const { historyFilters, historyPagination } = get();
+        const targetPage = page ?? historyPagination.page;
+
+        set((state) => {
+          state.isHistoryLoading = true;
+        });
+
+        try {
+          const result = await alertsApi.getAlertHistory(
+            {
+              severity: historyFilters.severity,
+              source: historyFilters.source,
+              acknowledged: historyFilters.acknowledged,
+              startDate: historyFilters.startDate,
+              endDate: historyFilters.endDate,
+            },
+            {
+              page: targetPage,
+              pageSize: historyPagination.pageSize,
+            }
+          );
+
+          set((state) => {
+            state.history = result.data;
+            state.historyPagination = result.pagination;
+            state.isHistoryLoading = false;
+          });
+        } catch (error) {
+          console.error('Failed to fetch alert history:', error);
+          set((state) => {
+            state.isHistoryLoading = false;
+          });
+        }
+      },
+
+      setHistoryFilters: (filters: AlertHistoryFilters): void => {
+        set((state) => {
+          state.historyFilters = filters;
+          state.historyPagination.page = 1; // Reset to first page on filter change
+        });
+        // Fetch with new filters
+        get().fetchAlertHistory(1);
+      },
+
+      fetchAlertCounts: async (): Promise<void> => {
+        try {
+          const counts = await alertsApi.getAlertCounts();
+          set((state) => {
+            state.alertCounts = counts;
+          });
+        } catch (error) {
+          console.error('Failed to fetch alert counts:', error);
+        }
+      },
+
+      reset: (): void => {
+        set(initialState);
       },
     })),
     { name: 'alerts-store' }
@@ -152,6 +287,11 @@ export const selectAlerts = (state: AlertsStore): Alert[] => state.alerts;
  * Select loading state.
  */
 export const selectIsLoading = (state: AlertsStore): boolean => state.isLoading;
+
+/**
+ * Select error state.
+ */
+export const selectError = (state: AlertsStore): string | null => state.error;
 
 /**
  * Select unacknowledged alerts.
@@ -216,3 +356,28 @@ export const selectMostCriticalAlert = (state: AlertsStore): Alert | undefined =
   // Already sorted by severity, so first is most critical
   return unacknowledged[0];
 };
+
+/**
+ * Select alert history.
+ */
+export const selectHistory = (state: AlertsStore): Alert[] => state.history;
+
+/**
+ * Select history pagination.
+ */
+export const selectHistoryPagination = (state: AlertsStore) => state.historyPagination;
+
+/**
+ * Select history filters.
+ */
+export const selectHistoryFilters = (state: AlertsStore) => state.historyFilters;
+
+/**
+ * Select history loading state.
+ */
+export const selectIsHistoryLoading = (state: AlertsStore): boolean => state.isHistoryLoading;
+
+/**
+ * Select alert counts.
+ */
+export const selectAlertCounts = (state: AlertsStore) => state.alertCounts;

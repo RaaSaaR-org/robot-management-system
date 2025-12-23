@@ -8,3 +8,5 @@ export * from './AlertSeverityBadge';
 export * from './AlertBanner';
 export * from './AlertList';
 export * from './AlertProvider';
+export * from './AlertFilters';
+export * from './AlertHistoryPanel';

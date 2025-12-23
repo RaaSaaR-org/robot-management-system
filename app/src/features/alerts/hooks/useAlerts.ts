@@ -6,9 +6,26 @@
  * @stateAccess useAlertsStore (read/write)
  */
 
-import { useCallback, useMemo } from 'react';
-import { useAlertsStore, selectAlerts, selectIsLoading } from '../store/alertsStore';
-import type { Alert, AlertSeverity, AlertSource, CreateAlertRequest } from '../types/alerts.types';
+import { useCallback, useMemo, useEffect } from 'react';
+import {
+  useAlertsStore,
+  selectAlerts,
+  selectIsLoading,
+  selectError,
+  selectHistory,
+  selectHistoryPagination,
+  selectHistoryFilters,
+  selectIsHistoryLoading,
+  selectAlertCounts,
+} from '../store/alertsStore';
+import type {
+  Alert,
+  AlertSeverity,
+  AlertSource,
+  CreateAlertRequest,
+  AlertHistoryPagination,
+  AlertHistoryFilters,
+} from '../types/alerts.types';
 
 // ============================================================================
 // TYPES
@@ -29,16 +46,22 @@ export interface UseAlertsReturn {
   unacknowledgedCount: number;
   /** Loading state */
   isLoading: boolean;
+  /** Error message if fetch failed */
+  error: string | null;
   /** Add a new alert */
   addAlert: (request: CreateAlertRequest) => Alert;
   /** Remove an alert */
   removeAlert: (id: string) => void;
-  /** Acknowledge an alert */
+  /** Acknowledge an alert (local only) */
   acknowledgeAlert: (id: string) => void;
+  /** Acknowledge an alert via API */
+  acknowledgeAlertAsync: (id: string) => Promise<void>;
   /** Clear all alerts */
   clearAll: () => void;
   /** Clear only acknowledged alerts */
   clearAcknowledged: () => void;
+  /** Fetch active alerts from server */
+  fetchAlerts: () => Promise<void>;
 }
 
 export interface UseAlertReturn {
@@ -84,6 +107,7 @@ export interface UseAlertReturn {
 export function useAlerts(): UseAlertsReturn {
   const alerts = useAlertsStore(selectAlerts);
   const isLoading = useAlertsStore(selectIsLoading);
+  const error = useAlertsStore(selectError);
 
   // Derive filtered values with useMemo to avoid infinite loops
   const unacknowledgedAlerts = useMemo(
@@ -110,8 +134,10 @@ export function useAlerts(): UseAlertsReturn {
   const storeAddAlert = useAlertsStore((state) => state.addAlert);
   const storeRemoveAlert = useAlertsStore((state) => state.removeAlert);
   const storeAcknowledgeAlert = useAlertsStore((state) => state.acknowledgeAlert);
+  const storeAcknowledgeAlertAsync = useAlertsStore((state) => state.acknowledgeAlertAsync);
   const storeClearAll = useAlertsStore((state) => state.clearAllAlerts);
   const storeClearAcknowledged = useAlertsStore((state) => state.clearAcknowledgedAlerts);
+  const storeFetchAlerts = useAlertsStore((state) => state.fetchActiveAlerts);
 
   const addAlert = useCallback(
     (request: CreateAlertRequest): Alert => {
@@ -134,6 +160,13 @@ export function useAlerts(): UseAlertsReturn {
     [storeAcknowledgeAlert]
   );
 
+  const acknowledgeAlertAsync = useCallback(
+    async (id: string): Promise<void> => {
+      await storeAcknowledgeAlertAsync(id);
+    },
+    [storeAcknowledgeAlertAsync]
+  );
+
   const clearAll = useCallback((): void => {
     storeClearAll();
   }, [storeClearAll]);
@@ -141,6 +174,10 @@ export function useAlerts(): UseAlertsReturn {
   const clearAcknowledged = useCallback((): void => {
     storeClearAcknowledged();
   }, [storeClearAcknowledged]);
+
+  const fetchAlerts = useCallback(async (): Promise<void> => {
+    await storeFetchAlerts();
+  }, [storeFetchAlerts]);
 
   return useMemo(
     () => ({
@@ -151,11 +188,14 @@ export function useAlerts(): UseAlertsReturn {
       mostCriticalAlert,
       unacknowledgedCount,
       isLoading,
+      error,
       addAlert,
       removeAlert,
       acknowledgeAlert,
+      acknowledgeAlertAsync,
       clearAll,
       clearAcknowledged,
+      fetchAlerts,
     }),
     [
       alerts,
@@ -165,11 +205,14 @@ export function useAlerts(): UseAlertsReturn {
       mostCriticalAlert,
       unacknowledgedCount,
       isLoading,
+      error,
       addAlert,
       removeAlert,
       acknowledgeAlert,
+      acknowledgeAlertAsync,
       clearAll,
       clearAcknowledged,
+      fetchAlerts,
     ]
   );
 }
@@ -259,4 +302,164 @@ export function useRobotAlerts(robotId: string): Alert[] {
  */
 export function useTaskAlerts(taskId: string): Alert[] {
   return useAlertsBySource('task', taskId);
+}
+
+// ============================================================================
+// HISTORY HOOK
+// ============================================================================
+
+export interface UseAlertHistoryReturn {
+  /** Alert history */
+  history: Alert[];
+  /** Pagination info */
+  pagination: AlertHistoryPagination;
+  /** Current filters */
+  filters: AlertHistoryFilters;
+  /** Loading state */
+  isLoading: boolean;
+  /** Fetch history (optionally with page) */
+  fetchHistory: (page?: number) => Promise<void>;
+  /** Set filters (triggers refetch) */
+  setFilters: (filters: AlertHistoryFilters) => void;
+  /** Go to next page */
+  nextPage: () => void;
+  /** Go to previous page */
+  prevPage: () => void;
+  /** Go to specific page */
+  goToPage: (page: number) => void;
+}
+
+/**
+ * Hook for accessing alert history with pagination and filtering.
+ *
+ * @example
+ * ```tsx
+ * function AlertHistory() {
+ *   const { history, pagination, isLoading, nextPage, prevPage, setFilters } = useAlertHistory();
+ *
+ *   useEffect(() => {
+ *     // Fetch initial history on mount is handled by the hook
+ *   }, []);
+ *
+ *   return (
+ *     <div>
+ *       {history.map(alert => <AlertItem key={alert.id} alert={alert} />)}
+ *       <button onClick={prevPage} disabled={pagination.page <= 1}>Prev</button>
+ *       <span>Page {pagination.page} of {pagination.totalPages}</span>
+ *       <button onClick={nextPage} disabled={pagination.page >= pagination.totalPages}>Next</button>
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function useAlertHistory(autoFetch = true): UseAlertHistoryReturn {
+  const history = useAlertsStore(selectHistory);
+  const pagination = useAlertsStore(selectHistoryPagination);
+  const filters = useAlertsStore(selectHistoryFilters);
+  const isLoading = useAlertsStore(selectIsHistoryLoading);
+  const storeFetchHistory = useAlertsStore((state) => state.fetchAlertHistory);
+  const storeSetFilters = useAlertsStore((state) => state.setHistoryFilters);
+
+  // Auto-fetch on mount if enabled
+  useEffect(() => {
+    if (autoFetch && history.length === 0) {
+      storeFetchHistory(1);
+    }
+  }, [autoFetch, history.length, storeFetchHistory]);
+
+  const fetchHistory = useCallback(
+    async (page?: number): Promise<void> => {
+      await storeFetchHistory(page);
+    },
+    [storeFetchHistory]
+  );
+
+  const setFilters = useCallback(
+    (newFilters: AlertHistoryFilters): void => {
+      storeSetFilters(newFilters);
+    },
+    [storeSetFilters]
+  );
+
+  const nextPage = useCallback((): void => {
+    if (pagination.page < pagination.totalPages) {
+      storeFetchHistory(pagination.page + 1);
+    }
+  }, [pagination.page, pagination.totalPages, storeFetchHistory]);
+
+  const prevPage = useCallback((): void => {
+    if (pagination.page > 1) {
+      storeFetchHistory(pagination.page - 1);
+    }
+  }, [pagination.page, storeFetchHistory]);
+
+  const goToPage = useCallback(
+    (page: number): void => {
+      if (page >= 1 && page <= pagination.totalPages) {
+        storeFetchHistory(page);
+      }
+    },
+    [pagination.totalPages, storeFetchHistory]
+  );
+
+  return useMemo(
+    () => ({
+      history,
+      pagination,
+      filters,
+      isLoading,
+      fetchHistory,
+      setFilters,
+      nextPage,
+      prevPage,
+      goToPage,
+    }),
+    [history, pagination, filters, isLoading, fetchHistory, setFilters, nextPage, prevPage, goToPage]
+  );
+}
+
+// ============================================================================
+// ALERT COUNTS HOOK
+// ============================================================================
+
+export interface UseAlertCountsReturn {
+  /** Counts by severity */
+  counts: Record<AlertSeverity, number>;
+  /** Total unacknowledged alerts */
+  total: number;
+  /** Fetch counts from server */
+  fetchCounts: () => Promise<void>;
+}
+
+/**
+ * Hook for accessing alert counts by severity.
+ */
+export function useAlertCounts(autoFetch = true): UseAlertCountsReturn {
+  const counts = useAlertsStore(selectAlertCounts);
+  const storeFetchCounts = useAlertsStore((state) => state.fetchAlertCounts);
+
+  // Auto-fetch on mount if enabled
+  useEffect(() => {
+    if (autoFetch) {
+      storeFetchCounts();
+    }
+  }, [autoFetch, storeFetchCounts]);
+
+  const total = useMemo(
+    () => counts.critical + counts.error + counts.warning + counts.info,
+    [counts]
+  );
+
+  const fetchCounts = useCallback(async (): Promise<void> => {
+    await storeFetchCounts();
+  }, [storeFetchCounts]);
+
+  return useMemo(
+    () => ({
+      counts,
+      total,
+      fetchCounts,
+    }),
+    [counts, total, fetchCounts]
+  );
 }
