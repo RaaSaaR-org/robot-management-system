@@ -166,8 +166,9 @@
           "1",
           "2"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T22:11:16.478Z"
       },
       {
         "id": "12",
@@ -180,8 +181,9 @@
           "1",
           "6"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T22:42:32.474Z"
       },
       {
         "id": "13",
@@ -194,8 +196,9 @@
           "1",
           "9"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-23T00:08:31.659Z"
       },
       {
         "id": "14",
@@ -209,8 +212,9 @@
           "2",
           "11"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T21:21:44.009Z"
       },
       {
         "id": "15",
@@ -236,8 +240,9 @@
         "dependencies": [
           "1"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T21:42:13.152Z"
       },
       {
         "id": "17",
@@ -249,8 +254,9 @@
         "dependencies": [
           "1"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T21:19:35.639Z"
       },
       {
         "id": "18",
@@ -264,8 +270,9 @@
           "3",
           "7"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T21:20:12.700Z"
       },
       {
         "id": "19",
@@ -279,15 +286,16 @@
           "2",
           "11"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-22T21:20:35.686Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2025-12-21T00:00:00.000Z",
+      "lastModified": "2025-12-23T00:08:31.660Z",
       "taskCount": 19,
-      "completedCount": 10,
+      "completedCount": 14,
       "tags": [
         "master"
       ]
