@@ -4,11 +4,16 @@
  * @feature robots
  */
 
-import { memo, useMemo } from 'react';
+import { memo, Suspense, lazy } from 'react';
 import { cn } from '@/shared/utils/cn';
 import { RobotStatusBadge } from './RobotStatusBadge';
-import { formatRobotLocation, getBatteryCategory } from '../types/robots.types';
-import type { Robot, RobotStatus, RobotTelemetry } from '../types/robots.types';
+import { Robot3DViewerFallback } from './visualization';
+import type { Robot, RobotStatus, RobotTelemetry, RobotType } from '../types/robots.types';
+
+// Lazy load 3D viewer
+const Robot3DViewer = lazy(() =>
+  import('./visualization/Robot3DViewer').then((m) => ({ default: m.Robot3DViewer }))
+);
 
 // ============================================================================
 // TYPES
@@ -91,46 +96,6 @@ const getValueColor = (value: number, type: 'cpu' | 'memory' | 'battery' | 'temp
 };
 
 // ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
-
-interface StatItemProps {
-  label: string;
-  value: string;
-  icon: React.ReactNode;
-  variant?: 'default' | 'warning' | 'error';
-}
-
-const StatItem = memo(function StatItem({ label, value, icon, variant = 'default' }: StatItemProps) {
-  return (
-    <div
-      className={cn(
-        'glass-subtle p-3 rounded-xl transition-all duration-200',
-        variant === 'error' && 'border-red-500/30 bg-red-500/5',
-        variant === 'warning' && 'border-yellow-500/30 bg-yellow-500/5'
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <div
-          className={cn(
-            'p-1.5 rounded-lg glass-subtle',
-            variant === 'error' && 'text-red-400',
-            variant === 'warning' && 'text-yellow-400',
-            variant === 'default' && 'text-theme-tertiary'
-          )}
-        >
-          {icon}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-[10px] uppercase tracking-wider text-theme-tertiary font-medium">{label}</p>
-          <p className="text-sm font-semibold text-theme-primary truncate">{value}</p>
-        </div>
-      </div>
-    </div>
-  );
-});
-
-// ============================================================================
 // HEXAGONAL DATA HUD SVG
 // ============================================================================
 
@@ -138,6 +103,8 @@ interface HexagonalDataHUDProps {
   status: RobotStatus;
   telemetry?: RobotTelemetry | null;
   batteryLevel: number;
+  /** Whether the robot is offline (affects data display) */
+  isOffline?: boolean;
   className?: string;
 }
 
@@ -170,6 +137,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
   status,
   telemetry,
   batteryLevel,
+  isOffline = false,
   className
 }: HexagonalDataHUDProps) {
   const colors = STATUS_COLORS[status];
@@ -184,10 +152,13 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
   const outerVertices = getHexagonVertices(cx, cy, outerR);
   const innerVertices = getHexagonVertices(cx, cy, innerR);
 
-  // Get telemetry values with fallbacks
-  const cpu = telemetry?.cpuUsage ?? 0;
-  const memory = telemetry?.memoryUsage ?? 0;
-  const temp = telemetry?.temperature ?? 0;
+  // When offline with no telemetry, show N/A for telemetry values
+  const showUnavailable = isOffline && !telemetry;
+
+  // Get telemetry values with fallbacks (null means unavailable)
+  const cpu = showUnavailable ? null : (telemetry?.cpuUsage ?? 0);
+  const memory = showUnavailable ? null : (telemetry?.memoryUsage ?? 0);
+  const temp = showUnavailable ? null : (telemetry?.temperature ?? 0);
   const speed = telemetry?.speed;
   const battery = telemetry?.batteryLevel ?? batteryLevel;
 
@@ -456,12 +427,12 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
           x={cx}
           y="42"
           textAnchor="middle"
-          fill={getValueColor(cpu, 'cpu')}
+          fill={cpu !== null ? getValueColor(cpu, 'cpu') : '#6b7280'}
           fontSize="14"
           fontFamily="monospace"
           fontWeight="600"
         >
-          {cpu.toFixed(0)}%
+          {cpu !== null ? `${cpu.toFixed(0)}%` : 'N/A'}
         </text>
       </g>
 
@@ -482,12 +453,12 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
           x="32"
           y={cy + 8}
           textAnchor="middle"
-          fill={getValueColor(memory, 'memory')}
+          fill={memory !== null ? getValueColor(memory, 'memory') : '#6b7280'}
           fontSize="14"
           fontFamily="monospace"
           fontWeight="600"
         >
-          {memory.toFixed(0)}%
+          {memory !== null ? `${memory.toFixed(0)}%` : 'N/A'}
         </text>
       </g>
 
@@ -508,12 +479,12 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
           x="268"
           y={cy + 8}
           textAnchor="middle"
-          fill={getValueColor(temp, 'temp')}
+          fill={temp !== null ? getValueColor(temp, 'temp') : '#6b7280'}
           fontSize="14"
           fontFamily="monospace"
           fontWeight="600"
         >
-          {temp.toFixed(0)}°C
+          {temp !== null ? `${temp.toFixed(0)}°C` : 'N/A'}
         </text>
       </g>
 
@@ -571,7 +542,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
 // ============================================================================
 
 /**
- * Hero section displaying a hexagonal data dashboard with key stats.
+ * Hero section displaying robot identity with 3D viewer and hexagonal data dashboard.
  */
 export const RobotHeroSection = memo(function RobotHeroSection({
   robot,
@@ -579,14 +550,6 @@ export const RobotHeroSection = memo(function RobotHeroSection({
   isLive = false,
   className,
 }: RobotHeroSectionProps) {
-  const batteryCategory = useMemo(() => getBatteryCategory(robot.batteryLevel), [robot.batteryLevel]);
-
-  const batteryVariant = useMemo(() => {
-    if (batteryCategory === 'critical') return 'error';
-    if (batteryCategory === 'low') return 'warning';
-    return 'default';
-  }, [batteryCategory]);
-
   return (
     <section
       className={cn(
@@ -599,96 +562,54 @@ export const RobotHeroSection = memo(function RobotHeroSection({
       {/* Background gradient overlay */}
       <div className="absolute inset-0 bg-gradient-to-br from-cobalt-500/5 via-transparent to-turquoise-500/5" />
 
-      {/* Content - Robot LEFT, Details RIGHT */}
-      <div className="relative z-10 grid grid-cols-1 lg:grid-cols-2 gap-8 p-6 lg:p-8">
-        {/* Robot Visualization - LEFT */}
-        <div className="flex items-center justify-center lg:justify-start py-4 lg:py-0 order-1">
-          <div className="relative">
-            {/* Ambient glow */}
-            <div
-              className="absolute inset-0 blur-3xl opacity-30"
-              style={{
-                background: `radial-gradient(circle, ${STATUS_COLORS[robot.status].glow} 0%, transparent 70%)`,
-              }}
-            />
-            <HexagonalDataHUD
-              status={robot.status}
-              telemetry={telemetry}
-              batteryLevel={robot.batteryLevel}
-            />
-          </div>
-        </div>
-
-        {/* Info Panel - RIGHT */}
-        <div className="flex flex-col justify-center space-y-5 order-2">
-          {/* Robot Identity */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-3xl lg:text-4xl font-bold text-theme-primary">{robot.name}</h1>
-              <RobotStatusBadge status={robot.status} size="lg" showPulse />
-            </div>
-            <p className="text-theme-secondary text-lg">{robot.model}</p>
+      {/* Content */}
+      <div className="relative z-10 p-6 lg:p-8 space-y-6">
+        {/* Header Row - Full Width */}
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <h1 className="text-3xl lg:text-4xl font-bold text-theme-primary">{robot.name}</h1>
+            <RobotStatusBadge status={robot.status} size="lg" showPulse />
             {isLive && (
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-xs text-green-500 font-medium">Live Telemetry</span>
+                <span className="text-xs text-green-500 font-medium">Live</span>
               </div>
             )}
           </div>
+          <p className="text-theme-secondary text-lg">{robot.model}</p>
+        </div>
 
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 gap-3">
-            <StatItem
-              label="Battery"
-              value={`${robot.batteryLevel.toFixed(0)}%`}
-              variant={batteryVariant}
-              icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <rect x="2" y="7" width="18" height="10" rx="2" />
-                  <rect x="20" y="10" width="2" height="4" rx="0.5" className="fill-current" />
-                </svg>
-              }
-            />
-            <StatItem
-              label="Location"
-              value={formatRobotLocation(robot.location)}
-              icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                  />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              }
-            />
-            <StatItem
-              label="Last Seen"
-              value={new Date(robot.lastSeen).toLocaleTimeString()}
-              icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              }
-            />
-            <StatItem
-              label="Task"
-              value={robot.currentTaskName ?? 'Idle'}
-              icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                  />
-                </svg>
-              }
-            />
+        {/* Visualizations Row - Equal Size */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 3D Robot Viewer - LEFT */}
+          <div className="h-[300px] rounded-xl overflow-hidden border border-glass-subtle">
+            <Suspense fallback={<Robot3DViewerFallback className="h-full" />}>
+              <Robot3DViewer
+                robotType={(telemetry?.robotType as RobotType) ?? 'generic'}
+                jointStates={telemetry?.jointStates}
+                isAnimating={isLive}
+              />
+            </Suspense>
+          </div>
+
+          {/* Hexagon Data HUD - RIGHT */}
+          <div className="h-[300px] flex items-center justify-center">
+            <div className="relative">
+              {/* Ambient glow */}
+              <div
+                className="absolute inset-0 blur-3xl opacity-30"
+                style={{
+                  background: `radial-gradient(circle, ${STATUS_COLORS[robot.status].glow} 0%, transparent 70%)`,
+                }}
+              />
+              <HexagonalDataHUD
+                status={robot.status}
+                telemetry={telemetry}
+                batteryLevel={robot.batteryLevel}
+                isOffline={robot.status === 'offline'}
+                className="h-[300px] w-[300px]"
+              />
+            </div>
           </div>
         </div>
       </div>

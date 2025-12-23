@@ -32,6 +32,21 @@ export type CommandType =
   | 'emergency_stop'
   | 'custom';
 
+/** Robot type for 3D visualization */
+export type RobotType = 'h1' | 'so101' | 'generic';
+
+// ============================================================================
+// JOINT TYPES (for 3D visualization)
+// ============================================================================
+
+/** Joint state for 3D animation */
+export interface JointState {
+  name: string;
+  position: number;
+  velocity?: number;
+  effort?: number;
+}
+
 // ============================================================================
 // LOCATION TYPES
 // ============================================================================
@@ -81,6 +96,7 @@ export interface Robot {
 /** Real-time robot telemetry data */
 export interface RobotTelemetry {
   robotId: string;
+  robotType?: RobotType;
   batteryLevel: number;
   batteryVoltage?: number;
   batteryTemperature?: number;
@@ -91,6 +107,7 @@ export interface RobotTelemetry {
   humidity?: number;
   speed?: number;
   sensors: Record<string, number | boolean | string>;
+  jointStates?: JointState[];
   errors?: string[];
   warnings?: string[];
   timestamp: string;
