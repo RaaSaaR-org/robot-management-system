@@ -5,3 +5,6 @@
  */
 
 export * from './useAuth';
+export * from './useRegistration';
+export * from './usePasswordReset';
+export * from './useAccountSettings';

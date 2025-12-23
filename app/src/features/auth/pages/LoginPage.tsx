@@ -5,6 +5,7 @@
  * @dependencies @/shared/components/ui, @/features/auth/components
  */
 
+import { Link } from 'react-router-dom';
 import { Card } from '@/shared/components/ui';
 import { LoginForm } from '../components/LoginForm';
 
@@ -121,18 +122,27 @@ export function LoginPage({
 
           <LoginForm onSuccess={onLoginSuccess} />
 
-          {/* Forgot password link placeholder */}
+          {/* Forgot password link */}
           <div className="mt-6 text-center">
-            <button
-              type="button"
+            <Link
+              to="/forgot-password"
               className="text-sm text-cobalt-600 hover:text-cobalt-700 dark:text-cobalt-400 dark:hover:text-cobalt-300"
-              onClick={() => {
-                // TODO: Implement forgot password flow
-                console.log('Forgot password clicked');
-              }}
             >
               Forgot your password?
-            </button>
+            </Link>
+          </div>
+
+          {/* Register link */}
+          <div className="mt-4 text-center">
+            <span className="text-sm text-theme-secondary">
+              Don&apos;t have an account?{' '}
+              <Link
+                to="/register"
+                className="font-medium text-cobalt-600 hover:text-cobalt-700 dark:text-cobalt-400 dark:hover:text-cobalt-300"
+              >
+                Create one
+              </Link>
+            </span>
           </div>
         </Card>
 

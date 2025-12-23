@@ -206,6 +206,116 @@ export const useAuthStore = createStore<AuthStore>(
         state.error = null;
       });
     },
+
+    // --------------------------------------------------------------------------
+    // Register Action
+    // --------------------------------------------------------------------------
+    register: async (email: string, password: string, name: string) => {
+      set((state) => {
+        state.isLoading = true;
+        state.error = null;
+      });
+
+      try {
+        const response = await authApi.register(email, password, name);
+
+        // Store tokens
+        tokenStorage.setTokens(response.accessToken, response.refreshToken);
+
+        set((state) => {
+          state.user = response.user;
+          state.isAuthenticated = true;
+          state.isLoading = false;
+          state.isInitialized = true;
+          state.error = null;
+        });
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.isLoading = false;
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    // --------------------------------------------------------------------------
+    // Forgot Password Action
+    // --------------------------------------------------------------------------
+    forgotPassword: async (email: string) => {
+      set((state) => {
+        state.isLoading = true;
+        state.error = null;
+      });
+
+      try {
+        const response = await authApi.forgotPassword(email);
+
+        set((state) => {
+          state.isLoading = false;
+        });
+
+        // Return reset token (only available in dev mode)
+        return response.resetToken;
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.isLoading = false;
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    // --------------------------------------------------------------------------
+    // Reset Password Action
+    // --------------------------------------------------------------------------
+    resetPassword: async (token: string, password: string) => {
+      set((state) => {
+        state.isLoading = true;
+        state.error = null;
+      });
+
+      try {
+        await authApi.resetPassword(token, password);
+
+        set((state) => {
+          state.isLoading = false;
+        });
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.isLoading = false;
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    // --------------------------------------------------------------------------
+    // Change Password Action
+    // --------------------------------------------------------------------------
+    changePassword: async (currentPassword: string, newPassword: string) => {
+      set((state) => {
+        state.isLoading = true;
+        state.error = null;
+      });
+
+      try {
+        await authApi.changePassword(currentPassword, newPassword);
+
+        set((state) => {
+          state.isLoading = false;
+        });
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.isLoading = false;
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
   }),
   {
     name: 'AuthStore',

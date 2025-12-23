@@ -76,16 +76,37 @@ export interface RefreshResponse {
   expiresIn: number;
 }
 
-/** Registration request (for future use) */
+/** Registration request */
 export interface RegisterRequest {
   email: string;
   password: string;
   name: string;
 }
 
-/** Password reset request (for future use) */
-export interface PasswordResetRequest {
+/** Registration response (same as login response) */
+export type RegisterResponse = LoginResponse;
+
+/** Forgot password request */
+export interface ForgotPasswordRequest {
   email: string;
+}
+
+/** Forgot password response */
+export interface ForgotPasswordResponse {
+  message: string;
+  resetToken?: string; // Only returned in dev mode
+}
+
+/** Reset password request */
+export interface ResetPasswordRequest {
+  token: string;
+  password: string;
+}
+
+/** Change password request */
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
 }
 
 // ============================================================================
@@ -124,6 +145,14 @@ export interface AuthActions {
   setLoading: (loading: boolean) => void;
   /** Development-only login without API call */
   devLogin: (user: User) => void;
+  /** Register a new user */
+  register: (email: string, password: string, name: string) => Promise<void>;
+  /** Request password reset */
+  forgotPassword: (email: string) => Promise<string | undefined>;
+  /** Reset password with token */
+  resetPassword: (token: string, password: string) => Promise<void>;
+  /** Change password for authenticated user */
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 /** Combined auth store type */
