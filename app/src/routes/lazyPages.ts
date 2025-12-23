@@ -46,6 +46,20 @@ export const LazyTaskDetailPage = lazy(() =>
 );
 
 /**
+ * Fleet page - Fleet management with map and zones
+ */
+export const LazyFleetPage = lazy(() =>
+  import('@/features/fleet').then((m) => ({ default: m.FleetPage }))
+);
+
+/**
+ * Alerts page - Alert history and management
+ */
+export const LazyAlertsPage = lazy(() =>
+  import('@/features/alerts').then((m) => ({ default: m.AlertsPage }))
+);
+
+/**
  * A2A page - Agent-to-Agent communication (legacy, replaced by ChatPage)
  */
 export const LazyA2APage = lazy(() =>
@@ -117,4 +131,32 @@ export const LazyLandingPage = lazy(() =>
  */
 export const LazyLoginPage = lazy(() =>
   import('@/features/auth').then((m) => ({ default: m.LoginPage }))
+);
+
+/**
+ * Register page - User registration
+ */
+export const LazyRegisterPage = lazy(() =>
+  import('@/features/auth').then((m) => ({ default: m.RegisterPage }))
+);
+
+/**
+ * Forgot password page - Request password reset
+ */
+export const LazyForgotPasswordPage = lazy(() =>
+  import('@/features/auth').then((m) => ({ default: m.ForgotPasswordPage }))
+);
+
+/**
+ * Reset password page - Set new password with token
+ */
+export const LazyResetPasswordPage = lazy(() =>
+  import('@/features/auth').then((m) => ({ default: m.ResetPasswordPage }))
+);
+
+/**
+ * Account page - User account settings
+ */
+export const LazyAccountPage = lazy(() =>
+  import('@/features/auth').then((m) => ({ default: m.AccountPage }))
 );

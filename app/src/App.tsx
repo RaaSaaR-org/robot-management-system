@@ -14,10 +14,16 @@ import { PageLoader } from './shared/components/ui/PageLoader';
 import {
   LazyLandingPage,
   LazyLoginPage,
+  LazyRegisterPage,
+  LazyForgotPasswordPage,
+  LazyResetPasswordPage,
+  LazyAccountPage,
   LazyDashboardPage,
   LazyOrchestratorChatPage,
   LazyRobotsPage,
   LazyRobotDetailPage,
+  LazyFleetPage,
+  LazyAlertsPage,
   LazyTasksPage,
   LazyTaskDetailPage,
   LazyA2AChatPage,
@@ -62,6 +68,16 @@ function App() {
               />
             }
           />
+          <Route
+            path="/register"
+            element={
+              <LazyRegisterPage
+                onRegisterSuccess={() => (window.location.href = '/dashboard')}
+              />
+            }
+          />
+          <Route path="/forgot-password" element={<LazyForgotPasswordPage />} />
+          <Route path="/reset-password" element={<LazyResetPasswordPage />} />
 
           {/* Protected routes */}
           <Route
@@ -97,6 +113,22 @@ function App() {
             }
           />
           <Route
+            path="/fleet"
+            element={
+              <ProtectedAppRoute>
+                <LazyFleetPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/alerts"
+            element={
+              <ProtectedAppRoute>
+                <LazyAlertsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
             path="/tasks"
             element={
               <ProtectedAppRoute>
@@ -117,6 +149,14 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazySettingsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/account"
+            element={
+              <ProtectedAppRoute>
+                <LazyAccountPage />
               </ProtectedAppRoute>
             }
           />

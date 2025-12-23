@@ -5,6 +5,7 @@
     "paths": {
       "@/*": ["src/*"]
     },
+    "types": ["vite/client", "@react-three/fiber"],
     "useDefineForClassFields": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",

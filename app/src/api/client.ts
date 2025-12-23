@@ -14,7 +14,7 @@ import type { ApiError, ApiClientConfig, TokenStorage } from '@/shared/types/api
 // ============================================================================
 
 const DEFAULT_CONFIG: ApiClientConfig = {
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/v1',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api',
   timeout: 30000,
   maxRetries: 3,
   retryDelay: 1000,
