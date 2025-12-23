@@ -7,10 +7,10 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { cn } from '@/shared/utils/cn';
-import type { FleetMapProps, RobotMapMarker } from '../types/fleet.types';
+import type { FleetMapProps, RobotMapMarker, Zone } from '../types/fleet.types';
 import { MAP_CANVAS_SIZE, MOCK_ZONES } from '../types/fleet.types';
 import { RobotMarker } from './RobotMarker';
-import { ZoneOverlay } from './ZoneOverlay';
+import { ZoneEditor } from './ZoneEditor';
 
 // ============================================================================
 // CONSTANTS
@@ -293,6 +293,11 @@ export function FleetMap({
   selectedFloor,
   onFloorChange,
   onRobotClick,
+  editorMode: _editorMode = 'view', // ZoneEditor gets mode from store
+  selectedZoneId = null,
+  onSelectZone,
+  onEditZone,
+  onZoneDrawn,
   className,
 }: FleetMapProps) {
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
@@ -427,11 +432,15 @@ export function FleetMap({
               {/* Grid fill */}
               <rect x="0" y="0" width="100%" height="100%" fill="url(#fleetGrid)" />
 
-              {/* Zone overlays */}
-              <ZoneOverlay
-                zones={filteredZones}
+              {/* Zone editor (handles both view and edit modes) */}
+              <ZoneEditor
+                zones={filteredZones as Zone[]}
                 scale={SCALE}
                 offset={{ x: PADDING - bounds.minX * SCALE, y: PADDING - bounds.minY * SCALE }}
+                selectedZoneId={selectedZoneId}
+                onSelectZone={onSelectZone || (() => {})}
+                onEditZone={onEditZone || (() => {})}
+                onZoneDrawn={onZoneDrawn || (() => {})}
               />
 
               {/* Robot markers */}

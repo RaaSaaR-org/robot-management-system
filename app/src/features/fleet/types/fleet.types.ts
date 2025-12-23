@@ -59,6 +59,42 @@ export interface FloorZone {
   type: ZoneType;
 }
 
+/** Zone from server API (includes additional fields) */
+export interface Zone extends FloorZone {
+  /** Optional color override */
+  color?: string;
+  /** Optional description */
+  description?: string;
+  /** Optional metadata */
+  metadata?: Record<string, unknown>;
+  /** Creation timestamp */
+  createdAt: string;
+  /** Last update timestamp */
+  updatedAt: string;
+}
+
+/** Request to create a new zone */
+export interface CreateZoneRequest {
+  name: string;
+  floor: string;
+  type: ZoneType;
+  bounds: ZoneBounds;
+  color?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Request to update a zone */
+export interface UpdateZoneRequest {
+  name?: string;
+  floor?: string;
+  type?: ZoneType;
+  bounds?: ZoneBounds;
+  color?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // ============================================================================
 // ROBOT MAP TYPES
 // ============================================================================
@@ -85,6 +121,9 @@ export interface RobotMapMarker {
 // COMPONENT PROPS TYPES
 // ============================================================================
 
+/** Editor mode for zone manipulation */
+export type ZoneEditorMode = 'view' | 'draw' | 'edit' | 'delete';
+
 /** Props for FleetMap component */
 export interface FleetMapProps {
   /** Robot markers to display */
@@ -97,6 +136,16 @@ export interface FleetMapProps {
   onFloorChange: (floor: string) => void;
   /** Callback when robot marker is clicked */
   onRobotClick?: (robotId: string) => void;
+  /** Editor mode for zone manipulation */
+  editorMode?: ZoneEditorMode;
+  /** Currently selected zone ID */
+  selectedZoneId?: string | null;
+  /** Callback when zone is selected */
+  onSelectZone?: (id: string | null) => void;
+  /** Callback when zone is double-clicked for editing */
+  onEditZone?: (zone: Zone) => void;
+  /** Callback when new zone bounds are drawn */
+  onZoneDrawn?: (bounds: ZoneBounds) => void;
   /** Additional class names */
   className?: string;
 }
