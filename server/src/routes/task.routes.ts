@@ -11,9 +11,9 @@ export const taskRoutes = Router();
 /**
  * POST /list - List all tasks
  */
-taskRoutes.post('/list', (_req: Request, res: Response) => {
+taskRoutes.post('/list', async (_req: Request, res: Response) => {
   try {
-    const tasks = conversationManager.listTasks();
+    const tasks = await conversationManager.listTasks();
     res.json({ tasks });
   } catch (error) {
     console.error('Error listing tasks:', error);
@@ -24,9 +24,9 @@ taskRoutes.post('/list', (_req: Request, res: Response) => {
 /**
  * GET /:id - Get a specific task
  */
-taskRoutes.get('/:id', (req: Request, res: Response) => {
+taskRoutes.get('/:id', async (req: Request, res: Response) => {
   try {
-    const task = conversationManager.getTask(req.params.id);
+    const task = await conversationManager.getTask(req.params.id);
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }

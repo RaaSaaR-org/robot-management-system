@@ -7,6 +7,7 @@ import axios from 'axios';
 import type { A2AAgentCard } from '../types/index.js';
 import { agentCardResolver } from './A2AClient.js';
 import { conversationManager } from './ConversationManager.js';
+import { robotRepository } from '../repositories/index.js';
 
 // ============================================================================
 // TYPES
@@ -34,6 +35,17 @@ export type CommandType =
   | 'return_home'
   | 'emergency_stop'
   | 'custom';
+
+/** Robot type for 3D visualization */
+export type RobotType = 'h1' | 'so101' | 'generic';
+
+/** Joint state for 3D animation */
+export interface JointState {
+  name: string;
+  position: number;
+  velocity?: number;
+  effort?: number;
+}
 
 /** Robot location in the facility */
 export interface RobotLocation {
@@ -70,6 +82,7 @@ export interface Robot {
 /** Robot telemetry data */
 export interface RobotTelemetry {
   robotId: string;
+  robotType?: RobotType;
   batteryLevel: number;
   batteryVoltage?: number;
   batteryTemperature?: number;
@@ -80,6 +93,7 @@ export interface RobotTelemetry {
   humidity?: number;
   speed?: number;
   sensors: Record<string, number | boolean | string>;
+  jointStates?: JointState[];
   errors?: string[];
   warnings?: string[];
   timestamp: string;
@@ -159,12 +173,28 @@ type RobotEventCallback = (event: RobotEvent) => void;
 // ============================================================================
 
 /**
- * RobotManager - manages robot registry and A2A connections
+ * RobotManager - manages robot registry and A2A connections with database persistence
  */
 export class RobotManager {
-  private robots: Map<string, RegisteredRobot> = new Map();
+  // In-memory cache for active robot connections
+  private robotCache: Map<string, RegisteredRobot> = new Map();
   private eventCallbacks: Set<RobotEventCallback> = new Set();
   private healthCheckInterval: NodeJS.Timeout | null = null;
+
+  // ============================================================================
+  // INITIALIZATION
+  // ============================================================================
+
+  /**
+   * Load robots from database into cache on startup
+   */
+  async initialize(): Promise<void> {
+    const registeredRobots = await robotRepository.getAllRegisteredRobots();
+    for (const robot of registeredRobots) {
+      this.robotCache.set(robot.robot.id, robot);
+    }
+    console.log(`[RobotManager] Loaded ${registeredRobots.length} robots from database`);
+  }
 
   // ============================================================================
   // REGISTRATION
@@ -199,12 +229,6 @@ export class RobotManager {
       console.log(`[RobotManager] Fetching agent card from ${baseUrl}`);
       const agentCard = await agentCardResolver.fetchAgentCard(baseUrl);
 
-      // Check if robot already registered
-      if (this.robots.has(registrationInfo.robot.id)) {
-        console.log(`[RobotManager] Robot ${registrationInfo.robot.id} already registered, updating`);
-        this.robots.delete(registrationInfo.robot.id);
-      }
-
       // Build full endpoint URLs
       const endpoints: RobotEndpoints = {
         robot: `${baseUrl}${registrationInfo.endpoints.robot}`,
@@ -213,14 +237,20 @@ export class RobotManager {
         telemetryWs: registrationInfo.endpoints.telemetryWs,
       };
 
+      // Update robot with A2A info
+      const robotWithA2A: Robot = {
+        ...registrationInfo.robot,
+        a2aEnabled: true,
+        a2aAgentUrl: baseUrl,
+      };
+
+      // Persist to database
+      await robotRepository.upsertWithRegistration(robotWithA2A, endpoints, agentCard, baseUrl);
+
       // Create registered robot entry
       const now = new Date().toISOString();
       const registeredRobot: RegisteredRobot = {
-        robot: {
-          ...registrationInfo.robot,
-          a2aEnabled: true,
-          a2aAgentUrl: baseUrl,
-        },
+        robot: robotWithA2A,
         endpoints,
         agentCard,
         baseUrl,
@@ -229,11 +259,11 @@ export class RobotManager {
         registeredAt: now,
       };
 
-      // Store in registry
-      this.robots.set(registeredRobot.robot.id, registeredRobot);
+      // Cache in memory
+      this.robotCache.set(registeredRobot.robot.id, registeredRobot);
 
       // Also register as A2A agent in ConversationManager
-      conversationManager.registerAgent(agentCard);
+      await conversationManager.registerAgent(agentCard);
 
       // Emit event
       this.emitEvent({
@@ -243,7 +273,9 @@ export class RobotManager {
         timestamp: now,
       });
 
-      console.log(`[RobotManager] Successfully registered robot: ${registeredRobot.robot.name} (${registeredRobot.robot.id})`);
+      console.log(
+        `[RobotManager] Successfully registered robot: ${registeredRobot.robot.name} (${registeredRobot.robot.id})`
+      );
 
       return registeredRobot;
     } catch (error) {
@@ -256,20 +288,27 @@ export class RobotManager {
   /**
    * Unregister a robot by ID
    */
-  unregisterRobot(robotId: string): boolean {
-    const registered = this.robots.get(robotId);
+  async unregisterRobot(robotId: string): Promise<boolean> {
+    const registered = this.robotCache.get(robotId);
     if (!registered) {
-      return false;
+      // Check database
+      const dbRobot = await robotRepository.getRegisteredRobot(robotId);
+      if (!dbRobot) {
+        return false;
+      }
     }
 
-    // Remove from registry
-    this.robots.delete(robotId);
+    // Remove from cache
+    this.robotCache.delete(robotId);
+
+    // Delete from database
+    await robotRepository.delete(robotId);
 
     // Also unregister from A2A agents
-    conversationManager.unregisterAgent(registered.agentCard.name);
-
-    // Clear agent card cache
-    agentCardResolver.clearCache(registered.baseUrl);
+    if (registered) {
+      await conversationManager.unregisterAgent(registered.agentCard.name);
+      agentCardResolver.clearCache(registered.baseUrl);
+    }
 
     // Emit event
     this.emitEvent({
@@ -290,22 +329,38 @@ export class RobotManager {
   /**
    * Get all registered robots
    */
-  listRobots(): Robot[] {
-    return Array.from(this.robots.values()).map((r) => r.robot);
+  async listRobots(): Promise<Robot[]> {
+    return robotRepository.findAll();
   }
 
   /**
    * Get a single robot by ID
    */
-  getRobot(robotId: string): Robot | undefined {
-    return this.robots.get(robotId)?.robot;
+  async getRobot(robotId: string): Promise<Robot | undefined> {
+    // Check cache first
+    const cached = this.robotCache.get(robotId);
+    if (cached) {
+      return cached.robot;
+    }
+
+    return (await robotRepository.findById(robotId)) ?? undefined;
   }
 
   /**
    * Get full registered robot data
    */
-  getRegisteredRobot(robotId: string): RegisteredRobot | undefined {
-    return this.robots.get(robotId);
+  async getRegisteredRobot(robotId: string): Promise<RegisteredRobot | undefined> {
+    // Check cache first
+    if (this.robotCache.has(robotId)) {
+      return this.robotCache.get(robotId);
+    }
+
+    // Load from database
+    const registered = await robotRepository.getRegisteredRobot(robotId);
+    if (registered) {
+      this.robotCache.set(robotId, registered);
+    }
+    return registered ?? undefined;
   }
 
   // ============================================================================
@@ -316,7 +371,7 @@ export class RobotManager {
    * Send a command to a robot
    */
   async sendCommand(robotId: string, command: RobotCommandRequest): Promise<RobotCommand> {
-    const registered = this.robots.get(robotId);
+    const registered = await this.getRegisteredRobot(robotId);
     if (!registered) {
       throw new Error(`Robot ${robotId} not found`);
     }
@@ -348,7 +403,7 @@ export class RobotManager {
    * Get current telemetry from a robot
    */
   async getTelemetry(robotId: string): Promise<RobotTelemetry> {
-    const registered = this.robots.get(robotId);
+    const registered = await this.getRegisteredRobot(robotId);
     if (!registered) {
       throw new Error(`Robot ${robotId} not found`);
     }
@@ -402,12 +457,16 @@ export class RobotManager {
    * Perform health check on all robots
    */
   private async performHealthChecks(): Promise<void> {
-    const robots = Array.from(this.robots.values());
+    const robots = Array.from(this.robotCache.values());
 
     for (const registered of robots) {
       try {
         const healthUrl = `${registered.baseUrl}/api/v1/health`;
-        const response = await axios.get<{ status: string; robotStatus: RobotStatus; batteryLevel: number }>(healthUrl, {
+        const response = await axios.get<{
+          status: string;
+          robotStatus: RobotStatus;
+          batteryLevel: number;
+        }>(healthUrl, {
           timeout: 5000,
         });
 
@@ -425,12 +484,23 @@ export class RobotManager {
           registered.robot.lastSeen = now;
           registered.robot.updatedAt = now;
 
+          // Persist to database
+          await robotRepository.updateHealthCheck(
+            registered.robot.id,
+            true,
+            response.data.robotStatus,
+            response.data.batteryLevel
+          );
+
           this.emitEvent({
             type: 'robot_status_changed',
             robotId: registered.robot.id,
             robot: registered.robot,
             timestamp: now,
           });
+        } else {
+          // Just update health check time
+          await robotRepository.updateHealthCheck(registered.robot.id, true);
         }
 
         // Emit reconnection event if was disconnected
@@ -442,12 +512,15 @@ export class RobotManager {
             timestamp: now,
           });
         }
-      } catch (error) {
+      } catch {
         // Mark as disconnected
         if (registered.isConnected) {
           registered.isConnected = false;
           registered.robot.status = 'offline';
           registered.robot.updatedAt = new Date().toISOString();
+
+          // Persist to database
+          await robotRepository.updateHealthCheck(registered.robot.id, false, 'offline');
 
           this.emitEvent({
             type: 'robot_status_changed',

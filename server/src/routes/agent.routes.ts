@@ -24,7 +24,7 @@ agentRoutes.post('/register', async (req: Request, res: Response) => {
     const agentCard = await agentCardResolver.fetchAgentCard(agentUrl);
 
     // Register the agent
-    conversationManager.registerAgent(agentCard);
+    await conversationManager.registerAgent(agentCard);
 
     res.json({ agentCard });
   } catch (error) {
@@ -37,9 +37,9 @@ agentRoutes.post('/register', async (req: Request, res: Response) => {
 /**
  * POST /list - List all registered agents
  */
-agentRoutes.post('/list', (_req: Request, res: Response) => {
+agentRoutes.post('/list', async (_req: Request, res: Response) => {
   try {
-    const agents = conversationManager.listAgents();
+    const agents = await conversationManager.listAgentsAsync();
     res.json({ agents });
   } catch (error) {
     console.error('Error listing agents:', error);
@@ -50,9 +50,9 @@ agentRoutes.post('/list', (_req: Request, res: Response) => {
 /**
  * DELETE /:name - Unregister an agent
  */
-agentRoutes.delete('/:name', (req: Request, res: Response) => {
+agentRoutes.delete('/:name', async (req: Request, res: Response) => {
   try {
-    const deleted = conversationManager.unregisterAgent(req.params.name);
+    const deleted = await conversationManager.unregisterAgent(req.params.name);
     if (!deleted) {
       return res.status(404).json({ error: 'Agent not found' });
     }
@@ -66,9 +66,9 @@ agentRoutes.delete('/:name', (req: Request, res: Response) => {
 /**
  * GET /:name - Get a specific registered agent
  */
-agentRoutes.get('/:name', (req: Request, res: Response) => {
+agentRoutes.get('/:name', async (req: Request, res: Response) => {
   try {
-    const agent = conversationManager.getAgent(req.params.name);
+    const agent = await conversationManager.getAgentAsync(req.params.name);
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }

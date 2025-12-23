@@ -7,12 +7,18 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import cors from 'cors';
 
 // Import routes
+import { authRoutes } from './routes/auth.routes.js';
 import { conversationRoutes } from './routes/conversation.routes.js';
 import { messageRoutes } from './routes/message.routes.js';
 import { taskRoutes } from './routes/task.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
 import { robotRoutes } from './routes/robot.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
+import { alertRoutes } from './routes/alert.routes.js';
+import { zoneRoutes } from './routes/zone.routes.js';
+
+// Import middleware
+import { authMiddleware } from './middleware/auth.middleware.js';
 
 // Import services
 import { robotManager } from './services/RobotManager.js';
@@ -42,14 +48,23 @@ export function createApp(): Express {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // API Routes
-  app.use('/api/a2a/conversation', conversationRoutes);
-  app.use('/api/a2a/message', messageRoutes);
-  app.use('/api/a2a/task', taskRoutes);
-  app.use('/api/a2a/agent', agentRoutes);
+  // Auth Routes (public)
+  app.use('/api/auth', authRoutes);
 
-  // Robot routes
-  app.use('/api/robots', robotRoutes);
+  // Protected API Routes
+  app.use('/api/a2a/conversation', authMiddleware, conversationRoutes);
+  app.use('/api/a2a/message', authMiddleware, messageRoutes);
+  app.use('/api/a2a/task', authMiddleware, taskRoutes);
+  app.use('/api/a2a/agent', authMiddleware, agentRoutes);
+
+  // Robot routes (protected)
+  app.use('/api/robots', authMiddleware, robotRoutes);
+
+  // Alert routes (protected)
+  app.use('/api/alerts', authMiddleware, alertRoutes);
+
+  // Zone routes (protected)
+  app.use('/api/zones', authMiddleware, zoneRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

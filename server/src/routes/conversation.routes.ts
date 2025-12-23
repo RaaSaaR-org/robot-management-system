@@ -11,10 +11,10 @@ export const conversationRoutes = Router();
 /**
  * POST /create - Create a new conversation
  */
-conversationRoutes.post('/create', (req: Request, res: Response) => {
+conversationRoutes.post('/create', async (req: Request, res: Response) => {
   try {
     const { robotId, name } = req.body;
-    const conversation = conversationManager.createConversation(robotId, name);
+    const conversation = await conversationManager.createConversation(robotId, name);
     res.json({ conversation });
   } catch (error) {
     console.error('Error creating conversation:', error);
@@ -25,9 +25,9 @@ conversationRoutes.post('/create', (req: Request, res: Response) => {
 /**
  * POST /list - List all conversations
  */
-conversationRoutes.post('/list', (_req: Request, res: Response) => {
+conversationRoutes.post('/list', async (_req: Request, res: Response) => {
   try {
-    const conversations = conversationManager.listConversations();
+    const conversations = await conversationManager.listConversations();
     res.json({ conversations });
   } catch (error) {
     console.error('Error listing conversations:', error);
@@ -38,9 +38,9 @@ conversationRoutes.post('/list', (_req: Request, res: Response) => {
 /**
  * GET /:id - Get a specific conversation
  */
-conversationRoutes.get('/:id', (req: Request, res: Response) => {
+conversationRoutes.get('/:id', async (req: Request, res: Response) => {
   try {
-    const conversation = conversationManager.getConversation(req.params.id);
+    const conversation = await conversationManager.getConversation(req.params.id);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
@@ -54,9 +54,9 @@ conversationRoutes.get('/:id', (req: Request, res: Response) => {
 /**
  * DELETE /:id - Delete a conversation
  */
-conversationRoutes.delete('/:id', (req: Request, res: Response) => {
+conversationRoutes.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const deleted = conversationManager.deleteConversation(req.params.id);
+    const deleted = await conversationManager.deleteConversation(req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: 'Conversation not found' });
     }

@@ -43,9 +43,9 @@ robotRoutes.post('/register', async (req: Request, res: Response) => {
 /**
  * GET / - List all registered robots
  */
-robotRoutes.get('/', (_req: Request, res: Response) => {
+robotRoutes.get('/', async (_req: Request, res: Response) => {
   try {
-    const robots = robotManager.listRobots();
+    const robots = await robotManager.listRobots();
     res.json({
       robots,
       pagination: {
@@ -64,9 +64,9 @@ robotRoutes.get('/', (_req: Request, res: Response) => {
 /**
  * GET /:id - Get a single robot by ID
  */
-robotRoutes.get('/:id', (req: Request, res: Response) => {
+robotRoutes.get('/:id', async (req: Request, res: Response) => {
   try {
-    const robot = robotManager.getRobot(req.params.id);
+    const robot = await robotManager.getRobot(req.params.id);
 
     if (!robot) {
       return res.status(404).json({ error: 'Robot not found' });
@@ -82,9 +82,9 @@ robotRoutes.get('/:id', (req: Request, res: Response) => {
 /**
  * DELETE /:id - Unregister a robot
  */
-robotRoutes.delete('/:id', (req: Request, res: Response) => {
+robotRoutes.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const deleted = robotManager.unregisterRobot(req.params.id);
+    const deleted = await robotManager.unregisterRobot(req.params.id);
 
     if (!deleted) {
       return res.status(404).json({ error: 'Robot not found' });

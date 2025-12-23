@@ -13,7 +13,7 @@ export const messageRoutes = Router();
  */
 messageRoutes.post('/send', async (req: Request, res: Response) => {
   try {
-    const { conversationId, message, robotId, targetAgentUrl } = req.body;
+    const { conversationId, message, targetAgentUrl } = req.body;
 
     if (!conversationId) {
       return res.status(400).json({ error: 'conversationId is required' });
@@ -35,8 +35,8 @@ messageRoutes.post('/send', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error sending message:', error);
-    const message = error instanceof Error ? error.message : 'Failed to send message';
-    res.status(500).json({ error: message });
+    const msg = error instanceof Error ? error.message : 'Failed to send message';
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -55,10 +55,7 @@ messageRoutes.post('/orchestrate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'message is required' });
     }
 
-    const result = await conversationManager.processOrchestratedMessage(
-      conversationId,
-      message
-    );
+    const result = await conversationManager.processOrchestratedMessage(conversationId, message);
 
     res.json({
       messageId: result.messageId,
@@ -75,7 +72,7 @@ messageRoutes.post('/orchestrate', async (req: Request, res: Response) => {
 /**
  * POST /list - List messages for a conversation
  */
-messageRoutes.post('/list', (req: Request, res: Response) => {
+messageRoutes.post('/list', async (req: Request, res: Response) => {
   try {
     const { conversationId } = req.body;
 
@@ -83,7 +80,7 @@ messageRoutes.post('/list', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'conversationId is required' });
     }
 
-    const messages = conversationManager.getMessages(conversationId);
+    const messages = await conversationManager.getMessages(conversationId);
     res.json({ messages });
   } catch (error) {
     console.error('Error listing messages:', error);

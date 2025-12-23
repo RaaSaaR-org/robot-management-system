@@ -7,6 +7,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import { conversationManager } from '../services/ConversationManager.js';
 import { robotManager, type RobotEvent } from '../services/RobotManager.js';
+import { alertService, type AlertEvent } from '../services/AlertService.js';
+import { zoneService, type ZoneEvent } from '../services/ZoneService.js';
 import type { A2ATaskEvent } from '../types/index.js';
 
 /**
@@ -76,8 +78,38 @@ export function setupWebSocket(server: Server): void {
   // Subscribe to robot events and broadcast to all clients
   robotManager.onRobotEvent((event: RobotEvent) => {
     const message = JSON.stringify({
-      type: event.type,
       ...event,
+      type: event.type, // Ensure type comes last to override spread
+    });
+
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  });
+
+  // Subscribe to alert events and broadcast to all clients
+  alertService.onAlertEvent((event: AlertEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      alert: event.alert,
+      timestamp: event.timestamp,
+    });
+
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  });
+
+  // Subscribe to zone events and broadcast to all clients
+  zoneService.onZoneEvent((event: ZoneEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      zone: event.zone,
+      timestamp: event.timestamp,
     });
 
     clients.forEach((client) => {

@@ -17,19 +17,41 @@ import type {
   JSONRPCRequest,
   JSONRPCResponse,
 } from '../types/index.js';
+import {
+  conversationRepository,
+  taskRepository,
+  agentRepository,
+  eventRepository,
+} from '../repositories/index.js';
 
 type TaskEventCallback = (event: A2ATaskEvent) => void;
 
 /**
- * ConversationManager - manages all A2A state
+ * ConversationManager - manages all A2A state with database persistence
  */
 export class ConversationManager {
-  private conversations: Map<string, A2AConversation> = new Map();
-  private tasks: Map<string, A2ATask> = new Map();
-  private events: A2AEvent[] = [];
-  private registeredAgents: Map<string, A2AAgentCard> = new Map();
+  // In-memory caches for active sessions and transient data
+  private activeConversations: Map<string, A2AConversation> = new Map();
+  private activeTasks: Map<string, A2ATask> = new Map();
   private pendingMessages: Map<string, string> = new Map();
   private taskCallbacks: Set<TaskEventCallback> = new Set();
+  // In-memory agent cache for quick lookups
+  private agentCache: Map<string, A2AAgentCard> = new Map();
+
+  // ============================================================================
+  // INITIALIZATION
+  // ============================================================================
+
+  /**
+   * Load agents from database into cache on startup
+   */
+  async initialize(): Promise<void> {
+    const agents = await agentRepository.findAll();
+    for (const agent of agents) {
+      this.agentCache.set(agent.name, agent);
+    }
+    console.log(`[ConversationManager] Loaded ${agents.length} agents from database`);
+  }
 
   // ============================================================================
   // CONVERSATION METHODS
@@ -38,43 +60,51 @@ export class ConversationManager {
   /**
    * Create a new conversation
    */
-  createConversation(robotId?: string, name?: string): A2AConversation {
-    const now = new Date().toISOString();
-    const conversation: A2AConversation = {
-      conversationId: uuidv4(),
-      name: name || `Conversation ${this.conversations.size + 1}`,
-      isActive: true,
-      taskIds: [],
-      messages: [],
+  async createConversation(robotId?: string, name?: string): Promise<A2AConversation> {
+    const count = await conversationRepository.count();
+    const conversationName = name || `Conversation ${count + 1}`;
+
+    const conversation = await conversationRepository.create({
       robotId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.conversations.set(conversation.conversationId, conversation);
+      name: conversationName,
+    });
+
+    // Cache for active use
+    this.activeConversations.set(conversation.conversationId, conversation);
+
     return conversation;
   }
 
   /**
    * Get a conversation by ID
    */
-  getConversation(conversationId: string): A2AConversation | undefined {
-    return this.conversations.get(conversationId);
+  async getConversation(conversationId: string): Promise<A2AConversation | undefined> {
+    // Check cache first
+    if (this.activeConversations.has(conversationId)) {
+      return this.activeConversations.get(conversationId);
+    }
+
+    // Load from database
+    const conversation = await conversationRepository.findById(conversationId);
+    if (conversation) {
+      this.activeConversations.set(conversationId, conversation);
+    }
+    return conversation ?? undefined;
   }
 
   /**
    * List all conversations
    */
-  listConversations(): A2AConversation[] {
-    return Array.from(this.conversations.values()).sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
+  async listConversations(): Promise<A2AConversation[]> {
+    return conversationRepository.findAll();
   }
 
   /**
    * Delete a conversation
    */
-  deleteConversation(conversationId: string): boolean {
-    return this.conversations.delete(conversationId);
+  async deleteConversation(conversationId: string): Promise<boolean> {
+    this.activeConversations.delete(conversationId);
+    return conversationRepository.delete(conversationId);
   }
 
   // ============================================================================
@@ -89,7 +119,7 @@ export class ConversationManager {
     text: string,
     targetAgentUrl?: string
   ): Promise<{ messageId: string; task?: A2ATask }> {
-    const conversation = this.conversations.get(conversationId);
+    const conversation = await this.getConversation(conversationId);
     if (!conversation) {
       throw new Error(`Conversation ${conversationId} not found`);
     }
@@ -103,7 +133,10 @@ export class ConversationManager {
       timestamp: new Date().toISOString(),
     };
 
-    // Add to conversation
+    // Save to database
+    await conversationRepository.addMessage(conversationId, userMessage);
+
+    // Update cached conversation
     conversation.messages.push(userMessage);
     conversation.updatedAt = new Date().toISOString();
 
@@ -111,11 +144,11 @@ export class ConversationManager {
     this.pendingMessages.set(userMessage.messageId, 'pending');
 
     // Create a task for this message
-    const task = this.createTask(conversationId);
+    const task = await this.createTask(conversationId);
     conversation.taskIds.push(task.id);
 
     // Add event
-    this.addEvent({
+    await this.addEvent({
       id: uuidv4(),
       actor: 'user',
       content: userMessage,
@@ -144,12 +177,12 @@ export class ConversationManager {
     userMessage: A2AMessage,
     agentUrl: string
   ): Promise<void> {
-    const conversation = this.conversations.get(conversationId);
-    const task = this.tasks.get(taskId);
+    const conversation = await this.getConversation(conversationId);
+    const task = await this.getTask(taskId);
     if (!conversation || !task) return;
 
     // Update task to working
-    this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
+    await this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
 
     try {
       // Prepare JSON-RPC request
@@ -226,12 +259,15 @@ export class ConversationManager {
         };
       }
 
-      // Add to conversation
+      // Save to database
+      await conversationRepository.addMessage(conversationId, agentMessage);
+
+      // Update cached conversation
       conversation.messages.push(agentMessage);
       conversation.updatedAt = new Date().toISOString();
 
       // Add event
-      this.addEvent({
+      await this.addEvent({
         id: uuidv4(),
         actor: 'agent',
         content: agentMessage,
@@ -239,7 +275,7 @@ export class ConversationManager {
       });
 
       // Update task to completed
-      this.updateTaskStatus(taskId, {
+      await this.updateTaskStatus(taskId, {
         state: 'completed',
         message: agentMessage,
         timestamp: new Date().toISOString(),
@@ -258,11 +294,14 @@ export class ConversationManager {
         timestamp: new Date().toISOString(),
       };
 
+      // Save to database
+      await conversationRepository.addMessage(conversationId, errorMessage);
+
       conversation.messages.push(errorMessage);
       conversation.updatedAt = new Date().toISOString();
 
       // Update task to failed
-      this.updateTaskStatus(taskId, {
+      await this.updateTaskStatus(taskId, {
         state: 'failed',
         message: errorMessage,
         timestamp: new Date().toISOString(),
@@ -278,12 +317,12 @@ export class ConversationManager {
     taskId: string,
     userText: string
   ): Promise<void> {
-    const conversation = this.conversations.get(conversationId);
-    const task = this.tasks.get(taskId);
+    const conversation = await this.getConversation(conversationId);
+    const task = await this.getTask(taskId);
     if (!conversation || !task) return;
 
     // Update task to working
-    this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
+    await this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
 
     // Simulate processing delay
     await this.delay(500);
@@ -303,12 +342,15 @@ export class ConversationManager {
       timestamp: new Date().toISOString(),
     };
 
-    // Add to conversation
+    // Save to database
+    await conversationRepository.addMessage(conversationId, agentMessage);
+
+    // Update cached conversation
     conversation.messages.push(agentMessage);
     conversation.updatedAt = new Date().toISOString();
 
     // Add event
-    this.addEvent({
+    await this.addEvent({
       id: uuidv4(),
       actor: 'agent',
       content: agentMessage,
@@ -316,7 +358,7 @@ export class ConversationManager {
     });
 
     // Update task to completed
-    this.updateTaskStatus(taskId, {
+    await this.updateTaskStatus(taskId, {
       state: 'completed',
       message: agentMessage,
       timestamp: new Date().toISOString(),
@@ -326,9 +368,14 @@ export class ConversationManager {
   /**
    * Get messages for a conversation
    */
-  getMessages(conversationId: string): A2AMessage[] {
-    const conversation = this.conversations.get(conversationId);
-    return conversation?.messages || [];
+  async getMessages(conversationId: string): Promise<A2AMessage[]> {
+    // Check cache first
+    const cached = this.activeConversations.get(conversationId);
+    if (cached) {
+      return cached.messages;
+    }
+
+    return conversationRepository.getMessages(conversationId);
   }
 
   /**
@@ -345,21 +392,11 @@ export class ConversationManager {
   /**
    * Create a new task
    */
-  createTask(contextId?: string): A2ATask {
-    const now = new Date().toISOString();
-    const task: A2ATask = {
-      id: uuidv4(),
-      contextId,
-      status: {
-        state: 'submitted',
-        timestamp: now,
-      },
-      artifacts: [],
-      history: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.tasks.set(task.id, task);
+  async createTask(contextId?: string): Promise<A2ATask> {
+    const task = await taskRepository.create(contextId);
+
+    // Cache for active use
+    this.activeTasks.set(task.id, task);
 
     // Notify callbacks
     this.notifyTaskEvent({
@@ -375,18 +412,12 @@ export class ConversationManager {
   /**
    * Update task status
    */
-  updateTaskStatus(taskId: string, status: A2ATaskStatus): void {
-    const task = this.tasks.get(taskId);
+  async updateTaskStatus(taskId: string, status: A2ATaskStatus): Promise<void> {
+    const task = await taskRepository.updateStatus(taskId, status);
     if (!task) return;
 
-    task.status = status;
-    task.updatedAt = new Date().toISOString();
-
-    // Add to history
-    if (status.message) {
-      task.history = task.history || [];
-      task.history.push(status.message);
-    }
+    // Update cache
+    this.activeTasks.set(taskId, task);
 
     // Notify callbacks
     this.notifyTaskEvent({
@@ -400,18 +431,24 @@ export class ConversationManager {
   /**
    * Get a task by ID
    */
-  getTask(taskId: string): A2ATask | undefined {
-    return this.tasks.get(taskId);
+  async getTask(taskId: string): Promise<A2ATask | undefined> {
+    // Check cache first
+    if (this.activeTasks.has(taskId)) {
+      return this.activeTasks.get(taskId);
+    }
+
+    const task = await taskRepository.findById(taskId);
+    if (task) {
+      this.activeTasks.set(taskId, task);
+    }
+    return task ?? undefined;
   }
 
   /**
    * List all tasks
    */
-  listTasks(): A2ATask[] {
-    return Array.from(this.tasks.values()).sort(
-      (a, b) => new Date(b.updatedAt || b.createdAt || '').getTime() -
-                new Date(a.updatedAt || a.createdAt || '').getTime()
-    );
+  async listTasks(): Promise<A2ATask[]> {
+    return taskRepository.findAll();
   }
 
   /**
@@ -436,29 +473,54 @@ export class ConversationManager {
   /**
    * Register an external agent
    */
-  registerAgent(card: A2AAgentCard): void {
-    this.registeredAgents.set(card.name, card);
+  async registerAgent(card: A2AAgentCard): Promise<void> {
+    await agentRepository.upsert(card);
+    this.agentCache.set(card.name, card);
   }
 
   /**
    * Unregister an agent
    */
-  unregisterAgent(name: string): boolean {
-    return this.registeredAgents.delete(name);
+  async unregisterAgent(name: string): Promise<boolean> {
+    this.agentCache.delete(name);
+    return agentRepository.delete(name);
   }
 
   /**
    * Get a registered agent
    */
   getAgent(name: string): A2AAgentCard | undefined {
-    return this.registeredAgents.get(name);
+    return this.agentCache.get(name);
+  }
+
+  /**
+   * Get a registered agent (async from database)
+   */
+  async getAgentAsync(name: string): Promise<A2AAgentCard | undefined> {
+    // Check cache first
+    if (this.agentCache.has(name)) {
+      return this.agentCache.get(name);
+    }
+
+    const agent = await agentRepository.findByName(name);
+    if (agent) {
+      this.agentCache.set(name, agent);
+    }
+    return agent ?? undefined;
   }
 
   /**
    * List all registered agents
    */
   listAgents(): A2AAgentCard[] {
-    return Array.from(this.registeredAgents.values());
+    return Array.from(this.agentCache.values());
+  }
+
+  /**
+   * List all registered agents (async from database)
+   */
+  async listAgentsAsync(): Promise<A2AAgentCard[]> {
+    return agentRepository.findAll();
   }
 
   // ============================================================================
@@ -482,8 +544,8 @@ export class ConversationManager {
     const heavyKeywords = ['heavy', 'large', 'big', 'industrial', 'warehouse', 'pallet', 'crate'];
     const lightKeywords = ['light', 'small', 'quick', 'nimble', 'delicate', 'precise'];
 
-    const isHeavyTask = heavyKeywords.some(k => lowerMessage.includes(k)) || requiredWeight > 10;
-    const isLightTask = lightKeywords.some(k => lowerMessage.includes(k));
+    const isHeavyTask = heavyKeywords.some((k) => lowerMessage.includes(k)) || requiredWeight > 10;
+    const isLightTask = lightKeywords.some((k) => lowerMessage.includes(k));
 
     // Score agents based on task requirements
     let bestAgent: A2AAgentCard | null = null;
@@ -530,7 +592,7 @@ export class ConversationManager {
     conversationId: string,
     text: string
   ): Promise<{ messageId: string; task?: A2ATask }> {
-    const conversation = this.conversations.get(conversationId);
+    const conversation = await this.getConversation(conversationId);
     if (!conversation) {
       throw new Error(`Conversation ${conversationId} not found`);
     }
@@ -554,7 +616,10 @@ export class ConversationManager {
       metadata: { orchestrated: true },
     };
 
-    // Add to conversation
+    // Save to database
+    await conversationRepository.addMessage(conversationId, userMessage);
+
+    // Update cached conversation
     conversation.messages.push(userMessage);
     conversation.updatedAt = new Date().toISOString();
 
@@ -562,11 +627,11 @@ export class ConversationManager {
     this.pendingMessages.set(userMessage.messageId, 'pending');
 
     // Create task
-    const task = this.createTask(conversationId);
+    const task = await this.createTask(conversationId);
     conversation.taskIds.push(task.id);
 
     // Add event
-    this.addEvent({
+    await this.addEvent({
       id: uuidv4(),
       actor: 'user',
       content: userMessage,
@@ -574,12 +639,7 @@ export class ConversationManager {
     });
 
     // Send to selected agent with metadata
-    await this.sendToRemoteAgentOrchestrated(
-      conversationId,
-      task.id,
-      userMessage,
-      selectedAgent
-    );
+    await this.sendToRemoteAgentOrchestrated(conversationId, task.id, userMessage, selectedAgent);
 
     this.pendingMessages.set(userMessage.messageId, 'sent');
 
@@ -595,12 +655,12 @@ export class ConversationManager {
     userMessage: A2AMessage,
     agent: A2AAgentCard
   ): Promise<void> {
-    const conversation = this.conversations.get(conversationId);
-    const task = this.tasks.get(taskId);
+    const conversation = await this.getConversation(conversationId);
+    const task = await this.getTask(taskId);
     if (!conversation || !task) return;
 
     // Update task to working
-    this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
+    await this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
 
     try {
       // Prepare JSON-RPC request
@@ -669,12 +729,15 @@ export class ConversationManager {
         orchestrated: true,
       };
 
-      // Add to conversation
+      // Save to database
+      await conversationRepository.addMessage(conversationId, agentMessage);
+
+      // Update cached conversation
       conversation.messages.push(agentMessage);
       conversation.updatedAt = new Date().toISOString();
 
       // Add event
-      this.addEvent({
+      await this.addEvent({
         id: uuidv4(),
         actor: 'agent',
         content: agentMessage,
@@ -682,7 +745,7 @@ export class ConversationManager {
       });
 
       // Update task to completed
-      this.updateTaskStatus(taskId, {
+      await this.updateTaskStatus(taskId, {
         state: 'completed',
         message: agentMessage,
         timestamp: new Date().toISOString(),
@@ -701,10 +764,13 @@ export class ConversationManager {
         metadata: { agentName: agent.name, orchestrated: true, error: true },
       };
 
+      // Save to database
+      await conversationRepository.addMessage(conversationId, errorMessage);
+
       conversation.messages.push(errorMessage);
       conversation.updatedAt = new Date().toISOString();
 
-      this.updateTaskStatus(taskId, {
+      await this.updateTaskStatus(taskId, {
         state: 'failed',
         message: errorMessage,
         timestamp: new Date().toISOString(),
@@ -719,26 +785,22 @@ export class ConversationManager {
   /**
    * Add an event
    */
-  addEvent(event: A2AEvent): void {
-    this.events.push(event);
-    // Keep only last 1000 events
-    if (this.events.length > 1000) {
-      this.events = this.events.slice(-1000);
-    }
+  async addEvent(event: A2AEvent): Promise<void> {
+    await eventRepository.create(event);
   }
 
   /**
    * Get all events
    */
-  getEvents(): A2AEvent[] {
-    return this.events;
+  async getEvents(): Promise<A2AEvent[]> {
+    return eventRepository.findAll();
   }
 
   /**
    * Get events since timestamp
    */
-  getEventsSince(timestamp: number): A2AEvent[] {
-    return this.events.filter((e) => e.timestamp > timestamp);
+  async getEventsSince(timestamp: number): Promise<A2AEvent[]> {
+    return eventRepository.findSince(timestamp);
   }
 
   // ============================================================================
