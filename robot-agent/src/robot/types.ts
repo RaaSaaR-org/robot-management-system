@@ -29,6 +29,27 @@ export type CommandType =
 
 export type RobotClass = 'lightweight' | 'heavy-duty' | 'standard';
 
+export type RobotType = 'h1' | 'so101' | 'generic';
+
+// ============================================================================
+// JOINT TYPES (for 3D visualization)
+// ============================================================================
+
+export interface JointConfig {
+  name: string;
+  axis: 'x' | 'y' | 'z';
+  limitLower: number;
+  limitUpper: number;
+  defaultPosition: number;
+}
+
+export interface JointState {
+  name: string;
+  position: number; // radians
+  velocity?: number; // rad/s
+  effort?: number; // torque
+}
+
 // ============================================================================
 // LOCATION TYPES
 // ============================================================================
@@ -71,6 +92,7 @@ export interface Robot {
 
 export interface RobotTelemetry {
   robotId: string;
+  robotType?: RobotType;
   batteryLevel: number;
   batteryVoltage?: number;
   batteryTemperature?: number;
@@ -81,6 +103,7 @@ export interface RobotTelemetry {
   humidity?: number;
   speed?: number;
   sensors: Record<string, number | boolean | string>;
+  jointStates?: JointState[];
   errors?: string[];
   warnings?: string[];
   timestamp: string;
@@ -111,6 +134,25 @@ export interface RobotCommand {
 }
 
 // ============================================================================
+// ALERT TYPES (for server integration)
+// ============================================================================
+
+export type AlertSeverity = 'critical' | 'error' | 'warning' | 'info';
+export type AlertSource = 'robot' | 'task' | 'system' | 'user';
+
+export interface RobotAlert {
+  id: string;
+  severity: AlertSeverity;
+  title: string;
+  message: string;
+  source: AlertSource;
+  sourceId: string;
+  timestamp: string;
+  dismissable: boolean;
+  autoDismissMs?: number;
+}
+
+// ============================================================================
 // SIMULATED ROBOT STATE
 // ============================================================================
 
@@ -120,6 +162,7 @@ export interface SimulatedRobotState {
   model: string;
   serialNumber: string;
   robotClass: RobotClass;
+  robotType: RobotType;
   maxPayloadKg: number;
   description: string;
   status: RobotStatus;
@@ -145,6 +188,7 @@ export interface RobotConfig {
   name: string;
   model: string;
   robotClass: RobotClass;
+  robotType: RobotType;
   maxPayloadKg: number;
   description: string;
   initialLocation: RobotLocation;
@@ -156,6 +200,32 @@ export interface CommandResult {
   message: string;
   estimatedTime?: number;
   data?: Record<string, unknown>;
+}
+
+// ============================================================================
+// ZONE TYPES (for zone-aware navigation)
+// ============================================================================
+
+export type ZoneType = 'operational' | 'restricted' | 'charging' | 'maintenance';
+
+export interface ZoneBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Zone {
+  id: string;
+  name: string;
+  floor: string;
+  type: ZoneType;
+  bounds: ZoneBounds;
+  color?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ============================================================================

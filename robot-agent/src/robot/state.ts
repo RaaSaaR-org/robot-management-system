@@ -16,6 +16,7 @@ import type {
   CommandType,
 } from './types.js';
 import { NAMED_LOCATIONS } from './types.js';
+import { generateTelemetry } from './telemetry.js';
 
 type StateListener = (state: SimulatedRobotState) => void;
 
@@ -36,6 +37,7 @@ export class RobotStateManager {
       model: config.model,
       serialNumber: `SIM-${Date.now()}`,
       robotClass: config.robotClass,
+      robotType: config.robotType,
       maxPayloadKg: config.maxPayloadKg,
       description: config.description,
       status: 'online',
@@ -80,6 +82,7 @@ export class RobotStateManager {
         heldObject: this.state.heldObject,
         isSimulated: true,
         robotClass: this.state.robotClass,
+        robotType: this.state.robotType,
         maxPayloadKg: this.state.maxPayloadKg,
         description: this.state.description,
       },
@@ -89,31 +92,7 @@ export class RobotStateManager {
   }
 
   getTelemetry(): RobotTelemetry {
-    return {
-      robotId: this.state.id,
-      batteryLevel: Math.round(this.state.batteryLevel),
-      batteryVoltage: 48.0 + (this.state.batteryLevel / 100) * 4,
-      batteryTemperature: 25 + Math.random() * 5,
-      cpuUsage: 15 + Math.random() * 20,
-      memoryUsage: 40 + Math.random() * 15,
-      diskUsage: 35,
-      temperature: 35 + Math.random() * 10,
-      humidity: 45 + Math.random() * 10,
-      speed: this.state.speed,
-      sensors: {
-        frontSonar: this.state.status === 'busy' ? 50 + Math.random() * 200 : 999,
-        rearSonar: 150 + Math.random() * 100,
-        leftBumper: false,
-        rightBumper: false,
-        cliffDetector: false,
-        obstacleDetected: false,
-        gripperClosed: !!this.state.heldObject,
-        armPosition: this.state.heldObject ? 'holding' : 'idle',
-      },
-      errors: this.state.errors,
-      warnings: this.state.warnings,
-      timestamp: new Date().toISOString(),
-    };
+    return generateTelemetry(this.state);
   }
 
   getCommandHistory(): RobotCommand[] {

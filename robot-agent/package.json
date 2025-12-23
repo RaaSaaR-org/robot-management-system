@@ -6,10 +6,12 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:so101": "DOTENV_CONFIG_PATH=.env.so101 tsx watch src/index.ts",
     "dev:light": "DOTENV_CONFIG_PATH=.env.light tsx watch src/index.ts",
     "dev:heavy": "DOTENV_CONFIG_PATH=.env.heavy tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:so101": "DOTENV_CONFIG_PATH=.env.so101 node dist/index.js",
     "start:light": "DOTENV_CONFIG_PATH=.env.light node dist/index.js",
     "start:heavy": "DOTENV_CONFIG_PATH=.env.heavy node dist/index.js",
     "typecheck": "tsc --noEmit"

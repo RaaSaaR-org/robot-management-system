@@ -6,7 +6,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import type { RobotStateManager } from '../robot/state.js';
-import { formatTelemetryMessage } from '../robot/telemetry.js';
+import {
+  formatTelemetryMessage,
+  generateAlerts,
+  formatAlertMessage,
+} from '../robot/telemetry.js';
 
 const TELEMETRY_INTERVAL_MS = 2000;
 
@@ -30,18 +34,31 @@ export function createTelemetryWebSocket(
     ws.send(formatTelemetryMessage(initialTelemetry));
 
     // Subscribe to state changes
-    const unsubscribe = robotStateManager.subscribe(() => {
+    const unsubscribe = robotStateManager.subscribe((state) => {
       if (ws.readyState === WebSocket.OPEN) {
         const telemetry = robotStateManager.getTelemetry();
         ws.send(formatTelemetryMessage(telemetry));
+
+        // Generate and send any new alerts
+        const alerts = generateAlerts(state);
+        for (const alert of alerts) {
+          ws.send(formatAlertMessage(alert));
+        }
       }
     });
 
     // Set up periodic telemetry updates
     const interval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
+        const state = robotStateManager.getState();
         const telemetry = robotStateManager.getTelemetry();
         ws.send(formatTelemetryMessage(telemetry));
+
+        // Check for alerts periodically as well
+        const alerts = generateAlerts(state);
+        for (const alert of alerts) {
+          ws.send(formatAlertMessage(alert));
+        }
       }
     }, TELEMETRY_INTERVAL_MS);
 

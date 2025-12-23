@@ -3,6 +3,8 @@
  * @description Environment configuration and validation
  */
 
+import type { RobotType } from '../robot/types.js';
+
 export type RobotClass = 'lightweight' | 'heavy-duty' | 'standard';
 
 export interface Config {
@@ -11,6 +13,7 @@ export interface Config {
   robotName: string;
   robotModel: string;
   robotClass: RobotClass;
+  robotType: RobotType;
   maxPayloadKg: number;
   robotDescription: string;
   geminiApiKey: string;
@@ -28,6 +31,7 @@ export const config: Config = {
   robotName: process.env.ROBOT_NAME || 'SimBot-01',
   robotModel: process.env.ROBOT_MODEL || 'SimBot H1',
   robotClass: (process.env.ROBOT_CLASS as RobotClass) || 'standard',
+  robotType: (process.env.ROBOT_TYPE as RobotType) || 'h1',
   maxPayloadKg: parseFloat(process.env.MAX_PAYLOAD_KG || '10'),
   robotDescription: process.env.ROBOT_DESCRIPTION || 'A versatile humanoid robot for general tasks',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
@@ -53,6 +57,7 @@ export function validateConfig(): void {
   console.log(`  - Robot ID: ${config.robotId}`);
   console.log(`  - Robot Name: ${config.robotName}`);
   console.log(`  - Robot Class: ${config.robotClass}`);
+  console.log(`  - Robot Type: ${config.robotType}`);
   console.log(`  - Max Payload: ${config.maxPayloadKg}kg`);
   console.log(`  - Initial Location: (${config.initialLocation.x}, ${config.initialLocation.y}) in ${config.initialLocation.zone}`);
 }

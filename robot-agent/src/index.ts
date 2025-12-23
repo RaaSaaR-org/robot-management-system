@@ -39,6 +39,7 @@ async function main() {
     name: ROBOT_NAME,
     model: config.robotModel,
     robotClass: config.robotClass,
+    robotType: config.robotType,
     maxPayloadKg: config.maxPayloadKg,
     description: config.robotDescription,
     initialLocation: config.initialLocation,
