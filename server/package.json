@@ -8,22 +8,32 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
   },
   "dependencies": {
-    "express": "^4.21.2",
+    "@prisma/client": "^6.19.1",
+    "axios": "^1.7.9",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
-    "ws": "^8.18.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "prisma": "^6.19.1",
     "uuid": "^11.0.3",
-    "axios": "^1.7.9"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.2",
-    "@types/express": "^5.0.0",
+    "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
-    "@types/ws": "^8.5.13",
-    "@types/uuid": "^10.0.0",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.10.2",
-    "tsx": "^4.19.2"
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

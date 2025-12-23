@@ -1,0 +1,304 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ROBOT ENTITIES
+// ============================================================================
+
+model Robot {
+  id              String   @id @default(uuid())
+  name            String
+  model           String
+  serialNumber    String?  @unique
+  status          String   @default("offline") // RobotStatus enum as string
+  batteryLevel    Int      @default(100)
+  location        String   @default("{}") // JSON: RobotLocation
+  lastSeen        DateTime @default(now())
+  currentTaskId   String?
+  currentTaskName String?
+  capabilities    String   @default("[]") // JSON: string[]
+  firmware        String?
+  ipAddress       String?
+  metadata        String?  // JSON: Record<string, unknown>
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // A2A Integration
+  a2aEnabled   Boolean @default(false)
+  a2aAgentUrl  String?
+
+  // Registration metadata
+  registeredAt    DateTime?
+  isConnected     Boolean   @default(false)
+  lastHealthCheck DateTime?
+  baseUrl         String?
+
+  // Relations
+  conversations Conversation[]
+  telemetryLogs RobotTelemetry[]
+  commands      RobotCommand[]
+  agentCard     AgentCard?
+  endpoints     RobotEndpoints?
+  alerts        Alert[]
+
+  @@index([status])
+  @@index([a2aEnabled])
+}
+
+model RobotTelemetry {
+  id                 String   @id @default(uuid())
+  robotId            String
+  batteryLevel       Int
+  batteryVoltage     Float?
+  batteryTemperature Float?
+  cpuUsage           Float
+  memoryUsage        Float
+  diskUsage          Float?
+  temperature        Float
+  humidity           Float?
+  speed              Float?
+  sensors            String   @default("{}") // JSON: Record<string, number | boolean | string>
+  errors             String   @default("[]") // JSON: string[]
+  warnings           String   @default("[]") // JSON: string[]
+  timestamp          DateTime @default(now())
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([robotId, timestamp])
+  @@index([timestamp])
+}
+
+model RobotCommand {
+  id           String    @id @default(uuid())
+  robotId      String
+  type         String // CommandType enum as string
+  payload      String    @default("{}") // JSON
+  status       String    @default("pending") // CommandStatus enum as string
+  priority     String    @default("normal") // CommandPriority enum as string
+  result       String?   // JSON
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([robotId, status])
+  @@index([createdAt])
+}
+
+model RobotEndpoints {
+  id          String   @id @default(uuid())
+  robotId     String   @unique
+  robot       String // endpoint path
+  command     String // endpoint path
+  telemetry   String // endpoint path
+  telemetryWs String // WebSocket URL
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  robotRef Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================================
+// A2A CONVERSATION ENTITIES
+// ============================================================================
+
+model Conversation {
+  id        String    @id @default(uuid())
+  name      String
+  isActive  Boolean   @default(true)
+  robotId   String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Soft delete support
+  deletedAt DateTime?
+
+  // Relations
+  robot    Robot?    @relation(fields: [robotId], references: [id], onDelete: SetNull)
+  messages Message[]
+  tasks    Task[]
+
+  @@index([robotId])
+  @@index([isActive])
+  @@index([updatedAt])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  role           String // MessageRole: 'user' | 'agent'
+  parts          String // JSON: A2APart[]
+  conversationId String?
+  taskId         String?
+  metadata       String?  // JSON: Record<string, unknown>
+  timestamp      DateTime @default(now())
+
+  // Relations
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  task         Task?         @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, timestamp])
+  @@index([taskId])
+}
+
+model Task {
+  id              String   @id @default(uuid())
+  conversationId  String?
+  state           String   @default("submitted") // TaskState enum as string
+  statusMessage   String?  // JSON: A2AMessage
+  statusTimestamp DateTime @default(now())
+  artifacts       String   @default("[]") // JSON: A2AArtifact[]
+  history         String   @default("[]") // JSON: A2AMessage[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  messages     Message[]
+
+  @@index([conversationId])
+  @@index([state])
+  @@index([updatedAt])
+}
+
+// ============================================================================
+// AGENT ENTITIES
+// ============================================================================
+
+model AgentCard {
+  id                 String   @id @default(uuid())
+  name               String   @unique
+  description        String
+  url                String
+  version            String?
+  documentationUrl   String?
+  provider           String?  // JSON: { organization, url? }
+  capabilities       String?  // JSON: { streaming?, pushNotifications?, stateTransitionHistory? }
+  authentication     String?  // JSON: { schemes[], credentials? }
+  defaultInputModes  String   @default("[]") // JSON: string[]
+  defaultOutputModes String   @default("[]") // JSON: string[]
+  skills             String   @default("[]") // JSON: A2ASkill[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Robot association (for robot agents)
+  robotId String? @unique
+  robot   Robot?  @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([name])
+}
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+model Alert {
+  id             String    @id @default(uuid())
+  severity       String // AlertSeverity: 'critical' | 'error' | 'warning' | 'info'
+  title          String
+  message        String
+  source         String // AlertSource: 'robot' | 'task' | 'system' | 'user'
+  sourceId       String? // ID of the source entity (robotId, taskId, etc.)
+  acknowledged   Boolean   @default(false)
+  acknowledgedAt DateTime?
+  acknowledgedBy String? // User ID who acknowledged
+  dismissable    Boolean   @default(true)
+  autoDismissMs  Int? // Auto-dismiss after ms (null = never)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Optional relation to robot if source is robot
+  robot Robot? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([severity])
+  @@index([source])
+  @@index([sourceId])
+  @@index([acknowledged])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// ZONES
+// ============================================================================
+
+model Zone {
+  id          String   @id @default(uuid())
+  name        String
+  floor       String
+  type        String // ZoneType: 'operational' | 'restricted' | 'charging' | 'maintenance'
+  bounds      String // JSON: { x, y, width, height }
+  color       String?
+  description String?
+  metadata    String? // JSON: Record<string, unknown>
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([name, floor])
+  @@index([floor])
+  @@index([type])
+}
+
+// ============================================================================
+// EVENT LOG
+// ============================================================================
+
+model Event {
+  id        String   @id @default(uuid())
+  actor     String // 'user' | 'agent' | 'system'
+  content   String // JSON: A2AMessage
+  timestamp DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([actor])
+}
+
+// ============================================================================
+// USER AUTHENTICATION
+// ============================================================================
+
+model User {
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  passwordHash         String
+  name                 String
+  role                 String    @default("viewer") // UserRole: 'admin' | 'operator' | 'viewer'
+  avatar               String?
+  tenantId             String?
+  isActive             Boolean   @default(true)
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  lastLoginAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  // Relations
+  refreshTokens RefreshToken[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([token])
+}

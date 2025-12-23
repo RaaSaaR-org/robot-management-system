@@ -30,6 +30,10 @@ node_modules/
 .env
 .env*
 !.env.example
+
+# Database
+*.db
+*.db-journal
 .vscode
 # OS specific
 
