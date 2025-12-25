@@ -16,6 +16,7 @@ import { robotRoutes } from './routes/robot.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { zoneRoutes } from './routes/zone.routes.js';
+import { commandRoutes } from './routes/command.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -65,6 +66,9 @@ export function createApp(): Express {
 
   // Zone routes (protected)
   app.use('/api/zones', authMiddleware, zoneRoutes);
+
+  // Command routes (protected)
+  app.use('/api/command', authMiddleware, commandRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

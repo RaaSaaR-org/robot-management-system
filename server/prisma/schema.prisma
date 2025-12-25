@@ -302,3 +302,27 @@ model RefreshToken {
   @@index([expiresAt])
   @@index([token])
 }
+
+// ============================================================================
+// COMMAND INTERPRETATION
+// ============================================================================
+
+model CommandInterpretation {
+  id                    String    @id @default(uuid())
+  robotId               String
+  originalText          String
+  commandType           String // CommandType enum as string
+  parameters            String    @default("{}") // JSON: CommandParameters
+  confidence            Float
+  safetyClassification  String // 'safe' | 'caution' | 'dangerous'
+  warnings              String    @default("[]") // JSON: string[]
+  suggestedAlternatives String    @default("[]") // JSON: string[]
+  status                String    @default("interpreted") // CommandHistoryStatus
+  executedCommandId     String? // Link to RobotCommand if executed
+  createdAt             DateTime  @default(now())
+  executedAt            DateTime?
+
+  @@index([robotId])
+  @@index([createdAt])
+  @@index([status])
+}

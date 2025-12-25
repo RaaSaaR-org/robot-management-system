@@ -31,3 +31,13 @@ export type {
   UpdateZoneInput,
   ZoneFilters,
 } from './ZoneRepository.js';
+export { commandRepository, CommandRepository } from './CommandRepository.js';
+export type {
+  CommandInterpretation,
+  CommandParameters,
+  CommandType,
+  SafetyClassification,
+  CommandHistoryStatus,
+  CreateCommandInterpretationInput,
+  CommandHistoryResponse,
+} from './CommandRepository.js';
