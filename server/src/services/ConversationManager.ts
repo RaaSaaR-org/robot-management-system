@@ -37,6 +37,8 @@ export class ConversationManager {
   private taskCallbacks: Set<TaskEventCallback> = new Set();
   // In-memory agent cache for quick lookups
   private agentCache: Map<string, A2AAgentCard> = new Map();
+  // Message-to-task mapping for tracking which message belongs to which task
+  private messageToTaskMap: Map<string, string> = new Map();
 
   // ============================================================================
   // INITIALIZATION
@@ -51,6 +53,39 @@ export class ConversationManager {
       this.agentCache.set(agent.name, agent);
     }
     console.log(`[ConversationManager] Loaded ${agents.length} agents from database`);
+  }
+
+  // ============================================================================
+  // TASK CONTINUATION HELPERS
+  // ============================================================================
+
+  /**
+   * Check if a task is still open (can receive more messages)
+   */
+  private isTaskOpen(task: A2ATask): boolean {
+    return ['submitted', 'working', 'input_required'].includes(task.status.state);
+  }
+
+  /**
+   * Find an open task for a conversation that can be continued
+   */
+  private getOpenTaskForConversation(conversationId: string): A2ATask | undefined {
+    const conversation = this.activeConversations.get(conversationId);
+    if (!conversation?.messages.length) return undefined;
+
+    // Find last message with a task
+    for (let i = conversation.messages.length - 1; i >= 0; i--) {
+      const msg = conversation.messages[i];
+      if (msg.taskId) {
+        const task = this.activeTasks.get(msg.taskId);
+        if (task && this.isTaskOpen(task)) {
+          return task;
+        }
+        // If task exists but is closed, stop looking (most recent task is done)
+        break;
+      }
+    }
+    return undefined;
   }
 
   // ============================================================================
@@ -124,12 +159,16 @@ export class ConversationManager {
       throw new Error(`Conversation ${conversationId} not found`);
     }
 
-    // Create user message
+    // Check for open task to continue (A2A protocol: link follow-up messages to open tasks)
+    const openTask = this.getOpenTaskForConversation(conversationId);
+
+    // Create user message with task linkage
     const userMessage: A2AMessage = {
       messageId: uuidv4(),
       role: 'user',
       parts: [{ kind: 'text', text }],
       contextId: conversationId,
+      taskId: openTask?.id, // Link to open task if exists
       timestamp: new Date().toISOString(),
     };
 
@@ -143,9 +182,21 @@ export class ConversationManager {
     // Mark as pending
     this.pendingMessages.set(userMessage.messageId, 'pending');
 
-    // Create a task for this message
-    const task = await this.createTask(conversationId);
-    conversation.taskIds.push(task.id);
+    // Use existing open task or create a new one
+    const task = openTask || (await this.createTask(conversationId));
+    userMessage.taskId = task.id;
+
+    // Track message-to-task mapping
+    this.messageToTaskMap.set(userMessage.messageId, task.id);
+
+    // Add message to task history
+    if (!task.history) task.history = [];
+    task.history.push(userMessage);
+
+    // Only add taskId to conversation if it's a new task
+    if (!openTask) {
+      conversation.taskIds.push(task.id);
+    }
 
     // Add event
     await this.addEvent({
@@ -185,13 +236,20 @@ export class ConversationManager {
     await this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
 
     try {
+      // Prepare message for remote agent - don't include server's taskId
+      // The remote agent will create its own task
+      const messageForAgent: A2AMessage = {
+        ...userMessage,
+        taskId: undefined, // Remove server's taskId - agent creates its own
+      };
+
       // Prepare JSON-RPC request
       const request: JSONRPCRequest = {
         jsonrpc: '2.0',
         id: uuidv4(),
         method: 'message/send',
         params: {
-          message: userMessage,
+          message: messageForAgent,
         },
       };
 
@@ -379,10 +437,49 @@ export class ConversationManager {
   }
 
   /**
-   * Get pending message statuses
+   * Get pending message statuses with meaningful progress text (A2A protocol)
    */
   getPendingMessages(): Array<[string, string]> {
-    return Array.from(this.pendingMessages.entries());
+    const result: Array<[string, string]> = [];
+
+    for (const [messageId, _status] of this.pendingMessages) {
+      const taskId = this.messageToTaskMap.get(messageId);
+
+      if (taskId) {
+        const task = this.activeTasks.get(taskId);
+
+        if (task?.history?.length) {
+          // Get status from last message in task history (from agent updates)
+          const lastMsg = task.history[task.history.length - 1];
+          // Only use agent messages for status text
+          if (lastMsg.role === 'agent') {
+            const textPart = lastMsg.parts.find((p) => p.kind === 'text');
+            if (textPart && 'text' in textPart) {
+              // Truncate long messages for status display
+              const statusText =
+                textPart.text.length > 100
+                  ? textPart.text.slice(0, 100) + '...'
+                  : textPart.text;
+              result.push([messageId, statusText]);
+              continue;
+            }
+          }
+        }
+
+        // Default based on task state
+        const stateText =
+          task?.status.state === 'working'
+            ? 'Working...'
+            : task?.status.state === 'input_required'
+              ? 'Waiting for input...'
+              : 'Processing...';
+        result.push([messageId, stateText]);
+      } else {
+        result.push([messageId, 'Processing...']);
+      }
+    }
+
+    return result;
   }
 
   // ============================================================================
@@ -416,8 +513,30 @@ export class ConversationManager {
     const task = await taskRepository.updateStatus(taskId, status);
     if (!task) return;
 
+    // Add status message to task history if present (A2A protocol)
+    if (status.message) {
+      if (!task.history) task.history = [];
+      // Avoid duplicates - check if message already in history
+      const alreadyInHistory = task.history.some(
+        (m) => m.messageId === status.message?.messageId
+      );
+      if (!alreadyInHistory) {
+        task.history.push(status.message);
+      }
+    }
+
     // Update cache
     this.activeTasks.set(taskId, task);
+
+    // Clean up pending messages when task completes or fails
+    if (['completed', 'failed', 'canceled'].includes(status.state)) {
+      // Find and remove all pending messages linked to this task
+      for (const [messageId, linkedTaskId] of this.messageToTaskMap) {
+        if (linkedTaskId === taskId) {
+          this.pendingMessages.delete(messageId);
+        }
+      }
+    }
 
     // Notify callbacks
     this.notifyTaskEvent({
@@ -528,10 +647,100 @@ export class ConversationManager {
   // ============================================================================
 
   /**
-   * Select the best agent for a given message based on capabilities
+   * Detect if a message is a system-level question that should be answered
+   * by the orchestrator rather than routed to a robot agent.
    */
-  selectAgentForMessage(message: string): A2AAgentCard | null {
-    const agents = this.listAgents();
+  private isSystemQuestion(message: string): boolean {
+    const lowerMessage = message.toLowerCase();
+
+    const systemPatterns = [
+      /what robots?/,
+      /which robots?/,
+      /list.*robots?/,
+      /show.*robots?/,
+      /how many robots?/,
+      /fleet status/,
+      /robots?.*(online|available|connected)/,
+      /available robots?/,
+      /connected robots?/,
+    ];
+
+    return systemPatterns.some((pattern) => pattern.test(lowerMessage));
+  }
+
+  /**
+   * Handle system-level questions directly without routing to a robot.
+   */
+  private async handleSystemQuestion(
+    conversationId: string,
+    text: string,
+    userMessage: A2AMessage
+  ): Promise<{ messageId: string; task?: A2ATask }> {
+    const conversation = await this.getConversation(conversationId);
+    if (!conversation) {
+      throw new Error(`Conversation ${conversationId} not found`);
+    }
+
+    const { robotManager } = await import('./RobotManager.js');
+    const robots = await robotManager.listRobots();
+    const connectedCount = robotManager.getConnectedAgents().length;
+
+    // Generate response based on question
+    let responseText: string;
+    const lowerText = text.toLowerCase();
+
+    if (lowerText.includes('how many')) {
+      responseText = `There are ${robots.length} robot(s) registered, ${connectedCount} currently online.`;
+    } else {
+      // List robots
+      if (robots.length === 0) {
+        responseText = 'No robots are currently registered in the system.';
+      } else {
+        const robotList = robots
+          .map((r) => `- **${r.name}** (${r.model}): ${r.status} - Battery: ${r.batteryLevel}%`)
+          .join('\n');
+        responseText = `**Fleet Status** (${connectedCount}/${robots.length} online):\n\n${robotList}`;
+      }
+    }
+
+    // Create agent response message from orchestrator
+    const agentMessage: A2AMessage = {
+      messageId: uuidv4(),
+      role: 'agent',
+      parts: [{ kind: 'text', text: responseText }],
+      contextId: conversationId,
+      timestamp: new Date().toISOString(),
+      metadata: { orchestrator: true },
+    };
+
+    // Save to database
+    await conversationRepository.addMessage(conversationId, agentMessage);
+
+    // Update cached conversation
+    conversation.messages.push(agentMessage);
+    conversation.updatedAt = new Date().toISOString();
+
+    // Add event
+    await this.addEvent({
+      id: uuidv4(),
+      actor: 'agent',
+      content: agentMessage,
+      timestamp: Date.now(),
+    });
+
+    return { messageId: agentMessage.messageId };
+  }
+
+  /**
+   * Select the best agent for a given message based on capabilities
+   * Only considers connected robots (not stale registrations)
+   */
+  selectAgentForMessage(message: string, connectedAgents?: A2AAgentCard[]): A2AAgentCard | null {
+    // Use provided connected agents, or fall back to registered agents
+    const agents = connectedAgents && connectedAgents.length > 0
+      ? connectedAgents
+      : this.listAgents();
+
     if (agents.length === 0) return null;
 
     const lowerMessage = message.toLowerCase();
@@ -597,16 +806,7 @@ export class ConversationManager {
       throw new Error(`Conversation ${conversationId} not found`);
     }
 
-    // Select best agent for this message
-    const selectedAgent = this.selectAgentForMessage(text);
-
-    if (!selectedAgent) {
-      throw new Error('No suitable agent found for this request. Please register agents first.');
-    }
-
-    console.log(`[Orchestrator] Selected agent: ${selectedAgent.name} for message: "${text}"`);
-
-    // Create user message with orchestration metadata
+    // First, save the user message
     const userMessage: A2AMessage = {
       messageId: uuidv4(),
       role: 'user',
@@ -623,13 +823,6 @@ export class ConversationManager {
     conversation.messages.push(userMessage);
     conversation.updatedAt = new Date().toISOString();
 
-    // Mark as pending
-    this.pendingMessages.set(userMessage.messageId, 'pending');
-
-    // Create task
-    const task = await this.createTask(conversationId);
-    conversation.taskIds.push(task.id);
-
     // Add event
     await this.addEvent({
       id: uuidv4(),
@@ -637,6 +830,47 @@ export class ConversationManager {
       content: userMessage,
       timestamp: Date.now(),
     });
+
+    // Check if this is a system question (handled by orchestrator, not robot)
+    if (this.isSystemQuestion(text)) {
+      console.log(`[Orchestrator] Handling system question: "${text}"`);
+      return this.handleSystemQuestion(conversationId, text, userMessage);
+    }
+
+    // Get connected agents from RobotManager (dynamic import to avoid circular dependency)
+    const { robotManager } = await import('./RobotManager.js');
+    const connectedAgents = robotManager.getConnectedAgents();
+
+    // Select best agent for this message (only from connected robots)
+    const selectedAgent = this.selectAgentForMessage(text, connectedAgents);
+
+    if (!selectedAgent) {
+      throw new Error('No connected robots available. Please ensure a robot agent is running.');
+    }
+
+    console.log(`[Orchestrator] Selected agent: ${selectedAgent.name} for message: "${text}"`);
+
+    // Check for open task to continue (A2A protocol)
+    const openTask = this.getOpenTaskForConversation(conversationId);
+
+    // Mark as pending
+    this.pendingMessages.set(userMessage.messageId, 'pending');
+
+    // Use existing open task or create a new one
+    const task = openTask || (await this.createTask(conversationId));
+    userMessage.taskId = task.id;
+
+    // Track message-to-task mapping
+    this.messageToTaskMap.set(userMessage.messageId, task.id);
+
+    // Add message to task history
+    if (!task.history) task.history = [];
+    task.history.push(userMessage);
+
+    // Only add taskId to conversation if it's a new task
+    if (!openTask) {
+      conversation.taskIds.push(task.id);
+    }
 
     // Send to selected agent with metadata
     await this.sendToRemoteAgentOrchestrated(conversationId, task.id, userMessage, selectedAgent);
@@ -663,12 +897,19 @@ export class ConversationManager {
     await this.updateTaskStatus(taskId, { state: 'working', timestamp: new Date().toISOString() });
 
     try {
+      // Prepare message for remote agent - don't include server's taskId
+      // The remote agent will create its own task
+      const messageForAgent: A2AMessage = {
+        ...userMessage,
+        taskId: undefined, // Remove server's taskId - agent creates its own
+      };
+
       // Prepare JSON-RPC request
       const request: JSONRPCRequest = {
         jsonrpc: '2.0',
         id: uuidv4(),
         method: 'message/send',
-        params: { message: userMessage },
+        params: { message: messageForAgent },
       };
 
       console.log(`[Orchestrator] Sending to ${agent.name} at ${agent.url}`);
