@@ -363,6 +363,16 @@ export class RobotManager {
     return registered ?? undefined;
   }
 
+  /**
+   * Get agent cards for connected robots only
+   * Used by orchestrator to route messages only to online robots
+   */
+  getConnectedAgents(): A2AAgentCard[] {
+    return Array.from(this.robotCache.values())
+      .filter((r) => r.isConnected)
+      .map((r) => r.agentCard);
+  }
+
   // ============================================================================
   // ROBOT COMMANDS
   // ============================================================================
@@ -477,30 +487,36 @@ export class RobotManager {
         const wasConnected = registered.isConnected;
         registered.isConnected = true;
 
-        // Update robot status if changed
-        if (response.data.robotStatus && response.data.robotStatus !== registered.robot.status) {
+        // Always update battery level from health check
+        const newBatteryLevel = response.data.batteryLevel ?? registered.robot.batteryLevel;
+        const statusChanged = response.data.robotStatus && response.data.robotStatus !== registered.robot.status;
+        const batteryChanged = newBatteryLevel !== registered.robot.batteryLevel;
+
+        // Update in-memory cache
+        registered.robot.batteryLevel = newBatteryLevel;
+        registered.robot.lastSeen = now;
+
+        if (statusChanged) {
           registered.robot.status = response.data.robotStatus;
-          registered.robot.batteryLevel = response.data.batteryLevel ?? registered.robot.batteryLevel;
-          registered.robot.lastSeen = now;
           registered.robot.updatedAt = now;
+        }
 
-          // Persist to database
-          await robotRepository.updateHealthCheck(
-            registered.robot.id,
-            true,
-            response.data.robotStatus,
-            response.data.batteryLevel
-          );
+        // Always persist battery level to database
+        await robotRepository.updateHealthCheck(
+          registered.robot.id,
+          true,
+          statusChanged ? response.data.robotStatus : undefined,
+          newBatteryLevel
+        );
 
+        // Emit event if status or battery changed significantly
+        if (statusChanged || batteryChanged) {
           this.emitEvent({
             type: 'robot_status_changed',
             robotId: registered.robot.id,
             robot: registered.robot,
             timestamp: now,
           });
-        } else {
-          // Just update health check time
-          await robotRepository.updateHealthCheck(registered.robot.id, true);
         }
 
         // Emit reconnection event if was disconnected
