@@ -5,6 +5,7 @@
  */
 
 import { memo, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { cn } from '@/shared/utils';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import type { A2AMessage, A2APart, FormSchema } from '../types';
@@ -46,7 +47,9 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
 
   if (isTextPart(part)) {
     return (
-      <p className="whitespace-pre-wrap break-words">{part.text}</p>
+      <div className="prose prose-sm dark:prose-invert max-w-none break-words prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0">
+        <ReactMarkdown>{part.text}</ReactMarkdown>
+      </div>
     );
   }
 
