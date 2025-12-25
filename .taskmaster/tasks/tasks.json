@@ -289,12 +289,237 @@
         "status": "deferred",
         "subtasks": [],
         "updatedAt": "2025-12-22T21:20:35.686Z"
+      },
+      {
+        "id": "20",
+        "title": "Structured Logging Infrastructure (Compliance)",
+        "description": "Implement append-only structured logging with tamper-evident mechanisms for regulatory compliance across AI Act, GDPR, and Machinery Regulation.",
+        "details": "**Regulatory Compliance Feature: AI Act Art. 12, GDPR Art. 30, MR Annex III**\n\n## Server (`server/src/`)\n- **Logging service**: Create `ComplianceLogService.ts` with:\n  - Append-only structured logging with hash chains for tamper evidence\n  - JSON format with ISO 8601 timestamps\n  - Fields: session_id, robot_id, operator_id, event_type, payload\n  - ML model version/hash logging for each AI operation\n  - Input-output matching records for AI decisions\n- **Log storage**: Implement write-once storage mechanism\n- **Log encryption**: AES-256-GCM for logs at rest\n- **Log access**: Role-based access with complete access audit trail\n- **Database**: Create ComplianceLog model with immutable flag\n\n## Robot Agent (`robot-agent/src/`)\n- **AI decision logging**: Log all Genkit AI decisions with context\n- **Safety decision recording**: Log safety-related decisions with confidence scores\n- **Movement logging**: Record navigation decisions for autonomous operations\n\n**Key Files:**\n- Server: Create `server/src/services/ComplianceLogService.ts`\n- Server: Create `server/src/routes/compliance-log.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with ComplianceLog model\n- Robot: Update `robot-agent/src/agent/agent-executor.ts` for AI logging",
+        "testStrategy": "Test log immutability (cannot modify existing logs). Test hash chain verification. Test AES-256 encryption at rest. Test role-based log access. Test AI decision logging captures all required fields. Verify timestamp accuracy and format.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "16"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "21",
+        "title": "Encryption & Secure Communication (Compliance)",
+        "description": "Implement AES-256 encryption at rest and TLS 1.3 for all communications per GDPR Art. 32, NIS2, CRA, and EN 18031 requirements.",
+        "details": "**Regulatory Compliance Feature: GDPR Art. 32, NIS2 Art. 21, CRA Annex I, EN 18031**\n\n## Server (`server/src/`)\n- **Database encryption**: Implement AES-256-GCM for SQLite/PostgreSQL data at rest\n- **TLS configuration**: Enforce TLS 1.3 for all HTTP/WebSocket connections\n- **Certificate management**: Create certificate rotation infrastructure\n- **Key management**: Implement secure key storage and rotation\n- **mTLS setup**: Configure mutual TLS for robot-to-server communication\n\n## Robot Agent (`robot-agent/src/`)\n- **TLS client**: Configure TLS 1.3 for server connections\n- **Device certificates**: Implement unique device certificate handling\n- **DTLS**: Configure DTLS for any UDP-based communications\n- **Key storage**: Secure local key storage\n\n## App (`app/src/`)\n- **HTTPS enforcement**: Ensure all API calls use HTTPS\n- **Certificate pinning**: Optional certificate pinning for mobile\n\n**Encryption Standards:**\n- AES-256-GCM for symmetric encryption\n- X25519 for key exchange\n- Ed25519 for signatures\n- SHA-256+ for hashing\n\n**Key Files:**\n- Server: Create `server/src/security/encryption.ts`\n- Server: Create `server/src/security/certificates.ts`\n- Robot: Update `robot-agent/src/api/server.ts` for TLS",
+        "testStrategy": "Test TLS 1.3 is enforced (reject TLS 1.2 and below). Test database encryption/decryption. Test mTLS handshake between robot and server. Verify certificate rotation. Test key management operations.",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "16"
+        ],
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-25T14:17:26.009Z"
+      },
+      {
+        "id": "22",
+        "title": "Multi-Factor Authentication (Compliance)",
+        "description": "Implement FIDO2/WebAuthn and TOTP MFA per NIS2 Art. 21(2)(j) and CRA Annex I requirements.",
+        "details": "**Regulatory Compliance Feature: NIS2 Art. 21(2)(j), CRA Annex I**\n\n## Server (`server/src/`)\n- **FIDO2/WebAuthn**: Primary MFA method implementation\n  - Registration flow for security keys\n  - Authentication flow with challenge/response\n  - Multiple key support per user\n- **TOTP fallback**: RFC 6238 TOTP as fallback option\n  - Secret generation and QR code display\n  - 6-digit code verification with time window\n- **Account lockout**: Lock after 5 failed MFA attempts\n- **Password requirements**: Minimum 12 characters, complexity rules\n- **First-use credential change**: Force password change on first login\n- **Privileged access management**: Enhanced auth for admin operations\n\n## App (`app/src/features/auth/`)\n- **MFA enrollment UI**: Security key registration, TOTP setup\n- **MFA challenge UI**: WebAuthn prompt, TOTP code input\n- **Recovery codes**: Display and manage recovery codes\n- **MFA settings**: Enable/disable MFA methods\n\n**Key Files:**\n- Server: Create `server/src/services/MFAService.ts`\n- Server: Update `server/src/routes/auth.routes.ts` with MFA endpoints\n- Server: Update `server/prisma/schema.prisma` with MFACredential model\n- App: Create `app/src/features/auth/components/MFAEnrollment.tsx`\n- App: Create `app/src/features/auth/components/MFAChallenge.tsx`",
+        "testStrategy": "Test FIDO2 registration and authentication flow. Test TOTP code generation and verification. Test account lockout after failed attempts. Test password complexity requirements. Test recovery code usage.",
+        "priority": "high",
+        "dependencies": [
+          "11",
+          "19"
+        ],
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-25T14:17:56.852Z"
+      },
+      {
+        "id": "23",
+        "title": "Device Identity & Secure Boot (Compliance)",
+        "description": "Implement unique device certificates and secure boot verification per CRA Annex I, EN 18031, and MR Annex III.",
+        "details": "**Regulatory Compliance Feature: CRA Annex I, EN 18031, MR Annex III**\n\n## Robot Agent (`robot-agent/src/`)\n- **Device certificates**: Generate and manage unique per-device X.509 certificates\n- **No default passwords**: Implement unique credential generation per device\n- **Secure boot verification**: Cryptographic signature verification at startup\n- **Software integrity**: Display installed software version and integrity status\n- **Anti-rollback**: Prevent installation of older vulnerable versions\n- **TPM integration**: Optional TPM 2.0 support for key storage\n- **Device identity API**: Expose device identity information securely\n\n## Server (`server/src/`)\n- **Device registry**: Store and validate device certificates\n- **Certificate issuance**: PKI infrastructure for device certificate management\n- **Device provisioning**: Secure device onboarding workflow\n- **Integrity verification**: Verify device software integrity on connection\n\n**Key Files:**\n- Robot: Create `robot-agent/src/security/device-identity.ts`\n- Robot: Create `robot-agent/src/security/secure-boot.ts`\n- Robot: Update `robot-agent/src/api/server.ts` for certificate auth\n- Server: Create `server/src/services/DeviceRegistryService.ts`\n- Server: Update `server/prisma/schema.prisma` with DeviceCertificate model",
+        "testStrategy": "Test unique certificate generation per device. Test certificate-based authentication. Test software integrity verification. Test anti-rollback protection. Test device provisioning workflow.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-25T14:18:54.850Z"
+      },
+      {
+        "id": "24",
+        "title": "Comprehensive Audit Trail System (Compliance)",
+        "description": "Implement complete audit trail system with retention policies per AI Act Art. 18-19, MR Annex III, and GDPR Art. 30.",
+        "details": "**Regulatory Compliance Feature: AI Act Art. 18-19, MR Annex III, GDPR Art. 30**\n\n## Server (`server/src/`)\n- **Audit events**: Create comprehensive AuditEventService\n  - Safety software version changes (5-year retention)\n  - AI safety decisions (1-year retention)\n  - Intervention evidence collection\n  - Movement decisions for autonomous ops\n  - All CRUD operations on sensitive data\n- **RoPA registry**: Records of Processing Activities\n  - Processing purposes\n  - Data categories\n  - Recipients and transfers\n  - Retention periods\n  - Security measures\n- **Log export API**: Deployer-accessible log export (6-month minimum)\n- **Provider documentation**: 10-year retention for technical docs\n- **Access audit**: Log all audit log access attempts\n\n## App (`app/src/`)\n- **Audit log viewer**: Admin interface for viewing audit trails\n- **Export functionality**: Download audit logs in various formats\n- **Filter and search**: Query audit logs by date, user, action type\n\n**Retention Matrix:**\n- Technical documentation: 10 years\n- Safety software versions: 5 years\n- AI decision logs: 1 year\n- Operational logs: 6 months\n\n**Key Files:**\n- Server: Create `server/src/services/AuditEventService.ts`\n- Server: Create `server/src/services/RoPAService.ts`\n- Server: Create `server/src/routes/audit.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with AuditEvent, RoPA models\n- App: Create `app/src/features/admin/components/AuditLogViewer.tsx`",
+        "testStrategy": "Test audit event capture for all required actions. Test retention policy enforcement. Test log export API. Test RoPA registry completeness. Test access audit logging. Verify data cannot be modified after creation.",
+        "priority": "high",
+        "dependencies": [
+          "20",
+          "16"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "25",
+        "title": "Data Retention Engine (Compliance)",
+        "description": "Implement automated data retention enforcement per AI Act Art. 19, GDPR Art. 5(1)(e), and MR Annex III.",
+        "details": "**Regulatory Compliance Feature: AI Act Art. 19, GDPR Art. 5(1)(e), MR Annex III**\n\n## Server (`server/src/`)\n- **Retention policies**: Create RetentionPolicyService\n  - Configurable retention periods per data type\n  - Automated deletion scheduling (cron jobs)\n  - Exception handling for legal holds\n- **Data categories and periods:**\n  - Technical documentation: 10 years\n  - Safety software versions: 5 years per upload\n  - AI decision logs: 1 year minimum\n  - Deployer operational logs: 6 months\n  - CCTV/video (no incident): 72 hours-7 days\n  - Training records: 2 years\n  - First aid/incident records: 5 years\n- **Deletion audit**: Create proof-of-deletion logs\n- **Legal hold**: Suspend deletion for data under legal hold\n- **Archive tier**: Move data to cold storage before deletion\n\n**Key Files:**\n- Server: Create `server/src/services/RetentionPolicyService.ts`\n- Server: Create `server/src/jobs/retention-cleanup.ts`\n- Server: Create `server/src/routes/retention.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with RetentionPolicy, LegalHold models",
+        "testStrategy": "Test automated deletion at retention periods. Test deletion audit logging. Test legal hold prevents deletion. Test archive tier functionality. Test configurable retention per data type.",
+        "priority": "high",
+        "dependencies": [
+          "16",
+          "24"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "26",
+        "title": "GDPR Rights Self-Service Portal (Compliance)",
+        "description": "Implement GDPR data subject rights portal per Articles 15-22 (access, rectification, erasure, portability, objection).",
+        "details": "**Regulatory Compliance Feature: GDPR Articles 15-22**\n\n## Server (`server/src/`)\n- **Art. 15 Access**: Self-service data export endpoint\n  - Compile all user data\n  - Third-party pixelation for CCTV\n  - 30-day response SLA tracking\n- **Art. 16 Rectification**: Data correction interface\n  - Edit interface for correctable data\n  - Audit trail of corrections\n- **Art. 17 Erasure**: Automated deletion workflows\n  - Right to be forgotten requests\n  - Exception handling (legal retention)\n- **Art. 18 Restriction**: Data flagging mechanism\n  - Processing limitation during disputes\n- **Art. 20 Portability**: Machine-readable export\n  - JSON/CSV export formats\n  - Automated data only\n- **Art. 21 Object**: Objection registration\n  - Re-assessment workflow\n- **Art. 22 ADM Safeguards**: Automated decision making\n  - Human intervention queue\n  - Contest workflow\n  - 72-hour acknowledgment SLA\n\n## App (`app/src/features/privacy/`)\n- **Privacy portal**: Self-service GDPR rights interface\n- **Data export**: Download personal data\n- **Deletion request**: Submit erasure requests\n- **Consent management**: View and manage consents\n- **Request tracking**: Track GDPR request status\n\n**Key Files:**\n- Server: Create `server/src/services/GDPRService.ts`\n- Server: Create `server/src/routes/gdpr.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with GDPRRequest model\n- App: Create `app/src/features/privacy/` feature module\n- App: Create `app/src/features/privacy/components/PrivacyPortal.tsx`",
+        "testStrategy": "Test data export completeness. Test erasure workflow including exceptions. Test portability export formats. Test request SLA tracking. Test human intervention queue for ADM. Test third-party data pixelation.",
+        "priority": "high",
+        "dependencies": [
+          "11",
+          "16"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "27",
+        "title": "Incident Reporting Infrastructure (Compliance)",
+        "description": "Implement incident detection and multi-authority reporting per AI Act Art. 73, GDPR Art. 33-34, NIS2 Art. 23, and CRA Art. 14.",
+        "details": "**Regulatory Compliance Feature: AI Act Art. 73, GDPR Art. 33-34, NIS2 Art. 23, CRA Art. 14**\n\n## Server (`server/src/`)\n- **Incident detection**:\n  - Safety incident triggers (force/collision events)\n  - Security incident triggers (intrusion, auth failures)\n  - Anomaly detection in robot behavior\n- **Evidence preservation**:\n  - Immutable incident logging\n  - System state snapshots on incident\n- **Breach assessment**:\n  - Risk scoring matrix\n  - Automated severity classification\n- **Notification workflows** with authority-specific timelines:\n  - **AI Act**: 2/10/15 days depending on severity\n  - **GDPR**: 72 hours to DPA, immediate to data subjects if high risk\n  - **NIS2**: 24h early warning, 72h notification, 1 month final\n  - **CRA**: 24h for exploited vulnerabilities\n- **Timeline tracking**: Dashboard for deadline compliance\n- **Template system**: Pre-built notification templates per authority\n\n## App (`app/src/features/incidents/`)\n- **Incident dashboard**: View and manage incidents\n- **Reporting workflow**: Guide through notification process\n- **Timeline tracker**: Visual timeline of required actions\n- **Template editor**: Customize notification templates\n\n**Key Files:**\n- Server: Create `server/src/services/IncidentService.ts`\n- Server: Create `server/src/services/BreachAssessmentService.ts`\n- Server: Create `server/src/routes/incident.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with Incident, IncidentNotification models\n- App: Create `app/src/features/incidents/` feature module",
+        "testStrategy": "Test incident auto-detection triggers. Test evidence preservation immutability. Test severity classification. Test notification timeline tracking. Test template generation. Test multi-authority workflow.",
+        "priority": "high",
+        "dependencies": [
+          "12",
+          "24"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "28",
+        "title": "Vulnerability Management & SBOM (Compliance)",
+        "description": "Implement Software Bill of Materials and vulnerability management per CRA Art. 14 and Annex V.",
+        "details": "**Regulatory Compliance Feature: CRA Art. 14, Annex V**\n\n## Server (`server/src/`)\n- **SBOM generation**: Automated Software Bill of Materials\n  - npm/package dependencies\n  - System libraries\n  - CycloneDX or SPDX format\n- **SBOM storage**: 10-year retention requirement\n- **Vulnerability tracking**:\n  - CVE monitoring for dependencies\n  - Severity classification (CVSS)\n  - Affected component mapping\n- **Disclosure program**: Coordinated vulnerability disclosure\n  - Security contact publication\n  - Disclosure timeline management\n- **Patch management**:\n  - Security update tracking\n  - Patch release workflow\n\n## Robot Agent (`robot-agent/src/`)\n- **Local SBOM**: Generate robot software SBOM\n- **Vulnerability status**: Report known vulnerabilities\n\n## App (`app/src/features/security/`)\n- **SBOM viewer**: Display component inventory\n- **Vulnerability dashboard**: Track CVEs and patches\n- **Disclosure portal**: Public vulnerability reporting\n\n**Key Files:**\n- Server: Create `server/src/services/SBOMService.ts`\n- Server: Create `server/src/services/VulnerabilityService.ts`\n- Server: Create `server/src/routes/security.routes.ts`\n- Robot: Create `robot-agent/src/security/sbom.ts`\n- App: Create `app/src/features/security/` feature module",
+        "testStrategy": "Test SBOM generation completeness. Test CVE monitoring and alerting. Test vulnerability severity classification. Test SBOM export formats (CycloneDX, SPDX). Test disclosure workflow.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "29",
+        "title": "Secure Update System OTA (Compliance)",
+        "description": "Implement secure over-the-air updates with signing, rollback, and approval workflows per CRA Art. 13 and MR Art. 10.",
+        "details": "**Regulatory Compliance Feature: CRA Art. 13, MR Art. 10, Annex I**\n\n## Server (`server/src/`)\n- **Update packages**: Signed update package creation\n  - Ed25519 signature on all packages\n  - Version metadata and changelog\n- **Update distribution**:\n  - TLS 1.3 delivery only\n  - Integrity verification endpoint\n  - Update availability notification\n- **Approval workflows**:\n  - Safety update impact assessment\n  - Change control board approval for safety updates\n  - Dual approval for critical updates\n- **Rollback management**:\n  - Previous version storage\n  - Rollback trigger conditions\n\n## Robot Agent (`robot-agent/src/`)\n- **Secure update client**:\n  - Signature verification before install\n  - Atomic updates (all-or-nothing)\n  - Automatic rollback on failure\n  - Anti-rollback for security updates\n- **Update notifications**: User notification of available updates\n- **Opt-out support**: Allow update deferral (not default)\n\n## App (`app/src/features/updates/`)\n- **Update management**: Admin interface for updates\n- **Rollback controls**: Trigger rollback for fleet\n- **Approval UI**: Approve pending updates\n\n**Update Support Period: 5-10 years after market placement**\n\n**Key Files:**\n- Server: Create `server/src/services/UpdateService.ts`\n- Server: Create `server/src/routes/update.routes.ts`\n- Robot: Create `robot-agent/src/updates/secure-update.ts`\n- App: Create `app/src/features/updates/` feature module",
+        "testStrategy": "Test package signing and verification. Test atomic update installation. Test rollback on failure. Test anti-rollback protection. Test approval workflow. Test TLS-only delivery.",
+        "priority": "high",
+        "dependencies": [
+          "23",
+          "28"
+        ],
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-25T14:25:45.077Z"
+      },
+      {
+        "id": "30",
+        "title": "Enhanced E-Stop & Safety Monitoring (Compliance)",
+        "description": "Enhance emergency stop and safety monitoring per MR Annex III, ISO 10218-1, and ISO/TS 15066 requirements.",
+        "details": "**Regulatory Compliance Feature: MR Annex III, ISO 10218-1, ISO/TS 15066**\n\n## Robot Agent (`robot-agent/src/`)\n- **Safety monitoring at 1kHz**:\n  - Force/torque monitoring (Butterworth 100Hz filter)\n  - Speed limiting (≤250 mm/s TCP in manual mode)\n  - Position/proximity monitoring\n- **Communication timeout**: Safe state on server disconnect (1s default)\n- **Protective stop logging**: Full context capture on stop events\n- **Safety-rated monitored stop**: Stop Category 2 implementation\n- **Fail-safe**: Automatic protective stop on any safety system failure\n\n## Server (`server/src/`)\n- **E-stop endpoints**:\n  - Individual robot halt\n  - Fleet-wide emergency stop\n  - Geographic zone stop\n- **E-stop status**: Real-time status via WebSocket\n- **Reset workflow**: Deliberate separate start action required\n- **E-stop logging**: Capture all e-stop events with context\n\n## App (`app/src/features/safety/`)\n- **Enhanced E-stop button**: Per-robot and fleet-wide\n- **Zone-based stop**: Stop robots in specific zones\n- **Safety status dashboard**: Real-time safety metrics\n- **Stop confirmation**: Visual confirmation of stop state\n\n**ISO/TS 15066 Force Limits** (stored in config):\n- Skull/Forehead: 130N (contact not permissible)\n- Hands/Fingers: 140N quasi-static, 280N transient\n\n**Key Files:**\n- Robot: Update `robot-agent/src/tools/navigation.ts` for speed limits\n- Robot: Create `robot-agent/src/safety/force-monitor.ts`\n- Server: Create `server/src/routes/safety.routes.ts`\n- Server: Update WebSocket for e-stop status\n- App: Update `app/src/features/alerts/components/EmergencyStopButton.tsx`",
+        "testStrategy": "Test e-stop response time (<100ms). Test fleet-wide stop. Test zone-based stop. Test reset workflow. Test communication timeout triggers safe state. Test force limit enforcement. Test protective stop logging.",
+        "priority": "high",
+        "dependencies": [
+          "6"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "31",
+        "title": "Human Oversight Dashboard (Compliance)",
+        "description": "Implement human oversight mechanisms per AI Act Art. 14 including intervention, override, and explainability.",
+        "details": "**Regulatory Compliance Feature: AI Act Art. 14**\n\n## App (`app/src/features/oversight/`)\n- **Intervention capabilities**:\n  - Stop/interrupt per robot and fleet-wide (Art. 14(4)(e))\n  - Manual task reassignment (Art. 14(4)(d))\n  - Local manual control mode activation\n- **Capability understanding** (Art. 14(4)(a)):\n  - Robot capabilities dashboard\n  - Current limitations display\n  - Confidence level indicators\n  - Anomaly indicators with visual alerts\n- **Output interpretation** (Art. 14(4)(c)):\n  - Decision explanation interface\n  - Input factors visualization\n  - Decision logic display\n  - Confidence scores\n  - Alternatives considered\n- **Automation bias prevention** (Art. 14(3)):\n  - Confirmation prompts for safety-critical decisions\n  - Periodic manual verification requirements\n  - Training module on automation bias\n\n## Server (`server/src/`)\n- **Oversight API**: Endpoints for all intervention actions\n- **Decision logging**: Store all oversight interactions\n- **Alert integration**: Configurable alert thresholds\n\n**Alert Response Times:**\n- Safety violation: ≤100ms\n- Anomaly detection: ≤1 second\n- System failure: Immediate\n\n**Key Files:**\n- App: Create `app/src/features/oversight/` feature module\n- App: Create `app/src/features/oversight/components/OversightDashboard.tsx`\n- App: Create `app/src/features/oversight/components/DecisionExplainer.tsx`\n- Server: Create `server/src/routes/oversight.routes.ts`",
+        "testStrategy": "Test intervention actions complete within SLA. Test capability dashboard accuracy. Test decision explanation completeness. Test automation bias prevention prompts. Test alert response times.",
+        "priority": "high",
+        "dependencies": [
+          "3",
+          "6",
+          "30"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "32",
+        "title": "AI Explainability API (Compliance)",
+        "description": "Implement AI decision explainability and transparency per AI Act Art. 13 and Art. 50.",
+        "details": "**Regulatory Compliance Feature: AI Act Art. 13, Art. 50**\n\n## Robot Agent (`robot-agent/src/`)\n- **Decision explanation generation**:\n  - Capture input factors for each decision\n  - Extract decision logic from Genkit\n  - Calculate and report confidence scores\n  - Track alternatives considered\n- **AI disclosure**: Audio/visual indicator when AI is active\n\n## Server (`server/src/`)\n- **Explainability API** (Art. 13(1)):\n  - GET /api/decisions/:id/explanation\n  - Returns: input_factors, decision_logic, confidence_score, alternatives\n- **Performance metrics** (Art. 13(3)(b)):\n  - Precision/recall metrics\n  - Error rates tracking\n  - Drift indicators\n- **Documentation endpoints** (Art. 13(3)(a)):\n  - Intended purpose\n  - Accuracy metrics\n  - Known limitations\n  - Human oversight requirements\n- **Limitation disclosure** (Art. 13(3)(c)):\n  - Operating conditions\n  - Environmental constraints\n  - Population performance variations\n\n## App (`app/src/features/explainability/`)\n- **Decision viewer**: Visualize AI decision factors\n- **Performance dashboard**: Metrics and drift indicators\n- **Documentation portal**: Access system documentation\n\n**Key Files:**\n- Robot: Create `robot-agent/src/ai/explainability.ts`\n- Robot: Update `robot-agent/src/agent/agent-executor.ts` for explanation capture\n- Server: Create `server/src/services/ExplainabilityService.ts`\n- Server: Create `server/src/routes/explainability.routes.ts`\n- App: Create `app/src/features/explainability/` feature module",
+        "testStrategy": "Test explanation generation for all decision types. Test confidence score calculation. Test alternatives tracking. Test performance metrics accuracy. Test AI disclosure indicator.",
+        "priority": "high",
+        "dependencies": [
+          "15"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "33",
+        "title": "Technical Documentation System (Compliance)",
+        "description": "Implement technical documentation management per AI Act Annex IV, MR Annex IV, CRA Annex V, and RED Annex V.",
+        "details": "**Regulatory Compliance Feature: AI Act Annex IV, MR Annex IV, CRA Annex V, RED Annex V**\n\n## Server (`server/src/`)\n- **AI System Technical File** (AI Act Annex IV):\n  - General description storage\n  - Design specifications\n  - Data requirements documentation\n  - Risk management records\n  - Testing/validation results\n  - Post-market monitoring plan\n- **Machinery Technical File** (MR Annex IV):\n  - Drawings and diagrams\n  - Risk assessment records\n  - Applied standards list\n  - Test reports\n  - Instructions storage\n- **Cybersecurity Documentation** (CRA Annex V):\n  - Security architecture docs\n  - Attack surface analysis\n  - SBOM integration\n  - Vulnerability handling procedures\n- **Risk assessment storage**:\n  - AI risk management (Art. 9)\n  - Machinery risk (ISO 12100)\n  - DPIA documents\n  - Cybersecurity assessments\n  - Occupational assessments\n- **Conformity declarations**: EU Declaration of Conformity management\n- **Document versioning**: Full audit trail with retention\n- **Public URL**: Publicly accessible conformity documents\n\n**Retention: 10 years after last unit placed on market**\n\n**Key Files:**\n- Server: Create `server/src/services/TechnicalDocService.ts`\n- Server: Create `server/src/routes/documentation.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with TechnicalDoc, RiskAssessment models",
+        "testStrategy": "Test document upload and versioning. Test 10-year retention enforcement. Test public URL access for conformity docs. Test risk assessment linkage. Test audit trail completeness.",
+        "priority": "high",
+        "dependencies": [
+          "24"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "34",
+        "title": "Compliance Monitoring Dashboard (Compliance)",
+        "description": "Implement unified compliance monitoring dashboard tracking all regulatory frameworks and deadlines.",
+        "details": "**Regulatory Compliance Feature: All Frameworks**\n\n## App (`app/src/features/compliance/`)\n- **Regulatory tracker**:\n  - Timeline of regulatory deadlines\n  - Status per framework (AI Act, MR, GDPR, NIS2, CRA, RED, DGUV)\n  - Gap analysis reporting\n- **Document management**:\n  - Document expiry alerts\n  - Certification status\n  - Missing document identification\n- **Training compliance** (DGUV):\n  - Training record tracking\n  - Annual refresh reminders\n  - Competence verification status\n- **Inspection schedules** (DGUV Vorschrift 3):\n  - Electrical inspection (every 4 years)\n  - Force verification (annual)\n  - Biomechanical verification (annual)\n- **Risk assessment tracking**:\n  - Due date monitoring\n  - Update trigger tracking\n\n## Server (`server/src/`)\n- **Compliance API**: Aggregate compliance status\n- **Alert generation**: Deadline and expiry alerts\n- **Report generation**: Compliance reports for auditors\n\n**Key Dates Tracked:**\n- April 2025: NIS2 registration\n- August 2025: RED EN 18031\n- January 2027: Machinery Regulation\n- August 2027: EU AI Act\n- December 2027: CRA\n\n**Key Files:**\n- App: Create `app/src/features/compliance/` feature module\n- App: Create `app/src/features/compliance/components/ComplianceDashboard.tsx`\n- Server: Create `server/src/services/ComplianceTrackerService.ts`\n- Server: Create `server/src/routes/compliance.routes.ts`",
+        "testStrategy": "Test deadline tracking accuracy. Test alert generation for approaching deadlines. Test gap analysis reporting. Test training record management. Test inspection schedule tracking.",
+        "priority": "medium",
+        "dependencies": [
+          "24",
+          "27",
+          "33"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "35",
+        "title": "Human Approval Workflows (Compliance)",
+        "description": "Implement human approval workflows for automated decisions per GDPR Art. 22 and AI Act Art. 14.",
+        "details": "**Regulatory Compliance Feature: GDPR Art. 22, AI Act Art. 14**\n\n## Server (`server/src/`)\n- **Approval workflows**:\n  - Performance evaluation affecting worker: 48-hour SLA human review\n  - Shift/role change based on performance: Supervisor approval required\n  - Disciplinary action trigger: Manager sign-off mandatory (cannot proceed without)\n  - Safety parameter modification: Dual approval (safety officer + admin)\n  - Software update affecting safety: Change control board + rollback plan\n- **Worker rights** (EDPB WP251):\n  - Obtain human intervention endpoint\n  - Express viewpoint submission\n  - Contest decision workflow\n- **Approval tracking**:\n  - SLA monitoring\n  - Escalation paths\n  - Audit trail of approvals\n- **Meaningful oversight**:\n  - Active engagement verification\n  - No rubber-stamping detection\n  - Authority and competence verification\n\n## App (`app/src/features/approvals/`)\n- **Approval queue**: Pending approvals dashboard\n- **Review interface**: Decision review with context\n- **Escalation management**: Handle overdue approvals\n- **Worker portal**: Submit viewpoints, contest decisions\n\n**Key Files:**\n- Server: Create `server/src/services/ApprovalWorkflowService.ts`\n- Server: Create `server/src/routes/approval.routes.ts`\n- Server: Update `server/prisma/schema.prisma` with Approval, ApprovalChain models\n- App: Create `app/src/features/approvals/` feature module\n- App: Create `app/src/features/approvals/components/ApprovalQueue.tsx`",
+        "testStrategy": "Test approval workflow routing. Test SLA enforcement and escalation. Test dual approval for safety changes. Test worker viewpoint submission. Test contest workflow. Test meaningful oversight verification.",
+        "priority": "high",
+        "dependencies": [
+          "11",
+          "31"
+        ],
+        "status": "pending",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2025-12-23T00:08:31.660Z",
-      "taskCount": 19,
+      "lastModified": "2025-12-25T14:25:45.078Z",
+      "taskCount": 35,
       "completedCount": 14,
       "tags": [
         "master"
