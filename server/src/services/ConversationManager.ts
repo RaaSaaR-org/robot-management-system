@@ -579,10 +579,16 @@ export class ConversationManager {
   }
 
   /**
-   * Notify all task event subscribers
+   * Notify all task event subscribers with error isolation
    */
   private notifyTaskEvent(event: A2ATaskEvent): void {
-    this.taskCallbacks.forEach((cb) => cb(event));
+    this.taskCallbacks.forEach((cb) => {
+      try {
+        cb(event);
+      } catch (error) {
+        console.error('[ConversationManager] Task event callback error:', error);
+      }
+    });
   }
 
   // ============================================================================

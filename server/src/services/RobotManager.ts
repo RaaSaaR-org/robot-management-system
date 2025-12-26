@@ -445,11 +445,15 @@ export class RobotManager {
     console.log(`[RobotManager] Starting health checks every ${intervalMs}ms`);
 
     this.healthCheckInterval = setInterval(() => {
-      this.performHealthChecks();
+      this.performHealthChecks().catch((error) => {
+        console.error('[RobotManager] Health check cycle error:', error);
+      });
     }, intervalMs);
 
-    // Run immediately
-    this.performHealthChecks();
+    // Run immediately with error handling
+    this.performHealthChecks().catch((error) => {
+      console.error('[RobotManager] Initial health check error:', error);
+    });
   }
 
   /**
@@ -492,6 +496,27 @@ export class RobotManager {
         const statusChanged = response.data.robotStatus && response.data.robotStatus !== registered.robot.status;
         const batteryChanged = newBatteryLevel !== registered.robot.batteryLevel;
 
+        // Also fetch robot data to sync position
+        let locationChanged = false;
+        try {
+          const robotResponse = await axios.get<Robot>(registered.endpoints.robot, {
+            timeout: 5000,
+          });
+          const robotData = robotResponse.data;
+          if (robotData.location) {
+            const oldLoc = registered.robot.location;
+            const newLoc = robotData.location;
+            // Check if position actually changed
+            if (oldLoc.x !== newLoc.x || oldLoc.y !== newLoc.y || oldLoc.zone !== newLoc.zone) {
+              registered.robot.location = newLoc;
+              locationChanged = true;
+            }
+          }
+        } catch (robotError) {
+          // Log but don't fail health check - position sync is secondary
+          console.warn(`[RobotManager] Failed to sync position for ${registered.robot.id}`);
+        }
+
         // Update in-memory cache
         registered.robot.batteryLevel = newBatteryLevel;
         registered.robot.lastSeen = now;
@@ -501,16 +526,17 @@ export class RobotManager {
           registered.robot.updatedAt = now;
         }
 
-        // Always persist battery level to database
+        // Persist battery level and location to database
         await robotRepository.updateHealthCheck(
           registered.robot.id,
           true,
           statusChanged ? response.data.robotStatus : undefined,
-          newBatteryLevel
+          newBatteryLevel,
+          locationChanged ? registered.robot.location : undefined
         );
 
-        // Emit event if status or battery changed significantly
-        if (statusChanged || batteryChanged) {
+        // Emit event if status, battery, or location changed
+        if (statusChanged || batteryChanged || locationChanged) {
           this.emitEvent({
             type: 'robot_status_changed',
             robotId: registered.robot.id,

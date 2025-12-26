@@ -13,6 +13,7 @@ import {
 import type {
   Robot,
   RobotStatus,
+  RobotLocation,
   RegisteredRobot,
   RobotEndpoints,
 } from '../services/RobotManager.js';
@@ -291,7 +292,8 @@ export class RobotRepository {
     id: string,
     isConnected: boolean,
     status?: RobotStatus,
-    batteryLevel?: number
+    batteryLevel?: number,
+    location?: RobotLocation
   ): Promise<boolean> {
     try {
       await prisma.robot.update({
@@ -302,6 +304,7 @@ export class RobotRepository {
           lastSeen: new Date(),
           ...(status && { status }),
           ...(batteryLevel !== undefined && { batteryLevel }),
+          ...(location && { location: JSON.stringify(location) }),
         },
       });
       return true;
