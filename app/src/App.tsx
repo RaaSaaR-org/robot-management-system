@@ -24,8 +24,8 @@ import {
   LazyRobotDetailPage,
   LazyFleetPage,
   LazyAlertsPage,
-  LazyTasksPage,
-  LazyTaskDetailPage,
+  LazyProcessesPage,
+  LazyProcessDetailPage,
   LazyA2AChatPage,
   LazyA2AAgentListPage,
   LazyA2AAgentDetailPage,
@@ -128,22 +128,26 @@ function App() {
               </ProtectedAppRoute>
             }
           />
+          {/* Processes - workflow management */}
           <Route
-            path="/tasks"
+            path="/processes"
             element={
               <ProtectedAppRoute>
-                <LazyTasksPage />
+                <LazyProcessesPage />
               </ProtectedAppRoute>
             }
           />
           <Route
-            path="/tasks/:id"
+            path="/processes/:id"
             element={
               <ProtectedAppRoute>
-                <LazyTaskDetailPage />
+                <LazyProcessDetailPage />
               </ProtectedAppRoute>
             }
           />
+          {/* Redirect old /tasks routes to /processes */}
+          <Route path="/tasks" element={<Navigate to="/processes" replace />} />
+          <Route path="/tasks/:id" element={<Navigate to="/processes" replace />} />
           <Route
             path="/settings"
             element={

@@ -32,18 +32,22 @@ export const LazyRobotDetailPage = lazy(() =>
 );
 
 /**
- * Tasks list page - All tasks with filtering
+ * Processes list page - All processes/workflows with filtering
  */
-export const LazyTasksPage = lazy(() =>
-  import('@/features/tasks').then((m) => ({ default: m.TasksPage }))
+export const LazyProcessesPage = lazy(() =>
+  import('@/features/tasks').then((m) => ({ default: m.ProcessesPage }))
 );
 
 /**
- * Task detail page - Single task view
+ * Process detail page - Single process/workflow view
  */
-export const LazyTaskDetailPage = lazy(() =>
-  import('@/features/tasks').then((m) => ({ default: m.TaskDetailPage }))
+export const LazyProcessDetailPage = lazy(() =>
+  import('@/features/tasks').then((m) => ({ default: m.ProcessDetailPage }))
 );
+
+// Legacy aliases for backwards compatibility
+export const LazyTasksPage = LazyProcessesPage;
+export const LazyTaskDetailPage = LazyProcessDetailPage;
 
 /**
  * Fleet page - Fleet management with map and zones

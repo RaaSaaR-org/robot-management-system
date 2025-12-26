@@ -110,8 +110,8 @@ export const NAV_ITEMS = [
     ),
   },
   {
-    label: "Tasks",
-    path: "/tasks",
+    label: "Processes",
+    path: "/processes",
     icon: (
       <svg
         className="w-5 h-5 shrink-0"

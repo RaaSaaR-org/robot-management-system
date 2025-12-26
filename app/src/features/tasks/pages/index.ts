@@ -1,8 +1,14 @@
 /**
  * @file index.ts
- * @description Barrel export for tasks pages
+ * @description Barrel export for processes pages
  * @feature tasks
+ *
+ * Note: Primary exports use "Process" naming, with "Task" aliases for backwards compatibility.
  */
 
-export * from './TasksPage';
-export * from './TaskDetailPage';
+// Primary exports - Process naming
+export * from './ProcessesPage';
+export * from './ProcessDetailPage';
+
+// Legacy aliases are re-exported from the new files
+// TasksPage and TaskDetailPage are exported from ProcessesPage.tsx and ProcessDetailPage.tsx
