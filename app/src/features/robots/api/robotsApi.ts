@@ -2,10 +2,10 @@
  * @file robotsApi.ts
  * @description API calls for robot management endpoints
  * @feature robots
- * @dependencies axios
+ * @dependencies @/api/client
  */
 
-import axios from 'axios';
+import { apiClient } from '@/api/client';
 import type {
   Robot,
   RobotTelemetry,
@@ -17,30 +17,16 @@ import type {
 } from '../types/robots.types';
 
 // ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-const ROBOT_API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-
-// Create axios instance for robot API
-const robotClient = axios.create({
-  baseURL: ROBOT_API_BASE,
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// ============================================================================
 // ENDPOINTS
 // ============================================================================
 
+// Note: apiClient already has /api prefix in baseURL
 const ENDPOINTS = {
-  list: '/api/robots',
-  register: '/api/robots/register',
-  get: (id: string) => `/api/robots/${id}`,
-  command: (id: string) => `/api/robots/${id}/command`,
-  telemetry: (id: string) => `/api/robots/${id}/telemetry`,
+  list: '/robots',
+  register: '/robots/register',
+  get: (id: string) => `/robots/${id}`,
+  command: (id: string) => `/robots/${id}/command`,
+  telemetry: (id: string) => `/robots/${id}/telemetry`,
 } as const;
 
 // ============================================================================
@@ -62,7 +48,7 @@ export const robotsApi = {
       telemetryWs: string;
     };
   }> {
-    const response = await robotClient.post<{
+    const response = await apiClient.post<{
       robot: Robot;
       endpoints: {
         robot: string;
@@ -79,7 +65,7 @@ export const robotsApi = {
    * @param robotId - Robot ID
    */
   async unregisterRobot(robotId: string): Promise<void> {
-    await robotClient.delete(ENDPOINTS.get(robotId));
+    await apiClient.delete(ENDPOINTS.get(robotId));
   },
 
   /**
@@ -88,7 +74,7 @@ export const robotsApi = {
    * @returns Paginated list of robots
    */
   async listRobots(params?: RobotListParams): Promise<RobotListResponse> {
-    const response = await robotClient.get<RobotListResponse>(ENDPOINTS.list, {
+    const response = await apiClient.get<RobotListResponse>(ENDPOINTS.list, {
       params: {
         status: params?.status,
         search: params?.search,
@@ -109,7 +95,7 @@ export const robotsApi = {
    * @returns Robot details
    */
   async getRobot(id: string): Promise<Robot> {
-    const response = await robotClient.get<Robot>(ENDPOINTS.get(id));
+    const response = await apiClient.get<Robot>(ENDPOINTS.get(id));
     return response.data;
   },
 
@@ -120,7 +106,7 @@ export const robotsApi = {
    * @returns Created command with status
    */
   async sendCommand(robotId: string, command: RobotCommandRequest): Promise<RobotCommand> {
-    const response = await robotClient.post<RobotCommand>(ENDPOINTS.command(robotId), command);
+    const response = await apiClient.post<RobotCommand>(ENDPOINTS.command(robotId), command);
     return response.data;
   },
 
@@ -154,7 +140,7 @@ export const robotsApi = {
    * @returns Latest telemetry data
    */
   async getTelemetry(robotId: string): Promise<RobotTelemetry> {
-    const response = await robotClient.get<RobotTelemetry>(ENDPOINTS.telemetry(robotId));
+    const response = await apiClient.get<RobotTelemetry>(ENDPOINTS.telemetry(robotId));
     return response.data;
   },
 

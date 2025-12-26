@@ -4,12 +4,11 @@
  * @feature robots
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, Suspense, lazy } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Card, Button, Spinner, Badge, Tabs } from '@/shared/components/ui';
 import type { Tab } from '@/shared/components/ui';
-import { cn } from '@/shared/utils/cn';
-import { Suspense, lazy } from 'react';
+import { cn, CPU_THRESHOLDS, MEMORY_THRESHOLDS, getResourceVariant } from '@/shared/utils';
 import { RobotHeroSection } from './RobotHeroSection';
 import { RobotChatPanel } from './RobotChatPanel';
 import { RobotOfflineBanner } from './RobotOfflineBanner';
@@ -260,12 +259,12 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
                     <ProgressBar
                       label="CPU Usage"
                       value={telemetry.cpuUsage}
-                      variant={telemetry.cpuUsage >= 90 ? 'error' : telemetry.cpuUsage >= 70 ? 'warning' : 'default'}
+                      variant={getResourceVariant(telemetry.cpuUsage, CPU_THRESHOLDS.WARNING, CPU_THRESHOLDS.ERROR)}
                     />
                     <ProgressBar
                       label="Memory Usage"
                       value={telemetry.memoryUsage}
-                      variant={telemetry.memoryUsage >= 90 ? 'error' : telemetry.memoryUsage >= 70 ? 'warning' : 'default'}
+                      variant={getResourceVariant(telemetry.memoryUsage, MEMORY_THRESHOLDS.WARNING, MEMORY_THRESHOLDS.ERROR)}
                     />
 
                     <div className="pt-4 border-t border-glass-subtle">
