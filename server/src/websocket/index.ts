@@ -9,7 +9,11 @@ import { conversationManager } from '../services/ConversationManager.js';
 import { robotManager, type RobotEvent } from '../services/RobotManager.js';
 import { alertService, type AlertEvent } from '../services/AlertService.js';
 import { zoneService, type ZoneEvent } from '../services/ZoneService.js';
+import { processManager } from '../services/ProcessManager.js';
+import { taskDistributor } from '../services/TaskDistributor.js';
 import type { A2ATaskEvent } from '../types/index.js';
+import type { ProcessEvent } from '../types/process.types.js';
+import type { TaskEvent } from '../types/robotTask.types.js';
 
 // Configuration
 const MAX_CLIENTS = 1000;
@@ -169,6 +173,57 @@ export function setupWebSocket(server: Server): void {
       type: event.type,
       zone: event.zone,
       timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to process events and broadcast to all clients
+  processManager.onProcessEvent((event: ProcessEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      processInstance: 'processInstance' in event ? event.processInstance : undefined,
+      stepInstance: 'stepInstance' in event ? event.stepInstance : undefined,
+      processInstanceId: 'processInstanceId' in event ? event.processInstanceId : undefined,
+      error: 'error' in event ? event.error : undefined,
+      timestamp: Date.now(),
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to robot task events and broadcast to all clients
+  taskDistributor.onTaskEvent((event: TaskEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      task: 'task' in event ? event.task : undefined,
+      taskId: 'taskId' in event ? event.taskId : undefined,
+      robotId: 'robotId' in event ? event.robotId : undefined,
+      progress: 'progress' in event ? event.progress : undefined,
+      result: 'result' in event ? event.result : undefined,
+      error: 'error' in event ? event.error : undefined,
+      timestamp: Date.now(),
+    });
+    broadcast(clients, message);
+  });
+
+  // Handle robot work assignment notifications (push to robot)
+  taskDistributor.on('robot:work_assigned', (data: { robotId: string; task: unknown }) => {
+    const message = JSON.stringify({
+      type: 'robot:work_assigned',
+      robotId: data.robotId,
+      task: data.task,
+      timestamp: Date.now(),
+    });
+    broadcast(clients, message);
+  });
+
+  // Handle robot work cancellation notifications
+  taskDistributor.on('robot:work_cancelled', (data: { robotId: string; taskId: string; reason?: string }) => {
+    const message = JSON.stringify({
+      type: 'robot:work_cancelled',
+      robotId: data.robotId,
+      taskId: data.taskId,
+      reason: data.reason,
+      timestamp: Date.now(),
     });
     broadcast(clients, message);
   });

@@ -18,12 +18,14 @@ import { wellKnownRoutes } from './routes/wellknown.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { zoneRoutes } from './routes/zone.routes.js';
 import { commandRoutes } from './routes/command.routes.js';
+import { processRoutes } from './routes/process.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
 
 // Import services
 import { robotManager } from './services/RobotManager.js';
+import { taskDistributor } from './services/TaskDistributor.js';
 
 // Default CORS origins for development
 const DEFAULT_CORS_ORIGINS = ['http://localhost:1420', 'http://localhost:5173', 'http://localhost:3000'];
@@ -110,11 +112,17 @@ export function createApp(): Express {
   // Command routes (protected)
   app.use('/api/command', authMiddleware, commandRoutes);
 
+  // Process routes (protected) - workflow management
+  app.use('/api/processes', authMiddleware, processRoutes);
+
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
 
   // Start robot health checks
   robotManager.startHealthChecks(30000);
+
+  // Start task distributor (push model for task assignment)
+  taskDistributor.start();
 
   // 404 handler
   app.use((_req: Request, res: Response) => {
