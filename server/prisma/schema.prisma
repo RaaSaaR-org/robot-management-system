@@ -49,6 +49,7 @@ model Robot {
   agentCard     AgentCard?
   endpoints     RobotEndpoints?
   alerts        Alert[]
+  robotTasks    RobotTask[]
 
   @@index([status])
   @@index([a2aEnabled])
@@ -325,4 +326,135 @@ model CommandInterpretation {
   @@index([robotId])
   @@index([createdAt])
   @@index([status])
+}
+
+// ============================================================================
+// PROCESS WORKFLOW MANAGEMENT
+// ============================================================================
+
+model ProcessDefinition {
+  id                       String   @id @default(uuid())
+  name                     String
+  description              String?
+  version                  Int      @default(1)
+  status                   String   @default("draft") // ProcessDefinitionStatus: 'draft' | 'ready' | 'archived'
+  stepTemplates            String   @default("[]") // JSON: StepTemplate[]
+  requiredCapabilities     String   @default("[]") // JSON: string[]
+  estimatedDurationMinutes Int?
+  maxConcurrentInstances   Int?
+  tags                     String   @default("[]") // JSON: string[]
+  createdBy                String
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  // Relations
+  instances ProcessInstance[]
+
+  @@index([name])
+  @@index([status])
+  @@index([createdBy])
+}
+
+model ProcessInstance {
+  id                    String    @id @default(uuid())
+  processDefinitionId   String
+  processName           String
+  description           String?
+  status                String    @default("pending") // ProcessInstanceStatus
+  priority              String    @default("normal") // Priority: 'low' | 'normal' | 'high' | 'critical'
+  currentStepIndex      Int       @default(0)
+  progress              Int       @default(0) // 0-100
+  preferredRobotIds     String    @default("[]") // JSON: string[]
+  assignedRobotIds      String    @default("[]") // JSON: string[]
+  scheduledAt           DateTime?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  estimatedCompletionAt DateTime?
+  inputData             String?   // JSON: Record<string, unknown>
+  outputData            String?   // JSON: Record<string, unknown>
+  errorMessage          String?
+  createdBy             String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  processDefinition ProcessDefinition @relation(fields: [processDefinitionId], references: [id], onDelete: Cascade)
+  steps             StepInstance[]
+  robotTasks        RobotTask[]
+
+  @@index([processDefinitionId])
+  @@index([status])
+  @@index([priority])
+  @@index([createdBy])
+  @@index([createdAt])
+}
+
+model StepInstance {
+  id                String    @id @default(uuid())
+  processInstanceId String
+  stepTemplateId    String
+  order             Int
+  name              String
+  description       String?
+  actionType        String // StepActionType
+  actionConfig      String    @default("{}") // JSON: Record<string, unknown>
+  status            String    @default("pending") // StepInstanceStatus
+  assignedRobotId   String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  result            String?   // JSON: StepResult
+  error             String?
+  retryCount        Int       @default(0)
+  maxRetries        Int       @default(3)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  processInstance ProcessInstance @relation(fields: [processInstanceId], references: [id], onDelete: Cascade)
+  robotTask       RobotTask?
+
+  @@index([processInstanceId])
+  @@index([status])
+  @@index([order])
+}
+
+// ============================================================================
+// ROBOT TASK (Work Item for Robots)
+// ============================================================================
+
+model RobotTask {
+  id                String    @id @default(uuid())
+  processInstanceId String?
+  stepInstanceId    String?   @unique
+  source            String    @default("manual") // RobotTaskSource: 'process' | 'command' | 'manual'
+  robotId           String
+  priority          String    @default("normal") // Priority
+  status            String    @default("pending") // RobotTaskStatus
+  actionType        String // StepActionType
+  actionConfig      String    @default("{}") // JSON: Record<string, unknown>
+  instruction       String
+  a2aTaskId         String?
+  a2aContextId      String?
+  assignedAt        DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  timeoutMs         Int?
+  result            String?   // JSON: RobotTaskResult
+  error             String?
+  retryCount        Int       @default(0)
+  maxRetries        Int       @default(3)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  robot           Robot            @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  processInstance ProcessInstance? @relation(fields: [processInstanceId], references: [id], onDelete: SetNull)
+  stepInstance    StepInstance?    @relation(fields: [stepInstanceId], references: [id], onDelete: SetNull)
+
+  @@index([robotId])
+  @@index([processInstanceId])
+  @@index([status])
+  @@index([priority])
+  @@index([source])
+  @@index([createdAt])
 }

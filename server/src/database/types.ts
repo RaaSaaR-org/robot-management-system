@@ -10,6 +10,10 @@ import type {
   AgentCard as DbAgentCard,
   Event as DbEvent,
   RobotEndpoints as DbRobotEndpoints,
+  ProcessDefinition as DbProcessDefinition,
+  ProcessInstance as DbProcessInstance,
+  StepInstance as DbStepInstance,
+  RobotTask as DbRobotTask,
 } from '@prisma/client';
 import type {
   A2AMessage,
@@ -29,6 +33,24 @@ import type {
   RobotStatus,
   RobotEndpoints,
 } from '../services/RobotManager.js';
+import type {
+  ProcessDefinition,
+  ProcessDefinitionStatus,
+  ProcessInstance,
+  ProcessInstanceStatus,
+  StepInstance,
+  StepInstanceStatus,
+  StepTemplate,
+  StepActionType,
+  StepResult,
+  Priority,
+} from '../types/process.types.js';
+import type {
+  RobotTask,
+  RobotTaskStatus,
+  RobotTaskSource,
+  RobotTaskResult,
+} from '../types/robotTask.types.js';
 import {
   RobotLocationSchema,
   safeParseJson,
@@ -344,5 +366,301 @@ export function domainEventToDb(event: A2AEvent): {
     actor: event.actor,
     content: JSON.stringify(event.content),
     timestamp: new Date(event.timestamp),
+  };
+}
+
+// ============================================================================
+// PROCESS DEFINITION CONVERSIONS
+// ============================================================================
+
+/**
+ * Convert Prisma ProcessDefinition to domain ProcessDefinition
+ */
+export function dbProcessDefinitionToDomain(db: DbProcessDefinition): ProcessDefinition {
+  return {
+    id: db.id,
+    name: db.name,
+    description: db.description ?? undefined,
+    version: db.version,
+    status: db.status as ProcessDefinitionStatus,
+    stepTemplates: safeParseJsonUntyped<StepTemplate[]>(db.stepTemplates, [], `process ${db.id} stepTemplates`),
+    requiredCapabilities: safeParseJsonUntyped<string[]>(db.requiredCapabilities, [], `process ${db.id} capabilities`),
+    estimatedDurationMinutes: db.estimatedDurationMinutes ?? undefined,
+    maxConcurrentInstances: db.maxConcurrentInstances ?? undefined,
+    tags: safeParseJsonUntyped<string[]>(db.tags, [], `process ${db.id} tags`),
+    createdBy: db.createdBy,
+    createdAt: db.createdAt.toISOString(),
+    updatedAt: db.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Convert domain ProcessDefinition to Prisma create input
+ */
+export function domainProcessDefinitionToDb(process: ProcessDefinition): {
+  id: string;
+  name: string;
+  description?: string;
+  version: number;
+  status: string;
+  stepTemplates: string;
+  requiredCapabilities: string;
+  estimatedDurationMinutes?: number;
+  maxConcurrentInstances?: number;
+  tags: string;
+  createdBy: string;
+} {
+  return {
+    id: process.id,
+    name: process.name,
+    description: process.description,
+    version: process.version,
+    status: process.status,
+    stepTemplates: JSON.stringify(process.stepTemplates),
+    requiredCapabilities: JSON.stringify(process.requiredCapabilities ?? []),
+    estimatedDurationMinutes: process.estimatedDurationMinutes,
+    maxConcurrentInstances: process.maxConcurrentInstances,
+    tags: JSON.stringify(process.tags ?? []),
+    createdBy: process.createdBy,
+  };
+}
+
+// ============================================================================
+// PROCESS INSTANCE CONVERSIONS
+// ============================================================================
+
+/**
+ * Convert Prisma ProcessInstance to domain ProcessInstance
+ */
+export function dbProcessInstanceToDomain(
+  db: DbProcessInstance & { steps?: DbStepInstance[] }
+): ProcessInstance {
+  return {
+    id: db.id,
+    processDefinitionId: db.processDefinitionId,
+    processName: db.processName,
+    description: db.description ?? undefined,
+    status: db.status as ProcessInstanceStatus,
+    priority: db.priority as Priority,
+    steps: db.steps?.map(dbStepInstanceToDomain) ?? [],
+    currentStepIndex: db.currentStepIndex,
+    progress: db.progress,
+    preferredRobotIds: safeParseJsonUntyped<string[]>(db.preferredRobotIds, [], `instance ${db.id} preferredRobots`),
+    assignedRobotIds: safeParseJsonUntyped<string[]>(db.assignedRobotIds, [], `instance ${db.id} assignedRobots`),
+    scheduledAt: db.scheduledAt?.toISOString(),
+    startedAt: db.startedAt?.toISOString(),
+    completedAt: db.completedAt?.toISOString(),
+    estimatedCompletionAt: db.estimatedCompletionAt?.toISOString(),
+    inputData: db.inputData
+      ? safeParseJsonUntyped<Record<string, unknown>>(db.inputData, {}, `instance ${db.id} inputData`)
+      : undefined,
+    outputData: db.outputData
+      ? safeParseJsonUntyped<Record<string, unknown>>(db.outputData, {}, `instance ${db.id} outputData`)
+      : undefined,
+    errorMessage: db.errorMessage ?? undefined,
+    createdBy: db.createdBy,
+    createdAt: db.createdAt.toISOString(),
+    updatedAt: db.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Convert domain ProcessInstance to Prisma create input
+ */
+export function domainProcessInstanceToDb(instance: ProcessInstance): {
+  id: string;
+  processDefinitionId: string;
+  processName: string;
+  description?: string;
+  status: string;
+  priority: string;
+  currentStepIndex: number;
+  progress: number;
+  preferredRobotIds: string;
+  assignedRobotIds: string;
+  scheduledAt?: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+  estimatedCompletionAt?: Date;
+  inputData?: string;
+  outputData?: string;
+  errorMessage?: string;
+  createdBy: string;
+} {
+  return {
+    id: instance.id,
+    processDefinitionId: instance.processDefinitionId,
+    processName: instance.processName,
+    description: instance.description,
+    status: instance.status,
+    priority: instance.priority,
+    currentStepIndex: instance.currentStepIndex,
+    progress: instance.progress,
+    preferredRobotIds: JSON.stringify(instance.preferredRobotIds ?? []),
+    assignedRobotIds: JSON.stringify(instance.assignedRobotIds ?? []),
+    scheduledAt: instance.scheduledAt ? new Date(instance.scheduledAt) : undefined,
+    startedAt: instance.startedAt ? new Date(instance.startedAt) : undefined,
+    completedAt: instance.completedAt ? new Date(instance.completedAt) : undefined,
+    estimatedCompletionAt: instance.estimatedCompletionAt ? new Date(instance.estimatedCompletionAt) : undefined,
+    inputData: instance.inputData ? JSON.stringify(instance.inputData) : undefined,
+    outputData: instance.outputData ? JSON.stringify(instance.outputData) : undefined,
+    errorMessage: instance.errorMessage,
+    createdBy: instance.createdBy,
+  };
+}
+
+// ============================================================================
+// STEP INSTANCE CONVERSIONS
+// ============================================================================
+
+/**
+ * Convert Prisma StepInstance to domain StepInstance
+ */
+export function dbStepInstanceToDomain(db: DbStepInstance): StepInstance {
+  return {
+    id: db.id,
+    processInstanceId: db.processInstanceId,
+    stepTemplateId: db.stepTemplateId,
+    order: db.order,
+    name: db.name,
+    description: db.description ?? undefined,
+    actionType: db.actionType as StepActionType,
+    actionConfig: safeParseJsonUntyped<Record<string, unknown>>(db.actionConfig, {}, `step ${db.id} actionConfig`),
+    status: db.status as StepInstanceStatus,
+    robotTaskId: undefined, // Will be populated from relation if needed
+    assignedRobotId: db.assignedRobotId ?? undefined,
+    startedAt: db.startedAt?.toISOString(),
+    completedAt: db.completedAt?.toISOString(),
+    result: db.result
+      ? safeParseJsonUntyped<StepResult>(db.result, { success: false }, `step ${db.id} result`)
+      : undefined,
+    error: db.error ?? undefined,
+    retryCount: db.retryCount,
+    maxRetries: db.maxRetries,
+  };
+}
+
+/**
+ * Convert domain StepInstance to Prisma create input
+ */
+export function domainStepInstanceToDb(step: StepInstance): {
+  id: string;
+  processInstanceId: string;
+  stepTemplateId: string;
+  order: number;
+  name: string;
+  description?: string;
+  actionType: string;
+  actionConfig: string;
+  status: string;
+  assignedRobotId?: string;
+  startedAt?: Date;
+  completedAt?: Date;
+  result?: string;
+  error?: string;
+  retryCount: number;
+  maxRetries: number;
+} {
+  return {
+    id: step.id,
+    processInstanceId: step.processInstanceId,
+    stepTemplateId: step.stepTemplateId,
+    order: step.order,
+    name: step.name,
+    description: step.description,
+    actionType: step.actionType,
+    actionConfig: JSON.stringify(step.actionConfig),
+    status: step.status,
+    assignedRobotId: step.assignedRobotId,
+    startedAt: step.startedAt ? new Date(step.startedAt) : undefined,
+    completedAt: step.completedAt ? new Date(step.completedAt) : undefined,
+    result: step.result ? JSON.stringify(step.result) : undefined,
+    error: step.error,
+    retryCount: step.retryCount,
+    maxRetries: step.maxRetries,
+  };
+}
+
+// ============================================================================
+// ROBOT TASK CONVERSIONS
+// ============================================================================
+
+/**
+ * Convert Prisma RobotTask to domain RobotTask
+ */
+export function dbRobotTaskToDomain(db: DbRobotTask): RobotTask {
+  return {
+    id: db.id,
+    processInstanceId: db.processInstanceId ?? undefined,
+    stepInstanceId: db.stepInstanceId ?? undefined,
+    source: db.source as RobotTaskSource,
+    robotId: db.robotId,
+    priority: db.priority as Priority,
+    status: db.status as RobotTaskStatus,
+    actionType: db.actionType as StepActionType,
+    actionConfig: safeParseJsonUntyped<Record<string, unknown>>(db.actionConfig, {}, `robotTask ${db.id} actionConfig`),
+    instruction: db.instruction,
+    a2aTaskId: db.a2aTaskId ?? undefined,
+    a2aContextId: db.a2aContextId ?? undefined,
+    createdAt: db.createdAt.toISOString(),
+    assignedAt: db.assignedAt?.toISOString(),
+    startedAt: db.startedAt?.toISOString(),
+    completedAt: db.completedAt?.toISOString(),
+    timeoutMs: db.timeoutMs ?? undefined,
+    result: db.result
+      ? safeParseJsonUntyped<RobotTaskResult>(db.result, { success: false, durationMs: 0 }, `robotTask ${db.id} result`)
+      : undefined,
+    error: db.error ?? undefined,
+    retryCount: db.retryCount,
+    maxRetries: db.maxRetries,
+  };
+}
+
+/**
+ * Convert domain RobotTask to Prisma create input
+ */
+export function domainRobotTaskToDb(task: RobotTask): {
+  id: string;
+  processInstanceId?: string;
+  stepInstanceId?: string;
+  source: string;
+  robotId: string;
+  priority: string;
+  status: string;
+  actionType: string;
+  actionConfig: string;
+  instruction: string;
+  a2aTaskId?: string;
+  a2aContextId?: string;
+  assignedAt?: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+  timeoutMs?: number;
+  result?: string;
+  error?: string;
+  retryCount: number;
+  maxRetries: number;
+} {
+  return {
+    id: task.id,
+    processInstanceId: task.processInstanceId,
+    stepInstanceId: task.stepInstanceId,
+    source: task.source,
+    robotId: task.robotId,
+    priority: task.priority,
+    status: task.status,
+    actionType: task.actionType,
+    actionConfig: JSON.stringify(task.actionConfig),
+    instruction: task.instruction,
+    a2aTaskId: task.a2aTaskId,
+    a2aContextId: task.a2aContextId,
+    assignedAt: task.assignedAt ? new Date(task.assignedAt) : undefined,
+    startedAt: task.startedAt ? new Date(task.startedAt) : undefined,
+    completedAt: task.completedAt ? new Date(task.completedAt) : undefined,
+    timeoutMs: task.timeoutMs,
+    result: task.result ? JSON.stringify(task.result) : undefined,
+    error: task.error,
+    retryCount: task.retryCount,
+    maxRetries: task.maxRetries,
   };
 }
