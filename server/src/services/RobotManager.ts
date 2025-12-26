@@ -3,11 +3,11 @@
  * @description Service for managing robot registry and A2A connections
  */
 
-import axios from 'axios';
 import type { A2AAgentCard } from '../types/index.js';
 import { agentCardResolver } from './A2AClient.js';
 import { conversationManager } from './ConversationManager.js';
 import { robotRepository } from '../repositories/index.js';
+import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 
 // ============================================================================
 // TYPES
@@ -215,11 +215,8 @@ export class RobotManager {
       const registerUrl = `${baseUrl}/api/v1/register`;
       console.log(`[RobotManager] Fetching registration info from ${registerUrl}`);
 
-      const regResponse = await axios.get<RegistrationInfo>(registerUrl, {
-        timeout: 10000,
-      });
-
-      const registrationInfo = regResponse.data;
+      const httpClient = new HttpClient(baseUrl, HTTP_TIMEOUTS.MEDIUM);
+      const registrationInfo = await httpClient.get<RegistrationInfo>('/api/v1/register');
 
       if (!registrationInfo.robot || !registrationInfo.endpoints) {
         throw new Error('Invalid registration info: missing robot or endpoints');
@@ -393,14 +390,11 @@ export class RobotManager {
     try {
       console.log(`[RobotManager] Sending command to ${robotId}:`, command);
 
-      const response = await axios.post<RobotCommand>(registered.endpoints.command, command, {
-        timeout: 30000,
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      return response.data;
+      const httpClient = new HttpClient(undefined, HTTP_TIMEOUTS.LONG);
+      return await httpClient.post<RobotCommand>(registered.endpoints.command, command);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      const message = error instanceof HttpClientError ? error.message :
+        (error instanceof Error ? error.message : 'Unknown error');
       throw new Error(`Failed to send command: ${message}`);
     }
   }
@@ -419,13 +413,11 @@ export class RobotManager {
     }
 
     try {
-      const response = await axios.get<RobotTelemetry>(registered.endpoints.telemetry, {
-        timeout: 10000,
-      });
-
-      return response.data;
+      const httpClient = new HttpClient(undefined, HTTP_TIMEOUTS.MEDIUM);
+      return await httpClient.get<RobotTelemetry>(registered.endpoints.telemetry);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      const message = error instanceof HttpClientError ? error.message :
+        (error instanceof Error ? error.message : 'Unknown error');
       throw new Error(`Failed to get telemetry: ${message}`);
     }
   }
@@ -475,14 +467,14 @@ export class RobotManager {
 
     for (const registered of robots) {
       try {
-        const healthUrl = `${registered.baseUrl}/api/v1/health`;
-        const response = await axios.get<{
+        // Create HTTP client for this robot's base URL
+        const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
+
+        const healthData = await httpClient.get<{
           status: string;
           robotStatus: RobotStatus;
           batteryLevel: number;
-        }>(healthUrl, {
-          timeout: 5000,
-        });
+        }>('/api/v1/health');
 
         const now = new Date().toISOString();
         registered.lastHealthCheck = now;
@@ -492,17 +484,15 @@ export class RobotManager {
         registered.isConnected = true;
 
         // Always update battery level from health check
-        const newBatteryLevel = response.data.batteryLevel ?? registered.robot.batteryLevel;
-        const statusChanged = response.data.robotStatus && response.data.robotStatus !== registered.robot.status;
+        const newBatteryLevel = healthData.batteryLevel ?? registered.robot.batteryLevel;
+        const statusChanged = healthData.robotStatus && healthData.robotStatus !== registered.robot.status;
         const batteryChanged = newBatteryLevel !== registered.robot.batteryLevel;
 
         // Also fetch robot data to sync position
         let locationChanged = false;
         try {
-          const robotResponse = await axios.get<Robot>(registered.endpoints.robot, {
-            timeout: 5000,
-          });
-          const robotData = robotResponse.data;
+          const robotHttpClient = new HttpClient(undefined, HTTP_TIMEOUTS.SHORT);
+          const robotData = await robotHttpClient.get<Robot>(registered.endpoints.robot);
           if (robotData.location) {
             const oldLoc = registered.robot.location;
             const newLoc = robotData.location;
@@ -512,7 +502,7 @@ export class RobotManager {
               locationChanged = true;
             }
           }
-        } catch (robotError) {
+        } catch {
           // Log but don't fail health check - position sync is secondary
           console.warn(`[RobotManager] Failed to sync position for ${registered.robot.id}`);
         }
@@ -522,7 +512,7 @@ export class RobotManager {
         registered.robot.lastSeen = now;
 
         if (statusChanged) {
-          registered.robot.status = response.data.robotStatus;
+          registered.robot.status = healthData.robotStatus;
           registered.robot.updatedAt = now;
         }
 
@@ -530,7 +520,7 @@ export class RobotManager {
         await robotRepository.updateHealthCheck(
           registered.robot.id,
           true,
-          statusChanged ? response.data.robotStatus : undefined,
+          statusChanged ? healthData.robotStatus : undefined,
           newBatteryLevel,
           locationChanged ? registered.robot.location : undefined
         );
