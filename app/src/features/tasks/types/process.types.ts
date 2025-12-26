@@ -1,17 +1,18 @@
 /**
- * @file tasks.types.ts
- * @description Type definitions for task entities, steps, and store
+ * @file process.types.ts
+ * @description Type definitions for process entities, steps, and store
  * @feature tasks
- * @dependencies @/features/robots/types
+ *
+ * Note: "Process" is the user-facing term for workflows with steps.
+ * This is distinct from A2A Tasks which are internal protocol-level tasks.
  */
-
 
 // ============================================================================
 // STATUS TYPES
 // ============================================================================
 
-/** Task execution status */
-export type TaskStatus =
+/** Process execution status */
+export type ProcessStatus =
   | 'pending'
   | 'queued'
   | 'in_progress'
@@ -20,30 +21,30 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
-/** Task priority levels */
-export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
+/** Process priority levels */
+export type ProcessPriority = 'low' | 'normal' | 'high' | 'critical';
 
-/** Task step status */
-export type TaskStepStatus =
+/** Process step status */
+export type ProcessStepStatus =
   | 'pending'
   | 'in_progress'
   | 'completed'
   | 'failed'
   | 'skipped';
 
-/** Task action commands */
-export type TaskAction = 'pause' | 'resume' | 'cancel' | 'retry';
+/** Process action commands */
+export type ProcessAction = 'pause' | 'resume' | 'cancel' | 'retry';
 
 // ============================================================================
-// TASK STEP ENTITY
+// PROCESS STEP ENTITY
 // ============================================================================
 
-/** Individual step within a task */
-export interface TaskStep {
+/** Individual step within a process */
+export interface ProcessStep {
   id: string;
   name: string;
   description?: string;
-  status: TaskStepStatus;
+  status: ProcessStepStatus;
   order: number;
   startedAt?: string;
   completedAt?: string;
@@ -52,19 +53,19 @@ export interface TaskStep {
 }
 
 // ============================================================================
-// TASK ENTITY
+// PROCESS ENTITY
 // ============================================================================
 
-/** Core task entity */
-export interface Task {
+/** Core process entity */
+export interface Process {
   id: string;
   name: string;
   description?: string;
   robotId: string;
   robotName?: string;
-  status: TaskStatus;
-  priority: TaskPriority;
-  steps: TaskStep[];
+  status: ProcessStatus;
+  priority: ProcessPriority;
+  steps: ProcessStep[];
   progress: number;
   currentStepIndex: number;
   estimatedDuration?: number;
@@ -78,22 +79,22 @@ export interface Task {
 }
 
 // ============================================================================
-// CREATE TASK TYPES
+// CREATE PROCESS TYPES
 // ============================================================================
 
-/** Task step for creation (without id and status) */
-export interface CreateTaskStep {
+/** Process step for creation (without id and status) */
+export interface CreateProcessStep {
   name: string;
   description?: string;
 }
 
-/** Task creation request */
-export interface CreateTaskRequest {
+/** Process creation request */
+export interface CreateProcessRequest {
   name: string;
   description?: string;
   robotId: string;
-  priority?: TaskPriority;
-  steps?: CreateTaskStep[];
+  priority?: ProcessPriority;
+  steps?: CreateProcessStep[];
   metadata?: Record<string, unknown>;
 }
 
@@ -101,10 +102,10 @@ export interface CreateTaskRequest {
 // FILTER & PAGINATION TYPES
 // ============================================================================
 
-/** Task list filter parameters */
-export interface TaskFilters {
-  status?: TaskStatus | TaskStatus[];
-  priority?: TaskPriority | TaskPriority[];
+/** Process list filter parameters */
+export interface ProcessFilters {
+  status?: ProcessStatus | ProcessStatus[];
+  priority?: ProcessPriority | ProcessPriority[];
   robotId?: string;
   search?: string;
   dateFrom?: string;
@@ -112,7 +113,7 @@ export interface TaskFilters {
 }
 
 /** Pagination parameters */
-export interface TaskPagination {
+export interface ProcessPagination {
   page: number;
   pageSize: number;
   total: number;
@@ -123,34 +124,36 @@ export interface TaskPagination {
 // API REQUEST/RESPONSE TYPES
 // ============================================================================
 
-/** Parameters for listing tasks */
-export interface TaskListParams {
-  status?: TaskStatus | TaskStatus[];
-  priority?: TaskPriority | TaskPriority[];
+/** Parameters for listing processes */
+export interface ProcessListParams {
+  status?: ProcessStatus | ProcessStatus[];
+  priority?: ProcessPriority | ProcessPriority[];
   robotId?: string;
   search?: string;
   dateFrom?: string;
   dateTo?: string;
   page?: number;
   pageSize?: number;
-  sortBy?: keyof Task;
+  sortBy?: keyof Process;
   sortOrder?: 'asc' | 'desc';
 }
 
-/** Response for task list endpoint */
-export interface TaskListResponse {
-  tasks: Task[];
-  pagination: TaskPagination;
+/** Response for process list endpoint */
+export interface ProcessListResponse {
+  /** List of processes (named 'tasks' for API compatibility) */
+  tasks: Process[];
+  pagination: ProcessPagination;
 }
 
-/** Request for task action */
-export interface TaskActionRequest {
-  action: TaskAction;
+/** Request for process action */
+export interface ProcessActionRequest {
+  action: ProcessAction;
 }
 
-/** Response for task action */
-export interface TaskActionResponse {
-  task: Task;
+/** Response for process action */
+export interface ProcessActionResponse {
+  /** The affected process (named 'task' for API compatibility) */
+  task: Process;
   message: string;
 }
 
@@ -158,69 +161,69 @@ export interface TaskActionResponse {
 // STORE TYPES
 // ============================================================================
 
-/** Tasks store state */
-export interface TasksState {
-  /** List of tasks */
-  tasks: Task[];
-  /** Currently selected task ID */
+/** Processes store state */
+export interface ProcessesState {
+  /** List of processes (named 'tasks' for API/store compatibility) */
+  tasks: Process[];
+  /** Currently selected process ID (named 'selectedTaskId' for compatibility) */
   selectedTaskId: string | null;
   /** Current filters */
-  filters: TaskFilters;
+  filters: ProcessFilters;
   /** Pagination state */
-  pagination: TaskPagination;
+  pagination: ProcessPagination;
   /** Loading state */
   isLoading: boolean;
   /** Action execution state */
   isExecuting: boolean;
   /** Error message */
   error: string | null;
-  /** Individual task detail (when viewing single task) */
-  taskDetail: Task | null;
+  /** Individual process detail (named 'taskDetail' for compatibility) */
+  taskDetail: Process | null;
 }
 
-/** Tasks store actions */
-export interface TasksActions {
-  /** Fetch tasks with current filters */
+/** Processes store actions */
+export interface ProcessesActions {
+  /** Fetch processes with current filters */
   fetchTasks: () => Promise<void>;
-  /** Fetch a single task by ID */
+  /** Fetch a single process by ID */
   fetchTask: (id: string) => Promise<void>;
-  /** Create a new task */
-  createTask: (data: CreateTaskRequest) => Promise<Task>;
-  /** Select a task */
+  /** Create a new process */
+  createTask: (data: CreateProcessRequest) => Promise<Process>;
+  /** Select a process */
   selectTask: (id: string | null) => void;
   /** Update filters */
-  setFilters: (filters: Partial<TaskFilters>) => void;
+  setFilters: (filters: Partial<ProcessFilters>) => void;
   /** Clear all filters */
   clearFilters: () => void;
   /** Set page number */
   setPage: (page: number) => void;
-  /** Pause a task */
-  pauseTask: (id: string) => Promise<Task>;
-  /** Resume a paused task */
-  resumeTask: (id: string) => Promise<Task>;
-  /** Cancel a task */
-  cancelTask: (id: string) => Promise<Task>;
-  /** Retry a failed task */
-  retryTask: (id: string) => Promise<Task>;
-  /** Update task status (for WebSocket updates) */
-  updateTaskStatus: (taskId: string, status: TaskStatus) => void;
-  /** Update task data (for WebSocket updates) */
-  updateTask: (task: Partial<Task> & { id: string }) => void;
+  /** Pause a process */
+  pauseTask: (id: string) => Promise<Process>;
+  /** Resume a paused process */
+  resumeTask: (id: string) => Promise<Process>;
+  /** Cancel a process */
+  cancelTask: (id: string) => Promise<Process>;
+  /** Retry a failed process */
+  retryTask: (id: string) => Promise<Process>;
+  /** Update process status (for WebSocket updates) */
+  updateTaskStatus: (taskId: string, status: ProcessStatus) => void;
+  /** Update process data (for WebSocket updates) */
+  updateTask: (task: Partial<Process> & { id: string }) => void;
   /** Clear error */
   clearError: () => void;
   /** Reset store to initial state */
   reset: () => void;
 }
 
-/** Combined tasks store type */
-export type TasksStore = TasksState & TasksActions;
+/** Combined processes store type */
+export type ProcessesStore = ProcessesState & ProcessesActions;
 
 // ============================================================================
 // ERROR TYPES
 // ============================================================================
 
-/** Task-related error codes */
-export type TaskErrorCode =
+/** Process-related error codes (using TASK_* naming for API compatibility) */
+export type ProcessErrorCode =
   | 'TASK_NOT_FOUND'
   | 'TASK_ALREADY_COMPLETED'
   | 'TASK_ALREADY_CANCELLED'
@@ -234,11 +237,11 @@ export type TaskErrorCode =
   | 'NETWORK_ERROR'
   | 'UNKNOWN_ERROR';
 
-/** Task error */
-export interface TaskError {
-  code: TaskErrorCode;
+/** Process error */
+export interface ProcessError {
+  code: ProcessErrorCode;
   message: string;
-  taskId?: string;
+  processId?: string;
   details?: Record<string, unknown>;
 }
 
@@ -247,7 +250,7 @@ export interface TaskError {
 // ============================================================================
 
 /** Status display labels */
-export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
+export const PROCESS_STATUS_LABELS: Record<ProcessStatus, string> = {
   pending: 'Pending',
   queued: 'Queued',
   in_progress: 'In Progress',
@@ -258,7 +261,7 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
 };
 
 /** Status colors for UI (maps to Badge variants) */
-export const TASK_STATUS_COLORS: Record<TaskStatus, 'success' | 'default' | 'info' | 'error' | 'warning'> = {
+export const PROCESS_STATUS_COLORS: Record<ProcessStatus, 'success' | 'default' | 'info' | 'error' | 'warning'> = {
   pending: 'default',
   queued: 'info',
   in_progress: 'info',
@@ -269,7 +272,7 @@ export const TASK_STATUS_COLORS: Record<TaskStatus, 'success' | 'default' | 'inf
 };
 
 /** Priority display labels */
-export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
+export const PROCESS_PRIORITY_LABELS: Record<ProcessPriority, string> = {
   low: 'Low',
   normal: 'Normal',
   high: 'High',
@@ -277,7 +280,7 @@ export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
 };
 
 /** Priority colors for UI */
-export const TASK_PRIORITY_COLORS: Record<TaskPriority, 'success' | 'default' | 'info' | 'error' | 'warning'> = {
+export const PROCESS_PRIORITY_COLORS: Record<ProcessPriority, 'success' | 'default' | 'info' | 'error' | 'warning'> = {
   low: 'default',
   normal: 'info',
   high: 'warning',
@@ -285,7 +288,7 @@ export const TASK_PRIORITY_COLORS: Record<TaskPriority, 'success' | 'default' | 
 };
 
 /** Step status display labels */
-export const TASK_STEP_STATUS_LABELS: Record<TaskStepStatus, string> = {
+export const PROCESS_STEP_STATUS_LABELS: Record<ProcessStepStatus, string> = {
   pending: 'Pending',
   in_progress: 'In Progress',
   completed: 'Completed',
@@ -294,7 +297,7 @@ export const TASK_STEP_STATUS_LABELS: Record<TaskStepStatus, string> = {
 };
 
 /** Default pagination */
-export const DEFAULT_TASK_PAGINATION: TaskPagination = {
+export const DEFAULT_PROCESS_PAGINATION: ProcessPagination = {
   page: 1,
   pageSize: 12,
   total: 0,
@@ -302,58 +305,58 @@ export const DEFAULT_TASK_PAGINATION: TaskPagination = {
 };
 
 /** Default filters */
-export const DEFAULT_TASK_FILTERS: TaskFilters = {};
+export const DEFAULT_PROCESS_FILTERS: ProcessFilters = {};
 
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
 
 /**
- * Check if a task is currently active (running or paused)
+ * Check if a process is currently active (running or paused)
  */
-export function isTaskActive(task: Task): boolean {
-  return task.status === 'in_progress' || task.status === 'paused' || task.status === 'queued';
+export function isProcessActive(process: Process): boolean {
+  return process.status === 'in_progress' || process.status === 'paused' || process.status === 'queued';
 }
 
 /**
- * Check if a task can be paused
+ * Check if a process can be paused
  */
-export function isTaskPauseable(task: Task): boolean {
-  return task.status === 'in_progress';
+export function isProcessPauseable(process: Process): boolean {
+  return process.status === 'in_progress';
 }
 
 /**
- * Check if a task can be resumed
+ * Check if a process can be resumed
  */
-export function isTaskResumeable(task: Task): boolean {
-  return task.status === 'paused';
+export function isProcessResumeable(process: Process): boolean {
+  return process.status === 'paused';
 }
 
 /**
- * Check if a task can be cancelled
+ * Check if a process can be cancelled
  */
-export function isTaskCancellable(task: Task): boolean {
-  return task.status === 'pending' || task.status === 'queued' || task.status === 'in_progress' || task.status === 'paused';
+export function isProcessCancellable(process: Process): boolean {
+  return process.status === 'pending' || process.status === 'queued' || process.status === 'in_progress' || process.status === 'paused';
 }
 
 /**
- * Check if a task can be retried
+ * Check if a process can be retried
  */
-export function isTaskRetryable(task: Task): boolean {
-  return task.status === 'failed' || task.status === 'cancelled';
+export function isProcessRetryable(process: Process): boolean {
+  return process.status === 'failed' || process.status === 'cancelled';
 }
 
 /**
- * Check if a task has ended (completed, failed, or cancelled)
+ * Check if a process has ended (completed, failed, or cancelled)
  */
-export function isTaskEnded(task: Task): boolean {
-  return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
+export function isProcessEnded(process: Process): boolean {
+  return process.status === 'completed' || process.status === 'failed' || process.status === 'cancelled';
 }
 
 /**
- * Calculate task progress from steps
+ * Calculate process progress from steps
  */
-export function calculateTaskProgress(steps: TaskStep[]): number {
+export function calculateProcessProgress(steps: ProcessStep[]): number {
   if (steps.length === 0) return 0;
   const completedSteps = steps.filter(
     (step) => step.status === 'completed' || step.status === 'skipped'
@@ -362,9 +365,9 @@ export function calculateTaskProgress(steps: TaskStep[]): number {
 }
 
 /**
- * Get the current step index from task steps
+ * Get the current step index from process steps
  */
-export function getCurrentStepIndex(steps: TaskStep[]): number {
+export function getCurrentStepIndex(steps: ProcessStep[]): number {
   const inProgressIndex = steps.findIndex((step) => step.status === 'in_progress');
   if (inProgressIndex !== -1) return inProgressIndex;
 
@@ -375,9 +378,9 @@ export function getCurrentStepIndex(steps: TaskStep[]): number {
 }
 
 /**
- * Format task duration for display
+ * Format process duration for display
  */
-export function formatTaskDuration(startedAt?: string, completedAt?: string): string {
+export function formatProcessDuration(startedAt?: string, completedAt?: string): string {
   if (!startedAt) return '-';
 
   const start = new Date(startedAt).getTime();
@@ -400,8 +403,8 @@ export function formatTaskDuration(startedAt?: string, completedAt?: string): st
 /**
  * Get priority sort weight (higher = more important)
  */
-export function getPrioritySortWeight(priority: TaskPriority): number {
-  const weights: Record<TaskPriority, number> = {
+export function getPrioritySortWeight(priority: ProcessPriority): number {
+  const weights: Record<ProcessPriority, number> = {
     critical: 4,
     high: 3,
     normal: 2,
@@ -415,15 +418,15 @@ export function getPrioritySortWeight(priority: TaskPriority): number {
 // ============================================================================
 
 /**
- * Type guard for TaskStatus
+ * Type guard for ProcessStatus
  */
-export function isTaskStatus(value: string): value is TaskStatus {
+export function isProcessStatus(value: string): value is ProcessStatus {
   return ['pending', 'queued', 'in_progress', 'paused', 'completed', 'failed', 'cancelled'].includes(value);
 }
 
 /**
- * Type guard for TaskPriority
+ * Type guard for ProcessPriority
  */
-export function isTaskPriority(value: string): value is TaskPriority {
+export function isProcessPriority(value: string): value is ProcessPriority {
   return ['low', 'normal', 'high', 'critical'].includes(value);
 }

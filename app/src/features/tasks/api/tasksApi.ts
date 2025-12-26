@@ -1,20 +1,23 @@
 /**
  * @file tasksApi.ts
- * @description API calls for task management endpoints
+ * @description API calls for process management endpoints
  * @feature tasks
  * @dependencies @/api/client, @/features/tasks/types
- * @apiCalls GET /tasks, GET /tasks/:id, POST /tasks, POST /tasks/:id/action
+ * @apiCalls GET /processes/instances/list, GET /processes/instances/:id, POST /processes, PUT /processes/instances/:id/*
+ *
+ * Note: This API manages "Processes" (user-facing workflows) which map to
+ * ProcessInstances on the server. This is distinct from A2A Tasks.
  */
 
 import { apiClient } from '@/api/client';
 import type {
-  Task,
-  TaskListParams,
-  TaskListResponse,
-  TaskActionRequest,
-  TaskActionResponse,
-  CreateTaskRequest,
-} from '../types/tasks.types';
+  Process as Task,
+  ProcessListParams as TaskListParams,
+  ProcessListResponse as TaskListResponse,
+  ProcessActionRequest as TaskActionRequest,
+  ProcessActionResponse as TaskActionResponse,
+  CreateProcessRequest as CreateTaskRequest,
+} from '../types';
 import {
   getMockTaskList,
   getMockTask,
@@ -28,22 +31,51 @@ import {
 // ============================================================================
 
 const ENDPOINTS = {
-  list: '/tasks',
-  get: (id: string) => `/tasks/${id}`,
-  create: '/tasks',
-  action: (id: string) => `/tasks/${id}/action`,
-  steps: (id: string) => `/tasks/${id}/steps`,
+  // Process definitions
+  definitions: '/processes',
+  getDefinition: (id: string) => `/processes/${id}`,
+  startProcess: (id: string) => `/processes/${id}/start`,
+  // Process instances (what users see as "Processes")
+  instances: '/processes/instances/list',
+  getInstance: (id: string) => `/processes/instances/${id}`,
+  pauseInstance: (id: string) => `/processes/instances/${id}/pause`,
+  resumeInstance: (id: string) => `/processes/instances/${id}/resume`,
+  cancelInstance: (id: string) => `/processes/instances/${id}/cancel`,
 } as const;
 
 // ============================================================================
 // API FUNCTIONS
 // ============================================================================
 
+/**
+ * Transform server ProcessInstance to frontend Process
+ * Maps field names for compatibility
+ */
+function transformServerToFrontend(serverData: Record<string, unknown>): Task {
+  return {
+    ...serverData,
+    // Map assignedRobotIds[0] to robotId for frontend compatibility
+    robotId: Array.isArray(serverData.assignedRobotIds) && serverData.assignedRobotIds.length > 0
+      ? serverData.assignedRobotIds[0]
+      : (serverData.robotId as string || ''),
+  } as Task;
+}
+
+/**
+ * Transform server response list
+ */
+function transformListResponse(serverResponse: { data: Record<string, unknown>[]; pagination: unknown }): TaskListResponse {
+  return {
+    tasks: serverResponse.data.map(transformServerToFrontend),
+    pagination: serverResponse.pagination as TaskListResponse['pagination'],
+  };
+}
+
 export const tasksApi = {
   /**
-   * List tasks with optional filtering and pagination.
+   * List processes with optional filtering and pagination.
    * @param params - Filter and pagination parameters
-   * @returns Paginated list of tasks
+   * @returns Paginated list of processes
    */
   async listTasks(params?: TaskListParams): Promise<TaskListResponse> {
     // Development mode: return mock data
@@ -52,27 +84,25 @@ export const tasksApi = {
       return getMockTaskList(params);
     }
 
-    const response = await apiClient.get<TaskListResponse>(ENDPOINTS.list, {
+    const response = await apiClient.get<{ data: Record<string, unknown>[]; pagination: unknown }>(ENDPOINTS.instances, {
       params: {
         status: Array.isArray(params?.status) ? params.status.join(',') : params?.status,
         priority: Array.isArray(params?.priority) ? params.priority.join(',') : params?.priority,
         robotId: params?.robotId,
         search: params?.search,
-        dateFrom: params?.dateFrom,
-        dateTo: params?.dateTo,
         page: params?.page,
-        pageSize: params?.pageSize,
+        limit: params?.pageSize,
         sortBy: params?.sortBy,
         sortOrder: params?.sortOrder,
       },
     });
-    return response.data;
+    return transformListResponse(response.data);
   },
 
   /**
-   * Get a single task by ID.
-   * @param id - Task ID
-   * @returns Task details
+   * Get a single process by ID.
+   * @param id - Process ID
+   * @returns Process details
    */
   async getTask(id: string): Promise<Task> {
     // Development mode: return mock data
@@ -80,19 +110,20 @@ export const tasksApi = {
       await mockDelay();
       const task = getMockTask(id);
       if (!task) {
-        throw new Error(`Task ${id} not found`);
+        throw new Error(`Process ${id} not found`);
       }
       return task;
     }
 
-    const response = await apiClient.get<Task>(ENDPOINTS.get(id));
-    return response.data;
+    const response = await apiClient.get<Record<string, unknown>>(ENDPOINTS.getInstance(id));
+    return transformServerToFrontend(response.data);
   },
 
   /**
-   * Create a new task.
-   * @param data - Task creation data
-   * @returns Created task
+   * Create a new process.
+   * Creates a process definition and starts it immediately.
+   * @param data - Process creation data
+   * @returns Created process instance
    */
   async createTask(data: CreateTaskRequest): Promise<Task> {
     // Development mode: return mock task
@@ -101,15 +132,36 @@ export const tasksApi = {
       return createMockTask(data);
     }
 
-    const response = await apiClient.post<Task>(ENDPOINTS.create, data);
-    return response.data;
+    // First create the process definition
+    const definitionResponse = await apiClient.post<{ id: string }>(ENDPOINTS.definitions, {
+      name: data.name,
+      description: data.description,
+      stepTemplates: data.steps?.map((step, index) => ({
+        order: index + 1,
+        name: step.name,
+        description: step.description,
+        actionType: 'custom',
+        actionConfig: {},
+      })) || [],
+    });
+
+    // Then start the process
+    const instanceResponse = await apiClient.post<Record<string, unknown>>(
+      ENDPOINTS.startProcess(definitionResponse.data.id),
+      {
+        priority: data.priority,
+        preferredRobotIds: data.robotId ? [data.robotId] : undefined,
+      }
+    );
+
+    return transformServerToFrontend(instanceResponse.data);
   },
 
   /**
-   * Execute an action on a task.
-   * @param taskId - Task ID
+   * Execute an action on a process.
+   * @param taskId - Process ID
    * @param action - Action to execute
-   * @returns Updated task
+   * @returns Updated process
    */
   async executeAction(taskId: string, action: TaskActionRequest): Promise<TaskActionResponse> {
     // Development mode: return mock response
@@ -118,14 +170,31 @@ export const tasksApi = {
       return executeMockTaskAction(taskId, action);
     }
 
-    const response = await apiClient.post<TaskActionResponse>(ENDPOINTS.action(taskId), action);
-    return response.data;
+    // Map action to endpoint
+    let endpoint: string;
+    switch (action.action) {
+      case 'pause':
+        endpoint = ENDPOINTS.pauseInstance(taskId);
+        break;
+      case 'resume':
+        endpoint = ENDPOINTS.resumeInstance(taskId);
+        break;
+      case 'cancel':
+        endpoint = ENDPOINTS.cancelInstance(taskId);
+        break;
+      default:
+        throw new Error(`Unknown action: ${action.action}`);
+    }
+
+    const response = await apiClient.put<Record<string, unknown>>(endpoint);
+    const task = transformServerToFrontend(response.data);
+    return { task, message: `Process ${action.action}d successfully` };
   },
 
   /**
-   * Pause a task.
-   * @param taskId - Task ID
-   * @returns Updated task
+   * Pause a process.
+   * @param taskId - Process ID
+   * @returns Updated process
    */
   async pauseTask(taskId: string): Promise<Task> {
     const response = await tasksApi.executeAction(taskId, { action: 'pause' });
@@ -133,9 +202,9 @@ export const tasksApi = {
   },
 
   /**
-   * Resume a paused task.
-   * @param taskId - Task ID
-   * @returns Updated task
+   * Resume a paused process.
+   * @param taskId - Process ID
+   * @returns Updated process
    */
   async resumeTask(taskId: string): Promise<Task> {
     const response = await tasksApi.executeAction(taskId, { action: 'resume' });
@@ -143,9 +212,9 @@ export const tasksApi = {
   },
 
   /**
-   * Cancel a task.
-   * @param taskId - Task ID
-   * @returns Updated task
+   * Cancel a process.
+   * @param taskId - Process ID
+   * @returns Updated process
    */
   async cancelTask(taskId: string): Promise<Task> {
     const response = await tasksApi.executeAction(taskId, { action: 'cancel' });
@@ -153,9 +222,10 @@ export const tasksApi = {
   },
 
   /**
-   * Retry a failed task.
-   * @param taskId - Task ID
-   * @returns Updated task
+   * Retry a failed process.
+   * Note: Server doesn't have retry endpoint yet, this will fail in production.
+   * @param taskId - Process ID
+   * @returns Updated process
    */
   async retryTask(taskId: string): Promise<Task> {
     const response = await tasksApi.executeAction(taskId, { action: 'retry' });
@@ -163,19 +233,19 @@ export const tasksApi = {
   },
 
   /**
-   * Get tasks for a specific robot.
+   * Get processes for a specific robot.
    * @param robotId - Robot ID
    * @param params - Additional filter parameters
-   * @returns Paginated list of tasks for the robot
+   * @returns Paginated list of processes for the robot
    */
   async getTasksByRobot(robotId: string, params?: Omit<TaskListParams, 'robotId'>): Promise<TaskListResponse> {
     return tasksApi.listTasks({ ...params, robotId });
   },
 
   /**
-   * Get active tasks (pending, queued, in_progress, paused).
+   * Get active processes (pending, queued, in_progress, paused).
    * @param params - Additional filter parameters
-   * @returns Paginated list of active tasks
+   * @returns Paginated list of active processes
    */
   async getActiveTasks(params?: Omit<TaskListParams, 'status'>): Promise<TaskListResponse> {
     return tasksApi.listTasks({
