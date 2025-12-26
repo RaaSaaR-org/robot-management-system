@@ -229,25 +229,6 @@ export interface Zone {
 }
 
 // ============================================================================
-// NAMED LOCATIONS
-// ============================================================================
-
-/**
- * Named locations for robot navigation.
- * @deprecated Use getNamedLocation() from navigation.ts instead.
- * Named locations are now derived from server zones (single source of truth).
- */
-export const NAMED_LOCATIONS: Record<string, RobotLocation> = {
-  home: { x: 0, y: 0, floor: '1', zone: 'Home Base' },
-  charging_station: { x: 5, y: 20, floor: '1', zone: 'Charging Station' },
-  entrance: { x: 50, y: 0, floor: '1', zone: 'Entrance' },
-  exit: { x: 50, y: 50, floor: '1', zone: 'Exit' },
-  warehouse_a: { x: 10, y: 8, floor: '1', zone: 'Warehouse A' },
-  warehouse_b: { x: 32, y: 10, floor: '1', zone: 'Warehouse B' },
-  loading_dock: { x: 20, y: 25, floor: '1', zone: 'Loading Dock' },
-};
-
-// ============================================================================
 // API RESPONSE TYPES
 // ============================================================================
 

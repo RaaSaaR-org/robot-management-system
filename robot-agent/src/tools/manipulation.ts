@@ -25,11 +25,30 @@ export const pickupObject = ai.defineTool(
   async ({ objectId }) => {
     console.log('[Tool:pickupObject]', objectId);
 
+    // Input validation
+    if (!objectId || typeof objectId !== 'string') {
+      return { success: false, message: 'Invalid object ID: must be a non-empty string' };
+    }
+
+    const trimmedId = objectId.trim();
+    if (trimmedId.length === 0) {
+      return { success: false, message: 'Invalid object ID: cannot be empty' };
+    }
+
+    if (trimmedId.length > 256) {
+      return { success: false, message: 'Invalid object ID: exceeds maximum length of 256 characters' };
+    }
+
+    // Sanitize: only allow alphanumeric, spaces, hyphens, underscores
+    if (!/^[\w\s\-]+$/i.test(trimmedId)) {
+      return { success: false, message: 'Invalid object ID: contains invalid characters' };
+    }
+
     if (!robotStateManager) {
       return { success: false, message: 'Robot state manager not initialized' };
     }
 
-    const result = await robotStateManager.pickup(objectId);
+    const result = await robotStateManager.pickup(trimmedId);
     const state = robotStateManager.getState();
 
     return {

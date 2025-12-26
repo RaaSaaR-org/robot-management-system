@@ -33,13 +33,11 @@ export function createTelemetryWebSocket(
     const initialTelemetry = robotStateManager.getTelemetry();
     ws.send(formatTelemetryMessage(initialTelemetry));
 
-    // Subscribe to state changes
+    // Subscribe to state changes for immediate alert notifications only
+    // (Telemetry is sent via periodic interval to avoid duplicates)
     const unsubscribe = robotStateManager.subscribe((state) => {
       if (ws.readyState === WebSocket.OPEN) {
-        const telemetry = robotStateManager.getTelemetry();
-        ws.send(formatTelemetryMessage(telemetry));
-
-        // Generate and send any new alerts
+        // Only send alerts on state changes - telemetry is sent periodically
         const alerts = generateAlerts(state);
         for (const alert of alerts) {
           ws.send(formatAlertMessage(alert));
@@ -47,18 +45,11 @@ export function createTelemetryWebSocket(
       }
     });
 
-    // Set up periodic telemetry updates
+    // Set up periodic telemetry updates (single source of telemetry to avoid duplicates)
     const interval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        const state = robotStateManager.getState();
         const telemetry = robotStateManager.getTelemetry();
         ws.send(formatTelemetryMessage(telemetry));
-
-        // Check for alerts periodically as well
-        const alerts = generateAlerts(state);
-        for (const alert of alerts) {
-          ws.send(formatAlertMessage(alert));
-        }
       }
     }, TELEMETRY_INTERVAL_MS);
 

@@ -221,6 +221,8 @@ export class RobotAgentExecutor implements AgentExecutor {
       // Check if the request has been cancelled
       if (this.cancelledTasks.has(taskId)) {
         console.log(`[RobotAgentExecutor] Request cancelled for task: ${taskId}`);
+        // Remove from set to prevent memory leak
+        this.cancelledTasks.delete(taskId);
         const cancelledUpdate: TaskStatusUpdateEvent = {
           kind: 'status-update',
           taskId: taskId,
@@ -245,15 +247,32 @@ export class RobotAgentExecutor implements AgentExecutor {
 
       let finalA2AState: TaskState = 'unknown';
 
-      if (finalStateLine === 'COMPLETED') {
+      // Validate response format - must end with a valid state marker
+      if (!finalStateLine) {
+        console.error('[RobotAgentExecutor] Empty response from AI');
+        finalA2AState = 'failed';
+      } else if (finalStateLine === 'COMPLETED') {
         finalA2AState = 'completed';
       } else if (finalStateLine === 'AWAITING_USER_INPUT') {
         finalA2AState = 'input-required';
+      } else if (finalStateLine === 'FAILED') {
+        finalA2AState = 'failed';
       } else {
-        console.warn(
-          `[RobotAgentExecutor] Unexpected final state line: ${finalStateLine}. Defaulting to 'completed'.`
-        );
-        finalA2AState = 'completed';
+        // Check if the state marker might be embedded in the response
+        const lastLine = lines.at(-1)?.trim() || '';
+        if (lastLine.includes('COMPLETED')) {
+          console.warn('[RobotAgentExecutor] Found COMPLETED embedded in response, extracting...');
+          finalA2AState = 'completed';
+        } else if (lastLine.includes('AWAITING_USER_INPUT')) {
+          console.warn('[RobotAgentExecutor] Found AWAITING_USER_INPUT embedded in response');
+          finalA2AState = 'input-required';
+        } else {
+          console.error(
+            `[RobotAgentExecutor] Invalid AI response format: expected COMPLETED, AWAITING_USER_INPUT, or FAILED. Got: "${finalStateLine}"`
+          );
+          // Mark as failed instead of silently completing - this is a bug that needs investigation
+          finalA2AState = 'failed';
+        }
       }
 
       // 7. Publish final task status update
@@ -282,7 +301,8 @@ export class RobotAgentExecutor implements AgentExecutor {
       eventBus.publish(finalUpdate);
 
       console.log(`[RobotAgentExecutor] Task ${taskId} finished with state: ${finalA2AState}`);
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[RobotAgentExecutor] Error processing task ${taskId}:`, error);
       const errorUpdate: TaskStatusUpdateEvent = {
         kind: 'status-update',
@@ -294,7 +314,7 @@ export class RobotAgentExecutor implements AgentExecutor {
             kind: 'message',
             role: 'agent',
             messageId: uuidv4(),
-            parts: [{ kind: 'text', text: `Error: ${error.message}` }],
+            parts: [{ kind: 'text', text: `Error: ${errorMessage}` }],
             taskId: taskId,
             contextId: contextId,
           },

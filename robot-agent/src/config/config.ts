@@ -23,6 +23,10 @@ export interface Config {
     floor: string;
     zone: string;
   };
+  /** Zone cache time-to-live in milliseconds */
+  zoneCacheTtlMs: number;
+  /** Server URL for API calls */
+  serverUrl: string;
 }
 
 export const config: Config = {
@@ -41,6 +45,8 @@ export const config: Config = {
     floor: process.env.INITIAL_FLOOR || '1',
     zone: process.env.INITIAL_ZONE || 'Warehouse A',
   },
+  zoneCacheTtlMs: parseInt(process.env.ZONE_CACHE_TTL_MS || '60000', 10), // 1 minute default
+  serverUrl: process.env.SERVER_URL || 'http://localhost:3001',
 };
 
 export function validateConfig(): void {

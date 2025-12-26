@@ -6,6 +6,7 @@
 import { ai, z } from '../agent/genkit.js';
 import type { RobotLocation, Zone, ZoneBounds } from '../robot/types.js';
 import type { RobotStateManager } from '../robot/state.js';
+import { config } from '../config/config.js';
 
 // Global reference to robot state manager (set by main)
 let robotStateManager: RobotStateManager;
@@ -14,7 +15,6 @@ let robotStateManager: RobotStateManager;
 let cachedZones: Zone[] = [];
 let cachedNamedLocations: Record<string, RobotLocation> = {};
 let lastZoneFetch = 0;
-const ZONE_CACHE_TTL_MS = 60000; // 1 minute cache
 
 // Default fallback locations (used when server is unavailable)
 const FALLBACK_LOCATIONS: Record<string, RobotLocation> = {
@@ -69,14 +69,13 @@ function deriveNamedLocationsFromZones(zones: Zone[]): Record<string, RobotLocat
  */
 async function fetchZones(): Promise<Zone[]> {
   const now = Date.now();
-  if (cachedZones.length > 0 && now - lastZoneFetch < ZONE_CACHE_TTL_MS) {
+  if (cachedZones.length > 0 && now - lastZoneFetch < config.zoneCacheTtlMs) {
     return cachedZones;
   }
 
   try {
-    // Fetch from server - use the server URL from environment
-    const serverUrl = process.env.SERVER_URL || 'http://localhost:3001';
-    const response = await fetch(`${serverUrl}/api/zones`);
+    // Fetch from server - use the server URL from config
+    const response = await fetch(`${config.serverUrl}/api/zones`);
     if (!response.ok) {
       console.warn('[Navigation] Failed to fetch zones:', response.status);
       return cachedZones;
@@ -250,12 +249,23 @@ export const moveToLocation = ai.defineTool(
     }),
   },
   async ({ x, y, zone }) => {
-    // Convert flat params to destination object
-    let destination: any;
+    // Convert flat params to destination object with proper typing
+    type Destination = { x: number; y: number } | { zone: string };
+    let destination: Destination;
+
     if (x !== undefined && y !== undefined) {
+      // Validate coordinates are finite numbers
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return { success: false, message: 'Invalid coordinates: x and y must be valid numbers' };
+      }
       destination = { x, y };
     } else if (zone) {
-      destination = { zone };
+      // Validate zone string
+      const trimmedZone = zone.trim();
+      if (trimmedZone.length === 0 || trimmedZone.length > 100) {
+        return { success: false, message: 'Invalid zone: must be 1-100 characters' };
+      }
+      destination = { zone: trimmedZone };
     } else {
       return { success: false, message: 'Provide either coordinates (x, y) or a zone name' };
     }
@@ -290,10 +300,11 @@ export const moveToLocation = ai.defineTool(
         targetLocation: location,
         destinationZone: validation.zone?.name,
       };
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       return {
         success: false,
-        message: error.message,
+        message: errorMessage,
         currentLocation: robotStateManager.getState().location,
       };
     }

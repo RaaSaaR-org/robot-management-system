@@ -52,10 +52,11 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
         commandRequest.payload || {}
       );
       res.json(command);
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Command execution failed';
       res.status(500).json({
         code: 'COMMAND_FAILED',
-        message: error.message,
+        message: errorMessage,
       });
     }
   });
