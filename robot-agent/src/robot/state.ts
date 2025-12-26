@@ -14,6 +14,7 @@ import type {
   RobotCommand,
   CommandResult,
   CommandType,
+  PushedTask,
 } from './types.js';
 import { generateTelemetry } from './telemetry.js';
 import {
@@ -34,6 +35,11 @@ export class RobotStateManager {
 
   // Cached charging station location (prefetched from server)
   private cachedChargingStation: RobotLocation | null = null;
+
+  // Task queue (pushed from server)
+  private taskQueue: PushedTask[] = [];
+  private currentTask: PushedTask | null = null;
+  private readonly MAX_QUEUE_SIZE = 5;
 
   constructor(config: RobotConfig) {
     const now = new Date().toISOString();
@@ -447,5 +453,178 @@ export class RobotStateManager {
     for (const listener of this.listeners) {
       listener(stateCopy);
     }
+  }
+
+  // ============================================================================
+  // TASK QUEUE MANAGEMENT (for server push model)
+  // ============================================================================
+
+  /**
+   * Accept a task pushed from the server
+   * @returns true if task was accepted, false if robot can't accept tasks
+   */
+  async acceptTask(task: PushedTask): Promise<boolean> {
+    // Check if robot can accept tasks
+    if (this.state.status === 'error' || this.state.status === 'maintenance') {
+      return false;
+    }
+
+    // Check queue size
+    if (this.taskQueue.length >= this.MAX_QUEUE_SIZE) {
+      console.warn(`[RobotState] Task queue full, rejecting task ${task.id}`);
+      return false;
+    }
+
+    // Add task to queue (sorted by priority)
+    this.taskQueue.push(task);
+    this.sortTaskQueue();
+
+    console.log(`[RobotState] Task ${task.id} added to queue (${this.taskQueue.length}/${this.MAX_QUEUE_SIZE})`);
+
+    // If no current task, start executing
+    if (!this.currentTask && this.state.status !== 'busy') {
+      this.executeNextTask();
+    }
+
+    return true;
+  }
+
+  /**
+   * Get the task queue
+   */
+  getTaskQueue(): PushedTask[] {
+    return [...this.taskQueue];
+  }
+
+  /**
+   * Get the task queue length
+   */
+  getTaskQueueLength(): number {
+    return this.taskQueue.length;
+  }
+
+  /**
+   * Get the current task being executed
+   */
+  getCurrentTask(): PushedTask | null {
+    return this.currentTask;
+  }
+
+  /**
+   * Cancel a task by ID
+   * @returns true if task was cancelled, false if not found
+   */
+  async cancelTask(taskId: string): Promise<boolean> {
+    // Check current task
+    if (this.currentTask && this.currentTask.id === taskId) {
+      await this.stop();
+      this.currentTask = null;
+      this.executeNextTask();
+      return true;
+    }
+
+    // Check queue
+    const index = this.taskQueue.findIndex(t => t.id === taskId);
+    if (index !== -1) {
+      this.taskQueue.splice(index, 1);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Sort task queue by priority (critical > high > normal > low)
+   */
+  private sortTaskQueue(): void {
+    const priorityWeight = {
+      critical: 4,
+      high: 3,
+      normal: 2,
+      low: 1,
+    };
+
+    this.taskQueue.sort((a, b) => {
+      return priorityWeight[b.priority] - priorityWeight[a.priority];
+    });
+  }
+
+  /**
+   * Execute the next task in the queue
+   */
+  private async executeNextTask(): Promise<void> {
+    if (this.taskQueue.length === 0) {
+      this.currentTask = null;
+      return;
+    }
+
+    const task = this.taskQueue.shift()!;
+    this.currentTask = task;
+    this.state.currentTaskId = task.id;
+    this.state.currentTaskName = task.instruction;
+
+    console.log(`[RobotState] Executing task ${task.id}: ${task.instruction}`);
+
+    // Map task action to command
+    let result: CommandResult;
+    switch (task.actionType) {
+      case 'move_to_location':
+        const location = task.actionConfig.location as RobotLocation | undefined;
+        if (location) {
+          result = await this.moveTo(location);
+        } else {
+          result = { success: false, message: 'No location provided' };
+        }
+        break;
+
+      case 'pickup_object':
+        const objectId = task.actionConfig.objectId as string | undefined;
+        if (objectId) {
+          result = await this.pickup(objectId);
+        } else {
+          result = { success: false, message: 'No object ID provided' };
+        }
+        break;
+
+      case 'drop_object':
+        result = await this.drop();
+        break;
+
+      case 'charge':
+        result = await this.goToCharge();
+        break;
+
+      case 'return_home':
+        result = await this.returnHome();
+        break;
+
+      case 'wait':
+        const duration = (task.actionConfig.durationMs as number) ?? 1000;
+        await new Promise(resolve => setTimeout(resolve, duration));
+        result = { success: true, message: `Waited ${duration}ms` };
+        break;
+
+      case 'inspect':
+      case 'custom':
+      default:
+        // For now, simulate a successful completion
+        console.log(`[RobotState] Simulating ${task.actionType} action`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        result = { success: true, message: `Completed ${task.actionType}` };
+        break;
+    }
+
+    // Task completed or failed - notify and move to next
+    console.log(`[RobotState] Task ${task.id} ${result.success ? 'completed' : 'failed'}: ${result.message}`);
+    this.currentTask = null;
+    this.state.currentTaskId = undefined;
+    this.state.currentTaskName = undefined;
+    this.notifyListeners();
+
+    // TODO: Notify server of task completion via HTTP callback
+    // This would be done in a real implementation
+
+    // Execute next task if available
+    this.executeNextTask();
   }
 }

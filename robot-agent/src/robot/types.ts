@@ -254,3 +254,52 @@ export interface CommandListResponse {
     totalPages: number;
   };
 }
+
+// ============================================================================
+// ROBOT TASK TYPES (pushed from server)
+// ============================================================================
+
+export type RobotTaskStatus = 'pending' | 'assigned' | 'executing' | 'completed' | 'failed' | 'cancelled';
+export type RobotTaskSource = 'process' | 'command' | 'manual';
+export type StepActionType =
+  | 'move_to_location'
+  | 'pickup_object'
+  | 'drop_object'
+  | 'wait'
+  | 'inspect'
+  | 'charge'
+  | 'return_home'
+  | 'custom';
+
+export type Priority = 'low' | 'normal' | 'high' | 'critical';
+
+/** Task pushed from server to robot */
+export interface PushedTask {
+  id: string;
+  processInstanceId?: string;
+  stepInstanceId?: string;
+  actionType: StepActionType;
+  actionConfig: Record<string, unknown>;
+  instruction: string;
+  priority: Priority;
+  source: RobotTaskSource;
+}
+
+/** Task status update request (robot → server) */
+export interface TaskStatusUpdateRequest {
+  status: 'executing' | 'completed' | 'failed';
+  a2aTaskId?: string;
+  a2aContextId?: string;
+  result?: {
+    success: boolean;
+    data?: Record<string, unknown>;
+    message?: string;
+  };
+  error?: string;
+}
+
+/** Task progress update request (robot → server) */
+export interface TaskProgressUpdateRequest {
+  progress: number; // 0-100
+  message?: string;
+}

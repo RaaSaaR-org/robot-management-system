@@ -6,7 +6,12 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { RobotStateManager } from '../robot/state.js';
-import type { RobotCommandRequest, RegistrationInfo } from '../robot/types.js';
+import type {
+  RobotCommandRequest,
+  RegistrationInfo,
+  PushedTask,
+  TaskStatusUpdateRequest,
+} from '../robot/types.js';
 import { config } from '../config/config.js';
 
 export function createRestRoutes(robotStateManager: RobotStateManager): Router {
@@ -133,6 +138,106 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
       batteryLevel: robot.batteryLevel,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // ============================================================================
+  // TASK ENDPOINTS (for server push model)
+  // ============================================================================
+
+  // POST /robots/:id/tasks - Receive a pushed task from server
+  router.post('/robots/:id/tasks', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const task: PushedTask = req.body;
+
+    if (!task.id || !task.actionType) {
+      res.status(400).json({
+        code: 'INVALID_TASK',
+        message: 'Task id and actionType are required',
+      });
+      return;
+    }
+
+    try {
+      // Queue the task for execution
+      const accepted = await robotStateManager.acceptTask(task);
+      if (accepted) {
+        console.log(`[Task] Accepted task ${task.id}: ${task.instruction}`);
+        res.status(202).json({
+          taskId: task.id,
+          status: 'accepted',
+          message: 'Task queued for execution',
+          queuePosition: robotStateManager.getTaskQueueLength(),
+        });
+      } else {
+        res.status(503).json({
+          code: 'ROBOT_UNAVAILABLE',
+          message: 'Robot cannot accept tasks at this time',
+          robotStatus: robot.status,
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to accept task';
+      res.status(500).json({
+        code: 'TASK_ACCEPT_FAILED',
+        message: errorMessage,
+      });
+    }
+  });
+
+  // GET /robots/:id/tasks - Get task queue
+  router.get('/robots/:id/tasks', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const tasks = robotStateManager.getTaskQueue();
+    res.json({
+      robotId: robot.id,
+      tasks,
+      queueLength: tasks.length,
+      currentTask: robotStateManager.getCurrentTask(),
+    });
+  });
+
+  // DELETE /robots/:id/tasks/:taskId - Cancel a task
+  router.delete('/robots/:id/tasks/:taskId', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const { taskId } = req.params;
+    const cancelled = await robotStateManager.cancelTask(taskId);
+
+    if (cancelled) {
+      res.json({
+        taskId,
+        status: 'cancelled',
+        message: 'Task cancelled successfully',
+      });
+    } else {
+      res.status(404).json({
+        code: 'TASK_NOT_FOUND',
+        message: `Task ${taskId} not found or already completed`,
+      });
+    }
   });
 
   return router;
