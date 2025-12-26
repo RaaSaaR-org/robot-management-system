@@ -35,14 +35,14 @@ export const LazyRobotDetailPage = lazy(() =>
  * Processes list page - All processes/workflows with filtering
  */
 export const LazyProcessesPage = lazy(() =>
-  import('@/features/tasks').then((m) => ({ default: m.ProcessesPage }))
+  import('@/features/processes').then((m) => ({ default: m.ProcessesPage }))
 );
 
 /**
  * Process detail page - Single process/workflow view
  */
 export const LazyProcessDetailPage = lazy(() =>
-  import('@/features/tasks').then((m) => ({ default: m.ProcessDetailPage }))
+  import('@/features/processes').then((m) => ({ default: m.ProcessDetailPage }))
 );
 
 // Legacy aliases for backwards compatibility

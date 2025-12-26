@@ -1,0 +1,31 @@
+{
+  "name": "@robo-mind/roboctl",
+  "version": "1.0.0",
+  "description": "CLI tool for controlling robot agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "roboctl": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "link": "npm link"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "conf": "^13.0.1",
+    "ora": "^8.1.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

@@ -1,19 +1,19 @@
 /**
  * @file taskMockData.ts
- * @description Mock data for tasks in development/testing mode
+ * @description Mock data for processes in development/testing mode
  * @feature mocks
- * @dependencies @/features/tasks/types
+ * @dependencies @/features/processes/types
  */
 
 import type {
-  Task,
-  TaskStep,
-  TaskListParams,
-  TaskListResponse,
-  TaskActionRequest,
-  TaskActionResponse,
-  CreateTaskRequest,
-} from '@/features/tasks/types';
+  Process as Task,
+  ProcessStep as TaskStep,
+  ProcessListParams as TaskListParams,
+  ProcessListResponse as TaskListResponse,
+  ProcessActionRequest as TaskActionRequest,
+  ProcessActionResponse as TaskActionResponse,
+  CreateProcessRequest as CreateTaskRequest,
+} from '@/features/processes/types';
 
 export { mockDelay } from './mockData';
 

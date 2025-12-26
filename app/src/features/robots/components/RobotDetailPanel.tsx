@@ -25,8 +25,8 @@ const Robot3DViewer = lazy(() =>
 import { CommandBar, CommandHistory } from '@/features/command';
 import { useRobot } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
-import { useTasksByRobotId } from '@/features/tasks/hooks/useTasks';
-import { TaskStatusBadge } from '@/features/tasks/components/TaskStatusBadge';
+import { useTasksByRobotId } from '@/features/processes/hooks/useTasks';
+import { TaskStatusBadge } from '@/features/processes/components/TaskStatusBadge';
 import {
   isRobotAvailable,
   COMMAND_TYPE_LABELS,
