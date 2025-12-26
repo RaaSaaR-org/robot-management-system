@@ -12,12 +12,12 @@ import { TaskPriorityBadge } from './TaskPriorityBadge';
 import { TaskTimeline } from './TaskTimeline';
 import { useTask } from '../hooks/useTasks';
 import {
-  formatTaskDuration,
-  isTaskPauseable,
-  isTaskResumeable,
-  isTaskCancellable,
-  isTaskRetryable,
-} from '../types/tasks.types';
+  formatProcessDuration as formatTaskDuration,
+  isProcessPauseable as isTaskPauseable,
+  isProcessResumeable as isTaskResumeable,
+  isProcessCancellable as isTaskCancellable,
+  isProcessRetryable as isTaskRetryable,
+} from '../types';
 
 // ============================================================================
 // TYPES

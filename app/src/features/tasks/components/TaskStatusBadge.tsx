@@ -6,7 +6,7 @@
  */
 
 import { Badge, type BadgeProps } from '@/shared/components/ui';
-import { type TaskStatus, TASK_STATUS_LABELS, TASK_STATUS_COLORS } from '../types/tasks.types';
+import { type ProcessStatus as TaskStatus, PROCESS_STATUS_LABELS as TASK_STATUS_LABELS, PROCESS_STATUS_COLORS as TASK_STATUS_COLORS } from '../types';
 
 // ============================================================================
 // TYPES

@@ -6,7 +6,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
-import { type TaskStep, type TaskStepStatus, TASK_STEP_STATUS_LABELS } from '../types/tasks.types';
+import { type ProcessStep as TaskStep, type ProcessStepStatus as TaskStepStatus, PROCESS_STEP_STATUS_LABELS as TASK_STEP_STATUS_LABELS } from '../types';
 
 // ============================================================================
 // TYPES

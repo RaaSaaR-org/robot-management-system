@@ -22,12 +22,12 @@ import {
   selectActiveTasks,
 } from '../store/tasksStore';
 import type {
-  Task,
-  TaskStatus,
-  TaskFilters,
-  TaskPagination,
-  CreateTaskRequest,
-} from '../types/tasks.types';
+  Process as Task,
+  ProcessStatus as TaskStatus,
+  ProcessFilters as TaskFilters,
+  ProcessPagination as TaskPagination,
+  CreateProcessRequest as CreateTaskRequest,
+} from '../types';
 
 // ============================================================================
 // TYPES

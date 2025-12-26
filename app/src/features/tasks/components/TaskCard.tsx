@@ -10,12 +10,12 @@ import { cn } from '@/shared/utils/cn';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { TaskPriorityBadge } from './TaskPriorityBadge';
 import {
-  type Task,
-  isTaskPauseable,
-  isTaskResumeable,
-  isTaskCancellable,
-  formatTaskDuration,
-} from '../types/tasks.types';
+  type Process as Task,
+  isProcessPauseable as isTaskPauseable,
+  isProcessResumeable as isTaskResumeable,
+  isProcessCancellable as isTaskCancellable,
+  formatProcessDuration as formatTaskDuration,
+} from '../types';
 
 // ============================================================================
 // TYPES

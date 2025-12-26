@@ -12,7 +12,7 @@ import { TaskCard } from './TaskCard';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { TaskPriorityBadge } from './TaskPriorityBadge';
 import { useTasks } from '../hooks/useTasks';
-import { type TaskStatus, type TaskPriority, TASK_STATUS_LABELS, TASK_PRIORITY_LABELS } from '../types/tasks.types';
+import { type ProcessStatus as TaskStatus, type ProcessPriority as TaskPriority, PROCESS_STATUS_LABELS as TASK_STATUS_LABELS, PROCESS_PRIORITY_LABELS as TASK_PRIORITY_LABELS } from '../types';
 
 // ============================================================================
 // TYPES
@@ -145,7 +145,7 @@ export function TaskList({
   if (isLoading && tasks.length === 0) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Spinner size="lg" color="cobalt" label="Loading tasks..." />
+        <Spinner size="lg" color="cobalt" label="Loading processes..." />
       </div>
     );
   }
@@ -169,7 +169,7 @@ export function TaskList({
             />
           </svg>
         </div>
-        <h3 className="mt-4 text-lg font-medium text-theme-primary">Failed to load tasks</h3>
+        <h3 className="mt-4 text-lg font-medium text-theme-primary">Failed to load processes</h3>
         <p className="mt-1 text-sm text-theme-secondary">{error}</p>
         <Button variant="primary" size="sm" className="mt-4" onClick={() => fetchTasks()}>
           Try Again
@@ -186,7 +186,7 @@ export function TaskList({
           {/* Search */}
           <div className="w-full sm:max-w-xs">
             <Input
-              placeholder="Search tasks..."
+              placeholder="Search processes..."
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
               leftIcon={
@@ -214,7 +214,7 @@ export function TaskList({
                     d="M12 4v16m8-8H4"
                   />
                 </svg>
-                Create Task
+                Create Process
               </Button>
             )}
 
@@ -353,15 +353,15 @@ export function TaskList({
               />
             </svg>
           </div>
-          <h3 className="mt-4 text-lg font-medium text-theme-primary">No tasks found</h3>
+          <h3 className="mt-4 text-lg font-medium text-theme-primary">No processes found</h3>
           <p className="mt-1 card-meta">
             {currentStatus || currentPriority || filters.search
               ? 'Try adjusting your filters'
-              : 'No tasks have been created yet'}
+              : 'No processes have been created yet'}
           </p>
           {showCreateButton && onCreateTask && (
             <Button variant="primary" size="sm" className="mt-4" onClick={onCreateTask}>
-              Create Task
+              Create Process
             </Button>
           )}
         </div>
@@ -391,7 +391,7 @@ export function TaskList({
           <p className="card-meta">
             Showing {(pagination.page - 1) * pagination.pageSize + 1} to{' '}
             {Math.min(pagination.page * pagination.pageSize, pagination.total)} of{' '}
-            {pagination.total} tasks
+            {pagination.total} processes
           </p>
           <div className="flex items-center gap-2">
             <Button

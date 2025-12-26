@@ -10,8 +10,8 @@ import { Modal, Input, Button, Spinner } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { useTasks } from '../hooks/useTasks';
 import { useRobots } from '@/features/robots/hooks/useRobots';
-import type { TaskPriority, CreateTaskRequest, CreateTaskStep } from '../types/tasks.types';
-import { TASK_PRIORITY_LABELS } from '../types/tasks.types';
+import type { ProcessPriority as TaskPriority, CreateProcessRequest as CreateTaskRequest, CreateProcessStep as CreateTaskStep } from '../types';
+import { PROCESS_PRIORITY_LABELS as TASK_PRIORITY_LABELS } from '../types';
 
 // ============================================================================
 // TYPES
@@ -83,7 +83,7 @@ export function CreateTaskModal({
   // Validate form
   const validateForm = (): boolean => {
     if (!name.trim()) {
-      setFormError('Task name is required');
+      setFormError('Process name is required');
       return false;
     }
     if (!robotId) {
@@ -141,7 +141,7 @@ export function CreateTaskModal({
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title="Create New Task"
+      title="Create New Process"
       size="lg"
       closeOnBackdrop={!isExecuting}
       closeOnEscape={!isExecuting}
@@ -157,7 +157,7 @@ export function CreateTaskModal({
                 Creating...
               </>
             ) : (
-              'Create Task'
+              'Create Process'
             )}
           </Button>
         </div>

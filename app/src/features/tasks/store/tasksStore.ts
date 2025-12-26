@@ -9,13 +9,13 @@
 import { createStore } from '@/store';
 import { tasksApi } from '../api/tasksApi';
 import type {
-  TasksStore,
-  Task,
-  TaskStatus,
-  TaskFilters,
-  CreateTaskRequest,
-  TaskErrorCode,
-} from '../types/tasks.types';
+  ProcessesStore as TasksStore,
+  Process as Task,
+  ProcessStatus as TaskStatus,
+  ProcessFilters as TaskFilters,
+  CreateProcessRequest as CreateTaskRequest,
+  ProcessErrorCode as TaskErrorCode,
+} from '../types';
 
 // ============================================================================
 // INITIAL STATE
