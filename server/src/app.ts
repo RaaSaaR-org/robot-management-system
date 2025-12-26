@@ -5,6 +5,7 @@
 
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 
 // Import routes
 import { authRoutes } from './routes/auth.routes.js';
@@ -24,17 +25,56 @@ import { authMiddleware } from './middleware/auth.middleware.js';
 // Import services
 import { robotManager } from './services/RobotManager.js';
 
+// Default CORS origins for development
+const DEFAULT_CORS_ORIGINS = ['http://localhost:1420', 'http://localhost:5173', 'http://localhost:3000'];
+
+// Parse CORS origins from environment variable (comma-separated)
+function getCorsOrigins(): string[] {
+  const envOrigins = process.env.CORS_ORIGINS;
+  if (envOrigins) {
+    return envOrigins.split(',').map((origin) => origin.trim()).filter(Boolean);
+  }
+  return DEFAULT_CORS_ORIGINS;
+}
+
+// Rate limiting configuration
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+  skip: (req) => req.path === '/health', // Skip health checks
+});
+
+// Stricter rate limit for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // limit each IP to 20 auth requests per 15 minutes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts, please try again later.' },
+});
+
 /**
  * Create and configure Express application
  */
 export function createApp(): Express {
   const app = express();
 
-  // Middleware
+  // Trust proxy for rate limiting behind reverse proxy
+  app.set('trust proxy', 1);
+
+  // CORS - use environment variable or defaults
   app.use(cors({
-    origin: ['http://localhost:1420', 'http://localhost:5173', 'http://localhost:3000'],
+    origin: getCorsOrigins(),
     credentials: true,
   }));
+
+  // Rate limiting - apply to all API routes
+  app.use('/api/', apiLimiter);
+
+  // Body parsing
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
 
@@ -49,8 +89,8 @@ export function createApp(): Express {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // Auth Routes (public)
-  app.use('/api/auth', authRoutes);
+  // Auth Routes (public) - with stricter rate limiting
+  app.use('/api/auth', authLimiter, authRoutes);
 
   // Protected API Routes
   app.use('/api/a2a/conversation', authMiddleware, conversationRoutes);

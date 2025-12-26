@@ -21,10 +21,12 @@
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.2.1",
     "jsonwebtoken": "^9.0.3",
     "prisma": "^6.19.1",
     "uuid": "^11.0.3",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
