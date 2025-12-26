@@ -52,6 +52,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +77,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (!mountedRef.current) return;
         console.log('A2A WebSocket connected');
         setIsConnected(true);
         setWsConnected(true);
@@ -84,6 +86,9 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
       };
 
       ws.onmessage = (event) => {
+        // Skip processing if component unmounted
+        if (!mountedRef.current) return;
+
         try {
           const data = JSON.parse(event.data);
 
@@ -92,8 +97,8 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
             handleTaskEvent(taskEvent);
             onTaskEvent?.(taskEvent);
 
-            // Refresh messages for the affected conversation
-            if (taskEvent.contextId) {
+            // Refresh messages for the affected conversation (with mounted check)
+            if (taskEvent.contextId && mountedRef.current) {
               fetchMessages(taskEvent.contextId).catch(console.error);
             }
           }
@@ -104,26 +109,30 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
 
       ws.onclose = () => {
         console.log('A2A WebSocket disconnected');
+        wsRef.current = null;
+        if (!mountedRef.current) return;
+
         setIsConnected(false);
         setWsConnected(false);
-        wsRef.current = null;
         onDisconnect?.();
 
-        // Attempt reconnection
-        if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+        // Attempt reconnection only if still mounted
+        if (mountedRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current += 1;
           console.log(
             `Attempting reconnection ${reconnectAttemptsRef.current}/${maxReconnectAttempts}...`
           );
           reconnectTimeoutRef.current = setTimeout(connect, reconnectDelay);
-        } else {
+        } else if (mountedRef.current) {
           setError('Max reconnection attempts reached');
         }
       };
 
       ws.onerror = (event) => {
         console.error('A2A WebSocket error:', event);
-        setError('WebSocket connection error');
+        if (mountedRef.current) {
+          setError('WebSocket connection error');
+        }
       };
     } catch (err) {
       console.error('Failed to create WebSocket:', err);
@@ -162,17 +171,24 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
 
   // Auto-connect on mount
   useEffect(() => {
+    mountedRef.current = true;
+
     if (autoConnect) {
       connect();
     }
 
     return () => {
+      // Mark as unmounted first to prevent state updates
+      mountedRef.current = false;
+
       // Clean up on unmount
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, [autoConnect, connect]);

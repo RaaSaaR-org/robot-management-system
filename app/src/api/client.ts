@@ -6,8 +6,13 @@
  * @sideEffects Sets up request/response interceptors
  */
 
-import axios, { type AxiosInstance, type AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import axios, { type AxiosInstance, type AxiosError, type InternalAxiosRequestConfig, type AxiosRequestConfig } from 'axios';
 import type { ApiError, ApiClientConfig, TokenStorage } from '@/shared/types/api.types';
+
+// Extended request config to track refresh attempts
+interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
+  _retryAfterRefresh?: boolean;
+}
 
 // ============================================================================
 // CONFIGURATION
@@ -87,10 +92,10 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
   client.interceptors.response.use(
     (response) => response,
     async (error: AxiosError<ApiError>) => {
-      const originalRequest = error.config;
+      const originalRequest = error.config as ExtendedAxiosRequestConfig | undefined;
 
-      // Handle 401 Unauthorized - attempt token refresh
-      if (error.response?.status === 401 && originalRequest) {
+      // Handle 401 Unauthorized - attempt token refresh (only once)
+      if (error.response?.status === 401 && originalRequest && !originalRequest._retryAfterRefresh) {
         const refreshToken = tokenStorage.getRefreshToken();
 
         if (refreshToken) {
@@ -103,6 +108,9 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
 
             const { accessToken, refreshToken: newRefreshToken } = refreshResponse.data;
             tokenStorage.setTokens(accessToken, newRefreshToken);
+
+            // Mark request to prevent infinite retry loop
+            originalRequest._retryAfterRefresh = true;
 
             // Retry the original request with the new token
             if (originalRequest.headers) {

@@ -288,12 +288,21 @@ export const useA2AStore = createStore<A2AStore>(
       }
     },
 
-    unregisterAgent: (name: string) => {
-      set((state) => {
-        state.registeredAgents = state.registeredAgents.filter((a) => a.name !== name);
-      });
-      // Fire and forget API call
-      a2aApi.unregisterAgent(name).catch(console.error);
+    unregisterAgent: async (name: string) => {
+      try {
+        // Call API first, then update state on success
+        await a2aApi.unregisterAgent(name);
+        set((state) => {
+          state.registeredAgents = state.registeredAgents.filter((a) => a.name !== name);
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to unregister agent';
+        console.error('[A2AStore] Failed to unregister agent:', message);
+        set((state) => {
+          state.error = message;
+        });
+        throw error;
+      }
     },
 
     fetchAgents: async () => {
