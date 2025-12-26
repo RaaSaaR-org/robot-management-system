@@ -11,6 +11,41 @@ import { alertService, type AlertEvent } from '../services/AlertService.js';
 import { zoneService, type ZoneEvent } from '../services/ZoneService.js';
 import type { A2ATaskEvent } from '../types/index.js';
 
+// Configuration
+const MAX_CLIENTS = 1000;
+const MAX_BUFFERED_AMOUNT = 65536; // 64KB backpressure threshold
+
+/**
+ * Safely send a message to a WebSocket client with error handling and backpressure check
+ */
+function safeSend(client: WebSocket, message: string, clients: Set<WebSocket>): boolean {
+  try {
+    if (client.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    // Check backpressure - skip if client is too slow
+    if (client.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+      console.warn('[WebSocket] Client backpressure detected, skipping message');
+      return false;
+    }
+    client.send(message);
+    return true;
+  } catch (error) {
+    console.error('[WebSocket] Send error:', error);
+    clients.delete(client);
+    return false;
+  }
+}
+
+/**
+ * Broadcast message to all connected clients with error handling
+ */
+function broadcast(clients: Set<WebSocket>, message: string): void {
+  clients.forEach((client) => {
+    safeSend(client, message, clients);
+  });
+}
+
 /**
  * Setup WebSocket server for real-time communication
  */
@@ -23,7 +58,14 @@ export function setupWebSocket(server: Server): void {
   const clients = new Set<WebSocket>();
 
   wss.on('connection', (ws: WebSocket) => {
-    console.log('WebSocket client connected');
+    // Reject connection if at capacity
+    if (clients.size >= MAX_CLIENTS) {
+      console.warn(`[WebSocket] Connection rejected: max clients (${MAX_CLIENTS}) reached`);
+      ws.close(1013, 'Server at capacity');
+      return;
+    }
+
+    console.log(`[WebSocket] Client connected (total: ${clients.size + 1})`);
     clients.add(ws);
 
     // Send welcome message
@@ -49,13 +91,13 @@ export function setupWebSocket(server: Server): void {
 
     // Handle close
     ws.on('close', () => {
-      console.log('WebSocket client disconnected');
+      console.log(`[WebSocket] Client disconnected (total: ${clients.size - 1})`);
       clients.delete(ws);
     });
 
     // Handle errors
     ws.on('error', (error) => {
-      console.error('WebSocket error:', error);
+      console.error('[WebSocket] Client error:', error);
       clients.delete(ws);
     });
   });
@@ -67,12 +109,7 @@ export function setupWebSocket(server: Server): void {
       event,
       timestamp: Date.now(),
     });
-
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
+    broadcast(clients, message);
   });
 
   // Subscribe to robot events and broadcast to all clients
@@ -81,12 +118,7 @@ export function setupWebSocket(server: Server): void {
       ...event,
       type: event.type, // Ensure type comes last to override spread
     });
-
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
+    broadcast(clients, message);
   });
 
   // Subscribe to alert events and broadcast to all clients
@@ -96,12 +128,7 @@ export function setupWebSocket(server: Server): void {
       alert: event.alert,
       timestamp: event.timestamp,
     });
-
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
+    broadcast(clients, message);
   });
 
   // Subscribe to zone events and broadcast to all clients
@@ -111,12 +138,7 @@ export function setupWebSocket(server: Server): void {
       zone: event.zone,
       timestamp: event.timestamp,
     });
-
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
+    broadcast(clients, message);
   });
 
   console.log('WebSocket server initialized');
