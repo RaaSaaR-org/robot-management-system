@@ -373,6 +373,40 @@
   }
 }
 
+/* Hero illustration - Device-specific animations */
+@keyframes droneHover {
+  0%, 100% {
+    transform: translateY(0) translateX(0);
+  }
+  25% {
+    transform: translateY(-6px) translateX(2px);
+  }
+  50% {
+    transform: translateY(-4px) translateX(-1px);
+  }
+  75% {
+    transform: translateY(-8px) translateX(1px);
+  }
+}
+
+@keyframes vehicleIdle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes robotReady {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.015);
+  }
+}
+
 /* Safety Preview animations */
 @keyframes drawPath {
   0% {

@@ -68,155 +68,256 @@ export function HeroSection() {
             </div>
           </div>
 
-          {/* Hero Visual - Device Ecosystem Constellation */}
+          {/* Hero Visual - Fleet of Autonomous Devices */}
           <div className="relative">
             <div className="aspect-square max-w-lg mx-auto relative">
-              {/* Connection lines (SVG) */}
+              {/* Connection lines and data flow (SVG) */}
               <svg className="absolute inset-0 w-full h-full" viewBox="0 0 400 400">
                 <defs>
+                  <linearGradient id="pulseGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#2A5FFF" stopOpacity="0.5" />
+                    <stop offset="100%" stopColor="#18E4C3" stopOpacity="0.2" />
+                  </linearGradient>
                   <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#2A5FFF" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#18E4C3" stopOpacity="0.4" />
+                    <stop offset="0%" stopColor="#2A5FFF" stopOpacity="0.3" />
+                    <stop offset="100%" stopColor="#18E4C3" stopOpacity="0.15" />
                   </linearGradient>
                 </defs>
-                {/* Cardinal direction lines */}
-                <line x1="200" y1="200" x2="200" y2="50" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1s" repeatCount="indefinite" />
-                </line>
-                <line x1="200" y1="200" x2="350" y2="200" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1s" repeatCount="indefinite" />
-                </line>
-                <line x1="200" y1="200" x2="200" y2="350" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1s" repeatCount="indefinite" />
-                </line>
-                <line x1="200" y1="200" x2="50" y2="200" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1s" repeatCount="indefinite" />
-                </line>
-                {/* Diagonal lines */}
-                <line x1="200" y1="200" x2="320" y2="80" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1.2s" repeatCount="indefinite" />
-                </line>
-                <line x1="200" y1="200" x2="320" y2="320" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1.2s" repeatCount="indefinite" />
-                </line>
-                <line x1="200" y1="200" x2="80" y2="320" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1.2s" repeatCount="indefinite" />
-                </line>
-                <line x1="200" y1="200" x2="80" y2="80" stroke="url(#lineGradient)" strokeWidth="2" strokeDasharray="6 4">
-                  <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1.2s" repeatCount="indefinite" />
-                </line>
-                {/* Data pulse dots */}
-                <circle r="4" fill="#2A5FFF">
-                  <animateMotion dur="2s" repeatCount="indefinite" path="M200,200 L200,50" />
+
+                {/* Pulse rings from hub */}
+                <circle cx="200" cy="200" r="45" fill="none" stroke="url(#pulseGradient)" strokeWidth="1" opacity="0">
+                  <animate attributeName="r" values="45;130" dur="4s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.3;0" dur="4s" repeatCount="indefinite" />
                 </circle>
-                <circle r="4" fill="#18E4C3">
-                  <animateMotion dur="2s" repeatCount="indefinite" path="M200,200 L350,200" begin="0.5s" />
+                <circle cx="200" cy="200" r="45" fill="none" stroke="url(#pulseGradient)" strokeWidth="1" opacity="0">
+                  <animate attributeName="r" values="45;130" dur="4s" repeatCount="indefinite" begin="2s" />
+                  <animate attributeName="opacity" values="0.3;0" dur="4s" repeatCount="indefinite" begin="2s" />
                 </circle>
-                <circle r="4" fill="#2A5FFF">
-                  <animateMotion dur="2s" repeatCount="indefinite" path="M200,200 L320,80" begin="0.3s" />
+
+                {/* Connection lines to 8 devices */}
+                <line x1="200" y1="200" x2="200" y2="40" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="320" y2="80" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="360" y2="200" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="320" y2="320" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="200" y2="360" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="80" y2="320" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="40" y2="200" stroke="url(#lineGradient)" strokeWidth="1" />
+                <line x1="200" y1="200" x2="80" y2="80" stroke="url(#lineGradient)" strokeWidth="1" />
+
+                {/* Data packets traveling to devices (commands) */}
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L200,40" />
                 </circle>
-                <circle r="4" fill="#18E4C3">
-                  <animateMotion dur="2s" repeatCount="indefinite" path="M200,200 L80,320" begin="0.8s" />
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L320,80" begin="0.3s" />
+                </circle>
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L360,200" begin="0.6s" />
+                </circle>
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L320,320" begin="0.9s" />
+                </circle>
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L200,360" begin="1.2s" />
+                </circle>
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L80,320" begin="1.5s" />
+                </circle>
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L40,200" begin="1.8s" />
+                </circle>
+                <circle r="3" fill="#2A5FFF" opacity="0.8">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,200 L80,80" begin="2.1s" />
+                </circle>
+
+                {/* Telemetry coming back from devices */}
+                <circle r="2" fill="#18E4C3" opacity="0.7">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M200,40 L200,200" begin="1s" />
+                </circle>
+                <circle r="2" fill="#18E4C3" opacity="0.7">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M360,200 L200,200" begin="1.5s" />
+                </circle>
+                <circle r="2" fill="#18E4C3" opacity="0.7">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M200,360 L200,200" begin="0.5s" />
+                </circle>
+                <circle r="2" fill="#18E4C3" opacity="0.7">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M40,200 L200,200" begin="2s" />
+                </circle>
+                <circle r="2" fill="#18E4C3" opacity="0.7">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M320,320 L200,200" begin="0.8s" />
+                </circle>
+                <circle r="2" fill="#18E4C3" opacity="0.7">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M80,80 L200,200" begin="1.8s" />
                 </circle>
               </svg>
 
-              {/* Rotating outer ring */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-36 h-36 rounded-full border-2 border-dashed border-cobalt/20 animate-spin" style={{ animationDuration: '20s' }} />
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 rounded-full border border-turquoise/10 animate-spin" style={{ animationDuration: '30s', animationDirection: 'reverse' }} />
-
               {/* Central Hub */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 rounded-full bg-gradient-to-br from-cobalt to-turquoise p-1 shadow-2xl shadow-cobalt/40 z-10">
-                <div className="w-full h-full rounded-full bg-gradient-to-br from-cobalt/90 to-turquoise/90 flex items-center justify-center">
-                  <div className="text-center">
-                    <span className="text-white font-bold text-2xl">R</span>
-                    <p className="text-white/80 text-xs font-mono tracking-wider">HUB</p>
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 z-10">
+                <div className="absolute inset-0 rounded-full bg-gradient-to-br from-cobalt/30 to-turquoise/30 blur-xl" />
+                <div className="relative w-full h-full rounded-full bg-gradient-to-br from-cobalt to-turquoise p-[2px] shadow-2xl shadow-cobalt/30">
+                  <div className="w-full h-full rounded-full bg-gradient-to-br from-cobalt/95 to-turquoise/95 flex items-center justify-center">
+                    <div className="text-center">
+                      <span className="text-white font-bold text-base">R</span>
+                      <p className="text-white/70 text-[8px] font-mono tracking-wider">HUB</p>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Drone - Top */}
-              <div className="absolute top-2 left-1/2 -translate-x-1/2" style={{ animation: 'float 4s ease-in-out infinite' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-cobalt" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              {/* === 8 DEVICES === */}
+
+              {/* Drone 1 - Top */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2" style={{ animation: 'droneHover 5s ease-in-out infinite' }}>
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-cobalt" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="5" cy="5" r="2" />
+                    <circle cx="19" cy="5" r="2" />
+                    <circle cx="5" cy="19" r="2" />
+                    <circle cx="19" cy="19" r="2" />
+                    <line x1="10" y1="10" x2="6.5" y2="6.5" />
+                    <line x1="14" y1="10" x2="17.5" y2="6.5" />
+                    <line x1="10" y1="14" x2="6.5" y2="17.5" />
+                    <line x1="14" y1="14" x2="17.5" y2="17.5" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Drone</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">Drone</p>
               </div>
 
-              {/* Facility - Top Right */}
-              <div className="absolute top-[12%] right-[12%]" style={{ animation: 'float 4.5s ease-in-out infinite', animationDelay: '0.5s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-turquoise" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+              {/* AGV - Top Right */}
+              <div className="absolute top-[8%] right-[8%]">
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-turquoise" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="4" y="10" width="12" height="8" rx="1" />
+                    <circle cx="7" cy="18" r="2" />
+                    <circle cx="13" cy="18" r="2" />
+                    <path d="M16 14h4l1 4h-5" />
+                    <path d="M8 10V6h6v4" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Facility</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">AGV</p>
               </div>
 
-              {/* Vehicle - Right */}
-              <div className="absolute right-2 top-1/2 -translate-y-1/2" style={{ animation: 'float 3.8s ease-in-out infinite', animationDelay: '1s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-cobalt" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 17h.01M16 17h.01M9 11h6M5 11l1.5-4.5A2 2 0 018.4 5h7.2a2 2 0 011.9 1.5L19 11M5 11h14M5 11v6a1 1 0 001 1h1m12-7v6a1 1 0 01-1 1h-1M7 18a1 1 0 100-2 1 1 0 000 2zm10 0a1 1 0 100-2 1 1 0 000 2z" />
+              {/* Autonomous Vehicle - Right */}
+              <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-cobalt" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M5 11l1.5-4.5a2 2 0 011.9-1.5h7.2a2 2 0 011.9 1.5L19 11" />
+                    <path d="M5 11h14v5a1 1 0 01-1 1H6a1 1 0 01-1-1v-5z" />
+                    <circle cx="7.5" cy="15.5" r="1.5" />
+                    <circle cx="16.5" cy="15.5" r="1.5" />
+                    <path d="M9 8h6" />
+                    <path d="M12 3v2" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Vehicle</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">AV</p>
               </div>
 
-              {/* Forklift - Bottom Right */}
-              <div className="absolute bottom-[12%] right-[12%]" style={{ animation: 'float 4.2s ease-in-out infinite', animationDelay: '1.5s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-turquoise" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              {/* Robot Arm - Bottom Right */}
+              <div className="absolute bottom-[8%] right-[8%]">
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-turquoise" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="4" y="18" width="6" height="4" rx="1" />
+                    <path d="M7 18v-4" />
+                    <path d="M7 14l5-5" />
+                    <path d="M12 9l4 2" />
+                    <circle cx="16" cy="11" r="2" />
+                    <path d="M18 11l2-1" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Logistics</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">Arm</p>
               </div>
 
-              {/* Robot - Bottom */}
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2" style={{ animation: 'float 4.4s ease-in-out infinite', animationDelay: '2s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-cobalt" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+              {/* Humanoid Robot - Bottom */}
+              <div className="absolute bottom-0 left-1/2 -translate-x-1/2" style={{ animation: 'robotReady 3s ease-in-out infinite' }}>
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-cobalt" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="9" y="2" width="6" height="5" rx="1" />
+                    <circle cx="10.5" cy="4" r="0.5" fill="currentColor" />
+                    <circle cx="13.5" cy="4" r="0.5" fill="currentColor" />
+                    <rect x="8" y="8" width="8" height="8" rx="1" />
+                    <line x1="8" y1="10" x2="5" y2="14" />
+                    <line x1="16" y1="10" x2="19" y2="14" />
+                    <line x1="10" y1="16" x2="10" y2="21" />
+                    <line x1="14" y1="16" x2="14" y2="21" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Robot</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">Humanoid</p>
               </div>
 
-              {/* Security - Bottom Left */}
-              <div className="absolute bottom-[12%] left-[12%]" style={{ animation: 'float 3.9s ease-in-out infinite', animationDelay: '2.5s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-turquoise" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              {/* Delivery Bot - Bottom Left */}
+              <div className="absolute bottom-[8%] left-[8%]">
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-turquoise" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="6" y="8" width="12" height="8" rx="2" />
+                    <circle cx="8" cy="18" r="2" />
+                    <circle cx="16" cy="18" r="2" />
+                    <rect x="9" y="5" width="6" height="3" rx="1" />
+                    <circle cx="10.5" cy="11" r="1" fill="currentColor" />
+                    <circle cx="13.5" cy="11" r="1" fill="currentColor" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Security</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">Delivery</p>
               </div>
 
-              {/* Delivery - Left */}
-              <div className="absolute left-2 top-1/2 -translate-y-1/2" style={{ animation: 'float 4.1s ease-in-out infinite', animationDelay: '3s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-cobalt" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              {/* Second Robot Arm - Left */}
+              <div className="absolute left-0 top-1/2 -translate-y-1/2">
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-cobalt/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-cobalt" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="4" y="18" width="6" height="4" rx="1" />
+                    <path d="M7 18v-4" />
+                    <path d="M7 14l5-5" />
+                    <path d="M12 9l4 2" />
+                    <circle cx="16" cy="11" r="2" />
+                    <path d="M18 11l2-1" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Delivery</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">Arm</p>
               </div>
 
-              {/* Medical - Top Left */}
-              <div className="absolute top-[12%] left-[12%]" style={{ animation: 'float 4.3s ease-in-out infinite', animationDelay: '3.5s' }}>
-                <div className="w-14 h-14 rounded-xl bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-turquoise" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+              {/* Drone 2 - Top Left */}
+              <div className="absolute top-[8%] left-[8%]" style={{ animation: 'droneHover 6s ease-in-out infinite', animationDelay: '1s' }}>
+                <div className="w-11 h-11 rounded-lg bg-theme-card border border-turquoise/30 backdrop-blur flex items-center justify-center shadow-lg">
+                  <svg className="w-5 h-5 text-turquoise" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="5" cy="5" r="2" />
+                    <circle cx="19" cy="5" r="2" />
+                    <circle cx="5" cy="19" r="2" />
+                    <circle cx="19" cy="19" r="2" />
+                    <line x1="10" y1="10" x2="6.5" y2="6.5" />
+                    <line x1="14" y1="10" x2="17.5" y2="6.5" />
+                    <line x1="10" y1="14" x2="6.5" y2="17.5" />
+                    <line x1="14" y1="14" x2="17.5" y2="17.5" />
                   </svg>
                 </div>
-                <p className="text-theme-muted text-[10px] text-center mt-1 font-mono">Medical</p>
+                <p className="text-theme-muted text-[8px] text-center mt-0.5 font-mono">Drone</p>
               </div>
 
               {/* Ambient glow */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-56 h-56 bg-cobalt/15 rounded-full blur-3xl" />
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 bg-turquoise/15 rounded-full blur-2xl animate-pulse" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 bg-cobalt/10 rounded-full blur-3xl" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 bg-turquoise/10 rounded-full blur-2xl" />
+            </div>
+
+            {/* Industries - Prominent display below illustration */}
+            <div className="flex justify-center gap-3 mt-6">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-cobalt/10 to-cobalt/5 border border-cobalt/20">
+                <svg className="w-4 h-4 text-cobalt" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+                </svg>
+                <span className="text-sm font-medium text-cobalt">Logistics</span>
+              </div>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-turquoise/10 to-turquoise/5 border border-turquoise/20">
+                <svg className="w-4 h-4 text-turquoise" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />
+                </svg>
+                <span className="text-sm font-medium text-turquoise">Manufacturing</span>
+              </div>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-cobalt/10 to-turquoise/10 border border-cobalt/20">
+                <svg className="w-4 h-4 text-cobalt" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
+                </svg>
+                <span className="text-sm font-medium bg-gradient-to-r from-cobalt to-turquoise bg-clip-text text-transparent">Healthcare</span>
+              </div>
             </div>
           </div>
         </div>
