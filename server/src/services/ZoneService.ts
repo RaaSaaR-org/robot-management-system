@@ -107,6 +107,50 @@ export class ZoneService {
     return zone?.type === 'restricted';
   }
 
+  /**
+   * Get named locations derived from zone centers.
+   * Returns a mapping of location name -> center coordinates.
+   * This is the single source of truth for all named location lookups.
+   */
+  async getNamedLocations(): Promise<
+    Record<string, { x: number; y: number; floor: string; zone: string }>
+  > {
+    const zones = await this.getAllZones();
+    const locations: Record<string, { x: number; y: number; floor: string; zone: string }> = {};
+
+    for (const zone of zones) {
+      // Compute center point of zone
+      const centerX = Math.round(zone.bounds.x + zone.bounds.width / 2);
+      const centerY = Math.round(zone.bounds.y + zone.bounds.height / 2);
+
+      // Create normalized key (lowercase, spaces to underscores)
+      const key = zone.name.toLowerCase().replace(/\s+/g, '_');
+
+      locations[key] = {
+        x: centerX,
+        y: centerY,
+        floor: zone.floor,
+        zone: zone.name,
+      };
+
+      // Add aliases for common zones
+      if (zone.type === 'charging') {
+        locations['charging_station'] = locations[key];
+        locations['charge'] = locations[key];
+      }
+      if (zone.type === 'maintenance') {
+        locations['maintenance'] = locations[key];
+      }
+    }
+
+    // Always include home at origin
+    if (!locations['home']) {
+      locations['home'] = { x: 0, y: 0, floor: '1', zone: 'Home Base' };
+    }
+
+    return locations;
+  }
+
   // ============================================================================
   // MUTATION OPERATIONS
   // ============================================================================

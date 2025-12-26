@@ -15,8 +15,11 @@ import type {
   CommandResult,
   CommandType,
 } from './types.js';
-import { NAMED_LOCATIONS } from './types.js';
 import { generateTelemetry } from './telemetry.js';
+import {
+  getChargingStationLocation,
+  getHomeLocation,
+} from '../tools/navigation.js';
 
 type StateListener = (state: SimulatedRobotState) => void;
 
@@ -28,6 +31,9 @@ export class RobotStateManager {
   private readonly SIMULATION_TICK_MS = 100;
   private readonly SPEED_UNITS_PER_SECOND = 2.0;
   private readonly BATTERY_DRAIN_PER_SECOND = 0.01;
+
+  // Cached charging station location (prefetched from server)
+  private cachedChargingStation: RobotLocation | null = null;
 
   constructor(config: RobotConfig) {
     const now = new Date().toISOString();
@@ -202,7 +208,8 @@ export class RobotStateManager {
   }
 
   async goToCharge(): Promise<CommandResult> {
-    const chargingStation = NAMED_LOCATIONS.charging_station;
+    // Get charging station from server (single source of truth)
+    const chargingStation = await getChargingStationLocation();
     const result = await this.moveTo(chargingStation);
     if (result.success) {
       result.message = `Navigating to charging station at (${chargingStation.x}, ${chargingStation.y})`;
@@ -211,7 +218,8 @@ export class RobotStateManager {
   }
 
   async returnHome(): Promise<CommandResult> {
-    const home = NAMED_LOCATIONS.home;
+    // Get home location from server (single source of truth)
+    const home = await getHomeLocation();
     const result = await this.moveTo(home);
     if (result.success) {
       result.message = `Returning to home base at (${home.x}, ${home.y})`;
@@ -298,6 +306,21 @@ export class RobotStateManager {
     if (this.simulationInterval) return;
 
     console.log(`[RobotState] Starting simulation for ${this.state.name}`);
+
+    // Prefetch charging station location from server
+    getChargingStationLocation()
+      .then((loc) => {
+        this.cachedChargingStation = loc;
+        console.log(
+          `[RobotState] Cached charging station location: (${loc.x}, ${loc.y})`
+        );
+      })
+      .catch((error) => {
+        console.error('[RobotState] Failed to fetch charging station location:', error);
+        // Use fallback default location
+        this.cachedChargingStation = { x: 0, y: 0, floor: '1', zone: 'charging' };
+      });
+
     this.simulationInterval = setInterval(() => {
       this.simulationTick();
     }, this.SIMULATION_TICK_MS);
@@ -374,14 +397,15 @@ export class RobotStateManager {
       this.state.status = 'online';
       this.state.currentTaskName = undefined;
 
-      // Check if arrived at charging station
-      const chargingStation = NAMED_LOCATIONS.charging_station;
-      if (
-        Math.abs(this.state.location.x - chargingStation.x) < 1 &&
-        Math.abs(this.state.location.y - chargingStation.y) < 1
-      ) {
-        this.state.status = 'charging';
-        this.state.currentTaskName = 'Charging';
+      // Check if arrived at charging station (use cached location from server)
+      if (this.cachedChargingStation) {
+        if (
+          Math.abs(this.state.location.x - this.cachedChargingStation.x) < 1 &&
+          Math.abs(this.state.location.y - this.cachedChargingStation.y) < 1
+        ) {
+          this.state.status = 'charging';
+          this.state.currentTaskName = 'Charging';
+        }
       }
 
       return true;

@@ -41,11 +41,20 @@ export interface ZonesResponse {
 // ENDPOINTS
 // ============================================================================
 
+/** Named location response type */
+export interface NamedLocation {
+  x: number;
+  y: number;
+  floor: string;
+  zone: string;
+}
+
 const ENDPOINTS = {
   list: '/zones',
   byId: (id: string) => `/zones/${id}`,
   byFloor: (floor: string) => `/zones/floor/${floor}`,
   atPoint: '/zones/at-point',
+  namedLocations: '/zones/named-locations',
 } as const;
 
 // ============================================================================
@@ -166,5 +175,17 @@ export const zoneApi = {
    */
   async deleteZone(id: string): Promise<void> {
     await apiClient.delete(ENDPOINTS.byId(id));
+  },
+
+  /**
+   * Get named locations derived from zone centers.
+   * This is the single source of truth for location name -> coordinates mapping.
+   * @returns Record of location name to coordinates
+   */
+  async getNamedLocations(): Promise<Record<string, NamedLocation>> {
+    const response = await apiClient.get<{ locations: Record<string, NamedLocation> }>(
+      ENDPOINTS.namedLocations
+    );
+    return response.data.locations;
   },
 };

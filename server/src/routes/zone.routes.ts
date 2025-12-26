@@ -39,9 +39,13 @@ zoneRoutes.get('/', async (req: Request, res: Response) => {
       filters.type = types.length === 1 ? types[0] : types;
     }
 
+    // Parse and validate pagination with bounds
+    const parsedPage = page ? parseInt(page as string, 10) : 1;
+    const parsedPageSize = pageSize ? parseInt(pageSize as string, 10) : 100;
+
     const pagination = {
-      page: page ? parseInt(page as string, 10) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string, 10) : 100,
+      page: Math.max(1, Number.isFinite(parsedPage) ? parsedPage : 1),
+      pageSize: Math.min(1000, Math.max(1, Number.isFinite(parsedPageSize) ? parsedPageSize : 100)),
     };
 
     const result = await zoneService.getZones(filters, pagination);
@@ -69,9 +73,19 @@ zoneRoutes.get('/at-point', async (req: Request, res: Response) => {
       });
     }
 
+    // Parse and validate coordinates
+    const xVal = parseFloat(x as string);
+    const yVal = parseFloat(y as string);
+
+    if (!Number.isFinite(xVal) || !Number.isFinite(yVal)) {
+      return res.status(400).json({
+        error: 'Invalid coordinates: x and y must be valid finite numbers',
+      });
+    }
+
     const zone = await zoneService.getZoneAtPoint(
-      parseFloat(x as string),
-      parseFloat(y as string),
+      xVal,
+      yVal,
       floor as string
     );
 
@@ -83,6 +97,20 @@ zoneRoutes.get('/at-point', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error finding zone at point:', error);
     res.status(500).json({ error: 'Failed to find zone at point' });
+  }
+});
+
+/**
+ * GET /named-locations - Get derived named locations from zone centers
+ * Returns a mapping of location name to coordinates (single source of truth)
+ */
+zoneRoutes.get('/named-locations', async (_req: Request, res: Response) => {
+  try {
+    const locations = await zoneService.getNamedLocations();
+    res.json({ locations });
+  } catch (error) {
+    console.error('Error getting named locations:', error);
+    res.status(500).json({ error: 'Failed to get named locations' });
   }
 });
 

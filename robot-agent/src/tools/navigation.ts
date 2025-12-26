@@ -5,23 +5,67 @@
 
 import { ai, z } from '../agent/genkit.js';
 import type { RobotLocation, Zone, ZoneBounds } from '../robot/types.js';
-import { NAMED_LOCATIONS } from '../robot/types.js';
 import type { RobotStateManager } from '../robot/state.js';
 
 // Global reference to robot state manager (set by main)
 let robotStateManager: RobotStateManager;
 
-// Cached zones from server
+// Cached zones and derived named locations from server
 let cachedZones: Zone[] = [];
+let cachedNamedLocations: Record<string, RobotLocation> = {};
 let lastZoneFetch = 0;
 const ZONE_CACHE_TTL_MS = 60000; // 1 minute cache
+
+// Default fallback locations (used when server is unavailable)
+const FALLBACK_LOCATIONS: Record<string, RobotLocation> = {
+  home: { x: 0, y: 0, floor: '1', zone: 'Home Base' },
+  charging_station: { x: 5, y: 20, floor: '1', zone: 'Charging Bay' },
+};
 
 export function setRobotStateManager(manager: RobotStateManager): void {
   robotStateManager = manager;
 }
 
 /**
- * Fetch zones from server (cached)
+ * Derive named locations from zone center points
+ * This is the single source of truth for location name -> coordinates
+ */
+function deriveNamedLocationsFromZones(zones: Zone[]): Record<string, RobotLocation> {
+  const locations: Record<string, RobotLocation> = {};
+
+  for (const zone of zones) {
+    // Calculate center point of zone bounds
+    const centerX = Math.round(zone.bounds.x + zone.bounds.width / 2);
+    const centerY = Math.round(zone.bounds.y + zone.bounds.height / 2);
+    const key = zone.name.toLowerCase().replace(/\s+/g, '_');
+
+    locations[key] = {
+      x: centerX,
+      y: centerY,
+      floor: zone.floor,
+      zone: zone.name,
+    };
+
+    // Add common aliases for special zone types
+    if (zone.type === 'charging') {
+      locations['charging_station'] = locations[key];
+      locations['charge'] = locations[key];
+    }
+    if (zone.type === 'maintenance') {
+      locations['maintenance'] = locations[key];
+    }
+  }
+
+  // Ensure home location exists (default to origin)
+  if (!locations['home']) {
+    locations['home'] = { x: 0, y: 0, floor: '1', zone: 'Home Base' };
+  }
+
+  return locations;
+}
+
+/**
+ * Fetch zones from server (cached) and derive named locations
  */
 async function fetchZones(): Promise<Zone[]> {
   const now = Date.now();
@@ -31,7 +75,7 @@ async function fetchZones(): Promise<Zone[]> {
 
   try {
     // Fetch from server - use the server URL from environment
-    const serverUrl = process.env.SERVER_URL || 'http://localhost:3000';
+    const serverUrl = process.env.SERVER_URL || 'http://localhost:3001';
     const response = await fetch(`${serverUrl}/api/zones`);
     if (!response.ok) {
       console.warn('[Navigation] Failed to fetch zones:', response.status);
@@ -40,12 +84,73 @@ async function fetchZones(): Promise<Zone[]> {
     const data = (await response.json()) as { data?: Zone[] };
     cachedZones = data.data || [];
     lastZoneFetch = now;
-    console.log(`[Navigation] Fetched ${cachedZones.length} zones from server`);
+
+    // Derive named locations from zones
+    cachedNamedLocations = deriveNamedLocationsFromZones(cachedZones);
+    console.log(
+      `[Navigation] Fetched ${cachedZones.length} zones, derived ${Object.keys(cachedNamedLocations).length} named locations`
+    );
   } catch (error) {
-    console.warn('[Navigation] Error fetching zones:', error);
+    // Log a concise message - this is expected when server isn't running yet
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const isConnectionError = message.includes('fetch failed') || message.includes('ECONNREFUSED');
+    if (isConnectionError) {
+      console.warn('[Navigation] Server not available, using fallback locations');
+    } else {
+      console.warn('[Navigation] Error fetching zones:', message);
+    }
+    // Use fallback locations if no cache available
+    if (Object.keys(cachedNamedLocations).length === 0) {
+      cachedNamedLocations = { ...FALLBACK_LOCATIONS };
+    }
   }
 
   return cachedZones;
+}
+
+/**
+ * Get a named location by name (async - fetches from server if needed)
+ * @param name - Location name (e.g., "home", "charging_station", "warehouse_a")
+ * @returns Location coordinates or undefined if not found
+ */
+export async function getNamedLocation(name: string): Promise<RobotLocation | undefined> {
+  // Ensure zones are fetched (which also populates named locations)
+  await fetchZones();
+
+  const key = name.toLowerCase().trim().replace(/\s+/g, '_');
+
+  // Exact match first
+  if (cachedNamedLocations[key]) {
+    return cachedNamedLocations[key];
+  }
+
+  // Try with spaces instead of underscores
+  const keyWithSpaces = name.toLowerCase().trim();
+  if (cachedNamedLocations[keyWithSpaces]) {
+    return cachedNamedLocations[keyWithSpaces];
+  }
+
+  // Partial match
+  const found = Object.entries(cachedNamedLocations).find(
+    ([k]) => key.includes(k) || k.includes(key)
+  );
+  return found?.[1];
+}
+
+/**
+ * Get the charging station location (async)
+ */
+export async function getChargingStationLocation(): Promise<RobotLocation> {
+  const loc = await getNamedLocation('charging_station');
+  return loc || FALLBACK_LOCATIONS.charging_station;
+}
+
+/**
+ * Get the home location (async)
+ */
+export async function getHomeLocation(): Promise<RobotLocation> {
+  const loc = await getNamedLocation('home');
+  return loc || FALLBACK_LOCATIONS.home;
 }
 
 /**
@@ -102,26 +207,25 @@ export function clearZoneCache(): void {
 }
 
 /**
- * Resolve a destination to a RobotLocation
+ * Resolve a destination to a RobotLocation (async - fetches from server)
  */
-function resolveDestination(
+async function resolveDestination(
   destination:
     | { x: number; y: number; floor?: string; zone?: string }
     | { zone: string }
     | { namedLocation: string }
-): RobotLocation {
+): Promise<RobotLocation> {
   if ('namedLocation' in destination) {
-    const loc = NAMED_LOCATIONS[destination.namedLocation.toLowerCase().replace(/\s+/g, '_')];
+    const loc = await getNamedLocation(destination.namedLocation);
     if (loc) return loc;
     throw new Error(`Unknown named location: ${destination.namedLocation}`);
   }
 
   if ('zone' in destination && !('x' in destination)) {
-    // Try to find zone in named locations
-    const zoneName = destination.zone.toLowerCase().replace(/\s+/g, '_');
-    const loc = NAMED_LOCATIONS[zoneName];
+    // Try to find zone in named locations (from server)
+    const loc = await getNamedLocation(destination.zone);
     if (loc) return loc;
-    // Default to a position in the zone
+    // Default to a position in the zone if not found
     return { x: 25, y: 25, zone: destination.zone, floor: '1' };
   }
 
@@ -162,7 +266,7 @@ export const moveToLocation = ai.defineTool(
     }
 
     try {
-      const location = resolveDestination(destination);
+      const location = await resolveDestination(destination);
 
       // Validate destination is not in a restricted zone
       const validation = await validateDestinationZone(location);
@@ -237,15 +341,19 @@ export const goToCharge = ai.defineTool(
       return { success: false, message: 'Robot state manager not initialized' };
     }
 
-    const result = await robotStateManager.goToCharge();
+    // Get charging station location from server
+    const chargingStation = await getChargingStationLocation();
+    const result = await robotStateManager.moveTo(chargingStation);
     const state = robotStateManager.getState();
 
     return {
       success: result.success,
-      message: result.message,
+      message: result.success
+        ? `Navigating to charging station at (${chargingStation.x}, ${chargingStation.y})`
+        : result.message,
       estimatedTime: result.estimatedTime,
       currentLocation: state.location,
-      targetLocation: NAMED_LOCATIONS.charging_station,
+      targetLocation: chargingStation,
     };
   }
 );
@@ -265,15 +373,19 @@ export const returnHome = ai.defineTool(
       return { success: false, message: 'Robot state manager not initialized' };
     }
 
-    const result = await robotStateManager.returnHome();
+    // Get home location from server
+    const home = await getHomeLocation();
+    const result = await robotStateManager.moveTo(home);
     const state = robotStateManager.getState();
 
     return {
       success: result.success,
-      message: result.message,
+      message: result.success
+        ? `Returning to home base at (${home.x}, ${home.y})`
+        : result.message,
       estimatedTime: result.estimatedTime,
       currentLocation: state.location,
-      targetLocation: NAMED_LOCATIONS.home,
+      targetLocation: home,
     };
   }
 );

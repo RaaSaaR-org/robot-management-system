@@ -10,4 +10,5 @@ export type {
   PaginationParams,
   PaginatedResponse,
   ZonesResponse,
+  NamedLocation,
 } from './zoneApi';

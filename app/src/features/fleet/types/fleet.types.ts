@@ -213,7 +213,11 @@ export const ZONE_TYPE_COLORS: Record<ZoneType, { fill: string; stroke: string; 
 /** Default floors available */
 export const DEFAULT_FLOORS = ['1', '2'] as const;
 
-/** Mock zone data for development */
+/**
+ * Mock zone data for development.
+ * @deprecated Use useZones() hook or zoneApi.getZones() to fetch zones from server.
+ * Server database is the single source of truth - see seedZones.ts
+ */
 export const MOCK_ZONES: FloorZone[] = [
   { id: 'wa', name: 'Warehouse A', floor: '1', bounds: { x: 0, y: 0, width: 20, height: 15 }, type: 'operational' },
   { id: 'wb', name: 'Warehouse B', floor: '1', bounds: { x: 20, y: 0, width: 25, height: 20 }, type: 'operational' },

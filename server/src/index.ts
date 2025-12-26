@@ -7,6 +7,7 @@ import { createServer } from 'http';
 import { createApp } from './app.js';
 import { setupWebSocket } from './websocket/index.js';
 import { connectDatabase, disconnectDatabase } from './database/index.js';
+import { seedZones } from './database/seedZones.js';
 import { conversationManager } from './services/ConversationManager.js';
 import { robotManager } from './services/RobotManager.js';
 
@@ -17,6 +18,9 @@ async function main() {
 
   // Connect to database
   await connectDatabase();
+
+  // Seed default zones if database is empty
+  await seedZones();
 
   // Initialize managers (load cached data from database)
   await conversationManager.initialize();

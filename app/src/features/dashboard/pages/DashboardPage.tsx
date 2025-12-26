@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useFleetStatus, FleetStats, FleetMap } from '@/features/fleet';
+import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
 import { AlertBanner } from '@/features/alerts/components';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -25,6 +25,7 @@ import { Spinner } from '@/shared/components/ui/Spinner';
 export function DashboardPage() {
   const navigate = useNavigate();
   const { status, robotMarkers, floors, isLoading, error, refresh } = useFleetStatus();
+  const { zones } = useZones(); // Fetch zones from server (single source of truth)
 
   // Floor selector state
   const [selectedFloor, setSelectedFloor] = useState(floors[0] || '1');
@@ -97,6 +98,7 @@ export function DashboardPage() {
       {/* Fleet Map */}
       <FleetMap
         robots={robotMarkers}
+        zones={zones}
         selectedFloor={selectedFloor}
         onFloorChange={setSelectedFloor}
         onRobotClick={handleRobotClick}
