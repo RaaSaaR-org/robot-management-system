@@ -16,8 +16,69 @@ import type { RobotStateManager } from '../robot/state.js';
 // Load the Genkit prompt
 const robotAgentPrompt = ai.prompt('robot_agent');
 
-// Store contexts for multi-turn conversations
-const contexts: Map<string, Message[]> = new Map();
+// LRU Cache with TTL for conversation contexts
+const CONTEXT_MAX_ENTRIES = 100;
+const CONTEXT_TTL_MS = 3600000; // 1 hour
+
+interface ContextEntry {
+  messages: Message[];
+  timestamp: number;
+}
+
+class ContextCache {
+  private cache = new Map<string, ContextEntry>();
+  private readonly maxEntries: number;
+  private readonly ttlMs: number;
+
+  constructor(maxEntries: number = CONTEXT_MAX_ENTRIES, ttlMs: number = CONTEXT_TTL_MS) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlMs;
+  }
+
+  get(contextId: string): Message[] | undefined {
+    const entry = this.cache.get(contextId);
+    if (!entry) return undefined;
+
+    // Check if expired
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(contextId);
+      return undefined;
+    }
+
+    // Move to end for LRU (delete and re-add)
+    this.cache.delete(contextId);
+    this.cache.set(contextId, { ...entry, timestamp: Date.now() });
+    return entry.messages;
+  }
+
+  set(contextId: string, messages: Message[]): void {
+    // Delete first if exists (to maintain LRU order)
+    this.cache.delete(contextId);
+
+    // Evict oldest entries if at capacity
+    while (this.cache.size >= this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) {
+        this.cache.delete(oldestKey);
+      }
+    }
+
+    this.cache.set(contextId, { messages, timestamp: Date.now() });
+  }
+
+  // Cleanup expired entries periodically
+  cleanup(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache) {
+      if (now - entry.timestamp > this.ttlMs) {
+        this.cache.delete(key);
+      }
+    }
+  }
+}
+
+// Store contexts for multi-turn conversations with LRU eviction and TTL
+const contexts = new ContextCache();
 
 export class RobotAgentExecutor implements AgentExecutor {
   private cancelledTasks = new Set<string>();
