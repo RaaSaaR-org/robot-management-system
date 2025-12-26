@@ -13,6 +13,9 @@ import {
   type SafetyClassification,
   type CreateCommandInterpretationInput,
 } from '../repositories/index.js';
+import { taskDistributor } from './TaskDistributor.js';
+import type { StepActionType } from '../types/process.types.js';
+import type { RobotTask } from '../types/robotTask.types.js';
 
 // ============================================================================
 // TYPES
@@ -22,6 +25,13 @@ export interface InterpretCommandRequest {
   text: string;
   robotId: string;
   context?: Record<string, unknown>;
+}
+
+export interface InterpretAndExecuteResult {
+  interpretation: CommandInterpretation;
+  task?: RobotTask;
+  executed: boolean;
+  reason?: string;
 }
 
 interface LLMInterpretationResult {
@@ -369,6 +379,127 @@ export class CommandInterpreter {
       speed: params.speed as CommandParameters['speed'],
       custom: params.custom,
     };
+  }
+
+  /**
+   * Interpret a command AND create a RobotTask for execution
+   * This is the main entry point for the command execution flow
+   */
+  async interpretAndExecute(
+    request: InterpretCommandRequest
+  ): Promise<InterpretAndExecuteResult> {
+    // First, interpret the command
+    const interpretation = await this.interpretCommand(request);
+
+    // Check if we should execute
+    if (interpretation.safetyClassification === 'dangerous') {
+      return {
+        interpretation,
+        executed: false,
+        reason: 'Command classified as dangerous. Execution blocked for safety.',
+      };
+    }
+
+    if (interpretation.confidence < 0.5) {
+      return {
+        interpretation,
+        executed: false,
+        reason: 'Command confidence too low. Please clarify your intent.',
+      };
+    }
+
+    // Map command type to action type
+    const actionType = this.mapCommandToActionType(interpretation.commandType);
+    if (!actionType) {
+      return {
+        interpretation,
+        executed: false,
+        reason: `Command type "${interpretation.commandType}" cannot be mapped to a robot action.`,
+      };
+    }
+
+    // Build action config from parameters
+    const actionConfig = this.buildActionConfig(interpretation);
+
+    // Create RobotTask via TaskDistributor
+    const task = await taskDistributor.createTask(
+      {
+        robotId: request.robotId,
+        actionType,
+        actionConfig,
+        instruction: request.text,
+        priority: this.mapSafetyToPriority(interpretation.safetyClassification),
+      },
+      'command'
+    );
+
+    return {
+      interpretation,
+      task,
+      executed: true,
+    };
+  }
+
+  /**
+   * Map command type to step action type
+   */
+  private mapCommandToActionType(commandType: CommandType): StepActionType | null {
+    const mapping: Record<CommandType, StepActionType | null> = {
+      navigation: 'move_to_location',
+      manipulation: 'pickup_object', // or drop_object depending on context
+      status: null, // Status queries don't create tasks
+      emergency: null, // Emergency handled separately
+      custom: 'custom',
+    };
+    return mapping[commandType] ?? null;
+  }
+
+  /**
+   * Build action config from interpretation parameters
+   */
+  private buildActionConfig(interpretation: CommandInterpretation): Record<string, unknown> {
+    const config: Record<string, unknown> = {};
+    const params = interpretation.parameters;
+
+    if (params.destination) {
+      config.location = params.destination;
+    }
+
+    if (params.target) {
+      config.target = params.target;
+      // Try to resolve target to zone location
+      config.zoneName = params.target;
+    }
+
+    if (params.objects && params.objects.length > 0) {
+      config.objectId = params.objects[0];
+      config.objects = params.objects;
+    }
+
+    if (params.speed) {
+      config.speed = params.speed;
+    }
+
+    if (params.quantity) {
+      config.quantity = params.quantity;
+    }
+
+    return config;
+  }
+
+  /**
+   * Map safety classification to task priority
+   */
+  private mapSafetyToPriority(safety: SafetyClassification): 'low' | 'normal' | 'high' | 'critical' {
+    switch (safety) {
+      case 'dangerous':
+        return 'critical'; // Should be blocked anyway
+      case 'caution':
+        return 'high';
+      case 'safe':
+      default:
+        return 'normal';
+    }
   }
 }
 
