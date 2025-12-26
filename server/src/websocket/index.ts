@@ -14,6 +14,8 @@ import type { A2ATaskEvent } from '../types/index.js';
 // Configuration
 const MAX_CLIENTS = 1000;
 const MAX_BUFFERED_AMOUNT = 65536; // 64KB backpressure threshold
+const HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
+const PONG_TIMEOUT_MS = 10000; // 10 seconds to respond to ping
 
 /**
  * Safely send a message to a WebSocket client with error handling and backpressure check
@@ -56,6 +58,30 @@ export function setupWebSocket(server: Server): void {
   });
 
   const clients = new Set<WebSocket>();
+  // Track alive status for heartbeat - use WeakMap to avoid memory leaks
+  const clientAliveStatus = new WeakMap<WebSocket, boolean>();
+
+  // Heartbeat interval to detect dead connections
+  const heartbeatInterval = setInterval(() => {
+    clients.forEach((ws) => {
+      const isAlive = clientAliveStatus.get(ws);
+      if (isAlive === false) {
+        // Client didn't respond to previous ping, terminate
+        console.log('[WebSocket] Terminating unresponsive client');
+        clients.delete(ws);
+        ws.terminate();
+        return;
+      }
+      // Mark as not alive, will be set to true when pong received
+      clientAliveStatus.set(ws, false);
+      ws.ping();
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  // Clean up interval when server closes
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
 
   wss.on('connection', (ws: WebSocket) => {
     // Reject connection if at capacity
@@ -67,6 +93,7 @@ export function setupWebSocket(server: Server): void {
 
     console.log(`[WebSocket] Client connected (total: ${clients.size + 1})`);
     clients.add(ws);
+    clientAliveStatus.set(ws, true);
 
     // Send welcome message
     ws.send(JSON.stringify({
@@ -74,6 +101,11 @@ export function setupWebSocket(server: Server): void {
       message: 'Connected to A2A WebSocket server',
       timestamp: Date.now(),
     }));
+
+    // Handle pong responses (heartbeat)
+    ws.on('pong', () => {
+      clientAliveStatus.set(ws, true);
+    });
 
     // Handle incoming messages
     ws.on('message', (data: Buffer) => {
