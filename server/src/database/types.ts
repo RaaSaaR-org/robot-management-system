@@ -2,7 +2,6 @@
  * @file types.ts
  * @description Type utilities for database <-> domain conversion
  */
-
 import type {
   Robot as DbRobot,
   Message as DbMessage,
@@ -30,10 +29,18 @@ import type {
   RobotStatus,
   RobotEndpoints,
 } from '../services/RobotManager.js';
+import {
+  RobotLocationSchema,
+  safeParseJson,
+  safeParseJsonUntyped,
+} from './schemas.js';
 
 // ============================================================================
 // ROBOT CONVERSIONS
 // ============================================================================
+
+// Default location for fallback
+const DEFAULT_LOCATION: RobotLocation = { x: 0, y: 0, floor: '1' };
 
 /**
  * Convert Prisma Robot to domain Robot
@@ -46,14 +53,16 @@ export function dbRobotToDomain(db: DbRobot): Robot {
     serialNumber: db.serialNumber ?? undefined,
     status: db.status as RobotStatus,
     batteryLevel: db.batteryLevel,
-    location: JSON.parse(db.location) as RobotLocation,
+    location: safeParseJson(db.location, RobotLocationSchema, DEFAULT_LOCATION, `robot ${db.id} location`),
     lastSeen: db.lastSeen.toISOString(),
     currentTaskId: db.currentTaskId ?? undefined,
     currentTaskName: db.currentTaskName ?? undefined,
-    capabilities: JSON.parse(db.capabilities) as string[],
+    capabilities: safeParseJsonUntyped<string[]>(db.capabilities, [], `robot ${db.id} capabilities`),
     firmware: db.firmware ?? undefined,
     ipAddress: db.ipAddress ?? undefined,
-    metadata: db.metadata ? (JSON.parse(db.metadata) as Record<string, unknown>) : undefined,
+    metadata: db.metadata
+      ? safeParseJsonUntyped<Record<string, unknown>>(db.metadata, {}, `robot ${db.id} metadata`)
+      : undefined,
     createdAt: db.createdAt.toISOString(),
     updatedAt: db.updatedAt.toISOString(),
     a2aEnabled: db.a2aEnabled,
@@ -125,10 +134,12 @@ export function dbMessageToDomain(db: DbMessage): A2AMessage {
   return {
     messageId: db.id,
     role: db.role as A2ARole,
-    parts: JSON.parse(db.parts) as A2APart[],
+    parts: safeParseJsonUntyped<A2APart[]>(db.parts, [], `message ${db.id} parts`),
     contextId: db.conversationId ?? undefined,
     taskId: db.taskId ?? undefined,
-    metadata: db.metadata ? (JSON.parse(db.metadata) as Record<string, unknown>) : undefined,
+    metadata: db.metadata
+      ? safeParseJsonUntyped<Record<string, unknown>>(db.metadata, {}, `message ${db.id} metadata`)
+      : undefined,
     timestamp: db.timestamp.toISOString(),
   };
 }
@@ -169,7 +180,9 @@ export function domainMessageToDb(
 export function dbTaskToDomain(db: DbTask): A2ATask {
   const status: A2ATaskStatus = {
     state: db.state as A2ATaskState,
-    message: db.statusMessage ? (JSON.parse(db.statusMessage) as A2AMessage) : undefined,
+    message: db.statusMessage
+      ? safeParseJsonUntyped<A2AMessage | undefined>(db.statusMessage, undefined, `task ${db.id} statusMessage`)
+      : undefined,
     timestamp: db.statusTimestamp.toISOString(),
   };
 
@@ -177,8 +190,8 @@ export function dbTaskToDomain(db: DbTask): A2ATask {
     id: db.id,
     contextId: db.conversationId ?? undefined,
     status,
-    artifacts: JSON.parse(db.artifacts) as A2AArtifact[],
-    history: JSON.parse(db.history) as A2AMessage[],
+    artifacts: safeParseJsonUntyped<A2AArtifact[]>(db.artifacts, [], `task ${db.id} artifacts`),
+    history: safeParseJsonUntyped<A2AMessage[]>(db.history, [], `task ${db.id} history`),
     createdAt: db.createdAt.toISOString(),
     updatedAt: db.updatedAt.toISOString(),
   };
@@ -243,16 +256,18 @@ export function dbAgentCardToDomain(db: DbAgentCard): A2AAgentCard {
     url: db.url,
     version: db.version ?? undefined,
     documentationUrl: db.documentationUrl ?? undefined,
-    provider: db.provider ? (JSON.parse(db.provider) as A2AAgentCard['provider']) : undefined,
+    provider: db.provider
+      ? safeParseJsonUntyped<A2AAgentCard['provider']>(db.provider, undefined, `agent ${db.name} provider`)
+      : undefined,
     capabilities: db.capabilities
-      ? (JSON.parse(db.capabilities) as A2AAgentCard['capabilities'])
+      ? safeParseJsonUntyped<A2AAgentCard['capabilities']>(db.capabilities, undefined, `agent ${db.name} capabilities`)
       : undefined,
     authentication: db.authentication
-      ? (JSON.parse(db.authentication) as A2AAgentCard['authentication'])
+      ? safeParseJsonUntyped<A2AAgentCard['authentication']>(db.authentication, undefined, `agent ${db.name} authentication`)
       : undefined,
-    defaultInputModes: JSON.parse(db.defaultInputModes) as string[],
-    defaultOutputModes: JSON.parse(db.defaultOutputModes) as string[],
-    skills: JSON.parse(db.skills) as A2AAgentCard['skills'],
+    defaultInputModes: safeParseJsonUntyped<string[]>(db.defaultInputModes, [], `agent ${db.name} inputModes`),
+    defaultOutputModes: safeParseJsonUntyped<string[]>(db.defaultOutputModes, [], `agent ${db.name} outputModes`),
+    skills: safeParseJsonUntyped<A2AAgentCard['skills']>(db.skills, [], `agent ${db.name} skills`),
   };
 }
 
@@ -296,6 +311,13 @@ export function domainAgentCardToDb(
 // EVENT CONVERSIONS
 // ============================================================================
 
+// Default message for fallback
+const DEFAULT_MESSAGE: A2AMessage = {
+  messageId: 'unknown',
+  role: 'agent',
+  parts: [],
+};
+
 /**
  * Convert Prisma Event to domain A2AEvent
  */
@@ -303,7 +325,7 @@ export function dbEventToDomain(db: DbEvent): A2AEvent {
   return {
     id: db.id,
     actor: db.actor,
-    content: JSON.parse(db.content) as A2AMessage,
+    content: safeParseJsonUntyped<A2AMessage>(db.content, DEFAULT_MESSAGE, `event ${db.id} content`),
     timestamp: db.timestamp.getTime(),
   };
 }

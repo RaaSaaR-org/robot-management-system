@@ -208,10 +208,14 @@ export class ConversationManager {
 
     // If target agent specified, send to it via JSON-RPC
     if (targetAgentUrl) {
-      this.sendToRemoteAgent(conversationId, task.id, userMessage, targetAgentUrl);
+      this.sendToRemoteAgent(conversationId, task.id, userMessage, targetAgentUrl).catch((err) => {
+        console.error('[ConversationManager] Remote agent error:', err);
+      });
     } else {
       // Simulate local processing
-      this.simulateAgentResponse(conversationId, task.id, text);
+      this.simulateAgentResponse(conversationId, task.id, text).catch((err) => {
+        console.error('[ConversationManager] Simulation error:', err);
+      });
     }
 
     this.pendingMessages.set(userMessage.messageId, 'sent');
@@ -528,14 +532,24 @@ export class ConversationManager {
     // Update cache
     this.activeTasks.set(taskId, task);
 
-    // Clean up pending messages when task completes or fails
+    // Clean up when task reaches terminal state
     if (['completed', 'failed', 'canceled'].includes(status.state)) {
-      // Find and remove all pending messages linked to this task
+      // Find and remove all pending messages and message-to-task mappings for this task
+      const messagesToClean: string[] = [];
       for (const [messageId, linkedTaskId] of this.messageToTaskMap) {
         if (linkedTaskId === taskId) {
           this.pendingMessages.delete(messageId);
+          messagesToClean.push(messageId);
         }
       }
+      // Remove the message-to-task mappings (done separately to avoid iterator issues)
+      for (const messageId of messagesToClean) {
+        this.messageToTaskMap.delete(messageId);
+      }
+      // Remove task from active cache after a short delay to allow final queries
+      setTimeout(() => {
+        this.activeTasks.delete(taskId);
+      }, 60000); // Keep in cache for 1 minute after completion
     }
 
     // Notify callbacks
@@ -878,8 +892,12 @@ export class ConversationManager {
       conversation.taskIds.push(task.id);
     }
 
-    // Send to selected agent with metadata
-    await this.sendToRemoteAgentOrchestrated(conversationId, task.id, userMessage, selectedAgent);
+    // Send to selected agent with metadata (fire-and-forget with error handling)
+    this.sendToRemoteAgentOrchestrated(conversationId, task.id, userMessage, selectedAgent).catch(
+      (err) => {
+        console.error('[ConversationManager] Orchestrated agent error:', err);
+      }
+    );
 
     this.pendingMessages.set(userMessage.messageId, 'sent');
 

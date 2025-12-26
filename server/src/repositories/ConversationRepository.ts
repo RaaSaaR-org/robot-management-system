@@ -146,17 +146,6 @@ export class ConversationRepository {
     });
   }
 
-  /**
-   * Link a task to a conversation
-   */
-  async addTaskId(conversationId: string, taskId: string): Promise<void> {
-    // Task relationship is already handled via foreign key in Task model
-    // This method updates the conversation timestamp
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { updatedAt: new Date() },
-    });
-  }
 }
 
 export const conversationRepository = new ConversationRepository();
