@@ -10,6 +10,7 @@ export * from './RobotList';
 export * from './RobotDetailPanel';
 export * from './RobotChatPanel';
 export * from './RobotOfflineBanner';
+export * from './RobotErrorBanner';
 export * from './BatteryGauge';
 export * from './SensorGrid';
 export * from './EmergencyStopButton';
