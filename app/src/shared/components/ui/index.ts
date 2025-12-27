@@ -39,3 +39,7 @@ export type { PageLoaderProps } from './PageLoader';
 // Tabs
 export { Tabs } from './Tabs';
 export type { TabsProps, Tab } from './Tabs';
+
+// ProgressBar
+export { ProgressBar } from './ProgressBar';
+export type { ProgressBarProps, ProgressBarVariant } from './ProgressBar';

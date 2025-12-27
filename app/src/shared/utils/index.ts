@@ -12,3 +12,4 @@ export {
   BATTERY_THRESHOLDS,
   getResourceVariant,
 } from './thresholds';
+export { formatTimeAgo, formatPercent, formatWithUnit } from './format';
