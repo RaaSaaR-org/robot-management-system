@@ -212,6 +212,25 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
     });
   });
 
+  // POST /robots/:id/reset - Reset robot state (for testing/recovery)
+  router.post('/robots/:id/reset', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    robotStateManager.reset();
+    const updatedRobot = robotStateManager.getRobotInterface();
+    res.json({
+      message: 'Robot reset successfully',
+      robot: updatedRobot,
+    });
+  });
+
   // DELETE /robots/:id/tasks/:taskId - Cancel a task
   router.delete('/robots/:id/tasks/:taskId', async (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
