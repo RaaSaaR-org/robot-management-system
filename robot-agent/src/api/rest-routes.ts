@@ -259,5 +259,180 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
     }
   });
 
+  // ============================================================================
+  // SAFETY ENDPOINTS (per ISO 10218-1, ISO/TS 15066, MR Annex III)
+  // ============================================================================
+
+  // GET /robots/:id/safety - Get safety status
+  router.get('/robots/:id/safety', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const safetyStatus = robotStateManager.getSafetyStatus();
+    res.json({
+      robotId: robot.id,
+      ...safetyStatus,
+    });
+  });
+
+  // GET /robots/:id/safety/estop - Get E-stop state
+  router.get('/robots/:id/safety/estop', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const estopState = robotStateManager.getEStopState();
+    res.json({
+      robotId: robot.id,
+      ...estopState,
+    });
+  });
+
+  // POST /robots/:id/safety/estop - Trigger emergency stop
+  router.post('/robots/:id/safety/estop', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const { reason, triggeredBy } = req.body;
+
+    robotStateManager.triggerEmergencyStop(
+      triggeredBy || 'remote',
+      reason || 'Remote E-stop triggered'
+    );
+
+    // Update server heartbeat since we received communication
+    robotStateManager.updateServerHeartbeat();
+
+    const estopState = robotStateManager.getEStopState();
+    res.json({
+      robotId: robot.id,
+      message: 'Emergency stop triggered',
+      ...estopState,
+    });
+  });
+
+  // POST /robots/:id/safety/estop/reset - Reset E-stop
+  router.post('/robots/:id/safety/estop/reset', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    // Update server heartbeat
+    robotStateManager.updateServerHeartbeat();
+
+    const success = robotStateManager.resetEmergencyStop();
+    const estopState = robotStateManager.getEStopState();
+
+    if (success) {
+      res.json({
+        robotId: robot.id,
+        message: 'E-stop reset successfully',
+        ...estopState,
+      });
+    } else {
+      res.status(400).json({
+        code: 'ESTOP_RESET_FAILED',
+        message: 'Cannot reset E-stop - safety conditions not met',
+        ...estopState,
+      });
+    }
+  });
+
+  // GET /robots/:id/safety/events - Get safety event log
+  router.get('/robots/:id/safety/events', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const limit = parseInt(req.query.limit as string) || 50;
+    const events = robotStateManager.getSafetyEvents(limit);
+
+    res.json({
+      robotId: robot.id,
+      events,
+      count: events.length,
+    });
+  });
+
+  // PUT /robots/:id/safety/mode - Set operating mode
+  router.put('/robots/:id/safety/mode', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const { mode } = req.body;
+    const validModes = ['automatic', 'manual_reduced_speed', 'manual_full_speed'];
+
+    if (!mode || !validModes.includes(mode)) {
+      res.status(400).json({
+        code: 'INVALID_MODE',
+        message: `Invalid operating mode. Must be one of: ${validModes.join(', ')}`,
+      });
+      return;
+    }
+
+    robotStateManager.setOperatingMode(mode);
+    robotStateManager.updateServerHeartbeat();
+
+    res.json({
+      robotId: robot.id,
+      message: `Operating mode set to ${mode}`,
+      mode,
+      speedLimit: robotStateManager.getEffectiveSpeedLimit(),
+    });
+  });
+
+  // POST /robots/:id/safety/heartbeat - Server heartbeat
+  router.post('/robots/:id/safety/heartbeat', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    robotStateManager.updateServerHeartbeat();
+
+    res.json({
+      robotId: robot.id,
+      message: 'Heartbeat received',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   return router;
 }

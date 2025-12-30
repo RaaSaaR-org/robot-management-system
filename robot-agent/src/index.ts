@@ -55,6 +55,10 @@ async function main() {
   robotStateManager.startSimulation();
   console.log('[SimulatedRobot] Robot simulation started');
 
+  // Start safety monitoring
+  robotStateManager.startSafetyMonitoring();
+  console.log('[SimulatedRobot] Safety monitoring started');
+
   // Create A2A components
   const agentCard = createRobotAgentCard({
     robotId: ROBOT_ID,
@@ -114,6 +118,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = () => {
     console.log('\n[SimulatedRobot] Shutting down...');
+    robotStateManager.stopSafetyMonitoring();
     robotStateManager.stopSimulation();
     server.close(() => {
       console.log('[SimulatedRobot] Server closed');

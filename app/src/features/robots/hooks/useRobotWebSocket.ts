@@ -6,7 +6,9 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useRobotsStore } from '../store/robotsStore';
+import { useSafetyStore } from '@/features/safety';
 import type { Robot } from '../types/robots.types';
+import type { EStopEvent } from '@/features/safety/types/safety.types';
 
 // ============================================================================
 // TYPES
@@ -19,9 +21,11 @@ interface RobotWebSocketEvent {
     | 'robot_status_changed'
     | 'robot_telemetry'
     | 'connected'
-    | 'task_event';
+    | 'task_event'
+    | 'safety:estop';
   robotId?: string;
   robot?: Robot;
+  event?: EStopEvent;
   timestamp?: string;
 }
 
@@ -50,8 +54,9 @@ interface UseRobotWebSocketOptions {
  * ```
  */
 export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
+  const defaultWsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/api/a2a/ws';
   const {
-    url = 'ws://localhost:3001/api/a2a/ws',
+    url = defaultWsUrl,
     autoReconnect = true,
     reconnectInterval = 5000,
   } = options;
@@ -104,6 +109,13 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
 
           case 'connected':
             console.log('[RobotWebSocket] Connected to server');
+            break;
+
+          case 'safety:estop':
+            if (data.event) {
+              console.log('[RobotWebSocket] E-stop event:', data.event.scope, data.event.reason);
+              useSafetyStore.getState().addEvent(data.event);
+            }
             break;
 
           default:

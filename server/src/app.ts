@@ -19,6 +19,7 @@ import { alertRoutes } from './routes/alert.routes.js';
 import { zoneRoutes } from './routes/zone.routes.js';
 import { commandRoutes } from './routes/command.routes.js';
 import { processRoutes } from './routes/process.routes.js';
+import { safetyRoutes } from './routes/safety.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -114,6 +115,9 @@ export function createApp(): Express {
 
   // Process routes (protected) - workflow management
   app.use('/api/processes', authMiddleware, processRoutes);
+
+  // Safety routes (protected) - E-stop and fleet safety
+  app.use('/api/safety', authMiddleware, safetyRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

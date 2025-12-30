@@ -11,6 +11,7 @@ import { cn } from '@/shared/utils';
 import { RobotHeroSection } from './RobotHeroSection';
 import { RobotOfflineBanner } from './RobotOfflineBanner';
 import { RobotErrorBanner } from './RobotErrorBanner';
+import { RobotEmergencyStopButton } from '@/features/safety';
 import {
   TelemetryTab,
   CommandsTab,
@@ -243,6 +244,30 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
 
       {/* Hero Section */}
       <RobotHeroSection robot={robot} telemetry={telemetry} isLive={isTelemetryConnected} />
+
+      {/* Emergency Stop Section */}
+      <div className="flex items-center justify-between p-4 rounded-xl bg-theme-elevated border border-theme-subtle">
+        <div className="flex items-center gap-3">
+          <svg
+            className="w-5 h-5 text-red-500"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-theme-primary">Safety Control</p>
+            <p className="text-xs text-theme-secondary">Emergency stop for this robot</p>
+          </div>
+        </div>
+        <RobotEmergencyStopButton robotId={robotId} robotName={robot.name} size="md" />
+      </div>
 
       {/* Offline Banner */}
       {robot.status === 'offline' && (

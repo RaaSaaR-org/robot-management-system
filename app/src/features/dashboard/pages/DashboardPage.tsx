@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
 import { AlertBanner } from '@/features/alerts/components';
+import { FleetEmergencyStopButton } from '@/features/safety';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
 
@@ -62,7 +63,9 @@ export function DashboardPage() {
           <h1 className="text-2xl font-bold text-theme-primary">Fleet Dashboard</h1>
           <p className="text-theme-secondary mt-1">Real-time fleet monitoring and control</p>
         </div>
-        <Button variant="outline" onClick={refresh} disabled={isLoading}>
+        <div className="flex items-center gap-3">
+          <FleetEmergencyStopButton size="md" />
+          <Button variant="outline" onClick={refresh} disabled={isLoading}>
           {isLoading ? (
             <>
               <Spinner size="sm" className="mr-2" />
@@ -87,6 +90,7 @@ export function DashboardPage() {
             </>
           )}
         </Button>
+        </div>
       </header>
 
       {/* Critical Alert Banner */}

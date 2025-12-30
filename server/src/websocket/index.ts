@@ -11,6 +11,7 @@ import { alertService, type AlertEvent } from '../services/AlertService.js';
 import { zoneService, type ZoneEvent } from '../services/ZoneService.js';
 import { processManager } from '../services/ProcessManager.js';
 import { taskDistributor } from '../services/TaskDistributor.js';
+import { safetyService, type EStopEvent } from '../services/SafetyService.js';
 import type { A2ATaskEvent } from '../types/index.js';
 import type { ProcessEvent } from '../types/process.types.js';
 import type { TaskEvent } from '../types/robotTask.types.js';
@@ -223,6 +224,16 @@ export function setupWebSocket(server: Server): void {
       robotId: data.robotId,
       taskId: data.taskId,
       reason: data.reason,
+      timestamp: Date.now(),
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to E-stop events and broadcast to all clients
+  safetyService.onEStopEvent((event: EStopEvent) => {
+    const message = JSON.stringify({
+      type: 'safety:estop',
+      event,
       timestamp: Date.now(),
     });
     broadcast(clients, message);

@@ -1,6 +1,6 @@
 /**
  * @file state.ts
- * @description Robot state management facade - coordinates state, commands, simulation, and tasks
+ * @description Robot state management facade - coordinates state, commands, simulation, tasks, and safety
  * @feature robot
  */
 
@@ -20,6 +20,14 @@ import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
 import { SimulationEngine } from './SimulationEngine.js';
 import { TaskQueue } from './TaskQueue.js';
+import {
+  SafetyMonitor,
+  type SafetyStatus,
+  type SafetyEvent,
+  type SafetyEventCallback,
+  type EStopState,
+  type OperatingMode,
+} from '../safety/index.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -36,12 +44,20 @@ const TASK_QUEUE_CONFIG = {
   maxQueueSize: 5,
 };
 
+const SAFETY_CONFIG = {
+  communicationTimeoutMs: 1000, // 1 second default
+  maxManualSpeedMmPerSec: 250,  // ISO 10218-1 limit
+  maxAutoSpeedMmPerSec: 1500,
+  forceLimitN: 140,              // Conservative default
+  estopRequiresManualReset: true,
+};
+
 // ============================================================================
 // ROBOT STATE MANAGER
 // ============================================================================
 
 /**
- * RobotStateManager - Facade coordinating robot state, commands, simulation, and tasks
+ * RobotStateManager - Facade coordinating robot state, commands, simulation, tasks, and safety
  */
 export class RobotStateManager {
   private state: SimulatedRobotState;
@@ -49,6 +65,7 @@ export class RobotStateManager {
   private commandExecutor: CommandExecutor;
   private simulation: SimulationEngine;
   private taskQueue: TaskQueue;
+  private safetyMonitor: SafetyMonitor;
 
   constructor(config: RobotConfig) {
     // Initialize state
@@ -115,6 +132,14 @@ export class RobotStateManager {
         stop: () => this.stop(),
       },
       TASK_QUEUE_CONFIG
+    );
+
+    // Initialize safety monitor
+    this.safetyMonitor = new SafetyMonitor(
+      stateGetter,
+      stateUpdater,
+      changeNotifier,
+      SAFETY_CONFIG
     );
   }
 
@@ -279,6 +304,111 @@ export class RobotStateManager {
   }
 
   // ============================================================================
+  // SAFETY MANAGEMENT (delegated to SafetyMonitor)
+  // ============================================================================
+
+  /**
+   * Start safety monitoring (call after simulation starts)
+   */
+  startSafetyMonitoring(): void {
+    this.safetyMonitor.start();
+  }
+
+  /**
+   * Stop safety monitoring
+   */
+  stopSafetyMonitoring(): void {
+    this.safetyMonitor.stop();
+  }
+
+  /**
+   * Get current safety status
+   */
+  getSafetyStatus(): SafetyStatus {
+    return this.safetyMonitor.getStatus();
+  }
+
+  /**
+   * Get E-stop state
+   */
+  getEStopState(): EStopState {
+    return this.safetyMonitor.getEStopState();
+  }
+
+  /**
+   * Check if E-stop is triggered
+   */
+  isEStopTriggered(): boolean {
+    return this.safetyMonitor.isEStopTriggered();
+  }
+
+  /**
+   * Trigger emergency stop from external source
+   */
+  triggerEmergencyStop(
+    triggeredBy: 'local' | 'remote' | 'server' | 'zone' | 'system',
+    reason: string
+  ): void {
+    this.safetyMonitor.triggerEmergencyStop(triggeredBy, reason);
+  }
+
+  /**
+   * Trigger protective stop
+   */
+  triggerProtectiveStop(reason: string): void {
+    this.safetyMonitor.triggerProtectiveStop('protective_stop', reason);
+  }
+
+  /**
+   * Reset E-stop (requires deliberate action)
+   */
+  resetEmergencyStop(): boolean {
+    return this.safetyMonitor.resetEmergencyStop();
+  }
+
+  /**
+   * Update server heartbeat (call when server communication is received)
+   */
+  updateServerHeartbeat(): void {
+    this.safetyMonitor.updateServerHeartbeat();
+  }
+
+  /**
+   * Set operating mode
+   */
+  setOperatingMode(mode: OperatingMode): void {
+    this.safetyMonitor.setOperatingMode(mode);
+  }
+
+  /**
+   * Get current operating mode
+   */
+  getOperatingMode(): OperatingMode {
+    return this.safetyMonitor.getOperatingMode();
+  }
+
+  /**
+   * Get safety events log
+   */
+  getSafetyEvents(limit = 50): SafetyEvent[] {
+    return this.safetyMonitor.getSafetyEvents(limit);
+  }
+
+  /**
+   * Subscribe to safety events
+   */
+  onSafetyEvent(callback: SafetyEventCallback): () => void {
+    return this.safetyMonitor.onSafetyEvent(callback);
+  }
+
+  /**
+   * Get effective speed limit for current mode
+   */
+  getEffectiveSpeedLimit(): number {
+    return this.safetyMonitor.getEffectiveSpeedLimit();
+  }
+
+  // ============================================================================
   // RESET (for testing/recovery)
   // ============================================================================
 
@@ -293,6 +423,12 @@ export class RobotStateManager {
     this.state.heldObject = undefined;
     this.state.speed = 0;
     this.state.updatedAt = new Date().toISOString();
+
+    // Also reset E-stop if triggered
+    if (this.safetyMonitor.isEStopTriggered()) {
+      this.safetyMonitor.resetEmergencyStop();
+    }
+
     this.notifyListeners();
     console.log(`[RobotStateManager] Robot ${this.state.name} reset to initial state`);
   }
