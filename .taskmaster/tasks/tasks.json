@@ -414,8 +414,9 @@
         "dependencies": [
           "1"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2025-12-29T15:42:52.499Z"
       },
       {
         "id": "29",
@@ -442,8 +443,9 @@
         "dependencies": [
           "6"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-29T16:09:22.572Z"
       },
       {
         "id": "31",
@@ -514,13 +516,26 @@
         ],
         "status": "pending",
         "subtasks": []
+      },
+      {
+        "id": "36",
+        "title": "Enhanced Process-Robot Task Delegation with Retry-Reassign",
+        "description": "Enhance the process-to-robot task delegation system to automatically reassign failed tasks to different robots after exhausting retries on the same robot.",
+        "details": "**Enhancement to Existing Process System**\n\nSee `docs/process-delegation-architecture.md` for full architecture.\n\n## Current Behavior\n- When a robot fails a task, ProcessManager retries on the same robot\n- After maxRetries, the entire process fails\n\n## Enhanced Behavior\n1. Retry on same robot first (configurable, e.g., 2 retries)\n2. After same-robot retries exhausted, reassign to different robot\n3. Track `failedRobotIds` to exclude from future assignments\n4. Continue until success OR all eligible robots exhausted\n\n## Implementation Steps\n\n### Step 1: Update Types\n**File**: `server/src/types/process.types.ts`\n- Add `failedRobotIds?: string[]` to `StepInstance`\n- Add `reassignmentCount?: number` to `StepInstance`\n- Add `maxReassignments?: number` to `StepTemplate`\n\n### Step 2: Update ProcessRepository\n**File**: `server/src/repositories/ProcessRepository.ts`\n- Add `addFailedRobotToStep(stepId, robotId)` method\n- Add `resetStepRetryCount(stepId)` method\n\n### Step 3: Enhance ProcessManager\n**File**: `server/src/services/ProcessManager.ts`\n- Modify `handleStepFailure()` to check reassignment eligibility\n- Add `shouldReassignStep(step)` helper\n- Add `reassignStep(step)` method\n- Emit `step:reassigned` event\n\n### Step 4: Update TaskDistributor\n**File**: `server/src/services/TaskDistributor.ts`\n- Modify `findEligibleRobots()` to accept `excludeRobotIds`\n- Pass exclude list when reassigning\n\n### Step 5: Add WebSocket Event\n**File**: `server/src/types/process.types.ts`\n- Add `StepReassignedEvent` type\n\n### Step 6: Update Frontend (Optional)\n**File**: `app/src/features/processes/types/process.types.ts`\n- Mirror type changes\n- Show reassignment info in TaskTimeline\n\n**Key Files:**\n- `server/src/types/process.types.ts`\n- `server/src/services/ProcessManager.ts`\n- `server/src/services/TaskDistributor.ts`\n- `server/src/repositories/ProcessRepository.ts`\n- `docs/process-delegation-architecture.md`",
+        "testStrategy": "Test same-robot retry works (retry count increments). Test reassignment triggers after max same-robot retries. Test failedRobotIds excludes robots. Test process completes when reassigned robot succeeds. Test process fails when all robots exhausted. Test WebSocket events for reassignment.",
+        "priority": "medium",
+        "dependencies": [
+          "4"
+        ],
+        "status": "pending",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2025-12-25T14:25:45.078Z",
-      "taskCount": 35,
-      "completedCount": 14,
+      "lastModified": "2025-12-31T00:00:00.000Z",
+      "taskCount": 36,
+      "completedCount": 15,
       "tags": [
         "master"
       ]
