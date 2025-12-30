@@ -16,7 +16,10 @@ import type {
   A2ACreateConversationRequest,
 } from '../types';
 
-const A2A_BASE_URL = import.meta.env.VITE_A2A_SERVER_URL || 'http://localhost:3001';
+// Use A2A-specific URL, or derive from API base URL, or fallback to localhost
+const A2A_BASE_URL = import.meta.env.VITE_A2A_SERVER_URL
+  || import.meta.env.VITE_API_BASE_URL?.replace('/api', '')
+  || 'http://localhost:3001';
 // Only use mock data if explicitly disabled via env var
 // When server is running, we want to use real API calls
 const USE_MOCK = import.meta.env.VITE_A2A_USE_MOCK === 'true';

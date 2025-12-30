@@ -57,7 +57,7 @@ export const OrchestratorChatPage = memo(function OrchestratorChatPage() {
 
       if (orchestratorConvo) {
         selectConversation(orchestratorConvo.conversationId);
-      } else if (conversations.length === 0 && !isLoading) {
+      } else if (conversations.length === 0 && !isLoading && !error) {
         // Create new orchestrator conversation
         try {
           await createConversation(undefined, 'Orchestrator');
@@ -71,7 +71,7 @@ export const OrchestratorChatPage = memo(function OrchestratorChatPage() {
     };
 
     initConversation();
-  }, [conversations, currentConversation, isLoading, createConversation, selectConversation]);
+  }, [conversations, currentConversation, isLoading, error, createConversation, selectConversation]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
