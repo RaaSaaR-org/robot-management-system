@@ -49,6 +49,9 @@ export interface ProcessStep {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  retryCount?: number;
+  maxRetries?: number;
+  failedRobotIds?: string[]; // Robots that have failed this step
   metadata?: Record<string, unknown>;
 }
 
@@ -209,6 +212,8 @@ export interface ProcessesActions {
   updateTaskStatus: (taskId: string, status: ProcessStatus) => void;
   /** Update process data (for WebSocket updates) */
   updateTask: (task: Partial<Process> & { id: string }) => void;
+  /** Update full process from WebSocket (for real-time updates) */
+  updateProcessFromWebSocket: (process: Process) => void;
   /** Clear error */
   clearError: () => void;
   /** Reset store to initial state */

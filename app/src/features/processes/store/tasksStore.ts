@@ -340,6 +340,27 @@ export const useTasksStore = createStore<TasksStore>(
     },
 
     // --------------------------------------------------------------------------
+    // Update Process from WebSocket (for real-time updates)
+    // --------------------------------------------------------------------------
+    updateProcessFromWebSocket: (process: Task) => {
+      set((state) => {
+        // Update in list if exists, otherwise add to front
+        const index = state.tasks.findIndex((t) => t.id === process.id);
+        if (index !== -1) {
+          state.tasks[index] = process;
+        } else {
+          // New process - add to front of list
+          state.tasks.unshift(process);
+          state.pagination.total += 1;
+        }
+        // Update in detail if viewing this process
+        if (state.taskDetail?.id === process.id) {
+          state.taskDetail = process;
+        }
+      });
+    },
+
+    // --------------------------------------------------------------------------
     // Clear Error
     // --------------------------------------------------------------------------
     clearError: () => {
