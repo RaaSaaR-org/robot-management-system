@@ -523,6 +523,71 @@ export class ProcessRepository {
 
     return counts;
   }
+
+  // ============================================================================
+  // STEP REASSIGNMENT METHODS
+  // ============================================================================
+
+  /**
+   * Add a robot to the step's failed robots list
+   */
+  async addFailedRobotToStep(stepId: string, robotId: string): Promise<boolean> {
+    try {
+      const step = await prisma.stepInstance.findUnique({ where: { id: stepId } });
+      if (!step) return false;
+
+      const failedRobotIds: string[] = JSON.parse(step.failedRobotIds || '[]');
+      if (!failedRobotIds.includes(robotId)) {
+        failedRobotIds.push(robotId);
+        await prisma.stepInstance.update({
+          where: { id: stepId },
+          data: { failedRobotIds: JSON.stringify(failedRobotIds) },
+        });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Reset step retry count (for reassignment to new robot)
+   */
+  async resetStepRetryCount(stepId: string): Promise<boolean> {
+    try {
+      await prisma.stepInstance.update({
+        where: { id: stepId },
+        data: { retryCount: 0, status: 'pending' },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get failed robot IDs for a step
+   */
+  async getStepFailedRobotIds(stepId: string): Promise<string[]> {
+    const step = await prisma.stepInstance.findUnique({ where: { id: stepId } });
+    if (!step) return [];
+    return JSON.parse(step.failedRobotIds || '[]');
+  }
+
+  /**
+   * Clear failed robot IDs for a step (for retry)
+   */
+  async clearStepFailedRobots(stepId: string): Promise<boolean> {
+    try {
+      await prisma.stepInstance.update({
+        where: { id: stepId },
+        data: { failedRobotIds: '[]', error: null },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export const processRepository = new ProcessRepository();

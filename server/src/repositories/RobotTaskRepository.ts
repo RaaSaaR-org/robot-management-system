@@ -146,7 +146,7 @@ export class RobotTaskRepository {
         processInstanceId,
         stepInstanceId,
         source,
-        robotId: request.robotId ?? '',
+        robotId: request.robotId ?? undefined, // null until assigned by TaskDistributor
         priority: request.priority ?? 'normal',
         status: request.robotId ? 'assigned' : 'pending',
         actionType: request.actionType,
