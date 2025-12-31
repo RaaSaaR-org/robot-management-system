@@ -191,9 +191,9 @@ calculateRobotScore(robot, task):
 3. If retryCount < maxRetries: increment retry, re-execute step
 4. If retryCount >= maxRetries: fail entire process
 
-### Enhanced Behavior (Task #36)
+### Enhanced Behavior (Implemented)
 
-The system will be enhanced to support **retry-then-reassign**:
+The system supports **retry-then-reassign**:
 
 1. Robot task fails → Same robot retries (up to N times)
 2. After N same-robot retries: reassign to different robot
