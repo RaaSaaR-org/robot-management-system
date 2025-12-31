@@ -406,6 +406,7 @@ model StepInstance {
   error             String?
   retryCount        Int       @default(0)
   maxRetries        Int       @default(3)
+  failedRobotIds    String    @default("[]") // JSON: string[] - robots that failed this step
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -427,7 +428,7 @@ model RobotTask {
   processInstanceId String?
   stepInstanceId    String?   @unique
   source            String    @default("manual") // RobotTaskSource: 'process' | 'command' | 'manual'
-  robotId           String
+  robotId           String?   // Optional until assigned by TaskDistributor
   priority          String    @default("normal") // Priority
   status            String    @default("pending") // RobotTaskStatus
   actionType        String // StepActionType
@@ -447,7 +448,7 @@ model RobotTask {
   updatedAt         DateTime  @updatedAt
 
   // Relations
-  robot           Robot            @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot           Robot?           @relation(fields: [robotId], references: [id], onDelete: Cascade)
   processInstance ProcessInstance? @relation(fields: [processInstanceId], references: [id], onDelete: SetNull)
   stepInstance    StepInstance?    @relation(fields: [stepInstanceId], references: [id], onDelete: SetNull)
 

@@ -537,6 +537,7 @@ export function dbStepInstanceToDomain(db: DbStepInstance): StepInstance {
     error: db.error ?? undefined,
     retryCount: db.retryCount,
     maxRetries: db.maxRetries,
+    failedRobotIds: safeParseJsonUntyped<string[]>(db.failedRobotIds, [], `step ${db.id} failedRobotIds`),
   };
 }
 
@@ -560,6 +561,7 @@ export function domainStepInstanceToDb(step: StepInstance): {
   error?: string;
   retryCount: number;
   maxRetries: number;
+  failedRobotIds: string;
 } {
   return {
     id: step.id,
@@ -578,6 +580,7 @@ export function domainStepInstanceToDb(step: StepInstance): {
     error: step.error,
     retryCount: step.retryCount,
     maxRetries: step.maxRetries,
+    failedRobotIds: JSON.stringify(step.failedRobotIds ?? []),
   };
 }
 
@@ -624,7 +627,7 @@ export function domainRobotTaskToDb(task: RobotTask): {
   processInstanceId?: string;
   stepInstanceId?: string;
   source: string;
-  robotId: string;
+  robotId: string | null;
   priority: string;
   status: string;
   actionType: string;

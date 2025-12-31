@@ -39,7 +39,7 @@ export interface RobotTask {
   source: RobotTaskSource;
 
   // Assignment
-  robotId: string;
+  robotId: string | null; // null until assigned by TaskDistributor
   priority: Priority;
   status: RobotTaskStatus;
 
@@ -161,7 +161,7 @@ export interface TaskAssignedEvent {
 export interface TaskProgressEvent {
   type: 'task:progress';
   taskId: string;
-  robotId: string;
+  robotId: string | null;
   progress: number; // 0-100
   message?: string;
 }

@@ -125,6 +125,7 @@ export interface StepInstance {
   error?: string;
   retryCount: number;
   maxRetries: number;
+  failedRobotIds?: string[]; // Robots that have failed this step
 }
 
 // ============================================================================
@@ -242,6 +243,14 @@ export interface StepFailedEvent {
   error: string;
 }
 
+export interface StepReassignedEvent {
+  type: 'step:reassigned';
+  processInstanceId: string;
+  stepInstance: StepInstance;
+  previousRobotId: string;
+  newRobotId: string;
+}
+
 export type ProcessEvent =
   | ProcessCreatedEvent
   | ProcessUpdatedEvent
@@ -249,4 +258,5 @@ export type ProcessEvent =
   | ProcessFailedEvent
   | StepStartedEvent
   | StepCompletedEvent
-  | StepFailedEvent;
+  | StepFailedEvent
+  | StepReassignedEvent;
