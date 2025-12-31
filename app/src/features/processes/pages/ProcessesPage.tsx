@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { TaskList as ProcessList } from '../components/TaskList';
-import { CreateTaskModal as CreateProcessModal } from '../components/CreateTaskModal';
+import { CreateProcessModal } from '../components/CreateProcessModal';
 
 // ============================================================================
 // COMPONENT

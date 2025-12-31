@@ -5,12 +5,16 @@
  * @dependencies @/shared/components/ui, @/features/processes/hooks
  */
 
+import { useState, useCallback, useMemo } from 'react';
 import { Card, Button, Spinner } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { TaskPriorityBadge } from './TaskPriorityBadge';
 import { TaskTimeline } from './TaskTimeline';
+import { TaskDetailSkeleton } from './TaskDetailSkeleton';
 import { useTask } from '../hooks/useTasks';
+import { useProcessWebSocket } from '../hooks/useProcessWebSocket';
+import { useRobots } from '@/features/robots/hooks/useRobots';
 import {
   formatProcessDuration as formatTaskDuration,
   isProcessPauseable as isTaskPauseable,
@@ -18,6 +22,9 @@ import {
   isProcessCancellable as isTaskCancellable,
   isProcessRetryable as isTaskRetryable,
 } from '../types';
+
+// Action loading state type
+type ActionType = 'pause' | 'resume' | 'cancel' | 'retry' | 'refresh';
 
 // ============================================================================
 // TYPES
@@ -190,7 +197,6 @@ export function TaskDetailPanel({
   const {
     task,
     isLoading,
-    isExecuting,
     error,
     refresh,
     pauseTask,
@@ -199,13 +205,35 @@ export function TaskDetailPanel({
     retryTask,
   } = useTask(taskId);
 
-  // Loading state
+  const { robots } = useRobots();
+
+  // Subscribe to real-time WebSocket updates for this process
+  useProcessWebSocket({ processId: taskId, enabled: !!taskId });
+
+  // Action-specific loading states
+  const [loadingAction, setLoadingAction] = useState<ActionType | null>(null);
+
+  // Get robot name from robots store if not in task
+  const robotName = useMemo(() => {
+    if (task?.robotName) return task.robotName;
+    if (!task?.robotId) return 'Unassigned';
+    const robot = robots.find((r) => r.id === task.robotId);
+    return robot?.name || task.robotId;
+  }, [task?.robotName, task?.robotId, robots]);
+
+  // Wrap actions with loading state
+  const handleAction = useCallback(async (action: ActionType, actionFn: () => Promise<unknown>) => {
+    setLoadingAction(action);
+    try {
+      await actionFn();
+    } finally {
+      setLoadingAction(null);
+    }
+  }, []);
+
+  // Loading state - show skeleton
   if (isLoading && !task) {
-    return (
-      <div className={cn('flex items-center justify-center py-20', className)}>
-        <Spinner size="lg" color="cobalt" label="Loading task details..." />
-      </div>
-    );
+    return <TaskDetailSkeleton className={className} />;
   }
 
   // Error state
@@ -301,10 +329,10 @@ export function TaskDetailPanel({
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" role="region" aria-label="Process statistics">
         <StatCard
           label="Assigned Robot"
-          value={task.robotName || task.robotId}
+          value={robotName}
           icon={<RobotIcon />}
         />
         <StatCard
@@ -391,56 +419,115 @@ export function TaskDetailPanel({
           <h2 className="text-lg font-medium text-theme-primary">Actions</h2>
         </Card.Header>
         <Card.Body>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3" role="group" aria-label="Process actions">
             {isTaskPauseable(task) && (
               <Button
                 variant="secondary"
-                onClick={() => pauseTask()}
-                disabled={isExecuting}
+                onClick={() => handleAction('pause', pauseTask)}
+                disabled={loadingAction !== null}
+                aria-label="Pause process execution"
               >
-                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                Pause Task
+                {loadingAction === 'pause' ? (
+                  <Spinner size="sm" className="mr-2" />
+                ) : (
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                )}
+                {loadingAction === 'pause' ? 'Pausing...' : 'Pause Process'}
               </Button>
             )}
 
             {isTaskResumeable(task) && (
               <Button
                 variant="primary"
-                onClick={() => resumeTask()}
-                disabled={isExecuting}
+                onClick={() => handleAction('resume', resumeTask)}
+                disabled={loadingAction !== null}
+                aria-label="Resume paused process"
               >
-                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                Resume Task
+                {loadingAction === 'resume' ? (
+                  <Spinner size="sm" className="mr-2" />
+                ) : (
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                )}
+                {loadingAction === 'resume' ? 'Resuming...' : 'Resume Process'}
               </Button>
             )}
 
             {isTaskRetryable(task) && (
               <Button
                 variant="primary"
-                onClick={() => retryTask()}
-                disabled={isExecuting}
+                onClick={() => handleAction('retry', retryTask)}
+                disabled={loadingAction !== null}
+                aria-label="Retry failed process from last failed step"
               >
-                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                {loadingAction === 'retry' ? (
+                  <Spinner size="sm" className="mr-2" />
+                ) : (
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                )}
+                {loadingAction === 'retry' ? 'Retrying...' : 'Retry Process'}
+              </Button>
+            )}
+
+            {isTaskCancellable(task) && (
+              <Button
+                variant="destructive"
+                onClick={() => handleAction('cancel', cancelTask)}
+                disabled={loadingAction !== null}
+                aria-label="Cancel and stop process execution"
+              >
+                {loadingAction === 'cancel' ? (
+                  <Spinner size="sm" className="mr-2" />
+                ) : (
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                )}
+                {loadingAction === 'cancel' ? 'Cancelling...' : 'Cancel Process'}
+              </Button>
+            )}
+
+            <Button
+              variant="outline"
+              onClick={() => handleAction('refresh', async () => { refresh(); })}
+              disabled={loadingAction !== null}
+              aria-label="Refresh process details"
+            >
+              {loadingAction === 'refresh' ? (
+                <Spinner size="sm" className="mr-2" />
+              ) : (
+                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -448,47 +535,10 @@ export function TaskDetailPanel({
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                   />
                 </svg>
-                Retry Task
-              </Button>
-            )}
-
-            {isTaskCancellable(task) && (
-              <Button
-                variant="destructive"
-                onClick={() => cancelTask()}
-                disabled={isExecuting}
-              >
-                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-                Cancel Task
-              </Button>
-            )}
-
-            <Button variant="outline" onClick={() => refresh()} disabled={isExecuting}>
-              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                />
-              </svg>
+              )}
               Refresh
             </Button>
           </div>
-
-          {isExecuting && (
-            <div className="mt-4 flex items-center gap-2 text-sm text-theme-secondary">
-              <Spinner size="sm" />
-              <span>Executing action...</span>
-            </div>
-          )}
         </Card.Body>
       </Card>
 

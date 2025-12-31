@@ -5,6 +5,7 @@
  */
 
 export * from './useTasks';
+export * from './useProcessWebSocket';
 
 // Process hook aliases (user-facing terminology)
 export {
