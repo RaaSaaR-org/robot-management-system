@@ -10,6 +10,7 @@ import type {
   CommandResult,
   PushedTask,
 } from './types.js';
+import { config } from '../config/config.js';
 
 /**
  * Callback to get current state
@@ -169,6 +170,32 @@ export class TaskQueue {
   }
 
   /**
+   * Report task status back to server
+   */
+  private async reportTaskStatus(
+    taskId: string,
+    status: 'executing' | 'completed' | 'failed',
+    result?: { success: boolean; data?: Record<string, unknown>; message?: string },
+    error?: string
+  ): Promise<void> {
+    try {
+      const response = await fetch(`${config.serverUrl}/api/processes/tasks/${taskId}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, result, error }),
+      });
+
+      if (!response.ok) {
+        console.error(`[TaskQueue] Failed to report task ${taskId} status: HTTP ${response.status}`);
+      } else {
+        console.log(`[TaskQueue] Reported task ${taskId} status: ${status}`);
+      }
+    } catch (err) {
+      console.error('[TaskQueue] Error reporting task status:', err);
+    }
+  }
+
+  /**
    * Execute the next task in the queue
    */
   private async executeNext(): Promise<void> {
@@ -187,11 +214,25 @@ export class TaskQueue {
 
     console.log(`[TaskQueue] Executing task ${task.id}: ${task.instruction}`);
 
+    // Report executing status to server
+    await this.reportTaskStatus(task.id, 'executing');
+
     // Execute task based on action type
     const result = await this.executeAction(task);
 
     // Task completed or failed
     console.log(`[TaskQueue] Task ${task.id} ${result.success ? 'completed' : 'failed'}: ${result.message}`);
+
+    // Report completion/failure status to server
+    if (result.success) {
+      await this.reportTaskStatus(task.id, 'completed', {
+        success: true,
+        message: result.message,
+        data: result.data,
+      });
+    } else {
+      await this.reportTaskStatus(task.id, 'failed', undefined, result.message);
+    }
 
     this.currentTask = null;
     this.stateUpdater((s) => {
