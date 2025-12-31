@@ -160,8 +160,11 @@ export class TaskDistributor extends EventEmitter {
       };
     }
 
-    // Find eligible robots
-    const eligibleRobots = await this.findEligibleRobots(task);
+    // Extract exclusion list from actionConfig (robots that failed this step)
+    const excludeRobotIds = (task.actionConfig.excludeRobotIds as string[]) ?? [];
+
+    // Find eligible robots (excluding failed ones)
+    const eligibleRobots = await this.findEligibleRobots(task, excludeRobotIds);
     if (eligibleRobots.length === 0) {
       logger.debug(`No eligible robots for task ${task.id}`);
       return {
@@ -203,11 +206,21 @@ export class TaskDistributor extends EventEmitter {
 
   /**
    * Find robots eligible to handle a task
+   * @param task The task to find robots for
+   * @param excludeRobotIds Robot IDs to exclude from consideration (e.g., robots that failed this step)
    */
-  private async findEligibleRobots(task: RobotTask): Promise<Robot[]> {
+  private async findEligibleRobots(
+    task: RobotTask,
+    excludeRobotIds: string[] = []
+  ): Promise<Robot[]> {
     const allRobots = await robotManager.listRobots();
 
     return allRobots.filter((robot: Robot) => {
+      // Exclude robots in exclusion list (failed robots)
+      if (excludeRobotIds.includes(robot.id)) {
+        return false;
+      }
+
       // Must be online or busy
       if (!['online', 'busy'].includes(robot.status)) {
         return false;
@@ -224,6 +237,17 @@ export class TaskDistributor extends EventEmitter {
 
       return true;
     });
+  }
+
+  /**
+   * Find eligible robots for reassignment (excludes specified robots)
+   * Used by ProcessManager to check if reassignment is possible
+   */
+  async findEligibleRobotsForReassignment(
+    task: RobotTask,
+    excludeRobotIds: string[]
+  ): Promise<Robot[]> {
+    return this.findEligibleRobots(task, excludeRobotIds);
   }
 
   /**
@@ -325,7 +349,39 @@ export class TaskDistributor extends EventEmitter {
       await processRepository.addAssignedRobot(task.processInstanceId, robotId);
     }
 
-    // Notify robot via WebSocket (to be implemented in websocket handler)
+    // Push task to robot's HTTP endpoint
+    const robot = await robotManager.getRobot(robotId);
+    if (robot?.a2aAgentUrl) {
+      try {
+        const robotUrl = robot.a2aAgentUrl;
+        const response = await fetch(`${robotUrl}/api/v1/robots/${robotId}/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: task.id,
+            processInstanceId: task.processInstanceId,
+            stepInstanceId: task.stepInstanceId,
+            actionType: task.actionType,
+            actionConfig: task.actionConfig,
+            instruction: task.instruction,
+            priority: task.priority,
+            source: task.source,
+          }),
+        });
+
+        if (!response.ok) {
+          logger.warn(`Failed to push task ${taskId} to robot ${robotId}: HTTP ${response.status}`);
+        } else {
+          logger.info(`Pushed task ${taskId} to robot ${robotId} via HTTP`);
+        }
+      } catch (error) {
+        logger.error(`Error pushing task ${taskId} to robot ${robotId}:`, error);
+      }
+    } else {
+      logger.warn(`Robot ${robotId} has no a2aAgentUrl configured, cannot push task`);
+    }
+
+    // Also emit WebSocket event for frontend updates
     this.emit('robot:work_assigned', {
       robotId,
       task,

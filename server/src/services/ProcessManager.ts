@@ -22,8 +22,19 @@ import type {
   PaginatedResponse,
   ProcessEvent,
   StepResult,
+  StepReassignedEvent,
 } from '../types/process.types.js';
 import type { RobotTask } from '../types/robotTask.types.js';
+
+// Lazy import to avoid circular dependency
+let taskDistributorInstance: import('./TaskDistributor.js').TaskDistributor | null = null;
+async function getTaskDistributor() {
+  if (!taskDistributorInstance) {
+    const { taskDistributor } = await import('./TaskDistributor.js');
+    taskDistributorInstance = taskDistributor;
+  }
+  return taskDistributorInstance;
+}
 
 // Simple logger wrapper
 const logger = {
@@ -204,6 +215,55 @@ export class ProcessManager extends EventEmitter {
   }
 
   /**
+   * Retry a failed or cancelled process
+   */
+  async retryProcess(id: string): Promise<ProcessInstance | null> {
+    const instance = await processRepository.findInstanceById(id);
+    if (!instance || !['failed', 'cancelled'].includes(instance.status)) {
+      return null;
+    }
+
+    // Find the first step that needs to be retried (failed or cancelled)
+    const firstRetryableStep = instance.steps.find(
+      (s) => ['failed', 'cancelled'].includes(s.status)
+    );
+    const retryFromIndex = firstRetryableStep
+      ? instance.steps.indexOf(firstRetryableStep)
+      : 0;
+
+    // Reset steps from the retry point onwards
+    for (let i = retryFromIndex; i < instance.steps.length; i++) {
+      const step = instance.steps[i];
+      await processRepository.updateStepStatus(step.id, 'pending');
+      await processRepository.resetStepRetryCount(step.id);
+      await processRepository.clearStepFailedRobots(step.id);
+    }
+
+    // Calculate new progress based on completed steps
+    const completedSteps = retryFromIndex;
+    const totalSteps = instance.steps.length;
+    const progress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+
+    // Update instance progress and current step
+    await processRepository.updateInstanceProgress(id, progress, retryFromIndex);
+
+    // Reset status to pending, clear error
+    const updated = await processRepository.updateInstanceStatus(id, 'pending', undefined);
+    if (updated) {
+      logger.info(`Process ${instance.processName} (${id}) retrying from step ${retryFromIndex + 1}`);
+      this.emitProcessEvent({
+        type: 'process:updated',
+        processInstance: updated,
+      });
+
+      // Begin execution
+      await this.beginExecution(id);
+    }
+
+    return processRepository.findInstanceById(id);
+  }
+
+  /**
    * Cancel a process
    */
   async cancelProcess(id: string): Promise<ProcessInstance | null> {
@@ -267,12 +327,18 @@ export class ProcessManager extends EventEmitter {
       stepInstance: { ...nextStep, status: 'queued' },
     });
 
+    // Get failed robot IDs for this step (for reassignment scenarios)
+    const failedRobotIds = await processRepository.getStepFailedRobotIds(nextStep.id);
+
     // Create a robot task for this step
-    // The TaskDistributor will assign it to a robot
+    // The TaskDistributor will assign it to a robot (excluding failed ones)
     const task = await robotTaskRepository.create(
       {
         actionType: nextStep.actionType,
-        actionConfig: nextStep.actionConfig,
+        actionConfig: {
+          ...nextStep.actionConfig,
+          excludeRobotIds: failedRobotIds, // Pass to TaskDistributor to exclude failed robots
+        },
         instruction: `${nextStep.name}: ${nextStep.description ?? ''}`,
         priority: instance.priority,
       },
@@ -281,7 +347,7 @@ export class ProcessManager extends EventEmitter {
       nextStep.id
     );
 
-    logger.info(`Created task ${task.id} for step ${nextStep.name} in process ${instance.processName}`);
+    logger.info(`Created task ${task.id} for step ${nextStep.name} in process ${instance.processName}${failedRobotIds.length > 0 ? ` (excluding ${failedRobotIds.length} failed robots)` : ''}`);
 
     // Emit event for TaskDistributor to pick up
     this.emit('task:created', task);
@@ -331,34 +397,104 @@ export class ProcessManager extends EventEmitter {
   }
 
   /**
-   * Handle step failure with retry logic
+   * Handle step failure with retry-then-reassign logic
+   *
+   * Strategy:
+   * 1. Retry on same robot (up to maxRetries times)
+   * 2. After exhausting retries, add robot to failedRobotIds and try reassignment
+   * 3. Repeat until success OR all eligible robots exhausted
    */
   private async handleStepFailure(step: StepInstance, error: string): Promise<void> {
-    if (step.retryCount < step.maxRetries) {
-      // Retry the step
-      const newRetryCount = await processRepository.incrementStepRetry(step.id);
-      logger.info(`Retrying step ${step.name} (attempt ${newRetryCount}/${step.maxRetries})`);
+    const failedRobotIds = [...(step.failedRobotIds ?? [])];
 
-      // Re-execute by going back to executeNextStep
+    if (step.retryCount < step.maxRetries) {
+      // Retry on same robot
+      const newRetryCount = await processRepository.incrementStepRetry(step.id);
+      logger.info(`Retrying step ${step.name} on same robot (attempt ${newRetryCount}/${step.maxRetries})`);
       await this.executeNextStep(step.processInstanceId);
     } else {
-      // Max retries reached - fail the process
-      const instance = await processRepository.findInstanceById(step.processInstanceId);
-      if (instance) {
-        const updated = await processRepository.updateInstanceStatus(
-          step.processInstanceId,
-          'failed',
-          `Step "${step.name}" failed after ${step.maxRetries} retries: ${error}`
-        );
-
-        if (updated) {
-          this.emitProcessEvent({
-            type: 'process:failed',
-            processInstance: updated,
-            error: `Step "${step.name}" failed: ${error}`,
-          });
-        }
+      // Max retries on current robot exhausted - try reassignment
+      const currentRobotId = step.assignedRobotId;
+      if (currentRobotId && !failedRobotIds.includes(currentRobotId)) {
+        await processRepository.addFailedRobotToStep(step.id, currentRobotId);
+        failedRobotIds.push(currentRobotId);
       }
+
+      // Check if other robots are available
+      const canReassign = await this.canReassignStep(step, failedRobotIds);
+
+      if (canReassign) {
+        // Reset retry count and reassign
+        await processRepository.resetStepRetryCount(step.id);
+        logger.info(`Reassigning step ${step.name} to different robot (${failedRobotIds.length} robots failed)`);
+
+        // Emit reassignment event
+        const reassignEvent: StepReassignedEvent = {
+          type: 'step:reassigned',
+          processInstanceId: step.processInstanceId,
+          stepInstance: { ...step, failedRobotIds, retryCount: 0, status: 'pending' },
+          previousRobotId: currentRobotId ?? '',
+          newRobotId: '', // Will be filled when assigned
+        };
+        this.emitProcessEvent(reassignEvent);
+
+        // Re-execute - TaskDistributor will find new robot
+        await this.executeNextStep(step.processInstanceId);
+      } else {
+        // All robots exhausted - fail the process
+        await this.failProcess(step, error, failedRobotIds);
+      }
+    }
+  }
+
+  /**
+   * Check if step can be reassigned to another robot
+   */
+  private async canReassignStep(step: StepInstance, excludeRobotIds: string[]): Promise<boolean> {
+    const instance = await processRepository.findInstanceById(step.processInstanceId);
+    if (!instance) return false;
+
+    // Create a minimal task object to check eligibility
+    const dummyTask = {
+      actionConfig: step.actionConfig,
+      processInstanceId: step.processInstanceId,
+    } as RobotTask;
+
+    // Use TaskDistributor to find eligible robots excluding failed ones
+    const taskDistributor = await getTaskDistributor();
+    const eligibleRobots = await taskDistributor.findEligibleRobotsForReassignment(
+      dummyTask,
+      excludeRobotIds
+    );
+
+    return eligibleRobots.length > 0;
+  }
+
+  /**
+   * Fail the process after all eligible robots have been exhausted
+   */
+  private async failProcess(
+    step: StepInstance,
+    error: string,
+    failedRobotIds: string[]
+  ): Promise<void> {
+    const instance = await processRepository.findInstanceById(step.processInstanceId);
+    if (!instance) return;
+
+    const errorMsg = `Step "${step.name}" failed on all eligible robots (${failedRobotIds.length} tried): ${error}`;
+    const updated = await processRepository.updateInstanceStatus(
+      step.processInstanceId,
+      'failed',
+      errorMsg
+    );
+
+    if (updated) {
+      logger.error(errorMsg);
+      this.emitProcessEvent({
+        type: 'process:failed',
+        processInstance: updated,
+        error: errorMsg,
+      });
     }
   }
 

@@ -254,6 +254,22 @@ processRoutes.put('/instances/:id/cancel', async (req: Request, res: Response) =
   }
 });
 
+/**
+ * PUT /process-instances/:id/retry - Retry a failed or cancelled process instance
+ */
+processRoutes.put('/instances/:id/retry', async (req: Request, res: Response) => {
+  try {
+    const instance = await processManager.retryProcess(req.params.id);
+    if (!instance) {
+      return res.status(400).json({ error: 'Cannot retry process. It must be in failed or cancelled state.' });
+    }
+    res.json(instance);
+  } catch (error) {
+    console.error('Error retrying process:', error);
+    res.status(500).json({ error: 'Failed to retry process' });
+  }
+});
+
 // ============================================================================
 // ROBOT TASK ROUTES
 // ============================================================================
