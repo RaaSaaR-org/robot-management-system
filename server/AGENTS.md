@@ -1,138 +1,203 @@
-# AGENTS.md
+# AGENTS.md - Server Application
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMindOS server.
+This file provides guidance for AI agents working with the RoboMindOS server.
 
-## Project Overview
+## Overview
 
-The A2A Protocol Server is the backend for RoboMindOS. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, and real-time telemetry via WebSocket.
+Node.js backend implementing A2A (Agent-to-Agent) protocol with Prisma database, compliance logging, and real-time WebSocket communication.
 
 ## Commands
 
-### Development
-
 ```bash
 npm run dev          # Start server with hot reload (tsx watch)
-```
-
-### Build
-
-```bash
 npm run build        # Compile TypeScript to dist/
 npm start            # Run production build
-```
-
-### Type Checking
-
-```bash
-npm run typecheck    # Run TypeScript compiler (noEmit mode)
+npm run typecheck    # Run TypeScript compiler
+npx prisma migrate dev    # Run database migrations
+npx prisma generate       # Generate Prisma client
 ```
 
 ## Architecture
 
-### Technology Stack
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Framework | Express.js | HTTP server |
+| Database | Prisma + SQLite | Data persistence |
+| Protocol | A2A SDK | Robot communication |
+| Real-time | WebSocket (ws) | Telemetry streaming |
+| Language | TypeScript (ESM) | Type safety |
 
-- **Runtime**: Node.js 18+
-- **Framework**: Express.js
-- **Protocol**: A2A (Agent-to-Agent)
-- **Real-time**: WebSocket (ws)
-- **Language**: TypeScript (ESM modules)
-
-### Entry Points
-
-- **Main**: `src/index.ts` - Server bootstrap
-- **App**: `src/app.ts` - Express app configuration and middleware
-
-### Default Port
-
-- HTTP/WebSocket: `3000` (configurable via PORT env)
+**Default Port**: 3001
 
 ## Project Structure
 
 ```
-server/src/
+src/
 ├── index.ts              # Server entry point
-├── app.ts                # Express app setup, middleware, route mounting
-├── routes/
-│   ├── conversation.routes.ts  # A2A conversation endpoints
-│   ├── message.routes.ts       # A2A message endpoints
-│   ├── agent.routes.ts         # Agent discovery endpoints
-│   ├── robot.routes.ts         # Robot management endpoints
-│   ├── wellknown.routes.ts     # /.well-known/agent-card.json
-│   └── task.routes.ts          # A2A task endpoints
-├── services/
-│   ├── A2AClient.ts            # Client for communicating with robot agents
-│   ├── ConversationManager.ts  # Manages A2A conversations, tasks, events
-│   └── RobotManager.ts         # Robot registration and state management
-├── websocket/
-│   └── index.ts                # WebSocket server for real-time telemetry
-└── types/
-    └── index.ts                # TypeScript type definitions
+├── app.ts                # Express app setup, middleware
+├── routes/               # API endpoints (see routes/AGENTS.md)
+│   ├── robot.routes.ts         # Robot management
+│   ├── conversation.routes.ts  # A2A conversations
+│   ├── compliance-log.routes.ts # Compliance logging
+│   ├── retention.routes.ts     # Retention policies
+│   ├── legal-hold.routes.ts    # Legal holds
+│   ├── ropa.routes.ts          # RoPA management
+│   ├── provider-docs.routes.ts # Technical documentation
+│   └── decision.routes.ts      # AI decisions
+├── services/             # Business logic (see services/AGENTS.md)
+│   ├── RobotManager.ts         # Robot state management
+│   ├── ConversationManager.ts  # A2A conversations
+│   ├── ComplianceLogService.ts # Compliance logging
+│   ├── RetentionPolicyService.ts # Retention management
+│   ├── LegalHoldService.ts     # Legal hold management
+│   ├── RopaService.ts          # RoPA management
+│   ├── ProviderDocumentationService.ts # Tech docs
+│   └── CommandInterpreter.ts   # AI command processing
+├── repositories/         # Database access layer
+│   ├── index.ts                # Prisma client export
+│   └── ComplianceLogRepository.ts
+├── types/                # TypeScript definitions
+│   ├── index.ts                # Core types
+│   ├── compliance.types.ts     # Compliance types
+│   └── retention.types.ts      # Retention/document types
+├── jobs/                 # Background jobs
+│   └── RetentionCleanupJob.ts  # Scheduled cleanup
+├── security/             # Security utilities
+│   └── HashChain.ts            # Cryptographic hash chain
+└── websocket/            # Real-time communication
+    └── index.ts                # WebSocket server
 ```
+
+## Database (Prisma)
+
+Schema location: `prisma/schema.prisma`
+
+### Key Models
+
+| Model | Purpose |
+|-------|---------|
+| `ComplianceLog` | Tamper-evident audit trail |
+| `Decision` | AI decision records with explainability |
+| `RetentionPolicy` | Per-event-type retention rules |
+| `LegalHold` | Litigation hold records |
+| `RopaEntry` | GDPR processing activities |
+| `ProviderDocumentation` | Technical documentation |
+
+### Database Commands
+
+```bash
+npx prisma migrate dev     # Create/apply migrations
+npx prisma migrate reset   # Reset database
+npx prisma studio          # Open database GUI
+npx prisma generate        # Regenerate client
+```
+
+## Key API Endpoints
+
+### Robot Management
+- `GET /api/robots` - List robots
+- `POST /api/robots/:id/register` - Register robot
+- `POST /api/robots/:id/command` - Send command
+
+### Compliance Logging
+- `GET /api/compliance/logs` - List compliance logs
+- `GET /api/compliance/verify` - Verify hash chain
+- `GET /api/compliance/metrics` - Log metrics
+
+### Retention & Legal Hold
+- `GET /api/compliance/retention` - List retention policies
+- `PUT /api/compliance/retention/:eventType` - Set policy
+- `POST /api/compliance/legal-holds` - Create hold
+
+### RoPA (GDPR Art. 30)
+- `GET /api/compliance/ropa` - List processing activities
+- `POST /api/compliance/ropa` - Create entry
+- `GET /api/compliance/ropa/report` - Generate report
+
+### Technical Documentation
+- `GET /api/compliance/providers` - List providers
+- `GET /api/compliance/providers/docs` - All documentation
+- `POST /api/compliance/providers/docs` - Add document
+- `GET /api/compliance/providers/public/conformity` - Public conformity (no auth)
+
+### AI Decisions
+- `GET /api/decisions` - List decisions
+- `GET /api/decisions/:id` - Decision details with factors
+- `GET /api/decisions/metrics` - Decision metrics
+
+### WebSocket
+- `ws://localhost:3001/api/a2a/ws` - Robot telemetry stream
 
 ## Development Guidelines
 
-### Route Pattern
-
-Routes follow REST conventions with A2A protocol extensions:
-- `GET /conversations` - List conversations
-- `POST /conversations` - Create conversation
-- `POST /conversations/:id/messages` - Send message (A2A)
-- `GET /robots` - List registered robots
-- `POST /robots/:id/register` - Register robot
-
 ### Service Pattern
 
-Services are singleton managers:
-- `ConversationManager` - In-memory Map storage for conversations, tasks, events
-- `RobotManager` - In-memory Map storage for registered robots
-- `A2AClient` - HTTP client for robot agent communication
-
-### Current Limitations
-
-- **In-memory storage**: All data lost on restart (Task 16 will add database)
-- **No authentication**: All endpoints are open (Task 11 will add auth)
-
-### File Header Convention
+Services are singleton managers with business logic:
 
 ```typescript
-/**
- * @file filename.ts
- * @description One-line purpose description
- */
+class FeatureService {
+  private static instance: FeatureService;
+
+  static getInstance(): FeatureService {
+    if (!FeatureService.instance) {
+      FeatureService.instance = new FeatureService();
+    }
+    return FeatureService.instance;
+  }
+
+  async doSomething(): Promise<Result> {
+    // Business logic here
+  }
+}
 ```
 
-## Key Endpoints
+### Route Pattern
 
-### A2A Protocol
-- `GET /.well-known/agent-card.json` - Server agent card
-- `POST /conversations` - Start conversation
-- `POST /conversations/:id/messages` - Send A2A message
-- `GET /conversations/:id/events` - SSE event stream
+Routes handle HTTP and delegate to services:
 
-### Robot Management
-- `GET /robots` - List all robots
-- `POST /robots/:id/register` - Register robot from agent URL
-- `DELETE /robots/:id` - Unregister robot
-- `POST /robots/:id/command` - Send command to robot
+```typescript
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const result = await service.getAll();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch' });
+  }
+});
+```
 
-### WebSocket
-- `ws://localhost:3000/ws` - Telemetry streaming
+### Compliance Logging
+
+All significant events should be logged:
+
+```typescript
+await complianceLogService.logEvent({
+  sessionId,
+  robotId,
+  eventType: 'ai_decision',
+  severity: 'info',
+  payload: { description: 'Command interpreted', ... },
+});
+```
 
 ## Key Dependencies
 
-- **express**: HTTP server framework
-- **ws**: WebSocket server
-- **cors**: CORS middleware
-- **axios**: HTTP client for robot communication
-- **uuid**: Unique ID generation
+- `express` - HTTP framework
+- `@prisma/client` - Database ORM
+- `ws` - WebSocket server
+- `cors` - CORS middleware
+- `uuid` - ID generation
+- `node-cron` - Scheduled jobs
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | Server port | `3000` |
+| `PORT` | Server port | `3001` |
+| `DATABASE_URL` | Prisma database URL | `file:./dev.db` |
 
 ## Related Documentation
 
+- `prisma/schema.prisma` - Database schema
 - `../docs/architecture.md` - System architecture
-- `../robot-agent/README.md` - Robot agent documentation
+- `../robot-agent/AGENTS.md` - Robot agent reference

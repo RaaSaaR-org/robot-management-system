@@ -1,148 +1,156 @@
-# CLAUDE.md
+# AGENTS.md - Frontend Application
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance for AI agents working with the RoboMindOS frontend application.
 
-## Project Overview
+## Overview
 
-RoboMindOS is a Tauri v2 desktop application for robot fleet management. It features a React + TypeScript frontend with Zustand state management and a Rust backend. The app enables users to manage, monitor, and control humanoid robots through natural language commands.
+React + TypeScript frontend with Tauri v2 for desktop deployment. Uses Zustand for state management and Tailwind CSS for styling.
 
 ## Commands
 
-### Development
-
 ```bash
-npm run dev          # Start Vite dev server (frontend only, http://localhost:1420)
-```
-
-### Build
-
-```bash
+npm run dev          # Start Vite dev server (http://localhost:1420)
 npm run build        # Build frontend (TypeScript check + Vite build)
-```
-
-### Type Checking
-
-```bash
-npx tsc              # Run TypeScript compiler (noEmit mode)
+npx tsc              # Run TypeScript compiler
 ```
 
 ## Architecture
 
-### Frontend (React/TypeScript)
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| UI Framework | React 18 | Component rendering |
+| State | Zustand + Immer | Global state management |
+| Styling | Tailwind CSS v4 | Utility-first CSS |
+| Routing | React Router v7 | Client-side routing |
+| Desktop | Tauri v2 | Native desktop wrapper |
+| HTTP | Axios | API communication |
 
-- **Entry point**: `src/main.tsx` - React app bootstrap with providers
-- **Root component**: `src/App.tsx` - Routes and layout
-- **Build tool**: Vite with React plugin
-- **Dev server**: Port 1420
-- **State management**: Zustand with Immer middleware
-- **Styling**: Tailwind CSS v4
-- **Routing**: React Router DOM v7
-
-### Backend (Rust/Tauri)
-
-- **Entry point**: `src-tauri/src/main.rs` - Tauri application entry
-- **Commands**: `src-tauri/src/lib.rs` - Tauri command handlers
-- **Config**: `src-tauri/tauri.conf.json` - Tauri application configuration
-
-### Frontend-Backend Communication
-
-- Use `@tauri-apps/api/core` `invoke()` to call Rust commands from React
-- Define Rust commands with `#[tauri::command]` attribute
-- Register commands in `tauri::Builder::default().invoke_handler()`
-
-## Project Structure (Feature-First)
+## Project Structure
 
 ```
 src/
-├── app/providers/       # Context providers (Auth, Theme)
+├── app/                 # App shell, providers, routing
 ├── features/            # Feature modules (domain-driven)
-│   ├── auth/            # Authentication
+│   ├── compliance/      # EU AI Act compliance (see features/compliance/AGENTS.md)
+│   ├── explainability/  # AI decision transparency
 │   ├── robots/          # Robot management
-│   ├── tasks/           # Task management
+│   ├── fleet/           # Fleet operations
+│   ├── command/         # Natural language commands
 │   ├── alerts/          # Alert system
-│   ├── command/         # VLA command interface
+│   ├── safety/          # Safety monitoring
+│   ├── a2a/             # A2A protocol integration
+│   ├── auth/            # Authentication (planned)
+│   ├── dashboard/       # Main dashboard
+│   ├── processes/       # Task/process management
 │   └── settings/        # User settings
-├── shared/              # Cross-feature shared code
-│   ├── components/ui/   # Reusable UI components (Button, Input, Modal, Spinner)
-│   ├── hooks/           # Shared hooks (useApi, useDebounce, useLocalStorage, useWebSocket)
-│   ├── types/           # Shared type definitions
-│   └── utils/           # Utility functions (cn for classnames)
+├── shared/              # Shared code
+│   ├── components/ui/   # Reusable UI components
+│   ├── hooks/           # Shared hooks
+│   ├── types/           # Shared types
+│   └── utils/           # Utility functions
 ├── api/                 # API client configuration
-├── store/               # Global store utilities
-├── mocks/               # Mock data for development
-└── pages/               # Top-level pages
+└── routes/              # Route definitions
 ```
 
-### Feature Module Structure
+## Feature Module Structure
 
-Each feature follows this structure:
+Each feature follows this pattern:
+
 ```
-features/{feature-name}/
-├── types/           # TypeScript type definitions (create FIRST)
-├── store/           # Zustand store slice
-├── api/             # API module with endpoints
-├── hooks/           # React hooks (useX)
+features/{feature}/
+├── api/             # API calls (featureApi.ts)
 ├── components/      # Feature components
+├── hooks/           # Feature hooks
 ├── pages/           # Route pages
-└── index.ts         # Public exports
+├── store/           # Zustand store (featureStore.ts)
+├── types/           # TypeScript types
+├── index.ts         # Public exports
+└── AGENTS.md        # Feature-specific guidance
 ```
+
+## Key Features
+
+### Compliance (`features/compliance/`)
+EU AI Act and GDPR compliance features:
+- Audit log viewer with hash chain verification
+- Integrity verification UI
+- RoPA (Records of Processing Activities) management
+- Technical documentation management
+- Retention policy configuration
+- Legal hold management
+
+### Explainability (`features/explainability/`)
+AI decision transparency:
+- Decision viewer with reasoning display
+- Confidence metrics visualization
+- Factor analysis
+- Decision timeline
+
+### Robots (`features/robots/`)
+Robot management:
+- Robot list and detail views
+- Real-time telemetry display
+- Command execution
+- Status monitoring
 
 ## Development Guidelines
 
 ### Implementation Order
-
-When building features, implement in this order:
-1. **Types** - Define interfaces and type aliases first
-2. **Store** - Create Zustand store with state and actions
-3. **API** - Implement API module with typed endpoints
-4. **Hooks** - Create hooks for data fetching/state access
-5. **Components** - Build UI components using shared primitives
-6. **Pages** - Assemble pages from components
-
-### File Header Convention
-
-Every file should start with:
-```typescript
-/**
- * @file FileName.tsx
- * @description One-line purpose description
- * @feature feature-name
- */
-```
+1. **Types** - Define interfaces first
+2. **Store** - Create Zustand store
+3. **API** - Implement API module
+4. **Hooks** - Create data fetching hooks
+5. **Components** - Build UI components
+6. **Pages** - Assemble pages
 
 ### Code Patterns
 
-- Use named exports (no default exports)
-- Wrap components in `memo()` for performance
-- Use `cn()` utility from `@/shared/utils` for conditional classnames
-- Store slices use Immer middleware for immutable updates
+```typescript
+// File header
+/**
+ * @file ComponentName.tsx
+ * @description Brief description
+ * @feature feature-name
+ */
 
-### Brand Colors (Tailwind)
+// Named exports only
+export function ComponentName() { ... }
+
+// Use cn() for conditional classes
+import { cn } from '@/shared/utils';
+className={cn('base-class', condition && 'conditional-class')}
+
+// Zustand store with Immer
+export const useFeatureStore = create<FeatureState>()(
+  immer((set) => ({
+    // state and actions
+  }))
+);
+```
+
+### Brand Colors
 
 ```
-Primary: #2A5FFF (Cobalt Blue) → primary-500
-Accent: #18E4C3 (Turquoise) → accent-500
+Primary: #2A5FFF (Cobalt Blue) -> primary-500
+Accent: #18E4C3 (Turquoise) -> accent-500
 Status:
-  - Online: #22c55e (green-500)
-  - Offline: #9ca3af (gray-400)
-  - Busy: #3b82f6 (blue-500)
-  - Error: #ef4444 (red-500)
-  - Charging: #eab308 (yellow-500)
+  - Online: green-500
+  - Offline: gray-400
+  - Busy: blue-500
+  - Error: red-500
+  - Charging: yellow-500
 ```
 
 ## Key Dependencies
 
-- **@tauri-apps/api**: Tauri frontend APIs
-- **zustand**: State management
-- **immer**: Immutable state updates
-- **axios**: HTTP client
-- **react-router-dom**: Routing
-- **tailwind-merge** + **clsx**: CSS class utilities
+- `zustand` + `immer` - State management
+- `axios` - HTTP client
+- `react-router-dom` - Routing
+- `@tauri-apps/api` - Tauri APIs
+- `tailwind-merge` + `clsx` - CSS utilities
 
-## Documentation
+## Related Documentation
 
-More detailed documentation:
-- `docs/architecture.md` - Full frontend architecture patterns
-- `docs/dev-workflow.md` - Development guidelines and conventions
-- `docs/brand.md` - Brand guide and visual design system
-- `docs/prd.md` - Product requirements document
+- `docs/app-architecture.md` - Detailed frontend architecture
+- `docs/brand.md` - Design system and brand guide
+- `../server/AGENTS.md` - Backend API reference
