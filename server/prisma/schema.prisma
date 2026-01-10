@@ -482,8 +482,154 @@ model Decision {
 
   createdAt DateTime @default(now())
 
+  // Relation to compliance logs
+  complianceLogs ComplianceLog[]
+
   @@index([entityId])
   @@index([robotId])
   @@index([decisionType])
   @@index([createdAt])
+}
+
+// ============================================================================
+// COMPLIANCE LOGGING (EU AI Act Art. 12, GDPR Art. 30, Machinery Regulation)
+// ============================================================================
+
+model ComplianceLog {
+  id         String @id @default(uuid())
+  sessionId  String // Session identifier for grouping related logs
+  robotId    String // Robot that generated the event
+  operatorId String? // User/operator ID (null for autonomous operations)
+
+  // Event classification
+  eventType String // 'ai_decision' | 'safety_action' | 'command_execution' | 'system_event' | 'access_audit'
+  severity  String @default("info") // 'debug' | 'info' | 'warning' | 'error' | 'critical'
+
+  // Encrypted payload (AES-256-GCM)
+  payloadEncrypted String // Base64-encoded encrypted JSON payload
+  payloadIv        String // Base64-encoded initialization vector
+  payloadHash      String // SHA-256 hash of unencrypted payload for verification
+
+  // ML model tracking (for AI decisions)
+  modelVersion String? // e.g., 'gemini-2.0-flash'
+  modelHash    String? // Hash of model configuration
+
+  // Input-output matching (for traceability)
+  inputHash  String? // SHA-256 hash of input data
+  outputHash String? // SHA-256 hash of output data
+
+  // Hash chain for tamper evidence
+  previousHash String // Hash of previous log entry (empty string for first entry)
+  currentHash  String // SHA-256(previousHash + timestamp + payloadHash + eventType)
+
+  // Link to AI Explainability system
+  decisionId String?
+  decision   Decision? @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+
+  // Timestamps
+  timestamp DateTime @default(now())
+
+  // Immutability flag - prevents updates/deletes at application level
+  immutable Boolean @default(true)
+
+  // Retention management (Task 24)
+  retentionExpiresAt DateTime? // When this log can be deleted
+  legalHoldId        String?   // If under legal hold, references LegalHold.id
+
+  // Relations
+  accessLogs ComplianceLogAccess[]
+
+  @@index([sessionId])
+  @@index([retentionExpiresAt])
+  @@index([robotId])
+  @@index([operatorId])
+  @@index([eventType])
+  @@index([severity])
+  @@index([timestamp])
+  @@index([decisionId])
+  @@index([currentHash])
+}
+
+model ComplianceLogAccess {
+  id        String   @id @default(uuid())
+  logId     String
+  userId    String? // User who accessed (null for system access)
+  accessType String // 'view' | 'export' | 'verify' | 'audit'
+  ipAddress String?
+  userAgent String?
+  timestamp DateTime @default(now())
+
+  // Relations
+  log ComplianceLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+
+  @@index([logId])
+  @@index([userId])
+  @@index([timestamp])
+}
+
+// ============================================================================
+// RETENTION & AUDIT TRAIL MANAGEMENT (EU AI Act Art. 12, GDPR Art. 30)
+// ============================================================================
+
+model RetentionPolicy {
+  id            String   @id @default(uuid())
+  eventType     String   @unique // 'ai_decision' | 'safety_action' | 'command_execution' | 'system_event' | 'access_audit'
+  retentionDays Int      // Days to retain logs (e.g., 3650 = 10 years)
+  description   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([eventType])
+}
+
+model LegalHold {
+  id        String    @id @default(uuid())
+  name      String
+  reason    String
+  createdBy String    // User ID who created the hold
+  startDate DateTime  @default(now())
+  endDate   DateTime?
+  isActive  Boolean   @default(true)
+  logIds    String[]  // Array of ComplianceLog IDs under hold
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([isActive])
+  @@index([createdBy])
+}
+
+// GDPR Article 30 - Records of Processing Activities
+model RopaEntry {
+  id                    String   @id @default(uuid())
+  processingActivity    String   // Name of the processing activity
+  purpose               String   // Purpose of processing
+  dataCategories        String[] // Types of personal data processed
+  dataSubjects          String[] // Categories of data subjects
+  recipients            String[] // Recipients of the data
+  thirdCountryTransfers String?  // International transfers info
+  retentionPeriod       String   // How long data is retained
+  securityMeasures      String[] // Technical/organizational security measures
+  legalBasis            String   // GDPR legal basis (consent, contract, legal obligation, etc.)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([processingActivity])
+}
+
+// AI Provider Documentation (EU AI Act transparency requirements)
+model ProviderDocumentation {
+  id           String    @id @default(uuid())
+  providerName String    // e.g., 'Google Gemini', 'OpenAI'
+  modelVersion String    // e.g., 'gemini-2.0-flash'
+  documentType String    // 'technical_doc' | 'risk_assessment' | 'conformity_declaration' | 'user_manual'
+  documentUrl  String?   // URL to external documentation
+  content      String    // Documentation content or summary
+  validFrom    DateTime  // When this documentation became valid
+  validTo      DateTime? // When this documentation expires (null = still valid)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([providerName])
+  @@index([modelVersion])
+  @@index([documentType])
 }

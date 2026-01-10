@@ -10,6 +10,10 @@ import { connectDatabase, disconnectDatabase } from './database/index.js';
 import { seedZones } from './database/seedZones.js';
 import { conversationManager } from './services/ConversationManager.js';
 import { robotManager } from './services/RobotManager.js';
+import { retentionCleanupJob } from './jobs/RetentionCleanupJob.js';
+import { retentionPolicyService } from './services/RetentionPolicyService.js';
+import { ropaService } from './services/RopaService.js';
+import { providerDocumentationService } from './services/ProviderDocumentationService.js';
 
 const PORT = process.env.PORT || 3001;
 
@@ -25,6 +29,14 @@ async function main() {
   // Initialize managers (load cached data from database)
   await conversationManager.initialize();
   await robotManager.initialize();
+
+  // Initialize retention policies, RoPA, and provider docs defaults
+  await retentionPolicyService.initializeDefaults();
+  await ropaService.initializeDefaults();
+  await providerDocumentationService.initializeDefaults();
+
+  // Start retention cleanup job (daily at 2 AM)
+  retentionCleanupJob.startSchedule(24);
 
   // Create Express app
   const app = createApp();
@@ -45,6 +57,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async () => {
     console.log('Shutting down...');
+    retentionCleanupJob.stopSchedule();
     await disconnectDatabase();
     server.close(() => {
       console.log('Server closed');

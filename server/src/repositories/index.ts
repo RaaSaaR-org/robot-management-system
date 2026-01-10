@@ -54,3 +54,4 @@ export type {
   AIDocumentation,
   DecisionType,
 } from './DecisionRepository.js';
+export { complianceLogRepository, ComplianceLogRepository } from './ComplianceLogRepository.js';

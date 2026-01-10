@@ -21,6 +21,11 @@ import { commandRoutes } from './routes/command.routes.js';
 import { processRoutes } from './routes/process.routes.js';
 import { safetyRoutes } from './routes/safety.routes.js';
 import { explainabilityRoutes } from './routes/explainability.routes.js';
+import { complianceLogRoutes } from './routes/compliance-log.routes.js';
+import { retentionRoutes } from './routes/retention.routes.js';
+import { legalHoldRoutes } from './routes/legal-hold.routes.js';
+import { ropaRoutes } from './routes/ropa.routes.js';
+import { providerDocsRoutes } from './routes/provider-docs.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -122,6 +127,21 @@ export function createApp(): Express {
 
   // Explainability routes (protected) - AI transparency (EU AI Act)
   app.use('/api/explainability', authMiddleware, explainabilityRoutes);
+
+  // Compliance logging routes (protected) - EU AI Act Art. 12, GDPR Art. 30
+  app.use('/api/compliance', authMiddleware, complianceLogRoutes);
+
+  // Retention policy routes (protected) - Log retention management
+  app.use('/api/compliance/retention', authMiddleware, retentionRoutes);
+
+  // Legal hold routes (protected) - Prevent deletion during investigations
+  app.use('/api/compliance/legal-holds', authMiddleware, legalHoldRoutes);
+
+  // RoPA routes (protected) - GDPR Article 30 Records of Processing Activities
+  app.use('/api/compliance/ropa', authMiddleware, ropaRoutes);
+
+  // Provider documentation routes (protected) - AI provider transparency docs
+  app.use('/api/compliance/providers', authMiddleware, providerDocsRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
