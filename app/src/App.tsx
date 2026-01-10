@@ -33,6 +33,7 @@ import {
   LazyA2AEventsPage,
   LazySettingsPage,
   LazyExplainabilityPage,
+  LazyCompliancePage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -212,6 +213,15 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyExplainabilityPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Compliance - Audit logging (EU AI Act Art. 12, GDPR Art. 30) */}
+          <Route
+            path="/compliance"
+            element={
+              <ProtectedAppRoute>
+                <LazyCompliancePage />
               </ProtectedAppRoute>
             }
           />

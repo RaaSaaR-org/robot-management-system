@@ -119,6 +119,13 @@ export const LazyExplainabilityPage = lazy(() =>
   import('@/features/explainability').then((m) => ({ default: m.ExplainabilityPage }))
 );
 
+/**
+ * Compliance page - Audit logging (EU AI Act Art. 12, GDPR Art. 30)
+ */
+export const LazyCompliancePage = lazy(() =>
+  import('@/features/compliance').then((m) => ({ default: m.CompliancePage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================
