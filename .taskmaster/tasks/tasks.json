@@ -376,8 +376,9 @@
           "16",
           "24"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-10T16:56:18.485Z"
       },
       {
         "id": "26",
@@ -390,8 +391,9 @@
           "11",
           "16"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-10T17:23:24.341Z"
       },
       {
         "id": "27",
@@ -538,9 +540,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-01-10T16:24:53.841Z",
+      "lastModified": "2026-01-10T17:23:24.342Z",
       "taskCount": 36,
-      "completedCount": 21,
+      "completedCount": 23,
       "tags": [
         "master"
       ]
