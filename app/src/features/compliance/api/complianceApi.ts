@@ -24,6 +24,7 @@ import type {
   RopaReport,
   ProviderSummary,
   ProviderDocumentation,
+  ProviderDocInput,
 } from '../types';
 
 const ENDPOINTS = {
@@ -330,6 +331,48 @@ export const complianceApi = {
   async getProviderDocs(providerName: string): Promise<{ documentation: ProviderDocumentation[] }> {
     const response = await apiClient.get<{ documentation: ProviderDocumentation[] }>(
       `${ENDPOINTS.providers}/${encodeURIComponent(providerName)}/docs`
+    );
+    return response.data;
+  },
+
+  /**
+   * Get a specific document by ID
+   */
+  async getDocument(id: string): Promise<ProviderDocumentation> {
+    const response = await apiClient.get<ProviderDocumentation>(`${ENDPOINTS.providers}/docs/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Add new provider documentation
+   */
+  async addDocumentation(input: ProviderDocInput): Promise<ProviderDocumentation> {
+    const response = await apiClient.post<ProviderDocumentation>(`${ENDPOINTS.providers}/docs`, input);
+    return response.data;
+  },
+
+  /**
+   * Update provider documentation
+   */
+  async updateDocumentation(id: string, input: Partial<ProviderDocInput>): Promise<ProviderDocumentation> {
+    const response = await apiClient.put<ProviderDocumentation>(`${ENDPOINTS.providers}/docs/${id}`, input);
+    return response.data;
+  },
+
+  /**
+   * Delete provider documentation
+   */
+  async deleteDocumentation(id: string): Promise<{ message: string }> {
+    const response = await apiClient.delete<{ message: string }>(`${ENDPOINTS.providers}/docs/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Get public conformity declarations (no auth required)
+   */
+  async getPublicConformity(): Promise<{ documents: ProviderDocumentation[]; count: number; generatedAt: string }> {
+    const response = await apiClient.get<{ documents: ProviderDocumentation[]; count: number; generatedAt: string }>(
+      `${ENDPOINTS.providers}/public/conformity`
     );
     return response.data;
   },
