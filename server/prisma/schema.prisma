@@ -286,7 +286,10 @@ model User {
   updatedAt            DateTime  @updatedAt
 
   // Relations
-  refreshTokens RefreshToken[]
+  refreshTokens    RefreshToken[]
+  gdprRequests     GDPRRequest[]
+  consents         UserConsent[]
+  dataRestrictions DataRestriction[]
 
   @@index([email])
   @@index([role])
@@ -632,4 +635,137 @@ model ProviderDocumentation {
   @@index([providerName])
   @@index([modelVersion])
   @@index([documentType])
+}
+
+// ============================================================================
+// GDPR RIGHTS MANAGEMENT (GDPR Articles 15-22)
+// ============================================================================
+
+// Core GDPR Request model - handles all request types
+model GDPRRequest {
+  id              String    @id @default(uuid())
+  userId          String
+  requestType     String    // 'access' | 'rectification' | 'erasure' | 'restriction' | 'portability' | 'objection' | 'adm_review'
+  status          String    @default("pending") // 'pending' | 'acknowledged' | 'in_progress' | 'completed' | 'rejected'
+
+  // SLA tracking
+  submittedAt     DateTime  @default(now())
+  acknowledgedAt  DateTime?
+  slaDeadline     DateTime  // 30 days from submission (or 72 hours for ADM acknowledgment)
+  completedAt     DateTime?
+
+  // Request details (JSON for flexibility per type)
+  requestData     String    @default("{}") // JSON: type-specific request data
+  responseData    String?   // JSON: result data (export path, changes made, etc.)
+
+  // Verification for sensitive requests
+  verificationToken   String?   @unique
+  verificationExpires DateTime?
+  verifiedAt          DateTime?
+
+  // Processing
+  assignedTo      String?   // Admin user ID handling the request
+  internalNotes   String?   // Admin notes (not visible to user)
+  rejectionReason String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  statusHistory   GDPRRequestStatusHistory[]
+  admReview       ADMReviewQueue?
+
+  @@index([userId])
+  @@index([requestType])
+  @@index([status])
+  @@index([slaDeadline])
+  @@index([submittedAt])
+}
+
+// Status history for audit trail
+model GDPRRequestStatusHistory {
+  id          String   @id @default(uuid())
+  requestId   String
+  fromStatus  String?
+  toStatus    String
+  changedBy   String?  // User ID who made the change (null for system)
+  reason      String?
+  timestamp   DateTime @default(now())
+
+  request     GDPRRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@index([timestamp])
+}
+
+// User consent tracking (GDPR consent requirements)
+model UserConsent {
+  id            String    @id @default(uuid())
+  userId        String
+  consentType   String    // 'marketing' | 'analytics' | 'ai_processing' | 'data_sharing' | 'third_party'
+  granted       Boolean   @default(false)
+  grantedAt     DateTime?
+  revokedAt     DateTime?
+  version       String    // Consent policy version at time of consent
+  ipAddress     String?   // IP at time of consent (for proof)
+  userAgent     String?   // Browser/device info
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, consentType])
+  @@index([userId])
+  @@index([consentType])
+}
+
+// Data Processing Restriction tracking (GDPR Art. 18)
+model DataRestriction {
+  id            String    @id @default(uuid())
+  userId        String
+  scope         String    // 'all' | 'ai_processing' | 'sharing' | 'marketing' | specific data category
+  reason        String    // 'accuracy_disputed' | 'unlawful_processing' | 'no_longer_needed' | 'objection_pending'
+  gdprRequestId String?   // Link to original GDPR request if applicable
+  startDate     DateTime  @default(now())
+  endDate       DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isActive])
+  @@index([scope])
+}
+
+// ADM (Automated Decision Making) Human Review Queue (GDPR Art. 22)
+model ADMReviewQueue {
+  id              String    @id @default(uuid())
+  gdprRequestId   String    @unique  // Links to GDPRRequest of type 'adm_review'
+  decisionId      String    // Original AI Decision that's being contested
+  userId          String    // User contesting the decision
+
+  contestReason   String    // Why the user is contesting
+  userEvidence    String?   // JSON: Evidence provided by user
+
+  status          String    @default("queued") // 'queued' | 'assigned' | 'under_review' | 'decision_overturned' | 'decision_upheld'
+  priority        String    @default("normal") // 'low' | 'normal' | 'high' | 'urgent'
+
+  assignedTo      String?   // Admin assigned to review
+  reviewNotes     String?   // Admin review notes
+  reviewOutcome   String?   // Final decision explanation
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  completedAt     DateTime?
+
+  gdprRequest     GDPRRequest @relation(fields: [gdprRequestId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([priority])
+  @@index([assignedTo])
+  @@index([decisionId])
+  @@index([createdAt])
 }
