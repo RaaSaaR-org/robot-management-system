@@ -204,15 +204,44 @@ export interface RopaReport {
 // ============================================================================
 
 /**
- * Document types for AI provider documentation
+ * Document types for technical documentation per regulatory requirements
+ *
+ * Covers:
+ * - EU AI Act Annex IV (AI System Technical File)
+ * - Machinery Regulation Annex IV
+ * - Cyber Resilience Act Annex V
+ * - Radio Equipment Directive Annex V
  */
 export const DocumentTypes = [
+  // Existing general types
   'technical_doc',
   'risk_assessment',
   'conformity_declaration',
   'user_manual',
   'training_data_description',
   'model_card',
+
+  // AI Act Annex IV - AI System Technical File
+  'general_description', // General description of the AI system
+  'design_specification', // Design specifications and development process
+  'data_requirements', // Data requirements and data governance
+  'testing_validation', // Testing and validation results
+  'post_market_monitoring', // Post-market monitoring plan
+
+  // Machinery Regulation Annex IV
+  'drawings_diagrams', // Technical drawings and diagrams
+  'applied_standards', // List of applied harmonized standards
+  'test_reports', // Test reports and certificates
+  'assembly_instructions', // Assembly and installation instructions
+
+  // Cyber Resilience Act Annex V
+  'security_architecture', // Security architecture documentation
+  'attack_surface_analysis', // Attack surface analysis
+  'sbom', // Software Bill of Materials
+  'vulnerability_handling', // Vulnerability handling procedures
+
+  // EU Declaration of Conformity
+  'eu_declaration_of_conformity',
 ] as const;
 
 export type DocumentType = (typeof DocumentTypes)[number];
