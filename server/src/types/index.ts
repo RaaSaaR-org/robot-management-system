@@ -215,3 +215,13 @@ export interface JSONRPCResponse {
   result?: unknown;
   error?: JSONRPCError;
 }
+
+// ============================================================================
+// FEATURE-SPECIFIC TYPE EXPORTS
+// ============================================================================
+
+export * from './compliance.types.js';
+export * from './retention.types.js';
+export * from './gdpr.types.js';
+export * from './process.types.js';
+export * from './robotTask.types.js';
