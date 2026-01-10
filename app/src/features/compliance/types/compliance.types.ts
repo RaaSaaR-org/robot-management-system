@@ -289,13 +289,88 @@ export interface RopaReport {
 // PROVIDER DOCUMENTATION TYPES
 // ============================================================================
 
+/**
+ * Document types for technical documentation per regulatory requirements
+ *
+ * Covers:
+ * - EU AI Act Annex IV (AI System Technical File)
+ * - Machinery Regulation Annex IV
+ * - Cyber Resilience Act Annex V
+ * - Radio Equipment Directive Annex V
+ */
 export type DocumentType =
+  // Existing general types
   | 'technical_doc'
   | 'risk_assessment'
   | 'conformity_declaration'
   | 'user_manual'
   | 'training_data_description'
-  | 'model_card';
+  | 'model_card'
+  // AI Act Annex IV - AI System Technical File
+  | 'general_description'
+  | 'design_specification'
+  | 'data_requirements'
+  | 'testing_validation'
+  | 'post_market_monitoring'
+  // Machinery Regulation Annex IV
+  | 'drawings_diagrams'
+  | 'applied_standards'
+  | 'test_reports'
+  | 'assembly_instructions'
+  // Cyber Resilience Act Annex V
+  | 'security_architecture'
+  | 'attack_surface_analysis'
+  | 'sbom'
+  | 'vulnerability_handling'
+  // EU Declaration of Conformity
+  | 'eu_declaration_of_conformity';
+
+/**
+ * Human-readable labels for document types
+ */
+export const DocumentTypeLabels: Record<DocumentType, string> = {
+  technical_doc: 'Technical Documentation',
+  risk_assessment: 'Risk Assessment',
+  conformity_declaration: 'Conformity Declaration',
+  user_manual: 'User Manual',
+  training_data_description: 'Training Data Description',
+  model_card: 'Model Card',
+  general_description: 'General Description',
+  design_specification: 'Design Specification',
+  data_requirements: 'Data Requirements',
+  testing_validation: 'Testing & Validation',
+  post_market_monitoring: 'Post-Market Monitoring',
+  drawings_diagrams: 'Drawings & Diagrams',
+  applied_standards: 'Applied Standards',
+  test_reports: 'Test Reports',
+  assembly_instructions: 'Assembly Instructions',
+  security_architecture: 'Security Architecture',
+  attack_surface_analysis: 'Attack Surface Analysis',
+  sbom: 'SBOM (Software Bill of Materials)',
+  vulnerability_handling: 'Vulnerability Handling',
+  eu_declaration_of_conformity: 'EU Declaration of Conformity',
+};
+
+/**
+ * Document type categories for filtering
+ */
+export const DocumentTypeCategories = {
+  general: ['technical_doc', 'risk_assessment', 'conformity_declaration', 'user_manual', 'training_data_description', 'model_card'],
+  ai_act: ['general_description', 'design_specification', 'data_requirements', 'testing_validation', 'post_market_monitoring'],
+  machinery: ['drawings_diagrams', 'applied_standards', 'test_reports', 'assembly_instructions'],
+  cybersecurity: ['security_architecture', 'attack_surface_analysis', 'sbom', 'vulnerability_handling'],
+  conformity: ['eu_declaration_of_conformity', 'conformity_declaration'],
+} as const;
+
+export interface ProviderDocInput {
+  providerName: string;
+  modelVersion: string;
+  documentType: DocumentType;
+  documentUrl?: string;
+  content: string;
+  validFrom: string;
+  validTo?: string;
+}
 
 export interface ProviderDocumentation {
   id: string;
