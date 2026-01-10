@@ -14,12 +14,14 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-# Copy source and build
+# Copy source
 COPY . .
-RUN npm run build
 
-# Generate Prisma client
+# Generate Prisma client (must happen before TypeScript build)
 RUN npx prisma generate
+
+# Build TypeScript
+RUN npm run build
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runner
