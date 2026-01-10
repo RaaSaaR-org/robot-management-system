@@ -32,6 +32,7 @@ import {
   LazyA2ATaskListPage,
   LazyA2AEventsPage,
   LazySettingsPage,
+  LazyExplainabilityPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -202,6 +203,15 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyA2AEventsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Explainability - AI transparency (EU AI Act) */}
+          <Route
+            path="/explainability"
+            element={
+              <ProtectedAppRoute>
+                <LazyExplainabilityPage />
               </ProtectedAppRoute>
             }
           />

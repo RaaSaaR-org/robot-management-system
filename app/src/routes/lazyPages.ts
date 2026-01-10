@@ -112,6 +112,13 @@ export const LazyA2AEventsPage = lazy(() =>
   import('@/features/a2a').then((m) => ({ default: m.EventsPage }))
 );
 
+/**
+ * Explainability page - AI decision transparency (EU AI Act)
+ */
+export const LazyExplainabilityPage = lazy(() =>
+  import('@/features/explainability').then((m) => ({ default: m.ExplainabilityPage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================
