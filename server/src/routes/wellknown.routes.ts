@@ -8,6 +8,9 @@ import type { A2AAgentCard } from '../types/index.js';
 
 export const wellKnownRoutes = Router();
 
+// Public URL for agent card discovery (configurable for K8s/Docker deployments)
+const PUBLIC_URL = process.env.PUBLIC_URL || 'http://localhost:3001';
+
 /**
  * Fleet-level agent card
  * This represents the RoboMindOS fleet as an A2A agent
@@ -15,7 +18,7 @@ export const wellKnownRoutes = Router();
 const FLEET_AGENT_CARD: A2AAgentCard = {
   name: 'RoboMindOS Fleet',
   description: 'Robot fleet management system with natural language control. Manages humanoid robots for various tasks including logistics, inspection, and assistance.',
-  url: 'http://localhost:3001',
+  url: PUBLIC_URL,
   version: '0.1.0',
   provider: {
     organization: 'RoboMindOS',
@@ -83,7 +86,7 @@ wellKnownRoutes.get('/robots/:robotId/agent_card.json', (req: Request, res: Resp
   const robotAgentCard: A2AAgentCard = {
     name: `Robot ${robotId}`,
     description: `Individual robot agent for robot ${robotId}. Can execute physical tasks and respond to natural language commands.`,
-    url: `http://localhost:3001/robots/${robotId}`,
+    url: `${PUBLIC_URL}/robots/${robotId}`,
     version: '0.1.0',
     provider: {
       organization: 'RoboMindOS',

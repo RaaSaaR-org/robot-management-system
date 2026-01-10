@@ -1,0 +1,44 @@
+# ============================================================================
+# RoboMindOS Helm Chart - Local Development Values (minikube/kind)
+# ============================================================================
+# Usage: helm install robomind ./helm/robomind -f ./helm/robomind/values-local.yaml
+
+server:
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+
+app:
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+
+robotAgent:
+  enabled: true
+  replicaCount: 1
+
+postgres:
+  storage: 1Gi
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: robomind.local
+  tls: false

@@ -1,0 +1,63 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "robomind.fullname" . }}-ingress
+  namespace: {{ include "robomind.namespace" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+    # WebSocket support for real-time features
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "{{ include "robomind.fullname" . }}-server"
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tlsSecretName | default (printf "%s-tls" (include "robomind.fullname" .)) }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # API routes -> server
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "robomind.fullname" . }}-server
+                port:
+                  number: {{ .Values.server.service.port }}
+          # Well-known routes -> server
+          - path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "robomind.fullname" . }}-server
+                port:
+                  number: {{ .Values.server.service.port }}
+          # Health check -> server
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "robomind.fullname" . }}-server
+                port:
+                  number: {{ .Values.server.service.port }}
+          # All other routes -> app (SPA)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "robomind.fullname" . }}-app
+                port:
+                  number: {{ .Values.app.service.port }}
+{{- end }}

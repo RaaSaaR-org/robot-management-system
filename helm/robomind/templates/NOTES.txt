@@ -1,0 +1,96 @@
+================================================================================
+  RoboMindOS has been deployed!
+================================================================================
+
+Thank you for installing {{ .Chart.Name }}.
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }}
+  $ helm get all {{ .Release.Name }}
+
+--------------------------------------------------------------------------------
+  ACCESSING THE APPLICATION
+--------------------------------------------------------------------------------
+
+{{- if .Values.ingress.enabled }}
+The application is accessible via Ingress:
+
+  URL: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+
+{{- if eq .Values.ingress.host "robomind.local" }}
+For local development, add this to your /etc/hosts:
+
+  127.0.0.1 robomind.local
+
+If using minikube, get the IP with:
+
+  minikube ip
+
+Then add: <minikube-ip> robomind.local
+{{- end }}
+{{- else }}
+The application can be accessed via port-forward:
+
+  # App (Frontend)
+  kubectl port-forward -n {{ include "robomind.namespace" . }} svc/{{ include "robomind.fullname" . }}-app 8080:80
+
+  # Server (API)
+  kubectl port-forward -n {{ include "robomind.namespace" . }} svc/{{ include "robomind.fullname" . }}-server 3001:3001
+
+Then open: http://localhost:8080
+{{- end }}
+
+--------------------------------------------------------------------------------
+  COMPONENTS STATUS
+--------------------------------------------------------------------------------
+
+Check the status of all pods:
+
+  kubectl get pods -n {{ include "robomind.namespace" . }}
+
+View logs:
+
+  # Server logs
+  kubectl logs -f deployment/{{ include "robomind.fullname" . }}-server -n {{ include "robomind.namespace" . }}
+
+  # App logs
+  kubectl logs -f deployment/{{ include "robomind.fullname" . }}-app -n {{ include "robomind.namespace" . }}
+
+{{- if .Values.robotAgent.enabled }}
+  # Robot Agent logs
+  kubectl logs -f deployment/{{ include "robomind.fullname" . }}-robot-agent -n {{ include "robomind.namespace" . }}
+{{- end }}
+
+--------------------------------------------------------------------------------
+  DATABASE
+--------------------------------------------------------------------------------
+
+{{- if .Values.postgres.enabled }}
+PostgreSQL is running in the cluster.
+
+  # Connect to PostgreSQL
+  kubectl exec -it deployment/{{ include "robomind.fullname" . }}-postgres -n {{ include "robomind.namespace" . }} -- psql -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}
+{{- else }}
+Using external PostgreSQL database.
+{{- end }}
+
+--------------------------------------------------------------------------------
+  IMPORTANT NOTES
+--------------------------------------------------------------------------------
+
+{{- if or (eq .Values.secrets.jwtSecret "") (eq .Values.secrets.jwtSecret "change-me-in-production") }}
+WARNING: JWT secret is not set or using default value!
+         Set a secure value with: --set secrets.jwtSecret=<your-secret>
+{{- end }}
+
+{{- if eq .Values.postgres.auth.password "" }}
+WARNING: PostgreSQL password is not set!
+         Set a secure value with: --set postgres.auth.password=<your-password>
+{{- end }}
+
+For production deployments, ensure you have set all required secrets securely.
+
+================================================================================

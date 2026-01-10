@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "robomind.fullname" . }}-server
+  namespace: {{ include "robomind.namespace" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - port: {{ .Values.server.service.port }}
+      targetPort: 3001
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "robomind.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server

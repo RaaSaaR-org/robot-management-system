@@ -1,0 +1,20 @@
+{{- if .Values.robotAgent.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "robomind.fullname" . }}-robot-agent
+  namespace: {{ include "robomind.namespace" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: robot-agent
+spec:
+  type: {{ .Values.robotAgent.service.type }}
+  ports:
+    - port: {{ .Values.robotAgent.service.port }}
+      targetPort: 41243
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "robomind.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: robot-agent
+{{- end }}

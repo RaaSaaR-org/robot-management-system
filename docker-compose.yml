@@ -1,0 +1,152 @@
+# ============================================================================
+# RoboMindOS Docker Compose
+# Development and testing environment
+# ============================================================================
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose up -d --build      # Build and start
+#   docker-compose logs -f            # View logs
+#   docker-compose down -v            # Stop and remove volumes
+#
+# Environment Variables:
+#   Create a .env file in the root directory with:
+#   - JWT_SECRET=your-secure-secret
+#   - GOOGLE_API_KEY=your-google-api-key
+#   - GEMINI_API_KEY=your-gemini-api-key
+#
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL Database
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: robomind-postgres
+    environment:
+      POSTGRES_DB: robomind
+      POSTGRES_USER: robomind
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robomind-dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robomind -d robomind"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - robomind-network
+
+  # --------------------------------------------------------------------------
+  # Server (Node.js API)
+  # --------------------------------------------------------------------------
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: robomind-server
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://robomind:${POSTGRES_PASSWORD:-robomind-dev}@postgres:5432/robomind
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
+      AUTH_DISABLED: ${AUTH_DISABLED:-false}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3001}
+      CORS_ORIGINS: http://localhost,http://localhost:80,http://app,http://app:80
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - robomind-network
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # App (React Frontend via nginx)
+  # --------------------------------------------------------------------------
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3001/api}
+        VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:3001/api/a2a/ws}
+        VITE_A2A_SERVER_URL: ${VITE_A2A_SERVER_URL:-http://localhost:3001}
+    container_name: robomind-app
+    ports:
+      - "80:80"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - robomind-network
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Robot Agent (Simulated Robot)
+  # Optional: Comment out if not needed for testing
+  # --------------------------------------------------------------------------
+  robot-agent:
+    build:
+      context: ./robot-agent
+      dockerfile: Dockerfile
+    container_name: robomind-robot-agent
+    environment:
+      NODE_ENV: production
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SERVER_URL: http://server:3001
+      PUBLIC_URL: ${ROBOT_PUBLIC_URL:-http://localhost:41243}
+      PORT: 41243
+      ROBOT_ID: ${ROBOT_ID:-sim-robot-001}
+      ROBOT_NAME: ${ROBOT_NAME:-SimBot-01}
+      ROBOT_MODEL: ${ROBOT_MODEL:-SimBot H1}
+      ROBOT_CLASS: ${ROBOT_CLASS:-standard}
+      MAX_PAYLOAD_KG: ${MAX_PAYLOAD_KG:-10}
+      ROBOT_DESCRIPTION: ${ROBOT_DESCRIPTION:-A versatile humanoid robot for general tasks}
+      INITIAL_X: ${INITIAL_X:-10.0}
+      INITIAL_Y: ${INITIAL_Y:-10.0}
+      INITIAL_ZONE: ${INITIAL_ZONE:-Warehouse A}
+      INITIAL_FLOOR: ${INITIAL_FLOOR:-1}
+    ports:
+      - "41243:41243"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:41243/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - robomind-network
+    restart: unless-stopped
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  postgres_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  robomind-network:
+    driver: bridge

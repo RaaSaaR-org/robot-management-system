@@ -1,0 +1,127 @@
+# ============================================================================
+# RoboMindOS Helm Chart - Default Values
+# ============================================================================
+
+global:
+  # Namespace for all resources
+  namespace: robomind
+  # Image registry (leave empty for Docker Hub)
+  imageRegistry: ""
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+
+# ----------------------------------------------------------------------------
+# PostgreSQL Database
+# ----------------------------------------------------------------------------
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  storage: 10Gi
+  storageClass: ""  # Use default storage class if empty
+  auth:
+    database: robomind
+    username: robomind
+    # Password should be set via --set or external secret
+    password: ""
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# ----------------------------------------------------------------------------
+# Server (Node.js API)
+# ----------------------------------------------------------------------------
+server:
+  replicaCount: 2
+  image:
+    repository: robomind/server
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  env:
+    NODE_ENV: production
+    AUTH_DISABLED: "false"
+  service:
+    type: ClusterIP
+    port: 3001
+
+# ----------------------------------------------------------------------------
+# App (React Frontend)
+# ----------------------------------------------------------------------------
+app:
+  replicaCount: 2
+  image:
+    repository: robomind/app
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  service:
+    type: ClusterIP
+    port: 80
+
+# ----------------------------------------------------------------------------
+# Robot Agent (Simulated Robot)
+# ----------------------------------------------------------------------------
+robotAgent:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: robomind/robot-agent
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  env:
+    ROBOT_ID: sim-robot-001
+    ROBOT_NAME: SimBot-01
+    ROBOT_MODEL: "SimBot H1"
+    ROBOT_CLASS: standard
+    MAX_PAYLOAD_KG: "10"
+  service:
+    type: ClusterIP
+    port: 41243
+
+# ----------------------------------------------------------------------------
+# Ingress Configuration
+# ----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  host: robomind.local
+  tls: false
+  # TLS secret name (required if tls: true)
+  tlsSecretName: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+# ----------------------------------------------------------------------------
+# Secrets
+# Set these via --set or external secret management
+# ----------------------------------------------------------------------------
+secrets:
+  # JWT secret for authentication
+  jwtSecret: ""
+  # Google API key for AI features
+  googleApiKey: ""
+  # Gemini API key for robot AI
+  geminiApiKey: ""

@@ -30,11 +30,14 @@ export function createRobotAgentCard(options: AgentCardOptions): AgentCard {
   const { robotId, robotName, port, robotClass, maxPayloadKg, robotDescription } = options;
   const classDescription = getClassDescription(robotClass, maxPayloadKg);
 
+  // Public URL for agent card discovery (configurable for K8s/Docker deployments)
+  const publicUrl = process.env.PUBLIC_URL || `http://localhost:${port}`;
+
   return {
     protocolVersion: '0.2.1',
     name: `Simulated Robot: ${robotName}`,
     description: `${classDescription}. ${robotDescription}. Can execute natural language commands for movement, picking up objects, and placing items. This robot can be controlled via A2A protocol or REST API.`,
-    url: `http://localhost:${port}/`,
+    url: `${publicUrl}/`,
     provider: {
       organization: 'RoboMindOS',
       url: 'https://robomind.io',

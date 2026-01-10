@@ -1,0 +1,57 @@
+# ============================================================================
+# RoboMindOS Helm Chart - Production Values (Self-hosted Cluster)
+# ============================================================================
+# Usage: helm install robomind ./helm/robomind -f ./helm/robomind/values-production.yaml
+#
+# Required secrets to set:
+#   --set secrets.jwtSecret=$JWT_SECRET
+#   --set secrets.googleApiKey=$GOOGLE_API_KEY
+#   --set secrets.geminiApiKey=$GEMINI_API_KEY
+#   --set postgres.auth.password=$DB_PASSWORD
+
+server:
+  replicaCount: 3
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+app:
+  replicaCount: 3
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "400m"
+
+robotAgent:
+  # Typically disabled in production - real robots run their own agents
+  enabled: false
+
+postgres:
+  storage: 50Gi
+  storageClass: ""  # Set to your production storage class
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: robomind.yourdomain.com  # Change to your domain
+  tls: true
+  tlsSecretName: robomind-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
