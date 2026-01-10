@@ -126,6 +126,13 @@ export const LazyCompliancePage = lazy(() =>
   import('@/features/compliance').then((m) => ({ default: m.CompliancePage }))
 );
 
+/**
+ * GDPR Portal page - Data subject rights self-service (GDPR Articles 15-22)
+ */
+export const LazyGDPRPortalPage = lazy(() =>
+  import('@/features/gdpr').then((m) => ({ default: m.GDPRPortalPage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================

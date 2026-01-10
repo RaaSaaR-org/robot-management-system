@@ -34,6 +34,7 @@ import {
   LazySettingsPage,
   LazyExplainabilityPage,
   LazyCompliancePage,
+  LazyGDPRPortalPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -222,6 +223,15 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyCompliancePage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* GDPR - Data subject rights self-service (GDPR Articles 15-22) */}
+          <Route
+            path="/gdpr"
+            element={
+              <ProtectedAppRoute>
+                <LazyGDPRPortalPage />
               </ProtectedAppRoute>
             }
           />
