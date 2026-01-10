@@ -15,6 +15,7 @@ import {
 } from '../repositories/index.js';
 import { taskDistributor } from './TaskDistributor.js';
 import { explainabilityService } from './ExplainabilityService.js';
+import { complianceLogService } from './ComplianceLogService.js';
 import type { StepActionType } from '../types/process.types.js';
 import type { RobotTask } from '../types/robotTask.types.js';
 
@@ -220,8 +221,9 @@ export class CommandInterpreter {
     const saved = await commandRepository.create(createInput);
 
     // Store decision for explainability (EU AI Act Art. 13)
+    let decisionId: string | undefined;
     try {
-      await explainabilityService.createFromCommandInterpretation({
+      const decision = await explainabilityService.createFromCommandInterpretation({
         entityId: saved.id,
         robotId,
         originalText: text,
@@ -232,10 +234,29 @@ export class CommandInterpreter {
         suggestedAlternatives: interpretation.suggestedAlternatives,
         modelUsed: this.genAI ? this.modelName : 'fallback-keyword',
       });
+      decisionId = decision.id;
       console.log(`[CommandInterpreter] Decision stored for explainability: ${saved.id}`);
     } catch (error) {
       // Don't fail the command if explainability storage fails
       console.warn('[CommandInterpreter] Failed to store decision for explainability:', error);
+    }
+
+    // Store audit log for compliance (EU AI Act Art. 12, GDPR Art. 30)
+    try {
+      await complianceLogService.logFromCommandInterpretation({
+        robotId,
+        originalText: text,
+        commandType: interpretation.commandType,
+        confidence: interpretation.confidence,
+        safetyClassification: interpretation.safetyClassification as 'safe' | 'caution' | 'dangerous',
+        warnings: interpretation.warnings,
+        modelUsed: this.genAI ? this.modelName : 'fallback-keyword',
+        decisionId: decisionId ?? saved.id, // Link to Decision or CommandInterpretation
+      });
+      console.log(`[CommandInterpreter] Compliance log created for: ${saved.id}`);
+    } catch (error) {
+      // Don't fail the command if compliance logging fails
+      console.warn('[CommandInterpreter] Failed to create compliance log:', error);
     }
 
     return saved;
