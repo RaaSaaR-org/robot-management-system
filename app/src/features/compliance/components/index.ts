@@ -24,3 +24,6 @@ export type { ExportDialogProps } from './ExportDialog';
 
 export { RopaTab } from './RopaTab';
 export type { RopaTabProps } from './RopaTab';
+
+export { ProviderDocsTab } from './ProviderDocsTab';
+export type { ProviderDocsTabProps } from './ProviderDocsTab';
