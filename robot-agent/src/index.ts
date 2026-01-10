@@ -20,6 +20,7 @@ import { createTelemetryWebSocket } from './api/websocket.js';
 import { setRobotStateManager as setNavigationStateManager } from './tools/navigation.js';
 import { setRobotStateManager as setManipulationStateManager } from './tools/manipulation.js';
 import { setRobotStateManager as setStatusStateManager } from './tools/status.js';
+import { complianceLogClient } from './compliance/ComplianceLogClient.js';
 
 async function main() {
   console.log('='.repeat(60));
@@ -58,6 +59,31 @@ async function main() {
   // Start safety monitoring
   robotStateManager.startSafetyMonitoring();
   console.log('[SimulatedRobot] Safety monitoring started');
+
+  // Start compliance logging session
+  try {
+    const sessionId = await complianceLogClient.startSession();
+    console.log(`[SimulatedRobot] Compliance logging session started: ${sessionId}`);
+
+    // Log system startup event
+    await complianceLogClient.logSystemEvent({
+      payload: {
+        description: 'Robot agent started',
+        eventName: 'system_startup',
+        component: 'robot-agent',
+        version: '1.0.0',
+        configuration: {
+          robotId: ROBOT_ID,
+          robotName: ROBOT_NAME,
+          robotClass: config.robotClass,
+          maxPayloadKg: config.maxPayloadKg,
+        },
+      },
+      severity: 'info',
+    });
+  } catch (error) {
+    console.warn('[SimulatedRobot] Failed to start compliance session:', error);
+  }
 
   // Create A2A components
   const agentCard = createRobotAgentCard({
@@ -116,8 +142,26 @@ async function main() {
   });
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('\n[SimulatedRobot] Shutting down...');
+
+    // Log shutdown and end compliance session
+    try {
+      await complianceLogClient.logSystemEvent({
+        payload: {
+          description: 'Robot agent shutting down',
+          eventName: 'system_shutdown',
+          component: 'robot-agent',
+          version: '1.0.0',
+        },
+        severity: 'info',
+      });
+      await complianceLogClient.endSession();
+      console.log('[SimulatedRobot] Compliance session ended');
+    } catch (error) {
+      console.error('[SimulatedRobot] Failed to end compliance session:', error);
+    }
+
     robotStateManager.stopSafetyMonitoring();
     robotStateManager.stopSimulation();
     server.close(() => {

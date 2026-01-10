@@ -18,6 +18,7 @@ import type {
 } from './types.js';
 import { DEFAULT_SAFETY_CONFIG } from './types.js';
 import type { SimulatedRobotState } from '../robot/types.js';
+import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 
 // ============================================================================
 // TYPES
@@ -641,6 +642,36 @@ export class SafetyMonitor {
     if (this.safetyEvents.length > 100) {
       this.safetyEvents.pop();
     }
+
+    // Log to compliance system (safety events are high priority - sent immediately)
+    complianceLogClient.logSafetyAction({
+      payload: {
+        description: `Safety event: ${type}`,
+        actionType: type,
+        triggerReason: reason,
+        robotState: {
+          location: {
+            x: context.location.x,
+            y: context.location.y,
+            z: 0,
+          },
+          speed: context.speed,
+          force: context.forceReading?.magnitude,
+          operatingMode: context.operatingMode,
+        },
+        resolutionRequired: stopCategory === 0, // E-stop requires manual reset
+        metadata: {
+          eventId: event.id,
+          stopCategory,
+          triggeredBy,
+          batteryLevel: context.batteryLevel,
+          currentTask: context.currentTask,
+          serverConnected: context.serverConnected,
+        },
+      },
+    }).catch((error) => {
+      console.error('[SafetyMonitor] Failed to log to compliance system:', error);
+    });
 
     // Notify callbacks
     this.eventCallbacks.forEach((cb) => {

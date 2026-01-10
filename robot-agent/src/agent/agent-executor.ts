@@ -12,6 +12,7 @@ import { moveToLocation, stopMovement, goToCharge, returnHome } from '../tools/n
 import { pickupObject, dropObject } from '../tools/manipulation.js';
 import { getRobotStatus, emergencyStop } from '../tools/status.js';
 import type { RobotStateManager } from '../robot/state.js';
+import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 
 // Load the Genkit prompt
 const robotAgentPrompt = ai.prompt('robot_agent');
@@ -301,6 +302,47 @@ export class RobotAgentExecutor implements AgentExecutor {
       eventBus.publish(finalUpdate);
 
       console.log(`[RobotAgentExecutor] Task ${taskId} finished with state: ${finalA2AState}`);
+
+      // Log AI decision to compliance system
+      try {
+        const userText = messages
+          .filter((m) => m.role === 'user')
+          .flatMap((m) => m.content.map((c) => c.text))
+          .join(' ');
+
+        await complianceLogClient.logAIDecision({
+          payload: {
+            description: `AI task execution: ${finalA2AState}`,
+            inputText: userText,
+            inputContext: {
+              taskId,
+              contextId,
+              robotState: {
+                location: robotState.location,
+                batteryLevel: robotState.batteryLevel,
+                status: robotState.status,
+                heldObject: robotState.heldObject,
+              },
+            },
+            outputText: agentReplyText,
+            outputAction: finalA2AState,
+            confidence: finalA2AState === 'completed' ? 0.9 : 0.5,
+            reasoning: [
+              `Processed user command: "${userText.substring(0, 100)}..."`,
+              `Robot state: ${robotState.status} at (${robotState.location.x}, ${robotState.location.y})`,
+              `Execution result: ${finalA2AState}`,
+            ],
+            safetyClassification: 'safe',
+            metadata: { taskId, contextId },
+          },
+          modelVersion: 'gemini-2.0-flash',
+          input: userText,
+          output: agentReplyText,
+          severity: finalA2AState === 'failed' ? 'warning' : 'info',
+        });
+      } catch (logError) {
+        console.error('[RobotAgentExecutor] Failed to log AI decision:', logError);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[RobotAgentExecutor] Error processing task ${taskId}:`, error);
