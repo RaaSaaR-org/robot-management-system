@@ -8,7 +8,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { providerDocumentationService } from '../services/ProviderDocumentationService.js';
-import type { DocumentType } from '../types/retention.types.js';
+import { DocumentTypes, type DocumentType } from '../types/retention.types.js';
 
 export const providerDocsRoutes = Router();
 
@@ -51,6 +51,30 @@ providerDocsRoutes.get('/docs/valid', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error fetching valid documentation:', error);
     res.status(500).json({ error: 'Failed to fetch valid documentation' });
+  }
+});
+
+/**
+ * GET /providers/public/conformity - Public endpoint for EU Declaration of Conformity
+ * No authentication required per regulatory requirement for public accessibility
+ */
+providerDocsRoutes.get('/public/conformity', async (_req: Request, res: Response) => {
+  try {
+    const allDocs = await providerDocumentationService.getValidDocumentation();
+    const conformityDocs = allDocs.filter(
+      (d) =>
+        d.documentType === 'eu_declaration_of_conformity' ||
+        d.documentType === 'conformity_declaration',
+    );
+
+    res.json({
+      documents: conformityDocs,
+      count: conformityDocs.length,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Error fetching public conformity documents:', error);
+    res.status(500).json({ error: 'Failed to fetch conformity documents' });
   }
 });
 
@@ -127,17 +151,9 @@ providerDocsRoutes.post('/docs', async (req: Request, res: Response) => {
       });
     }
 
-    const validDocTypes = [
-      'technical_doc',
-      'risk_assessment',
-      'conformity_declaration',
-      'user_manual',
-      'training_data_description',
-      'model_card',
-    ];
-    if (!validDocTypes.includes(documentType)) {
+    if (!DocumentTypes.includes(documentType as DocumentType)) {
       return res.status(400).json({
-        error: `Invalid documentType. Must be one of: ${validDocTypes.join(', ')}`,
+        error: `Invalid documentType. Must be one of: ${DocumentTypes.join(', ')}`,
       });
     }
 
@@ -168,20 +184,10 @@ providerDocsRoutes.put('/docs/:id', async (req: Request, res: Response) => {
       req.body;
 
     // Validate documentType if provided
-    if (documentType) {
-      const validDocTypes = [
-        'technical_doc',
-        'risk_assessment',
-        'conformity_declaration',
-        'user_manual',
-        'training_data_description',
-        'model_card',
-      ];
-      if (!validDocTypes.includes(documentType)) {
-        return res.status(400).json({
-          error: `Invalid documentType. Must be one of: ${validDocTypes.join(', ')}`,
-        });
-      }
+    if (documentType && !DocumentTypes.includes(documentType as DocumentType)) {
+      return res.status(400).json({
+        error: `Invalid documentType. Must be one of: ${DocumentTypes.join(', ')}`,
+      });
     }
 
     const doc = await providerDocumentationService.updateDocumentation(req.params.id, {
