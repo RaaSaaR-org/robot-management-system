@@ -6,7 +6,10 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  // PostgreSQL for production/Kubernetes deployments
+  // For local SQLite: provider = "sqlite", DATABASE_URL = "file:./dev.db"
+  // For PostgreSQL:   provider = "postgresql", DATABASE_URL = "postgresql://user:pass@host:5432/db"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -457,5 +460,30 @@ model RobotTask {
   @@index([status])
   @@index([priority])
   @@index([source])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// AI EXPLAINABILITY (EU AI Act Art. 13, Art. 50)
+// ============================================================================
+
+model Decision {
+  id           String   @id @default(uuid())
+  decisionType String // 'command_interpretation' | 'task_execution' | 'safety_action'
+  entityId     String // Foreign key to CommandInterpretation, RobotTask, etc.
+  robotId      String
+
+  inputFactors  String // JSON: DecisionInputFactors
+  reasoning     String // JSON: string[] - step-by-step reasoning
+  modelUsed     String // e.g., 'gemini-2.5-flash'
+  confidence    Float
+  alternatives  String // JSON: AlternativeConsidered[]
+  safetyFactors String // JSON: DecisionSafetyFactors
+
+  createdAt DateTime @default(now())
+
+  @@index([entityId])
+  @@index([robotId])
+  @@index([decisionType])
   @@index([createdAt])
 }

@@ -14,6 +14,7 @@ import {
   type CreateCommandInterpretationInput,
 } from '../repositories/index.js';
 import { taskDistributor } from './TaskDistributor.js';
+import { explainabilityService } from './ExplainabilityService.js';
 import type { StepActionType } from '../types/process.types.js';
 import type { RobotTask } from '../types/robotTask.types.js';
 
@@ -217,6 +218,26 @@ export class CommandInterpreter {
 
     // Save to database and return
     const saved = await commandRepository.create(createInput);
+
+    // Store decision for explainability (EU AI Act Art. 13)
+    try {
+      await explainabilityService.createFromCommandInterpretation({
+        entityId: saved.id,
+        robotId,
+        originalText: text,
+        commandType: interpretation.commandType,
+        confidence: interpretation.confidence,
+        safetyClassification: interpretation.safetyClassification as SafetyClassification,
+        warnings: interpretation.warnings,
+        suggestedAlternatives: interpretation.suggestedAlternatives,
+        modelUsed: this.genAI ? this.modelName : 'fallback-keyword',
+      });
+      console.log(`[CommandInterpreter] Decision stored for explainability: ${saved.id}`);
+    } catch (error) {
+      // Don't fail the command if explainability storage fails
+      console.warn('[CommandInterpreter] Failed to store decision for explainability:', error);
+    }
+
     return saved;
   }
 

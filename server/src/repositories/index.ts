@@ -41,3 +41,16 @@ export type {
   CreateCommandInterpretationInput,
   CommandHistoryResponse,
 } from './CommandRepository.js';
+export { decisionRepository, DecisionRepository } from './DecisionRepository.js';
+export type {
+  DecisionExplanation,
+  DecisionInputFactors,
+  AlternativeConsidered,
+  DecisionSafetyFactors,
+  CreateDecisionInput,
+  DecisionListResponse,
+  DecisionQueryParams,
+  AIPerformanceMetrics,
+  AIDocumentation,
+  DecisionType,
+} from './DecisionRepository.js';

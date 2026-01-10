@@ -20,6 +20,7 @@ import { zoneRoutes } from './routes/zone.routes.js';
 import { commandRoutes } from './routes/command.routes.js';
 import { processRoutes } from './routes/process.routes.js';
 import { safetyRoutes } from './routes/safety.routes.js';
+import { explainabilityRoutes } from './routes/explainability.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -118,6 +119,9 @@ export function createApp(): Express {
 
   // Safety routes (protected) - E-stop and fleet safety
   app.use('/api/safety', authMiddleware, safetyRoutes);
+
+  // Explainability routes (protected) - AI transparency (EU AI Act)
+  app.use('/api/explainability', authMiddleware, explainabilityRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
