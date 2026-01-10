@@ -26,6 +26,7 @@ import { retentionRoutes } from './routes/retention.routes.js';
 import { legalHoldRoutes } from './routes/legal-hold.routes.js';
 import { ropaRoutes } from './routes/ropa.routes.js';
 import { providerDocsRoutes } from './routes/provider-docs.routes.js';
+import { gdprRoutes } from './routes/gdpr.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -142,6 +143,9 @@ export function createApp(): Express {
 
   // Provider documentation routes (protected) - AI provider transparency docs
   app.use('/api/compliance/providers', authMiddleware, providerDocsRoutes);
+
+  // GDPR rights self-service routes (protected) - Articles 15-22
+  app.use('/api/gdpr', authMiddleware, gdprRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
