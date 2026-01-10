@@ -15,6 +15,7 @@ import { RetentionSettings } from '../components/RetentionSettings';
 import { LegalHoldManager } from '../components/LegalHoldManager';
 import { ExportDialog } from '../components/ExportDialog';
 import { RopaTab } from '../components/RopaTab';
+import { ProviderDocsTab } from '../components/ProviderDocsTab';
 import { useComplianceStore } from '../store';
 import type { ComplianceLog, ComplianceEventType } from '../types';
 
@@ -292,6 +293,9 @@ export function CompliancePage() {
   // RoPA Tab Content
   const ropaContent = <RopaTab />;
 
+  // Technical Docs Tab Content
+  const technicalDocsContent = <ProviderDocsTab />;
+
   // Settings Tab Content
   const settingsContent = (
     <div className="space-y-8">
@@ -323,6 +327,11 @@ export function CompliancePage() {
       id: 'ropa',
       label: 'RoPA',
       content: ropaContent,
+    },
+    {
+      id: 'technical-docs',
+      label: 'Technical Docs',
+      content: technicalDocsContent,
     },
     {
       id: 'settings',
