@@ -5,8 +5,8 @@
 global:
   # Namespace for all resources
   namespace: robomind
-  # Image registry (leave empty for Docker Hub)
-  imageRegistry: ""
+  # Image registry
+  imageRegistry: "ghcr.io"
   # Image pull secrets for private registries
   imagePullSecrets: []
 
@@ -37,7 +37,7 @@ postgres:
 server:
   replicaCount: 2
   image:
-    repository: robomind/server
+    repository: raasaar-org/robomind-server
     tag: latest
     pullPolicy: IfNotPresent
   resources:
@@ -60,7 +60,7 @@ server:
 app:
   replicaCount: 2
   image:
-    repository: robomind/app
+    repository: raasaar-org/robomind-app
     tag: latest
     pullPolicy: IfNotPresent
   resources:
@@ -81,7 +81,7 @@ robotAgent:
   enabled: true
   replicaCount: 1
   image:
-    repository: robomind/robot-agent
+    repository: raasaar-org/robomind-robot-agent
     tag: latest
     pullPolicy: IfNotPresent
   resources:

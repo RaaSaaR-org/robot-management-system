@@ -59,6 +59,38 @@ Open http://localhost:1420 to access the dashboard.
 - **Task Management**: Create, monitor, and cancel robot tasks
 - **Safety Controls**: Emergency stop, exclusion zones
 
+## Deployment
+
+### Docker Compose (Local)
+
+```bash
+docker-compose up -d
+```
+
+### Kubernetes (Helm)
+
+Container images are published to GitHub Container Registry on tagged releases:
+
+- `ghcr.io/raasaar-org/robomind-app`
+- `ghcr.io/raasaar-org/robomind-server`
+- `ghcr.io/raasaar-org/robomind-robot-agent`
+
+Deploy with Helm:
+
+```bash
+# Local/development
+helm install robomind ./helm/robomind -f ./helm/robomind/values-local.yaml \
+  --set postgres.auth.password=yourpassword \
+  --set secrets.jwtSecret=yourjwtsecret
+
+# Production
+helm install robomind ./helm/robomind -f ./helm/robomind/values-production.yaml \
+  --set postgres.auth.password=$DB_PASSWORD \
+  --set secrets.jwtSecret=$JWT_SECRET \
+  --set secrets.googleApiKey=$GOOGLE_API_KEY \
+  --set secrets.geminiApiKey=$GEMINI_API_KEY
+```
+
 ## Documentation
 
 - `docs/prd.md` - Product requirements
