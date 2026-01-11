@@ -5,3 +5,4 @@
  */
 
 export { useComplianceStore } from './complianceStore';
+export { useComplianceTrackerStore } from './complianceTrackerStore';

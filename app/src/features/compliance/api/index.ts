@@ -5,3 +5,4 @@
  */
 
 export { complianceApi } from './complianceApi';
+export { complianceTrackerApi } from './complianceTrackerApi';

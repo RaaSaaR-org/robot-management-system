@@ -16,6 +16,13 @@ import { LegalHoldManager } from '../components/LegalHoldManager';
 import { ExportDialog } from '../components/ExportDialog';
 import { RopaTab } from '../components/RopaTab';
 import { ProviderDocsTab } from '../components/ProviderDocsTab';
+import { ComplianceDashboard } from '../components/ComplianceDashboard';
+import { RegulatoryTimeline } from '../components/RegulatoryTimeline';
+import { GapAnalysisPanel } from '../components/GapAnalysisPanel';
+import { DocumentExpiryList } from '../components/DocumentExpiryList';
+import { TrainingCompliancePanel } from '../components/TrainingCompliancePanel';
+import { InspectionSchedulePanel } from '../components/InspectionSchedulePanel';
+import { RiskAssessmentTracker } from '../components/RiskAssessmentTracker';
 import { useComplianceStore } from '../store';
 import type { ComplianceLog, ComplianceEventType } from '../types';
 
@@ -24,7 +31,7 @@ import type { ComplianceLog, ComplianceEventType } from '../types';
  */
 export function CompliancePage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('logs');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLog, setSelectedLog] = useState<ComplianceLog | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
 
@@ -306,8 +313,59 @@ export function CompliancePage() {
     </div>
   );
 
+  // Dashboard Tab Content - sub-tabs for different compliance areas
+  const [dashboardSubTab, setDashboardSubTab] = useState<
+    'overview' | 'deadlines' | 'gaps' | 'documents' | 'training' | 'inspections' | 'risk'
+  >('overview');
+
+  const dashboardContent = (
+    <div className="space-y-4">
+      {/* Sub-navigation */}
+      <div className="flex gap-2 flex-wrap">
+        {[
+          { id: 'overview', label: 'Overview' },
+          { id: 'deadlines', label: 'Deadlines' },
+          { id: 'gaps', label: 'Gap Analysis' },
+          { id: 'documents', label: 'Documents' },
+          { id: 'training', label: 'Training' },
+          { id: 'inspections', label: 'Inspections' },
+          { id: 'risk', label: 'Risk Assessments' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+              dashboardSubTab === tab.id
+                ? 'bg-primary-500 text-white'
+                : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
+            }`}
+            onClick={() => setDashboardSubTab(tab.id as typeof dashboardSubTab)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sub-tab content */}
+      <div className="overflow-y-auto">
+        {dashboardSubTab === 'overview' && <ComplianceDashboard />}
+        {dashboardSubTab === 'deadlines' && <RegulatoryTimeline />}
+        {dashboardSubTab === 'gaps' && <GapAnalysisPanel />}
+        {dashboardSubTab === 'documents' && <DocumentExpiryList />}
+        {dashboardSubTab === 'training' && <TrainingCompliancePanel />}
+        {dashboardSubTab === 'inspections' && <InspectionSchedulePanel />}
+        {dashboardSubTab === 'risk' && <RiskAssessmentTracker />}
+      </div>
+    </div>
+  );
+
   // Tab configuration - no useMemo needed since content is JSX that changes each render
   const tabs = [
+    {
+      id: 'dashboard',
+      label: 'Dashboard',
+      content: dashboardContent,
+    },
     {
       id: 'logs',
       label: 'Audit Logs',

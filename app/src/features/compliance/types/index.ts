@@ -5,3 +5,4 @@
  */
 
 export * from './compliance.types';
+export * from './compliance-tracker.types';

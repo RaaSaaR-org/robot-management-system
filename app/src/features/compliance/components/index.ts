@@ -27,3 +27,25 @@ export type { RopaTabProps } from './RopaTab';
 
 export { ProviderDocsTab } from './ProviderDocsTab';
 export type { ProviderDocsTabProps } from './ProviderDocsTab';
+
+// Compliance Tracker Dashboard Components
+export { ComplianceDashboard } from './ComplianceDashboard';
+export type { ComplianceDashboardProps } from './ComplianceDashboard';
+
+export { RegulatoryTimeline } from './RegulatoryTimeline';
+export type { RegulatoryTimelineProps } from './RegulatoryTimeline';
+
+export { GapAnalysisPanel } from './GapAnalysisPanel';
+export type { GapAnalysisPanelProps } from './GapAnalysisPanel';
+
+export { DocumentExpiryList } from './DocumentExpiryList';
+export type { DocumentExpiryListProps } from './DocumentExpiryList';
+
+export { TrainingCompliancePanel } from './TrainingCompliancePanel';
+export type { TrainingCompliancePanelProps } from './TrainingCompliancePanel';
+
+export { InspectionSchedulePanel } from './InspectionSchedulePanel';
+export type { InspectionSchedulePanelProps } from './InspectionSchedulePanel';
+
+export { RiskAssessmentTracker } from './RiskAssessmentTracker';
+export type { RiskAssessmentTrackerProps } from './RiskAssessmentTracker';
