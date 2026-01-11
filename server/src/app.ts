@@ -27,6 +27,10 @@ import { legalHoldRoutes } from './routes/legal-hold.routes.js';
 import { ropaRoutes } from './routes/ropa.routes.js';
 import { providerDocsRoutes } from './routes/provider-docs.routes.js';
 import { gdprRoutes } from './routes/gdpr.routes.js';
+import { incidentRoutes, templateRoutes } from './routes/incident.routes.js';
+import { oversightRoutes } from './routes/oversight.routes.js';
+import { approvalRoutes } from './routes/approval.routes.js';
+import { complianceTrackerRoutes } from './routes/compliance-tracker.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -34,6 +38,9 @@ import { authMiddleware } from './middleware/auth.middleware.js';
 // Import services
 import { robotManager } from './services/RobotManager.js';
 import { taskDistributor } from './services/TaskDistributor.js';
+import { incidentService } from './services/IncidentService.js';
+import { notificationWorkflowService } from './services/NotificationWorkflowService.js';
+import { approvalWorkflowService } from './services/ApprovalWorkflowService.js';
 
 // Default CORS origins for development
 const DEFAULT_CORS_ORIGINS = ['http://localhost:1420', 'http://localhost:5173', 'http://localhost:3000'];
@@ -144,8 +151,23 @@ export function createApp(): Express {
   // Provider documentation routes (protected) - AI provider transparency docs
   app.use('/api/compliance/providers', authMiddleware, providerDocsRoutes);
 
+  // Compliance tracker routes (protected) - Dashboard, deadlines, gaps, training, inspections
+  app.use('/api/compliance/tracker', authMiddleware, complianceTrackerRoutes);
+
   // GDPR rights self-service routes (protected) - Articles 15-22
   app.use('/api/gdpr', authMiddleware, gdprRoutes);
+
+  // Incident reporting routes (protected) - EU AI Act Art. 73, GDPR Art. 33-34, NIS2, CRA
+  app.use('/api/incidents', authMiddleware, incidentRoutes);
+
+  // Notification template routes (protected)
+  app.use('/api/notification-templates', authMiddleware, templateRoutes);
+
+  // Human oversight routes (protected) - EU AI Act Art. 14
+  app.use('/api/oversight', authMiddleware, oversightRoutes);
+
+  // Human approval workflow routes (protected) - GDPR Art. 22, AI Act Art. 14
+  app.use('/api/approvals', authMiddleware, approvalRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
@@ -155,6 +177,15 @@ export function createApp(): Express {
 
   // Start task distributor (push model for task assignment)
   taskDistributor.start();
+
+  // Initialize incident reporting services
+  incidentService.initialize();
+  notificationWorkflowService.initialize().catch((err) => {
+    console.error('[App] Failed to initialize notification workflow service:', err);
+  });
+
+  // Initialize approval workflow service (SLA monitoring, escalations)
+  approvalWorkflowService.initialize();
 
   // 404 handler
   app.use((_req: Request, res: Response) => {

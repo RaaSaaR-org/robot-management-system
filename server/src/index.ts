@@ -14,6 +14,7 @@ import { retentionCleanupJob } from './jobs/RetentionCleanupJob.js';
 import { retentionPolicyService } from './services/RetentionPolicyService.js';
 import { ropaService } from './services/RopaService.js';
 import { providerDocumentationService } from './services/ProviderDocumentationService.js';
+import { complianceTrackerService } from './services/ComplianceTrackerService.js';
 
 const PORT = process.env.PORT || 3001;
 
@@ -30,10 +31,11 @@ async function main() {
   await conversationManager.initialize();
   await robotManager.initialize();
 
-  // Initialize retention policies, RoPA, and provider docs defaults
+  // Initialize retention policies, RoPA, provider docs, and compliance tracker defaults
   await retentionPolicyService.initializeDefaults();
   await ropaService.initializeDefaults();
   await providerDocumentationService.initializeDefaults();
+  await complianceTrackerService.initializeDefaults();
 
   // Start retention cleanup job (daily at 2 AM)
   retentionCleanupJob.startSchedule(24);
