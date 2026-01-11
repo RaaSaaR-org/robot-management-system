@@ -53,6 +53,7 @@ model Robot {
   endpoints     RobotEndpoints?
   alerts        Alert[]
   robotTasks    RobotTask[]
+  incidents     Incident[]
 
   @@index([status])
   @@index([a2aEnabled])
@@ -768,4 +769,518 @@ model ADMReviewQueue {
   @@index([assignedTo])
   @@index([decisionId])
   @@index([createdAt])
+}
+
+// ============================================================================
+// INCIDENT REPORTING (EU AI Act Art. 73, GDPR Art. 33-34, NIS2 Art. 23, CRA Art. 14)
+// ============================================================================
+
+model Incident {
+  id             String   @id @default(uuid())
+  incidentNumber String   @unique // INC-2026-001 format
+
+  // Classification
+  type     String // 'safety' | 'security' | 'data_breach' | 'ai_malfunction' | 'vulnerability'
+  severity String // 'critical' | 'high' | 'medium' | 'low'
+  status   String @default("detected") // 'detected' | 'investigating' | 'contained' | 'resolved' | 'closed'
+
+  // Description
+  title       String
+  description String
+  rootCause   String?
+  resolution  String?
+
+  // Risk Assessment
+  riskScore            Int?     // 0-100
+  affectedDataSubjects Int?     // For GDPR assessment
+  dataCategories       String[] // Personal data types affected
+
+  // Timestamps
+  detectedAt  DateTime
+  containedAt DateTime?
+  resolvedAt  DateTime?
+  closedAt    DateTime?
+
+  // Evidence Links
+  robotId          String?
+  complianceLogIds String[] // Links to ComplianceLog entries
+  alertIds         String[] // Links to Alert entries
+
+  // System State Snapshot
+  systemSnapshot String? // JSON: SystemSnapshot
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+
+  // Relations
+  robot         Robot?                 @relation(fields: [robotId], references: [id], onDelete: SetNull)
+  notifications IncidentNotification[]
+
+  @@index([type])
+  @@index([severity])
+  @@index([status])
+  @@index([detectedAt])
+  @@index([robotId])
+}
+
+model IncidentNotification {
+  id         String @id @default(uuid())
+  incidentId String
+
+  // Authority & Regulation
+  authority  String // 'ai_act_authority' | 'dpa' | 'data_subject' | 'csirt' | 'enisa'
+  regulation String // 'ai_act' | 'gdpr' | 'nis2' | 'cra'
+
+  // Notification Type & Deadline
+  notificationType String   // 'early_warning' | 'initial' | 'intermediate' | 'final'
+  deadlineHours    Int      // Hours from incident detection
+  dueAt            DateTime
+
+  // Status
+  status         String    @default("pending") // 'pending' | 'draft' | 'sent' | 'acknowledged' | 'overdue'
+  sentAt         DateTime?
+  acknowledgedAt DateTime?
+
+  // Content
+  templateId String?
+  content    String? // Generated/edited notification content
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sentBy    String?
+
+  // Relations
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@index([status])
+  @@index([dueAt])
+  @@index([authority])
+  @@index([regulation])
+}
+
+model NotificationTemplate {
+  id         String  @id @default(uuid())
+  name       String
+  regulation String  // 'ai_act' | 'gdpr' | 'nis2' | 'cra'
+  authority  String  // 'ai_act_authority' | 'dpa' | 'data_subject' | 'csirt' | 'enisa'
+  type       String  // 'early_warning' | 'initial' | 'intermediate' | 'final'
+  subject    String
+  body       String  // Template with {{placeholders}}
+  isDefault  Boolean @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([regulation, authority, type, isDefault])
+  @@index([regulation])
+  @@index([authority])
+}
+
+// ============================================================================
+// HUMAN OVERSIGHT (EU AI Act Art. 14)
+// ============================================================================
+
+// Manual Control Session - tracks when operators take manual control of robots
+model ManualControlSession {
+  id                 String    @id @default(uuid())
+  robotId            String
+  operatorId         String
+  reason             String
+  startedAt          DateTime  @default(now())
+  endedAt            DateTime?
+  isActive           Boolean   @default(true)
+  speedLimitMmPerSec Int       @default(250)  // ISO 10218-1 reduced speed limit
+  forceLimitN        Int       @default(140)  // ISO/TS 15066 force limit
+
+  @@index([robotId])
+  @@index([operatorId])
+  @@index([isActive])
+}
+
+// Verification Schedule - periodic checks to prevent automation bias (Art. 14(3))
+model VerificationSchedule {
+  id              String   @id @default(uuid())
+  name            String
+  description     String?
+  intervalMinutes Int      // How often verification is required
+  robotScope      String   @default("all") // 'all' | 'robot' | 'zone'
+  scopeId         String?  // Specific robot or zone ID
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  completions VerificationCompletion[]
+
+  @@index([isActive])
+  @@index([robotScope])
+}
+
+// Verification Completion - tracks when verifications are completed
+model VerificationCompletion {
+  id          String   @id @default(uuid())
+  scheduleId  String
+  operatorId  String
+  robotId     String?
+  status      String   // 'completed' | 'skipped' | 'deferred'
+  notes       String?
+  completedAt DateTime @default(now())
+
+  // Relations
+  schedule VerificationSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId])
+  @@index([operatorId])
+  @@index([completedAt])
+}
+
+// Oversight Log - audit trail of all human oversight actions
+model OversightLog {
+  id         String   @id @default(uuid())
+  actionType String   // 'manual_mode_activated' | 'task_reassigned' | etc.
+  operatorId String
+  robotId    String?
+  taskId     String?
+  decisionId String?
+  reason     String
+  details    String   @default("{}") // JSON for action-specific data
+  timestamp  DateTime @default(now())
+
+  @@index([actionType])
+  @@index([operatorId])
+  @@index([robotId])
+  @@index([timestamp])
+}
+
+// Anomaly Record - tracks detected anomalies for human review
+model AnomalyRecord {
+  id             String    @id @default(uuid())
+  robotId        String
+  anomalyType    String    // 'confidence_drop' | 'behavior_drift' | 'performance_degradation' | 'safety_warning'
+  severity       String    // 'low' | 'medium' | 'high' | 'critical'
+  description    String
+  detectedAt     DateTime  @default(now())
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt     DateTime?
+  resolution     String?
+  isActive       Boolean   @default(true)
+
+  @@index([robotId])
+  @@index([anomalyType])
+  @@index([severity])
+  @@index([isActive])
+  @@index([detectedAt])
+}
+
+// ============================================================================
+// HUMAN APPROVAL WORKFLOWS (GDPR Art. 22, AI Act Art. 14)
+// ============================================================================
+
+// Approval Request - represents a single approval needing human review
+model ApprovalRequest {
+  id              String    @id @default(uuid())
+  requestNumber   String    @unique // APR-2026-001 format
+  entityType      String    // 'performance_evaluation' | 'shift_change' | 'disciplinary_action' | 'safety_parameter_modification' | 'software_update'
+  entityId        String
+  entityData      String    @default("{}") // JSON snapshot of entity at request time
+  approvalType    String    // 'single_approval' | 'dual_approval' | 'chain_approval'
+  priority        String    @default("normal") // 'low' | 'normal' | 'high' | 'critical' | 'urgent'
+  status          String    @default("pending") // 'pending' | 'in_progress' | 'approved' | 'rejected' | 'escalated' | 'expired' | 'cancelled'
+  affectedUserId  String?   // Worker affected by this decision (GDPR Art. 22)
+  affectedRobotId String?   // Robot affected (for safety changes)
+  slaHours        Int       // SLA deadline in hours
+  slaDeadline     DateTime  // Calculated deadline
+  escalatedAt     DateTime?
+  escalationLevel Int       @default(0)
+  requestedBy     String
+  requestReason   String
+  blocksExecution Boolean   @default(true)
+  rollbackPlan    String?   // JSON: RollbackPlan for safety-critical changes
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  completedAt     DateTime?
+
+  // Relations
+  chain           ApprovalChain?
+  steps           ApprovalStep[]
+  workerViewpoint WorkerViewpoint?
+  decisionContest DecisionContest?
+  statusHistory   ApprovalStatusHistory[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([entityType])
+  @@index([affectedUserId])
+  @@index([slaDeadline])
+  @@index([requestedBy])
+  @@index([createdAt])
+}
+
+// Approval Chain - defines multi-step approval sequence
+model ApprovalChain {
+  id                String   @id @default(uuid())
+  approvalRequestId String   @unique
+  name              String
+  description       String?
+  requiredSteps     Int
+  currentStepIndex  Int      @default(0)
+  isSequential      Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([approvalRequestId])
+}
+
+// Approval Step - individual approval action by an approver
+model ApprovalStep {
+  id                String    @id @default(uuid())
+  approvalRequestId String
+  stepOrder         Int
+  approverRole      String    // 'supervisor' | 'manager' | 'safety_officer' | 'admin'
+  assignedTo        String?   // Specific user assigned (null = any user with role)
+  status            String    @default("pending") // 'pending' | 'awaiting' | 'approved' | 'rejected' | 'skipped'
+  decision          String?   // 'approve' | 'reject' | 'defer' | 'request_info'
+  decidedBy         String?
+  decisionNotes     String?
+  activeEngagement  Boolean   @default(false) // Art. 14: Did approver actively engage?
+  reviewDurationSec Int?      // Time spent reviewing (anti-rubber-stamp)
+  competenceVerified Boolean  @default(false) // Has approver been verified competent?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  assignedAt        DateTime?
+  decidedAt         DateTime?
+
+  // Relations
+  approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([approvalRequestId])
+  @@index([stepOrder])
+  @@index([approverRole])
+  @@index([assignedTo])
+  @@index([status])
+}
+
+// Approval Status History - audit trail for approval requests
+model ApprovalStatusHistory {
+  id                String   @id @default(uuid())
+  approvalRequestId String
+  fromStatus        String?
+  toStatus          String
+  changedBy         String?
+  reason            String?
+  metadata          String   @default("{}") // JSON: additional context
+  timestamp         DateTime @default(now())
+
+  // Relations
+  approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([approvalRequestId])
+  @@index([timestamp])
+}
+
+// Worker Viewpoint - GDPR Art. 22 right to express viewpoint
+model WorkerViewpoint {
+  id                String    @id @default(uuid())
+  approvalRequestId String    @unique
+  workerId          String
+  statement         String
+  supportingDocs    String    @default("[]") // JSON: array of document references
+  status            String    @default("submitted") // 'submitted' | 'acknowledged' | 'considered' | 'addressed'
+  acknowledgedAt    DateTime?
+  acknowledgedBy    String?
+  response          String?
+  respondedAt       DateTime?
+  respondedBy       String?
+  submittedAt       DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([workerId])
+  @@index([status])
+}
+
+// Decision Contest - Worker right to contest automated decisions
+model DecisionContest {
+  id                        String    @id @default(uuid())
+  approvalRequestId         String?   @unique
+  decisionId                String    // Original AI Decision being contested
+  workerId                  String
+  contestReason             String
+  contestEvidence           String?   // JSON: Evidence provided by worker
+  requestedOutcome          String?
+  status                    String    @default("submitted") // 'submitted' | 'under_review' | 'human_intervention_granted' | 'decision_overturned' | 'decision_upheld'
+  priority                  String    @default("normal")
+  assignedTo                String?   // Admin assigned to review
+  reviewNotes               String?
+  reviewOutcome             String?
+  humanInterventionProvided Boolean   @default(false)
+  newDecisionData           String?   // JSON: Modified decision if overturned
+  submittedAt               DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  reviewedAt                DateTime?
+  completedAt               DateTime?
+
+  // Relations
+  approvalRequest ApprovalRequest? @relation(fields: [approvalRequestId], references: [id], onDelete: SetNull)
+
+  @@index([decisionId])
+  @@index([workerId])
+  @@index([status])
+  @@index([submittedAt])
+}
+
+// Escalation Rule - defines when and how to escalate
+model EscalationRule {
+  id               String   @id @default(uuid())
+  name             String
+  description      String?
+  entityType       String   // Which entity type this applies to
+  approvalType     String?  // Specific approval type (null = all)
+  triggerCondition String   // 'overdue' | 'near_deadline' | 'high_priority' | 'repeated_rejection'
+  triggerThreshold Int      // Hours overdue, or percentage of deadline
+  escalateTo       String   // Role to escalate to
+  notifyOriginal   Boolean  @default(true)
+  notifyAdmin      Boolean  @default(true)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([entityType])
+  @@index([isActive])
+}
+
+// ============================================================================
+// COMPLIANCE MONITORING DASHBOARD (Task 34)
+// ============================================================================
+
+// Training Record - DGUV training compliance tracking
+model TrainingRecord {
+  id               String   @id @default(uuid())
+  userId           String
+  userName         String
+  userEmail        String?
+  trainingType     String   // 'operator_competence' | 'safety_training' | 'emergency_response' | 'first_aid' | 'maintenance_training'
+  completedAt      DateTime
+  expiresAt        DateTime
+  certificateUrl   String?
+  trainingProvider String?
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+  @@index([trainingType])
+  @@index([expiresAt])
+}
+
+// Inspection Schedule - DGUV Vorschrift 3 and ISO inspections
+model InspectionSchedule {
+  id                 String   @id @default(uuid())
+  inspectionType     String   // 'electrical' | 'force_verification' | 'biomechanical' | 'safety_function' | 'protective_device'
+  robotId            String?
+  robotName          String?
+  lastInspectionDate DateTime
+  nextDueDate        DateTime
+  intervalYears      Int
+  inspectorName      String?
+  inspectorCompany   String?
+  reportUrl          String?
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([inspectionType])
+  @@index([robotId])
+  @@index([nextDueDate])
+}
+
+// Risk Assessment - tracks risk assessment documents and review schedules
+model RiskAssessment {
+  id                String   @id @default(uuid())
+  assessmentType    String   // 'ai_risk' | 'machinery_risk' | 'dpia' | 'cybersecurity' | 'occupational'
+  name              String
+  version           String
+  description       String?
+  lastUpdated       DateTime
+  nextReviewDate    DateTime
+  triggerConditions String[] // Conditions that trigger an update
+  triggeredUpdates  String[] // History of triggered updates
+  documentUrl       String?
+  responsiblePerson String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([assessmentType])
+  @@index([nextReviewDate])
+}
+
+// Compliance Gap - tracks gaps in regulatory compliance
+model ComplianceGap {
+  id               String    @id @default(uuid())
+  framework        String    // 'ai_act' | 'machinery_regulation' | 'gdpr' | 'nis2' | 'cra' | 'red' | 'dguv'
+  requirement      String
+  articleReference String    // e.g., "Art. 12" or "Annex IV.2"
+  severity         String    // 'critical' | 'high' | 'medium' | 'low'
+  description      String
+  currentState     String
+  targetState      String
+  remediation      String
+  estimatedEffort  String    @default("medium") // 'low' | 'medium' | 'high'
+  dueDate          DateTime?
+  assignedTo       String?
+  status           String    @default("open") // 'open' | 'in_progress' | 'closed'
+  closedAt         DateTime?
+  closedBy         String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([framework])
+  @@index([severity])
+  @@index([status])
+  @@index([dueDate])
+}
+
+// Regulatory Deadline - tracks key regulatory deadlines
+model RegulatoryDeadline {
+  id                    String   @id @default(uuid())
+  framework             String   // 'ai_act' | 'machinery_regulation' | 'gdpr' | 'nis2' | 'cra' | 'red' | 'dguv'
+  name                  String
+  deadline              DateTime
+  description           String
+  requirements          String[] // List of requirements to meet
+  completedRequirements String[] // Requirements already met
+  priority              String   @default("medium") // 'critical' | 'high' | 'medium' | 'low'
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([framework])
+  @@index([deadline])
+  @@index([priority])
+}
+
+// Compliance Activity - tracks recent compliance-related activities
+model ComplianceActivity {
+  id          String    @id @default(uuid())
+  type        String    // 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated'
+  description String
+  framework   String?   // Optional framework association
+  entityId    String?   // ID of related entity (gap, document, training, etc.)
+  entityType  String?   // Type of related entity
+  userId      String?
+  userName    String?
+  timestamp   DateTime  @default(now())
+
+  @@index([type])
+  @@index([framework])
+  @@index([timestamp])
 }
