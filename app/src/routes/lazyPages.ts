@@ -133,6 +133,34 @@ export const LazyGDPRPortalPage = lazy(() =>
   import('@/features/gdpr').then((m) => ({ default: m.GDPRPortalPage }))
 );
 
+/**
+ * Incidents page - Incident management and regulatory reporting
+ */
+export const LazyIncidentsPage = lazy(() =>
+  import('@/features/incidents').then((m) => ({ default: m.IncidentsPage }))
+);
+
+/**
+ * Incident detail page - Single incident view
+ */
+export const LazyIncidentDetailPage = lazy(() =>
+  import('@/features/incidents').then((m) => ({ default: m.IncidentDetailPage }))
+);
+
+/**
+ * Oversight page - Human oversight dashboard (EU AI Act Art. 14)
+ */
+export const LazyOversightPage = lazy(() =>
+  import('@/features/oversight').then((m) => ({ default: m.OversightPage }))
+);
+
+/**
+ * Approvals page - Human approval workflows (GDPR Art. 22, AI Act Art. 14)
+ */
+export const LazyApprovalsPage = lazy(() =>
+  import('@/features/approvals').then((m) => ({ default: m.ApprovalsPage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================

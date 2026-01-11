@@ -35,6 +35,10 @@ import {
   LazyExplainabilityPage,
   LazyCompliancePage,
   LazyGDPRPortalPage,
+  LazyIncidentsPage,
+  LazyIncidentDetailPage,
+  LazyOversightPage,
+  LazyApprovalsPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -232,6 +236,41 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyGDPRPortalPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Incidents - Incident management and regulatory reporting */}
+          <Route
+            path="/incidents"
+            element={
+              <ProtectedAppRoute>
+                <LazyIncidentsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/incidents/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyIncidentDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Oversight - Human oversight dashboard (EU AI Act Art. 14) */}
+          <Route
+            path="/oversight"
+            element={
+              <ProtectedAppRoute>
+                <LazyOversightPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Approvals - Human approval workflows (GDPR Art. 22, AI Act Art. 14) */}
+          <Route
+            path="/approvals"
+            element={
+              <ProtectedAppRoute>
+                <LazyApprovalsPage />
               </ProtectedAppRoute>
             }
           />
