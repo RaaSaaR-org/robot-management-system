@@ -1,0 +1,57 @@
+name: SCRAI Sunday Sprint Cycle
+
+on:
+  schedule:
+    - cron: '0 9 * * 0'  # Sunday 9:00 AM UTC
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  sprint-cycle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Check for previous sprint
+        id: check-sprint
+        run: |
+          if ls docs/planning/sprints/sprint-planning-*.md 1>/dev/null 2>&1; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Retrospective
+        if: steps.check-sprint.outputs.has_previous == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: claude -p /scrai-retrospective --yes
+
+      - name: Run Backlog Grooming
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: claude -p /scrai-backlog-grooming --yes
+
+      - name: Run Sprint Planning
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: claude -p /scrai-sprint-planning --yes
+
+      - name: Commit and push
+        run: |
+          git config user.name "SCRAI Bot"
+          git config user.email "scrai-bot@users.noreply.github.com"
+          git add docs/planning/
+          git diff --staged --quiet || git commit -m "scrai: Sunday sprint cycle - $(date +%Y-%m-%d)"
+          git push

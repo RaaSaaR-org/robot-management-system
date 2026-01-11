@@ -1,0 +1,37 @@
+name: SCRAI Daily Standup
+
+on:
+  schedule:
+    - cron: '0 9 * * 1-6'  # Mon-Sat 9:00 AM UTC
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  daily-standup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run Daily Standup
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: claude -p /scrai-daily-standup --yes
+
+      - name: Commit and push
+        run: |
+          git config user.name "SCRAI Bot"
+          git config user.email "scrai-bot@users.noreply.github.com"
+          git add docs/planning/standups/
+          git diff --staged --quiet || git commit -m "scrai: Daily standup - $(date +%Y-%m-%d)"
+          git push
