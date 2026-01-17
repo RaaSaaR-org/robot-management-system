@@ -108,6 +108,12 @@ server:
     limits:
       memory: "1Gi"
       cpu: "1000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
 
 # -----------------------------------------------------------------------------
 # App (Frontend)
@@ -122,6 +128,12 @@ app:
     limits:
       memory: "256Mi"
       cpu: "500m"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
   ingress:
     enabled: true
     className: nginx
@@ -179,4 +191,34 @@ securityContext:
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: false
+  # Enable read-only root filesystem for security
+  # Note: Deployments use emptyDir mounts for /tmp where needed
+  readOnlyRootFilesystem: true
+
+# -----------------------------------------------------------------------------
+# Network Policy
+# -----------------------------------------------------------------------------
+networkPolicy:
+  # Enable network policies for pod-to-pod communication restriction
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# VLA Inference Production Settings
+# -----------------------------------------------------------------------------
+# Uncomment below to enable VLA with GPU in production:
+# vlaInference:
+#   enabled: true
+#   config:
+#     device: "cuda"
+#   gpu:
+#     enabled: true
+#     count: 1
+#   resources:
+#     requests:
+#       memory: "8Gi"
+#       cpu: "2000m"
+#       nvidia.com/gpu: 1
+#     limits:
+#       memory: "16Gi"
+#       cpu: "4000m"
+#       nvidia.com/gpu: 1

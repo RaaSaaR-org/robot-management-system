@@ -186,6 +186,13 @@ server:
     initialDelaySeconds: 30
     periodSeconds: 30
     timeoutSeconds: 10
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
 
 # -----------------------------------------------------------------------------
 # App (React Frontend)
@@ -218,6 +225,13 @@ app:
     limits:
       memory: "128Mi"
       cpu: "100m"
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
 
 # -----------------------------------------------------------------------------
 # Robot Agent (Simulated Robot)
@@ -268,10 +282,23 @@ vlaInference:
   config:
     # Model type: pi0, openvla, etc.
     modelType: "pi0"
-    # Device: cpu (GPU not included in this config)
+    # Device: cpu or cuda
     device: "cpu"
     # Number of gRPC workers
     maxWorkers: 4
+  # GPU configuration (NVIDIA)
+  gpu:
+    enabled: false
+    # Number of GPUs to request
+    count: 1
+    # Node selector for GPU nodes
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+    # Tolerations for GPU nodes
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
   resources:
     requests:
       memory: "2Gi"
@@ -318,6 +345,13 @@ ingress:
   host: robomind.local
   tls: false
   tlsSecretName: ""
+
+# -----------------------------------------------------------------------------
+# Network Policy
+# -----------------------------------------------------------------------------
+networkPolicy:
+  # Enable network policies for pod-to-pod communication restriction
+  enabled: false
 
 # -----------------------------------------------------------------------------
 # Node Scheduling
