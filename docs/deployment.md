@@ -7,6 +7,7 @@ This guide covers deploying RoboMindOS to Docker and Kubernetes environments.
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Docker Compose (Local Development)](#docker-compose-local-development)
+- [Services Overview](#services-overview)
 - [Kubernetes Deployment](#kubernetes-deployment)
   - [Local (minikube/kind)](#local-minikubekind)
   - [Production (Self-hosted Cluster)](#production-self-hosted-cluster)
@@ -61,11 +62,31 @@ open http://localhost
 helm install robomind helm/robomind \
   -f helm/robomind/values-local.yaml \
   --set postgres.auth.password=mypassword \
-  --set secrets.jwtSecret=my-jwt-secret
+  --set secrets.jwtSecret=my-jwt-secret \
+  --set rustfs.auth.accessKey=minio-key \
+  --set rustfs.auth.secretKey=minio-secret
 
 # Check pods
 kubectl get pods -n robomind
 ```
+
+---
+
+## Services Overview
+
+RoboMindOS consists of 9 services in Docker Compose:
+
+| Service | Port(s) | Description |
+|---------|---------|-------------|
+| **App** | 80 | React frontend (nginx) |
+| **Server** | 3001 | Node.js API server |
+| **Robot Agent** | 41243 | Simulated robot with AI |
+| **PostgreSQL** | 5432 | Primary database |
+| **NATS** | 4222, 8222 | Message queue (JetStream) |
+| **RustFS** | 9000, 9001 | S3-compatible object storage |
+| **MLflow** | 5000 | Model registry & tracking |
+| **VLA Inference** | 50051, 9090 | Vision-Language-Action model server |
+| **RustFS-Init** | - | Bucket initialization (one-shot) |
 
 ---
 
@@ -84,8 +105,12 @@ JWT_SECRET=your-jwt-secret-min-32-chars
 GOOGLE_API_KEY=your-google-api-key
 GEMINI_API_KEY=your-gemini-api-key
 
+# Optional - Object Storage
+RUSTFS_ACCESS_KEY=rustfsadmin
+RUSTFS_SECRET_KEY=rustfsadmin
+
 # Optional - Customization
-AUTH_DISABLED=false
+AUTH_DISABLED=true
 ROBOT_ID=sim-robot-001
 ROBOT_NAME=SimBot-01
 ```
@@ -96,10 +121,11 @@ ROBOT_NAME=SimBot-01
 # Build and start all services
 docker-compose up -d --build
 
-# Or start specific services
-docker-compose up -d postgres server
-docker-compose up -d app
-docker-compose up -d robot-agent
+# Or start infrastructure first, then applications
+docker-compose up -d nats postgres rustfs
+docker-compose up -d mlflow
+docker-compose up -d server
+docker-compose up -d app robot-agent vla-inference
 ```
 
 ### 3. Verify Deployment
@@ -109,24 +135,52 @@ docker-compose up -d robot-agent
 docker-compose ps
 
 # Check health endpoints
-curl http://localhost:3001/health   # Server
-curl http://localhost/              # App
-curl http://localhost:41243/health  # Robot Agent
+curl http://localhost:3001/health      # Server
+curl http://localhost/                 # App
+curl http://localhost:41243/health     # Robot Agent
+curl http://localhost:8222/healthz     # NATS
+curl http://localhost:5000/health      # MLflow
 
 # View logs
 docker-compose logs -f server
+docker-compose logs -f nats
 ```
 
-### 4. Access the Application
+### 4. Access Services
 
-| Service | URL |
-|---------|-----|
-| App (Frontend) | http://localhost |
-| Server (API) | http://localhost:3001 |
-| Robot Agent | http://localhost:41243 |
-| PostgreSQL | localhost:5432 |
+| Service | URL | Description |
+|---------|-----|-------------|
+| **App (Frontend)** | http://localhost | Main web application |
+| **Server (API)** | http://localhost:3001 | REST API + WebSocket |
+| **Server Health** | http://localhost:3001/health | Health check endpoint |
+| **Robot Agent** | http://localhost:41243 | Robot A2A endpoint |
+| **NATS Monitoring** | http://localhost:8222 | NATS server monitoring |
+| **RustFS Console** | http://localhost:9001 | S3 storage web console |
+| **RustFS S3 API** | http://localhost:9000 | S3-compatible API |
+| **MLflow UI** | http://localhost:5000 | Model tracking dashboard |
+| **VLA gRPC** | localhost:50051 | VLA inference gRPC |
+| **VLA Metrics** | http://localhost:9090 | Prometheus metrics |
+| **PostgreSQL** | localhost:5432 | Database (user: robomind) |
 
-### 5. Stop Services
+### 5. Test Service Connectivity
+
+```bash
+# Test NATS
+curl http://localhost:8222/varz
+
+# Test RustFS (list buckets)
+AWS_ACCESS_KEY_ID=rustfsadmin \
+AWS_SECRET_ACCESS_KEY=rustfsadmin \
+aws --endpoint-url http://localhost:9000 s3 ls
+
+# Test MLflow
+curl http://localhost:5000/api/2.0/mlflow/experiments/list
+
+# Test VLA Inference (requires grpcurl)
+grpcurl -plaintext localhost:50051 list
+```
+
+### 6. Stop Services
 
 ```bash
 # Stop all services
@@ -442,28 +496,44 @@ helm uninstall robomind
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Ingress                               │
-│                    (nginx-ingress)                           │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-        ┌─────────────┴─────────────┐
-        │                           │
-        ▼                           ▼
-┌───────────────┐           ┌───────────────┐
-│     App       │           │    Server     │
-│   (nginx)     │           │  (Node.js)    │
-│   Port: 80    │           │  Port: 3001   │
-└───────────────┘           └───────┬───────┘
-                                    │
-                    ┌───────────────┼───────────────┐
-                    │               │               │
-                    ▼               ▼               ▼
-            ┌───────────┐   ┌───────────┐   ┌───────────────┐
-            │ PostgreSQL│   │   Redis   │   │  Robot Agent  │
-            │ Port: 5432│   │  (future) │   │  Port: 41243  │
-            └───────────┘   └───────────┘   └───────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Ingress                                     │
+│                          (nginx-ingress)                                 │
+└─────────────────────────────┬───────────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+              ▼                               ▼
+      ┌───────────────┐               ┌───────────────┐
+      │     App       │               │    Server     │◄────────┐
+      │   (nginx)     │               │  (Node.js)    │         │
+      │   Port: 80    │               │  Port: 3001   │         │
+      └───────────────┘               └───────┬───────┘         │
+                                              │                 │
+          ┌───────────────┬───────────────────┼─────────────────┤
+          │               │                   │                 │
+          ▼               ▼                   ▼                 ▼
+  ┌───────────────┐ ┌───────────┐   ┌───────────────┐  ┌───────────────┐
+  │     NATS      │ │ PostgreSQL│   │  Robot Agent  │  │ VLA Inference │
+  │  JetStream    │ │   + MLflow│   │  A2A Protocol │  │  gRPC Server  │
+  │ 4222 / 8222   │ │    5432   │   │    41243      │  │    50051      │
+  └───────────────┘ └───────────┘   └───────────────┘  └───────────────┘
+          │                                 │
+          │         ┌───────────────────────┘
+          │         │
+          ▼         ▼
+  ┌─────────────────────┐     ┌───────────────┐
+  │      RustFS         │     │    MLflow     │
+  │  S3-Compatible      │◄────│   Tracking    │
+  │   9000 / 9001       │     │     5000      │
+  └─────────────────────┘     └───────────────┘
 ```
+
+**Service Dependencies:**
+- Server → PostgreSQL, NATS, RustFS, MLflow
+- MLflow → PostgreSQL, RustFS
+- Robot Agent → Server (for registration)
+- VLA Inference → Standalone (can connect to Server)
 
 ---
 

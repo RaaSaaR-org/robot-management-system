@@ -694,7 +694,7 @@ The training management system orchestrates the complete ML lifecycle from datas
 │  │ (Python)     │ │ (Python)     │ │ (MLflow)     │ │ (gRPC LB)     │  │
 │  └──────────────┘ └──────────────┘ └──────────────┘ └───────────────┘  │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  PostgreSQL      │  MinIO/S3       │  MLflow        │  Prometheus     │
+│  PostgreSQL      │  RustFS/S3      │  MLflow        │  Prometheus     │
 │  (Metadata)      │  (Artifacts)    │  (Experiments) │  (Metrics)      │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1184,7 +1184,7 @@ Simulation Testing (Isaac Sim) → HIL Testing → Single Robot Staging
 
 ### Phase 1: Infrastructure foundation (Weeks 1-4)
 
-- Deploy PostgreSQL + Redis + MinIO storage cluster
+- Deploy PostgreSQL + Redis + RustFS storage cluster
 - Set up MLflow tracking server
 - Implement core database schema
 - Create Node.js Express API skeleton
@@ -1233,7 +1233,7 @@ Simulation Testing (Isaac Sim) → HIL Testing → Single Robot Staging
 | **Backend** | Node.js Express + TypeScript | Existing infrastructure, strong async |
 | **Job Queue** | BullMQ + Redis | Native Node.js, persistent, priority |
 | **Database** | PostgreSQL | Relational + JSONB flexibility |
-| **Object Storage** | MinIO (S3-compatible) | Self-hosted, GDPR compliant |
+| **Object Storage** | RustFS (S3-compatible) | Self-hosted, GDPR compliant |
 | **ML Tracking** | MLflow | Open-source, comprehensive registry |
 | **Data Format** | LeRobot v3 | Ecosystem standard, HF integration |
 | **Monitoring** | Prometheus + Grafana | Industry standard, GPU metrics |
