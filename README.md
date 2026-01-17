@@ -4,6 +4,8 @@
 
 **Neo-Deus Ex Machina** — The "One" System for the Divine Machine
 
+![NeoDEM Logo](neodem.png)
+
 _A fleet management platform for humanoid robots with Vision-Language-Action (VLA) model training, deployment, and EU AI Act compliance._
 
 [Getting Started](#quick-start) | [Documentation](#documentation) | [Architecture](#architecture) | [Contributing](#contributing)
