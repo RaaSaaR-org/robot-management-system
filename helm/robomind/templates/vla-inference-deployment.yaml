@@ -72,17 +72,53 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 5
           resources:
+            {{- if .Values.vlaInference.gpu.enabled }}
+            requests:
+              {{- with .Values.vlaInference.resources.requests }}
+              memory: {{ .memory | quote }}
+              cpu: {{ .cpu | quote }}
+              {{- end }}
+              nvidia.com/gpu: {{ .Values.vlaInference.gpu.count | quote }}
+            limits:
+              {{- with .Values.vlaInference.resources.limits }}
+              memory: {{ .memory | quote }}
+              cpu: {{ .cpu | quote }}
+              {{- end }}
+              nvidia.com/gpu: {{ .Values.vlaInference.gpu.count | quote }}
+            {{- else }}
             {{- toYaml .Values.vlaInference.resources | nindent 12 }}
+            {{- end }}
+          {{- if .Values.securityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /.cache
+          {{- end }}
+      {{- if .Values.securityContext.readOnlyRootFilesystem }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+      {{- end }}
+      {{- if .Values.vlaInference.gpu.enabled }}
+      nodeSelector:
+        {{- toYaml .Values.vlaInference.gpu.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.vlaInference.gpu.tolerations | nindent 8 }}
+      {{- else }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
