@@ -16,10 +16,9 @@ import type {
   A2ACreateConversationRequest,
 } from '../types';
 
-// Use A2A-specific URL, or derive from API base URL, or use empty string for same-origin
-const A2A_BASE_URL = import.meta.env.VITE_A2A_SERVER_URL
-  || import.meta.env.VITE_API_BASE_URL?.replace('/api', '')
-  || '';
+// A2A API path prefix (apiClient already has /api as baseURL, so we just need /a2a)
+// If VITE_A2A_SERVER_URL is set, use it as absolute URL; otherwise use relative path
+const A2A_BASE_URL = import.meta.env.VITE_A2A_SERVER_URL || '';
 // Only use mock data if explicitly disabled via env var
 // When server is running, we want to use real API calls
 const USE_MOCK = import.meta.env.VITE_A2A_USE_MOCK === 'true';
@@ -92,7 +91,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ conversation: A2AConversation }>(
-      `${A2A_BASE_URL}/api/a2a/conversation/create`,
+      `${A2A_BASE_URL}/a2a/conversation/create`,
       request || {}
     );
     return response.data.conversation;
@@ -108,7 +107,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ conversations: A2AConversation[] }>(
-      `${A2A_BASE_URL}/api/a2a/conversation/list`
+      `${A2A_BASE_URL}/a2a/conversation/list`
     );
     return response.data.conversations;
   },
@@ -123,7 +122,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.get<{ conversation: A2AConversation }>(
-      `${A2A_BASE_URL}/api/a2a/conversation/${conversationId}`
+      `${A2A_BASE_URL}/a2a/conversation/${conversationId}`
     );
     return response.data.conversation;
   },
@@ -141,7 +140,7 @@ export const a2aApi = {
       return;
     }
 
-    await apiClient.delete(`${A2A_BASE_URL}/api/a2a/conversation/${conversationId}`);
+    await apiClient.delete(`${A2A_BASE_URL}/a2a/conversation/${conversationId}`);
   },
 
   // ===========================================================================
@@ -220,7 +219,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<A2ASendMessageResponse>(
-      `${A2A_BASE_URL}/api/a2a/message/send`,
+      `${A2A_BASE_URL}/a2a/message/send`,
       request
     );
     return response.data;
@@ -303,7 +302,7 @@ export const a2aApi = {
 
     // In orchestration mode, don't specify a target agent - let the host agent decide
     const response = await apiClient.post<A2ASendMessageResponse>(
-      `${A2A_BASE_URL}/api/a2a/message/orchestrate`,
+      `${A2A_BASE_URL}/a2a/message/orchestrate`,
       request
     );
     return response.data;
@@ -322,7 +321,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ messages: A2AMessage[] }>(
-      `${A2A_BASE_URL}/api/a2a/message/list`,
+      `${A2A_BASE_URL}/a2a/message/list`,
       { conversationId }
     );
     return response.data.messages;
@@ -342,7 +341,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ tasks: A2ATask[] }>(
-      `${A2A_BASE_URL}/api/a2a/task/list`
+      `${A2A_BASE_URL}/a2a/task/list`
     );
     return response.data.tasks;
   },
@@ -357,7 +356,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.get<{ task: A2ATask }>(
-      `${A2A_BASE_URL}/api/a2a/task/${taskId}`
+      `${A2A_BASE_URL}/a2a/task/${taskId}`
     );
     return response.data.task;
   },
@@ -386,7 +385,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ agentCard: A2AAgentCard }>(
-      `${A2A_BASE_URL}/api/a2a/agent/register`,
+      `${A2A_BASE_URL}/a2a/agent/register`,
       { agentUrl }
     );
     return response.data.agentCard;
@@ -402,7 +401,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ agents: A2AAgentCard[] }>(
-      `${A2A_BASE_URL}/api/a2a/agent/list`
+      `${A2A_BASE_URL}/a2a/agent/list`
     );
     return response.data.agents;
   },
@@ -420,7 +419,7 @@ export const a2aApi = {
       return;
     }
 
-    await apiClient.delete(`${A2A_BASE_URL}/api/a2a/agent/${encodeURIComponent(name)}`);
+    await apiClient.delete(`${A2A_BASE_URL}/a2a/agent/${encodeURIComponent(name)}`);
   },
 
   // ===========================================================================
@@ -437,7 +436,7 @@ export const a2aApi = {
     }
 
     const response = await apiClient.post<{ events: A2AEvent[] }>(
-      `${A2A_BASE_URL}/api/a2a/events/get`
+      `${A2A_BASE_URL}/a2a/events/get`
     );
     return response.data.events;
   },
