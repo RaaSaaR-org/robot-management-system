@@ -1,45 +1,80 @@
-# RoboMindOS
+# NeoDEM: RoboMindOS
 
-A fleet management platform for humanoid robots with Vision-Language-Action (VLA) model training, deployment, and EU AI Act compliance.
+<div align="center">
+
+**Neo-Deus Ex Machina** — The "One" System for the Divine Machine
+
+_A fleet management platform for humanoid robots with Vision-Language-Action (VLA) model training, deployment, and EU AI Act compliance._
+
+[Getting Started](#quick-start) | [Documentation](#documentation) | [Architecture](#architecture) | [Contributing](#contributing)
+
+</div>
+
+---
+
+## The NeoDEM Philosophy
+
+**NeoDEM** is the convergence of "The One" and the "Divine Machine" — the architectural bridge between raw hardware and sentient-like autonomy.
+
+| Concept | Origin                          | Meaning                                                                                                                    |
+| ------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Neo** | Greek _neos_ (New) + The Matrix | The "Chosen One" system — a singular, unified intelligence breaking the fleet free from hard-coded logic                   |
+| **DEM** | Deus Ex Machina                 | "God from the Machine" — the VLA model that emerges from silicon to solve high-dimensional challenges of humanoid movement |
+
+> _"I know Kung Fu."_
+>
+> Just as Neo downloaded skills directly into his consciousness, **NeoDEM** allows operators to upload complex Vision-Language-Action behaviors across an entire fleet instantly. We aren't just managing robots — we are overseeing the awakening of the machine.
+
+While the Matrix was a simulation to control, **NeoDEM** is a framework to _empower_. With EU AI Act compliance and explainable AI built-in, we ensure that as the machine awakens, it remains transparent, safe, and aligned with human intent.
+
+---
 
 ## Overview
 
-RoboMindOS enables operators to manage, monitor, and control humanoid robot fleets through an intuitive interface. The platform supports:
+NeoDEM enables operators to manage, monitor, and control humanoid robot fleets through an intuitive interface:
 
-- **Natural Language Commands** - Control robots with instructions like "Pick up the red cup"
-- **VLA Model Training** - Fine-tune vision-language-action models on your robot's data
-- **Fleet-Wide Deployment** - Train once, deploy skills across your entire fleet
-- **EU AI Act Compliance** - Built-in audit logging, explainability, and documentation
+- **Natural Language Commands** — Control robots with instructions like "Pick up the red cup"
+- **VLA Model Training** — Fine-tune vision-language-action models on your robot's data
+- **Fleet-Wide Deployment** — Train once, deploy skills across your entire fleet
+- **EU AI Act Compliance** — Built-in audit logging, explainability, and documentation
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              RoboMindOS                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐         ┌──────────────┐         ┌──────────────┐        │
-│  │     App      │ ◄─────► │    Server    │ ◄─────► │ Robot Agent  │        │
-│  │  (React +    │  REST/  │  (Node.js)   │   A2A   │  (Genkit AI) │        │
-│  │   Tauri)     │   WS    │              │         │              │        │
-│  └──────────────┘         └──────┬───────┘         └──────┬───────┘        │
-│                                  │                        │                 │
-│                                  ▼                        ▼ gRPC            │
-│                           ┌──────────────┐         ┌──────────────┐        │
-│                           │  PostgreSQL  │         │VLA Inference │        │
-│                           │   + MLflow   │         │   (Python)   │        │
-│                           └──────────────┘         └──────────────┘        │
-│                                                                              │
-│  Infrastructure: NATS │ RustFS │ Prometheus                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
+                                    NeoDEM: RoboMindOS
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                                                                         │
+    │   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        │
+    │   │             │  REST  │             │  A2A   │             │        │
+    │   │     App     │◄──────►│   Server    │◄──────►│ Robot Agent │        │
+    │   │  React/Tauri│   WS   │   Node.js   │Protocol│  Genkit AI  │        │
+    │   │             │        │             │        │             │        │
+    │   └─────────────┘        └──────┬──────┘        └──────┬──────┘        │
+    │         :1420                   │                      │               │
+    │                                 │                      │ gRPC          │
+    │                                 ▼                      ▼               │
+    │                          ┌─────────────┐        ┌─────────────┐        │
+    │                          │ PostgreSQL  │        │     VLA     │        │
+    │                          │  + MLflow   │        │  Inference  │        │
+    │                          │             │        │   Python    │        │
+    │                          └─────────────┘        └─────────────┘        │
+    │                               :5432                  :50051            │
+    │                                                                         │
+    │   ─────────────────────────────────────────────────────────────────    │
+    │   Infrastructure:  NATS :4222  │  RustFS :9000  │  Prometheus :9090    │
+    └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-| Component          | Description                           | Port  |
-|--------------------|---------------------------------------|-------|
-| **App**            | React + Tauri desktop application     | 1420  |
-| **Server**         | Node.js A2A protocol server           | 3001  |
-| **Robot Agent**    | AI-powered robot control software     | 41243 |
-| **VLA Inference**  | Python gRPC server for VLA models     | 50051 |
+| Component         | Tech Stack        | Port  | Description                                |
+| ----------------- | ----------------- | ----- | ------------------------------------------ |
+| **App**           | React + Tauri     | 1420  | Desktop/web dashboard for fleet management |
+| **Server**        | Node.js + Express | 3001  | A2A protocol server, REST API, WebSocket   |
+| **Robot Agent**   | Node.js + Genkit  | 41243 | AI-powered robot control software          |
+| **VLA Inference** | Python + gRPC     | 50051 | Vision-Language-Action model serving       |
+
+---
 
 ## Quick Start
 
@@ -93,110 +128,131 @@ make proto
 make run
 ```
 
+---
+
 ## Features
 
 ### Robot Fleet Management
-- **Fleet Dashboard** - Real-time overview of all robots
-- **Live Telemetry** - Battery, position, sensor data via WebSocket
-- **Task Management** - Create, monitor, and cancel robot tasks
-- **Safety Controls** - Emergency stop, exclusion zones
+
+| Feature         | Description                                             |
+| --------------- | ------------------------------------------------------- |
+| Fleet Dashboard | Real-time overview of all robots with status indicators |
+| Live Telemetry  | Battery, position, sensor data streamed via WebSocket   |
+| Task Management | Create, monitor, and cancel robot tasks                 |
+| Safety Controls | Emergency stop, exclusion zones, protective stops       |
 
 ### VLA Model Training
-- **Dataset Management** - Upload and curate training demonstrations
-- **Training Jobs** - Fine-tune VLA models with MLflow tracking
-- **Skill Library** - Reusable skills learned from demonstrations
-- **Active Learning** - Intelligent sample selection
+
+| Feature            | Description                                          |
+| ------------------ | ---------------------------------------------------- |
+| Dataset Management | Upload and curate training demonstrations            |
+| Training Jobs      | Fine-tune VLA models with MLflow experiment tracking |
+| Skill Library      | Reusable skills learned from demonstrations          |
+| Active Learning    | Intelligent sample selection for efficient training  |
 
 ### Data Flywheel
-- **Teleoperation** - Record demonstrations via VR or keyboard
-- **Data Contribution** - Robots contribute successful completions
-- **Federated Learning** - Privacy-preserving fleet-wide improvement
-- **Synthetic Data** - Augmentation and sim-to-real transfer
+
+| Feature            | Description                                     |
+| ------------------ | ----------------------------------------------- |
+| Teleoperation      | Record demonstrations via VR or keyboard        |
+| Data Contribution  | Robots contribute successful task completions   |
+| Federated Learning | Privacy-preserving fleet-wide model improvement |
+| Synthetic Data     | Augmentation and sim-to-real transfer           |
 
 ### EU AI Act Compliance
-- **Compliance Logging** - Tamper-evident audit trail
-- **Explainability** - AI decision transparency and reasoning
-- **RoPA Management** - Records of Processing Activities
-- **Technical Documentation** - Per AI Act Annex IV
+
+| Feature            | Description                                     |
+| ------------------ | ----------------------------------------------- |
+| Compliance Logging | Tamper-evident audit trail (Art. 12)            |
+| Explainability     | AI decision transparency with reasoning chains  |
+| RoPA Management    | Records of Processing Activities (GDPR Art. 30) |
+| Technical Docs     | Per AI Act Annex IV, MR Annex IV, CRA Annex V   |
+
+---
+
+## VLA Models
+
+NeoDEM supports multiple Vision-Language-Action model architectures:
+
+| Model           | Parameters | Inference Speed | Best For                      |
+| --------------- | ---------- | --------------- | ----------------------------- |
+| **pi0** (pi0.6) | 3B + 300M  | 50 Hz           | Real-time control, production |
+| **OpenVLA**     | 7B         | 4-71 Hz         | High accuracy, research       |
+| **GR00T**       | 2B+        | 23-26 Hz        | NVIDIA ecosystem              |
+
+See [`docs/VLA-integration-guide.md`](docs/VLA-integration-guide.md) for detailed integration guidance.
+
+---
 
 ## Deployment
 
-### Docker Compose (Local)
+### Docker Compose (Development)
 
 ```bash
 docker-compose up -d
 ```
 
-### Kubernetes (Helm)
+### Kubernetes (Production)
 
 Container images are published to GitHub Container Registry:
 
-- `ghcr.io/raasaar-org/robomind-app`
-- `ghcr.io/raasaar-org/robomind-server`
-- `ghcr.io/raasaar-org/robomind-robot-agent`
-- `ghcr.io/raasaar-org/robomind-vla-inference`
+```
+ghcr.io/neodem/app
+ghcr.io/neodem/server
+ghcr.io/neodem/robot-agent
+ghcr.io/neodem/vla-inference
+```
 
 Deploy with Helm:
 
 ```bash
-# Local/development
-helm install robomind ./helm/robomind -f ./helm/robomind/values-local.yaml \
+# Development
+helm install neodem ./helm/robomind \
   --set postgres.auth.password=yourpassword \
   --set secrets.jwtSecret=yourjwtsecret
 
-# Production
-helm install robomind ./helm/robomind -f ./helm/robomind/values-production.yaml \
+# Production (with autoscaling, network policies, PDBs)
+helm install neodem ./helm/robomind \
+  -f ./helm/robomind/values-production.yaml \
   --set postgres.auth.password=$DB_PASSWORD \
   --set secrets.jwtSecret=$JWT_SECRET \
-  --set secrets.googleApiKey=$GOOGLE_API_KEY \
   --set secrets.geminiApiKey=$GEMINI_API_KEY
 ```
+
+Production features:
+
+- HorizontalPodAutoscalers (server: 2-10, app: 2-5 replicas)
+- PodDisruptionBudgets for zero-downtime upgrades
+- NetworkPolicies for pod-to-pod security
+- ReadOnlyRootFilesystem with tmpfs mounts
+
+---
 
 ## Project Structure
 
 ```
-robot-management-system/
-├── app/                 # React + Tauri frontend
-├── server/              # Node.js A2A server
-├── robot-agent/         # Robot control software
-├── vla-inference/       # Python VLA model server
-├── protos/              # Protocol Buffer definitions
-├── helm/robomind/       # Kubernetes Helm chart
-├── config/              # Configuration files
-└── docs/                # Documentation
+neodem/
+├── app/                    # React + Tauri frontend
+│   ├── src/features/       # Feature modules (robots, training, compliance...)
+│   └── AGENTS.md           # Frontend development guide
+├── server/                 # Node.js A2A server
+│   ├── src/services/       # Business logic (Training, Deployment, MLflow...)
+│   ├── prisma/             # Database schema
+│   └── AGENTS.md           # Server development guide
+├── robot-agent/            # Robot control software
+│   ├── src/tools/          # Genkit AI tools (navigation, manipulation...)
+│   ├── src/vla/            # VLA inference client
+│   └── AGENTS.md           # Robot agent development guide
+├── vla-inference/          # Python VLA model server
+│   ├── models/             # Model implementations (pi0, openvla, groot)
+│   └── README.md           # VLA server documentation
+├── protos/                 # Protocol Buffer definitions
+├── helm/robomind/          # Kubernetes Helm chart
+├── docs/                   # Documentation
+└── CLAUDE.md               # AI assistant guidance
 ```
 
-## VLA Models
-
-RoboMindOS supports multiple Vision-Language-Action model architectures:
-
-| Model | Parameters | Speed | License |
-|-------|-----------|-------|---------|
-| **π0.6** (pi0) | 3B + 300M | 50 Hz | Apache 2.0 |
-| **OpenVLA** | 7B | 4-71 Hz | Llama Community |
-| **GR00T** | 2B+ | 23-26 Hz | Contact NVIDIA |
-
-See `docs/VLA-integration-guide.md` for detailed integration guidance.
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| `docs/architecture.md` | System architecture |
-| `docs/VLA-integration-guide.md` | VLA model integration |
-| `docs/deployment.md` | Kubernetes deployment |
-| `docs/prd.md` | Product requirements |
-| `docs/brand.md` | Design system |
-| `CLAUDE.md` | AI assistant guidance |
-
-### Component Guides
-
-| Guide | Description |
-|-------|-------------|
-| `app/AGENTS.md` | Frontend development |
-| `server/AGENTS.md` | Server development |
-| `robot-agent/AGENTS.md` | Robot agent development |
-| `vla-inference/README.md` | VLA inference server |
+---
 
 ## Development
 
@@ -208,12 +264,12 @@ See `docs/VLA-integration-guide.md` for detailed integration guidance.
 
 ### Commands
 
-| Component | Dev | Build | Type Check |
-|-----------|-----|-------|------------|
-| App | `npm run dev` | `npm run build` | `npx tsc` |
-| Server | `npm run dev` | `npm run build` | `npm run typecheck` |
-| Robot Agent | `npm run dev` | `npm run build` | `npm run typecheck` |
-| VLA Inference | `make run` | `docker build` | - |
+| Component     | Dev           | Build           | Type Check          |
+| ------------- | ------------- | --------------- | ------------------- |
+| App           | `npm run dev` | `npm run build` | `npx tsc`           |
+| Server        | `npm run dev` | `npm run build` | `npm run typecheck` |
+| Robot Agent   | `npm run dev` | `npm run build` | `npm run typecheck` |
+| VLA Inference | `make run`    | `docker build`  | `mypy`              |
 
 ### Task Management
 
@@ -223,13 +279,33 @@ npx task-master next     # Get next task
 npx task-master show 1   # Show task details
 ```
 
+---
+
+## Documentation
+
+| Document                                                         | Description                   |
+| ---------------------------------------------------------------- | ----------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)                   | System architecture deep-dive |
+| [`docs/VLA-integration-guide.md`](docs/VLA-integration-guide.md) | VLA model integration         |
+| [`docs/deployment.md`](docs/deployment.md)                       | Kubernetes deployment guide   |
+| [`docs/brand.md`](docs/brand.md)                                 | Design system and theming     |
+| [`CLAUDE.md`](CLAUDE.md)                                         | AI assistant guidance         |
+
+---
+
 ## Contributing
 
 1. Check `.taskmaster/tasks/tasks.json` for open tasks
-2. Read the relevant `AGENTS.md` for the component
+2. Read the relevant `AGENTS.md` for the component you're working on
 3. Follow the code style guidelines
 4. Submit a PR with a clear description
 
-## License
+---
 
-MIT
+<div align="center">
+
+**NeoDEM** — _Overseeing the Awakening of the Machine_
+
+MIT License
+
+</div>
