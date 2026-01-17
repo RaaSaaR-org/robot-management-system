@@ -149,6 +149,19 @@ authRoutes.get(
         });
       }
 
+      // When auth is disabled, return mock user directly (no DB lookup)
+      if (process.env.AUTH_DISABLED === 'true') {
+        return res.json({
+          id: req.user.id,
+          email: req.user.email,
+          name: req.user.name,
+          role: req.user.role,
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
       const user = await authService.getCurrentUser(req.user.id);
 
       res.json(user);
