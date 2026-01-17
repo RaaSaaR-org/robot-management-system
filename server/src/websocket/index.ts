@@ -13,10 +13,16 @@ import { processManager } from '../services/ProcessManager.js';
 import { taskDistributor } from '../services/TaskDistributor.js';
 import { safetyService, type EStopEvent } from '../services/SafetyService.js';
 import { incidentService } from '../services/IncidentService.js';
+import { trainingJobService } from '../services/TrainingJobService.js';
+import { datasetService } from '../services/DatasetService.js';
+import { deploymentService } from '../services/DeploymentService.js';
 import type { IncidentEvent } from '../types/incident.types.js';
+import type { DeploymentEvent } from '../types/deployment.types.js';
 import type { A2ATaskEvent } from '../types/index.js';
 import type { ProcessEvent } from '../types/process.types.js';
 import type { TaskEvent } from '../types/robotTask.types.js';
+import type { TrainingJobEvent } from '../types/training.types.js';
+import type { DatasetEvent } from '../types/dataset.types.js';
 
 // Configuration
 const MAX_CLIENTS = 1000;
@@ -247,6 +253,49 @@ export function setupWebSocket(server: Server): void {
       type: event.type,
       incident: event.incident,
       notification: event.notification,
+      timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to training job events and broadcast to all clients
+  trainingJobService.onJobEvent((event: TrainingJobEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      jobId: event.jobId,
+      job: event.job,
+      progress: event.progress,
+      error: event.error,
+      timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to dataset events and broadcast to all clients
+  datasetService.onDatasetEvent((event: DatasetEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      datasetId: event.datasetId,
+      dataset: event.dataset,
+      progress: event.progress,
+      error: event.error,
+      timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to deployment events and broadcast to all clients (Task 47)
+  deploymentService.onDeploymentEvent((event: DeploymentEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      deploymentId: event.deploymentId,
+      deployment: event.deployment,
+      robotId: event.robotId,
+      stage: event.stage,
+      totalStages: event.totalStages,
+      metrics: event.metrics,
+      error: event.error,
+      reason: event.reason,
       timestamp: event.timestamp,
     });
     broadcast(clients, message);

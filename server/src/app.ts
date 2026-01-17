@@ -31,6 +31,20 @@ import { incidentRoutes, templateRoutes } from './routes/incident.routes.js';
 import { oversightRoutes } from './routes/oversight.routes.js';
 import { approvalRoutes } from './routes/approval.routes.js';
 import { complianceTrackerRoutes } from './routes/compliance-tracker.routes.js';
+import { trainingRoutes } from './routes/training.routes.js';
+import { storageRoutes } from './routes/storage.routes.js';
+import { modelsRoutes } from './routes/models.routes.js';
+import { datasetRoutes } from './routes/datasets.routes.js';
+import { deploymentsRoutes } from './routes/deployments.routes.js';
+import { skillsRoutes } from './routes/skills.routes.js';
+import { embodimentsRoutes } from './routes/embodiments.routes.js';
+import { teleoperationRoutes } from './routes/teleoperation.routes.js';
+import { trainingDocsRoutes } from './routes/training-docs.routes.js';
+import { curationRoutes } from './routes/curation.routes.js';
+import { activeLearningRoutes } from './routes/active-learning.routes.js';
+import { syntheticRoutes } from './routes/synthetic.routes.js';
+import { federatedRoutes } from './routes/federated.routes.js';
+import { contributionsRoutes } from './routes/contributions.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -168,6 +182,48 @@ export function createApp(): Express {
 
   // Human approval workflow routes (protected) - GDPR Art. 22, AI Act Art. 14
   app.use('/api/approvals', authMiddleware, approvalRoutes);
+
+  // Training job routes (protected) - VLA model training management
+  app.use('/api/training', authMiddleware, trainingRoutes);
+
+  // Storage routes (protected) - RustFS object storage
+  app.use('/api/storage', authMiddleware, storageRoutes);
+
+  // Models routes (protected) - MLflow model registry
+  app.use('/api/models', authMiddleware, modelsRoutes);
+
+  // Dataset routes (protected) - VLA training dataset management
+  app.use('/api/datasets', authMiddleware, datasetRoutes);
+
+  // Deployment routes (protected) - VLA model fleet deployment
+  app.use('/api/deployments', authMiddleware, deploymentsRoutes);
+
+  // Skills routes (protected) - VLA skill library management
+  app.use('/api/skills', authMiddleware, skillsRoutes);
+
+  // Embodiments routes (protected) - VLA embodiment configuration management
+  app.use('/api/embodiments', authMiddleware, embodimentsRoutes);
+
+  // Teleoperation routes (protected) - VLA data collection via teleoperation
+  app.use('/api/teleoperation', authMiddleware, teleoperationRoutes);
+
+  // Training data documentation routes (protected) - EU AI Act GPAI compliance
+  app.use('/api/training-docs', authMiddleware, trainingDocsRoutes);
+
+  // Data curation & augmentation routes (protected) - VLA training data optimization
+  app.use('/api/curation', authMiddleware, curationRoutes);
+
+  // Active learning routes (protected) - Data collection prioritization
+  app.use('/api/active-learning', authMiddleware, activeLearningRoutes);
+
+  // Synthetic data generation routes (protected) - Isaac Lab integration
+  app.use('/api/synthetic', authMiddleware, syntheticRoutes);
+
+  // Federated learning routes (protected) - Fleet learning infrastructure
+  app.use('/api/federated', authMiddleware, federatedRoutes);
+
+  // Customer data contribution routes (protected) - Data contribution portal
+  app.use('/api/contributions', authMiddleware, contributionsRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

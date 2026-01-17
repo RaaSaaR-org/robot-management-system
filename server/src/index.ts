@@ -15,6 +15,15 @@ import { retentionPolicyService } from './services/RetentionPolicyService.js';
 import { ropaService } from './services/RopaService.js';
 import { providerDocumentationService } from './services/ProviderDocumentationService.js';
 import { complianceTrackerService } from './services/ComplianceTrackerService.js';
+import { natsClient, createStreams, createKVStores, initializeJobQueue } from './messaging/index.js';
+import { trainingJobService } from './services/TrainingJobService.js';
+import { datasetService } from './services/DatasetService.js';
+import { datasetValidationWorker } from './workers/dataset-validation.worker.js';
+import { trainingWorker } from './workers/training.worker.js';
+import { initializeRustFSClient } from './storage/index.js';
+import { storageCleanupJob } from './jobs/storage-cleanup.js';
+import { mlflowService } from './services/MLflowService.js';
+import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 
 const PORT = process.env.PORT || 3001;
 
@@ -40,6 +49,43 @@ async function main() {
   // Start retention cleanup job (daily at 2 AM)
   retentionCleanupJob.startSchedule(24);
 
+  // Initialize NATS JetStream (optional - graceful degradation if not available)
+  try {
+    await natsClient.connect();
+    if (natsClient.isConnected()) {
+      const jsm = natsClient.getJetStreamManager();
+      const js = natsClient.getJetStream();
+      await createStreams(jsm);
+      await createKVStores(js);
+      await initializeJobQueue();
+      await trainingJobService.initialize();
+      await datasetService.initialize();
+      await datasetValidationWorker.start();
+      await trainingOrchestrator.initialize();
+      await trainingWorker.start();
+      console.log('[NATS] JetStream initialized with streams and KV stores');
+    }
+  } catch (error) {
+    console.warn('[NATS] Failed to initialize (training features disabled):', error instanceof Error ? error.message : error);
+  }
+
+  // Initialize RustFS Object Storage (optional - graceful degradation if not available)
+  try {
+    await initializeRustFSClient();
+    storageCleanupJob.startSchedule(24); // Daily at 3 AM
+    console.log('[RustFS] Object storage initialized');
+  } catch (error) {
+    console.warn('[RustFS] Failed to initialize (storage features disabled):', error instanceof Error ? error.message : error);
+  }
+
+  // Initialize MLflow Model Registry (optional - graceful degradation if not available)
+  try {
+    await mlflowService.initialize();
+    console.log('[MLflow] Model registry initialized');
+  } catch (error) {
+    console.warn('[MLflow] Failed to initialize (model registry features disabled):', error instanceof Error ? error.message : error);
+  }
+
   // Create Express app
   const app = createApp();
 
@@ -60,6 +106,11 @@ async function main() {
   const shutdown = async () => {
     console.log('Shutting down...');
     retentionCleanupJob.stopSchedule();
+    storageCleanupJob.stopSchedule();
+    trainingJobService.stopAllWatchers();
+    await trainingWorker.stop();
+    await datasetValidationWorker.stop();
+    await natsClient.close();
     await disconnectDatabase();
     server.close(() => {
       console.log('Server closed');

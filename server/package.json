@@ -15,17 +15,24 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.966.0",
+    "@aws-sdk/lib-storage": "^3.966.0",
+    "@aws-sdk/s3-request-presigner": "^3.966.0",
     "@google/generative-ai": "^0.21.0",
     "@prisma/client": "^6.19.1",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "axios": "^1.7.9",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "express-rate-limit": "^8.2.1",
     "jsonwebtoken": "^9.0.3",
+    "nats": "^2.29.1",
     "prisma": "^6.19.1",
     "uuid": "^11.0.3",
     "ws": "^8.18.0",
+    "yaml": "^2.8.2",
     "zod": "^4.2.1"
   },
   "devDependencies": {

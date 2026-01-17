@@ -55,3 +55,21 @@ export type {
   DecisionType,
 } from './DecisionRepository.js';
 export { complianceLogRepository, ComplianceLogRepository } from './ComplianceLogRepository.js';
+
+// VLA (Vision-Language-Action) Training Management
+export {
+  robotTypeRepository,
+  RobotTypeRepository,
+  skillDefinitionRepository,
+  SkillDefinitionRepository,
+  datasetRepository,
+  DatasetRepository,
+  trainingJobRepository,
+  TrainingJobRepository,
+  modelVersionRepository,
+  ModelVersionRepository,
+  deploymentRepository,
+  DeploymentRepository,
+  skillChainRepository,
+  SkillChainRepository,
+} from './VLARepository.js';
