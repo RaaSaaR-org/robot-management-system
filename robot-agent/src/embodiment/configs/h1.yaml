@@ -1,0 +1,127 @@
+# Unitree H1 Humanoid Robot Configuration
+# Based on h1_description/urdf/h1.urdf
+# 19 active joints: 10 leg, 1 torso, 8 arm
+
+embodiment_tag: unitree_h1
+manufacturer: Unitree
+model: H1
+description: Unitree H1 humanoid robot with 19 DOF
+
+action:
+  dim: 19  # 19 joints total
+  normalization:
+    # Mean values (default positions)
+    mean: [
+      # Left Leg (5)
+      0.0, 0.0, 0.0, 0.0, 0.0,
+      # Right Leg (5)
+      0.0, 0.0, 0.0, 0.0, 0.0,
+      # Torso (1)
+      0.0,
+      # Left Arm (4)
+      0.0, 0.0, 0.0, 0.0,
+      # Right Arm (4)
+      0.0, 0.0, 0.0, 0.0
+    ]
+    # Std values (based on joint ranges for normalization to ~[-1, 1])
+    std: [
+      # Left Leg (5) - based on joint limits
+      0.43, 0.43, 2.835, 1.155, 0.695,
+      # Right Leg (5)
+      0.43, 0.43, 2.835, 1.155, 0.695,
+      # Torso (1)
+      2.35,
+      # Left Arm (4)
+      2.87, 1.725, 2.875, 1.93,
+      # Right Arm (4)
+      2.87, 1.725, 2.875, 1.93
+    ]
+
+proprioception:
+  dim: 38  # 19 positions + 19 velocities
+  joint_names:
+    # Left Leg
+    - left_hip_yaw_joint
+    - left_hip_roll_joint
+    - left_hip_pitch_joint
+    - left_knee_joint
+    - left_ankle_joint
+    # Right Leg
+    - right_hip_yaw_joint
+    - right_hip_roll_joint
+    - right_hip_pitch_joint
+    - right_knee_joint
+    - right_ankle_joint
+    # Torso
+    - torso_joint
+    # Left Arm
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    # Right Arm
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+
+cameras:
+  - name: head_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.0, 0.0, 1.7]  # Approximate head height
+    enabled: true
+
+limits:
+  position:
+    lower: [
+      # Left Leg
+      -0.43, -0.43, -3.14, -0.26, -0.87,
+      # Right Leg
+      -0.43, -0.43, -3.14, -0.26, -0.87,
+      # Torso
+      -2.35,
+      # Left Arm
+      -2.87, -0.34, -1.3, -1.25,
+      # Right Arm
+      -2.87, -3.11, -4.45, -1.25
+    ]
+    upper: [
+      # Left Leg
+      0.43, 0.43, 2.53, 2.05, 0.52,
+      # Right Leg
+      0.43, 0.43, 2.53, 2.05, 0.52,
+      # Torso
+      2.35,
+      # Left Arm
+      2.87, 3.11, 4.45, 2.61,
+      # Right Arm
+      2.87, 0.34, 1.3, 2.61
+    ]
+  velocity: [
+    # Velocities in rad/s (conservative defaults)
+    2.0, 2.0, 2.0, 2.0, 2.0,  # Left leg
+    2.0, 2.0, 2.0, 2.0, 2.0,  # Right leg
+    2.0,                       # Torso
+    3.0, 3.0, 3.0, 3.0,       # Left arm
+    3.0, 3.0, 3.0, 3.0        # Right arm
+  ]
+  torque: [
+    # Torques in Nm (conservative defaults)
+    150.0, 150.0, 200.0, 200.0, 100.0,  # Left leg
+    150.0, 150.0, 200.0, 200.0, 100.0,  # Right leg
+    200.0,                               # Torso
+    100.0, 100.0, 100.0, 50.0,          # Left arm
+    100.0, 100.0, 100.0, 50.0           # Right arm
+  ]
+
+safety:
+  max_speed: 1.5  # m/s walking speed
+  workspace:
+    type: box
+    min: [-2.0, -2.0, 0.0]
+    max: [2.0, 2.0, 2.5]
+  collision_margin: 0.05
+  force_limit: 140.0  # ISO/TS 15066 limit
+
+version: "1.0.0"

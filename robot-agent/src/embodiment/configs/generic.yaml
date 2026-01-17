@@ -1,0 +1,48 @@
+# Generic Embodiment Configuration
+# Default fallback configuration for unknown robot types
+
+embodiment_tag: generic
+manufacturer: Generic
+model: Generic Robot
+description: Default embodiment configuration for generic robots
+
+action:
+  dim: 6  # 6-DOF default (common for arms)
+  normalization:
+    mean: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    std: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+proprioception:
+  dim: 12  # positions + velocities
+  joint_names:
+    - joint_1
+    - joint_2
+    - joint_3
+    - joint_4
+    - joint_5
+    - joint_6
+
+cameras:
+  - name: primary_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.0, 0.0, 0.5]
+    enabled: true
+
+limits:
+  position:
+    lower: [-3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159]
+    upper: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159]
+  velocity: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+  torque: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+
+safety:
+  max_speed: 1.0  # m/s
+  workspace:
+    type: box
+    min: [-2.0, -2.0, 0.0]
+    max: [2.0, 2.0, 2.0]
+  collision_margin: 0.05
+  force_limit: 140.0  # ISO/TS 15066 limit
+
+version: "1.0.0"

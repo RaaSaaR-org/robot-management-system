@@ -1,0 +1,63 @@
+# SO-ARM100 SO101 Robotic Arm Configuration
+# Based on SO-ARM100/Simulation/SO101/so101_new_calib.urdf
+# 6 active joints: 5 arm + 1 gripper
+
+embodiment_tag: so101_arm
+manufacturer: SO-ARM100
+model: SO101
+description: SO-ARM100 SO101 6-DOF robotic arm with gripper
+
+action:
+  dim: 6  # 5 arm joints + 1 gripper
+  normalization:
+    # Mean values (default positions)
+    mean: [0.0, 0.0, 0.0, 0.0, 0.0, 0.785]  # Gripper slightly open
+    # Std values (based on joint ranges for normalization)
+    std: [
+      1.91986,   # shoulder_pan: ±1.92 rad
+      1.74533,   # shoulder_lift: ±1.75 rad
+      1.69,      # elbow_flex: ±1.69 rad
+      1.65806,   # wrist_flex: ±1.66 rad
+      2.79253,   # wrist_roll: ~2.79 rad range
+      0.96      # gripper: ~0.96 rad range
+    ]
+
+proprioception:
+  dim: 12  # 6 positions + 6 velocities
+  joint_names:
+    - shoulder_pan
+    - shoulder_lift
+    - elbow_flex
+    - wrist_flex
+    - wrist_roll
+    - gripper
+
+cameras:
+  - name: wrist_camera
+    resolution: [224, 224]
+    fov: 60
+    position: [0.0, 0.0, 0.1]  # Near end-effector
+    enabled: true
+  - name: base_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.3, 0.0, 0.5]  # Looking at workspace
+    enabled: false
+
+limits:
+  position:
+    lower: [-1.91986, -1.74533, -1.69, -1.65806, -2.74385, -0.174533]
+    upper: [1.91986, 1.74533, 1.69, 1.65806, 2.84121, 1.74533]
+  velocity: [2.0, 2.0, 2.0, 3.0, 3.0, 1.5]  # rad/s
+  torque: [25.0, 25.0, 15.0, 10.0, 5.0, 5.0]  # Nm (estimated for small arm)
+
+safety:
+  max_speed: 0.5  # m/s - conservative for tabletop arm
+  workspace:
+    type: sphere
+    center: [0.0, 0.0, 0.15]
+    radius: 0.45
+  collision_margin: 0.02
+  force_limit: 50.0  # Lower force limit for small arm
+
+version: "1.0.0"
