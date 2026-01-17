@@ -9,6 +9,7 @@ import { useRobotsStore } from '../store/robotsStore';
 import { useSafetyStore } from '@/features/safety';
 import type { Robot } from '../types/robots.types';
 import type { EStopEvent } from '@/features/safety/types/safety.types';
+import { getWebSocketUrl } from '@/shared/utils/websocket';
 
 // ============================================================================
 // TYPES
@@ -54,9 +55,8 @@ interface UseRobotWebSocketOptions {
  * ```
  */
 export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
-  const defaultWsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/api/a2a/ws';
   const {
-    url = defaultWsUrl,
+    url = getWebSocketUrl(),
     autoReconnect = true,
     reconnectInterval = 5000,
   } = options;

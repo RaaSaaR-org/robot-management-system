@@ -7,8 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useA2AStore } from '../store';
 import type { A2ATaskEvent } from '../types';
-
-const A2A_WS_URL = import.meta.env.VITE_A2A_WS_URL || 'ws://localhost:3001/api/a2a/ws';
+import { getWebSocketUrl } from '@/shared/utils/websocket';
 
 interface UseA2AStreamOptions {
   /** Auto-connect on mount */
@@ -73,7 +72,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
     setError(null);
 
     try {
-      const ws = new WebSocket(A2A_WS_URL);
+      const ws = new WebSocket(getWebSocketUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {

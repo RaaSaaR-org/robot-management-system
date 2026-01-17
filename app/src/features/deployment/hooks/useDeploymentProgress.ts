@@ -7,8 +7,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useDeploymentStore } from '../store';
 import type { DeploymentEvent } from '../types';
-
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/api/a2a/ws';
+import { getWebSocketUrl } from '@/shared/utils/websocket';
 
 export interface UseDeploymentProgressOptions {
   url?: string;
@@ -30,7 +29,7 @@ export function useDeploymentProgress(
   options: UseDeploymentProgressOptions = {}
 ): UseDeploymentProgressReturn {
   const {
-    url = WS_URL,
+    url = getWebSocketUrl(),
     autoReconnect = true,
     reconnectInterval = 5000,
     onEvent,

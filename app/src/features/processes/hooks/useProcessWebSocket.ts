@@ -7,6 +7,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useTasksStore } from '../store/tasksStore';
 import type { Process, ProcessStep } from '../types';
+import { getWebSocketUrl } from '@/shared/utils/websocket';
 
 // ============================================================================
 // TYPES
@@ -127,10 +128,9 @@ function transformProcessInstance(instance: ProcessInstance): Process {
  * ```
  */
 export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
-  const defaultWsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/api/a2a/ws';
   const {
     processId,
-    url = defaultWsUrl,
+    url = getWebSocketUrl(),
     autoReconnect = true,
     reconnectInterval = 5000,
     enabled = true,

@@ -7,9 +7,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTrainingStore } from '../store';
 import type { TrainingJobEvent, JobProgress } from '../types';
-
-// Use full WebSocket URL (consistent with other hooks like useRobotWebSocket)
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/api/a2a/ws';
+import { getWebSocketUrl } from '@/shared/utils/websocket';
 
 export interface UseTrainingProgressReturn {
   isConnected: boolean;
@@ -46,7 +44,7 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
     }
 
     try {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(getWebSocketUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {
