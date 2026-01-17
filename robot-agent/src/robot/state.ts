@@ -28,6 +28,20 @@ import {
   type EStopState,
   type OperatingMode,
 } from '../safety/index.js';
+import { VLAController, type ActionExecutor, type ObservationGenerator } from '../vla/vla-controller.js';
+import {
+  VLAModelManager,
+  type ModelSwitchRequest,
+  type ModelSwitchResult,
+  type VLAInferenceMetrics,
+} from '../vla/vla-model-manager.js';
+import type { VLAStatus, VLAControllerConfig, Observation } from '../vla/types.js';
+import {
+  EmbodimentLoader,
+  JointMapper,
+  CameraConfigManager,
+  type EmbodimentConfig,
+} from '../embodiment/index.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -66,6 +80,12 @@ export class RobotStateManager {
   private simulation: SimulationEngine;
   private taskQueue: TaskQueue;
   private safetyMonitor: SafetyMonitor;
+  private vlaController: VLAController | null = null;
+  private vlaModelManager: VLAModelManager;
+
+  // Embodiment integration (Task 51)
+  private jointMapper: JointMapper;
+  private cameraConfigManager: CameraConfigManager;
 
   constructor(config: RobotConfig) {
     // Initialize state
@@ -141,6 +161,13 @@ export class RobotStateManager {
       changeNotifier,
       SAFETY_CONFIG
     );
+
+    // Initialize VLA model manager (Task 47)
+    this.vlaModelManager = new VLAModelManager();
+
+    // Initialize embodiment utilities (Task 51)
+    this.jointMapper = new JointMapper();
+    this.cameraConfigManager = new CameraConfigManager();
   }
 
   // ============================================================================
@@ -409,10 +436,224 @@ export class RobotStateManager {
   }
 
   // ============================================================================
+  // VLA CONTROL (Task 46)
+  // ============================================================================
+
+  /**
+   * Start VLA control mode with a language instruction.
+   *
+   * @param instruction Natural language task instruction
+   * @param config Optional VLA controller configuration overrides
+   */
+  async startVLAControl(
+    instruction: string,
+    config?: Partial<VLAControllerConfig>
+  ): Promise<void> {
+    if (this.vlaController && this.vlaController.isActive()) {
+      throw new Error('VLA control is already active');
+    }
+
+    // Create action executor that delegates to CommandExecutor
+    const actionExecutor: ActionExecutor = async (action) => {
+      const result = await this.commandExecutor.executeVLAAction(action);
+      this.notifyListeners();
+      return result;
+    };
+
+    // Create observation generator from current robot state (Task 51)
+    const observationGenerator: ObservationGenerator = async () => {
+      const embodimentTag = config?.embodimentTag ?? this.state.robotType ?? 'generic';
+
+      // Get embodiment config for proper observation dimensions
+      let embodimentConfig: EmbodimentConfig | null = null;
+      try {
+        const loader = EmbodimentLoader.getInstance();
+        await loader.initialize();
+        embodimentConfig = await loader.loadEmbodiment(embodimentTag);
+      } catch {
+        console.warn(`[RobotStateManager] Could not load embodiment ${embodimentTag}, using defaults`);
+      }
+
+      // Get camera resolution from embodiment config or use default
+      let imageWidth = 224;
+      let imageHeight = 224;
+      if (embodimentConfig) {
+        const primaryCamera = this.cameraConfigManager.getPrimaryCamera(embodimentConfig);
+        if (primaryCamera) {
+          [imageWidth, imageHeight] = primaryCamera.resolution;
+        }
+      }
+
+      // Create placeholder image (in real implementation, this would be from camera)
+      const placeholderImage = this.cameraConfigManager.createPlaceholderImage(
+        'primary_camera',
+        embodimentConfig ?? {
+          embodiment_tag: 'generic',
+          manufacturer: 'Generic',
+          model: 'Generic',
+          action: { dim: 6, normalization: { mean: [], std: [] } },
+          proprioception: { dim: 12, joint_names: [] },
+          cameras: [{ name: 'primary_camera', resolution: [imageWidth, imageHeight], enabled: true }],
+          version: '1.0.0',
+        }
+      );
+
+      // Generate joint positions/velocities based on embodiment config
+      const numJoints = embodimentConfig?.action.dim ?? 6;
+      const jointPositions = new Array(numJoints).fill(0);
+      const jointVelocities = new Array(numJoints).fill(0);
+
+      const observation: Observation = {
+        cameraImage: placeholderImage,
+        jointPositions,
+        jointVelocities,
+        languageInstruction: instruction,
+        timestamp: Date.now() / 1000,
+        embodimentTag,
+        sessionId: undefined, // Will be set by controller
+      };
+
+      return observation;
+    };
+
+    // Create VLA controller with configuration
+    this.vlaController = new VLAController({
+      cloudEndpoint: process.env.VLA_CLOUD_ENDPOINT ?? 'localhost:50051',
+      edgeEndpoint: process.env.VLA_EDGE_ENDPOINT,
+      embodimentTag: this.state.robotType ?? 'generic',
+      ...config,
+    });
+
+    // Forward VLA events to safety and logging
+    this.vlaController.on('underrun', () => {
+      console.warn('[RobotStateManager] VLA buffer underrun detected');
+    });
+    this.vlaController.on('fallback:safe-retract', () => {
+      console.warn('[RobotStateManager] VLA safe retract initiated');
+      this.safetyMonitor.triggerProtectiveStop('protective_stop', 'VLA buffer underrun - safe retract');
+    });
+    this.vlaController.on('error', (error) => {
+      console.error('[RobotStateManager] VLA error:', error);
+    });
+
+    // Start VLA control
+    await this.vlaController.start(instruction, actionExecutor, observationGenerator);
+
+    console.log(`[RobotStateManager] VLA control started: "${instruction}"`);
+  }
+
+  /**
+   * Stop VLA control mode gracefully.
+   */
+  async stopVLAControl(): Promise<void> {
+    if (!this.vlaController) {
+      return;
+    }
+
+    await this.vlaController.stop();
+    this.commandExecutor.stopVLAControl();
+    this.vlaController = null;
+
+    this.notifyListeners();
+    console.log('[RobotStateManager] VLA control stopped');
+  }
+
+  /**
+   * Pause VLA control (holds current position).
+   */
+  pauseVLAControl(): void {
+    if (this.vlaController) {
+      this.vlaController.pause();
+    }
+  }
+
+  /**
+   * Resume VLA control from paused state.
+   */
+  resumeVLAControl(): void {
+    if (this.vlaController) {
+      this.vlaController.resume();
+    }
+  }
+
+  /**
+   * Get current VLA control status.
+   */
+  getVLAStatus(): VLAStatus | null {
+    if (!this.vlaController) {
+      return null;
+    }
+    return this.vlaController.getStatus();
+  }
+
+  /**
+   * Check if VLA control is currently active.
+   */
+  isVLAActive(): boolean {
+    return this.vlaController !== null && this.vlaController.isActive();
+  }
+
+  // ============================================================================
+  // VLA MODEL MANAGEMENT (Task 47)
+  // ============================================================================
+
+  /**
+   * Switch to a new VLA model version.
+   * Used by deployment pipeline for canary/production rollouts.
+   *
+   * @param request Model switch request with version and artifact URI
+   * @returns Result of the switch operation
+   */
+  async switchVLAModel(request: ModelSwitchRequest): Promise<ModelSwitchResult> {
+    const wasActive = this.isVLAActive();
+    let currentInstruction: string | undefined;
+
+    // If VLA is active, stop it first
+    if (wasActive && this.vlaController) {
+      currentInstruction = this.vlaController.getStatus()?.instruction;
+      await this.stopVLAControl();
+    }
+
+    // Perform model switch
+    const result = await this.vlaModelManager.switchModel(request);
+
+    // Log the switch
+    if (result.success) {
+      console.log(
+        `[RobotStateManager] VLA model switched: ${result.previousModelVersion} -> ${result.newModelVersion}`
+      );
+    } else {
+      console.error(`[RobotStateManager] VLA model switch failed: ${result.error}`);
+    }
+
+    return result;
+  }
+
+  /**
+   * Get VLA inference metrics for deployment monitoring.
+   */
+  getVLAInferenceMetrics(): VLAInferenceMetrics {
+    return this.vlaModelManager.getInferenceMetrics();
+  }
+
+  /**
+   * Get current VLA model version.
+   */
+  getVLAModelVersion(): string | null {
+    return this.vlaModelManager.getCurrentModelVersion();
+  }
+
+  // ============================================================================
   // RESET (for testing/recovery)
   // ============================================================================
 
   reset(): void {
+    // Stop VLA control if active
+    if (this.vlaController) {
+      this.vlaController.stop().catch(() => {});
+      this.vlaController = null;
+    }
+
     this.state.batteryLevel = 95 + Math.random() * 5;
     this.state.status = 'online';
     this.state.errors = [];

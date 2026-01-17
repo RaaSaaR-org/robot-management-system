@@ -434,5 +434,232 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
     });
   });
 
+  // ============================================================================
+  // VLA CONTROL ENDPOINTS (Task 46)
+  // ============================================================================
+
+  // GET /robots/:id/vla - Get VLA control status
+  router.get('/robots/:id/vla', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const vlaStatus = robotStateManager.getVLAStatus();
+
+    res.json({
+      robotId: robot.id,
+      active: robotStateManager.isVLAActive(),
+      status: vlaStatus,
+    });
+  });
+
+  // POST /robots/:id/vla/start - Start VLA control
+  router.post('/robots/:id/vla/start', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const { instruction, config: vlaConfig } = req.body;
+
+    if (!instruction) {
+      res.status(400).json({
+        code: 'INVALID_REQUEST',
+        message: 'instruction is required to start VLA control',
+      });
+      return;
+    }
+
+    try {
+      await robotStateManager.startVLAControl(instruction, vlaConfig);
+
+      res.json({
+        robotId: robot.id,
+        message: 'VLA control started',
+        instruction,
+        status: robotStateManager.getVLAStatus(),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to start VLA control';
+      res.status(500).json({
+        code: 'VLA_START_FAILED',
+        message: errorMessage,
+      });
+    }
+  });
+
+  // POST /robots/:id/vla/stop - Stop VLA control
+  router.post('/robots/:id/vla/stop', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    try {
+      await robotStateManager.stopVLAControl();
+
+      res.json({
+        robotId: robot.id,
+        message: 'VLA control stopped',
+        active: robotStateManager.isVLAActive(),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to stop VLA control';
+      res.status(500).json({
+        code: 'VLA_STOP_FAILED',
+        message: errorMessage,
+      });
+    }
+  });
+
+  // POST /robots/:id/vla/pause - Pause VLA control
+  router.post('/robots/:id/vla/pause', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    robotStateManager.pauseVLAControl();
+
+    res.json({
+      robotId: robot.id,
+      message: 'VLA control paused',
+      status: robotStateManager.getVLAStatus(),
+    });
+  });
+
+  // POST /robots/:id/vla/resume - Resume VLA control
+  router.post('/robots/:id/vla/resume', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    robotStateManager.resumeVLAControl();
+
+    res.json({
+      robotId: robot.id,
+      message: 'VLA control resumed',
+      status: robotStateManager.getVLAStatus(),
+    });
+  });
+
+  // ============================================================================
+  // VLA MODEL MANAGEMENT ENDPOINTS (Task 47)
+  // ============================================================================
+
+  // POST /robots/:id/vla/model/switch - Switch VLA model version
+  router.post('/robots/:id/vla/model/switch', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const { modelVersionId, artifactUri, rollback } = req.body;
+
+    if (!modelVersionId || !artifactUri) {
+      res.status(400).json({
+        code: 'INVALID_REQUEST',
+        message: 'modelVersionId and artifactUri are required',
+      });
+      return;
+    }
+
+    try {
+      const result = await robotStateManager.switchVLAModel({
+        modelVersionId,
+        artifactUri,
+        rollback: rollback ?? false,
+      });
+
+      if (result.success) {
+        res.json({
+          robotId: robot.id,
+          previousModelVersion: result.previousModelVersion,
+          newModelVersion: result.newModelVersion,
+          status: 'switched',
+          switchTimeMs: result.switchTimeMs,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(500).json({
+          robotId: robot.id,
+          previousModelVersion: result.previousModelVersion,
+          newModelVersion: result.newModelVersion,
+          status: 'failed',
+          error: result.error,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to switch model';
+      res.status(500).json({
+        code: 'MODEL_SWITCH_FAILED',
+        message: errorMessage,
+      });
+    }
+  });
+
+  // GET /robots/:id/vla/model - Get current VLA model info
+  router.get('/robots/:id/vla/model', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    res.json({
+      robotId: robot.id,
+      currentModelVersion: robotStateManager.getVLAModelVersion(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // GET /robots/:id/vla/metrics - Get VLA inference metrics
+  router.get('/robots/:id/vla/metrics', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    res.json({
+      robotId: robot.id,
+      metrics: robotStateManager.getVLAInferenceMetrics(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   return router;
 }

@@ -27,6 +27,23 @@ export interface Config {
   zoneCacheTtlMs: number;
   /** Server URL for API calls */
   serverUrl: string;
+  /** VLA inference configuration */
+  vla: {
+    /** VLA inference server hostname */
+    host: string;
+    /** VLA inference server port */
+    port: number;
+    /** Connection pool size for parallel requests */
+    poolSize: number;
+    /** Health check interval in milliseconds */
+    healthCheckIntervalMs: number;
+    /** Request timeout in milliseconds */
+    timeoutMs: number;
+    /** Optional REST fallback URL for degraded mode */
+    restFallbackUrl: string | undefined;
+    /** Whether VLA inference is enabled */
+    enabled: boolean;
+  };
 }
 
 export const config: Config = {
@@ -47,6 +64,15 @@ export const config: Config = {
   },
   zoneCacheTtlMs: parseInt(process.env.ZONE_CACHE_TTL_MS || '60000', 10), // 1 minute default
   serverUrl: process.env.SERVER_URL || 'http://localhost:3001',
+  vla: {
+    host: process.env.VLA_INFERENCE_HOST || 'localhost',
+    port: parseInt(process.env.VLA_INFERENCE_PORT || '50051', 10),
+    poolSize: parseInt(process.env.VLA_CONNECTION_POOL_SIZE || '4', 10),
+    healthCheckIntervalMs: parseInt(process.env.VLA_HEALTH_CHECK_INTERVAL_MS || '5000', 10),
+    timeoutMs: parseInt(process.env.VLA_TIMEOUT_MS || '5000', 10),
+    restFallbackUrl: process.env.VLA_REST_FALLBACK_URL || undefined,
+    enabled: process.env.VLA_ENABLED === 'true',
+  },
 };
 
 export function validateConfig(): void {
@@ -66,4 +92,10 @@ export function validateConfig(): void {
   console.log(`  - Robot Type: ${config.robotType}`);
   console.log(`  - Max Payload: ${config.maxPayloadKg}kg`);
   console.log(`  - Initial Location: (${config.initialLocation.x}, ${config.initialLocation.y}) in ${config.initialLocation.zone}`);
+  console.log(`  - VLA Inference: ${config.vla.enabled ? 'enabled' : 'disabled'}`);
+  if (config.vla.enabled) {
+    console.log(`    - Host: ${config.vla.host}:${config.vla.port}`);
+    console.log(`    - Pool Size: ${config.vla.poolSize}`);
+    console.log(`    - Health Check Interval: ${config.vla.healthCheckIntervalMs}ms`);
+  }
 }

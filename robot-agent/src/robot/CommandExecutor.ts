@@ -12,6 +12,7 @@ import type {
   CommandResult,
   CommandType,
 } from './types.js';
+import type { Action, ActionResult } from '../vla/types.js';
 import {
   getChargingStationLocation,
   getHomeLocation,
@@ -286,5 +287,176 @@ export class CommandExecutor {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // ============================================================================
+  // VLA Action Execution (Task 46)
+  // ============================================================================
+
+  /**
+   * Execute a VLA action on the robot.
+   * Maps normalized joint commands to robot state updates.
+   *
+   * @param action VLA action with normalized joint commands [-1, 1]
+   * @returns ActionResult indicating success or failure
+   */
+  async executeVLAAction(action: Action): Promise<ActionResult> {
+    const state = this.stateGetter();
+    const timestamp = Date.now();
+
+    // Validate robot is in a state that can accept VLA commands
+    if (state.status === 'error') {
+      return {
+        success: false,
+        error: 'Robot is in error state. Cannot execute VLA action.',
+        timestamp,
+      };
+    }
+
+    if (state.status === 'charging') {
+      return {
+        success: false,
+        error: 'Robot is charging. Disconnect charger before VLA control.',
+        timestamp,
+      };
+    }
+
+    // Validate action within safety limits
+    const validationResult = this.validateVLAAction(action);
+    if (!validationResult.valid) {
+      return {
+        success: false,
+        error: `Action validation failed: ${validationResult.reason}`,
+        timestamp,
+      };
+    }
+
+    // Apply action to robot state
+    // In simulation, we convert normalized joint commands to position deltas
+    try {
+      this.stateUpdater((s) => {
+        // Map joint commands to position changes (simplified simulation)
+        // Assuming jointCommands[0] = forward/backward velocity, jointCommands[1] = left/right velocity
+        const forwardVelocity = action.jointCommands[0] ?? 0;
+        const lateralVelocity = action.jointCommands[1] ?? 0;
+
+        // Scale by velocity factor (normalized [-1, 1] -> actual units)
+        const velocityScale = this.config.speedUnitsPerSecond * 0.02; // 20ms tick
+
+        const dx = forwardVelocity * velocityScale;
+        const dy = lateralVelocity * velocityScale;
+
+        // Update position
+        s.location = {
+          x: s.location.x + dx,
+          y: s.location.y + dy,
+          zone: s.location.zone,
+        };
+
+        // Update heading based on movement direction
+        if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+          s.location.heading = Math.atan2(dy, dx) * (180 / Math.PI);
+        }
+
+        // Update gripper state
+        if (action.gripperCommand !== undefined) {
+          // gripperCommand: 0 = open, 1 = closed
+          // Map to held object state (simplified)
+          if (action.gripperCommand > 0.5 && !s.heldObject) {
+            s.currentTaskName = 'VLA: Gripper closed';
+          } else if (action.gripperCommand < 0.5 && s.heldObject) {
+            s.currentTaskName = 'VLA: Gripper open';
+          }
+        }
+
+        // Update speed indicator
+        s.speed = Math.sqrt(dx * dx + dy * dy) / 0.02; // Convert back to units/sec
+
+        // Mark as busy during VLA control
+        if (s.status === 'online') {
+          s.status = 'busy';
+        }
+
+        s.updatedAt = new Date().toISOString();
+      });
+
+      return {
+        success: true,
+        appliedAction: action,
+        timestamp,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to apply VLA action: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        timestamp,
+      };
+    }
+  }
+
+  /**
+   * Validate a VLA action against safety constraints.
+   */
+  private validateVLAAction(action: Action): { valid: boolean; reason?: string } {
+    // Check jointCommands is defined and is an array
+    if (!action.jointCommands || !Array.isArray(action.jointCommands)) {
+      return {
+        valid: false,
+        reason: 'jointCommands is required and must be an array',
+      };
+    }
+
+    // Check gripperCommand is defined
+    if (typeof action.gripperCommand !== 'number') {
+      return {
+        valid: false,
+        reason: 'gripperCommand is required and must be a number',
+      };
+    }
+
+    // Check joint commands are in valid range [-1, 1]
+    for (let i = 0; i < action.jointCommands.length; i++) {
+      const cmd = action.jointCommands[i];
+      if (cmd < -1 || cmd > 1) {
+        return {
+          valid: false,
+          reason: `Joint command ${i} out of range: ${cmd} (expected [-1, 1])`,
+        };
+      }
+    }
+
+    // Check gripper command is in valid range [0, 1]
+    if (action.gripperCommand < 0 || action.gripperCommand > 1) {
+      return {
+        valid: false,
+        reason: `Gripper command out of range: ${action.gripperCommand} (expected [0, 1])`,
+      };
+    }
+
+    // Check timestamp is reasonable (not too old or too far in future)
+    const now = Date.now() / 1000;
+    const maxDrift = 5; // 5 seconds max drift
+    if (Math.abs(action.timestamp - now) > maxDrift) {
+      return {
+        valid: false,
+        reason: `Action timestamp too far from current time: ${action.timestamp} vs ${now}`,
+      };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Stop VLA control and return to idle state.
+   */
+  stopVLAControl(): void {
+    this.stateUpdater((s) => {
+      s.speed = 0;
+      if (s.status === 'busy') {
+        s.status = 'online';
+      }
+      s.currentTaskName = undefined;
+      s.updatedAt = new Date().toISOString();
+    });
   }
 }

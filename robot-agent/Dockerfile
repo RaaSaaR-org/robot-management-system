@@ -32,6 +32,8 @@ ENV NODE_ENV=production
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
+# Copy prompts directory (Genkit loads these at runtime)
+COPY --from=builder /app/src/prompts ./dist/prompts
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs && \
@@ -45,7 +47,7 @@ EXPOSE 41243
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:41243/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:41243/api/v1/health || exit 1
 
 # Start robot agent
 CMD ["npm", "start"]
