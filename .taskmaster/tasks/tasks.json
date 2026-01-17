@@ -545,14 +545,15 @@
         "id": "37",
         "title": "VLA Database Schema Extension (VLA Infrastructure)",
         "description": "Extend the Prisma database schema with models for VLA training management including robot types, skills, datasets, training jobs, model versions, and deployments.",
-        "details": "**VLA Integration Phase 1: Infrastructure Foundation**\n\nExtend the existing Prisma schema with models required for VLA training pipeline and fleet deployment.\n\n## Server (`server/prisma/schema.prisma`)\n- **RobotType model**: Define robot embodiment configurations\n  - `id`, `name`, `manufacturer`, `model` fields\n  - `actionDim`, `proprioceptionDim` for VLA action/observation dimensions\n  - `cameras` JSON field for camera configurations (name, resolution, fov)\n  - `capabilities` array for robot capabilities\n  - `limits` JSON for joint position/velocity/torque limits\n  - Relations to Dataset, SkillDefinition\n\n- **SkillDefinition model**: Define learnable robot skills\n  - `id`, `name`, `version`, `description` fields\n  - `parametersSchema` JSON for Zod-compatible parameter validation\n  - `preconditions`, `postconditions` JSON arrays\n  - `compatibleRobotTypes` relation\n  - `timeout`, `maxRetries` for execution constraints\n  - `status` enum: draft, published, deprecated, archived\n\n- **Dataset model**: Training datasets in LeRobot v3 format\n  - `id`, `name`, `description` fields\n  - `robotTypeId` foreign key to RobotType\n  - `skillId` optional foreign key to SkillDefinition\n  - `storagePath` for MinIO location\n  - `lerobotVersion`, `fps`, `totalFrames`, `totalDuration`\n  - `demonstrationCount`, `qualityScore` (0-100)\n  - `infoJson`, `statsJson` for LeRobot metadata\n  - `status` enum: uploading, validating, ready, failed\n\n- **TrainingJob model**: Training job queue entries\n  - `id`, `datasetId` foreign key\n  - `baseModel` enum: pi0, pi0_6, openvla, groot\n  - `fineTuneMethod` enum: lora, full, oft\n  - `hyperparameters` JSON (learning_rate, batch_size, epochs, lora_rank, warmup_steps)\n  - `gpuRequirements` JSON (count, memory, type)\n  - `status` enum: pending, queued, running, completed, failed, cancelled\n  - `progress` (0-100), `currentEpoch`, `totalEpochs`\n  - `metrics` JSON for training/validation loss curves\n  - `mlflowRunId`, `mlflowExperimentId`\n  - `startedAt`, `completedAt`, `errorMessage`\n  - `bullmqJobId` for queue tracking\n\n- **ModelVersion model**: Trained model artifacts\n  - `id`, `skillId` foreign key\n  - `trainingJobId` foreign key\n  - `version` semantic version string\n  - `artifactUri` for MinIO model location\n  - `checkpointUri` for intermediate checkpoints\n  - `trainingMetrics`, `validationMetrics` JSON\n  - `deploymentStatus` enum: staging, canary, production, archived\n  - `mlflowModelName`, `mlflowModelVersion`\n\n- **Deployment model**: Fleet deployment tracking\n  - `id`, `modelVersionId` foreign key\n  - `strategy` enum: canary, blue_green, rolling\n  - `targetRobotTypes` array, `targetZones` array\n  - `trafficPercentage` (0-100)\n  - `canaryConfig` JSON (stages, durations, thresholds)\n  - `rollbackThresholds` JSON (errorRate, latencyP99, failureRate)\n  - `status` enum: pending, deploying, canary, production, rolling_back, failed\n  - `deployedRobotIds` array, `failedRobotIds` array\n  - `startedAt`, `completedAt`\n\n## Server (`server/src/types/vla.types.ts`)\n- Export TypeScript interfaces matching all Prisma models\n- Define enums: BaseModel, FineTuneMethod, TrainingJobStatus, DeploymentStatus, DeploymentStrategy\n- Define JSON field types: Hyperparameters, GpuRequirements, CameraConfig, JointLimits\n\n## Server (`server/src/repositories/VLARepository.ts`)\n- Implement CRUD operations for all VLA models\n- Implement query methods: getReadyDatasets, getPendingJobs, getActiveDeployments\n- Implement relation loading methods\n\n**Key Files:**\n- `server/prisma/schema.prisma` - Add 6 new models with relations\n- `server/src/types/vla.types.ts` - TypeScript type definitions\n- `server/src/repositories/VLARepository.ts` - Data access layer\n- Migration file: `server/prisma/migrations/YYYYMMDD_add_vla_models/migration.sql`",
+        "details": "**VLA Integration Phase 1: Infrastructure Foundation**\n\nExtend the existing Prisma schema with models required for VLA training pipeline and fleet deployment.\n\n## Server (`server/prisma/schema.prisma`)\n- **RobotType model**: Define robot embodiment configurations\n  - `id`, `name`, `manufacturer`, `model` fields\n  - `actionDim`, `proprioceptionDim` for VLA action/observation dimensions\n  - `cameras` JSON field for camera configurations (name, resolution, fov)\n  - `capabilities` array for robot capabilities\n  - `limits` JSON for joint position/velocity/torque limits\n  - Relations to Dataset, SkillDefinition\n\n- **SkillDefinition model**: Define learnable robot skills\n  - `id`, `name`, `version`, `description` fields\n  - `parametersSchema` JSON for Zod-compatible parameter validation\n  - `preconditions`, `postconditions` JSON arrays\n  - `compatibleRobotTypes` relation\n  - `timeout`, `maxRetries` for execution constraints\n  - `status` enum: draft, published, deprecated, archived\n\n- **Dataset model**: Training datasets in LeRobot v3 format\n  - `id`, `name`, `description` fields\n  - `robotTypeId` foreign key to RobotType\n  - `skillId` optional foreign key to SkillDefinition\n  - `storagePath` for RustFS location\n  - `lerobotVersion`, `fps`, `totalFrames`, `totalDuration`\n  - `demonstrationCount`, `qualityScore` (0-100)\n  - `infoJson`, `statsJson` for LeRobot metadata\n  - `status` enum: uploading, validating, ready, failed\n\n- **TrainingJob model**: Training job queue entries\n  - `id`, `datasetId` foreign key\n  - `baseModel` enum: pi0, pi0_6, openvla, groot\n  - `fineTuneMethod` enum: lora, full, oft\n  - `hyperparameters` JSON (learning_rate, batch_size, epochs, lora_rank, warmup_steps)\n  - `gpuRequirements` JSON (count, memory, type)\n  - `status` enum: pending, queued, running, completed, failed, cancelled\n  - `progress` (0-100), `currentEpoch`, `totalEpochs`\n  - `metrics` JSON for training/validation loss curves\n  - `mlflowRunId`, `mlflowExperimentId`\n  - `startedAt`, `completedAt`, `errorMessage`\n  - `bullmqJobId` for queue tracking\n\n- **ModelVersion model**: Trained model artifacts\n  - `id`, `skillId` foreign key\n  - `trainingJobId` foreign key\n  - `version` semantic version string\n  - `artifactUri` for RustFS model location\n  - `checkpointUri` for intermediate checkpoints\n  - `trainingMetrics`, `validationMetrics` JSON\n  - `deploymentStatus` enum: staging, canary, production, archived\n  - `mlflowModelName`, `mlflowModelVersion`\n\n- **Deployment model**: Fleet deployment tracking\n  - `id`, `modelVersionId` foreign key\n  - `strategy` enum: canary, blue_green, rolling\n  - `targetRobotTypes` array, `targetZones` array\n  - `trafficPercentage` (0-100)\n  - `canaryConfig` JSON (stages, durations, thresholds)\n  - `rollbackThresholds` JSON (errorRate, latencyP99, failureRate)\n  - `status` enum: pending, deploying, canary, production, rolling_back, failed\n  - `deployedRobotIds` array, `failedRobotIds` array\n  - `startedAt`, `completedAt`\n\n## Server (`server/src/types/vla.types.ts`)\n- Export TypeScript interfaces matching all Prisma models\n- Define enums: BaseModel, FineTuneMethod, TrainingJobStatus, DeploymentStatus, DeploymentStrategy\n- Define JSON field types: Hyperparameters, GpuRequirements, CameraConfig, JointLimits\n\n## Server (`server/src/repositories/VLARepository.ts`)\n- Implement CRUD operations for all VLA models\n- Implement query methods: getReadyDatasets, getPendingJobs, getActiveDeployments\n- Implement relation loading methods\n\n**Key Files:**\n- `server/prisma/schema.prisma` - Add 6 new models with relations\n- `server/src/types/vla.types.ts` - TypeScript type definitions\n- `server/src/repositories/VLARepository.ts` - Data access layer\n- Migration file: `server/prisma/migrations/YYYYMMDD_add_vla_models/migration.sql`",
         "testStrategy": "Validate schema migrations run successfully with `npx prisma migrate dev`. Test CRUD operations for all 6 new models. Verify foreign key relationships and cascade behaviors. Test enum field validation. Verify JSON field serialization/deserialization. Test unique constraints and indexes.",
         "priority": "high",
         "dependencies": [
           "16"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-12T22:17:26.137Z"
       },
       {
         "id": "38",
@@ -564,35 +565,38 @@
         "dependencies": [
           "37"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-12T22:46:44.788Z"
       },
       {
         "id": "39",
         "title": "RustFS Object Storage Integration (VLA Infrastructure)",
         "description": "Integrate RustFS S3-compatible distributed storage for training datasets and model artifacts with presigned URLs for large file uploads, erasure coding for durability, and bucket lifecycle management.",
-        "details": "**VLA Integration Phase 1: Infrastructure Foundation**\n\nSet up RustFS for scalable storage of training data and model checkpoints. See `docs/nats-rustfs.md` for complete implementation reference.\n\n## Infrastructure (`docker-compose.yml`)\n- Add RustFS cluster (4 nodes for EC:4 erasure coding)\n  - Ports: 9000 (API), 9001 (Console) per node\n  - Volumes: `rustfs-{1..4}-data:/data`\n  - Environment: `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`\n  - Health check with `curl -f http://localhost:9000/minio/health/live`\n  - Command: `server http://rustfs-{1...4}:9000/data --console-address \":9001\"`\n- Add nginx load balancer for HA\n  - Port 9090 exposed\n  - Upstream to all 4 RustFS nodes\n  - Config: `config/nginx-rustfs.conf`\n- Create initial buckets via init container:\n  - `training-datasets` - LeRobot format training data\n  - `model-checkpoints` - Training checkpoint snapshots\n  - `production-models` - Deployed ONNX models (versioned)\n  - `robot-logs` - Telemetry archives and incident logs\n- Set lifecycle rules:\n  - `model-checkpoints/temp/` - 90 day expiry\n  - `robot-logs/debug/` - 30 day expiry\n\n## Server (`server/src/storage/rustfs-client.ts`)\n- **RustFS client configuration**:\n  - Use `@aws-sdk/client-s3` (S3-compatible)\n  - Use `@aws-sdk/s3-request-presigner` for presigned URLs\n  - Use `@aws-sdk/lib-storage` for multipart uploads\n  - Environment config: `RUSTFS_ENDPOINT`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`\n  - Force path style: true\n  - Connection validation on startup\n  - Retry logic for transient failures\n- **RustFSClient class methods**:\n  - `upload(bucket, key, body, options)`: Upload with progress callback\n  - `download(bucket, key)`: Download as Buffer\n  - `getStream(bucket, key)`: Download as Readable stream\n  - `delete(bucket, key)`: Delete object\n  - `exists(bucket, key)`: Check existence\n  - `getMetadata(bucket, key)`: Get size, contentType, lastModified\n  - `list(bucket, options)`: List objects with pagination\n  - `listAll(bucket, prefix)`: Async generator for all objects\n  - `getPresignedDownloadUrl(bucket, key, expiresIn)`: Presigned download\n  - `getPresignedUploadUrl(bucket, key, expiresIn, contentType)`: Presigned upload\n  - `copy(src, dest)`: Copy object\n  - `move(src, dest)`: Move object\n\n## Server (`server/src/storage/model-storage.ts`)\n- **ModelStorageClient class**:\n  - Bucket constants: datasets, checkpoints, models, logs\n  - `uploadDataset(name, version, data, metadata)`: Store training dataset\n  - `getDatasetStream(name, version)`: Stream dataset\n  - `uploadCheckpoint(jobId, epoch, data, metrics)`: Store checkpoint\n  - `listCheckpoints(jobId)`: List job checkpoints\n  - `uploadProductionModel(modelName, version, onnxBuffer, metadata)`: Deploy model\n  - `getModelDownloadUrl(modelName, version, expiry)`: Presigned URL\n  - `listModelVersions(modelName)`: List versions\n  - `uploadRobotLog(robotId, date, logType, data)`: Archive logs\n\n## Server (`server/src/routes/storage.routes.ts`)\n- `POST /api/storage/presign` - Get presigned upload URL\n  - Body: `{ bucket, key, contentType, size }`\n  - Validate size limits (datasets: 50GB, models: 10GB)\n- `POST /api/storage/datasets/:id/complete` - Mark dataset upload complete\n  - Triggers validation and quality scoring\n- `GET /api/storage/datasets/:id/download` - Get presigned download URL\n- `POST /api/storage/models/:id/upload` - Upload model artifact\n- `GET /api/storage/models/:id/download` - Get model download URL\n- `GET /api/storage/stats` - Storage statistics\n- `DELETE /api/storage/temp/:key` - Cancel incomplete upload\n\n## Server (`server/src/jobs/storage-cleanup.ts`)\n- Scheduled job (daily 3 AM): Clean temp uploads\n- Remove uploads older than 24 hours from temp prefix\n- Log cleanup statistics\n\n**Key Files:**\n- `server/src/storage/rustfs-client.ts` - RustFSClient using AWS SDK S3\n- `server/src/storage/model-storage.ts` - ModelStorageClient class\n- `server/src/routes/storage.routes.ts` - Storage API endpoints\n- `server/src/jobs/storage-cleanup.ts` - Scheduled cleanup job\n- `docker-compose.yml` - Add RustFS cluster (4 nodes)\n- `config/nginx-rustfs.conf` - Load balancer configuration\n- `.env.example` - Add RUSTFS_* environment variables",
+        "details": "**VLA Integration Phase 1: Infrastructure Foundation**\n\nSet up RustFS for scalable storage of training data and model checkpoints. See `docs/nats-rustfs.md` for complete implementation reference.\n\n## Infrastructure (`docker-compose.yml`)\n- Add RustFS cluster (4 nodes for EC:4 erasure coding)\n  - Ports: 9000 (API), 9001 (Console) per node\n  - Volumes: `rustfs-{1..4}-data:/data`\n  - Environment: `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`\n  - Health check with `curl -f http://localhost:9001/rustfs/console/index.html`\n  - Command: `server http://rustfs-{1...4}:9000/data --console-address \":9001\"`\n- Add nginx load balancer for HA\n  - Port 9090 exposed\n  - Upstream to all 4 RustFS nodes\n  - Config: `config/nginx-rustfs.conf`\n- Create initial buckets via init container:\n  - `training-datasets` - LeRobot format training data\n  - `model-checkpoints` - Training checkpoint snapshots\n  - `production-models` - Deployed ONNX models (versioned)\n  - `robot-logs` - Telemetry archives and incident logs\n- Set lifecycle rules:\n  - `model-checkpoints/temp/` - 90 day expiry\n  - `robot-logs/debug/` - 30 day expiry\n\n## Server (`server/src/storage/rustfs-client.ts`)\n- **RustFS client configuration**:\n  - Use `@aws-sdk/client-s3` (S3-compatible)\n  - Use `@aws-sdk/s3-request-presigner` for presigned URLs\n  - Use `@aws-sdk/lib-storage` for multipart uploads\n  - Environment config: `RUSTFS_ENDPOINT`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`\n  - Force path style: true\n  - Connection validation on startup\n  - Retry logic for transient failures\n- **RustFSClient class methods**:\n  - `upload(bucket, key, body, options)`: Upload with progress callback\n  - `download(bucket, key)`: Download as Buffer\n  - `getStream(bucket, key)`: Download as Readable stream\n  - `delete(bucket, key)`: Delete object\n  - `exists(bucket, key)`: Check existence\n  - `getMetadata(bucket, key)`: Get size, contentType, lastModified\n  - `list(bucket, options)`: List objects with pagination\n  - `listAll(bucket, prefix)`: Async generator for all objects\n  - `getPresignedDownloadUrl(bucket, key, expiresIn)`: Presigned download\n  - `getPresignedUploadUrl(bucket, key, expiresIn, contentType)`: Presigned upload\n  - `copy(src, dest)`: Copy object\n  - `move(src, dest)`: Move object\n\n## Server (`server/src/storage/model-storage.ts`)\n- **ModelStorageClient class**:\n  - Bucket constants: datasets, checkpoints, models, logs\n  - `uploadDataset(name, version, data, metadata)`: Store training dataset\n  - `getDatasetStream(name, version)`: Stream dataset\n  - `uploadCheckpoint(jobId, epoch, data, metrics)`: Store checkpoint\n  - `listCheckpoints(jobId)`: List job checkpoints\n  - `uploadProductionModel(modelName, version, onnxBuffer, metadata)`: Deploy model\n  - `getModelDownloadUrl(modelName, version, expiry)`: Presigned URL\n  - `listModelVersions(modelName)`: List versions\n  - `uploadRobotLog(robotId, date, logType, data)`: Archive logs\n\n## Server (`server/src/routes/storage.routes.ts`)\n- `POST /api/storage/presign` - Get presigned upload URL\n  - Body: `{ bucket, key, contentType, size }`\n  - Validate size limits (datasets: 50GB, models: 10GB)\n- `POST /api/storage/datasets/:id/complete` - Mark dataset upload complete\n  - Triggers validation and quality scoring\n- `GET /api/storage/datasets/:id/download` - Get presigned download URL\n- `POST /api/storage/models/:id/upload` - Upload model artifact\n- `GET /api/storage/models/:id/download` - Get model download URL\n- `GET /api/storage/stats` - Storage statistics\n- `DELETE /api/storage/temp/:key` - Cancel incomplete upload\n\n## Server (`server/src/jobs/storage-cleanup.ts`)\n- Scheduled job (daily 3 AM): Clean temp uploads\n- Remove uploads older than 24 hours from temp prefix\n- Log cleanup statistics\n\n**Key Files:**\n- `server/src/storage/rustfs-client.ts` - RustFSClient using AWS SDK S3\n- `server/src/storage/model-storage.ts` - ModelStorageClient class\n- `server/src/routes/storage.routes.ts` - Storage API endpoints\n- `server/src/jobs/storage-cleanup.ts` - Scheduled cleanup job\n- `docker-compose.yml` - Add RustFS cluster (4 nodes)\n- `config/nginx-rustfs.conf` - Load balancer configuration\n- `.env.example` - Add RUSTFS_* environment variables",
         "testStrategy": "Test presigned URL generation and expiry (reject expired URLs). Test multipart upload for files >5MB using @aws-sdk/lib-storage. Test LeRobot structure validation (reject missing info.json). Test file size limit enforcement. Test bucket lifecycle rules. Test cleanup job removes only old temp files. Test download URL works for stored objects. Test erasure coding survives node failure. Use RustFS in Docker for integration tests.",
         "priority": "high",
         "dependencies": [
           "37"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-12T23:05:04.782Z"
       },
       {
         "id": "40",
         "title": "MLflow Model Registry Integration (VLA Infrastructure)",
         "description": "Integrate MLflow for experiment tracking, model versioning, and deployment management with staging/production/canary aliases.",
-        "details": "**VLA Integration Phase 1: Infrastructure Foundation**\n\nSet up MLflow for comprehensive model lifecycle management.\n\n## Infrastructure (`docker-compose.yml`)\n- Add MLflow service\n  - Image: `ghcr.io/mlflow/mlflow:v2.10.0`\n  - Port: 5000\n  - Backend store: PostgreSQL (shared with main db or separate)\n  - Artifact store: MinIO (`s3://models`)\n  - Environment: `MLFLOW_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`\n  - Command: `mlflow server --host 0.0.0.0 --backend-store-uri postgresql://... --default-artifact-root s3://models`\n\n## Server (`server/src/services/MLflowService.ts`)\n- **MLflow REST client**: Implement Node.js client for MLflow REST API\n  - Base URL from `MLFLOW_TRACKING_URI` env var\n  - Error handling with typed responses\n  - Retry logic for transient failures\n- **Experiment management**:\n  - `createExperiment(name, tags)`: Create training experiment\n  - `getExperiment(id)`: Get experiment details\n  - `listExperiments()`: List all experiments\n- **Run management**:\n  - `createRun(experimentId, tags)`: Start training run\n  - `logParams(runId, params)`: Log hyperparameters\n  - `logMetrics(runId, metrics, step)`: Log training metrics\n  - `logArtifact(runId, localPath, artifactPath)`: Upload artifact\n  - `endRun(runId, status)`: Mark run complete/failed\n  - `getRun(runId)`: Get run with metrics/params/artifacts\n- **Model registry**:\n  - `createRegisteredModel(name, tags)`: Register model\n  - `createModelVersion(modelName, source, runId)`: Add version\n  - `setModelVersionTag(name, version, key, value)`: Add tags\n  - `transitionModelVersionStage(name, version, stage)`: Move to staging/production\n  - `getLatestModelVersion(name, stages)`: Get version by stage\n  - `setModelAlias(name, alias, version)`: Set canary alias\n- **Metric queries**:\n  - `compareRuns(runIds, metrics)`: Compare training runs\n  - `getMetricHistory(runId, metricKey)`: Get metric over time\n\n## Server (`server/src/routes/models.routes.ts`)\n- `POST /api/models/experiments` - Create experiment\n- `GET /api/models/experiments` - List experiments\n- `GET /api/models/experiments/:id/runs` - List runs in experiment\n- `POST /api/models/registry` - Register model\n- `GET /api/models/registry/:name/versions` - List versions\n- `PUT /api/models/registry/:name/versions/:version/stage` - Transition stage\n- `GET /api/models/registry/:name/latest` - Get latest by stage\n- `GET /api/models/compare` - Compare runs by metrics\n- `GET /api/models/runs/:id/metrics/:key` - Get metric history\n\n**Key Files:**\n- `server/src/services/MLflowService.ts` - MLflow REST API client\n- `server/src/routes/models.routes.ts` - Model registry API endpoints\n- `server/src/types/mlflow.types.ts` - MLflow API response types\n- `docker-compose.yml` - Add MLflow service\n- `.env.example` - Add MLFLOW_TRACKING_URI",
-        "testStrategy": "Test experiment creation and listing. Test run creation with params/metrics logging. Test artifact upload to MinIO via MLflow. Test model registration and versioning. Test stage transitions (None → Staging → Production). Test alias management for canary deployments. Test metric comparison across runs. Mock MLflow API for unit tests, use real MLflow for integration tests.",
-        "priority": "medium",
+        "details": "**VLA Integration Phase 1: Infrastructure Foundation**\n\nSet up MLflow for comprehensive model lifecycle management.\n\n## Infrastructure (`docker-compose.yml`)\n- Add MLflow service\n  - Image: `ghcr.io/mlflow/mlflow:v2.10.0`\n  - Port: 5000\n  - Backend store: PostgreSQL (shared with main db or separate)\n  - Artifact store: RustFS (`s3://models`) - uses storage from Task 39\n  - Environment: `MLFLOW_S3_ENDPOINT_URL=${RUSTFS_ENDPOINT}`, `AWS_ACCESS_KEY_ID=${RUSTFS_ACCESS_KEY}`, `AWS_SECRET_ACCESS_KEY=${RUSTFS_SECRET_KEY}`\n  - Command: `mlflow server --host 0.0.0.0 --backend-store-uri postgresql://... --default-artifact-root s3://models`\n\n## Server (`server/src/services/MLflowService.ts`)\n- **MLflow REST client**: Implement Node.js client for MLflow REST API\n  - Base URL from `MLFLOW_TRACKING_URI` env var\n  - Error handling with typed responses\n  - Retry logic for transient failures\n- **Experiment management**:\n  - `createExperiment(name, tags)`: Create training experiment\n  - `getExperiment(id)`: Get experiment details\n  - `listExperiments()`: List all experiments\n- **Run management**:\n  - `createRun(experimentId, tags)`: Start training run\n  - `logParams(runId, params)`: Log hyperparameters\n  - `logMetrics(runId, metrics, step)`: Log training metrics\n  - `logArtifact(runId, localPath, artifactPath)`: Upload artifact\n  - `endRun(runId, status)`: Mark run complete/failed\n  - `getRun(runId)`: Get run with metrics/params/artifacts\n- **Model registry**:\n  - `createRegisteredModel(name, tags)`: Register model\n  - `createModelVersion(modelName, source, runId)`: Add version\n  - `setModelVersionTag(name, version, key, value)`: Add tags\n  - `transitionModelVersionStage(name, version, stage)`: Move to staging/production\n  - `getLatestModelVersion(name, stages)`: Get version by stage\n  - `setModelAlias(name, alias, version)`: Set canary alias\n- **Metric queries**:\n  - `compareRuns(runIds, metrics)`: Compare training runs\n  - `getMetricHistory(runId, metricKey)`: Get metric over time\n\n## Server (`server/src/routes/models.routes.ts`)\n- `POST /api/models/experiments` - Create experiment\n- `GET /api/models/experiments` - List experiments\n- `GET /api/models/experiments/:id/runs` - List runs in experiment\n- `POST /api/models/registry` - Register model\n- `GET /api/models/registry/:name/versions` - List versions\n- `PUT /api/models/registry/:name/versions/:version/stage` - Transition stage\n- `GET /api/models/registry/:name/latest` - Get latest by stage\n- `GET /api/models/compare` - Compare runs by metrics\n- `GET /api/models/runs/:id/metrics/:key` - Get metric history\n\n**Key Files:**\n- `server/src/services/MLflowService.ts` - MLflow REST API client\n- `server/src/routes/models.routes.ts` - Model registry API endpoints\n- `server/src/types/mlflow.types.ts` - MLflow API response types\n- `docker-compose.yml` - Add MLflow service\n- `.env.example` - Add MLFLOW_TRACKING_URI",
+        "testStrategy": "Test experiment creation and listing. Test run creation with params/metrics logging. Test artifact upload to RustFS via MLflow. Test model registration and versioning. Test stage transitions (None → Staging → Production). Test alias management for canary deployments. Test metric comparison across runs. Mock MLflow API for unit tests, use real MLflow for integration tests.",
+        "priority": "high",
         "dependencies": [
           "37",
           "39"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-12T23:40:11.496Z"
       },
       {
         "id": "41",
@@ -605,8 +609,9 @@
           "38",
           "39"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-13T00:11:36.262Z"
       },
       {
         "id": "42",
@@ -619,8 +624,9 @@
           "38",
           "41"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-13T00:29:25.589Z"
       },
       {
         "id": "43",
@@ -633,8 +639,9 @@
           "41",
           "42"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-15T21:53:48.465Z"
       },
       {
         "id": "44",
@@ -646,8 +653,9 @@
         "dependencies": [
           "37"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-13T22:26:21.633Z"
       },
       {
         "id": "45",
@@ -659,8 +667,9 @@
         "dependencies": [
           "44"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-14T00:30:54.821Z"
       },
       {
         "id": "46",
@@ -673,21 +682,22 @@
           "44",
           "45"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-15T22:25:39.743Z"
       },
       {
         "id": "47",
         "title": "Model Deployment Pipeline (VLA Fleet)",
         "description": "Implement skill deployment to robot fleets with canary rollout (5% → 20% → 50% → 100%), automatic rollback on error thresholds, and WebSocket-based deployment status tracking.",
-        "details": "**VLA Integration Phase 4: Fleet Deployment**\n\nBuild production deployment pipeline for rolling out trained models to robot fleets.\n\n## Server (`server/src/services/DeploymentService.ts`)\n- **Deployment creation**:\n  - `createDeployment(modelVersionId, config)`: Initialize deployment\n    - Validate model version exists and has artifacts\n    - Validate target robots are compatible (robotType match)\n    - Create Deployment record with status=pending\n    - Return deployment ID\n- **Canary rollout**:\n  - `startCanary(deploymentId)`: Begin staged rollout\n    - Stage 1: 5% of target robots (minimum 1)\n    - Stage 2: 20% after stage 1 success (24h default)\n    - Stage 3: 50% after stage 2 success\n    - Stage 4: 100% (full production)\n  - Configurable stage durations and percentages\n  - Automatic progression if metrics pass thresholds\n- **Robot selection for canary**:\n  - Random selection from eligible robots\n  - Prefer robots with lower utilization\n  - Exclude robots with recent failures\n  - Track deployed vs pending robots\n- **Rollback thresholds**:\n  - Error rate > 5% triggers rollback\n  - Latency P99 > 500ms triggers rollback\n  - Task failure rate > 10% triggers rollback\n  - Manual rollback always available\n- **Rollback execution**:\n  - `rollback(deploymentId)`: Revert to previous model\n    - Mark deployment as rolling_back\n    - Signal robots to reload previous model\n    - Track rollback progress\n    - Mark complete when all robots reverted\n- **Promotion**:\n  - `promoteToProduction(deploymentId)`: Skip remaining canary\n  - Requires explicit confirmation\n  - Updates model version stage in MLflow\n\n## Server (`server/src/routes/deployments.routes.ts`)\n- `POST /api/deployments` - Create deployment\n- `GET /api/deployments` - List deployments with filters\n- `GET /api/deployments/:id` - Get deployment status\n- `POST /api/deployments/:id/start` - Start canary rollout\n- `POST /api/deployments/:id/promote` - Promote to next stage\n- `POST /api/deployments/:id/rollback` - Trigger rollback\n- `GET /api/deployments/:id/metrics` - Get deployment metrics\n\n## Server (`server/src/services/DeploymentMetricsService.ts`)\n- **Metric collection**:\n  - Aggregate error rates from deployed robots\n  - Calculate latency percentiles\n  - Track task success/failure rates\n- **Threshold monitoring**:\n  - Check thresholds every 60 seconds\n  - Trigger automatic rollback if exceeded\n  - Log threshold breaches\n\n## WebSocket events\n- `deployment:created` - New deployment\n- `deployment:stage:started` - Canary stage began\n- `deployment:stage:completed` - Canary stage passed\n- `deployment:robot:deployed` - Individual robot updated\n- `deployment:rollback:started` - Rollback triggered\n- `deployment:completed` - Full production deployment\n- `deployment:failed` - Deployment failed\n\n## Robot Agent integration\n- New endpoint: `POST /vla/model/switch`\n  - Body: `{ modelVersion, artifactUri }`\n  - Download model from MinIO\n  - Hot-swap in inference client\n  - Report success/failure to server\n\n**Key Files:**\n- `server/src/services/DeploymentService.ts` - Deployment orchestration\n- `server/src/services/DeploymentMetricsService.ts` - Metric aggregation\n- `server/src/routes/deployments.routes.ts` - REST API endpoints\n- `server/prisma/schema.prisma` - Deployment model (already added in Task 37)\n- `server/src/websocket/index.ts` - Add deployment events (update existing)",
+        "details": "**VLA Integration Phase 4: Fleet Deployment**\n\nBuild production deployment pipeline for rolling out trained models to robot fleets.\n\n## Server (`server/src/services/DeploymentService.ts`)\n- **Deployment creation**:\n  - `createDeployment(modelVersionId, config)`: Initialize deployment\n    - Validate model version exists and has artifacts\n    - Validate target robots are compatible (robotType match)\n    - Create Deployment record with status=pending\n    - Return deployment ID\n- **Canary rollout**:\n  - `startCanary(deploymentId)`: Begin staged rollout\n    - Stage 1: 5% of target robots (minimum 1)\n    - Stage 2: 20% after stage 1 success (24h default)\n    - Stage 3: 50% after stage 2 success\n    - Stage 4: 100% (full production)\n  - Configurable stage durations and percentages\n  - Automatic progression if metrics pass thresholds\n- **Robot selection for canary**:\n  - Random selection from eligible robots\n  - Prefer robots with lower utilization\n  - Exclude robots with recent failures\n  - Track deployed vs pending robots\n- **Rollback thresholds**:\n  - Error rate > 5% triggers rollback\n  - Latency P99 > 500ms triggers rollback\n  - Task failure rate > 10% triggers rollback\n  - Manual rollback always available\n- **Rollback execution**:\n  - `rollback(deploymentId)`: Revert to previous model\n    - Mark deployment as rolling_back\n    - Signal robots to reload previous model\n    - Track rollback progress\n    - Mark complete when all robots reverted\n- **Promotion**:\n  - `promoteToProduction(deploymentId)`: Skip remaining canary\n  - Requires explicit confirmation\n  - Updates model version stage in MLflow\n\n## Server (`server/src/routes/deployments.routes.ts`)\n- `POST /api/deployments` - Create deployment\n- `GET /api/deployments` - List deployments with filters\n- `GET /api/deployments/:id` - Get deployment status\n- `POST /api/deployments/:id/start` - Start canary rollout\n- `POST /api/deployments/:id/promote` - Promote to next stage\n- `POST /api/deployments/:id/rollback` - Trigger rollback\n- `GET /api/deployments/:id/metrics` - Get deployment metrics\n\n## Server (`server/src/services/DeploymentMetricsService.ts`)\n- **Metric collection**:\n  - Aggregate error rates from deployed robots\n  - Calculate latency percentiles\n  - Track task success/failure rates\n- **Threshold monitoring**:\n  - Check thresholds every 60 seconds\n  - Trigger automatic rollback if exceeded\n  - Log threshold breaches\n\n## WebSocket events\n- `deployment:created` - New deployment\n- `deployment:stage:started` - Canary stage began\n- `deployment:stage:completed` - Canary stage passed\n- `deployment:robot:deployed` - Individual robot updated\n- `deployment:rollback:started` - Rollback triggered\n- `deployment:completed` - Full production deployment\n- `deployment:failed` - Deployment failed\n\n## Robot Agent integration\n- New endpoint: `POST /vla/model/switch`\n  - Body: `{ modelVersion, artifactUri }`\n  - Download model from RustFS\n  - Hot-swap in inference client\n  - Report success/failure to server\n\n**Key Files:**\n- `server/src/services/DeploymentService.ts` - Deployment orchestration\n- `server/src/services/DeploymentMetricsService.ts` - Metric aggregation\n- `server/src/routes/deployments.routes.ts` - REST API endpoints\n- `server/prisma/schema.prisma` - Deployment model (already added in Task 37)\n- `server/src/websocket/index.ts` - Add deployment events (update existing)",
         "testStrategy": "Test canary stage progression (5% → 20% → 50% → 100%). Test automatic rollback when error rate exceeds threshold. Test manual rollback at any stage. Test robot selection distributes evenly. Test WebSocket events fire for all lifecycle stages. Test promotion skips remaining stages. Test concurrent deployments are prevented for same skill.",
         "priority": "high",
         "dependencies": [
           "40",
           "45"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -701,8 +711,9 @@
           "37",
           "47"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-15T23:25:35.537Z"
       },
       {
         "id": "49",
@@ -715,8 +726,9 @@
           "47",
           "48"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-16T00:32:52.794Z"
       },
       {
         "id": "50",
@@ -729,8 +741,9 @@
           "30",
           "46"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "deferred",
+        "subtasks": [],
+        "updatedAt": "2026-01-15T23:05:32.457Z"
       },
       {
         "id": "51",
@@ -743,8 +756,9 @@
           "37",
           "46"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:26:29.819Z"
       },
       {
         "id": "52",
@@ -759,13 +773,240 @@
         ],
         "status": "deferred",
         "subtasks": []
+      },
+      {
+        "id": "53",
+        "title": "Advanced Data Quality Validation Pipeline (VLA Data)",
+        "description": "Implement trajectory quality metrics including RMS jerk, action consistency, anomaly detection, and OOD detection framework for training data validation.",
+        "details": "**VLA Data Strategy Phase 1: Quality Metrics (13 SP)**\n\nImplement comprehensive trajectory quality metrics beyond basic scoring.\n\n## Server (`server/src/services/DataQualityService.ts`)\n- **Trajectory smoothness metrics:**\n  - `computeRMSJerk(trajectory)`: RMS of d³p/dt³ for joint trajectories\n  - `computeLDLJ(trajectory)`: Logarithmic Dimensionless Jerk (normalized, noise-resistant)\n  - `computePositionInstability(trajectory)`: TCP position variations ||p_t - p_{t-1}||\n- **Action consistency metrics:**\n  - `computePathLengthVariance(demonstrations)`: Variance across demos of same task\n  - `computeDTWDistance(traj1, traj2)`: Dynamic Time Warping distance\n  - `computeEffortMetric(trajectory)`: Integrated torque over trajectory\n- **Anomaly detection:**\n  - `detectStatisticalOutliers(dataset)`: Z-score and IQR-based detection\n  - `detectEnvelopeViolations(trajectory, bounds)`: Trajectory envelope checking\n  - `detectVelocitySpikes(trajectory, threshold)`: Sudden velocity/acceleration detection\n- **OOD detection framework:**\n  - Interface for cVAE reconstruction error (placeholder for ML model)\n  - `flagHighReconstructionError(observations, threshold)`: Flag OOD samples\n  - Human review queue for flagged samples\n- **Quality scoring integration:**\n  - Extend DatasetService.computeQualityScore() with new metrics\n  - Weights: smoothness (30), consistency (30), anomaly-free (20), completeness (20)\n  - Store per-trajectory metrics in database\n\n## Server (`server/src/types/data-quality.types.ts`)\n```typescript\ninterface TrajectoryMetrics {\n  rmsJerk: number;\n  ldlj: number;\n  positionInstability: number;\n  pathLength: number;\n  effort: number;\n  hasAnomalies: boolean;\n  anomalyTypes: string[];\n}\n\ninterface DatasetQualityReport {\n  datasetId: string;\n  overallScore: number;\n  smoothnessScore: number;\n  consistencyScore: number;\n  anomalyScore: number;\n  completenessScore: number;\n  trajectoryCount: number;\n  flaggedTrajectoryCount: number;\n  metrics: TrajectoryMetrics[];\n}\n```\n\n## Server (`server/src/routes/datasets.routes.ts`)\n- `GET /api/datasets/:id/quality` - Detailed quality breakdown\n- `GET /api/datasets/:id/trajectories/:idx/metrics` - Per-trajectory metrics\n- `POST /api/datasets/:id/validate-advanced` - Trigger advanced validation job\n- `GET /api/datasets/:id/flagged` - List flagged trajectories for review\n- `POST /api/datasets/:id/trajectories/:idx/unflag` - Mark as reviewed\n\n**Key Files:**\n- `server/src/services/DataQualityService.ts` - Core quality computation\n- `server/src/types/data-quality.types.ts` - Type definitions\n- Update `server/src/services/DatasetService.ts` - Integration\n- Update `server/src/routes/datasets.routes.ts` - New endpoints",
+        "testStrategy": "Test RMS jerk computation against known smooth vs jerky trajectories. Test DTW distance is symmetric and zero for identical trajectories. Test anomaly detection flags obvious outliers (>3 sigma). Test quality score weights sum to 100. Test flagged trajectories appear in review queue. Test validation job completes and updates dataset record.",
+        "priority": "high",
+        "dependencies": [
+          "41"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:28:54.938Z"
+      },
+      {
+        "id": "54",
+        "title": "Teleoperation Data Collection Infrastructure (VLA Data)",
+        "description": "Implement teleoperation session management for VR (Quest/Vision Pro) and bilateral (ALOHA-style) data collection with LeRobot export.",
+        "details": "**VLA Data Strategy Phase 1: Data Collection (21 SP)**\n\nImplement teleoperation infrastructure for high-quality demonstration collection.\n\n## Server (`server/src/services/TeleoperationService.ts`)\n- **Session management:**\n  - `createSession(operatorId, robotId, type)`: Initialize collection session\n  - `startSession(sessionId)`: Begin recording\n  - `pauseSession(sessionId)`: Pause without ending\n  - `resumeSession(sessionId)`: Resume paused session\n  - `endSession(sessionId)`: Complete and finalize\n  - Session types: `vr_quest`, `vr_vision_pro`, `bilateral_aloha`, `kinesthetic`\n- **Trajectory recording:**\n  - Store frames at configurable FPS (30-100 Hz)\n  - Frame data: timestamp, joint_positions, joint_velocities, camera_images, action\n  - Intervention markers when operator corrects trajectory\n  - Language instruction annotation per trajectory\n- **LeRobot export:**\n  - `exportToLeRobot(sessionId)`: Generate LeRobot v3 structure\n  - Create `meta/info.json`, `meta/stats.json`, `meta/episodes.json`\n  - Convert frames to Parquet tables\n  - Upload to RustFS datasets bucket\n- **Quality feedback:**\n  - Real-time smoothness indicator during collection\n  - Warn on jerky movements\n  - Suggest retake for low-quality segments\n\n## Robot Agent (`robot-agent/src/teleoperation/`)\n- **teleop-server.ts:**\n  - WebSocket server for receiving teleop commands\n  - Command types: `joint_target`, `cartesian_target`, `gripper`\n  - Rate limiting to prevent overload\n  - Echo state back to operator\n- **teleop-recorder.ts:**\n  - Buffer frames in memory with ring buffer\n  - Periodic flush to server\n  - Camera frame capture integration\n  - Timestamp synchronization\n- **bilateral-adapter.ts:**\n  - Interface for leader-follower arm mapping\n  - Joint-to-joint correspondence\n  - Gravity compensation awareness\n\n## Database (`server/prisma/schema.prisma`)\n```prisma\nmodel TeleoperationSession {\n  id            String   @id @default(uuid())\n  operatorId    String\n  robotId       String\n  type          String   // vr_quest, bilateral_aloha, etc.\n  status        String   // created, recording, paused, completed\n  startedAt     DateTime?\n  endedAt       DateTime?\n  frameCount    Int      @default(0)\n  duration      Float?   // seconds\n  fps           Int      @default(30)\n  languageInstr String?\n  qualityScore  Float?\n  exportedDatasetId String?\n  createdAt     DateTime @default(now())\n}\n\nmodel TeleoperationFrame {\n  id            String   @id @default(uuid())\n  sessionId     String\n  timestamp     Float    // seconds from session start\n  jointPositions Json    // array of floats\n  jointVelocities Json?\n  action        Json     // commanded action\n  imagePath     String?  // RustFS path to camera frame\n  isIntervention Boolean @default(false)\n  session       TeleoperationSession @relation(...)\n}\n```\n\n**Key Files:**\n- `server/src/services/TeleoperationService.ts` - Session management\n- `server/src/routes/teleoperation.routes.ts` - REST API\n- `robot-agent/src/teleoperation/teleop-server.ts` - Robot-side server\n- `robot-agent/src/teleoperation/teleop-recorder.ts` - Frame recording\n- `app/src/features/datacollection/` - Collection UI\n- Update `server/prisma/schema.prisma` - Add models",
+        "testStrategy": "Test session lifecycle (create → start → record frames → end). Test frame recording at 30 Hz without drops. Test pause/resume preserves session state. Test LeRobot export creates valid structure (validate with LeRobot tools). Test intervention markers are recorded. Test quality feedback updates during collection. Test WebSocket command handling on robot agent.",
+        "priority": "high",
+        "dependencies": [
+          "37",
+          "46"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:32:07.413Z"
+      },
+      {
+        "id": "55",
+        "title": "Synthetic Data Generation Pipeline - Isaac Lab Integration (VLA Data)",
+        "description": "Integrate Isaac Lab for synthetic trajectory generation with domain randomization, sim-to-real validation, and LeRobot format export.",
+        "details": "**VLA Data Strategy Phase 2: Simulation (21 SP)**\n\nIntegrate Isaac Lab for scalable synthetic data generation.\n\n## Server (`server/src/services/SyntheticDataService.ts`)\n- **Job management:**\n  - `submitGenerationJob(config)`: Submit Isaac Lab job\n  - `getJobStatus(jobId)`: Query progress\n  - `cancelJob(jobId)`: Cancel running job\n  - `listJobs(filters)`: List with status filter\n- **Configuration:**\n  - SyntheticJobConfig with task, embodiment, trajectoryCount, domainRandomization\n  - DomainRandomizationConfig with physics, visual, sensor noise params\n- **Output processing:**\n  - Convert Isaac Lab output to LeRobot v3 format\n  - Validate synthetic trajectories\n  - Compute statistics\n  - Upload to RustFS\n- **Sim-to-real validation:**\n  - Track metrics: success rate on sim, success rate on real\n  - A/B testing framework for synthetic data effectiveness\n  - Domain gap analysis\n\n## Server (`server/src/workers/synthetic-data.worker.ts`)\n- NATS consumer for `jobs.synthetic.generate`\n- Call external Isaac Lab service via REST/gRPC\n- Progress reporting to KV store\n- Handle job completion and failure\n\n## Server (`server/src/routes/synthetic.routes.ts`)\n- `POST /api/synthetic/jobs` - Submit generation job\n- `GET /api/synthetic/jobs` - List jobs\n- `GET /api/synthetic/jobs/:id` - Get job details with progress\n- `POST /api/synthetic/jobs/:id/cancel` - Cancel job\n- `GET /api/synthetic/templates` - Preset DR configurations\n- `POST /api/synthetic/validate-sim-to-real` - Record validation result\n\n## Database (`server/prisma/schema.prisma`)\n```prisma\nmodel SyntheticJob {\n  id            String   @id @default(uuid())\n  task          String\n  embodiment    String\n  trajectoryCount Int\n  config        Json     // DomainRandomizationConfig\n  status        String\n  progress      Int      @default(0)\n  outputDatasetId String?\n  errorMessage  String?\n  startedAt     DateTime?\n  completedAt   DateTime?\n  createdAt     DateTime @default(now())\n}\n```\n\n**Key Files:**\n- `server/src/services/SyntheticDataService.ts` - Job management\n- `server/src/workers/synthetic-data.worker.ts` - Job processor\n- `server/src/routes/synthetic.routes.ts` - REST API\n- `server/src/types/synthetic.types.ts` - Type definitions",
+        "testStrategy": "Test job submission creates database record and NATS message. Test progress updates flow through KV store. Test cancellation stops job. Test output converts to valid LeRobot format. Test domain randomization config validation. Test sim-to-real metrics are recorded and queryable. Mock Isaac Lab service for unit tests.",
+        "priority": "medium",
+        "dependencies": [
+          "37",
+          "39",
+          "41"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:35:17.439Z"
+      },
+      {
+        "id": "56",
+        "title": "Fleet Learning Infrastructure - Federated Averaging (VLA Data)",
+        "description": "Implement federated learning for privacy-preserving model improvement with FedAvg, differential privacy, and Return on Human Effort (ROHE) metrics.",
+        "details": "**VLA Data Strategy Phase 3: Fleet Learning (34 SP)**\n\nImplement federated learning for privacy-preserving fleet-wide model improvement.\n\n## Server (`server/src/services/FederatedLearningService.ts`)\n- **Round management:**\n  - `createRound(config)`: Initialize federated round\n  - `selectParticipants(roundId, criteria)`: Sample robots for round\n  - `distributeModel(roundId)`: Push global model to participants\n  - `collectUpdates(roundId)`: Gather model updates\n  - `aggregateUpdates(roundId)`: Run FedAvg aggregation\n  - `finalizeRound(roundId)`: Complete and publish new global model\n- **FedAvg implementation:**\n  - Weight by local sample count: `w_global = Σ(n_i/n_total) * w_i`\n  - Handle stragglers (timeout after threshold)\n  - Minimum participants requirement\n- **Privacy mechanisms:**\n  - Differential privacy: Gaussian noise injection\n  - Privacy budget (epsilon) tracking per robot\n  - Secure aggregation (additive masking, optional)\n- **ROHE metrics (Return on Human Effort):**\n  - Track interventions per robot\n  - Measure performance improvement per intervention\n  - Compare fleet performance before/after rounds\n\n## Robot Agent (`robot-agent/src/federated/`)\n- **local-trainer.ts:** On-device fine-tuning (LoRA-based)\n- **gradient-uploader.ts:** Upload model updates with local DP noise\n- **differential-privacy.ts:** Gradient clipping and noise injection\n\n## Database (`server/prisma/schema.prisma`)\n```prisma\nmodel FederatedRound {\n  id                String   @id @default(uuid())\n  status            String   // created, selecting, training, aggregating, completed, failed\n  globalModelVersion String\n  newModelVersion   String?\n  minParticipants   Int\n  maxParticipants   Int\n  timeout           Int      // seconds\n  privacyEpsilon    Float?\n  aggregationMethod String   @default(\"fedavg\")\n  startedAt         DateTime?\n  completedAt       DateTime?\n  createdAt         DateTime @default(now())\n  participants      FederatedParticipant[]\n}\n\nmodel FederatedParticipant {\n  id            String   @id @default(uuid())\n  roundId       String\n  robotId       String\n  status        String   // selected, training, uploaded, failed, timeout\n  localSamples  Int?\n  uploadedAt    DateTime?\n  round         FederatedRound @relation(...)\n}\n\nmodel RobotPrivacyBudget {\n  robotId       String   @id\n  totalEpsilon  Float    @default(10.0)\n  usedEpsilon   Float    @default(0.0)\n  lastUpdated   DateTime @default(now())\n}\n```\n\n**Key Files:**\n- `server/src/services/FederatedLearningService.ts` - Round orchestration\n- `server/src/routes/federated.routes.ts` - REST API\n- `server/src/types/federated.types.ts` - Type definitions\n- `robot-agent/src/federated/` - Local training components",
+        "testStrategy": "Test round creation and participant selection. Test model distribution reaches selected robots. Test FedAvg produces weighted average (verify with known weights). Test differential privacy adds correct noise level. Test privacy budget decrements and blocks exhausted robots. Test straggler timeout excludes slow robots. Test ROHE metrics correlate with intervention data. Test convergence over multiple rounds in simulation.",
+        "priority": "medium",
+        "dependencies": [
+          "38",
+          "40",
+          "46"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:40:13.625Z"
+      },
+      {
+        "id": "57",
+        "title": "Data Curation & Augmentation Pipeline (VLA Data)",
+        "description": "Implement dataset balancing (Re-Mix), task taxonomy management, quality-based curation, hindsight relabeling, and augmentation techniques.",
+        "details": "**VLA Data Strategy Phase 2: Curation (21 SP)**\n\nImplement data curation and augmentation for training optimization.\n\n## Server (`server/src/services/DataCurationService.ts`)\n- **Dataset balancing (Re-Mix style):**\n  - `analyzeDistribution(datasetId)`: Task/environment distribution\n  - `computeOptimalWeights(datasetId)`: DRO-based sampling weights\n  - `createBalancedSubset(datasetId, config)`: Generate balanced dataset\n  - Maximize worst-case performance across task groups\n- **Task taxonomy:**\n  - Hierarchical structure: primitive → composed → long-horizon\n  - `categorizeTrajectory(trajectory)`: Auto-assign taxonomy level\n  - `getTaskDistribution(datasetId)`: Distribution by taxonomy\n  - Environment and scene cataloging\n- **Quality-based curation:**\n  - `filterByQuality(datasetId, minScore)`: Remove low-quality demos\n  - `removeDuplicates(datasetId, similarityThreshold)`: Deduplicate\n  - `identifyHarmful(datasetId)`: Flag potentially harmful demos (CUPID-style)\n- **Hindsight relabeling:**\n  - `relabelFailedTrajectories(datasetId)`: Goal-conditioned relabeling\n  - Generate positive signal from partial successes\n  - Update language instructions to match achieved goals\n\n## Server (`server/src/services/DataAugmentationService.ts`)\n- **Action augmentation:**\n  - `addGaussianNoise(trajectory, scale)`: MimicGen-style (default 0.05)\n  - `applyTemporalJitter(trajectory, jitterMs)`: Slight timing variations\n  - `interpolateActions(trajectory, factor)`: Smooth trajectory\n- **Image augmentation:**\n  - `augmentImages(frames, config)`: Color jitter, crops, flips\n  - `randomizeBackgrounds(frames)`: Background substitution\n  - Placeholder for generative augmentation (ROSIE-style)\n- **Language augmentation:**\n  - `paraphraseInstructions(dataset)`: LLM-based paraphrasing\n  - `chainSkillInstructions(dataset)`: Combine primitives\n  - `computeDiversityScore(dataset)`: Measure instruction variety\n\n## Server (`server/src/routes/curation.routes.ts`)\n- `GET /api/datasets/:id/distribution` - Task distribution analysis\n- `POST /api/datasets/:id/balance` - Create balanced subset\n- `POST /api/datasets/:id/augment` - Apply augmentation pipeline\n- `POST /api/datasets/:id/curate` - Run curation pipeline\n- `GET /api/taxonomy` - Browse task taxonomy\n- `POST /api/taxonomy/categorize` - Categorize trajectory\n- `GET /api/datasets/:id/duplicates` - Find near-duplicates\n- `POST /api/datasets/:id/relabel-hindsight` - Hindsight relabeling\n\n**Key Files:**\n- `server/src/services/DataCurationService.ts` - Curation logic\n- `server/src/services/DataAugmentationService.ts` - Augmentation logic\n- `server/src/routes/curation.routes.ts` - REST API\n- `server/src/types/curation.types.ts` - Type definitions",
+        "testStrategy": "Test distribution analysis identifies imbalanced datasets. Test Re-Mix weights increase minority class sampling. Test balanced subset has more uniform distribution. Test quality filter removes demos below threshold. Test duplicate detection finds near-identical trajectories. Test Gaussian noise augmentation preserves trajectory shape. Test language paraphrasing produces diverse instructions. Test hindsight relabeling creates valid new instructions.",
+        "priority": "medium",
+        "dependencies": [
+          "41",
+          "53"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:42:53.209Z"
+      },
+      {
+        "id": "58",
+        "title": "Training Data Compliance Documentation (VLA Compliance)",
+        "description": "Implement EU AI Act GPAI training data documentation with dataset provenance, training data summary template, bias documentation, and version management.",
+        "details": "**VLA Data Strategy Phase 3: Compliance (13 SP)**\n\nImplement training data documentation per EU AI Act requirements.\n\n## Server (`server/src/services/TrainingDataDocService.ts`)\n- **Dataset provenance tracking:**\n  - `recordProvenance(datasetId, provenance)`: Document source\n  - Source types: `collected`, `purchased`, `synthetic`, `open_source`, `contributed`\n  - Collection methodology documentation\n  - Labeling procedures and annotator info\n  - Data cleaning steps applied\n  - Chain of custody tracking\n- **Training data summary (AI Act GPAI template):**\n  - `generateSummary(modelVersionId)`: Create AI Act summary\n  - List all datasets used in training\n  - Public vs private classification\n  - Web scraping sources (if any)\n  - Copyright compliance measures\n  - Data processing purposes\n- **Bias and gap documentation:**\n  - `recordBiasAssessment(modelVersionId, assessment)`: Store assessment\n  - Demographic coverage analysis fields\n  - Known limitations and gaps\n  - Potential bias sources\n  - Mitigation measures applied\n- **Version and update management:**\n  - Track which data versions used per training run\n  - MLflow lineage integration\n  - 6-month update tracking (AI Act requirement)\n  - Alert when update is due\n\n## Database (`server/prisma/schema.prisma`)\n```prisma\nmodel DatasetProvenance {\n  id              String   @id @default(uuid())\n  datasetId       String   @unique\n  sourceType      String\n  sourceName      String?\n  sourceUrl       String?\n  collectionMethod String?\n  labelingProcedure String?\n  cleaningSteps   Json?    // string[]\n  licenseType     String?\n  copyrightCompliance String?\n  recordedAt      DateTime @default(now())\n  recordedBy      String\n}\n\nmodel TrainingDataSummary {\n  id              String   @id @default(uuid())\n  modelVersionId  String   @unique\n  datasetIds      Json     // string[]\n  totalTrajectories Int\n  copyrightMeasures String\n  processingPurposes Json  // string[]\n  knownGaps       Json     // string[]\n  generatedAt     DateTime @default(now())\n  lastUpdated     DateTime @default(now())\n  nextUpdateDue   DateTime\n}\n\nmodel BiasAssessment {\n  id              String   @id @default(uuid())\n  modelVersionId  String\n  demographicCoverage Json\n  knownLimitations Json    // string[]\n  potentialBiasSources Json // string[]\n  mitigationMeasures Json  // string[]\n  assessedBy      String\n  assessmentDate  DateTime @default(now())\n}\n```\n\n**Key Files:**\n- `server/src/services/TrainingDataDocService.ts` - Documentation logic\n- `server/src/routes/training-docs.routes.ts` - REST API\n- `server/src/types/training-docs.types.ts` - Type definitions\n- Update `server/prisma/schema.prisma` - Add models",
+        "testStrategy": "Test provenance recording stores all required fields. Test summary generation includes all datasets used in training. Test 6-month update due date calculation. Test update-due alert triggers correctly. Test bias assessment stores and retrieves properly. Test export generates valid markdown/PDF. Test MLflow lineage links are preserved.",
+        "priority": "high",
+        "dependencies": [
+          "24",
+          "41"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:48:00.727Z"
+      },
+      {
+        "id": "59",
+        "title": "Active Learning System (VLA Data)",
+        "description": "Implement uncertainty-based data collection prioritization with MUSEL-inspired framework, learning progress metrics, and collection recommendations.",
+        "details": "**VLA Data Strategy Phase 3: Active Learning (13 SP)**\n\nImplement active learning for targeted data collection prioritization.\n\n## Server (`server/src/services/ActiveLearningService.ts`)\n- **Uncertainty estimation:**\n  - `logPrediction(modelId, input, output, confidence)`: Store prediction\n  - `computeEpistemicUncertainty(modelId, task)`: Ensemble disagreement\n  - `aggregateUncertainty(modelId, groupBy)`: By task/environment\n  - High uncertainty = model needs more data\n- **Learning progress tracking:**\n  - `trackImprovementRate(modelId)`: Performance delta over time\n  - `identifyPlateaus(modelId)`: Tasks where improvement stalled\n  - Plateau = need more diverse data, not just more data\n- **MUSEL-inspired priority scoring:**\n  - Predictive uncertainty (model confidence)\n  - Input diversity (distance to existing data)\n  - Learning progress (recent improvement rate)\n  - Combined score: `priority = w1*uncertainty + w2*diversity + w3*(1-progress)`\n- **Collection recommendations:**\n  - `getCollectionPriorities()`: Ranked list of targets\n  - `estimateDemosNeeded(target)`: How many demos to collect\n  - `trackCollectionProgress(target)`: Progress vs recommendation\n  - Update priorities as new data arrives\n\n## Database (`server/prisma/schema.prisma`)\n```prisma\nmodel PredictionLog {\n  id            String   @id @default(uuid())\n  modelId       String\n  robotId       String\n  timestamp     DateTime @default(now())\n  inputHash     String\n  taskCategory  String\n  environment   String\n  confidence    Float\n  wasCorrect    Boolean?\n  @@index([modelId, taskCategory])\n  @@index([modelId, environment])\n}\n\nmodel CollectionTarget {\n  id            String   @id @default(uuid())\n  targetType    String   // task, environment\n  targetName    String\n  priorityScore Float\n  estimatedDemos Int\n  collectedDemos Int     @default(0)\n  status        String   // active, completed, paused\n  createdAt     DateTime @default(now())\n  updatedAt     DateTime @updatedAt\n}\n```\n\n**Key Files:**\n- `server/src/services/ActiveLearningService.ts` - Core logic\n- `server/src/routes/active-learning.routes.ts` - REST API\n- `server/src/types/active-learning.types.ts` - Type definitions",
+        "testStrategy": "Test prediction logging stores all fields correctly. Test uncertainty aggregation groups by task/environment. Test priority scoring combines components correctly. Test recommendations update as new data is collected. Test progress tracking shows uncertainty reduction. Test robot agent reports confidence with predictions. Test heatmap visualization renders correctly.",
+        "priority": "medium",
+        "dependencies": [
+          "41",
+          "53"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-01-17T01:56:32.860Z"
+      },
+      {
+        "id": "60",
+        "title": "Customer Data Contribution Portal (VLA Data)",
+        "description": "Implement customer data contribution system with upload workflow, incentive credits, impact tracking, and contribution leaderboard.",
+        "details": "**VLA Data Strategy Phase 4: Data Flywheel (21 SP)**\n\nImplement customer data contribution for fleet learning data flywheel.\n\n## Server (`server/src/services/DataContributionService.ts`)\n- **Contribution workflow:**\n  - `initiateContribution(userId, metadata)`: Start contribution\n  - `uploadContributionData(contributionId, data)`: Upload dataset\n  - `validateContribution(contributionId)`: Quality validation\n  - `reviewContribution(contributionId, decision)`: Privacy review\n  - `acceptContribution(contributionId)`: Accept into training pool\n  - `rejectContribution(contributionId, reason)`: Reject with feedback\n- **Consent and licensing:**\n  - License options: `exclusive`, `non_exclusive`, `limited`\n  - Consent tracking for data usage\n  - Revocation support (remove from future training)\n- **Credit system:**\n  - `calculateCredits(contribution)`: Based on quantity and quality\n  - `awardCredits(contributionId)`: Add to user account\n  - `getCreditsBalance(userId)`: Current balance\n  - `redeemCredits(userId, reward)`: Use credits for rewards\n  - Credit formula: `credits = trajectories * quality_score * rarity_bonus`\n- **Impact tracking:**\n  - `trackModelInclusion(contributionId, modelVersionId)`: Record usage\n  - `computeImpactScore(contributionId)`: How much did it help?\n  - `getContributionImpact(contributionId)`: Detailed impact report\n  - Impact = improvement delta attributable to contribution\n\n## Database (`server/prisma/schema.prisma`)\n```prisma\nmodel DataContribution {\n  id              String   @id @default(uuid())\n  userId          String\n  organizationId  String?\n  status          String\n  datasetId       String?  @unique\n  trajectoryCount Int\n  qualityScore    Float?\n  licenseType     String\n  consentGrantedAt DateTime\n  metadata        Json\n  creditsAwarded  Int?\n  rejectionReason String?\n  reviewedBy      String?\n  reviewedAt      DateTime?\n  createdAt       DateTime @default(now())\n  updatedAt       DateTime @updatedAt\n  credits         ContributionCredit[]\n  impacts         ContributionImpact[]\n}\n\nmodel ContributionCredit {\n  id              String   @id @default(uuid())\n  userId          String\n  amount          Int\n  reason          String\n  contributionId  String?\n  contribution    DataContribution? @relation(...)\n  awardedAt       DateTime @default(now())\n  @@index([userId])\n}\n\nmodel ContributionImpact {\n  id              String   @id @default(uuid())\n  contributionId  String\n  modelVersionId  String\n  trajectoriesUsed Int\n  impactScore     Float\n  contribution    DataContribution @relation(...)\n  recordedAt      DateTime @default(now())\n}\n```\n\n**Key Files:**\n- `server/src/services/DataContributionService.ts` - Contribution logic\n- `server/src/routes/contributions.routes.ts` - REST API\n- `server/src/types/contribution.types.ts` - Type definitions\n- `app/src/features/contributions/` - Contribution UI feature module",
+        "testStrategy": "Test contribution workflow from initiation to acceptance. Test quality validation runs automatically. Test credit calculation formula. Test credits are awarded on acceptance. Test impact tracking records model usage. Test leaderboard ranks by total credits. Test consent revocation removes from future training. Test license types are enforced.",
+        "priority": "low",
+        "dependencies": [
+          "41",
+          "56"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "61",
+        "title": "Teleoperation Robot Agent Modules (VLA Data)",
+        "description": "Implement teleoperation modules on robot-agent for receiving teleop commands, recording frames, and supporting bilateral (ALOHA-style) control.",
+        "details": "**VLA Data Collection Infrastructure - Robot Side**\n\nImplement the robot-agent side of teleoperation data collection.\n\n## Robot Agent (`robot-agent/src/teleoperation/`)\n\n### teleop-server.ts\n- **WebSocket server for teleop commands:**\n  - Listen on configurable port (default 8765)\n  - Command types: `joint_target`, `cartesian_target`, `gripper`, `pause`, `resume`\n  - Rate limiting to prevent overload (max 100 Hz)\n  - Echo current state back to operator for latency display\n  - Authentication via session token\n  - Graceful disconnection handling\n\n### teleop-recorder.ts\n- **Frame recording with ring buffer:**\n  - Ring buffer for recent N frames (configurable, default 1000)\n  - Store: timestamp, joint_positions, joint_velocities, action, camera frames\n  - Periodic flush to server via REST API (configurable interval)\n  - Camera frame capture integration (resize, compress to JPEG)\n  - Timestamp synchronization with server clock\n  - Intervention marker support (operator can flag corrections)\n  - Memory-efficient storage with typed arrays\n\n### bilateral-adapter.ts\n- **Leader-follower arm mapping:**\n  - Interface for ALOHA-style bilateral teleop\n  - Joint-to-joint correspondence mapping\n  - Gravity compensation awareness\n  - Position/velocity mode switching\n  - Force feedback channel (if hardware supports)\n  - Workspace scaling factors\n\n## Integration\n- Export teleoperation module from robot-agent\n- Add teleoperation config to robot-agent config\n- Connect to SafetyMonitor for E-stop during teleop\n\n**Key Files:**\n- `robot-agent/src/teleoperation/teleop-server.ts` (NEW)\n- `robot-agent/src/teleoperation/teleop-recorder.ts` (NEW)\n- `robot-agent/src/teleoperation/bilateral-adapter.ts` (NEW)\n- `robot-agent/src/teleoperation/index.ts` (NEW)\n- `robot-agent/src/config/config.ts` (UPDATE)",
+        "testStrategy": "Test WebSocket server accepts connections and rate limits. Test frame recording stores correct data types. Test ring buffer evicts oldest frames. Test periodic flush sends to server. Test bilateral adapter maps joints correctly. Test intervention markers are recorded. Test E-stop halts teleop session.",
+        "priority": "high",
+        "dependencies": [
+          "54"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "62",
+        "title": "LeRobot Export Implementation (VLA Data)",
+        "description": "Replace the stub exportToLeRobot() implementation with full Parquet conversion, metadata generation, and RustFS upload for LeRobot v3 format.",
+        "details": "**VLA Data Collection - LeRobot Export**\n\nImplement actual LeRobot v3 format export for teleoperation sessions.\n\n## Server (`server/src/services/TeleoperationService.ts`)\n\n### exportToLeRobot() - Full Implementation\n**Currently:** Returns stub response with random dataset ID\n**Needs:** Full LeRobot v3 export\n\n1. **Parquet Table Generation:**\n   - Install: `npm install parquetjs` or `@apache-arrow/parquet`\n   - Convert frames to columnar format:\n     - `observation.state`: Float32 array for joint positions\n     - `action`: Float32 array for commanded actions\n     - `timestamp`: Float64 for frame timestamps\n   - Create `data/train-00000.parquet` file\n\n2. **Metadata File Generation:**\n   - `meta/info.json`:\n     ```json\n     {\n       \"codebase_version\": \"v3.0\",\n       \"robot_type\": \"<embodiment_tag>\",\n       \"fps\": 30,\n       \"features\": { ... },\n       \"total_episodes\": 1,\n       \"total_frames\": <frame_count>\n     }\n     ```\n   - `meta/stats.json`: Compute mean/std per feature from frames\n   - `meta/episodes.json`: Episode boundaries (single episode per session)\n\n3. **RustFS Upload:**\n   - Use existing `rustfsClient` from `storage/rustfs-client.ts`\n   - Upload to `datasets/<dataset_id>/` bucket\n   - Structure:\n     ```\n     datasets/<uuid>/\n       meta/info.json\n       meta/stats.json\n       meta/episodes.json\n       data/train-00000.parquet\n       videos/observation.images.*/episode_0.mp4 (optional)\n     ```\n\n4. **Validation:**\n   - Verify Parquet schema matches LeRobot spec\n   - Check all required metadata fields present\n   - Validate frame count consistency\n\n**Key Files:**\n- `server/src/services/TeleoperationService.ts` (UPDATE - exportToLeRobot method)\n- `server/package.json` (UPDATE - add parquetjs dependency)",
+        "testStrategy": "Test Parquet file is valid and readable. Test info.json has all required fields. Test stats.json has correct mean/std values. Test episodes.json boundaries match frame counts. Test upload to RustFS succeeds. Test exported dataset is readable by LeRobot tools.",
+        "priority": "high",
+        "dependencies": [
+          "54",
+          "61"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "63",
+        "title": "Synthetic Data NATS Worker (VLA Data)",
+        "description": "Implement NATS-based background worker for synthetic data generation jobs, replacing the simulated job execution with actual job queue processing.",
+        "details": "**VLA Data Pipeline - NATS Worker for Synthetic Generation**\n\nReplace simulateJobExecution() with real NATS-based job processing.\n\n## Server (`server/src/messaging/streams.ts`)\n\n### Add Synthetic Stream\n```typescript\nSTREAM_NAMES.SYNTHETIC_GENERATION = 'SYNTHETIC_GENERATION'\nSUBJECTS.SYNTHETIC_GENERATE = 'jobs.synthetic.generate'\nCONSUMER_NAMES.SYNTHETIC_WORKERS = 'synthetic-workers'\n```\n\n## Server (`server/src/workers/synthetic-generation.worker.ts`)\n\n### Worker Implementation\n```typescript\nexport const syntheticWorker = {\n  start: startSyntheticWorker,\n  stop: stopSyntheticWorker,\n  isRunning: () => isRunning\n}\n\nasync function startSyntheticWorker(): Promise<void> {\n  // Get JetStream consumer\n  // Listen for jobs.synthetic.generate messages\n  // For each message:\n  //   1. Parse SyntheticJobMessage\n  //   2. Update job status to 'queued'\n  //   3. Call IsaacLabClient.submitJob() (or mock for now)\n  //   4. Poll for progress OR wait for webhook\n  //   5. Update progress via syntheticDataService.updateJobProgress()\n  //   6. On complete: syntheticDataService.completeJob()\n  //   7. On failure: syntheticDataService.failJob()\n  //   8. ACK message\n}\n```\n\n## Server (`server/src/services/SyntheticDataService.ts`)\n\n### Update submitJob()\n- Replace `simulateJobExecution()` with NATS publish:\n```typescript\nawait natsClient.publish('jobs.synthetic.generate', {\n  jobId: job.id,\n  config: job.config,\n  callbackUrl: `${process.env.SERVER_URL}/api/synthetic/workers/callback`\n});\n```\n\n## Server (`server/src/routes/synthetic.routes.ts`)\n\n### Add Worker Callbacks\n```typescript\nPOST /api/synthetic/workers/progress\nPOST /api/synthetic/workers/complete\nPOST /api/synthetic/workers/failed\n```\n\n## Server (`server/src/index.ts`)\n\n### Initialize Worker\n```typescript\nimport { syntheticWorker } from './workers/synthetic-generation.worker.js';\nawait syntheticWorker.start();\n```\n\n**Key Files:**\n- `server/src/workers/synthetic-generation.worker.ts` (NEW)\n- `server/src/messaging/streams.ts` (UPDATE)\n- `server/src/services/SyntheticDataService.ts` (UPDATE - remove simulate)\n- `server/src/routes/synthetic.routes.ts` (UPDATE - add worker callbacks)\n- `server/src/index.ts` (UPDATE - start worker)",
+        "testStrategy": "Test job submission publishes to NATS. Test worker consumes and processes jobs. Test progress updates flow through. Test job completion marks database record. Test job failure updates status and error message. Test worker handles NATS disconnection. Test dead-letter queue receives failed jobs after retries.",
+        "priority": "high",
+        "dependencies": [
+          "55"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "64",
+        "title": "Isaac Lab REST Client (VLA Data)",
+        "description": "Implement REST client for Isaac Lab synthetic data generation service with job submission, status polling, cancellation, and output retrieval.",
+        "details": "**VLA Data Pipeline - Isaac Lab Integration**\n\nCreate REST client to communicate with Isaac Lab synthetic generation service.\n\n## Server (`server/src/services/IsaacLabClient.ts`)\n\n### Client Implementation\n```typescript\nexport class IsaacLabClient {\n  private baseUrl: string;\n  private apiKey?: string;\n  private httpClient: AxiosInstance;\n\n  constructor() {\n    this.baseUrl = process.env.ISAAC_LAB_ENDPOINT || 'http://localhost:8100';\n    this.apiKey = process.env.ISAAC_LAB_API_KEY;\n  }\n\n  // Submit synthetic generation job\n  async submitJob(request: IsaacLabRequest): Promise<{ jobId: string }>\n\n  // Get job status and progress\n  async getJobStatus(jobId: string): Promise<IsaacLabJobStatus>\n\n  // Cancel running job\n  async cancelJob(jobId: string): Promise<void>\n\n  // Get generated output path\n  async getJobOutput(jobId: string): Promise<{ outputPath: string; trajectoryCount: number }>\n\n  // Health check\n  async healthCheck(): Promise<{ status: 'healthy' | 'degraded' | 'unhealthy' }>\n}\n\ninterface IsaacLabRequest {\n  task: string;\n  embodiment: string;\n  trajectoryCount: number;\n  domainRandomization: DomainRandomizationConfig;\n  simulation: SimulationConfig;\n  callbackUrl?: string;\n}\n\ninterface IsaacLabJobStatus {\n  jobId: string;\n  status: 'pending' | 'running' | 'completed' | 'failed';\n  progress: number;\n  generatedCount: number;\n  successfulCount: number;\n  failedCount: number;\n  estimatedTimeRemaining?: number;\n  errorMessage?: string;\n  outputPath?: string;\n}\n```\n\n### Mock Mode\n- When ISAAC_LAB_ENDPOINT is 'mock' or undefined, use simulation\n- Simulate realistic job timing and progress\n- Generate mock output for testing\n\n### Error Handling\n- Retry logic for transient failures (3 retries with exponential backoff)\n- Timeout handling (configurable, default 30s per request)\n- Circuit breaker for sustained failures\n\n**Key Files:**\n- `server/src/services/IsaacLabClient.ts` (NEW)\n- `server/src/types/synthetic.types.ts` (UPDATE - add Isaac Lab types if needed)",
+        "testStrategy": "Test job submission returns job ID. Test status polling returns correct progress. Test cancellation stops job. Test output retrieval returns valid path. Test health check reflects service status. Test retry logic handles transient failures. Test mock mode works for development. Test timeout handling.",
+        "priority": "medium",
+        "dependencies": [
+          "55",
+          "63"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "65",
+        "title": "Federated Learning Robot Agent Modules (VLA Data)",
+        "description": "Implement federated learning components on robot-agent for local model training, gradient uploading with differential privacy, and round participation.",
+        "details": "**VLA Fleet Learning - Robot Side**\n\nImplement robot-agent components for federated learning participation.\n\n## Robot Agent (`robot-agent/src/federated/`)\n\n### local-trainer.ts\n- **On-device model fine-tuning:**\n  - Receive global model from server\n  - Fine-tune with local demonstration data\n  - LoRA-based training (parameter efficient)\n  - Support for VLA model architecture\n  - Training config: learning rate, epochs, batch size\n  - Memory-efficient training (gradient checkpointing)\n  - Return model delta (updated - original weights)\n\n### gradient-uploader.ts\n- **Upload model updates with privacy:**\n  - Serialize model delta to compact format\n  - Apply differential privacy noise before upload\n  - Compute update hash for verification\n  - Upload via REST API to server\n  - Retry logic for failed uploads\n  - Progress reporting during upload\n\n### differential-privacy.ts\n- **Gradient clipping and noise injection:**\n  - Clip gradients to max norm (configurable)\n  - Add Gaussian noise scaled by privacy budget\n  - Track local privacy budget consumption\n  - Prevent participation if budget exhausted\n  - Report privacy metrics to server\n\n### round-client.ts\n- **Federated round participation:**\n  - Receive round invitation from server\n  - Check eligibility (privacy budget, connectivity)\n  - Download global model\n  - Run local training\n  - Upload model update\n  - Report completion/failure\n\n**Key Files:**\n- `robot-agent/src/federated/local-trainer.ts` (NEW)\n- `robot-agent/src/federated/gradient-uploader.ts` (NEW)\n- `robot-agent/src/federated/differential-privacy.ts` (NEW)\n- `robot-agent/src/federated/round-client.ts` (NEW)\n- `robot-agent/src/federated/index.ts` (NEW)",
+        "testStrategy": "Test local trainer produces valid model delta. Test gradient clipping limits norm. Test DP noise scales with epsilon. Test uploader retries on failure. Test round client handles full lifecycle. Test privacy budget prevents over-participation. Test model delta serialization roundtrips.",
+        "priority": "medium",
+        "dependencies": [
+          "56"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "66",
+        "title": "Secure Aggregation Implementation (VLA Data)",
+        "description": "Implement secure aggregation for federated learning with cryptographic masking, preventing server from seeing individual model updates.",
+        "details": "**VLA Fleet Learning - Secure Aggregation**\n\nAdd cryptographic protection for federated model updates.\n\n## Server (`server/src/services/SecureAggregationService.ts`)\n\n### Additive Masking Protocol\n1. **Key Exchange Phase:**\n   - Each participant generates random mask seed\n   - Participants exchange seeds pairwise (via server relay)\n   - Server cannot see seeds (encrypted end-to-end)\n\n2. **Masking Phase:**\n   - Each participant masks their update: `masked_update = update + sum(masks_to_add) - sum(masks_to_subtract)`\n   - Masks cancel out when summed: `sum(masked_updates) = sum(updates)`\n   - Server aggregates masked updates\n\n3. **Dropout Handling:**\n   - Surviving participants reveal masks for dropped participants\n   - Aggregation completes with available updates\n\n### Implementation\n```typescript\nexport class SecureAggregationService {\n  // Initialize round with participants\n  async initializeRound(roundId: string, participants: string[]): Promise<void>\n\n  // Generate and distribute pairwise seeds\n  async distributeMasks(roundId: string): Promise<Map<string, Buffer>>\n\n  // Verify masked update structure\n  async verifyMaskedUpdate(roundId: string, participantId: string, maskedUpdate: Buffer): Promise<boolean>\n\n  // Aggregate masked updates\n  async aggregateMaskedUpdates(roundId: string): Promise<Float32Array>\n\n  // Handle participant dropout\n  async handleDropout(roundId: string, droppedParticipantId: string): Promise<void>\n}\n```\n\n## Server (`server/src/services/FederatedLearningService.ts`)\n\n### Integration\n- Use SecureAggregationService when `config.secureAggregation: true`\n- Fall back to plain FedAvg when disabled\n- Store masked updates instead of plain deltas\n- Verify aggregation result\n\n**Key Files:**\n- `server/src/services/SecureAggregationService.ts` (NEW)\n- `server/src/services/FederatedLearningService.ts` (UPDATE)\n- `server/src/types/federated.types.ts` (UPDATE - add secure aggregation types)",
+        "testStrategy": "Test mask generation produces random values. Test masks cancel out in sum. Test dropout handling recovers aggregation. Test aggregation result matches expected sum. Test verification rejects tampered updates. Test integration with FederatedLearningService. Test fallback to plain FedAvg when disabled.",
+        "priority": "medium",
+        "dependencies": [
+          "56",
+          "65"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "67",
+        "title": "PDF Export for Training Compliance (VLA Compliance)",
+        "description": "Implement PDF generation for EU AI Act training data documentation with compliance-formatted templates and digital signatures.",
+        "details": "**VLA Compliance - PDF Export**\n\nAdd PDF generation capability to TrainingDataDocService.\n\n## Server (`server/src/services/TrainingDataDocService.ts`)\n\n### exportDocumentation() - PDF Format\n**Currently:** JSON and Markdown only\n**Add:** PDF generation using pdfkit or puppeteer\n\n### Option A: pdfkit (Lighter, no browser dependency)\n```typescript\nimport PDFDocument from 'pdfkit';\n\nasync exportAsPdf(data: ExportedDocument): Promise<Buffer> {\n  const doc = new PDFDocument();\n  const buffers: Buffer[] = [];\n\n  doc.on('data', buffers.push.bind(buffers));\n  doc.on('end', () => resolve(Buffer.concat(buffers)));\n\n  // Header\n  doc.fontSize(24).text('Training Data Documentation', { align: 'center' });\n  doc.fontSize(12).text(`Model Version: ${data.modelVersionId}`);\n  doc.text(`Generated: ${data.generatedAt}`);\n\n  // Summary Section\n  doc.addPage();\n  doc.fontSize(18).text('Training Data Summary');\n  // ... format summary data\n\n  // Provenance Section\n  doc.addPage();\n  doc.fontSize(18).text('Dataset Provenance');\n  // ... format provenance table\n\n  // Bias Assessment Section\n  doc.addPage();\n  doc.fontSize(18).text('Bias Assessment');\n  // ... format assessment data\n\n  doc.end();\n}\n```\n\n### Option B: puppeteer (Rich HTML rendering)\n```typescript\nimport puppeteer from 'puppeteer';\n\nasync exportAsPdf(data: ExportedDocument): Promise<Buffer> {\n  // Generate HTML from markdown\n  const html = renderComplianceTemplate(data);\n\n  // Launch headless browser\n  const browser = await puppeteer.launch();\n  const page = await browser.newPage();\n  await page.setContent(html);\n\n  // Generate PDF\n  const pdf = await page.pdf({\n    format: 'A4',\n    printBackground: true,\n    margin: { top: '1in', bottom: '1in', left: '1in', right: '1in' }\n  });\n\n  await browser.close();\n  return Buffer.from(pdf);\n}\n```\n\n### EU AI Act Compliance Template\n- Header with model version, date, organization\n- Table of Contents with page numbers\n- Training Data Summary (Art. 53)\n- Dataset Sources with license information\n- Bias Assessment and Mitigations\n- Known Limitations\n- Processing Purposes\n- Footer with page numbers and generation timestamp\n\n**Key Files:**\n- `server/src/services/TrainingDataDocService.ts` (UPDATE)\n- `server/package.json` (UPDATE - add pdfkit or puppeteer)\n- `server/src/templates/compliance-pdf.ts` (NEW - PDF template)",
+        "testStrategy": "Test PDF generation produces valid PDF. Test all sections are included. Test table formatting is correct. Test images/logos render if included. Test PDF is readable by standard viewers. Test file size is reasonable. Test generation completes in reasonable time (<10s).",
+        "priority": "high",
+        "dependencies": [
+          "58"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "68",
+        "title": "Ensemble Uncertainty for Active Learning (VLA Data)",
+        "description": "Implement multi-model ensemble disagreement and MC Dropout uncertainty estimation for improved active learning prioritization.",
+        "details": "**VLA Active Learning - Ensemble Uncertainty**\n\nAdd proper uncertainty estimation using model ensembles.\n\n## Server (`server/src/services/ActiveLearningService.ts`)\n\n### Ensemble Disagreement\n**Currently:** Uses single-model confidence\n**Add:** Multi-model ensemble disagreement\n\n```typescript\ninterface EnsembleUncertainty {\n  modelId: string;\n  inputHash: string;\n  predictions: EnsemblePrediction[];\n  meanConfidence: number;\n  varianceConfidence: number;\n  disagreementScore: number;  // Jensen-Shannon divergence\n  epistemicUncertainty: number;  // Model uncertainty\n  aleatoric: number;  // Data uncertainty (if separable)\n}\n\ninterface EnsemblePrediction {\n  ensembleMemberId: string;\n  confidence: number;\n  actionPrediction: number[];\n}\n```\n\n### computeEnsembleUncertainty()\n```typescript\nasync computeEnsembleUncertainty(\n  modelIds: string[],  // Ensemble member model IDs\n  inputHash: string\n): Promise<EnsembleUncertainty> {\n  // Fetch predictions from all ensemble members\n  const predictions = await this.getPredictionsForInput(modelIds, inputHash);\n\n  // Compute variance across ensemble\n  const confidences = predictions.map(p => p.confidence);\n  const meanConf = mean(confidences);\n  const varianceConf = variance(confidences);\n\n  // Compute Jensen-Shannon divergence for disagreement\n  const disagreement = this.computeJSDivergence(predictions);\n\n  // Epistemic uncertainty = high variance = model doesn't know\n  const epistemic = Math.sqrt(varianceConf);\n\n  return {\n    meanConfidence: meanConf,\n    varianceConfidence: varianceConf,\n    disagreementScore: disagreement,\n    epistemicUncertainty: epistemic,\n    // ...\n  };\n}\n```\n\n### MC Dropout Uncertainty\n```typescript\n// For models that support MC Dropout:\n// Run N forward passes with dropout enabled\n// Compute variance across passes\nasync computeMCDropoutUncertainty(\n  modelId: string,\n  inputHash: string,\n  numPasses: number = 10\n): Promise<number> {\n  // This would be called from robot-agent during inference\n  // Robot logs multiple passes, server aggregates\n  const passes = await this.getMCDropoutPasses(modelId, inputHash);\n  return this.computeVariance(passes);\n}\n```\n\n### Integration with Priority Scoring\n- Update `computeCollectionPriorities()` to use ensemble uncertainty\n- Higher epistemic uncertainty = higher priority for data collection\n- Track uncertainty trends over time\n\n## Robot Agent Integration\n- Robot agent should log predictions from ensemble members\n- Support MC Dropout mode during inference\n- Report ensemble uncertainty back to server\n\n**Key Files:**\n- `server/src/services/ActiveLearningService.ts` (UPDATE)\n- `server/src/types/active-learning.types.ts` (UPDATE - add ensemble types)\n- `robot-agent/src/vla/vla-controller.ts` (UPDATE - log ensemble predictions)",
+        "testStrategy": "Test ensemble predictions are aggregated correctly. Test variance computation is accurate. Test JS divergence produces valid values (0-1). Test high disagreement increases priority score. Test MC Dropout aggregation works. Test integration with robot-agent prediction logging. Test uncertainty trends track over time.",
+        "priority": "medium",
+        "dependencies": [
+          "59"
+        ],
+        "status": "pending",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-01-11T03:06:46.484Z",
-      "taskCount": 52,
-      "completedCount": 27,
+      "lastModified": "2026-01-17T12:00:00.000Z",
+      "taskCount": 68,
+      "completedCount": 48,
       "tags": [
         "master"
       ]
