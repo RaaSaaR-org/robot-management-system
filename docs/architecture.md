@@ -1,60 +1,39 @@
-# RoboMindOS System Architecture
+# NeoDEM: RoboMindOS — System Architecture
 
-> **Version**: 1.0
-> **Last Updated**: December 2025
+> *"The body cannot live without the mind."* — Morpheus
+
+**Version**: 2.0
+**Last Updated**: January 2025
 
 ---
 
 ## System Overview
 
-RoboMindOS is a distributed system for managing fleets of humanoid robots. It consists of three main components that communicate via the A2A (Agent-to-Agent) protocol.
+NeoDEM is a distributed system for managing fleets of humanoid robots. It combines Vision-Language-Action (VLA) model integration for skill learning with EU AI Act compliance — enabling the "awakening of the machine" while keeping it transparent and aligned.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              OPERATORS                                   │
-│                         (Desktop/Mobile/Web)                            │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    │ HTTP/WebSocket
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│                          ┌─────────────────┐                            │
-│                          │      APP        │                            │
-│                          │  React + Tauri  │                            │
-│                          │   Port: 1420    │                            │
-│                          └────────┬────────┘                            │
-│                                   │                                     │
-│                                   │ REST/WebSocket                      │
-│                                   ▼                                     │
-│                          ┌─────────────────┐                            │
-│                          │     SERVER      │                            │
-│                          │  Node.js A2A    │                            │
-│                          │   Port: 3000    │                            │
-│                          └────────┬────────┘                            │
-│                                   │                                     │
-│                    CLOUD/ON-PREM  │ A2A Protocol                        │
-│                                   │                                     │
-└───────────────────────────────────┼─────────────────────────────────────┘
-                                    │
-           ┌────────────────────────┼────────────────────────┐
-           │                        │                        │
-           ▼                        ▼                        ▼
-┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│  ROBOT AGENT    │      │  ROBOT AGENT    │      │  ROBOT AGENT    │
-│   Port: 41243   │      │   Port: 41244   │      │   Port: 41245   │
-│                 │      │                 │      │                 │
-│  ┌───────────┐  │      │  ┌───────────┐  │      │  ┌───────────┐  │
-│  │  MindOs   │  │      │  │  MindOs   │  │      │  │  MindOs   │  │
-│  │    AI     │  │      │  │    AI     │  │      │  │    AI     │  │
-│  └───────────┘  │      │  └───────────┘  │      │  └───────────┘  │
-└────────┬────────┘      └────────┬────────┘      └────────┬────────┘
-         │                        │                        │
-         ▼                        ▼                        ▼
-   ┌───────────┐           ┌───────────┐           ┌───────────┐
-   │  ROBOT 1  │           │  ROBOT 2  │           │  ROBOT 3  │
-   │ Hardware  │           │ Hardware  │           │ Hardware  │
-   └───────────┘           └───────────┘           └───────────┘
+                                    NeoDEM: RoboMindOS
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                                                                         │
+    │   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        │
+    │   │             │  REST  │             │  A2A   │             │        │
+    │   │     App     │◄──────►│   Server    │◄──────►│ Robot Agent │        │
+    │   │  React/Tauri│   WS   │   Node.js   │Protocol│  Genkit AI  │        │
+    │   │             │        │             │        │             │        │
+    │   └─────────────┘        └──────┬──────┘        └──────┬──────┘        │
+    │         :1420                   │                      │               │
+    │                                 │                      │ gRPC          │
+    │                                 ▼                      ▼               │
+    │                          ┌─────────────┐        ┌─────────────┐        │
+    │                          │ PostgreSQL  │        │     VLA     │        │
+    │                          │  + MLflow   │        │  Inference  │        │
+    │                          │             │        │  (Oracle)   │        │
+    │                          └─────────────┘        └─────────────┘        │
+    │                               :5432                  :50051            │
+    │                                                                         │
+    │   ─────────────────────────────────────────────────────────────────    │
+    │   Infrastructure:  NATS :4222  │  RustFS :9000  │  Prometheus :9090    │
+    └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -63,37 +42,42 @@ RoboMindOS is a distributed system for managing fleets of humanoid robots. It co
 
 ### 1. App (Frontend)
 
-The user-facing application for operators to manage and monitor robots.
+The operator interface for managing and monitoring the fleet.
 
-| Aspect       | Details                                     |
-| ------------ | ------------------------------------------- |
-| **Location** | `app/`                                      |
-| **Stack**    | React 18, TypeScript, Tailwind CSS, Zustand |
-| **Wrapper**  | Tauri 2.0 (desktop), Capacitor (mobile)     |
-| **Port**     | 1420 (development)                          |
-| **Build**    | Vite                                        |
+| Aspect | Details |
+|--------|---------|
+| **Location** | `app/` |
+| **Stack** | React 18, TypeScript, Tailwind CSS, Zustand |
+| **Wrapper** | Tauri 2.0 (desktop) |
+| **Port** | 1420 (development), 80 (production) |
+| **Build** | Vite |
 
 **Key Features:**
 
 - Fleet dashboard with real-time robot positions
 - Natural language command interface
+- VLA model training UI
+- Skill library and deployment
 - Live telemetry visualization
-- Task management and monitoring
+- EU AI Act compliance logging
 - Emergency stop controls
 
-**Architecture Pattern:** Feature-first organization with Zustand stores per feature.
+**Architecture Pattern:** Feature-first organization with Zustand stores.
 
 ```
 app/src/
 ├── features/
-│   ├── robots/      # Robot management
-│   ├── fleet/       # Fleet overview & map
-│   ├── command/     # NL command interface
-│   ├── alerts/      # Alert system
-│   ├── tasks/       # Task management
-│   └── settings/    # User preferences
-├── shared/          # Shared components, hooks, utils
-└── app/             # App shell, routing, providers
+│   ├── robots/         # Robot management
+│   ├── fleet/          # Fleet overview & map
+│   ├── training/       # VLA training UI
+│   ├── deployment/     # Model deployment
+│   ├── command/        # NL command interface
+│   ├── compliance/     # EU AI Act logging
+│   ├── explainability/ # AI decision viewer
+│   ├── safety/         # Safety monitoring
+│   └── alerts/         # Alert system
+├── shared/             # Shared components, hooks, utils
+└── app/                # App shell, routing, providers
 ```
 
 ---
@@ -102,62 +86,68 @@ app/src/
 
 Central orchestration server implementing the A2A protocol.
 
-| Aspect       | Details                      |
-| ------------ | ---------------------------- |
-| **Location** | `server/`                    |
-| **Stack**    | Node.js, Express, TypeScript |
-| **Protocol** | A2A (Agent-to-Agent)         |
-| **Port**     | 3000                         |
-| **Storage**  | In-memory (database planned) |
+| Aspect | Details |
+|--------|---------|
+| **Location** | `server/` |
+| **Stack** | Node.js, Express, Prisma, TypeScript |
+| **Protocol** | A2A (Agent-to-Agent) |
+| **Port** | 3001 |
+| **Database** | PostgreSQL |
 
 **Key Features:**
 
 - Robot registration and discovery
 - A2A conversation management
-- Command routing to robots
-- Telemetry aggregation
-- Task orchestration
+- VLA training orchestration
+- Model deployment to fleet
+- Skill library management
+- EU AI Act compliance logging
+- MLflow integration
 
-**Architecture Pattern:** Service-oriented with route handlers and manager services.
+**Architecture Pattern:** Routes + Services with repository layer.
 
 ```
 server/src/
-├── routes/          # API endpoints
+├── routes/              # API endpoints
 │   ├── robot.routes.ts
-│   ├── conversation.routes.ts
-│   ├── task.routes.ts
-│   └── agent.routes.ts
-├── services/        # Business logic
+│   ├── training.routes.ts
+│   ├── deployment.routes.ts
+│   └── compliance.routes.ts
+├── services/            # Business logic
 │   ├── RobotManager.ts
-│   ├── ConversationManager.ts
-│   └── A2AClient.ts
-├── websocket/       # Real-time communication
-└── types/           # TypeScript definitions
+│   ├── TrainingOrchestrator.ts
+│   ├── DeploymentService.ts
+│   ├── SkillLibraryService.ts
+│   └── ComplianceLogger.ts
+├── repositories/        # Data access
+├── websocket/           # Real-time communication
+└── types/               # TypeScript definitions
 ```
 
 ---
 
 ### 3. Robot Agent
 
-Software that runs on each robot, providing AI-powered command processing.
+AI-powered software that runs on each robot (or in simulation).
 
-| Aspect       | Details                                  |
-| ------------ | ---------------------------------------- |
-| **Location** | `robot-agent/`                           |
-| **Stack**    | Node.js, Express, Genkit, Gemini AI      |
-| **Protocol** | A2A SDK                                  |
-| **Port**     | 41243+ (one per robot)                   |
-| **Modes**    | Production (hardware) / Simulation (dev) |
+| Aspect | Details |
+|--------|---------|
+| **Location** | `robot-agent/` |
+| **Stack** | Node.js, Genkit, Gemini AI |
+| **Protocol** | A2A SDK |
+| **Port** | 41243+ |
+| **Modes** | Production (hardware) / Simulation (dev) |
 
 **Key Features:**
 
 - Natural language command interpretation
+- VLA model inference client
 - A2A protocol compliance
 - Robot state management
 - Telemetry streaming
-- Tool execution (navigation, manipulation)
+- Safety monitoring & E-stop
 
-**Architecture Pattern:** AI agent with Genkit tools for robot actions.
+**Architecture Pattern:** AI agent with Genkit tools.
 
 ```
 robot-agent/src/
@@ -166,14 +156,55 @@ robot-agent/src/
 │   ├── agent-executor.ts
 │   └── genkit.ts
 ├── robot/           # Robot state & telemetry
-│   ├── state.ts
-│   ├── telemetry.ts
-│   └── types.ts
 ├── tools/           # Genkit AI tools
 │   ├── navigation.ts
 │   ├── manipulation.ts
-│   └── status.ts
-└── api/             # REST & WebSocket
+│   └── vla-skill.ts
+├── vla/             # VLA inference client
+│   ├── client.ts
+│   └── controller.ts
+├── safety/          # Safety monitoring
+└── compliance/      # Compliance logging client
+```
+
+---
+
+### 4. VLA Inference Server (The Oracle)
+
+> *"I'm going to let you in on a little secret. Being The One is just like being in love."* — The Oracle
+
+Vision-Language-Action model serving for skill execution.
+
+| Aspect | Details |
+|--------|---------|
+| **Location** | `vla-inference/` |
+| **Stack** | Python, gRPC, PyTorch |
+| **Protocol** | gRPC (Predict, StreamControl) |
+| **Port** | 50051 (gRPC), 9090 (metrics) |
+| **Models** | pi0.6, OpenVLA, GR00T |
+
+**Key Features:**
+
+- Multi-model support (factory pattern)
+- Streaming action predictions
+- GPU acceleration (CUDA)
+- Prometheus metrics
+- Health checks
+
+**Architecture Pattern:** gRPC servicer with model factory.
+
+```
+vla-inference/
+├── server.py           # Async gRPC server
+├── servicer.py         # gRPC service implementation
+├── config.py           # Configuration
+├── metrics.py          # Prometheus metrics
+├── models/
+│   ├── __init__.py     # Model factory
+│   ├── pi0.py          # pi0.6 model
+│   ├── openvla.py      # OpenVLA 7B
+│   └── groot.py        # GR00T (stub)
+└── protos/             # Generated gRPC code
 ```
 
 ---
@@ -182,7 +213,7 @@ robot-agent/src/
 
 ### A2A Protocol (Agent-to-Agent)
 
-The primary protocol for server-robot communication, enabling multi-turn conversations and task management.
+Primary protocol for server-robot communication.
 
 ```
 ┌──────────┐                    ┌──────────────┐
@@ -200,102 +231,118 @@ The primary protocol for server-robot communication, enabling multi-turn convers
      │         Task Created            │
      │<────────────────────────────────│
      │                                 │
-     │  GET /tasks/:id (polling)       │
-     │────────────────────────────────>│
-     │         Task Status             │
-     │<────────────────────────────────│
-     │                                 │
 ```
 
-**Agent Card**: Each agent exposes `/.well-known/agent-card.json` describing its capabilities.
+### gRPC (Robot ↔ VLA Inference)
 
-**Message Types**:
+High-performance streaming for VLA predictions.
 
-- `message/send` - Send command to agent
-- `task/get` - Get task status
-- `task/cancel` - Cancel running task
-
----
-
-### REST API
-
-Used for app-to-server communication and robot management.
-
-| Endpoint                      | Method | Description        |
-| ----------------------------- | ------ | ------------------ |
-| `/robots`                     | GET    | List all robots    |
-| `/robots/:id/register`        | POST   | Register robot     |
-| `/robots/:id/command`         | POST   | Send command       |
-| `/conversations`              | POST   | Start conversation |
-| `/conversations/:id/messages` | POST   | Send message       |
-
----
+```
+┌──────────────┐                    ┌──────────────┐
+│ Robot Agent  │                    │ VLA Inference│
+└──────┬───────┘                    └──────┬───────┘
+       │                                   │
+       │  Predict(image, instruction)      │
+       │──────────────────────────────────>│
+       │         ActionPrediction          │
+       │<──────────────────────────────────│
+       │                                   │
+       │  StreamControl(stream of images)  │
+       │──────────────────────────────────>│
+       │         Stream of actions         │
+       │<──────────────────────────────────│
+       │                                   │
+```
 
 ### WebSocket
 
-Real-time streaming for telemetry and events.
+Real-time telemetry and events.
 
-```
-┌─────────┐         ┌──────────┐         ┌─────────────┐
-│   App   │◄───────►│  Server  │◄───────►│ Robot Agent │
-└─────────┘   WS    └──────────┘   WS    └─────────────┘
-              │                    │
-         Aggregated           Per-Robot
-         Telemetry            Telemetry
-```
-
-**Events**:
-
-- `telemetry` - Sensor data (position, battery, etc.)
-- `status` - Robot status changes
-- `alert` - Warning/error notifications
-- `task` - Task progress updates
+| Event | Description |
+|-------|-------------|
+| `telemetry` | Position, battery, sensors |
+| `status` | Robot state changes |
+| `alert` | Warnings and errors |
+| `task` | Task progress updates |
+| `compliance` | Audit log events |
 
 ---
 
 ## Data Flow
 
-### Command Flow
+### Skill Upload Flow ("I know Kung Fu")
 
 ```
-1. User enters command: "Move Robot-01 to Warehouse A"
+1. Operator uploads training demonstrations
    │
    ▼
-2. App sends to Server: POST /robots/robot-01/command
+2. Server stores in RustFS, creates dataset
    │
    ▼
-3. Server creates A2A conversation with Robot Agent
+3. Training job submitted to orchestrator
    │
    ▼
-4. Robot Agent's Gemini AI interprets command
+4. VLA model fine-tuned (MLflow tracking)
    │
    ▼
-5. Genkit tool executes: navigation.move_to_location()
+5. Model deployed to VLA Inference server
    │
    ▼
-6. Robot hardware moves (or simulation updates)
+6. Skill added to Skill Library
    │
    ▼
-7. Telemetry streams position updates via WebSocket
+7. Robot agents load new skill via gRPC
    │
    ▼
-8. App displays real-time robot movement on map
+8. Fleet "knows Kung Fu"
 ```
 
-### Telemetry Flow
+### Command Execution Flow
 
 ```
-Robot Sensors
-     │
-     ▼ (100ms intervals)
-Robot Agent generates telemetry
-     │
-     ▼ (WebSocket)
-Server aggregates from all robots
-     │
-     ▼ (WebSocket)
-App updates UI (position, battery, status)
+1. User: "Pick up the red cup"
+   │
+   ▼
+2. Server routes to Robot Agent via A2A
+   │
+   ▼
+3. Genkit AI interprets command
+   │
+   ▼
+4. VLA skill invoked if available
+   │
+   ▼
+5. Robot Agent → VLA Inference (gRPC)
+   │
+   ▼
+6. VLA model predicts actions (50 Hz)
+   │
+   ▼
+7. Robot executes actions
+   │
+   ▼
+8. Telemetry streamed back via WebSocket
 ```
+
+---
+
+## Infrastructure
+
+### Databases & Storage
+
+| Service | Purpose | Port |
+|---------|---------|------|
+| **PostgreSQL** | Primary database (Prisma ORM) | 5432 |
+| **MLflow** | Experiment tracking, model registry | 5000 |
+| **RustFS** | S3-compatible object storage | 9000 |
+| **NATS** | Message queue for async tasks | 4222 |
+
+### Monitoring
+
+| Service | Purpose | Port |
+|---------|---------|------|
+| **Prometheus** | Metrics collection | 9090 |
+| **Grafana** | Dashboards (optional) | 3000 |
 
 ---
 
@@ -309,94 +356,100 @@ App updates UI (position, battery, status)
 │                                                  │
 │  ┌─────────┐   ┌─────────┐   ┌──────────────┐   │
 │  │   App   │   │ Server  │   │ Robot Agent  │   │
-│  │  :1420  │   │  :3000  │   │ :41243-41250 │   │
+│  │  :1420  │   │  :3001  │   │    :41243    │   │
 │  └─────────┘   └─────────┘   └──────────────┘   │
-│       │             │               │            │
-│       └─────────────┴───────────────┘            │
-│                 localhost                        │
+│                                                  │
+│  docker-compose up -d postgres nats rustfs       │
 └──────────────────────────────────────────────────┘
 ```
 
-### Production
+### Production (Kubernetes)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         CLOUD                                │
-│  ┌─────────────────┐        ┌─────────────────────────┐     │
-│  │   CDN / Edge    │        │     Server Cluster      │     │
-│  │  (App Assets)   │        │  (Load Balanced A2A)    │     │
-│  └─────────────────┘        └───────────┬─────────────┘     │
-│                                         │                    │
-└─────────────────────────────────────────┼────────────────────┘
-                                          │
-                    ┌─────────────────────┼─────────────────────┐
-                    │                     │                     │
-                    ▼                     ▼                     ▼
-            ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-            │   Robot 1   │       │   Robot 2   │       │   Robot N   │
-            │   (Local)   │       │   (Local)   │       │   (Local)   │
-            └─────────────┘       └─────────────┘       └─────────────┘
+│                      Kubernetes Cluster                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │     App     │  │   Server    │  │ Robot Agent │         │
+│  │  (2-5 pods) │  │ (2-10 pods) │  │  (1+ pods)  │         │
+│  │     HPA     │  │     HPA     │  │             │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │ PostgreSQL  │  │    NATS     │  │   RustFS    │         │
+│  │ StatefulSet │  │ StatefulSet │  │ StatefulSet │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐                          │
+│  │   MLflow    │  │VLA Inference│  (GPU nodes)             │
+│  │             │  │    (GPU)    │                          │
+│  └─────────────┘  └─────────────┘                          │
+│                                                              │
+│  NetworkPolicies │ PodDisruptionBudgets │ Secrets          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Security Architecture
 
-### Current State (Development)
+### Authentication & Authorization
 
-- No authentication (all endpoints open)
-- No encryption (HTTP, not HTTPS)
-- In-memory storage (no persistence)
+| Layer | Implementation |
+|-------|----------------|
+| **User Auth** | JWT tokens |
+| **Robot Auth** | API keys |
+| **RBAC** | Admin, Operator, Viewer roles |
 
-### Planned (Production)
+### Transport Security
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      SECURITY LAYERS                         │
-├─────────────────────────────────────────────────────────────┤
-│  Authentication                                              │
-│  ├── JWT tokens for user sessions                           │
-│  ├── API keys for robot agents                              │
-│  └── OAuth2 for third-party integrations                    │
-├─────────────────────────────────────────────────────────────┤
-│  Authorization                                               │
-│  ├── Role-based access (Admin, Operator, Viewer)            │
-│  ├── Robot-level permissions                                │
-│  └── Zone-based restrictions                                │
-├─────────────────────────────────────────────────────────────┤
-│  Transport                                                   │
-│  ├── TLS/HTTPS for all connections                          │
-│  ├── WSS for WebSocket                                      │
-│  └── Certificate pinning for robots                         │
-├─────────────────────────────────────────────────────────────┤
-│  Safety                                                      │
-│  ├── Command validation and sanitization                    │
-│  ├── Rate limiting                                          │
-│  ├── Emergency stop override                                │
-│  └── Audit logging                                          │
-└─────────────────────────────────────────────────────────────┘
-```
+- TLS/HTTPS for all connections
+- WSS for WebSocket
+- gRPC with TLS for VLA inference
+
+### EU AI Act Compliance
+
+| Requirement | Implementation |
+|-------------|----------------|
+| **Art. 12 Logging** | Tamper-evident audit trail |
+| **Art. 13 Transparency** | AI decision explainability |
+| **Art. 14 Human Oversight** | Emergency stop, supervision |
+| **GDPR Art. 30** | Records of Processing Activities |
 
 ---
 
-## Technology Stack Summary
+## Technology Stack
 
-| Layer         | Technology                  | Purpose             |
-| ------------- | --------------------------- | ------------------- |
-| **Frontend**  | React, TypeScript, Tailwind | UI                  |
-| **Desktop**   | Tauri 2.0 (Rust)            | Native wrapper      |
-| **Mobile**    | Capacitor                   | iOS/Android         |
-| **Server**    | Node.js, Express            | API & orchestration |
-| **Protocol**  | A2A                         | Agent communication |
-| **AI**        | Genkit, Gemini              | NL interpretation   |
-| **Real-time** | WebSocket                   | Telemetry streaming |
-| **Database**  | SQLite/PostgreSQL (planned) | Persistence         |
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| **Frontend** | React, TypeScript, Tailwind | UI |
+| **Desktop** | Tauri 2.0 (Rust) | Native wrapper |
+| **Server** | Node.js, Express, Prisma | API & orchestration |
+| **Protocol** | A2A | Agent communication |
+| **AI** | Genkit, Gemini | NL interpretation |
+| **VLA** | Python, PyTorch, gRPC | Vision-Language-Action |
+| **Real-time** | WebSocket, NATS | Streaming |
+| **Database** | PostgreSQL | Persistence |
+| **Storage** | RustFS (S3) | Object storage |
+| **ML Ops** | MLflow | Experiment tracking |
+| **Orchestration** | Kubernetes, Helm | Deployment |
 
 ---
 
 ## Related Documentation
 
-- [Frontend Architecture](./app-architecture.md) - Detailed React/Tauri patterns
-- [PRD](./prd.md) - Product requirements
-- [Brand Guide](./brand.md) - Visual design system
-- [A2A Protocol](./humanoid-robot-communication-protocols.md) - Protocol details
+| Document | Description |
+|----------|-------------|
+| [VLA Integration Guide](./VLA-integration-guide.md) | VLA model integration |
+| [Deployment Guide](./deployment.md) | Kubernetes deployment |
+| [Brand Guide](./brand.md) | Visual design system |
+| [PRD](./prd.md) | Product requirements |
+
+---
+
+<div align="center">
+
+**NeoDEM** — *Overseeing the Awakening of the Machine*
+
+</div>

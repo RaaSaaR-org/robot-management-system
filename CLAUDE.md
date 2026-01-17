@@ -1,26 +1,28 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMindOS codebase.
+> *"I know Kung Fu."* — Neo
+
+This file provides guidance to Claude Code when working with the **NeoDEM** codebase.
 
 ## Project Overview
 
-RoboMindOS is a distributed fleet management platform for humanoid robots with EU AI Act compliance features and Vision-Language-Action (VLA) model integration for skill learning and deployment.
+**NeoDEM** (Neo-Deus Ex Machina) is a distributed fleet management platform for humanoid robots. It combines Vision-Language-Action (VLA) model integration for skill learning with EU AI Act compliance — enabling the "awakening of the machine" while keeping it transparent and aligned.
 
-| Component          | Location         | Description                          | Port  |
-| ------------------ | ---------------- | ------------------------------------ | ----- |
-| **App**            | `app/`           | React + Tauri frontend               | 1420  |
-| **Server**         | `server/`        | Node.js A2A protocol server          | 3001  |
-| **Robot Agent**    | `robot-agent/`   | AI-powered robot software            | 41243 |
-| **VLA Inference**  | `vla-inference/` | Python gRPC VLA model server         | 50051 |
+| Component | Location | Description | Port |
+|-----------|----------|-------------|------|
+| **App** | `app/` | React + Tauri frontend | 1420 |
+| **Server** | `server/` | Node.js A2A protocol server | 3001 |
+| **Robot Agent** | `robot-agent/` | AI-powered robot software | 41243 |
+| **VLA Inference** | `vla-inference/` | Python gRPC VLA model server | 50051 |
 
 ## Component-Specific Guidance
 
 Each component has its own `AGENTS.md` file with detailed guidance:
 
-- `app/AGENTS.md` - Frontend development patterns, Zustand stores, Tailwind
-- `server/AGENTS.md` - Server routes, services, Prisma database
-- `robot-agent/AGENTS.md` - Genkit tools, robot state, safety monitoring
-- `vla-inference/README.md` - VLA model serving, gRPC API, metrics
+- `app/AGENTS.md` — Frontend patterns, Zustand stores, Tailwind
+- `server/AGENTS.md` — Routes, services, Prisma database
+- `robot-agent/AGENTS.md` — Genkit tools, robot state, safety monitoring
+- `vla-inference/README.md` — VLA model serving, gRPC API, metrics
 
 **Always check the relevant AGENTS.md file when working in a specific component.**
 
@@ -44,35 +46,38 @@ cd vla-inference && make run
 
 ### Individual Component Commands
 
-| Component        | Dev                               | Build           | Type Check          |
-| ---------------- | --------------------------------- | --------------- | ------------------- |
-| **App**          | `cd app && npm run dev`           | `npm run build` | `npx tsc`           |
-| **Server**       | `cd server && npm run dev`        | `npm run build` | `npm run typecheck` |
-| **Robot**        | `cd robot-agent && npm run dev`   | `npm run build` | `npm run typecheck` |
-| **VLA Inference**| `cd vla-inference && make run`    | Docker build    | N/A (Python)        |
+| Component | Dev | Build | Type Check |
+|-----------|-----|-------|------------|
+| **App** | `cd app && npm run dev` | `npm run build` | `npx tsc` |
+| **Server** | `cd server && npm run dev` | `npm run build` | `npm run typecheck` |
+| **Robot** | `cd robot-agent && npm run dev` | `npm run build` | `npm run typecheck` |
+| **VLA Inference** | `cd vla-inference && make run` | Docker build | `mypy` |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              RoboMindOS Architecture                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐         ┌──────────────┐         ┌──────────────┐        │
-│  │     App      │ ◄─────► │    Server    │ ◄─────► │ Robot Agent  │        │
-│  │  (React +    │  REST/  │  (Node.js    │   A2A   │  (Genkit AI) │        │
-│  │   Tauri)     │   WS    │   Express)   │ Protocol│              │        │
-│  └──────────────┘         └──────┬───────┘         └──────┬───────┘        │
-│                                  │                        │                 │
-│                                  │                        │ gRPC            │
-│                                  ▼                        ▼                 │
-│                           ┌──────────────┐         ┌──────────────┐        │
-│                           │  PostgreSQL  │         │VLA Inference │        │
-│                           │   + MLflow   │         │   (Python)   │        │
-│                           └──────────────┘         └──────────────┘        │
-│                                                                              │
-│  Infrastructure: NATS (messaging) │ RustFS (object storage) │ Prometheus   │
-└─────────────────────────────────────────────────────────────────────────────┘
+                                    NeoDEM: RoboMindOS
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                                                                         │
+    │   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        │
+    │   │             │  REST  │             │  A2A   │             │        │
+    │   │     App     │◄──────►│   Server    │◄──────►│ Robot Agent │        │
+    │   │  React/Tauri│   WS   │   Node.js   │Protocol│  Genkit AI  │        │
+    │   │             │        │             │        │             │        │
+    │   └─────────────┘        └──────┬──────┘        └──────┬──────┘        │
+    │         :1420                   │                      │               │
+    │                                 │                      │ gRPC          │
+    │                                 ▼                      ▼               │
+    │                          ┌─────────────┐        ┌─────────────┐        │
+    │                          │ PostgreSQL  │        │     VLA     │        │
+    │                          │  + MLflow   │        │  Inference  │        │
+    │                          │             │        │   Python    │        │
+    │                          └─────────────┘        └─────────────┘        │
+    │                               :5432                  :50051            │
+    │                                                                         │
+    │   ─────────────────────────────────────────────────────────────────    │
+    │   Infrastructure:  NATS :4222  │  RustFS :9000  │  Prometheus :9090    │
+    └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Communication Protocols:**
@@ -83,7 +88,7 @@ cd vla-inference && make run
 
 **Database:**
 
-- Prisma ORM with PostgreSQL (server/prisma/schema.prisma)
+- Prisma ORM with PostgreSQL (`server/prisma/schema.prisma`)
 - Run migrations: `cd server && npx prisma migrate dev`
 
 See `docs/architecture.md` for comprehensive system architecture.
@@ -91,7 +96,7 @@ See `docs/architecture.md` for comprehensive system architecture.
 ## Directory Structure
 
 ```
-robot-management-system/
+neodem/
 ├── app/                    # Frontend (React + Tauri)
 │   ├── src/
 │   │   ├── features/       # Feature modules
@@ -122,8 +127,7 @@ robot-management-system/
 │   │   │   ├── DatasetService.ts        # Training datasets
 │   │   │   ├── MLflowService.ts         # MLflow integration
 │   │   │   ├── SkillLibraryService.ts   # Skill management
-│   │   │   ├── FederatedLearningService.ts # Fleet learning
-│   │   │   └── ...
+│   │   │   └── FederatedLearningService.ts # Fleet learning
 │   │   ├── repositories/   # Database access layer
 │   │   ├── types/          # TypeScript type definitions
 │   │   ├── storage/        # Object storage (RustFS)
@@ -131,7 +135,7 @@ robot-management-system/
 │   │   └── websocket/      # Real-time telemetry
 │   └── AGENTS.md           # Server-specific guidance
 │
-├── robot-agent/            # Robot Software
+├── robot-agent/            # Robot Software (The Matrix Interface)
 │   ├── src/
 │   │   ├── agent/          # A2A agent & Genkit AI
 │   │   ├── robot/          # State, telemetry, types
@@ -143,13 +147,13 @@ robot-management-system/
 │   │   └── api/            # REST & WebSocket
 │   └── AGENTS.md           # Robot-specific guidance
 │
-├── vla-inference/          # VLA Model Server (Python)
+├── vla-inference/          # VLA Model Server (The Oracle)
 │   ├── server.py           # Async gRPC server
 │   ├── servicer.py         # gRPC service implementation
 │   ├── config.py           # Configuration management
 │   ├── metrics.py          # Prometheus metrics
 │   ├── models/             # Model implementations
-│   │   ├── pi0.py          # π0.6 model
+│   │   ├── pi0.py          # pi0.6 model
 │   │   ├── openvla.py      # OpenVLA 7B
 │   │   └── groot.py        # GR00T (stub)
 │   ├── Dockerfile          # Multi-stage build
@@ -160,6 +164,9 @@ robot-management-system/
 │
 ├── helm/robomind/          # Kubernetes Helm chart
 │   ├── templates/
+│   │   ├── pdb.yaml                    # PodDisruptionBudgets
+│   │   ├── hpa.yaml                    # HorizontalPodAutoscalers
+│   │   ├── networkpolicy.yaml          # NetworkPolicies
 │   │   ├── app-deployment.yaml
 │   │   ├── server-deployment.yaml
 │   │   ├── robot-agent-deployment.yaml
@@ -168,10 +175,8 @@ robot-management-system/
 │   │   ├── mlflow-deployment.yaml
 │   │   ├── nats-statefulset.yaml
 │   │   └── rustfs-statefulset.yaml
-│   └── values.yaml
-│
-├── config/                 # Configuration files
-│   └── postgres-init/      # Database initialization
+│   ├── values.yaml
+│   └── values-production.yaml
 │
 ├── docs/                   # Documentation
 │   ├── architecture.md     # System architecture
@@ -186,7 +191,9 @@ robot-management-system/
 
 ## Key Features
 
-### VLA Model Training & Deployment
+### VLA Model Training & Deployment (Skill Uploads)
+
+> *"I know Kung Fu."* — Just as Neo downloaded skills, NeoDEM uploads VLA behaviors fleet-wide.
 
 - **Training Orchestrator**: Manage VLA fine-tuning jobs with MLflow tracking
 - **Dataset Management**: Upload, curate, and version training data
@@ -242,36 +249,36 @@ robot-management-system/
 
 When building features across the stack:
 
-1. **Types** - Define shared interfaces
-2. **Proto** - Define gRPC messages (if VLA-related)
-3. **Server** - API endpoints, services, database models
-4. **VLA Inference** - Model integration (if applicable)
-5. **Robot** - AI tools, VLA client integration
-6. **Frontend** - Store, hooks, components, pages
+1. **Types** — Define shared interfaces
+2. **Proto** — Define gRPC messages (if VLA-related)
+3. **Server** — API endpoints, services, database models
+4. **VLA Inference** — Model integration (if applicable)
+5. **Robot** — AI tools, VLA client integration
+6. **Frontend** — Store, hooks, components, pages
 
 ### Key Patterns
 
-| Component        | Pattern                 | Example                                               |
-| ---------------- | ----------------------- | ----------------------------------------------------- |
-| **App**          | Feature-first + Zustand | `features/robots/store/robotsStore.ts`                |
-| **Server**       | Routes + Services       | `routes/robot.routes.ts` → `services/RobotManager.ts` |
-| **Robot**        | Genkit Tools            | `tools/navigation.ts` with `ai.defineTool()`          |
-| **VLA Inference**| Model Factory           | `models/__init__.py` → `create_model("pi0")`          |
+| Component | Pattern | Example |
+|-----------|---------|---------|
+| **App** | Feature-first + Zustand | `features/robots/store/robotsStore.ts` |
+| **Server** | Routes + Services | `routes/robot.routes.ts` → `services/RobotManager.ts` |
+| **Robot** | Genkit Tools | `tools/navigation.ts` with `ai.defineTool()` |
+| **VLA Inference** | Model Factory | `models/__init__.py` → `create_model("pi0")` |
 
 ## Key Dependencies
 
-| Package               | Used In        | Purpose                    |
-| --------------------- | -------------- | -------------------------- |
-| `zustand`             | App            | State management           |
-| `@tauri-apps/api`     | App            | Desktop APIs               |
-| `express`             | Server, Robot  | HTTP server                |
-| `prisma`              | Server         | Database ORM               |
-| `ws`                  | Server, Robot  | WebSocket                  |
-| `@a2a-js/sdk`         | Robot          | A2A protocol               |
-| `genkit`              | Robot          | AI framework               |
-| `@genkit-ai/googleai` | Robot          | Gemini integration         |
-| `grpcio`              | VLA Inference  | gRPC server                |
-| `prometheus-client`   | VLA Inference  | Metrics                    |
+| Package | Used In | Purpose |
+|---------|---------|---------|
+| `zustand` | App | State management |
+| `@tauri-apps/api` | App | Desktop APIs |
+| `express` | Server, Robot | HTTP server |
+| `prisma` | Server | Database ORM |
+| `ws` | Server, Robot | WebSocket |
+| `@a2a-js/sdk` | Robot | A2A protocol |
+| `genkit` | Robot | AI framework |
+| `@genkit-ai/googleai` | Robot | Gemini integration |
+| `grpcio` | VLA Inference | gRPC server |
+| `prometheus-client` | VLA Inference | Metrics |
 
 ## Infrastructure
 
@@ -284,26 +291,26 @@ docker-compose up -d postgres nats rustfs
 ### Kubernetes (Helm)
 
 ```bash
-# Local/development
-helm install robomind ./helm/robomind -f ./helm/robomind/values-local.yaml
+# Development
+helm install neodem ./helm/robomind
 
-# Production
-helm install robomind ./helm/robomind -f ./helm/robomind/values-production.yaml
+# Production (with autoscaling, network policies, PDBs)
+helm install neodem ./helm/robomind -f ./helm/robomind/values-production.yaml
 ```
 
 ### Services
 
-| Service        | Purpose                              | Port  |
-| -------------- | ------------------------------------ | ----- |
-| PostgreSQL     | Primary database                     | 5432  |
-| NATS           | Message queue                        | 4222  |
-| RustFS         | Object storage (S3-compatible)       | 9000  |
-| MLflow         | Experiment tracking                  | 5000  |
-| Prometheus     | Metrics collection                   | 9090  |
+| Service | Purpose | Port |
+|---------|---------|------|
+| PostgreSQL | Primary database | 5432 |
+| NATS | Message queue | 4222 |
+| RustFS | Object storage (S3-compatible) | 9000 |
+| MLflow | Experiment tracking | 5000 |
+| Prometheus | Metrics collection | 9090 |
 
 ## Task Management
 
-Project tasks are tracked in `.taskmaster/tasks/tasks.json`. Use task-master CLI:
+Project tasks are tracked in `.taskmaster/tasks/tasks.json`:
 
 ```bash
 npx task-master list          # List all tasks
@@ -313,17 +320,18 @@ npx task-master show <id>     # Show task details
 
 ## Documentation
 
-| Document                          | Description                       |
-| --------------------------------- | --------------------------------- |
-| `docs/architecture.md`            | Full system architecture          |
-| `docs/VLA-integration-guide.md`   | VLA model integration guide       |
-| `docs/deployment.md`              | Kubernetes deployment guide       |
-| `docs/prd.md`                     | Product requirements              |
-| `docs/brand.md`                   | Colors, typography, design tokens |
+| Document | Description |
+|----------|-------------|
+| `docs/architecture.md` | Full system architecture |
+| `docs/VLA-integration-guide.md` | VLA model integration guide |
+| `docs/deployment.md` | Kubernetes deployment guide |
+| `docs/prd.md` | Product requirements |
+| `docs/brand.md` | Colors, typography, design tokens |
 
 ## Current Status
 
 - **Database**: Prisma with PostgreSQL (migrations in server/prisma/migrations)
-- **VLA Models**: π0.6, OpenVLA supported; GR00T planned
+- **VLA Models**: pi0.6, OpenVLA supported; GR00T planned
 - **Authentication**: JWT-based (in development)
 - **Simulation**: Robot agent runs in simulation mode for development
+- **Production**: Helm chart with HPA, PDB, NetworkPolicies ready

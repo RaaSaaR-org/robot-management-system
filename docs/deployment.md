@@ -1,6 +1,8 @@
-# RoboMindOS Deployment Guide
+# NeoDEM: RoboMindOS — Deployment Guide
 
-This guide covers deploying RoboMindOS to Docker and Kubernetes environments.
+> *"Free your mind."* — Morpheus
+
+This guide covers deploying NeoDEM to Docker and Kubernetes environments.
 
 ## Table of Contents
 
