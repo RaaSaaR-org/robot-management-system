@@ -1,0 +1,96 @@
+{{/*
+rustfs-statefulset.yaml - RustFS Object Storage StatefulSet
+=============================================================================
+*/}}
+{{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "robomind.rustfs.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+spec:
+  serviceName: {{ include "robomind.rustfs.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rustfs
+  template:
+    metadata:
+      labels:
+        {{- include "robomind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rustfs
+    spec:
+      {{- include "robomind.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "robomind.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: rustfs
+          image: "{{ .Values.rustfs.image.repository }}:{{ .Values.rustfs.image.tag }}"
+          imagePullPolicy: {{ .Values.rustfs.image.pullPolicy }}
+          ports:
+            - name: s3
+              containerPort: 9000
+              protocol: TCP
+            - name: console
+              containerPort: 9001
+              protocol: TCP
+          env:
+            - name: RUSTFS_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: RUSTFS_ACCESS_KEY
+            - name: RUSTFS_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: RUSTFS_SECRET_KEY
+          livenessProbe:
+            httpGet:
+              path: /rustfs/console/index.html
+              port: console
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /rustfs/console/index.html
+              port: console
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.rustfs.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.rustfs.storage.size }}
+{{- end }}

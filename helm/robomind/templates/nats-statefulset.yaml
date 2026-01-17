@@ -1,0 +1,91 @@
+{{/*
+nats-statefulset.yaml - NATS JetStream StatefulSet
+=============================================================================
+*/}}
+{{- if and .Values.nats.enabled (not .Values.nats.external.enabled) }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "robomind.nats.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  serviceName: {{ include "robomind.nats.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  template:
+    metadata:
+      labels:
+        {{- include "robomind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
+    spec:
+      {{- include "robomind.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "robomind.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: nats
+          image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
+          imagePullPolicy: {{ .Values.nats.image.pullPolicy }}
+          args:
+            - "--js"
+            - "--sd"
+            - "/data"
+            - "-m"
+            - "8222"
+          ports:
+            - name: client
+              containerPort: 4222
+              protocol: TCP
+            - name: monitor
+              containerPort: 8222
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.nats.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.nats.storage.size }}
+{{- end }}

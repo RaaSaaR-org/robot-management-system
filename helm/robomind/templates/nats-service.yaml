@@ -1,0 +1,27 @@
+{{/*
+nats-service.yaml - NATS Service
+=============================================================================
+*/}}
+{{- if and .Values.nats.enabled (not .Values.nats.external.enabled) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "robomind.nats.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: ClusterIP
+  ports:
+    - port: 4222
+      targetPort: client
+      protocol: TCP
+      name: client
+    - port: 8222
+      targetPort: monitor
+      protocol: TCP
+      name: monitor
+  selector:
+    {{- include "robomind.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+{{- end }}

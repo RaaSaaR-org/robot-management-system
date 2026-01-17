@@ -1,0 +1,125 @@
+{{/*
+mlflow-deployment.yaml - MLflow Model Registry Deployment
+=============================================================================
+*/}}
+{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "robomind.mlflow.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mlflow
+  template:
+    metadata:
+      labels:
+        {{- include "robomind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mlflow
+    spec:
+      {{- include "robomind.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "robomind.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Wait for PostgreSQL
+        {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "Waiting for PostgreSQL..."
+              until nc -z {{ include "robomind.postgres.fullname" . }} 5432; do
+                echo "PostgreSQL not ready, waiting..."
+                sleep 5
+              done
+              echo "PostgreSQL is ready!"
+        {{- end }}
+        # Wait for RustFS
+        {{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
+        - name: wait-for-rustfs
+          image: busybox:1.36
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "Waiting for RustFS..."
+              until wget -q --spider http://{{ include "robomind.rustfs.fullname" . }}:9001/rustfs/console/index.html; do
+                echo "RustFS not ready, waiting..."
+                sleep 5
+              done
+              echo "RustFS is ready!"
+        {{- end }}
+      containers:
+        - name: mlflow
+          image: "{{ .Values.mlflow.image.repository }}:{{ .Values.mlflow.image.tag }}"
+          imagePullPolicy: {{ .Values.mlflow.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install psycopg2-binary boto3 && \
+              mlflow server \
+                --host 0.0.0.0 \
+                --port 5000 \
+                --backend-store-uri postgresql://{{ .Values.postgres.auth.username }}:$(POSTGRES_PASSWORD)@{{ include "robomind.postgres.fullname" . }}:5432/mlflow \
+                --default-artifact-root s3://model-checkpoints/mlflow
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: POSTGRES_PASSWORD
+            {{- if or .Values.rustfs.enabled .Values.rustfs.external.enabled }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ include "robomind.rustfs.endpoint" . | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: RUSTFS_ACCESS_KEY
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: RUSTFS_SECRET_KEY
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+          resources:
+            {{- toYaml .Values.mlflow.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

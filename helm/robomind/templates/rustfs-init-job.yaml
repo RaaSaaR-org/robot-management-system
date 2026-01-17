@@ -1,0 +1,68 @@
+{{/*
+rustfs-init-job.yaml - RustFS Bucket Initialization Job
+=============================================================================
+*/}}
+{{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "robomind.rustfs.fullname" . }}-init
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "robomind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rustfs-init
+    spec:
+      {{- include "robomind.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait for RustFS to be ready
+        - name: wait-for-rustfs
+          image: busybox:1.36
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "Waiting for RustFS to be ready..."
+              until wget -q --spider http://{{ include "robomind.rustfs.fullname" . }}:9001/rustfs/console/index.html; do
+                echo "RustFS not ready yet, waiting..."
+                sleep 5
+              done
+              echo "RustFS is ready!"
+      containers:
+        - name: init-buckets
+          image: "{{ .Values.rustfs.init.image.repository }}:{{ .Values.rustfs.init.image.tag }}"
+          imagePullPolicy: {{ .Values.rustfs.init.image.pullPolicy }}
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: RUSTFS_ACCESS_KEY
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "robomind.fullname" . }}-secrets
+                  key: RUSTFS_SECRET_KEY
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ENDPOINT="http://{{ include "robomind.rustfs.fullname" . }}:9000"
+              echo "Creating buckets on RustFS at $ENDPOINT"
+              {{- range .Values.rustfs.buckets }}
+              echo "Creating bucket: {{ . }}"
+              aws --endpoint-url $ENDPOINT s3 mb s3://{{ . }} || echo "Bucket {{ . }} already exists"
+              {{- end }}
+              echo "All buckets initialized successfully!"
+{{- end }}

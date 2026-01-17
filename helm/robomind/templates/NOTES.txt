@@ -1,96 +1,92 @@
-================================================================================
-  RoboMindOS has been deployed!
-================================================================================
+=============================================================================
+  RoboMindOS {{ .Chart.Version }} has been deployed!
+=============================================================================
 
 Thank you for installing {{ .Chart.Name }}.
 
-Your release is named {{ .Release.Name }}.
-
-To learn more about the release, try:
-
-  $ helm status {{ .Release.Name }}
-  $ helm get all {{ .Release.Name }}
-
---------------------------------------------------------------------------------
-  ACCESSING THE APPLICATION
---------------------------------------------------------------------------------
-
-{{- if .Values.ingress.enabled }}
-The application is accessible via Ingress:
-
-  URL: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
-
-{{- if eq .Values.ingress.host "robomind.local" }}
-For local development, add this to your /etc/hosts:
-
-  127.0.0.1 robomind.local
-
-If using minikube, get the IP with:
-
-  minikube ip
-
-Then add: <minikube-ip> robomind.local
-{{- end }}
-{{- else }}
-The application can be accessed via port-forward:
-
-  # App (Frontend)
-  kubectl port-forward -n {{ include "robomind.namespace" . }} svc/{{ include "robomind.fullname" . }}-app 8080:80
-
-  # Server (API)
-  kubectl port-forward -n {{ include "robomind.namespace" . }} svc/{{ include "robomind.fullname" . }}-server 3001:3001
-
-Then open: http://localhost:8080
+{{ if .Values.production.requireSecrets -}}
+PRODUCTION MODE: Secret validation is enabled.
 {{- end }}
 
---------------------------------------------------------------------------------
-  COMPONENTS STATUS
---------------------------------------------------------------------------------
-
-Check the status of all pods:
-
-  kubectl get pods -n {{ include "robomind.namespace" . }}
-
-View logs:
-
-  # Server logs
-  kubectl logs -f deployment/{{ include "robomind.fullname" . }}-server -n {{ include "robomind.namespace" . }}
-
-  # App logs
-  kubectl logs -f deployment/{{ include "robomind.fullname" . }}-app -n {{ include "robomind.namespace" . }}
-
-{{- if .Values.robotAgent.enabled }}
-  # Robot Agent logs
-  kubectl logs -f deployment/{{ include "robomind.fullname" . }}-robot-agent -n {{ include "robomind.namespace" . }}
-{{- end }}
-
---------------------------------------------------------------------------------
-  DATABASE
---------------------------------------------------------------------------------
-
+DEPLOYED COMPONENTS:
 {{- if .Values.postgres.enabled }}
-PostgreSQL is running in the cluster.
+  - PostgreSQL Database
+{{- end }}
+{{- if .Values.nats.enabled }}
+  - NATS JetStream (Message Queue)
+{{- end }}
+{{- if .Values.rustfs.enabled }}
+  - RustFS Object Storage (S3-compatible)
+{{- end }}
+{{- if .Values.mlflow.enabled }}
+  - MLflow Model Registry
+{{- end }}
+{{- if .Values.server.enabled }}
+  - RoboMindOS Server (API)
+{{- end }}
+{{- if .Values.app.enabled }}
+  - RoboMindOS App (Frontend)
+{{- end }}
+{{- if .Values.robotAgent.enabled }}
+  - Robot Agent (Simulated)
+{{- end }}
+{{- if .Values.vlaInference.enabled }}
+  - VLA Inference Server
+{{- end }}
 
-  # Connect to PostgreSQL
-  kubectl exec -it deployment/{{ include "robomind.fullname" . }}-postgres -n {{ include "robomind.namespace" . }} -- psql -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}
+ACCESSING THE APPLICATION:
+{{- if .Values.app.ingress.enabled }}
+
+  The application is available at:
+  {{- range .Values.app.ingress.hosts }}
+    http{{ if $.Values.app.ingress.tls }}s{{ end }}://{{ .host }}
+  {{- end }}
 {{- else }}
-Using external PostgreSQL database.
+
+  Get the application URL by running:
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "robomind.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=app" -o jsonpath="{.items[0].metadata.name}")
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:80
+  
+  Then open http://localhost:8080 in your browser.
 {{- end }}
 
---------------------------------------------------------------------------------
-  IMPORTANT NOTES
---------------------------------------------------------------------------------
+VERIFY DEPLOYMENT:
 
-{{- if or (eq .Values.secrets.jwtSecret "") (eq .Values.secrets.jwtSecret "change-me-in-production") }}
-WARNING: JWT secret is not set or using default value!
-         Set a secure value with: --set secrets.jwtSecret=<your-secret>
+  # Check all pods are running
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+  
+  # View logs for a specific component
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=server
+
+{{- if .Values.nats.enabled }}
+
+NATS MONITORING:
+
+  # Port-forward to NATS monitoring
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "robomind.nats.fullname" . }} 8222:8222
+  
+  # Then open http://localhost:8222 for monitoring
 {{- end }}
 
-{{- if eq .Values.postgres.auth.password "" }}
-WARNING: PostgreSQL password is not set!
-         Set a secure value with: --set postgres.auth.password=<your-password>
+{{- if .Values.mlflow.enabled }}
+
+MLFLOW UI:
+
+  # Port-forward to MLflow UI
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "robomind.mlflow.fullname" . }} 5000:5000
+  
+  # Then open http://localhost:5000 for MLflow tracking UI
 {{- end }}
 
-For production deployments, ensure you have set all required secrets securely.
+{{- if .Values.rustfs.enabled }}
 
-================================================================================
+RUSTFS CONSOLE:
+
+  # Port-forward to RustFS console
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "robomind.rustfs.fullname" . }} 9001:9001
+  
+  # Then open http://localhost:9001 for RustFS console
+{{- end }}
+
+For more information, see the documentation at:
+https://github.com/robomind/robomindos

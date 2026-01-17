@@ -1,9 +1,12 @@
+{{/*
+robot-agent-service.yaml - RoboMindOS Robot Agent Service
+=============================================================================
+*/}}
 {{- if .Values.robotAgent.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "robomind.fullname" . }}-robot-agent
-  namespace: {{ include "robomind.namespace" . }}
+  name: {{ include "robomind.robotAgent.fullname" . }}
   labels:
     {{- include "robomind.labels" . | nindent 4 }}
     app.kubernetes.io/component: robot-agent
@@ -11,7 +14,7 @@ spec:
   type: {{ .Values.robotAgent.service.type }}
   ports:
     - port: {{ .Values.robotAgent.service.port }}
-      targetPort: 41243
+      targetPort: http
       protocol: TCP
       name: http
   selector:

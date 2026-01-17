@@ -1,0 +1,88 @@
+{{/*
+vla-inference-deployment.yaml - VLA Inference Server Deployment
+=============================================================================
+Vision-Language-Action model inference service (CPU-only configuration)
+*/}}
+{{- if .Values.vlaInference.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "robomind.vlaInference.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vla-inference
+spec:
+  replicas: {{ .Values.vlaInference.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vla-inference
+  template:
+    metadata:
+      labels:
+        {{- include "robomind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: vla-inference
+    spec:
+      {{- include "robomind.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "robomind.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: vla-inference
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.vlaInference.image.repository }}:{{ .Values.vlaInference.image.tag }}"
+          imagePullPolicy: {{ .Values.vlaInference.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.vlaInference.service.grpcPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.vlaInference.service.metricsPort }}
+              protocol: TCP
+          env:
+            - name: VLA_GRPC_PORT
+              value: {{ .Values.vlaInference.service.grpcPort | quote }}
+            - name: VLA_METRICS_PORT
+              value: {{ .Values.vlaInference.service.metricsPort | quote }}
+            - name: VLA_MAX_WORKERS
+              value: {{ .Values.vlaInference.config.maxWorkers | quote }}
+            - name: VLA_DEVICE
+              value: {{ .Values.vlaInference.config.device | quote }}
+            - name: VLA_MODEL_TYPE
+              value: {{ .Values.vlaInference.config.modelType | quote }}
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import grpc; ch = grpc.insecure_channel('localhost:{{ .Values.vlaInference.service.grpcPort }}'); grpc.channel_ready_future(ch).result(timeout=5)"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import grpc; ch = grpc.insecure_channel('localhost:{{ .Values.vlaInference.service.grpcPort }}'); grpc.channel_ready_future(ch).result(timeout=5)"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.vlaInference.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

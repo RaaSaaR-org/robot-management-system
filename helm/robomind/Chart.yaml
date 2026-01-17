@@ -1,18 +1,20 @@
+# Chart.yaml - RoboMindOS Helm Chart
 apiVersion: v2
 name: robomind
-description: RoboMindOS - Fleet Management for Humanoid Robots
+description: RoboMindOS - Distributed fleet management platform for humanoid robots with EU AI Act compliance
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.0.0"
 keywords:
   - robotics
   - fleet-management
-  - humanoid
   - ai
-  - a2a
-home: https://robomind.io
-sources:
-  - https://github.com/robomindos/robomind
+  - humanoid
+  - eu-ai-act
+  - compliance
+home: https://github.com/robomind/robomindos
 maintainers:
-  - name: RoboMindOS Team
+  - name: RoboMind Team
     email: team@robomind.io
+sources:
+  - https://github.com/robomind/robomindos

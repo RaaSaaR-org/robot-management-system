@@ -1,57 +1,182 @@
-# ============================================================================
-# RoboMindOS Helm Chart - Production Values (Self-hosted Cluster)
-# ============================================================================
-# Usage: helm install robomind ./helm/robomind -f ./helm/robomind/values-production.yaml
+# values-production.yaml - Production Configuration for RoboMindOS
+# =============================================================================
+# This file contains production-specific overrides.
+# Use with: helm install robomind ./helm/robomind -f ./helm/robomind/values-production.yaml
 #
-# Required secrets to set:
+# IMPORTANT: You must set the following secrets via --set or environment variables:
 #   --set secrets.jwtSecret=$JWT_SECRET
-#   --set secrets.googleApiKey=$GOOGLE_API_KEY
-#   --set secrets.geminiApiKey=$GEMINI_API_KEY
-#   --set postgres.auth.password=$DB_PASSWORD
+#   --set postgres.auth.password=$POSTGRES_PASSWORD
+#   --set rustfs.auth.accessKey=$RUSTFS_ACCESS_KEY
+#   --set rustfs.auth.secretKey=$RUSTFS_SECRET_KEY
+#   --set secrets.geminiApiKey=$GEMINI_API_KEY (optional)
+#   --set secrets.googleApiKey=$GOOGLE_API_KEY (optional)
+# =============================================================================
 
-server:
-  replicaCount: 3
-  resources:
-    requests:
-      memory: "512Mi"
-      cpu: "500m"
-    limits:
-      memory: "1Gi"
-      cpu: "1000m"
+# -----------------------------------------------------------------------------
+# Production Mode Settings
+# -----------------------------------------------------------------------------
+production:
+  # Require all secrets to be set (fails deployment if defaults are used)
+  requireSecrets: true
+  rbac:
+    # Enable RBAC for production security
+    enabled: true
 
-app:
-  replicaCount: 3
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "200m"
-    limits:
-      memory: "512Mi"
-      cpu: "400m"
+# -----------------------------------------------------------------------------
+# Secrets (must be overridden)
+# -----------------------------------------------------------------------------
+secrets:
+  # JWT secret - MUST be set via --set or environment variable
+  jwtSecret: ""  # Required: Set via --set secrets.jwtSecret=$JWT_SECRET
 
-robotAgent:
-  # Typically disabled in production - real robots run their own agents
-  enabled: false
-
+# -----------------------------------------------------------------------------
+# PostgreSQL
+# -----------------------------------------------------------------------------
 postgres:
-  storage: 50Gi
-  storageClass: ""  # Set to your production storage class
+  enabled: true
+  auth:
+    password: ""  # Required: Set via --set postgres.auth.password=$POSTGRES_PASSWORD
+  storage:
+    size: 50Gi
   resources:
     requests:
       memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+# -----------------------------------------------------------------------------
+# NATS JetStream
+# -----------------------------------------------------------------------------
+nats:
+  enabled: true
+  storage:
+    size: 20Gi
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
       cpu: "500m"
+
+# -----------------------------------------------------------------------------
+# RustFS Object Storage
+# -----------------------------------------------------------------------------
+rustfs:
+  enabled: true
+  auth:
+    accessKey: ""  # Required: Set via --set rustfs.auth.accessKey=$RUSTFS_ACCESS_KEY
+    secretKey: ""  # Required: Set via --set rustfs.auth.secretKey=$RUSTFS_SECRET_KEY
+  storage:
+    size: 100Gi
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+# -----------------------------------------------------------------------------
+# MLflow
+# -----------------------------------------------------------------------------
+mlflow:
+  enabled: true
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+# -----------------------------------------------------------------------------
+# Server
+# -----------------------------------------------------------------------------
+server:
+  enabled: true
+  replicaCount: 2
+  env:
+    nodeEnv: production
+    authDisabled: "false"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
     limits:
       memory: "1Gi"
       cpu: "1000m"
 
-ingress:
+# -----------------------------------------------------------------------------
+# App (Frontend)
+# -----------------------------------------------------------------------------
+app:
   enabled: true
-  className: nginx
-  host: robomind.yourdomain.com  # Change to your domain
-  tls: true
-  tlsSecretName: robomind-tls
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  replicaCount: 2
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    hosts:
+      - host: robomind.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: robomind-tls
+        hosts:
+          - robomind.example.com
+
+# -----------------------------------------------------------------------------
+# Robot Agent
+# -----------------------------------------------------------------------------
+robotAgent:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# -----------------------------------------------------------------------------
+# VLA Inference (disabled by default in production)
+# Enable with: --set vlaInference.enabled=true
+# -----------------------------------------------------------------------------
+vlaInference:
+  enabled: false
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2000m"
+    limits:
+      memory: "8Gi"
+      cpu: "4000m"
+
+# -----------------------------------------------------------------------------
+# Pod Security
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false

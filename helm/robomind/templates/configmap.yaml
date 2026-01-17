@@ -1,11 +1,41 @@
+{{/*
+configmap.yaml - RoboMindOS ConfigMap
+=============================================================================
+*/}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "robomind.fullname" . }}-config
-  namespace: {{ include "robomind.namespace" . }}
   labels:
     {{- include "robomind.labels" . | nindent 4 }}
 data:
-  NODE_ENV: {{ .Values.server.env.NODE_ENV | quote }}
-  AUTH_DISABLED: {{ .Values.server.env.AUTH_DISABLED | quote }}
-  PUBLIC_URL: "http://{{ include "robomind.fullname" . }}-server:{{ .Values.server.service.port }}"
+  # Database configuration
+  DATABASE_URL: {{ include "robomind.postgres.url" . | quote }}
+  
+  # NATS configuration
+  {{- if or .Values.nats.enabled .Values.nats.external.enabled }}
+  NATS_SERVERS: {{ include "robomind.nats.servers" . | quote }}
+  {{- end }}
+  
+  # RustFS configuration
+  {{- if or .Values.rustfs.enabled .Values.rustfs.external.enabled }}
+  RUSTFS_ENDPOINT: {{ include "robomind.rustfs.endpoint" . | quote }}
+  {{- if .Values.rustfs.external.enabled }}
+  RUSTFS_REGION: {{ .Values.rustfs.external.region | quote }}
+  {{- end }}
+  {{- end }}
+  
+  # MLflow configuration
+  {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
+  MLFLOW_TRACKING_URI: {{ include "robomind.mlflow.trackingUri" . | quote }}
+  {{- end }}
+  
+  # Server configuration
+  NODE_ENV: {{ .Values.server.env.nodeEnv | quote }}
+  AUTH_DISABLED: {{ .Values.server.env.authDisabled | quote }}
+  {{- if .Values.server.env.publicUrl }}
+  PUBLIC_URL: {{ .Values.server.env.publicUrl | quote }}
+  {{- end }}
+  {{- if .Values.server.env.corsOrigins }}
+  CORS_ORIGINS: {{ .Values.server.env.corsOrigins | quote }}
+  {{- end }}

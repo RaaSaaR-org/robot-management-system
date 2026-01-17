@@ -1,0 +1,27 @@
+{{/*
+vla-inference-service.yaml - VLA Inference Service
+=============================================================================
+*/}}
+{{- if .Values.vlaInference.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "robomind.vlaInference.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vla-inference
+spec:
+  type: {{ .Values.vlaInference.service.type }}
+  ports:
+    - port: {{ .Values.vlaInference.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: {{ .Values.vlaInference.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "robomind.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: vla-inference
+{{- end }}

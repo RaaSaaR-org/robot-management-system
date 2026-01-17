@@ -1,23 +1,23 @@
 {{/*
-server-service.yaml - RoboMindOS Server Service
+mlflow-service.yaml - MLflow Service
 =============================================================================
 */}}
-{{- if .Values.server.enabled }}
+{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "robomind.server.fullname" . }}
+  name: {{ include "robomind.mlflow.fullname" . }}
   labels:
     {{- include "robomind.labels" . | nindent 4 }}
-    app.kubernetes.io/component: server
+    app.kubernetes.io/component: mlflow
 spec:
-  type: {{ .Values.server.service.type }}
+  type: ClusterIP
   ports:
-    - port: {{ .Values.server.service.port }}
+    - port: 5000
       targetPort: http
       protocol: TCP
       name: http
   selector:
     {{- include "robomind.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: server
+    app.kubernetes.io/component: mlflow
 {{- end }}

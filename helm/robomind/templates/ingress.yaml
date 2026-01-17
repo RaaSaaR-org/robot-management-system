@@ -1,19 +1,24 @@
+{{/*
+ingress.yaml - Combined Ingress for App and Server API
+=============================================================================
+This provides a unified ingress that routes API traffic to the server
+and all other traffic to the frontend app.
+*/}}
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "robomind.fullname" . }}-ingress
-  namespace: {{ include "robomind.namespace" . }}
   labels:
     {{- include "robomind.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
     # WebSocket support for real-time features
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/websocket-services: "{{ include "robomind.fullname" . }}-server"
+    nginx.ingress.kubernetes.io/websocket-services: "{{ include "robomind.server.fullname" . }}"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
@@ -33,15 +38,15 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "robomind.fullname" . }}-server
+                name: {{ include "robomind.server.fullname" . }}
                 port:
                   number: {{ .Values.server.service.port }}
-          # Well-known routes -> server
+          # Well-known routes -> server (A2A protocol)
           - path: /.well-known
             pathType: Prefix
             backend:
               service:
-                name: {{ include "robomind.fullname" . }}-server
+                name: {{ include "robomind.server.fullname" . }}
                 port:
                   number: {{ .Values.server.service.port }}
           # Health check -> server
@@ -49,7 +54,7 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: {{ include "robomind.fullname" . }}-server
+                name: {{ include "robomind.server.fullname" . }}
                 port:
                   number: {{ .Values.server.service.port }}
           # All other routes -> app (SPA)
@@ -57,7 +62,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "robomind.fullname" . }}-app
+                name: {{ include "robomind.app.fullname" . }}
                 port:
                   number: {{ .Values.app.service.port }}
 {{- end }}

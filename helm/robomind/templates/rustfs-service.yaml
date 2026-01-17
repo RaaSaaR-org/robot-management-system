@@ -1,0 +1,27 @@
+{{/*
+rustfs-service.yaml - RustFS Service
+=============================================================================
+*/}}
+{{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "robomind.rustfs.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+      targetPort: s3
+      protocol: TCP
+      name: s3
+    - port: 9001
+      targetPort: console
+      protocol: TCP
+      name: console
+  selector:
+    {{- include "robomind.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+{{- end }}
