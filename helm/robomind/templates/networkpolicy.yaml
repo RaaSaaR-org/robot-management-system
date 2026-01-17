@@ -1,0 +1,458 @@
+{{/*
+networkpolicy.yaml - Network Policies for RoboMindOS
+=============================================================================
+Restricts pod-to-pod communication to minimize lateral movement risk.
+*/}}
+
+{{- if .Values.networkPolicy.enabled }}
+
+{{/* PostgreSQL Network Policy - Only allow connections from server and mlflow */}}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.postgres.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from server
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow from mlflow
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: mlflow
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+{{- end }}
+
+{{/* NATS Network Policy - Allow from server and robot-agent */}}
+{{- if and .Values.nats.enabled (not .Values.nats.external.enabled) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.nats.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from server
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 4222
+    # Allow from robot-agent
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: robot-agent
+      ports:
+        - protocol: TCP
+          port: 4222
+---
+{{- end }}
+
+{{/* RustFS Network Policy - Allow from server and mlflow */}}
+{{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.rustfs.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rustfs
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from server
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Allow from mlflow
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: mlflow
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Allow from rustfs-init job (for bucket creation)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: rustfs-init
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+{{- end }}
+
+{{/* MLflow Network Policy - Allow from server */}}
+{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.mlflow.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mlflow
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from server
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 5000
+  egress:
+    # Allow to PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow to RustFS
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: rustfs
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+{{- end }}
+
+{{/* Server Network Policy - Allow from app (ingress) and to backend services */}}
+{{- if .Values.server.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.server.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from app (via ingress or internal)
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: app
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Allow from robot-agent (A2A protocol)
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: robot-agent
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3001
+  egress:
+    # Allow to PostgreSQL
+    {{- if or .Values.postgres.enabled .Values.postgres.external.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    # Allow to NATS
+    {{- if or .Values.nats.enabled .Values.nats.external.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: nats
+      ports:
+        - protocol: TCP
+          port: 4222
+    {{- end }}
+    # Allow to RustFS
+    {{- if or .Values.rustfs.enabled .Values.rustfs.external.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: rustfs
+      ports:
+        - protocol: TCP
+          port: 9000
+    {{- end }}
+    # Allow to MLflow
+    {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: mlflow
+      ports:
+        - protocol: TCP
+          port: 5000
+    {{- end }}
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+{{- end }}
+
+{{/* App Network Policy - Allow from ingress, allow to server */}}
+{{- if .Values.app.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.app.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 80
+  egress:
+    # Allow to server (API calls proxied by nginx)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+{{- end }}
+
+{{/* Robot Agent Network Policy - Allow from server, allow to VLA inference */}}
+{{- if .Values.robotAgent.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.robotAgent.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: robot-agent
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: robot-agent
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from server (A2A protocol)
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 41243
+  egress:
+    # Allow to server (registration, status updates)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Allow to NATS
+    {{- if or .Values.nats.enabled .Values.nats.external.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: nats
+      ports:
+        - protocol: TCP
+          port: 4222
+    {{- end }}
+    # Allow to VLA inference
+    {{- if .Values.vlaInference.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: vla-inference
+      ports:
+        - protocol: TCP
+          port: {{ .Values.vlaInference.service.grpcPort }}
+    {{- end }}
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow external (for Gemini API if configured)
+    {{- if .Values.secrets.geminiApiKey }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+---
+{{- end }}
+
+{{/* VLA Inference Network Policy - Allow from robot-agent */}}
+{{- if .Values.vlaInference.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "robomind.vlaInference.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vla-inference
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vla-inference
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from robot-agent (gRPC)
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "robomind.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: robot-agent
+      ports:
+        - protocol: TCP
+          port: {{ .Values.vlaInference.service.grpcPort }}
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: {{ .Values.vlaInference.service.metricsPort }}
+{{- end }}
+
+{{- end }}
