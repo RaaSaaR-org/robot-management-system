@@ -1,6 +1,9 @@
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
+import { StatsSection } from '../components/landing/StatsSection';
 import { FeatureSection } from '../components/landing/FeatureSection';
+import { AdvantagesSection } from '../components/landing/AdvantagesSection';
+import { DataEcosystemSection } from '../components/landing/DataEcosystemSection';
 import { SafetyPreview } from '../components/landing/SafetyPreview';
 import { AudienceSection } from '../components/landing/AudienceSection';
 import { DeploymentSection } from '../components/landing/DeploymentSection';
@@ -13,7 +16,10 @@ export function LandingPage() {
       <Header />
       <main>
         <HeroSection />
+        <StatsSection />
         <FeatureSection />
+        <AdvantagesSection />
+        <DataEcosystemSection />
         <SafetyPreview />
         <AudienceSection />
         <DeploymentSection />

@@ -161,6 +161,69 @@ export const LazyApprovalsPage = lazy(() =>
   import('@/features/approvals').then((m) => ({ default: m.ApprovalsPage }))
 );
 
+/**
+ * Datasets page - VLA training dataset management
+ */
+export const LazyDatasetsPage = lazy(() =>
+  import('@/features/training').then((m) => ({ default: m.DatasetsPage }))
+);
+
+/**
+ * Training page - VLA model fine-tuning
+ */
+export const LazyTrainingPage = lazy(() =>
+  import('@/features/training').then((m) => ({ default: m.TrainingPage }))
+);
+
+/**
+ * Models page - Model registry and version management
+ */
+export const LazyModelsPage = lazy(() =>
+  import('@/features/training').then((m) => ({ default: m.ModelsPage }))
+);
+
+/**
+ * Deployments page - VLA fleet deployment management
+ */
+export const LazyDeploymentsPage = lazy(() =>
+  import('@/features/deployment').then((m) => ({ default: m.DeploymentsPage }))
+);
+
+/**
+ * Deployment detail page - Single deployment view with metrics
+ */
+export const LazyDeploymentDetailPage = lazy(() =>
+  import('@/features/deployment').then((m) => ({ default: m.DeploymentDetailPage }))
+);
+
+/**
+ * Skills page - Skill library management
+ */
+export const LazySkillsPage = lazy(() =>
+  import('@/features/deployment').then((m) => ({ default: m.SkillsPage }))
+);
+
+/**
+ * Contributions page - Data contribution portal
+ */
+export const LazyContributionsPage = lazy(() =>
+  import('@/features/contributions').then((m) => ({ default: m.ContributionsPage }))
+);
+
+/**
+ * New contribution page - Contribution wizard
+ */
+export const LazyNewContributionPage = lazy(() =>
+  import('@/features/contributions').then((m) => ({ default: m.NewContributionPage }))
+);
+
+/**
+ * Contribution detail page - Single contribution view
+ */
+export const LazyContributionDetailPage = lazy(() =>
+  import('@/features/contributions').then((m) => ({ default: m.ContributionDetailPage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================

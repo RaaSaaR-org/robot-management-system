@@ -39,6 +39,15 @@ import {
   LazyIncidentDetailPage,
   LazyOversightPage,
   LazyApprovalsPage,
+  LazyDatasetsPage,
+  LazyTrainingPage,
+  LazyModelsPage,
+  LazyDeploymentsPage,
+  LazyDeploymentDetailPage,
+  LazySkillsPage,
+  LazyContributionsPage,
+  LazyNewContributionPage,
+  LazyContributionDetailPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -271,6 +280,84 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyApprovalsPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Training - VLA model fine-tuning */}
+          <Route
+            path="/datasets"
+            element={
+              <ProtectedAppRoute>
+                <LazyDatasetsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/training"
+            element={
+              <ProtectedAppRoute>
+                <LazyTrainingPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/models"
+            element={
+              <ProtectedAppRoute>
+                <LazyModelsPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Deployment - VLA fleet deployment management */}
+          <Route
+            path="/deployments"
+            element={
+              <ProtectedAppRoute>
+                <LazyDeploymentsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/deployments/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyDeploymentDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/skills"
+            element={
+              <ProtectedAppRoute>
+                <LazySkillsPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Contributions - Data contribution portal */}
+          <Route
+            path="/contributions"
+            element={
+              <ProtectedAppRoute>
+                <LazyContributionsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/contributions/new"
+            element={
+              <ProtectedAppRoute>
+                <LazyNewContributionPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/contributions/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyContributionDetailPage />
               </ProtectedAppRoute>
             }
           />
