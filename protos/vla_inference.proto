@@ -1,0 +1,135 @@
+/**
+ * @file vla_inference.proto
+ * @description gRPC Protocol Buffer definitions for VLA inference service
+ * @feature vla
+ */
+
+syntax = "proto3";
+
+package vla;
+
+option go_package = "github.com/robomindos/protos/vla";
+
+// VLAInference service provides low-latency inference for Vision-Language-Action models.
+// Supports both unary and bidirectional streaming RPCs for flexible robot control patterns.
+service VLAInference {
+  // Predict performs a single VLA inference given an observation.
+  // Returns an action chunk containing 8-16 future actions.
+  rpc Predict(Observation) returns (ActionChunk) {}
+
+  // StreamControl enables continuous bidirectional streaming for real-time control.
+  // Client sends observations, server responds with action chunks.
+  rpc StreamControl(stream Observation) returns (stream ActionChunk) {}
+
+  // GetModelInfo returns metadata about the currently loaded VLA model.
+  rpc GetModelInfo(Empty) returns (ModelInfo) {}
+
+  // HealthCheck returns the server's health status including GPU utilization.
+  rpc HealthCheck(Empty) returns (HealthStatus) {}
+}
+
+// Observation represents the robot's current sensory state.
+message Observation {
+  // Camera image data (JPEG compressed, typically 224x224 or 336x336).
+  bytes camera_image = 1;
+
+  // Current joint positions in radians.
+  repeated float joint_positions = 2;
+
+  // Current joint velocities in rad/s.
+  repeated float joint_velocities = 3;
+
+  // Natural language instruction for the task.
+  string language_instruction = 4;
+
+  // Observation timestamp in Unix epoch seconds.
+  double timestamp = 5;
+
+  // Robot embodiment identifier (e.g., "unitree_h1", "so101_arm").
+  string embodiment_tag = 6;
+
+  // Optional session ID for tracking continuous control sessions.
+  string session_id = 7;
+}
+
+// ActionChunk contains a sequence of predicted future actions.
+message ActionChunk {
+  // Sequence of 8-16 future actions to execute.
+  repeated Action actions = 1;
+
+  // Inference time in milliseconds.
+  float inference_time_ms = 2;
+
+  // Model version identifier.
+  string model_version = 3;
+
+  // Confidence score for the action prediction (0.0 - 1.0).
+  float confidence = 4;
+
+  // Sequence number for tracking in streaming mode.
+  uint64 sequence_number = 5;
+}
+
+// Action represents a single timestep control command.
+message Action {
+  // Joint position commands, normalized to [-1, 1] range.
+  repeated float joint_commands = 1;
+
+  // Gripper command: 0.0 = fully open, 1.0 = fully closed.
+  float gripper_command = 2;
+
+  // Target timestamp for this action in Unix epoch seconds.
+  double timestamp = 3;
+}
+
+// ModelInfo contains metadata about the loaded VLA model.
+message ModelInfo {
+  // Human-readable model name (e.g., "pi0-base", "openvla-7b").
+  string model_name = 1;
+
+  // Semantic version string (e.g., "1.2.3").
+  string model_version = 2;
+
+  // Action space dimensionality (number of joints + gripper).
+  int32 action_dim = 3;
+
+  // Number of actions per chunk (typically 8-16).
+  int32 chunk_size = 4;
+
+  // List of supported robot embodiments.
+  repeated string supported_embodiments = 5;
+
+  // Expected image resolution (width x height).
+  int32 image_width = 6;
+  int32 image_height = 7;
+
+  // Base model architecture (e.g., "pi0", "openvla", "groot").
+  string base_model = 8;
+}
+
+// HealthStatus reports server health and resource utilization.
+message HealthStatus {
+  // Whether the server is ready to accept inference requests.
+  bool ready = 1;
+
+  // GPU utilization percentage (0-100).
+  float gpu_utilization = 2;
+
+  // GPU memory utilization percentage (0-100).
+  float memory_utilization = 3;
+
+  // Number of pending requests in the inference queue.
+  int32 queue_depth = 4;
+
+  // Current server uptime in seconds.
+  double uptime_seconds = 5;
+
+  // Number of inference requests processed since startup.
+  uint64 total_requests = 6;
+
+  // Average inference latency in milliseconds (rolling window).
+  float avg_latency_ms = 7;
+}
+
+// Empty message for RPCs that don't require input.
+message Empty {}
