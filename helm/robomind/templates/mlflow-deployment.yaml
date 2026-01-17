@@ -31,6 +31,7 @@ spec:
         {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
         - name: wait-for-postgres
           image: busybox:1.36
+          imagePullPolicy: IfNotPresent
           command: ['sh', '-c']
           args:
             - |
@@ -40,11 +41,19 @@ spec:
                 sleep 5
               done
               echo "PostgreSQL is ready!"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "50m"
         {{- end }}
         # Wait for RustFS
         {{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
         - name: wait-for-rustfs
           image: busybox:1.36
+          imagePullPolicy: IfNotPresent
           command: ['sh', '-c']
           args:
             - |
@@ -54,6 +63,13 @@ spec:
                 sleep 5
               done
               echo "RustFS is ready!"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "50m"
         {{- end }}
       containers:
         - name: mlflow
