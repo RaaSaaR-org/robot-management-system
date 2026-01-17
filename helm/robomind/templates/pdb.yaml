@@ -1,0 +1,112 @@
+{{/*
+pdb.yaml - PodDisruptionBudgets for RoboMindOS
+=============================================================================
+Ensures controlled pod eviction during cluster maintenance and upgrades.
+*/}}
+
+{{/* Server PDB */}}
+{{- if and .Values.server.enabled (gt (int .Values.server.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "robomind.server.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+---
+{{- end }}
+
+{{/* App PDB */}}
+{{- if and .Values.app.enabled (gt (int .Values.app.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "robomind.app.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+---
+{{- end }}
+
+{{/* PostgreSQL PDB - always keep at least 1 available for data services */}}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "robomind.postgres.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+---
+{{- end }}
+
+{{/* NATS PDB */}}
+{{- if and .Values.nats.enabled (not .Values.nats.external.enabled) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "robomind.nats.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+---
+{{- end }}
+
+{{/* RustFS PDB */}}
+{{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "robomind.rustfs.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rustfs
+---
+{{- end }}
+
+{{/* MLflow PDB */}}
+{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "robomind.mlflow.fullname" . }}
+  labels:
+    {{- include "robomind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "robomind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mlflow
+{{- end }}
