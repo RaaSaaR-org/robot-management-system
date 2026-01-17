@@ -13,6 +13,9 @@ metadata:
 spec:
   serviceName: {{ include "robomind.postgres.fullname" . }}
   replicas: 1
+  # Use OnDelete to prevent automatic rolling updates that could cause data loss
+  updateStrategy:
+    type: OnDelete
   selector:
     matchLabels:
       {{- include "robomind.selectorLabels" . | nindent 6 }}

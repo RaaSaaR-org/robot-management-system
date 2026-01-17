@@ -13,6 +13,11 @@ metadata:
 spec:
   serviceName: {{ include "robomind.nats.fullname" . }}
   replicas: 1
+  # Use RollingUpdate with partition for controlled updates
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
   selector:
     matchLabels:
       {{- include "robomind.selectorLabels" . | nindent 6 }}
