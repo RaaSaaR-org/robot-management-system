@@ -19,6 +19,70 @@
 
 services:
   # --------------------------------------------------------------------------
+  # NATS JetStream (Message Queue)
+  # --------------------------------------------------------------------------
+  nats:
+    image: nats:2.10-alpine
+    container_name: robomind-nats
+    command: ["--js", "--sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - robomind-network
+
+  # --------------------------------------------------------------------------
+  # RustFS Object Storage (S3-compatible)
+  # Single-node for development. Container runs as UID 10001 (rustfs user).
+  # --------------------------------------------------------------------------
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: robomind-rustfs
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console
+    volumes:
+      - rustfs_data:/data
+      - rustfs_logs:/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/rustfs/console/index.html"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - robomind-network
+
+  # Bucket initialization container (uses AWS CLI for S3-compatible operations)
+  rustfs-init:
+    image: amazon/aws-cli:latest
+    container_name: robomind-rustfs-init
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      aws --endpoint-url http://rustfs:9000 s3 mb s3://training-datasets || true &&
+      aws --endpoint-url http://rustfs:9000 s3 mb s3://model-checkpoints || true &&
+      aws --endpoint-url http://rustfs:9000 s3 mb s3://production-models || true &&
+      aws --endpoint-url http://rustfs:9000 s3 mb s3://robot-logs || true &&
+      echo 'RustFS buckets initialized successfully'
+      "
+    networks:
+      - robomind-network
+
+  # --------------------------------------------------------------------------
   # PostgreSQL Database
   # --------------------------------------------------------------------------
   postgres:
@@ -28,8 +92,10 @@ services:
       POSTGRES_DB: robomind
       POSTGRES_USER: robomind
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robomind-dev}
+      POSTGRES_MULTIPLE_DATABASES: mlflow
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres-init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
     healthcheck:
@@ -39,6 +105,39 @@ services:
       retries: 5
     networks:
       - robomind-network
+
+  # --------------------------------------------------------------------------
+  # MLflow Model Registry
+  # --------------------------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    container_name: robomind-mlflow
+    command: >
+      bash -c "pip install psycopg2-binary boto3 && mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://robomind:${POSTGRES_PASSWORD:-robomind-dev}@postgres:5432/mlflow
+      --default-artifact-root s3://model-checkpoints/mlflow"
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - robomind-network
+    restart: unless-stopped
 
   # --------------------------------------------------------------------------
   # Server (Node.js API)
@@ -52,14 +151,24 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://robomind:${POSTGRES_PASSWORD:-robomind-dev}@postgres:5432/robomind
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
-      AUTH_DISABLED: ${AUTH_DISABLED:-false}
+      AUTH_DISABLED: ${AUTH_DISABLED:-true}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3001}
-      CORS_ORIGINS: http://localhost,http://localhost:80,http://app,http://app:80
+      CORS_ORIGINS: http://localhost,http://localhost:80,http://app,http://app:80,http://192.168.178.67:1420,http://192.168.178.67
+      NATS_SERVERS: nats://nats:4222
+      RUSTFS_ENDPOINT: http://rustfs:9000
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      COMPLIANCE_LOG_ENCRYPTION_KEY: ${COMPLIANCE_LOG_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
     ports:
       - "3001:3001"
     depends_on:
+      nats:
+        condition: service_healthy
       postgres:
+        condition: service_healthy
+      mlflow:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
@@ -137,10 +246,43 @@ services:
       - robomind-network
     restart: unless-stopped
 
+  # --------------------------------------------------------------------------
+  # VLA Inference Server (Python gRPC)
+  # Vision-Language-Action model inference service
+  # --------------------------------------------------------------------------
+  vla-inference:
+    build:
+      context: .
+      dockerfile: vla-inference/Dockerfile
+    container_name: robomind-vla-inference
+    environment:
+      VLA_GRPC_PORT: 50051
+      VLA_MAX_WORKERS: 4
+      VLA_DEVICE: cpu
+      VLA_METRICS_PORT: 9090
+    ports:
+      - "50051:50051"
+      - "9090:9090"    # Prometheus metrics
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; ch = grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - robomind-network
+    restart: unless-stopped
+
 # ============================================================================
 # Volumes
 # ============================================================================
 volumes:
+  nats_data:
+    driver: local
+  rustfs_data:
+    driver: local
+  rustfs_logs:
+    driver: local
   postgres_data:
     driver: local
 
