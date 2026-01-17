@@ -1284,3 +1284,523 @@ model ComplianceActivity {
   @@index([framework])
   @@index([timestamp])
 }
+
+// ============================================================================
+// TELEOPERATION DATA COLLECTION (VLA Data Strategy)
+// ============================================================================
+
+// TeleoperationSession - Data collection session for demonstrations
+model TeleoperationSession {
+  id              String    @id @default(uuid())
+  operatorId      String
+  robotId         String
+  type            String    // vr_quest, vr_vision_pro, bilateral_aloha, kinesthetic
+  status          String    @default("created") // created, recording, paused, completed, failed
+  startedAt       DateTime?
+  endedAt         DateTime?
+  frameCount      Int       @default(0)
+  duration        Float?    // seconds
+  fps             Int       @default(30)
+  languageInstr   String?   // Language instruction for this demonstration
+  qualityScore    Float?    // Computed quality score (0-100)
+  exportedDatasetId String? // If exported to a Dataset
+  errorMessage    String?   // Error message if failed
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  frames          TeleoperationFrame[]
+
+  @@index([operatorId])
+  @@index([robotId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// TRAINING DATA COMPLIANCE (EU AI Act GPAI Requirements)
+// ============================================================================
+
+// DatasetProvenance - Source documentation for training datasets
+model DatasetProvenance {
+  id                String   @id @default(uuid())
+  datasetId         String   @unique
+  sourceType        String   // collected, purchased, synthetic, open_source, contributed
+  sourceName        String?  // Name of source (e.g., "Open X-Embodiment")
+  sourceUrl         String?  // URL to source
+  collectionMethod  String?  // How data was collected
+  collectionPeriod  Json?    // { start: Date, end: Date }
+  labelingProcedure String?  // How data was labeled
+  annotatorInfo     String?  // Information about annotators
+  cleaningSteps     Json?    // string[] - Data cleaning steps applied
+  licenseType       String?  // License under which data is held
+  copyrightCompliance String? // Copyright compliance measures
+  chainOfCustody    Json?    // Array of custody transfers
+  recordedAt        DateTime @default(now())
+  recordedBy        String
+  updatedAt         DateTime @updatedAt
+
+  @@index([datasetId])
+  @@index([sourceType])
+}
+
+// TrainingDataSummary - AI Act GPAI training data summary per model version
+model TrainingDataSummary {
+  id                String   @id @default(uuid())
+  modelVersionId    String   @unique
+  datasetIds        Json     // string[] - Datasets used in training
+  totalTrajectories Int
+  publicDatasets    Json?    // string[] - IDs of public datasets
+  privateDatasets   Json?    // string[] - IDs of private datasets
+  webScrapingSources Json?   // string[] - Web scraping sources if any
+  copyrightMeasures String   // Copyright compliance measures
+  processingPurposes Json    // string[] - Purposes of processing
+  knownGaps         Json     // string[] - Known data gaps
+  limitations       Json?    // string[] - Known limitations
+  generatedAt       DateTime @default(now())
+  lastUpdated       DateTime @default(now())
+  nextUpdateDue     DateTime // 6 months from lastUpdated per AI Act
+  generatedBy       String
+
+  @@index([modelVersionId])
+  @@index([nextUpdateDue])
+}
+
+// BiasAssessment - Bias and fairness documentation per model version
+model BiasAssessment {
+  id                   String   @id @default(uuid())
+  modelVersionId       String
+  assessmentVersion    Int      @default(1)
+  demographicCoverage  Json     // Record<string, string> - coverage by demographic
+  geographicCoverage   Json?    // Record<string, string> - coverage by region
+  taskCoverage         Json?    // Record<string, string> - coverage by task type
+  knownLimitations     Json     // string[] - Known limitations
+  potentialBiasSources Json     // string[] - Potential bias sources
+  mitigationMeasures   Json     // string[] - Measures taken to mitigate bias
+  testingResults       Json?    // Bias testing results
+  assessedBy           String
+  reviewedBy           String?
+  assessmentDate       DateTime @default(now())
+  reviewedDate         DateTime?
+  status               String   @default("draft") // draft, reviewed, approved
+  notes                String?
+
+  @@unique([modelVersionId, assessmentVersion])
+  @@index([modelVersionId])
+  @@index([status])
+  @@index([assessmentDate])
+}
+
+// TeleoperationFrame - Individual frame in a teleoperation session
+model TeleoperationFrame {
+  id              String   @id @default(uuid())
+  sessionId       String
+  frameIndex      Int      // Sequential frame index
+  timestamp       Float    // seconds from session start
+  jointPositions  Json     // array of floats
+  jointVelocities Json?    // array of floats (optional)
+  action          Json     // commanded action
+  imagePath       String?  // RustFS path to camera frame
+  depthImagePath  String?  // RustFS path to depth image (optional)
+  isIntervention  Boolean  @default(false) // Human intervention marker
+
+  // Relations
+  session         TeleoperationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, frameIndex])
+  @@index([sessionId])
+  @@index([timestamp])
+}
+
+// ============================================================================
+// SYNTHETIC DATA GENERATION
+// ============================================================================
+
+model SyntheticJob {
+  id                     String    @id @default(uuid())
+  task                   String    // Isaac Lab task name
+  embodiment             String    // Embodiment tag
+  trajectoryCount        Int       // Requested trajectory count
+  config                 Json      // SyntheticJobConfig
+  status                 String    @default("pending") // pending, queued, running, processing, completed, failed, cancelled
+  progress               Int       @default(0) // 0-100
+  generatedCount         Int       @default(0)
+  successfulCount        Int       @default(0)
+  failedCount            Int       @default(0)
+  processingRate         Float?    // trajectories per second
+  estimatedTimeRemaining Float?    // seconds
+  outputDatasetId        String?
+  errorMessage           String?
+  startedAt              DateTime?
+  completedAt            DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  validations SimToRealValidation[]
+
+  @@index([status])
+  @@index([task])
+  @@index([embodiment])
+  @@index([createdAt])
+}
+
+model SimToRealValidation {
+  id              String   @id @default(uuid())
+  syntheticJobId  String
+  modelVersionId  String
+  validationDate  DateTime @default(now())
+  simSuccessRate  Float
+  realSuccessRate Float
+  domainGapScore  Float
+  realTestCount   Int
+  taskCategories  Json     // string[]
+  perTaskMetrics  Json?    // Record<string, { simSuccess, realSuccess, gap }>
+  notes           String?
+
+  syntheticJob SyntheticJob @relation(fields: [syntheticJobId], references: [id], onDelete: Cascade)
+
+  @@index([syntheticJobId])
+  @@index([modelVersionId])
+  @@index([validationDate])
+}
+
+// ============================================================================
+// FEDERATED LEARNING
+// ============================================================================
+
+model FederatedRound {
+  id                    String    @id @default(uuid())
+  status                String    @default("created") // created, selecting, distributing, training, collecting, aggregating, completed, failed
+  globalModelVersion    String
+  newModelVersion       String?
+  config                Json      // FederatedRoundConfig
+  participantCount      Int       @default(0)
+  completedParticipants Int       @default(0)
+  failedParticipants    Int       @default(0)
+  totalLocalSamples     Int       @default(0)
+  metrics               Json?     // RoundMetrics
+  startedAt             DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  participants FederatedParticipant[]
+
+  @@index([status])
+  @@index([globalModelVersion])
+  @@index([createdAt])
+}
+
+model FederatedParticipant {
+  id                String    @id @default(uuid())
+  roundId           String
+  robotId           String
+  status            String    @default("selected") // selected, model_received, training, uploaded, failed, timeout
+  localSamples      Int?
+  localLoss         Float?
+  aggregationWeight Float?
+  privacyBudgetUsed Float?
+  failureReason     String?
+  modelReceivedAt   DateTime?
+  trainingStartedAt DateTime?
+  uploadedAt        DateTime?
+
+  round FederatedRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, robotId])
+  @@index([roundId])
+  @@index([robotId])
+  @@index([status])
+}
+
+model RobotPrivacyBudget {
+  id                 String   @id @default(uuid())
+  robotId            String   @unique
+  totalEpsilon       Float    @default(10.0)
+  usedEpsilon        Float    @default(0.0)
+  remainingEpsilon   Float    @default(10.0)
+  roundsParticipated Int      @default(0)
+  lastUpdated        DateTime @default(now())
+
+  @@index([robotId])
+}
+
+model InterventionRecord {
+  id               String   @id @default(uuid())
+  robotId          String
+  task             String
+  interventionType String   // correction, demonstration, abort
+  confidenceBefore Float?
+  confidenceAfter  Float?
+  description      String?
+  timestamp        DateTime @default(now())
+
+  @@index([robotId])
+  @@index([task])
+  @@index([timestamp])
+}
+
+// ============================================================================
+// ACTIVE LEARNING
+// ============================================================================
+
+model PredictionLog {
+  id           String    @id @default(uuid())
+  modelId      String
+  robotId      String
+  inputHash    String
+  taskCategory String
+  environment  String
+  confidence   Float
+  wasCorrect   Boolean?
+  metadata     Json?
+  timestamp    DateTime  @default(now())
+
+  @@index([modelId, taskCategory])
+  @@index([modelId, environment])
+  @@index([modelId, timestamp])
+  @@index([timestamp])
+}
+
+model CollectionTarget {
+  id             String   @id @default(uuid())
+  targetType     String   // task, environment, task_environment
+  targetName     String
+  priorityScore  Float    @default(0.5)
+  estimatedDemos Int
+  collectedDemos Int      @default(0)
+  status         String   @default("active") // active, completed, paused, cancelled
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status])
+  @@index([targetType])
+  @@index([priorityScore])
+}
+
+// ============================================================================
+// VLA (VISION-LANGUAGE-ACTION) TRAINING MANAGEMENT
+// ============================================================================
+
+// RobotType - Robot embodiment configurations for VLA training
+model RobotType {
+  id                String   @id @default(uuid())
+  name              String   @unique
+  manufacturer      String
+  model             String
+  actionDim         Int      // VLA action dimensions
+  proprioceptionDim Int      // VLA observation dimensions
+  cameras           String   @default("[]") // JSON: CameraConfig[]
+  capabilities      String[] // Robot capabilities array
+  limits            String   @default("{}") // JSON: JointLimits
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  datasets         Dataset[]
+  skillDefinitions SkillDefinition[]
+  embodiments      Embodiment[]
+
+  @@index([manufacturer])
+}
+
+// Embodiment - YAML-based embodiment configurations for VLA pipeline
+model Embodiment {
+  id                String   @id @default(uuid())
+  tag               String   @unique  // e.g., 'unitree_h1', 'so101_arm'
+  manufacturer      String
+  model             String
+  description       String?
+  configYaml        String             // Full YAML configuration content
+  actionDim         Int                // Action space dimension
+  proprioceptionDim Int                // Proprioception dimension
+  robotTypeId       String?            // Optional link to RobotType
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  robotType         RobotType? @relation(fields: [robotTypeId], references: [id], onDelete: SetNull)
+
+  @@index([robotTypeId])
+  @@index([manufacturer])
+  @@index([tag])
+}
+
+// SkillDefinition - Learnable robot skills
+model SkillDefinition {
+  id                   String   @id @default(uuid())
+  name                 String
+  version              String
+  description          String?
+  parametersSchema     String   @default("{}") // JSON: Zod-compatible parameter validation (JSON Schema format)
+  defaultParameters    String   @default("{}") // JSON: Record<string, unknown>
+  preconditions        String   @default("[]") // JSON: Condition[]
+  postconditions       String   @default("[]") // JSON: Condition[]
+  requiredCapabilities String[] // Array of required robot capabilities
+  timeout              Int?     // Execution timeout in seconds
+  maxRetries           Int      @default(3)
+  status               String   @default("draft") // 'draft' | 'published' | 'deprecated' | 'archived'
+  linkedModelVersionId String?  // Optional link to a trained model version
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Relations
+  compatibleRobotTypes RobotType[]
+  datasets             Dataset[]
+  modelVersions        ModelVersion[]
+  skillChainSteps      SkillChainStep[]
+
+  @@unique([name, version])
+  @@index([status])
+  @@index([linkedModelVersionId])
+}
+
+// SkillChain - A sequence of skills to be executed together
+model SkillChain {
+  id                String   @id @default(uuid())
+  name              String
+  description       String?
+  status            String   @default("draft") // 'draft' | 'active' | 'archived'
+  estimatedDuration Int?     // Total estimated duration in seconds
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  steps SkillChainStep[]
+
+  @@index([status])
+  @@index([name])
+}
+
+// SkillChainStep - Individual step in a skill chain
+model SkillChainStep {
+  id              String @id @default(uuid())
+  chainId         String
+  skillId         String
+  order           Int    // Order in the chain (0-indexed)
+  parameters      String @default("{}") // JSON: Record<string, unknown>
+  inputMapping    String @default("{}") // JSON: Record<string, string> - Map previous output to input
+  onFailure       String @default("abort") // 'abort' | 'skip' | 'retry'
+  maxRetries      Int?   // Override skill's default maxRetries
+  timeoutOverride Int?   // Override skill's default timeout
+
+  // Relations
+  chain SkillChain      @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  skill SkillDefinition @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, order])
+  @@index([chainId])
+  @@index([skillId])
+}
+
+// Dataset - Training datasets in LeRobot v3 format
+model Dataset {
+  id                 String   @id @default(uuid())
+  name               String
+  description        String?
+  robotTypeId        String
+  skillId            String?
+  storagePath        String   // MinIO location
+  lerobotVersion     String   // LeRobot v3 format version
+  fps                Int
+  totalFrames        Int
+  totalDuration      Float    // Duration in seconds
+  demonstrationCount Int
+  qualityScore       Int?     // 0-100
+  infoJson           String   @default("{}") // JSON: LeRobot metadata
+  statsJson          String   @default("{}") // JSON: LeRobot stats
+  status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  robotType    RobotType        @relation(fields: [robotTypeId], references: [id])
+  skill        SkillDefinition? @relation(fields: [skillId], references: [id])
+  trainingJobs TrainingJob[]
+
+  @@index([robotTypeId])
+  @@index([skillId])
+  @@index([status])
+}
+
+// TrainingJob - Training job queue entries
+model TrainingJob {
+  id                 String    @id @default(uuid())
+  datasetId          String
+  baseModel          String    // 'pi0' | 'pi0_6' | 'openvla' | 'groot'
+  fineTuneMethod     String    // 'lora' | 'full' | 'oft'
+  hyperparameters    String    @default("{}") // JSON: { learning_rate, batch_size, epochs, lora_rank, warmup_steps }
+  gpuRequirements    String    @default("{}") // JSON: { count, memory, type }
+  status             String    @default("pending") // 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  progress           Int       @default(0) // 0-100
+  currentEpoch       Int?
+  totalEpochs        Int?
+  metrics            String    @default("{}") // JSON: training/validation loss curves
+  mlflowRunId        String?
+  mlflowExperimentId String?
+  bullmqJobId        String?   // BullMQ queue tracking
+  startedAt          DateTime?
+  completedAt        DateTime?
+  errorMessage       String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  // Relations
+  dataset       Dataset        @relation(fields: [datasetId], references: [id])
+  modelVersions ModelVersion[]
+
+  @@index([datasetId])
+  @@index([status])
+  @@index([baseModel])
+}
+
+// ModelVersion - Trained model artifacts
+model ModelVersion {
+  id                 String   @id @default(uuid())
+  skillId            String
+  trainingJobId      String
+  version            String   // Semantic version string
+  artifactUri        String   // MinIO model location
+  checkpointUri      String?  // Intermediate checkpoints location
+  trainingMetrics    String   @default("{}") // JSON: training metrics
+  validationMetrics  String   @default("{}") // JSON: validation metrics
+  deploymentStatus   String   @default("staging") // 'staging' | 'canary' | 'production' | 'archived'
+  mlflowModelName    String?
+  mlflowModelVersion String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  skill       SkillDefinition @relation(fields: [skillId], references: [id])
+  trainingJob TrainingJob     @relation(fields: [trainingJobId], references: [id])
+  deployments Deployment[]
+
+  @@unique([skillId, version])
+  @@index([deploymentStatus])
+}
+
+// Deployment - Fleet deployment tracking
+model Deployment {
+  id                 String    @id @default(uuid())
+  modelVersionId     String
+  strategy           String    // 'canary' | 'blue_green' | 'rolling'
+  targetRobotTypes   String[]  // Robot types to deploy to
+  targetZones        String[]  // Zones to deploy to
+  trafficPercentage  Int       @default(0) // 0-100
+  canaryConfig       String    @default("{}") // JSON: { stages, durations, thresholds }
+  rollbackThresholds String    @default("{}") // JSON: { errorRate, latencyP99, failureRate }
+  status             String    @default("pending") // 'pending' | 'deploying' | 'canary' | 'production' | 'rolling_back' | 'failed'
+  deployedRobotIds   String[]  // Robots successfully deployed
+  failedRobotIds     String[]  // Robots that failed deployment
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  // Relations
+  modelVersion ModelVersion @relation(fields: [modelVersionId], references: [id])
+
+  @@index([modelVersionId])
+  @@index([status])
+}
