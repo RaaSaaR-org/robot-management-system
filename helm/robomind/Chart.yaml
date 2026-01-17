@@ -1,20 +1,28 @@
-# Chart.yaml - RoboMindOS Helm Chart
+# Chart.yaml - NeoDEM: RoboMindOS Helm Chart
 apiVersion: v2
-name: robomind
-description: RoboMindOS - Distributed fleet management platform for humanoid robots with EU AI Act compliance
+name: neodem
+description: >-
+  NeoDEM (Neo-Deus Ex Machina) - Fleet management platform for humanoid robots
+  with Vision-Language-Action (VLA) model integration and EU AI Act compliance.
+  Overseeing the Awakening of the Machine.
 type: application
-version: 0.2.0
-appVersion: "1.0.0"
+version: 0.3.0
+appVersion: "2.0.0"
 keywords:
   - robotics
   - fleet-management
+  - vla
+  - vision-language-action
   - ai
   - humanoid
   - eu-ai-act
   - compliance
-home: https://github.com/robomind/robomindos
+  - kubernetes
+home: https://github.com/neodem/robomindos
 maintainers:
-  - name: RoboMind Team
-    email: team@robomind.io
+  - name: NeoDEM Team
 sources:
-  - https://github.com/robomind/robomindos
+  - https://github.com/neodem/robomindos
+annotations:
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/license: MIT
