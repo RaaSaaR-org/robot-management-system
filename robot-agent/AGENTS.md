@@ -1,217 +1,225 @@
-# AGENTS.md - Robot Agent
+# AGENTS.md
 
-This file provides guidance for AI agents working with the RoboMind Robot Agent.
+This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMind Robot Agent.
 
-## Overview
+## Project Overview
 
-AI-powered robot software implementing A2A protocol. Uses Genkit with Gemini for natural language command interpretation. Includes safety monitoring, compliance logging, and simulation mode for development.
+The Robot Agent is software that runs directly on humanoid robots, implementing the A2A (Agent-to-Agent) protocol for communication with RoboMindOS. It uses Genkit with Gemini AI to interpret natural language commands and execute robot actions.
+
+For development and demos, the agent includes a **simulation mode** that emulates robot behavior (movement, battery, sensors, joint states) without physical hardware.
 
 ## Commands
 
+### Development
+
 ```bash
-npm run dev          # Start agent with hot reload
-npm run dev:light    # Start with light model config (.env.light)
-npm run dev:heavy    # Start with heavy model config (.env.heavy)
+npm run dev          # Start agent with hot reload (default: SimBot-01, port 41243)
+npm run dev:light    # Start as NimbleBot (lightweight, port 41243)
+npm run dev:heavy    # Start as TitanBot (heavy-duty, port 41244)
+npm run dev:so101    # Start as ArmBot (SO-ARM100, port 41245)
+```
+
+### Build
+
+```bash
 npm run build        # Compile TypeScript to dist/
-npm run typecheck    # Run TypeScript compiler
+npm start            # Run production build
+```
+
+### Type Checking
+
+```bash
+npm run typecheck    # Run TypeScript compiler (noEmit mode)
 ```
 
 ## Architecture
 
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| AI Framework | Genkit | Tool orchestration |
-| AI Model | Google Gemini | Command interpretation |
-| Protocol | A2A SDK | Server communication |
-| Framework | Express.js | HTTP server |
-| Real-time | WebSocket (ws) | Telemetry streaming |
+### Technology Stack
 
-**Default Port**: 41243
+- **Runtime**: Node.js 18+
+- **Framework**: Express.js
+- **AI**: Genkit with Google Gemini 2.5 Flash
+- **Protocol**: A2A SDK (@a2a-js/sdk)
+- **Real-time**: WebSocket (ws)
+- **Language**: TypeScript (ESM modules)
+
+### Entry Point
+
+- **Main**: `src/index.ts` - Express server with A2A SDK integration
+
+### Default Port
+
+- HTTP/WebSocket: `41243` (configurable via `PORT` env)
+
+### State Management Architecture
+
+The robot uses a **facade + delegation** pattern:
+
+```
+RobotStateManager (facade)
+├── CommandExecutor     # Executes move/pickup/drop/stop/charge commands
+├── SimulationEngine    # Physics loop (100ms tick): movement, battery, heading
+├── StatePublisher      # Observer pattern: subscribe to state changes
+└── TaskQueue           # Server-pushed task queue (max 5, priority-sorted)
+```
 
 ## Project Structure
 
 ```
-src/
+robot-agent/src/
 ├── index.ts              # Main entry point, Express + A2A setup
 ├── config/
-│   └── config.ts         # Environment configuration
+│   └── config.ts         # Environment configuration & validation
 ├── agent/
-│   ├── agent-card.ts     # A2A AgentCard definition
-│   ├── agent-executor.ts # A2A message processing with Genkit
-│   └── genkit.ts         # Genkit/Gemini AI setup
+│   ├── agent-card.ts     # A2A AgentCard definition (3 skills)
+│   ├── agent-executor.ts # A2A message processing (Genkit, LRU context cache)
+│   └── genkit.ts         # Genkit/Gemini AI setup (gemini-2.5-flash)
 ├── robot/
-│   ├── types.ts          # Robot type definitions
-│   ├── state.ts          # Robot state management & simulation
-│   └── telemetry/        # Sensor data generation
-├── tools/                # Genkit AI tools
-│   ├── navigation.ts     # move, stop, return_home
-│   ├── manipulation.ts   # pickup, drop, place
-│   └── status.ts         # get_status, get_location
-├── safety/               # Safety monitoring system
-│   └── SafetyMonitor.ts  # Real-time safety classification
-├── compliance/           # Compliance logging client
-│   └── ComplianceClient.ts # Logs to server
+│   ├── types.ts          # All type definitions (RobotStatus, CommandType, etc.)
+│   ├── state.ts          # RobotStateManager facade (coordinates subsystems)
+│   ├── CommandExecutor.ts    # Command execution with validation & history
+│   ├── SimulationEngine.ts   # Physics loop (position, battery, heading)
+│   ├── StatePublisher.ts     # Observer/pub-sub for state changes
+│   ├── TaskQueue.ts          # Server-pushed task queue with priority
+│   ├── telemetry.ts          # Sensor data generation & alert detection
+│   └── joint-configs/
+│       ├── index.ts          # Joint config dispatcher (by robot type)
+│       ├── h1.config.ts      # Unitree H1 - 19 joints
+│       └── so101.config.ts   # SO-ARM100 SO101 - 6 joints
 ├── api/
-│   ├── rest-routes.ts    # REST API endpoints
-│   └── websocket.ts      # WebSocket telemetry streaming
+│   ├── rest-routes.ts    # REST API endpoints (RoboMindOS compatible)
+│   └── websocket.ts      # WebSocket telemetry streaming (2s interval)
+├── tools/
+│   ├── navigation.ts     # Genkit tools: moveToLocation, stopMovement, goToCharge, returnHome
+│   ├── manipulation.ts   # Genkit tools: pickupObject, dropObject
+│   └── status.ts         # Genkit tools: getRobotStatus, emergencyStop
 └── prompts/
-    └── robot_agent.prompt # AI system prompt template
+    └── robot_agent.prompt # AI system prompt template (Dotprompt)
 ```
 
-## Key Features
+## AI Tools (Genkit)
 
-### Safety Monitoring (`safety/SafetyMonitor.ts`)
+All 8 tools are registered with Genkit and available to the AI agent:
 
-Real-time safety classification and intervention:
+### Navigation (4 tools)
 
-```typescript
-// Safety levels
-type SafetyLevel = 'safe' | 'caution' | 'warning' | 'danger' | 'critical';
+| Tool | Input | Description |
+|------|-------|-------------|
+| `moveToLocation` | `{ x?, y?, zone? }` | Move to coordinates or named zone. Resolves zone names via server zone API (cached 60s). Validates against restricted zones. |
+| `stopMovement` | `{ reason? }` | Stop current movement |
+| `goToCharge` | `{ priority? }` | Navigate to charging station (fetched from server zones) |
+| `returnHome` | `{ priority? }` | Navigate to home position |
 
-// Monitor evaluates commands before execution
-const result = safetyMonitor.evaluateCommand(command, robotState);
-if (result.level === 'critical') {
-  await safetyMonitor.triggerEmergencyStop();
-}
-```
+### Manipulation (2 tools)
 
-**Safety checks include:**
-- Command safety classification
-- Robot state validation (battery, position, speed)
-- Environmental hazard detection
-- Force limit monitoring
-- Communication timeout handling
+| Tool | Input | Description |
+|------|-------|-------------|
+| `pickupObject` | `{ objectId }` | Pick up an object (validates payload capacity) |
+| `dropObject` | `{ gentle? }` | Drop held object |
 
-### Compliance Logging (`compliance/ComplianceClient.ts`)
+### Status (2 tools)
 
-Logs all events to server for regulatory compliance:
+| Tool | Input | Description |
+|------|-------|-------------|
+| `getRobotStatus` | `{ verbose? }` | Get full robot status, battery, location |
+| `emergencyStop` | `{ reason? }` | Immediate emergency stop |
 
-```typescript
-await complianceClient.logEvent({
-  eventType: 'ai_decision',
-  severity: 'info',
-  payload: {
-    description: 'Navigation command interpreted',
-    inputText: userCommand,
-    outputAction: 'move_to_location',
-    confidence: 0.95,
-    safetyClassification: 'safe',
-  },
-});
-```
+### Zone Resolution
 
-### Genkit Tools (`tools/`)
+Navigation tools fetch zones from `GET {serverUrl}/api/zones` and derive named locations from zone center points. Results are cached for 60 seconds. Fallback locations when server is unavailable: `home: {x:0, y:0}`, `charging_station: {x:5, y:20}`.
 
-AI tools for robot control:
+## Simulation Engine
 
-| Tool | File | Purpose |
-|------|------|---------|
-| `move_to_location` | navigation.ts | Move to coordinates |
-| `stop` | navigation.ts | Stop movement |
-| `return_home` | navigation.ts | Return to base |
-| `pickup_object` | manipulation.ts | Pick up item |
-| `drop_object` | manipulation.ts | Drop held item |
-| `get_status` | status.ts | Current robot state |
-| `get_location` | status.ts | Position info |
+The simulation runs at **100ms tick intervals** with these behaviors:
 
-### Robot State (`robot/state.ts`)
+- **Movement**: Interpolates position towards target at 2.0 units/second
+- **Heading**: Computed as `atan2(dy, dx)` in degrees
+- **Battery drain**: 0.01%/s idle, 0.02%/s while busy
+- **Battery charge**: 0.5%/s when at charging station
+- **Battery warnings**: Warning at < 20%, error state at < 5%
+- **Telemetry**: Full sensor suite (sonar, bumpers, IMU, motor currents, gripper) + joint states
 
-Manages robot state (position, status, battery, held objects):
+### Joint Animations
 
-```typescript
-interface RobotState {
-  id: string;
-  position: { x: number; y: number; zone: string };
-  status: 'idle' | 'moving' | 'working' | 'charging' | 'error';
-  battery: number;
-  heldObjects: string[];
-}
-```
+- **H1 (humanoid)**: 19-joint walking gait animation at 2.0Hz cycle; idle sway at 0.3Hz
+- **SO101 (arm)**: 6-joint working/holding/rest poses at 0.5Hz cycle
 
-## Development Guidelines
+## Task Queue (Server-Pushed)
 
-### Genkit Tool Pattern
+The robot accepts tasks pushed from the server's `TaskDistributor`:
 
-```typescript
-const moveTool = ai.defineTool(
-  {
-    name: 'move_to_location',
-    description: 'Move robot to coordinates or named zone',
-    inputSchema: z.object({
-      x: z.number().optional(),
-      y: z.number().optional(),
-      zone: z.string().optional(),
-    }),
-    outputSchema: z.object({
-      success: z.boolean(),
-      message: z.string(),
-    }),
-  },
-  async (input) => {
-    // Validate with safety monitor
-    const safetyResult = safetyMonitor.evaluateMovement(input);
-    if (!safetyResult.safe) {
-      return { success: false, message: safetyResult.reason };
-    }
+- **Max queue size**: 5
+- **Priority order**: critical(4) > high(3) > normal(2) > low(1)
+- **Supported actions**: `move_to_location`, `pickup_object`, `drop_object`, `charge`, `return_home`, `wait`, `inspect`, `custom`
+- **Rejects tasks** when robot is in `error` or `maintenance` state
 
-    // Execute movement
-    await robotState.moveTo(input);
-
-    // Log to compliance
-    await complianceClient.logEvent({ ... });
-
-    return { success: true, message: 'Movement started' };
-  }
-);
-```
-
-### Safety-First Development
-
-1. Always check safety before executing commands
-2. Log all actions to compliance system
-3. Handle emergency stop gracefully
-4. Validate robot state before operations
-
-## API Endpoints
+## Key Endpoints
 
 ### A2A Protocol
+
 - `GET /.well-known/agent-card.json` - Robot agent card
 - `POST /` - A2A message handler (via SDK)
 
-### REST API
-- `GET /api/v1/robots/:id` - Robot details
-- `POST /api/v1/robots/:id/command` - Send command
-- `GET /api/v1/robots/:id/telemetry` - Current telemetry
-- `POST /api/v1/robots/:id/emergency-stop` - Emergency stop
-- `GET /api/v1/health` - Health check
+### REST API (`/api/v1`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET    | `/api/v1/robots/:id` | Get robot details |
+| POST   | `/api/v1/robots/:id/command` | Send command |
+| GET    | `/api/v1/robots/:id/telemetry` | Get current telemetry |
+| POST   | `/api/v1/robots/:id/tasks` | Accept pushed task (202) |
+| GET    | `/api/v1/robots/:id/tasks` | Get task queue |
+| DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
+| POST   | `/api/v1/robots/:id/reset` | Reset robot state |
+| GET    | `/api/v1/register` | Registration info for server |
+| GET    | `/api/v1/health` | Health check |
 
 ### WebSocket
-- `ws://localhost:41243/ws/telemetry/:robotId` - Real-time telemetry
 
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GEMINI_API_KEY` | Google Gemini API key | Required |
-| `PORT` | Server port | `41243` |
-| `ROBOT_ID` | Unique robot identifier | `sim-robot-001` |
-| `ROBOT_NAME` | Display name | `SimBot-01` |
-| `SERVER_URL` | RoboMindOS server URL | `http://localhost:3001` |
-| `INITIAL_X` | Starting X coordinate | `10.0` |
-| `INITIAL_Y` | Starting Y coordinate | `10.0` |
-| `INITIAL_ZONE` | Starting zone | `Warehouse A` |
+- `ws://localhost:41243/ws/telemetry/:robotId` - Real-time telemetry (every 2s) + alerts on state change
 
 ## Key Dependencies
 
-- `@a2a-js/sdk` - A2A protocol implementation
-- `genkit` - Google AI framework
-- `@genkit-ai/googleai` - Gemini integration
-- `express` - HTTP server
-- `ws` - WebSocket server
-- `zod` - Schema validation
+| Package                 | Purpose                     |
+| ----------------------- | --------------------------- |
+| `@a2a-js/sdk`          | A2A protocol implementation |
+| `genkit`                | Google AI framework         |
+| `@genkit-ai/googleai`  | Gemini model integration    |
+| `express`               | HTTP server                 |
+| `ws`                    | WebSocket server            |
+| `axios`                 | HTTP client (zone fetching) |
+| `dotprompt`             | Prompt template engine      |
+
+## Environment Variables
+
+| Variable           | Default            | Description                    |
+| ------------------ | ------------------ | ------------------------------ |
+| `GEMINI_API_KEY`   | (required)         | Google Gemini API key          |
+| `PORT`             | `41243`            | Server port                    |
+| `SERVER_URL`       | `http://localhost:3001` | RoboMindOS server URL     |
+| `ROBOT_ID`         | `sim-robot-001`    | Unique robot identifier        |
+| `ROBOT_NAME`       | `SimBot-01`        | Display name                   |
+| `ROBOT_MODEL`      | `SimBot H1`        | Model string                   |
+| `ROBOT_CLASS`      | `standard`         | `lightweight \| standard \| heavy-duty` |
+| `ROBOT_TYPE`       | `h1`               | `h1 \| so101 \| generic`      |
+| `MAX_PAYLOAD_KG`   | `10`               | Max payload capacity (kg)      |
+| `ROBOT_DESCRIPTION`| (generic)          | AI prompt context              |
+| `INITIAL_X`        | `10.0`             | Starting X coordinate          |
+| `INITIAL_Y`        | `10.0`             | Starting Y coordinate          |
+| `INITIAL_ZONE`     | `Warehouse A`      | Starting zone name             |
+| `INITIAL_FLOOR`    | `1`                | Starting floor                 |
+
+### Pre-configured Profiles
+
+| File          | Robot     | Class       | Type  | Port  | Payload |
+| ------------- | --------- | ----------- | ----- | ----- | ------- |
+| `.env`        | SimBot-01 | standard    | h1    | 41243 | 10kg    |
+| `.env.light`  | NimbleBot | lightweight | h1    | 41243 | 5kg     |
+| `.env.heavy`  | TitanBot  | heavy-duty  | h1    | 41244 | 50kg    |
+| `.env.so101`  | ArmBot    | lightweight | SO101 | 41245 | 0.5kg   |
 
 ## Related Documentation
 
-- `./README.md` - Full robot agent documentation
-- `../server/AGENTS.md` - Server API reference
+- `../server/AGENTS.md` - Server documentation
+- `../app/AGENTS.md` - Frontend documentation
 - `../docs/architecture.md` - System architecture

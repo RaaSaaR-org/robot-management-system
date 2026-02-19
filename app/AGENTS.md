@@ -1,156 +1,216 @@
-# AGENTS.md - Frontend Application
+# AGENTS.md
 
-This file provides guidance for AI agents working with the RoboMindOS frontend application.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Overview
+## Project Overview
 
-React + TypeScript frontend with Tauri v2 for desktop deployment. Uses Zustand for state management and Tailwind CSS for styling.
+RoboMindOS is a Tauri v2 desktop application for robot fleet management. It features a React + TypeScript frontend with Zustand state management and a Rust backend. The app enables users to manage, monitor, and control humanoid robots through natural language commands and an A2A orchestration chat interface.
 
 ## Commands
 
+### Development
+
 ```bash
-npm run dev          # Start Vite dev server (http://localhost:1420)
+npm run dev          # Start Vite dev server (frontend only, http://localhost:1420)
+```
+
+### Build
+
+```bash
 npm run build        # Build frontend (TypeScript check + Vite build)
-npx tsc              # Run TypeScript compiler
+```
+
+### Type Checking
+
+```bash
+npx tsc              # Run TypeScript compiler (noEmit mode)
 ```
 
 ## Architecture
 
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| UI Framework | React 18 | Component rendering |
-| State | Zustand + Immer | Global state management |
-| Styling | Tailwind CSS v4 | Utility-first CSS |
-| Routing | React Router v7 | Client-side routing |
-| Desktop | Tauri v2 | Native desktop wrapper |
-| HTTP | Axios | API communication |
+### Frontend (React/TypeScript)
 
-## Project Structure
+- **Entry point**: `src/main.tsx` - React app bootstrap with providers
+- **Root component**: `src/App.tsx` - Routes and layout
+- **Build tool**: Vite with React plugin
+- **Dev server**: Port 1420
+- **State management**: Zustand with Immer middleware
+- **Styling**: Tailwind CSS v4
+- **Routing**: React Router DOM v7 (lazy-loaded pages)
+
+### Backend (Rust/Tauri)
+
+- **Entry point**: `src-tauri/src/main.rs` - Tauri application entry
+- **Commands**: `src-tauri/src/lib.rs` - Tauri command handlers
+- **Config**: `src-tauri/tauri.conf.json` - Tauri application configuration
+
+### Provider Composition (outermost to innermost)
+
+```
+BrowserRouter > ThemeProvider > AuthProvider > App
+```
+
+- **ThemeProvider**: Applies `light`/`dark` class to `<html>` from `themeStore`
+- **AuthProvider**: Auto-logs in with mock user in `DEV` mode. Exposes `can()`, `hasRole()` helpers
+
+## Routes
+
+### Public Routes
+
+| Path              | Page                | Description              |
+| ----------------- | ------------------- | ------------------------ |
+| `/`               | `LandingPage`       | Marketing/landing page   |
+| `/login`          | `LoginPage`         | Authentication           |
+| `/register`       | `RegisterPage`      | User registration        |
+| `/forgot-password`| `ForgotPasswordPage`| Password reset request   |
+| `/reset-password` | `ResetPasswordPage` | Password reset with token|
+
+### Protected Routes (require auth, wrapped in `AppLayout`)
+
+| Path              | Page                  | Description                  |
+| ----------------- | --------------------- | ---------------------------- |
+| `/dashboard`      | `DashboardPage`       | Fleet overview with map      |
+| `/orchestrator`   | `OrchestratorChatPage`| AI chat with auto-routing    |
+| `/robots`         | `RobotsPage`          | Robot list with filtering    |
+| `/robots/:id`     | `RobotDetailPage`     | Robot detail (tabs: Telemetry, Commands, Tasks, Info, 3D Model, Chat) |
+| `/fleet`          | `FleetPage`           | Fleet map & zone management  |
+| `/alerts`         | `AlertsPage`          | Alert management             |
+| `/processes`      | `ProcessesPage`       | Workflow/process list        |
+| `/processes/:id`  | `ProcessDetailPage`   | Process detail               |
+| `/settings`       | `SettingsPage`        | Theme preferences            |
+| `/account`        | `AccountPage`         | User account settings        |
+| `/a2a`            | `ChatPage`            | A2A direct chat              |
+| `/a2a/agents`     | `AgentListPage`       | Registered A2A agents        |
+| `/a2a/agents/:name` | `AgentDetailPage`  | Agent detail                 |
+| `/a2a/tasks`      | `TaskListPage`        | A2A task list                |
+| `/a2a/events`     | `EventsPage`          | A2A event viewer             |
+
+**Redirects**: `/tasks` -> `/processes`, `/tasks/:id` -> `/processes`
+
+## Project Structure (Feature-First)
 
 ```
 src/
-├── app/                 # App shell, providers, routing
+├── app/providers/       # Context providers (Auth, Theme)
 ├── features/            # Feature modules (domain-driven)
-│   ├── compliance/      # EU AI Act compliance (see features/compliance/AGENTS.md)
-│   ├── explainability/  # AI decision transparency
-│   ├── robots/          # Robot management
-│   ├── fleet/           # Fleet operations
-│   ├── command/         # Natural language commands
-│   ├── alerts/          # Alert system
-│   ├── safety/          # Safety monitoring
-│   ├── a2a/             # A2A protocol integration
-│   ├── auth/            # Authentication (planned)
-│   ├── dashboard/       # Main dashboard
-│   ├── processes/       # Task/process management
-│   └── settings/        # User settings
-├── shared/              # Shared code
-│   ├── components/ui/   # Reusable UI components
-│   ├── hooks/           # Shared hooks
-│   ├── types/           # Shared types
-│   └── utils/           # Utility functions
-├── api/                 # API client configuration
-└── routes/              # Route definitions
+│   ├── a2a/             # A2A orchestration & chat
+│   ├── alerts/          # Alert management
+│   ├── auth/            # Authentication (login, register, password reset)
+│   ├── command/         # NL command interface & safety preview
+│   ├── dashboard/       # Fleet dashboard page
+│   ├── fleet/           # Fleet map & zone management
+│   ├── processes/       # Workflow/process management
+│   ├── robots/          # Robot management, telemetry, 3D viewer
+│   └── settings/        # Theme & UI stores
+├── shared/              # Cross-feature shared code
+│   ├── components/ui/   # Reusable UI (Badge, Button, Card, Input, Modal, ProgressBar, Spinner, Tabs)
+│   ├── hooks/           # Shared hooks (useApi, useDebounce, useLocalStorage, useMediaQuery, useWebSocket)
+│   ├── types/           # Shared types (ApiResponse, PaginatedResponse, WebSocketStatus)
+│   └── utils/           # Utilities (cn, error, format, thresholds)
+├── api/                 # Axios client with token refresh
+├── store/               # Zustand store factory (createStore with immer + devtools + persist)
+├── components/          # Layout components (AppLayout, Sidebar, TopBar) + landing sections
+├── pages/               # Top-level pages (LandingPage, SettingsPage)
+├── routes/              # Lazy page imports (lazyPages.ts)
+└── mocks/               # Mock data for development
 ```
 
-## Feature Module Structure
+### Feature Module Structure
 
-Each feature follows this pattern:
+Each feature follows this structure:
 
 ```
-features/{feature}/
-├── api/             # API calls (featureApi.ts)
+features/{feature-name}/
+├── types/           # TypeScript type definitions (create FIRST)
+├── store/           # Zustand store slice
+├── api/             # API module with endpoints
+├── hooks/           # React hooks (useX)
 ├── components/      # Feature components
-├── hooks/           # Feature hooks
 ├── pages/           # Route pages
-├── store/           # Zustand store (featureStore.ts)
-├── types/           # TypeScript types
-├── index.ts         # Public exports
-└── AGENTS.md        # Feature-specific guidance
+└── index.ts         # Public exports
 ```
-
-## Key Features
-
-### Compliance (`features/compliance/`)
-EU AI Act and GDPR compliance features:
-- Audit log viewer with hash chain verification
-- Integrity verification UI
-- RoPA (Records of Processing Activities) management
-- Technical documentation management
-- Retention policy configuration
-- Legal hold management
-
-### Explainability (`features/explainability/`)
-AI decision transparency:
-- Decision viewer with reasoning display
-- Confidence metrics visualization
-- Factor analysis
-- Decision timeline
-
-### Robots (`features/robots/`)
-Robot management:
-- Robot list and detail views
-- Real-time telemetry display
-- Command execution
-- Status monitoring
 
 ## Development Guidelines
 
 ### Implementation Order
-1. **Types** - Define interfaces first
-2. **Store** - Create Zustand store
-3. **API** - Implement API module
-4. **Hooks** - Create data fetching hooks
-5. **Components** - Build UI components
-6. **Pages** - Assemble pages
+
+When building features, implement in this order:
+
+1. **Types** - Define interfaces and type aliases first
+2. **Store** - Create Zustand store with state and actions
+3. **API** - Implement API module with typed endpoints
+4. **Hooks** - Create hooks for data fetching/state access
+5. **Components** - Build UI components using shared primitives
+6. **Pages** - Assemble pages from components
+
+### File Header Convention
+
+Every file should start with:
+
+```typescript
+/**
+ * @file FileName.tsx
+ * @description One-line purpose description
+ * @feature feature-name
+ */
+```
 
 ### Code Patterns
 
-```typescript
-// File header
-/**
- * @file ComponentName.tsx
- * @description Brief description
- * @feature feature-name
- */
+- Use named exports (no default exports)
+- Wrap components in `memo()` for performance
+- Use `cn()` utility from `@/shared/utils` for conditional classnames
+- Store slices use the `createStore<T>()` factory from `src/store/createStore.ts` (includes immer + devtools + persist)
+- All pages are lazy-loaded via `React.lazy()` in `routes/lazyPages.ts`
+- Dev mode auto-login: `AuthProvider` injects `MOCK_USER` when `import.meta.env.DEV` is true
 
-// Named exports only
-export function ComponentName() { ... }
-
-// Use cn() for conditional classes
-import { cn } from '@/shared/utils';
-className={cn('base-class', condition && 'conditional-class')}
-
-// Zustand store with Immer
-export const useFeatureStore = create<FeatureState>()(
-  immer((set) => ({
-    // state and actions
-  }))
-);
-```
-
-### Brand Colors
+### Brand Colors (Tailwind)
 
 ```
 Primary: #2A5FFF (Cobalt Blue) -> primary-500
 Accent: #18E4C3 (Turquoise) -> accent-500
 Status:
-  - Online: green-500
-  - Offline: gray-400
-  - Busy: blue-500
-  - Error: red-500
-  - Charging: yellow-500
+  - Online: #22c55e (green-500)
+  - Offline: #9ca3af (gray-400)
+  - Busy: #3b82f6 (blue-500)
+  - Error: #ef4444 (red-500)
+  - Charging: #eab308 (yellow-500)
 ```
 
 ## Key Dependencies
 
-- `zustand` + `immer` - State management
-- `axios` - HTTP client
-- `react-router-dom` - Routing
-- `@tauri-apps/api` - Tauri APIs
-- `tailwind-merge` + `clsx` - CSS utilities
+| Package                | Purpose                     |
+| ---------------------- | --------------------------- |
+| `react` / `react-dom`  | UI framework (v19)         |
+| `react-router-dom`     | Client-side routing (v7)   |
+| `zustand`              | State management           |
+| `immer`                | Immutable state updates    |
+| `axios`                | HTTP client                |
+| `three`                | 3D rendering               |
+| `@react-three/fiber`   | React bindings for Three.js|
+| `@react-three/drei`    | Three.js helpers           |
+| `urdf-loader`          | URDF robot model loader    |
+| `react-markdown`       | Markdown rendering (chat)  |
+| `@google/generative-ai`| Gemini API client          |
+| `clsx` + `tailwind-merge` | CSS class utilities     |
+| `@tauri-apps/api`      | Tauri desktop APIs         |
 
-## Related Documentation
+## Environment Variables
 
-- `docs/app-architecture.md` - Detailed frontend architecture
-- `docs/brand.md` - Design system and brand guide
-- `../server/AGENTS.md` - Backend API reference
+| Variable              | Default                           | Description               |
+| --------------------- | --------------------------------- | ------------------------- |
+| `VITE_API_BASE_URL`   | `http://localhost:3001/api`       | Server API base URL       |
+| `VITE_A2A_SERVER_URL` | `http://localhost:3001`           | A2A server URL            |
+| `VITE_A2A_WS_URL`     | `ws://localhost:3001/api/a2a/ws`  | A2A WebSocket URL         |
+| `VITE_A2A_USE_MOCK`   | `false`                           | Use mock A2A data         |
+| `GOOGLE_API_KEY`       | —                                | Gemini API key            |
+
+## Documentation
+
+More detailed documentation:
+
+- `docs/architecture.md` - Full frontend architecture patterns
+- `docs/brand.md` - Brand guide and visual design system
+- `docs/prd.md` - Product requirements document
+- `../server/AGENTS.md` - Server documentation
+- `../robot-agent/AGENTS.md` - Robot agent documentation
