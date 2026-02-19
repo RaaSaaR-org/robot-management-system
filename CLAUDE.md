@@ -1,239 +1,159 @@
 # CLAUDE.md
 
-> *"I know Kung Fu."* — Neo
-
-This file provides guidance to Claude Code when working with the **NeoDEM** codebase.
+This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMindOS codebase.
 
 ## Project Overview
 
-**NeoDEM** (Neo-Deus Ex Machina) is a distributed fleet management platform for humanoid robots. It combines Vision-Language-Action (VLA) model integration for skill learning with EU AI Act compliance — enabling the "awakening of the machine" while keeping it transparent and aligned.
+RoboMindOS is a distributed fleet management platform for humanoid robots. It consists of three main components:
 
-| Component | Location | Description | Port |
-|-----------|----------|-------------|------|
-| **App** | `app/` | React + Tauri frontend | 1420 |
-| **Server** | `server/` | Node.js A2A protocol server | 3001 |
-| **Robot Agent** | `robot-agent/` | AI-powered robot software | 41243 |
-| **VLA Inference** | `vla-inference/` | Python gRPC VLA model server | 50051 |
+| Component       | Location       | Description                 | Port  |
+| --------------- | -------------- | --------------------------- | ----- |
+| **App**         | `app/`         | React + Tauri frontend      | 1420  |
+| **Server**      | `server/`      | Node.js A2A protocol server | 3001  |
+| **Robot Agent** | `robot-agent/` | AI-powered robot software   | 41243 |
 
 ## Component-Specific Guidance
 
 Each component has its own `AGENTS.md` file with detailed guidance:
 
-- `app/AGENTS.md` — Frontend patterns, Zustand stores, Tailwind
-- `server/AGENTS.md` — Routes, services, Prisma database
-- `robot-agent/AGENTS.md` — Genkit tools, robot state, safety monitoring
-- `vla-inference/README.md` — VLA model serving, gRPC API, metrics
+- `app/AGENTS.md` - Frontend development patterns, Zustand stores, Tailwind
+- `server/AGENTS.md` - Server routes, services, A2A protocol, database
+- `robot-agent/AGENTS.md` - Genkit tools, robot state, telemetry, simulation
 
 **Always check the relevant AGENTS.md file when working in a specific component.**
 
 ## Quick Start Commands
 
-### Start Components (Development)
+### Starting Components (Development)
 
 ```bash
-# Terminal 1: Server
+# Terminal 1: Server (requires DATABASE_URL and optionally GOOGLE_API_KEY in server/.env)
 cd server && npm run dev
 
-# Terminal 2: Robot Agent (simulation)
+# Terminal 2: Robot Agent (requires GEMINI_API_KEY in robot-agent/.env)
 cd robot-agent && npm run dev
 
 # Terminal 3: Frontend
 cd app && npm run dev
+```
 
-# Terminal 4: VLA Inference (optional, requires Python)
-cd vla-inference && make run
+### Environment Setup
+
+Each component needs a `.env` file. Copy from examples and fill in API keys:
+
+```bash
+# Server (SQLite database, JWT auth disabled in dev)
+cp server/.env.example server/.env  # if no .env exists
+
+# Robot Agent (needs Gemini API key)
+cp robot-agent/.env.example robot-agent/.env
+# Edit robot-agent/.env and set GEMINI_API_KEY=your_key
+
+# App (defaults work for local dev)
+# VITE_API_BASE_URL defaults to http://localhost:3001/api
 ```
 
 ### Individual Component Commands
 
-| Component | Dev | Build | Type Check |
-|-----------|-----|-------|------------|
-| **App** | `cd app && npm run dev` | `npm run build` | `npx tsc` |
-| **Server** | `cd server && npm run dev` | `npm run build` | `npm run typecheck` |
-| **Robot** | `cd robot-agent && npm run dev` | `npm run build` | `npm run typecheck` |
-| **VLA Inference** | `cd vla-inference && make run` | Docker build | `mypy` |
+| Component  | Dev                             | Build           | Type Check          |
+| ---------- | ------------------------------- | --------------- | ------------------- |
+| **App**    | `cd app && npm run dev`         | `npm run build` | `npx tsc`           |
+| **Server** | `cd server && npm run dev`      | `npm run build` | `npm run typecheck` |
+| **Robot**  | `cd robot-agent && npm run dev` | `npm run build` | `npm run typecheck` |
+
+### Database Commands (Server)
+
+```bash
+cd server
+npm run db:generate   # Generate Prisma client
+npm run db:push       # Push schema to dev database
+npm run db:migrate    # Run migrations
+npm run db:studio     # Open Prisma Studio GUI
+```
 
 ## Architecture
 
-```
-                                    NeoDEM: RoboMindOS
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                                                                         │
-    │   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        │
-    │   │             │  REST  │             │  A2A   │             │        │
-    │   │     App     │◄──────►│   Server    │◄──────►│ Robot Agent │        │
-    │   │  React/Tauri│   WS   │   Node.js   │Protocol│  Genkit AI  │        │
-    │   │             │        │             │        │             │        │
-    │   └─────────────┘        └──────┬──────┘        └──────┬──────┘        │
-    │         :1420                   │                      │               │
-    │                                 │                      │ gRPC          │
-    │                                 ▼                      ▼               │
-    │                          ┌─────────────┐        ┌─────────────┐        │
-    │                          │ PostgreSQL  │        │     VLA     │        │
-    │                          │  + MLflow   │        │  Inference  │        │
-    │                          │             │        │   Python    │        │
-    │                          └─────────────┘        └─────────────┘        │
-    │                               :5432                  :50051            │
-    │                                                                         │
-    │   ─────────────────────────────────────────────────────────────────    │
-    │   Infrastructure:  NATS :4222  │  RustFS :9000  │  Prometheus :9090    │
-    └─────────────────────────────────────────────────────────────────────────┘
-```
-
 **Communication Protocols:**
 
-- App ↔ Server: REST API + WebSocket (real-time telemetry)
-- Server ↔ Robot Agent: A2A (Agent-to-Agent) protocol
-- Robot Agent ↔ VLA Inference: gRPC (Predict, StreamControl)
+- App <-> Server: REST API + WebSocket (`ws://localhost:3001/api/a2a/ws`)
+- Server <-> Robot: A2A (Agent-to-Agent) protocol + REST API
+- Server -> Robot: Push-model task distribution
 
-**Database:**
+**Key Infrastructure:**
 
-- Prisma ORM with PostgreSQL (`server/prisma/schema.prisma`)
-- Run migrations: `cd server && npx prisma migrate dev`
+- **Database**: Prisma ORM + SQLite (server)
+- **Authentication**: JWT-based with role-based access control (disabled in dev via `AUTH_DISABLED=true`)
+- **AI**: Gemini 2.5 Flash for NL command interpretation (server) and robot agent reasoning (robot-agent)
 
 See `docs/architecture.md` for comprehensive system architecture.
 
 ## Directory Structure
 
 ```
-neodem/
+robo-mind-app/
 ├── app/                    # Frontend (React + Tauri)
 │   ├── src/
 │   │   ├── features/       # Feature modules
-│   │   │   ├── compliance/   # EU AI Act compliance logging
-│   │   │   ├── explainability/ # AI decision transparency
-│   │   │   ├── robots/       # Robot management
-│   │   │   ├── fleet/        # Fleet operations
-│   │   │   ├── training/     # VLA model training UI
-│   │   │   ├── deployment/   # Model deployment UI
-│   │   │   ├── datacollection/ # Training data collection
-│   │   │   ├── fleetlearning/  # Federated learning UI
-│   │   │   ├── contributions/  # Data contribution tracking
-│   │   │   ├── command/      # Natural language commands
-│   │   │   ├── alerts/       # Alert system
-│   │   │   └── safety/       # Safety monitoring
-│   │   ├── shared/         # Shared components, hooks, utils
-│   │   └── app/            # App shell, routing, providers
+│   │   │   ├── a2a/        # Agent-to-Agent chat & orchestration
+│   │   │   ├── alerts/     # Alert management
+│   │   │   ├── auth/       # Authentication (login, register, etc.)
+│   │   │   ├── command/    # NL command interface
+│   │   │   ├── dashboard/  # Fleet dashboard
+│   │   │   ├── fleet/      # Fleet map & zone management
+│   │   │   ├── processes/  # Workflow/process management
+│   │   │   ├── robots/     # Robot management & telemetry
+│   │   │   └── settings/   # Theme & UI preferences
+│   │   ├── shared/         # Shared components, hooks, utils, types
+│   │   ├── app/            # Providers (Auth, Theme)
+│   │   ├── api/            # Axios client with token refresh
+│   │   ├── store/          # Zustand store factory
+│   │   ├── components/     # Layout & landing page components
+│   │   ├── pages/          # Top-level pages (Landing, Settings)
+│   │   └── mocks/          # Mock data for development
 │   ├── src-tauri/          # Tauri (Rust) backend
-│   └── AGENTS.md           # Frontend-specific guidance
+│   └── AGENTS.md
 │
 ├── server/                 # Backend (Node.js A2A Server)
-│   ├── prisma/             # Database schema and migrations
 │   ├── src/
-│   │   ├── routes/         # API endpoints
-│   │   ├── services/       # Business logic
-│   │   │   ├── TrainingOrchestrator.ts  # VLA training jobs
-│   │   │   ├── DeploymentService.ts     # Model deployment
-│   │   │   ├── DatasetService.ts        # Training datasets
-│   │   │   ├── MLflowService.ts         # MLflow integration
-│   │   │   ├── SkillLibraryService.ts   # Skill management
-│   │   │   └── FederatedLearningService.ts # Fleet learning
-│   │   ├── repositories/   # Database access layer
-│   │   ├── types/          # TypeScript type definitions
-│   │   ├── storage/        # Object storage (RustFS)
-│   │   ├── messaging/      # NATS messaging
-│   │   └── websocket/      # Real-time telemetry
-│   └── AGENTS.md           # Server-specific guidance
+│   │   ├── routes/         # API endpoints (11 route files)
+│   │   ├── services/       # Business logic (10 services)
+│   │   ├── repositories/   # Data access layer (Prisma)
+│   │   ├── database/       # Prisma client, schemas, seeds
+│   │   ├── middleware/      # Auth, rate limiting
+│   │   ├── interfaces/     # Service interfaces (DI/testing)
+│   │   ├── websocket/      # Real-time events
+│   │   ├── types/          # TypeScript definitions
+│   │   └── utils/          # Error hierarchy
+│   ├── prisma/             # Prisma schema & migrations
+│   └── AGENTS.md
 │
-├── robot-agent/            # Robot Software (The Matrix Interface)
+├── robot-agent/            # Robot Software
 │   ├── src/
 │   │   ├── agent/          # A2A agent & Genkit AI
-│   │   ├── robot/          # State, telemetry, types
-│   │   ├── tools/          # AI tools (navigation, manipulation)
-│   │   ├── vla/            # VLA inference client
-│   │   ├── embodiment/     # Robot embodiment definitions
-│   │   ├── safety/         # Safety monitoring & emergency stop
-│   │   ├── compliance/     # Compliance logging client
-│   │   └── api/            # REST & WebSocket
-│   └── AGENTS.md           # Robot-specific guidance
-│
-├── vla-inference/          # VLA Model Server (The Oracle)
-│   ├── server.py           # Async gRPC server
-│   ├── servicer.py         # gRPC service implementation
-│   ├── config.py           # Configuration management
-│   ├── metrics.py          # Prometheus metrics
-│   ├── models/             # Model implementations
-│   │   ├── pi0.py          # pi0.6 model
-│   │   ├── openvla.py      # OpenVLA 7B
-│   │   └── groot.py        # GR00T (stub)
-│   ├── Dockerfile          # Multi-stage build
-│   └── README.md           # VLA server documentation
-│
-├── protos/                 # Protocol Buffer definitions
-│   └── vla_inference.proto # VLA gRPC service definition
-│
-├── helm/robomind/          # Kubernetes Helm chart
-│   ├── templates/
-│   │   ├── pdb.yaml                    # PodDisruptionBudgets
-│   │   ├── hpa.yaml                    # HorizontalPodAutoscalers
-│   │   ├── networkpolicy.yaml          # NetworkPolicies
-│   │   ├── app-deployment.yaml
-│   │   ├── server-deployment.yaml
-│   │   ├── robot-agent-deployment.yaml
-│   │   ├── vla-inference-deployment.yaml
-│   │   ├── postgres-statefulset.yaml
-│   │   ├── mlflow-deployment.yaml
-│   │   ├── nats-statefulset.yaml
-│   │   └── rustfs-statefulset.yaml
-│   ├── values.yaml
-│   └── values-production.yaml
+│   │   ├── robot/          # State, simulation, telemetry, tasks
+│   │   ├── tools/          # AI tools (navigation, manipulation, status)
+│   │   ├── api/            # REST & WebSocket
+│   │   ├── config/         # Environment configuration
+│   │   └── prompts/        # AI prompt templates
+│   └── AGENTS.md
 │
 ├── docs/                   # Documentation
 │   ├── architecture.md     # System architecture
-│   ├── VLA-integration-guide.md # VLA model integration
-│   ├── deployment.md       # Deployment guide
+│   ├── app-architecture.md # Frontend architecture (detailed)
 │   ├── prd.md              # Product requirements
 │   └── brand.md            # Design system
 │
-└── .taskmaster/            # Task management
-    └── tasks/tasks.json    # Project tasks
+└── .mc/                    # MissionControl (task management)
+    ├── tasks/              # Task markdown files (todo/, done/)
+    ├── config.yml          # MC configuration
+    └── templates/          # Task/sprint templates
 ```
-
-## Key Features
-
-### VLA Model Training & Deployment (Skill Uploads)
-
-> *"I know Kung Fu."* — Just as Neo downloaded skills, NeoDEM uploads VLA behaviors fleet-wide.
-
-- **Training Orchestrator**: Manage VLA fine-tuning jobs with MLflow tracking
-- **Dataset Management**: Upload, curate, and version training data
-- **Skill Library**: Reusable skills learned from demonstrations
-- **Fleet Deployment**: Deploy trained models across robot fleets
-- **Active Learning**: Intelligent sample selection for efficient training
-
-### Data Flywheel
-
-- **Teleoperation Recording**: Capture demonstrations via VR/keyboard
-- **Data Contribution**: Robots contribute successful task completions
-- **Federated Learning**: Privacy-preserving fleet-wide model improvement
-- **Synthetic Data**: Augmentation and simulation-to-real transfer
-
-### Compliance & Regulatory (EU AI Act)
-
-- **Compliance Logging**: Tamper-evident audit trail (Art. 12)
-- **Hash Chain Verification**: Cryptographic integrity verification
-- **RoPA Management**: Records of Processing Activities (GDPR Art. 30)
-- **Technical Documentation**: Per AI Act Annex IV, MR Annex IV, CRA Annex V
-- **Retention Policies**: Configurable per event type (up to 10 years)
-
-### AI Explainability
-
-- **Decision Viewer**: Inspect AI decisions with reasoning
-- **Confidence Metrics**: Model confidence and safety scores
-- **Factor Analysis**: Input factors and their influence
-
-### Safety Features
-
-- **Safety Monitor**: Real-time safety classification
-- **Emergency Stop**: Immediate robot halt capability
-- **Protective Stop**: Automatic safety interventions
 
 ## Development Guidelines
 
 ### Code Style
 
 - **TypeScript**: Strict mode, explicit types for public APIs
-- **Python**: Type hints, docstrings (vla-inference)
 - **Named exports**: No default exports
 - **File headers**: Include `@file`, `@description`, `@feature` JSDoc
 
@@ -249,89 +169,82 @@ neodem/
 
 When building features across the stack:
 
-1. **Types** — Define shared interfaces
-2. **Proto** — Define gRPC messages (if VLA-related)
-3. **Server** — API endpoints, services, database models
-4. **VLA Inference** — Model integration (if applicable)
-5. **Robot** — AI tools, VLA client integration
-6. **Frontend** — Store, hooks, components, pages
+1. **Types** - Define shared interfaces
+2. **Server** - Database schema, repositories, services, routes
+3. **Robot** - AI tools and state (if applicable)
+4. **Frontend** - Store, hooks, components, pages
 
 ### Key Patterns
 
-| Component | Pattern | Example |
-|-----------|---------|---------|
-| **App** | Feature-first + Zustand | `features/robots/store/robotsStore.ts` |
-| **Server** | Routes + Services | `routes/robot.routes.ts` → `services/RobotManager.ts` |
-| **Robot** | Genkit Tools | `tools/navigation.ts` with `ai.defineTool()` |
-| **VLA Inference** | Model Factory | `models/__init__.py` → `create_model("pi0")` |
+| Component  | Pattern                      | Example                                               |
+| ---------- | ---------------------------- | ----------------------------------------------------- |
+| **App**    | Feature-first + Zustand      | `features/robots/store/robotsStore.ts`                |
+| **Server** | Routes + Services + Repos    | `routes/robot.routes.ts` -> `services/RobotManager.ts` -> `repositories/RobotRepository.ts` |
+| **Robot**  | Genkit Tools + State Manager | `tools/navigation.ts` with `ai.defineTool()`          |
 
 ## Key Dependencies
 
-| Package | Used In | Purpose |
-|---------|---------|---------|
-| `zustand` | App | State management |
-| `@tauri-apps/api` | App | Desktop APIs |
-| `express` | Server, Robot | HTTP server |
-| `prisma` | Server | Database ORM |
-| `ws` | Server, Robot | WebSocket |
-| `@a2a-js/sdk` | Robot | A2A protocol |
-| `genkit` | Robot | AI framework |
-| `@genkit-ai/googleai` | Robot | Gemini integration |
-| `grpcio` | VLA Inference | gRPC server |
-| `prometheus-client` | VLA Inference | Metrics |
-
-## Infrastructure
-
-### Local Development
-
-```bash
-docker-compose up -d postgres nats rustfs
-```
-
-### Kubernetes (Helm)
-
-```bash
-# Development
-helm install neodem ./helm/robomind
-
-# Production (with autoscaling, network policies, PDBs)
-helm install neodem ./helm/robomind -f ./helm/robomind/values-production.yaml
-```
-
-### Services
-
-| Service | Purpose | Port |
-|---------|---------|------|
-| PostgreSQL | Primary database | 5432 |
-| NATS | Message queue | 4222 |
-| RustFS | Object storage (S3-compatible) | 9000 |
-| MLflow | Experiment tracking | 5000 |
-| Prometheus | Metrics collection | 9090 |
+| Package                 | Used In       | Purpose                    |
+| ----------------------- | ------------- | -------------------------- |
+| `zustand`               | App           | State management           |
+| `immer`                 | App           | Immutable state updates    |
+| `axios`                 | App, Server   | HTTP client                |
+| `@tauri-apps/api`       | App           | Desktop APIs               |
+| `three`                 | App           | 3D robot model viewer      |
+| `react-router-dom`      | App           | Client-side routing        |
+| `express`               | Server, Robot | HTTP server                |
+| `ws`                    | Server, Robot | WebSocket                  |
+| `@prisma/client`        | Server        | Database ORM               |
+| `jsonwebtoken`          | Server        | JWT authentication         |
+| `@google/generative-ai` | Server, Robot | Gemini AI                  |
+| `genkit`                | Robot         | AI framework               |
+| `@a2a-js/sdk`           | Robot         | A2A protocol               |
 
 ## Task Management
 
-Project tasks are tracked in `.taskmaster/tasks/tasks.json`:
+Project tasks are tracked in `.mc/tasks/` using MissionControl (mc CLI). Tasks are markdown files with YAML frontmatter, organized in `todo/` and `done/` folders.
 
 ```bash
-npx task-master list          # List all tasks
-npx task-master next          # Get next task to work on
-npx task-master show <id>     # Show task details
+mc task board                 # Show kanban board
+mc task next                  # Get next actionable task
+mc list tasks                 # List all tasks
+mc show TASK-001              # Show task details
+mc task move TASK-001 done    # Move task to done
+mc new task "Title" --priority 2 --tags core  # Create new task
 ```
+
+### Task Authoring Guidelines
+
+**Tasks must be self-contained.** Anyone reading a task should have all context needed to implement it without needing to cross-reference other documents or ask questions.
+
+Every task description must include:
+
+1. **Description**: 1-2 sentence summary of what needs to be done and why
+2. **Details**: Full implementation guidance with:
+   - **Current state**: What exists today (file paths, current behavior)
+   - **Per-component sections**: Separate `### Server`, `### Frontend`, `### Robot Agent` sections as needed
+   - **Key files**: Explicit list of files to create or modify with full relative paths
+3. **Test Strategy**: How to verify the implementation works
+
+Guidelines:
+- **Independent**: Each task should be implementable on its own. Include file paths, API shapes, and relevant context inline — don't assume the reader has read other tasks
+- **Specific**: Reference exact file paths (`app/src/features/fleet/components/FleetMap.tsx`), not vague locations ("the fleet module")
+- **Scoped**: One task = one coherent deliverable. If it spans 3+ components, that's fine, but it should be one logical feature
+- **Tagged**: Use `core`, `extended`, or `compliance` tags. Add `deferred` for deprioritized items
+- **Dependencies**: Use `depends_on` with `[[TASK-NNN]]` links for hard blockers only
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| `docs/architecture.md` | Full system architecture |
-| `docs/VLA-integration-guide.md` | VLA model integration guide |
-| `docs/deployment.md` | Kubernetes deployment guide |
-| `docs/prd.md` | Product requirements |
-| `docs/brand.md` | Colors, typography, design tokens |
+| Document                                         | Description                       |
+| ------------------------------------------------ | --------------------------------- |
+| `docs/architecture.md`                           | Full system architecture          |
+| `docs/app-architecture.md`                       | Frontend patterns (detailed)      |
+| `docs/prd.md`                                    | Product requirements              |
+| `docs/brand.md`                                  | Colors, typography, design tokens |
+| `docs/humanoid-robot-communication-protocols.md` | A2A protocol details              |
 
-## Current Status
+## Current Limitations
 
-- **Database**: Prisma with PostgreSQL (migrations in server/prisma/migrations)
-- **VLA Models**: pi0.6, OpenVLA supported; GR00T planned
-- **Authentication**: JWT-based (in development)
-- **Simulation**: Robot agent runs in simulation mode for development
-- **Production**: Helm chart with HPA, PDB, NetworkPolicies ready
+- **Simulation only**: Robot agent runs in simulation mode for development
+- **SQLite**: Server uses file-based SQLite; production should migrate to PostgreSQL
+- **Auth disabled in dev**: JWT auth exists but bypassed via `AUTH_DISABLED=true`
