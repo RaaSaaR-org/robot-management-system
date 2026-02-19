@@ -14,24 +14,71 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 50  # Need recent history for "done since yesterday"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+      - name: Install open-code
+        run: npm install -g open-code
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install MissionControl
+        run: cargo install mc
 
       - name: Run Daily Standup
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: claude -p /scrai-daily-standup --yes
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          mkdir -p docs/planning/standups
+
+          open-code -p "You are the SCRAI daily standup bot for the RoboMindOS project.
+
+          Generate a daily standup report for ${DATE}.
+
+          Steps:
+          1. Read .mc/config.yml for project context
+          2. List all task files in .mc/tasks/todo/ and .mc/tasks/done/ — read their YAML frontmatter to get id, title, status, priority, owner, sprint, tags
+          3. Check git log for the last 24 hours: git log --since='24 hours ago' --oneline
+          4. Find the active sprint in .mc/sprints/ (status: active), if any
+          5. Generate the standup report
+
+          Write the report to docs/planning/standups/standup-${DATE}.md with this structure:
+
+          ---
+          date: ${DATE}
+          sprint: <active sprint ID or 'none'>
+          ---
+
+          # Daily Standup — ${DATE}
+
+          ## Done (last 24h)
+          List tasks moved to done recently (check git log for task file moves and recent commits).
+
+          ## In Progress
+          List tasks with status: in-progress from .mc/tasks/todo/, with their TASK-NNN IDs.
+
+          ## Up Next
+          List the top 3 highest-priority backlog/todo tasks that are unblocked.
+
+          ## Blockers
+          Note any tasks with unresolved depends_on references (dependencies not yet done).
+
+          ## Sprint Progress
+          If there is an active sprint, summarize: X tasks done, Y in-progress, Z remaining.
+
+          Keep it concise. Reference TASK-NNN IDs throughout." --yes
 
       - name: Commit and push
         run: |
           git config user.name "SCRAI Bot"
           git config user.email "scrai-bot@users.noreply.github.com"
-          git add docs/planning/standups/
-          git diff --staged --quiet || git commit -m "scrai: Daily standup - $(date +%Y-%m-%d)"
+          git add docs/planning/standups/ .mc/
+          git diff --staged --quiet || git commit -m "scrai: daily standup - $(date +%Y-%m-%d)"
           git push
