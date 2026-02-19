@@ -45,11 +45,13 @@ function LoadingPlaceholder() {
 // ============================================================================
 
 export const Robot3DViewer = memo(function Robot3DViewer({
-  robotType,
+  robotType: rawRobotType,
   jointStates,
   isAnimating = true,
   className,
 }: Robot3DViewerProps) {
+  const robotType = rawRobotType.toLowerCase() as RobotType;
+
   // Camera position based on robot type
   const cameraPosition: [number, number, number] =
     robotType === 'so101' ? [0.5, 0.4, 0.5] : [2, 1.5, 2];

@@ -29,6 +29,7 @@ export interface RobotModelProps {
 
 const URDF_PATHS: Record<string, string> = {
   h1: '/assets/robots/h1/h1.urdf',
+  so101: '/assets/robots/so101/so101.urdf',
 };
 
 // ============================================================================
@@ -276,12 +277,13 @@ function ProceduralModel({
 // ============================================================================
 
 export function RobotModel(props: RobotModelProps) {
-  const { robotType } = props;
+  const normalizedType = props.robotType.toLowerCase() as RobotType;
+  const normalizedProps = { ...props, robotType: normalizedType };
 
   // Use URDF for supported types, fallback to procedural for others
-  if (robotType in URDF_PATHS) {
-    return <URDFModel {...props} />;
+  if (normalizedType in URDF_PATHS) {
+    return <URDFModel {...normalizedProps} />;
   }
 
-  return <ProceduralModel {...props} />;
+  return <ProceduralModel {...normalizedProps} />;
 }
