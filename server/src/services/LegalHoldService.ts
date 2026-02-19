@@ -10,6 +10,11 @@
 import { prisma } from '../database/index.js';
 import type { LegalHold, LegalHoldInput, AddLogsToHoldInput } from '../types/retention.types.js';
 
+/** Parse JSON string array from SQLite, return string[] */
+const parseIds = (val: string): string[] => {
+  try { return JSON.parse(val); } catch { return []; }
+};
+
 export class LegalHoldService {
   constructor() {
     console.log('[LegalHoldService] Initialized');
@@ -24,7 +29,7 @@ export class LegalHoldService {
         name: input.name,
         reason: input.reason,
         createdBy: input.createdBy,
-        logIds: input.logIds,
+        logIds: JSON.stringify(input.logIds),
         endDate: input.endDate,
         isActive: true,
       },
@@ -50,7 +55,7 @@ export class LegalHoldService {
       startDate: hold.startDate,
       endDate: hold.endDate,
       isActive: hold.isActive,
-      logIds: hold.logIds,
+      logIds: parseIds(hold.logIds),
       createdAt: hold.createdAt,
       updatedAt: hold.updatedAt,
     };
@@ -86,7 +91,7 @@ export class LegalHoldService {
       startDate: hold.startDate,
       endDate: hold.endDate,
       isActive: hold.isActive,
-      logIds: hold.logIds,
+      logIds: parseIds(hold.logIds),
       createdAt: hold.createdAt,
       updatedAt: hold.updatedAt,
     };
@@ -110,7 +115,7 @@ export class LegalHoldService {
       startDate: hold.startDate,
       endDate: hold.endDate,
       isActive: hold.isActive,
-      logIds: hold.logIds,
+      logIds: parseIds(hold.logIds),
       createdAt: hold.createdAt,
       updatedAt: hold.updatedAt,
     };
@@ -133,7 +138,7 @@ export class LegalHoldService {
       startDate: hold.startDate,
       endDate: hold.endDate,
       isActive: hold.isActive,
-      logIds: hold.logIds,
+      logIds: parseIds(hold.logIds),
       createdAt: hold.createdAt,
       updatedAt: hold.updatedAt,
     }));
@@ -155,7 +160,7 @@ export class LegalHoldService {
       startDate: hold.startDate,
       endDate: hold.endDate,
       isActive: hold.isActive,
-      logIds: hold.logIds,
+      logIds: parseIds(hold.logIds),
       createdAt: hold.createdAt,
       updatedAt: hold.updatedAt,
     }));
@@ -191,7 +196,7 @@ export class LegalHoldService {
 
     const allLogIds = new Set<string>();
     for (const hold of activeHolds) {
-      for (const logId of hold.logIds) {
+      for (const logId of parseIds(hold.logIds)) {
         allLogIds.add(logId);
       }
     }
@@ -210,7 +215,7 @@ export class LegalHoldService {
     if (!hold || !hold.isActive) return null;
 
     // Merge new log IDs with existing (deduplicated)
-    const existingIds = new Set(hold.logIds);
+    const existingIds = new Set(parseIds(hold.logIds));
     for (const logId of input.logIds) {
       existingIds.add(logId);
     }
@@ -218,7 +223,7 @@ export class LegalHoldService {
 
     const updated = await prisma.legalHold.update({
       where: { id: input.holdId },
-      data: { logIds: updatedLogIds },
+      data: { logIds: JSON.stringify(updatedLogIds) },
     });
 
     // Update compliance logs with legal hold reference
@@ -239,7 +244,7 @@ export class LegalHoldService {
       startDate: updated.startDate,
       endDate: updated.endDate,
       isActive: updated.isActive,
-      logIds: updated.logIds,
+      logIds: parseIds(updated.logIds),
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     };
@@ -256,11 +261,11 @@ export class LegalHoldService {
     if (!hold) return null;
 
     const logIdsToRemove = new Set(logIds);
-    const updatedLogIds = hold.logIds.filter((id) => !logIdsToRemove.has(id));
+    const updatedLogIds = parseIds(hold.logIds).filter((id: string) => !logIdsToRemove.has(id));
 
     const updated = await prisma.legalHold.update({
       where: { id: holdId },
-      data: { logIds: updatedLogIds },
+      data: { logIds: JSON.stringify(updatedLogIds) },
     });
 
     // Clear legal hold reference from removed logs
@@ -281,7 +286,7 @@ export class LegalHoldService {
       startDate: updated.startDate,
       endDate: updated.endDate,
       isActive: updated.isActive,
-      logIds: updated.logIds,
+      logIds: parseIds(updated.logIds),
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     };

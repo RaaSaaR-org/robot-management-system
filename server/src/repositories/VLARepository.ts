@@ -75,6 +75,14 @@ import type {
 } from '../types/skill.types.js';
 
 // ============================================================================
+// JSON-encoded array helper (SQLite stores string[] as JSON strings)
+// ============================================================================
+
+const parseArr = (val: string): string[] => {
+  try { return JSON.parse(val); } catch { return []; }
+};
+
+// ============================================================================
 // HELPER FUNCTIONS - RobotType
 // ============================================================================
 
@@ -87,7 +95,7 @@ function dbRobotTypeToDomain(db: PrismaRobotType): RobotType {
     actionDim: db.actionDim,
     proprioceptionDim: db.proprioceptionDim,
     cameras: JSON.parse(db.cameras) as CameraConfig[],
-    capabilities: db.capabilities,
+    capabilities: parseArr(db.capabilities),
     limits: JSON.parse(db.limits) as JointLimits,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
@@ -108,7 +116,7 @@ function dbSkillDefinitionToDomain(db: PrismaSkillDefinition): SkillDefinition {
     defaultParameters: JSON.parse(db.defaultParameters) as Record<string, unknown>,
     preconditions: JSON.parse(db.preconditions) as Condition[],
     postconditions: JSON.parse(db.postconditions) as Condition[],
-    requiredCapabilities: db.requiredCapabilities,
+    requiredCapabilities: parseArr(db.requiredCapabilities),
     timeout: db.timeout ?? undefined,
     maxRetries: db.maxRetries,
     status: db.status as SkillStatus,
@@ -238,14 +246,14 @@ function dbDeploymentToDomain(db: PrismaDeployment): Deployment {
     id: db.id,
     modelVersionId: db.modelVersionId,
     strategy: db.strategy as Deployment['strategy'],
-    targetRobotTypes: db.targetRobotTypes,
-    targetZones: db.targetZones,
+    targetRobotTypes: parseArr(db.targetRobotTypes),
+    targetZones: parseArr(db.targetZones),
     trafficPercentage: db.trafficPercentage,
     canaryConfig: JSON.parse(db.canaryConfig) as CanaryConfig,
     rollbackThresholds: JSON.parse(db.rollbackThresholds) as RollbackThresholds,
     status: db.status as DeploymentStatus,
-    deployedRobotIds: db.deployedRobotIds,
-    failedRobotIds: db.failedRobotIds,
+    deployedRobotIds: parseArr(db.deployedRobotIds),
+    failedRobotIds: parseArr(db.failedRobotIds),
     startedAt: db.startedAt ?? undefined,
     completedAt: db.completedAt ?? undefined,
     createdAt: db.createdAt,
@@ -267,7 +275,7 @@ export class RobotTypeRepository {
         actionDim: input.actionDim,
         proprioceptionDim: input.proprioceptionDim,
         cameras: JSON.stringify(input.cameras ?? []),
-        capabilities: input.capabilities ?? [],
+        capabilities: JSON.stringify(input.capabilities ?? []),
         limits: JSON.stringify(input.limits ?? { position: { min: [], max: [] }, velocity: [], torque: [] }),
       },
     });
@@ -313,7 +321,7 @@ export class RobotTypeRepository {
       if (input.actionDim !== undefined) updateData.actionDim = input.actionDim;
       if (input.proprioceptionDim !== undefined) updateData.proprioceptionDim = input.proprioceptionDim;
       if (input.cameras !== undefined) updateData.cameras = JSON.stringify(input.cameras);
-      if (input.capabilities !== undefined) updateData.capabilities = input.capabilities;
+      if (input.capabilities !== undefined) updateData.capabilities = JSON.stringify(input.capabilities);
       if (input.limits !== undefined) updateData.limits = JSON.stringify(input.limits);
 
       const robotType = await prisma.robotType.update({
@@ -351,7 +359,7 @@ export class SkillDefinitionRepository {
         defaultParameters: JSON.stringify(input.defaultParameters ?? {}),
         preconditions: JSON.stringify(input.preconditions ?? []),
         postconditions: JSON.stringify(input.postconditions ?? []),
-        requiredCapabilities: input.requiredCapabilities ?? [],
+        requiredCapabilities: JSON.stringify(input.requiredCapabilities ?? []),
         timeout: input.timeout,
         maxRetries: input.maxRetries ?? 3,
         status: input.status ?? 'draft',
@@ -447,7 +455,7 @@ export class SkillDefinitionRepository {
     const skills = await prisma.skillDefinition.findMany({
       where: {
         requiredCapabilities: {
-          has: capability,
+          contains: capability,
         },
       },
       orderBy: { name: 'asc' },
@@ -486,7 +494,7 @@ export class SkillDefinitionRepository {
       if (input.defaultParameters !== undefined) updateData.defaultParameters = JSON.stringify(input.defaultParameters);
       if (input.preconditions !== undefined) updateData.preconditions = JSON.stringify(input.preconditions);
       if (input.postconditions !== undefined) updateData.postconditions = JSON.stringify(input.postconditions);
-      if (input.requiredCapabilities !== undefined) updateData.requiredCapabilities = input.requiredCapabilities;
+      if (input.requiredCapabilities !== undefined) updateData.requiredCapabilities = JSON.stringify(input.requiredCapabilities);
       if (input.timeout !== undefined) updateData.timeout = input.timeout;
       if (input.maxRetries !== undefined) updateData.maxRetries = input.maxRetries;
       if (input.status !== undefined) updateData.status = input.status;
@@ -535,7 +543,7 @@ export class SkillDefinitionRepository {
     }
 
     if (params.capability) {
-      where.requiredCapabilities = { has: params.capability };
+      where.requiredCapabilities = { contains: params.capability };
     }
 
     if (params.linkedModelVersionId) {
@@ -980,8 +988,8 @@ export class DeploymentRepository {
       data: {
         modelVersionId: input.modelVersionId,
         strategy: input.strategy,
-        targetRobotTypes: input.targetRobotTypes ?? [],
-        targetZones: input.targetZones ?? [],
+        targetRobotTypes: JSON.stringify(input.targetRobotTypes ?? []),
+        targetZones: JSON.stringify(input.targetZones ?? []),
         canaryConfig: JSON.stringify(input.canaryConfig ?? { stages: [], successThreshold: 0.95 }),
         rollbackThresholds: JSON.stringify(input.rollbackThresholds ?? {
           errorRate: 0.05,
@@ -1062,8 +1070,8 @@ export class DeploymentRepository {
       if (input.canaryConfig !== undefined) updateData.canaryConfig = JSON.stringify(input.canaryConfig);
       if (input.rollbackThresholds !== undefined) updateData.rollbackThresholds = JSON.stringify(input.rollbackThresholds);
       if (input.status !== undefined) updateData.status = input.status;
-      if (input.deployedRobotIds !== undefined) updateData.deployedRobotIds = input.deployedRobotIds;
-      if (input.failedRobotIds !== undefined) updateData.failedRobotIds = input.failedRobotIds;
+      if (input.deployedRobotIds !== undefined) updateData.deployedRobotIds = JSON.stringify(input.deployedRobotIds);
+      if (input.failedRobotIds !== undefined) updateData.failedRobotIds = JSON.stringify(input.failedRobotIds);
       if (input.startedAt !== undefined) updateData.startedAt = input.startedAt;
       if (input.completedAt !== undefined) updateData.completedAt = input.completedAt;
 

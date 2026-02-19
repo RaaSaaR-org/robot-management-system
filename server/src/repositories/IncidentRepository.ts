@@ -36,6 +36,11 @@ import type {
 // HELPER FUNCTIONS
 // ============================================================================
 
+/** Parse a JSON-encoded string array column (SQLite compat). */
+const parseArr = (val: string): string[] => {
+  try { return JSON.parse(val); } catch { return []; }
+};
+
 function dbIncidentToDomain(
   dbIncident: PrismaIncident & { notifications?: PrismaNotification[] }
 ): Incident {
@@ -51,14 +56,14 @@ function dbIncidentToDomain(
     resolution: dbIncident.resolution,
     riskScore: dbIncident.riskScore,
     affectedDataSubjects: dbIncident.affectedDataSubjects,
-    dataCategories: dbIncident.dataCategories,
+    dataCategories: parseArr(dbIncident.dataCategories),
     detectedAt: dbIncident.detectedAt,
     containedAt: dbIncident.containedAt,
     resolvedAt: dbIncident.resolvedAt,
     closedAt: dbIncident.closedAt,
     robotId: dbIncident.robotId,
-    complianceLogIds: dbIncident.complianceLogIds,
-    alertIds: dbIncident.alertIds,
+    complianceLogIds: parseArr(dbIncident.complianceLogIds),
+    alertIds: parseArr(dbIncident.alertIds),
     systemSnapshot: dbIncident.systemSnapshot
       ? (JSON.parse(dbIncident.systemSnapshot) as SystemSnapshot)
       : null,
@@ -227,10 +232,10 @@ export class IncidentRepository {
         description: input.description,
         detectedAt: input.detectedAt ?? new Date(),
         robotId: input.robotId,
-        complianceLogIds: input.complianceLogIds ?? [],
-        alertIds: input.alertIds ?? [],
+        complianceLogIds: JSON.stringify(input.complianceLogIds ?? []),
+        alertIds: JSON.stringify(input.alertIds ?? []),
         createdBy: input.createdBy,
-        dataCategories: [],
+        dataCategories: JSON.stringify([]),
       },
       include: { notifications: true },
     });
@@ -254,7 +259,7 @@ export class IncidentRepository {
           resolution: input.resolution,
           riskScore: input.riskScore,
           affectedDataSubjects: input.affectedDataSubjects,
-          dataCategories: input.dataCategories,
+          dataCategories: input.dataCategories ? JSON.stringify(input.dataCategories) : undefined,
           containedAt: input.containedAt,
           resolvedAt: input.resolvedAt,
           closedAt: input.closedAt,
@@ -297,19 +302,22 @@ export class IncidentRepository {
       const current = await prisma.incident.findUnique({ where: { id } });
       if (!current) return null;
 
+      const existingComplianceLogIds = parseArr(current.complianceLogIds);
+      const existingAlertIds = parseArr(current.alertIds);
+
       const updatedComplianceLogIds = complianceLogIds
-        ? [...new Set([...current.complianceLogIds, ...complianceLogIds])]
-        : current.complianceLogIds;
+        ? [...new Set([...existingComplianceLogIds, ...complianceLogIds])]
+        : existingComplianceLogIds;
 
       const updatedAlertIds = alertIds
-        ? [...new Set([...current.alertIds, ...alertIds])]
-        : current.alertIds;
+        ? [...new Set([...existingAlertIds, ...alertIds])]
+        : existingAlertIds;
 
       const incident = await prisma.incident.update({
         where: { id },
         data: {
-          complianceLogIds: updatedComplianceLogIds,
-          alertIds: updatedAlertIds,
+          complianceLogIds: JSON.stringify(updatedComplianceLogIds),
+          alertIds: JSON.stringify(updatedAlertIds),
         },
         include: { notifications: true },
       });

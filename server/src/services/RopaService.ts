@@ -10,6 +10,28 @@
 import { prisma } from '../database/index.js';
 import type { RopaEntry, RopaEntryInput, RopaReport } from '../types/retention.types.js';
 
+/** Parse JSON string array from SQLite, return string[] */
+const parseArr = (val: string): string[] => {
+  try { return JSON.parse(val); } catch { return []; }
+};
+
+/** Convert Prisma row to API RopaEntry (deserialize JSON arrays) */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const toRopaEntry = (row: any): RopaEntry => ({
+  id: row.id,
+  processingActivity: row.processingActivity,
+  purpose: row.purpose,
+  dataCategories: parseArr(row.dataCategories),
+  dataSubjects: parseArr(row.dataSubjects),
+  recipients: parseArr(row.recipients),
+  thirdCountryTransfers: row.thirdCountryTransfers,
+  retentionPeriod: row.retentionPeriod,
+  securityMeasures: parseArr(row.securityMeasures),
+  legalBasis: row.legalBasis,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt,
+});
+
 export class RopaService {
   constructor() {
     console.log('[RopaService] Initialized');
@@ -23,32 +45,19 @@ export class RopaService {
       data: {
         processingActivity: input.processingActivity,
         purpose: input.purpose,
-        dataCategories: input.dataCategories,
-        dataSubjects: input.dataSubjects,
-        recipients: input.recipients,
+        dataCategories: JSON.stringify(input.dataCategories),
+        dataSubjects: JSON.stringify(input.dataSubjects),
+        recipients: JSON.stringify(input.recipients),
         thirdCountryTransfers: input.thirdCountryTransfers,
         retentionPeriod: input.retentionPeriod,
-        securityMeasures: input.securityMeasures,
+        securityMeasures: JSON.stringify(input.securityMeasures),
         legalBasis: input.legalBasis,
       },
     });
 
     console.log(`[RopaService] Created RoPA entry: ${entry.processingActivity}`);
 
-    return {
-      id: entry.id,
-      processingActivity: entry.processingActivity,
-      purpose: entry.purpose,
-      dataCategories: entry.dataCategories,
-      dataSubjects: entry.dataSubjects,
-      recipients: entry.recipients,
-      thirdCountryTransfers: entry.thirdCountryTransfers,
-      retentionPeriod: entry.retentionPeriod,
-      securityMeasures: entry.securityMeasures,
-      legalBasis: entry.legalBasis,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    };
+    return toRopaEntry(entry);
   }
 
   /**
@@ -61,34 +70,21 @@ export class RopaService {
         data: {
           ...(input.processingActivity && { processingActivity: input.processingActivity }),
           ...(input.purpose && { purpose: input.purpose }),
-          ...(input.dataCategories && { dataCategories: input.dataCategories }),
-          ...(input.dataSubjects && { dataSubjects: input.dataSubjects }),
-          ...(input.recipients && { recipients: input.recipients }),
+          ...(input.dataCategories && { dataCategories: JSON.stringify(input.dataCategories) }),
+          ...(input.dataSubjects && { dataSubjects: JSON.stringify(input.dataSubjects) }),
+          ...(input.recipients && { recipients: JSON.stringify(input.recipients) }),
           ...(input.thirdCountryTransfers !== undefined && {
             thirdCountryTransfers: input.thirdCountryTransfers,
           }),
           ...(input.retentionPeriod && { retentionPeriod: input.retentionPeriod }),
-          ...(input.securityMeasures && { securityMeasures: input.securityMeasures }),
+          ...(input.securityMeasures && { securityMeasures: JSON.stringify(input.securityMeasures) }),
           ...(input.legalBasis && { legalBasis: input.legalBasis }),
         },
       });
 
       console.log(`[RopaService] Updated RoPA entry: ${entry.processingActivity}`);
 
-      return {
-        id: entry.id,
-        processingActivity: entry.processingActivity,
-        purpose: entry.purpose,
-        dataCategories: entry.dataCategories,
-        dataSubjects: entry.dataSubjects,
-        recipients: entry.recipients,
-        thirdCountryTransfers: entry.thirdCountryTransfers,
-        retentionPeriod: entry.retentionPeriod,
-        securityMeasures: entry.securityMeasures,
-        legalBasis: entry.legalBasis,
-        createdAt: entry.createdAt,
-        updatedAt: entry.updatedAt,
-      };
+      return toRopaEntry(entry);
     } catch {
       return null;
     }
@@ -102,20 +98,7 @@ export class RopaService {
       orderBy: { processingActivity: 'asc' },
     });
 
-    return entries.map((entry) => ({
-      id: entry.id,
-      processingActivity: entry.processingActivity,
-      purpose: entry.purpose,
-      dataCategories: entry.dataCategories,
-      dataSubjects: entry.dataSubjects,
-      recipients: entry.recipients,
-      thirdCountryTransfers: entry.thirdCountryTransfers,
-      retentionPeriod: entry.retentionPeriod,
-      securityMeasures: entry.securityMeasures,
-      legalBasis: entry.legalBasis,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    }));
+    return entries.map(toRopaEntry);
   }
 
   /**
@@ -128,20 +111,7 @@ export class RopaService {
 
     if (!entry) return null;
 
-    return {
-      id: entry.id,
-      processingActivity: entry.processingActivity,
-      purpose: entry.purpose,
-      dataCategories: entry.dataCategories,
-      dataSubjects: entry.dataSubjects,
-      recipients: entry.recipients,
-      thirdCountryTransfers: entry.thirdCountryTransfers,
-      retentionPeriod: entry.retentionPeriod,
-      securityMeasures: entry.securityMeasures,
-      legalBasis: entry.legalBasis,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    };
+    return toRopaEntry(entry);
   }
 
   /**

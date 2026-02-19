@@ -15,6 +15,11 @@
 
 import { prisma } from '../database/index.js';
 
+/** Parse a JSON-encoded string[] column back into an array. */
+const parseArr = (val: string): string[] => {
+  try { return JSON.parse(val); } catch { return []; }
+};
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -270,8 +275,10 @@ export class ComplianceTrackerService {
 
     return deadlines.map(d => {
       const daysUntilDeadline = Math.ceil((d.deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      const completionRate = d.requirements.length > 0
-        ? d.completedRequirements.length / d.requirements.length
+      const reqs = parseArr(d.requirements);
+      const completedReqs = parseArr(d.completedRequirements);
+      const completionRate = reqs.length > 0
+        ? completedReqs.length / reqs.length
         : 1;
 
       let status: ComplianceStatus;
@@ -296,8 +303,8 @@ export class ComplianceTrackerService {
         name: input.name,
         deadline: input.deadline,
         description: input.description,
-        requirements: input.requirements,
-        completedRequirements: [],
+        requirements: JSON.stringify(input.requirements),
+        completedRequirements: JSON.stringify([]),
         priority: input.priority || 'medium',
         notes: input.notes,
       },
@@ -307,7 +314,7 @@ export class ComplianceTrackerService {
   async updateDeadlineProgress(id: string, completedRequirements: string[]) {
     return prisma.regulatoryDeadline.update({
       where: { id },
-      data: { completedRequirements },
+      data: { completedRequirements: JSON.stringify(completedRequirements) },
     });
   }
 
@@ -629,8 +636,8 @@ export class ComplianceTrackerService {
         description: input.description,
         lastUpdated: input.lastUpdated,
         nextReviewDate: input.nextReviewDate,
-        triggerConditions: input.triggerConditions || [],
-        triggeredUpdates: [],
+        triggerConditions: JSON.stringify(input.triggerConditions || []),
+        triggeredUpdates: JSON.stringify([]),
         documentUrl: input.documentUrl,
         responsiblePerson: input.responsiblePerson,
       },
@@ -648,7 +655,7 @@ export class ComplianceTrackerService {
         lastUpdated: new Date(),
         nextReviewDate,
         documentUrl: documentUrl || assessment.documentUrl,
-        triggeredUpdates: [...assessment.triggeredUpdates, `Updated to ${newVersion} on ${new Date().toISOString()}`],
+        triggeredUpdates: JSON.stringify([...parseArr(assessment.triggeredUpdates), `Updated to ${newVersion} on ${new Date().toISOString()}`]),
       },
     });
 

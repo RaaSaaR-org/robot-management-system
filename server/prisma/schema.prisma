@@ -9,7 +9,7 @@ datasource db {
   // PostgreSQL for production/Kubernetes deployments
   // For local SQLite: provider = "sqlite", DATABASE_URL = "file:./dev.db"
   // For PostgreSQL:   provider = "postgresql", DATABASE_URL = "postgresql://user:pass@host:5432/db"
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -594,7 +594,7 @@ model LegalHold {
   startDate DateTime  @default(now())
   endDate   DateTime?
   isActive  Boolean   @default(true)
-  logIds    String[]  // Array of ComplianceLog IDs under hold
+  logIds    String   @default("[]") // JSON: ComplianceLog IDs under hold
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -607,12 +607,12 @@ model RopaEntry {
   id                    String   @id @default(uuid())
   processingActivity    String   // Name of the processing activity
   purpose               String   // Purpose of processing
-  dataCategories        String[] // Types of personal data processed
-  dataSubjects          String[] // Categories of data subjects
-  recipients            String[] // Recipients of the data
+  dataCategories        String   @default("[]") // JSON: Types of personal data processed
+  dataSubjects          String   @default("[]") // JSON: Categories of data subjects
+  recipients            String   @default("[]") // JSON: Recipients of the data
   thirdCountryTransfers String?  // International transfers info
   retentionPeriod       String   // How long data is retained
-  securityMeasures      String[] // Technical/organizational security measures
+  securityMeasures      String   @default("[]") // JSON: Technical/organizational security measures
   legalBasis            String   // GDPR legal basis (consent, contract, legal obligation, etc.)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -793,7 +793,7 @@ model Incident {
   // Risk Assessment
   riskScore            Int?     // 0-100
   affectedDataSubjects Int?     // For GDPR assessment
-  dataCategories       String[] // Personal data types affected
+  dataCategories       String   @default("[]") // JSON: Personal data types affected
 
   // Timestamps
   detectedAt  DateTime
@@ -803,8 +803,8 @@ model Incident {
 
   // Evidence Links
   robotId          String?
-  complianceLogIds String[] // Links to ComplianceLog entries
-  alertIds         String[] // Links to Alert entries
+  complianceLogIds String   @default("[]") // JSON: Links to ComplianceLog entries
+  alertIds         String   @default("[]") // JSON: Links to Alert entries
 
   // System State Snapshot
   systemSnapshot String? // JSON: SystemSnapshot
@@ -1212,8 +1212,8 @@ model RiskAssessment {
   description       String?
   lastUpdated       DateTime
   nextReviewDate    DateTime
-  triggerConditions String[] // Conditions that trigger an update
-  triggeredUpdates  String[] // History of triggered updates
+  triggerConditions String   @default("[]") // JSON: Conditions that trigger an update
+  triggeredUpdates  String   @default("[]") // JSON: History of triggered updates
   documentUrl       String?
   responsiblePerson String?
   createdAt         DateTime @default(now())
@@ -1256,8 +1256,8 @@ model RegulatoryDeadline {
   name                  String
   deadline              DateTime
   description           String
-  requirements          String[] // List of requirements to meet
-  completedRequirements String[] // Requirements already met
+  requirements          String   @default("[]") // JSON: List of requirements to meet
+  completedRequirements String   @default("[]") // JSON: Requirements already met
   priority              String   @default("medium") // 'critical' | 'high' | 'medium' | 'low'
   notes                 String?
   createdAt             DateTime @default(now())
@@ -1592,7 +1592,7 @@ model RobotType {
   actionDim         Int      // VLA action dimensions
   proprioceptionDim Int      // VLA observation dimensions
   cameras           String   @default("[]") // JSON: CameraConfig[]
-  capabilities      String[] // Robot capabilities array
+  capabilities      String   @default("[]") // JSON: Robot capabilities array
   limits            String   @default("{}") // JSON: JointLimits
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -1637,7 +1637,7 @@ model SkillDefinition {
   defaultParameters    String   @default("{}") // JSON: Record<string, unknown>
   preconditions        String   @default("[]") // JSON: Condition[]
   postconditions       String   @default("[]") // JSON: Condition[]
-  requiredCapabilities String[] // Array of required robot capabilities
+  requiredCapabilities String   @default("[]") // JSON: Array of required robot capabilities
   timeout              Int?     // Execution timeout in seconds
   maxRetries           Int      @default(3)
   status               String   @default("draft") // 'draft' | 'published' | 'deprecated' | 'archived'
@@ -1785,14 +1785,14 @@ model Deployment {
   id                 String    @id @default(uuid())
   modelVersionId     String
   strategy           String    // 'canary' | 'blue_green' | 'rolling'
-  targetRobotTypes   String[]  // Robot types to deploy to
-  targetZones        String[]  // Zones to deploy to
+  targetRobotTypes   String    @default("[]") // JSON: Robot types to deploy to
+  targetZones        String    @default("[]") // JSON: Zones to deploy to
   trafficPercentage  Int       @default(0) // 0-100
   canaryConfig       String    @default("{}") // JSON: { stages, durations, thresholds }
   rollbackThresholds String    @default("{}") // JSON: { errorRate, latencyP99, failureRate }
   status             String    @default("pending") // 'pending' | 'deploying' | 'canary' | 'production' | 'rolling_back' | 'failed'
-  deployedRobotIds   String[]  // Robots successfully deployed
-  failedRobotIds     String[]  // Robots that failed deployment
+  deployedRobotIds   String    @default("[]") // JSON: Robots successfully deployed
+  failedRobotIds     String    @default("[]") // JSON: Robots that failed deployment
   startedAt          DateTime?
   completedAt        DateTime?
   createdAt          DateTime  @default(now())
