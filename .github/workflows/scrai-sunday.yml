@@ -11,6 +11,9 @@ permissions:
 jobs:
   sprint-cycle:
     runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENCODE_DISABLE_AUTOUPDATE: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,180 +25,31 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install open-code
-        run: npm install -g open-code
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install MissionControl
-        run: cargo install mc
+      - name: Install OpenCode and MissionControl
+        run: |
+          npm install -g opencode-ai@latest
+          cargo install mc
 
       - name: Retrospective
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           DATE=$(date +%Y-%m-%d)
           mkdir -p docs/planning/retrospectives
-
-          open-code -p "You are the SCRAI retrospective bot for the RoboMindOS project.
-
-          Steps:
-          1. Read .mc/config.yml for project context
-          2. Check .mc/sprints/ for the active sprint (status: active). If none exists, skip the retrospective and just write a short note saying 'No active sprint to close.'
-          3. If an active sprint exists:
-             a. Read the sprint file to get its goal, start_date, and linked tasks
-             b. Read all task files in .mc/tasks/done/ and .mc/tasks/todo/ to determine which tasks were completed during this sprint period
-             c. Check git log for commits since the sprint start_date
-             d. Update the sprint file: set status to 'completed' and updated to '${DATE}'
-             e. Move the sprint file from .mc/sprints/ to .mc/archive/ if it exists there, otherwise leave in sprints/
-          4. Generate the retrospective report
-
-          Write to docs/planning/retrospectives/retro-${DATE}.md:
-
-          ---
-          date: ${DATE}
-          sprint: <sprint ID>
-          ---
-
-          # Sprint Retrospective — ${DATE}
-
-          ## Sprint Summary
-          Sprint goal, duration, and overall outcome.
-
-          ## Completed (TASK-NNN references)
-          List all tasks completed during this sprint with their IDs and titles.
-
-          ## Carried Over
-          List tasks that were planned but not completed (still in todo/).
-
-          ## Velocity
-          Number of tasks completed, broken down by priority and tags.
-
-          ## What Went Well
-          Infer from commit history and task completion patterns.
-
-          ## What Could Improve
-          Note any carried-over tasks, blocked items, or patterns.
-
-          ## Action Items
-          Concrete suggestions for the next sprint.
-
-          Keep analysis grounded in the actual data from .mc/ and git log." --yes
+          opencode run --agent scrai-retro "Run the sprint retrospective for ${DATE}. Close the active sprint and generate the retro report."
 
       - name: Backlog Grooming
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          open-code -p "You are the SCRAI backlog grooming bot for the RoboMindOS project.
-
-          Steps:
-          1. Read ALL task files in .mc/tasks/todo/ — parse their YAML frontmatter (id, title, status, priority, tags, depends_on)
-          2. Read ALL task files in .mc/tasks/done/ — just the frontmatter to know which dependencies are satisfied
-          3. For each todo task, check if all depends_on references point to done tasks (i.e., the task is unblocked)
-          4. Review priorities — flag any mismatches (e.g., high-priority tasks blocked by low-priority ones)
-
-          Generate a grooming report. Write to docs/planning/grooming/grooming-$(date +%Y-%m-%d).md:
-
-          ---
-          date: $(date +%Y-%m-%d)
-          ---
-
-          # Backlog Grooming — $(date +%Y-%m-%d)
-
-          ## Backlog Overview
-          Total todo tasks, breakdown by priority (1=critical, 2=high, 3=medium, 4=low) and tags.
-
-          ## Unblocked & Ready
-          Tasks whose dependencies are ALL satisfied (all depends_on items are in done/).
-          Sort by priority (1 first), then by TASK ID.
-
-          ## Blocked
-          Tasks with unsatisfied dependencies. Show which dependency is missing.
-
-          ## Recommendations
-          Suggest which tasks to prioritize for the next sprint based on:
-          - Priority level
-          - Unblocked status
-          - Tag clustering (group related tasks)
-          - Dependencies (do blockers first)
-
-          Do NOT modify any task files. This is a read-only analysis." --yes
-
-      - name: Sprint Planning
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           DATE=$(date +%Y-%m-%d)
-          END_DATE=$(date -d '+7 days' +%Y-%m-%d 2>/dev/null || date -v+7d +%Y-%m-%d)
           mkdir -p docs/planning/grooming
+          opencode run --agent scrai-grooming "Analyze the backlog and generate the grooming report for ${DATE}."
 
-          open-code -p "You are the SCRAI sprint planning bot for the RoboMindOS project.
-
-          Steps:
-          1. Read .mc/config.yml for project context
-          2. Read the grooming report from docs/planning/grooming/grooming-${DATE}.md (just generated)
-          3. Read the retrospective from docs/planning/retrospectives/retro-${DATE}.md if it exists
-          4. Determine the next sprint number by checking .mc/sprints/ for existing sprint files (SPR-001, SPR-002, etc.) and incrementing
-          5. Select tasks for the sprint:
-             - Pick from the 'Unblocked & Ready' list in the grooming report
-             - Aim for 5-8 tasks per sprint (1 week)
-             - Prioritize: critical > high > medium > low
-             - Prefer tasks that cluster by tag (related work is more efficient)
-             - Include any action items from the retrospective
-          6. Create the sprint file in .mc/sprints/ using this exact format:
-
-          ---
-          id: SPR-NNN
-          aliases:
-          - SPR-NNN
-          title: 'Sprint NNN — <concise theme>'
-          status: active
-          goal: '<1-2 sentence sprint goal based on selected tasks>'
-          start_date: '${DATE}'
-          end_date: '${END_DATE}'
-          owner: ''
-          projects: []
-          tags: []
-          created: '${DATE}'
-          updated: '${DATE}'
-          ---
-
-          # Sprint NNN — <theme>
-
-          ## Sprint Goal
-          <1-2 sentences>
-
-          ## Selected Tasks
-          | ID | Title | Priority | Tags |
-          |---|---|---|---|
-          | TASK-NNN | ... | ... | ... |
-
-          ## Notes
-          <Any relevant context from retro or grooming>
-
-          7. For each selected task, update its frontmatter in .mc/tasks/todo/:
-             - Set sprint: 'SPR-NNN'
-             - Set status: 'todo' (if currently 'backlog')
-
-          8. Write a sprint plan summary to docs/planning/sprints/sprint-plan-${DATE}.md:
-
-          ---
-          date: ${DATE}
-          sprint: SPR-NNN
-          ---
-
-          # Sprint Plan — ${DATE}
-
-          ## Goal
-          ## Selected Tasks (with TASK-NNN references)
-          ## Rationale
-          Why these tasks were selected, what they unblock, and expected outcomes.
-
-          Make sure the sprint file in .mc/sprints/ has the correct frontmatter format with proper YAML quoting." --yes
-
-      - name: Rebuild MC index
-        run: mc build-index || true
+      - name: Sprint Planning
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          mkdir -p docs/planning/sprints
+          opencode run --agent scrai-sprint-planning "Create the next sprint starting ${DATE}. Use the grooming report to select tasks."
 
       - name: Commit and push
         run: |
