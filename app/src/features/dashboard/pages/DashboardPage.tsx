@@ -132,7 +132,7 @@ export function DashboardPage() {
             View All Robots
           </Link>
           <Link
-            to="/tasks"
+            to="/processes"
             className="inline-flex items-center px-4 py-2 bg-theme-hover text-theme-primary rounded-brand hover:bg-theme-hover/80 transition-colors"
           >
             <svg
