@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-The A2A Protocol Server is the backend for RoboMindOS. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, zones, alerts, processes, and real-time events via WebSocket. Data is persisted in SQLite via Prisma ORM.
+The A2A Protocol Server is the backend for RoboMindOS. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, zones, alerts, processes, compliance logging, incident management, GDPR, VLA training pipelines, and real-time events via WebSocket. Data is persisted via Prisma ORM (SQLite locally, PostgreSQL in production). The schema has 73 models.
 
 ## Commands
 
@@ -42,7 +42,7 @@ npm run db:studio    # Open Prisma Studio GUI (browser)
 
 - **Runtime**: Node.js 18+
 - **Framework**: Express.js
-- **Database**: Prisma ORM + SQLite (configurable via `DATABASE_URL`)
+- **Database**: Prisma ORM — SQLite (dev) or PostgreSQL (production) via `DATABASE_URL`
 - **Authentication**: JWT (bcryptjs + jsonwebtoken), disabled in dev via `AUTH_DISABLED=true`
 - **Protocol**: A2A (Agent-to-Agent)
 - **Real-time**: WebSocket (ws)
@@ -64,62 +64,109 @@ npm run db:studio    # Open Prisma Studio GUI (browser)
 server/src/
 ├── index.ts              # Server entry point
 ├── app.ts                # Express app setup, middleware, route mounting
-├── routes/
-│   ├── auth.routes.ts         # Authentication endpoints
-│   ├── robot.routes.ts        # Robot management endpoints
-│   ├── alert.routes.ts        # Alert CRUD endpoints
+├── routes/               # 37 route files organized by domain
+│   ├── auth.routes.ts         # Authentication
+│   ├── robot.routes.ts        # Robot management
+│   ├── alert.routes.ts        # Alert CRUD
 │   ├── zone.routes.ts         # Zone/facility management
 │   ├── command.routes.ts      # NL command interpretation
 │   ├── process.routes.ts      # Process/workflow management
-│   ├── conversation.routes.ts # A2A conversation endpoints
-│   ├── message.routes.ts      # A2A message endpoints
-│   ├── task.routes.ts         # A2A task endpoints
-│   ├── agent.routes.ts        # A2A agent discovery endpoints
-│   └── wellknown.routes.ts    # /.well-known/a2a discovery
-├── services/
-│   ├── AuthService.ts         # JWT auth (register, login, tokens)
-│   ├── RobotManager.ts        # Robot registry, health checks, commands
-│   ├── ConversationManager.ts # A2A conversations, messages, orchestration
-│   ├── AlertService.ts        # Alert CRUD with WebSocket broadcast
-│   ├── ZoneService.ts         # Zone CRUD with geometry validation
-│   ├── CommandInterpreter.ts  # NL command → structured command (Gemini)
+│   ├── safety.routes.ts       # Safety monitoring
+│   ├── conversation.routes.ts # A2A conversations
+│   ├── message.routes.ts      # A2A messages
+│   ├── task.routes.ts         # A2A tasks
+│   ├── agent.routes.ts        # A2A agent discovery
+│   ├── wellknown.routes.ts    # /.well-known/a2a
+│   ├── compliance-log.routes.ts    # Compliance audit logs
+│   ├── retention.routes.ts         # Retention policies
+│   ├── legal-hold.routes.ts        # Legal holds
+│   ├── ropa.routes.ts              # GDPR Art. 30 (RoPA)
+│   ├── provider-docs.routes.ts     # Provider documentation
+│   ├── compliance-tracker.routes.ts # Compliance dashboard
+│   ├── gdpr.routes.ts              # GDPR self-service
+│   ├── incident.routes.ts          # Incident management
+│   ├── oversight.routes.ts         # Human oversight
+│   ├── approval.routes.ts          # Approval workflows
+│   ├── explainability.routes.ts    # AI decision transparency
+│   ├── datasets.routes.ts          # Dataset management
+│   ├── training.routes.ts          # Training jobs
+│   ├── models.routes.ts            # Model registry
+│   ├── deployments.routes.ts       # Fleet deployments
+│   ├── skills.routes.ts            # Skill library
+│   ├── embodiments.routes.ts       # Embodiment configs
+│   ├── storage.routes.ts           # Object storage
+│   ├── teleoperation.routes.ts     # Teleoperation
+│   ├── training-docs.routes.ts     # Training documentation
+│   ├── curation.routes.ts          # Data curation
+│   ├── active-learning.routes.ts   # Active learning
+│   ├── synthetic.routes.ts         # Synthetic data
+│   ├── federated.routes.ts         # Federated learning
+│   └── contributions.routes.ts     # Data contributions
+├── services/             # 45 service files (singletons)
+│   ├── RobotManager.ts        # Robot registry, health checks
+│   ├── ConversationManager.ts # A2A conversations, orchestration
+│   ├── AuthService.ts         # JWT auth
+│   ├── AlertService.ts        # Alert CRUD + WebSocket
+│   ├── ZoneService.ts         # Zone CRUD + geometry
+│   ├── CommandInterpreter.ts  # NL → structured command (Gemini)
 │   ├── ProcessManager.ts      # Multi-step workflow engine
-│   ├── TaskDistributor.ts     # Push-model task scheduler (2s interval)
-│   ├── A2AClient.ts           # HTTP client for robot A2A agents
-│   └── HttpClient.ts          # Centralized Axios wrapper
-├── repositories/
-│   ├── RobotRepository.ts
-│   ├── ConversationRepository.ts
-│   ├── TaskRepository.ts
-│   ├── AgentRepository.ts
-│   ├── EventRepository.ts
-│   ├── UserRepository.ts
-│   ├── RefreshTokenRepository.ts
-│   ├── AlertRepository.ts
-│   ├── ZoneRepository.ts
-│   ├── CommandRepository.ts
-│   ├── ProcessRepository.ts
-│   ├── RobotTaskRepository.ts
+│   ├── TaskDistributor.ts     # Push-model task scheduler
+│   ├── SafetyService.ts       # Safety monitoring
+│   ├── ComplianceLogService.ts     # Audit logging
+│   ├── ComplianceTrackerService.ts # Compliance dashboard
+│   ├── RetentionPolicyService.ts   # Retention management
+│   ├── LegalHoldService.ts         # Legal holds
+│   ├── RopaService.ts              # GDPR Art. 30
+│   ├── ProviderDocumentationService.ts
+│   ├── GDPRRequestService.ts       # GDPR self-service
+│   ├── ConsentService.ts           # Consent management
+│   ├── DataRestrictionService.ts   # Data restrictions
+│   ├── IncidentService.ts          # Incident management
+│   ├── NotificationWorkflowService.ts
+│   ├── BreachAssessmentService.ts
+│   ├── OversightService.ts         # Human oversight
+│   ├── ApprovalWorkflowService.ts  # Approval workflows
+│   ├── ExplainabilityService.ts    # AI decision transparency
+│   ├── DatasetService.ts           # Dataset management
+│   ├── DataQualityService.ts       # Data quality
+│   ├── DataCurationService.ts      # Data curation
+│   ├── DataAugmentationService.ts
+│   ├── DataContributionService.ts
+│   ├── TrainingJobService.ts       # Training jobs
+│   ├── TrainingOrchestrator.ts     # Training pipeline
+│   ├── TrainingDataDocService.ts
+│   ├── DeploymentService.ts        # Fleet deployment
+│   ├── DeploymentMetricsService.ts
+│   ├── SkillLibraryService.ts      # Skill library
+│   ├── SkillExecutionService.ts
+│   ├── EmbodimentService.ts        # Embodiment configs
+│   ├── TeleoperationService.ts
+│   ├── ActiveLearningService.ts
+│   ├── SyntheticDataService.ts
+│   ├── FederatedLearningService.ts
+│   ├── MLflowService.ts            # MLflow integration
+│   ├── A2AClient.ts, HttpClient.ts, LogExportService.ts
+│   └── ...
+├── repositories/         # 18 repositories (Prisma data access)
+│   ├── RobotRepository.ts, AlertRepository.ts, ZoneRepository.ts
+│   ├── ConversationRepository.ts, TaskRepository.ts, AgentRepository.ts
+│   ├── UserRepository.ts, RefreshTokenRepository.ts, CommandRepository.ts
+│   ├── ProcessRepository.ts, RobotTaskRepository.ts, EventRepository.ts
+│   ├── ComplianceLogRepository.ts, DecisionRepository.ts
+│   ├── IncidentRepository.ts, OversightRepository.ts
+│   ├── ApprovalRepository.ts, VLARepository.ts
 │   └── index.ts
-├── database/
-│   ├── client.ts             # Prisma client singleton
-│   ├── index.ts              # Connect/disconnect
-│   ├── schemas.ts            # Zod-based JSON parsing for DB fields
-│   ├── types.ts              # DB <-> domain type converters
-│   └── seedZones.ts          # Default zone seeding
-├── middleware/
-│   └── auth.middleware.ts    # JWT auth, optional auth, role-based access
-├── interfaces/
-│   ├── IRobotManager.ts      # DI interface for RobotManager
-│   ├── IConversationManager.ts # DI interface for ConversationManager
-│   ├── IProcessManager.ts    # DI interface for ProcessManager
-│   └── index.ts
-├── websocket/
-│   └── index.ts              # WebSocket server (events broadcast)
-├── types/
-│   └── index.ts              # TypeScript type definitions
-└── utils/
-    └── errors.ts             # Typed error hierarchy (AppError, NotFoundError, etc.)
+├── database/             # Prisma client, schemas, seeds
+├── middleware/            # JWT auth middleware
+├── interfaces/            # Service interfaces for DI/testing
+├── websocket/             # WebSocket server (event broadcast)
+├── types/                 # 24 type definition files
+├── utils/                 # Error hierarchy (AppError + subclasses)
+├── storage/               # RustFS/S3-compatible object storage client
+├── messaging/             # NATS messaging (job queues, KV, streams)
+├── jobs/                  # Background jobs (retention cleanup, storage)
+├── workers/               # Worker threads (dataset validation, training)
+└── security/              # Encryption utilities
 ```
 
 ## API Endpoints
@@ -235,6 +282,38 @@ server/src/
 | GET    | `/.well-known/a2a/agent_card.json`              | Fleet-level agent card   |
 | GET    | `/.well-known/a2a/robots/:robotId/agent_card.json` | Per-robot agent card  |
 
+### Compliance & Governance
+
+- `/api/compliance` — Compliance audit logs (CRUD, chain verification, export)
+- `/api/compliance/retention` — Retention policies
+- `/api/compliance/legal-holds` — Legal holds on audit logs
+- `/api/compliance/ropa` — GDPR Art. 30 Records of Processing Activities
+- `/api/compliance/providers` — Provider documentation
+- `/api/compliance/tracker` — Compliance dashboard (gaps, deadlines, risk assessments)
+- `/api/gdpr` — GDPR self-service (data access/deletion/portability requests)
+- `/api/incidents` — Incident management & regulatory reporting
+- `/api/oversight` — Human oversight dashboard (anomaly detection)
+- `/api/approvals` — Human approval workflows
+- `/api/explainability` — AI decision transparency
+- `/api/safety` — Safety monitoring
+
+### ML & Training Pipeline
+
+- `/api/datasets` — Dataset management
+- `/api/training` — Training job orchestration
+- `/api/models` — Model registry (versions, metrics)
+- `/api/deployments` — Fleet deployment (canary, blue-green, rolling)
+- `/api/skills` — Skill library management
+- `/api/embodiments` — Robot type/embodiment configs
+- `/api/storage` — Object storage (presigned URLs)
+- `/api/teleoperation` — Teleoperation sessions
+- `/api/curation` — Data curation pipelines
+- `/api/active-learning` — Active learning strategies
+- `/api/synthetic` — Synthetic data generation
+- `/api/federated` — Federated learning
+- `/api/contributions` — Data contribution portal
+- `/api/training-docs` — Training data documentation
+
 ### WebSocket
 
 - `ws://localhost:3001/api/a2a/ws` - Real-time event streaming
@@ -247,7 +326,7 @@ server/src/
 
 ### Service Pattern
 
-Services are singleton managers with DB-backed persistence:
+Services are singleton managers with DB-backed persistence. Core services:
 
 | Service | Singleton | Purpose |
 |---------|-----------|---------|
@@ -256,9 +335,17 @@ Services are singleton managers with DB-backed persistence:
 | `AuthService` | `authService` | JWT auth (access 15m, refresh 7d) |
 | `AlertService` | `alertService` | Alert CRUD, WebSocket broadcast |
 | `ZoneService` | `zoneService` | Zone CRUD, geometry validation |
-| `CommandInterpreter` | `commandInterpreter` | NL -> structured command (Gemini, keyword fallback) |
+| `CommandInterpreter` | `commandInterpreter` | NL → structured command (Gemini, keyword fallback) |
 | `ProcessManager` | `processManager` | Multi-step workflow engine |
 | `TaskDistributor` | `taskDistributor` | Push-model task scheduler (2s interval) |
+
+Additional service groups (45 total):
+- **Compliance**: `ComplianceLogService`, `ComplianceTrackerService`, `RetentionPolicyService`, `LegalHoldService`, `RopaService`, `ProviderDocumentationService`
+- **GDPR**: `GDPRRequestService`, `ConsentService`, `DataRestrictionService`
+- **Incidents**: `IncidentService`, `NotificationWorkflowService`, `BreachAssessmentService`
+- **Oversight**: `OversightService`, `ApprovalWorkflowService`, `ExplainabilityService`
+- **ML/Training**: `DatasetService`, `TrainingJobService`, `TrainingOrchestrator`, `DeploymentService`, `SkillLibraryService`, `EmbodimentService`, `MLflowService`
+- **Data Pipeline**: `DataQualityService`, `DataCurationService`, `DataAugmentationService`, `ActiveLearningService`, `SyntheticDataService`, `FederatedLearningService`, `DataContributionService`
 
 ### Repository Pattern
 
@@ -285,19 +372,20 @@ Typed error hierarchy in `utils/errors.ts`: `BadRequestError`, `AuthenticationEr
 
 ## Key Dependencies
 
-| Package                 | Purpose                        |
-| ----------------------- | ------------------------------ |
-| `express`               | HTTP server framework          |
-| `@prisma/client`        | Database ORM                   |
-| `ws`                    | WebSocket server               |
-| `jsonwebtoken`          | JWT signing/verification       |
-| `bcryptjs`              | Password hashing               |
-| `express-rate-limit`    | Rate limiting middleware        |
-| `@google/generative-ai` | Gemini for command interpretation |
-| `axios`                 | HTTP client for robot comms    |
-| `cors`                  | CORS middleware                 |
-| `uuid`                  | ID generation                  |
-| `zod`                   | Schema validation              |
+| Package                 | Purpose                         |
+| ----------------------- | ------------------------------- |
+| `express`               | HTTP server framework           |
+| `@prisma/client`        | Database ORM (SQLite/PostgreSQL)|
+| `ws`                    | WebSocket server                |
+| `jsonwebtoken`          | JWT signing/verification        |
+| `bcryptjs`              | Password hashing                |
+| `express-rate-limit`    | Rate limiting middleware         |
+| `@google/generative-ai` | Gemini for command interpretation|
+| `axios`                 | HTTP client for robot comms     |
+| `nats`                  | Async messaging (optional)      |
+| `@aws-sdk/client-s3`    | RustFS/S3 object storage (optional)|
+| `zod` + `ajv`           | Schema validation               |
+| `cors`, `uuid`, `yaml`  | Middleware, IDs, config parsing |
 
 ## Environment Variables
 

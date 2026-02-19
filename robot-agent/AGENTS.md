@@ -32,6 +32,19 @@ npm start            # Run production build
 npm run typecheck    # Run TypeScript compiler (noEmit mode)
 ```
 
+### Testing
+
+```bash
+npm test             # Run tests with vitest (watch mode)
+npm run test:run     # Run tests once
+```
+
+### Protobuf
+
+```bash
+npm run proto:build  # Rebuild gRPC stubs from protos/vla_inference.proto
+```
+
 ## Architecture
 
 ### Technology Stack
@@ -40,6 +53,7 @@ npm run typecheck    # Run TypeScript compiler (noEmit mode)
 - **Framework**: Express.js
 - **AI**: Genkit with Google Gemini 2.5 Flash
 - **Protocol**: A2A SDK (@a2a-js/sdk)
+- **gRPC**: VLA inference client (@grpc/grpc-js)
 - **Real-time**: WebSocket (ws)
 - **Language**: TypeScript (ESM modules)
 
@@ -93,6 +107,31 @@ robot-agent/src/
 │   ├── navigation.ts     # Genkit tools: moveToLocation, stopMovement, goToCharge, returnHome
 │   ├── manipulation.ts   # Genkit tools: pickupObject, dropObject
 │   └── status.ts         # Genkit tools: getRobotStatus, emergencyStop
+├── embodiment/            # Embodiment abstraction layer
+│   ├── embodiment-loader.ts  # YAML config loader with hot-reload (chokidar)
+│   ├── camera-config.ts      # Camera configuration per embodiment
+│   ├── joint-mapper.ts       # Joint name mapping across embodiments
+│   ├── normalizer.ts         # Action/observation space normalization
+│   ├── types.ts
+│   ├── configs/
+│   │   ├── generic.yaml      # Default generic embodiment
+│   │   ├── h1.yaml           # Unitree H1 humanoid config
+│   │   └── so101.yaml        # SO-ARM100 arm config
+│   └── __tests__/            # Unit tests (vitest)
+├── safety/
+│   ├── SafetyMonitor.ts      # Safety monitoring & protective stop
+│   └── types.ts
+├── compliance/
+│   └── ComplianceLogClient.ts # HTTP client for server compliance API
+├── vla/                       # VLA inference client (gRPC)
+│   ├── vla-client.ts          # gRPC client for VLA inference server
+│   ├── vla-controller.ts      # VLA action execution controller
+│   ├── vla-model-manager.ts   # Model loading & switching
+│   ├── action-buffer.ts       # Action buffering & smoothing
+│   ├── action-interpolator.ts # Interpolation between actions
+│   ├── metrics.ts             # Inference metrics collection
+│   ├── types.ts
+│   └── proto/                 # Local proto copy
 └── prompts/
     └── robot_agent.prompt # AI system prompt template (Dotprompt)
 ```
@@ -185,10 +224,14 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | `@a2a-js/sdk`          | A2A protocol implementation |
 | `genkit`                | Google AI framework         |
 | `@genkit-ai/googleai`  | Gemini model integration    |
+| `@grpc/grpc-js`        | gRPC client (VLA inference) |
+| `@grpc/proto-loader`   | Protobuf loading            |
 | `express`               | HTTP server                 |
 | `ws`                    | WebSocket server            |
 | `axios`                 | HTTP client (zone fetching) |
-| `dotprompt`             | Prompt template engine      |
+| `chokidar`              | File watching (config hot-reload) |
+| `yaml`                  | YAML config parsing         |
+| `async-mutex`           | Concurrency control         |
 
 ## Environment Variables
 

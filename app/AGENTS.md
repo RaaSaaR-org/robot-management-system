@@ -85,23 +85,61 @@ BrowserRouter > ThemeProvider > AuthProvider > App
 | `/a2a/tasks`      | `TaskListPage`        | A2A task list                |
 | `/a2a/events`     | `EventsPage`          | A2A event viewer             |
 
-**Redirects**: `/tasks` -> `/processes`, `/tasks/:id` -> `/processes`
+### Compliance & Governance Routes
+
+| Path              | Page                  | Description                  |
+| ----------------- | --------------------- | ---------------------------- |
+| `/compliance`     | `CompliancePage`      | Audit logging viewer         |
+| `/explainability` | `ExplainabilityPage`  | AI decision transparency     |
+| `/gdpr`           | `GDPRPage`            | GDPR self-service portal     |
+| `/incidents`      | `IncidentsPage`       | Incident management          |
+| `/incidents/:id`  | `IncidentDetailPage`  | Incident detail              |
+| `/oversight`      | `OversightPage`       | Human oversight dashboard    |
+| `/approvals`      | `ApprovalsPage`       | Approval workflows           |
+
+### AI & ML Routes
+
+| Path                | Page                  | Description                  |
+| ------------------- | --------------------- | ---------------------------- |
+| `/datasets`         | `DatasetsPage`        | VLA dataset management       |
+| `/training`         | `TrainingPage`        | Training job management      |
+| `/models`           | `ModelsPage`          | Model registry               |
+| `/deployments`      | `DeploymentsPage`     | Fleet deployment management  |
+| `/deployments/:id`  | `DeploymentDetailPage`| Deployment detail            |
+| `/skills`           | `SkillsPage`          | Skill library                |
+| `/contributions`    | `ContributionsPage`   | Data contribution portal     |
+| `/contributions/new`| `NewContributionPage` | Submit new contribution      |
+| `/contributions/:id`| `ContributionDetailPage` | Contribution detail       |
+
+**Redirects**: `/tasks` → `/processes`, `/tasks/:id` → `/processes`
 
 ## Project Structure (Feature-First)
 
 ```
 src/
 ├── app/providers/       # Context providers (Auth, Theme)
-├── features/            # Feature modules (domain-driven)
+├── features/            # 21 feature modules (domain-driven)
 │   ├── a2a/             # A2A orchestration & chat
 │   ├── alerts/          # Alert management
+│   ├── approvals/       # Human approval workflows (EU AI Act Art. 14)
 │   ├── auth/            # Authentication (login, register, password reset)
 │   ├── command/         # NL command interface & safety preview
+│   ├── compliance/      # Audit logging viewer (EU AI Act Art. 12)
+│   ├── contributions/   # Data contribution portal
 │   ├── dashboard/       # Fleet dashboard page
+│   ├── datacollection/  # Robot data collection management
+│   ├── deployment/      # VLA model deployment management
+│   ├── explainability/  # AI decision transparency
 │   ├── fleet/           # Fleet map & zone management
+│   ├── fleetlearning/   # Federated learning management
+│   ├── gdpr/            # GDPR self-service portal (Articles 15-22)
+│   ├── incidents/       # Incident management & regulatory reporting
+│   ├── oversight/       # Human oversight dashboard
 │   ├── processes/       # Workflow/process management
 │   ├── robots/          # Robot management, telemetry, 3D viewer
-│   └── settings/        # Theme & UI stores
+│   ├── safety/          # Safety monitoring
+│   ├── settings/        # Theme & UI stores
+│   └── training/        # VLA dataset & training management
 ├── shared/              # Cross-feature shared code
 │   ├── components/ui/   # Reusable UI (Badge, Button, Card, Input, Modal, ProgressBar, Spinner, Tabs)
 │   ├── hooks/           # Shared hooks (useApi, useDebounce, useLocalStorage, useMediaQuery, useWebSocket)
