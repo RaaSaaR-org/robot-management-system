@@ -1,0 +1,17 @@
+# SmolVLA Remote Inference Server Configuration
+
+# Path to the SmolVLA model — either a HuggingFace repo ID or a local directory.
+# For base model: "lerobot/smolvla_base"
+# For fine-tuned: "${HF_USER}/my_finetuned_smolvla" or "./outputs/train/my_smolvla/checkpoints/last/pretrained_model"
+model_path: "lerobot/smolvla_base"
+
+# PyTorch device. Use "mps" on Apple Silicon, "cuda" on NVIDIA, "cpu" as fallback.
+device: "mps"
+
+# Server bind address and port. Use 0.0.0.0 to accept connections from the Pi on LAN.
+host: "0.0.0.0"
+port: 8000
+
+# Task description — must match what was used during dataset recording / fine-tuning.
+# Can be overridden per-request by the client.
+default_task: "Pick up the cube and place it in the bin."

@@ -1,0 +1,30 @@
+[project]
+name = "smolvla-server"
+version = "0.1.0"
+description = "SmolVLA remote inference server for Mac M1"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "torch>=2.1.0",
+    "Pillow>=10.0.0",
+]
+
+# NOTE: LeRobot with SmolVLA deps must be installed separately:
+#   git clone https://github.com/huggingface/lerobot.git
+#   cd lerobot && uv pip install -e ".[smolvla]"
+# Then install this server package into the same venv.
+
+[project.optional-dependencies]
+dev = ["httpx", "pytest"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
