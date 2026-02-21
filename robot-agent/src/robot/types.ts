@@ -29,7 +29,7 @@ export type CommandType =
 
 export type RobotClass = 'lightweight' | 'heavy-duty' | 'standard';
 
-export type RobotType = 'h1' | 'so101' | 'generic';
+export type RobotType = 'h1' | 'g1' | 'so101' | 'generic';
 
 // ============================================================================
 // JOINT TYPES (for 3D visualization)

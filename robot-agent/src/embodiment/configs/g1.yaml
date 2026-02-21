@@ -1,0 +1,137 @@
+# Unitree G1 Humanoid Robot Configuration
+# Based on g1_description/g1_29dof_rev_1_0.urdf
+# 29 active joints: 12 leg, 3 waist, 14 arm
+
+embodiment_tag: unitree_g1
+manufacturer: Unitree
+model: G1
+description: Unitree G1 humanoid robot with 29 DOF
+
+action:
+  dim: 29  # 29 joints total
+  normalization:
+    # Mean values (default positions)
+    mean: [
+      # Left Leg (6)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Right Leg (6)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Waist (3)
+      0.0, 0.0, 0.0,
+      # Left Arm (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Right Arm (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    ]
+    # Std values (based on joint ranges for normalization to ~[-1, 1])
+    std: [
+      # Left Leg (6) - half range of joint limits
+      2.705, 1.745, 2.758, 1.484, 0.698, 0.262,
+      # Right Leg (6)
+      2.705, 1.745, 2.758, 1.484, 0.698, 0.262,
+      # Waist (3)
+      2.618, 0.52, 0.52,
+      # Left Arm (7)
+      2.880, 1.920, 2.618, 1.571, 1.972, 1.614, 1.614,
+      # Right Arm (7)
+      2.880, 1.920, 2.618, 1.571, 1.972, 1.614, 1.614
+    ]
+
+proprioception:
+  dim: 58  # 29 positions + 29 velocities
+  joint_names:
+    # Left Leg
+    - left_hip_pitch_joint
+    - left_hip_roll_joint
+    - left_hip_yaw_joint
+    - left_knee_joint
+    - left_ankle_pitch_joint
+    - left_ankle_roll_joint
+    # Right Leg
+    - right_hip_pitch_joint
+    - right_hip_roll_joint
+    - right_hip_yaw_joint
+    - right_knee_joint
+    - right_ankle_pitch_joint
+    - right_ankle_roll_joint
+    # Waist
+    - waist_yaw_joint
+    - waist_roll_joint
+    - waist_pitch_joint
+    # Left Arm
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - left_wrist_roll_joint
+    - left_wrist_pitch_joint
+    - left_wrist_yaw_joint
+    # Right Arm
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_roll_joint
+    - right_wrist_pitch_joint
+    - right_wrist_yaw_joint
+
+cameras:
+  - name: head_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.0, 0.0, 1.2]  # Approximate head height for G1
+    enabled: true
+
+limits:
+  position:
+    lower: [
+      # Left Leg
+      -2.5307, -0.5236, -2.7576, -0.087267, -0.87267, -0.2618,
+      # Right Leg
+      -2.5307, -2.9671, -2.7576, -0.087267, -0.87267, -0.2618,
+      # Waist
+      -2.618, -0.52, -0.52,
+      # Left Arm
+      -3.0892, -1.5882, -2.618, -1.0472, -1.972222, -1.61443, -1.61443,
+      # Right Arm
+      -3.0892, -2.2515, -2.618, -1.0472, -1.972222, -1.61443, -1.61443
+    ]
+    upper: [
+      # Left Leg
+      2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618,
+      # Right Leg
+      2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618,
+      # Waist
+      2.618, 0.52, 0.52,
+      # Left Arm
+      2.6704, 2.2515, 2.618, 2.0944, 1.972222, 1.61443, 1.61443,
+      # Right Arm
+      2.6704, 1.5882, 2.618, 2.0944, 1.972222, 1.61443, 1.61443
+    ]
+  velocity: [
+    # Velocities in rad/s (from URDF effort/velocity specs)
+    32.0, 20.0, 32.0, 20.0, 30.0, 30.0,  # Left leg
+    32.0, 20.0, 32.0, 20.0, 30.0, 30.0,  # Right leg
+    32.0, 30.0, 30.0,                     # Waist
+    37.0, 37.0, 37.0, 37.0, 37.0, 22.0, 22.0,  # Left arm
+    37.0, 37.0, 37.0, 37.0, 37.0, 22.0, 22.0   # Right arm
+  ]
+  torque: [
+    # Torques in Nm (from URDF effort specs)
+    88.0, 139.0, 88.0, 139.0, 35.0, 35.0,   # Left leg
+    88.0, 139.0, 88.0, 139.0, 35.0, 35.0,   # Right leg
+    88.0, 35.0, 35.0,                        # Waist
+    25.0, 25.0, 25.0, 25.0, 25.0, 5.0, 5.0, # Left arm
+    25.0, 25.0, 25.0, 25.0, 25.0, 5.0, 5.0  # Right arm
+  ]
+
+safety:
+  max_speed: 2.0  # m/s - G1 is faster than H1
+  workspace:
+    type: box
+    min: [-2.0, -2.0, 0.0]
+    max: [2.0, 2.0, 1.5]
+  collision_margin: 0.05
+  force_limit: 140.0  # ISO/TS 15066 limit
+
+version: "1.0.0"

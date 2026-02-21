@@ -56,6 +56,8 @@ function generateJointStates(
 
     if (robotType === 'h1') {
       position = simulateH1Joint(joint.name, time, isMoving, isHolding);
+    } else if (robotType === 'g1') {
+      position = simulateG1Joint(joint.name, time, isMoving, isHolding);
     } else if (robotType === 'so101') {
       position = simulateSO101Joint(joint.name, time, isMoving, isHolding);
     }
@@ -115,6 +117,72 @@ function simulateH1Joint(jointName: string, time: number, isMoving: boolean, isH
       return isLeft ? 0.2 : -0.2;
     case jointName.includes('elbow'):
       return isHolding ? 0.8 : 0.4 + Math.sin(phase + phaseOffset) * 0.1;
+
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Simulate G1 humanoid joint positions for walking animation
+ * G1 has 29 DOF: 12 leg (6 per side with ankle roll), 3 waist, 14 arm (7 per side with wrist 3DOF)
+ */
+function simulateG1Joint(jointName: string, time: number, isMoving: boolean, isHolding: boolean): number {
+  const walkFreq = 2.0;
+
+  if (!isMoving) {
+    // Idle pose - subtle natural sway
+    const idleSway = Math.sin(time * 0.3) * 0.02;
+    if (jointName.includes('hip_pitch')) return idleSway;
+    if (jointName.includes('knee')) return 0.1;
+    if (jointName.includes('elbow') && isHolding) return 0.8;
+    if (jointName.includes('waist_yaw')) return Math.sin(time * 0.15) * 0.01;
+    return 0;
+  }
+
+  // Walking animation
+  const phase = time * walkFreq;
+  const isLeft = jointName.includes('left');
+  const phaseOffset = isLeft ? 0 : Math.PI;
+
+  switch (true) {
+    // Leg joints - walking cycle
+    case jointName.includes('hip_pitch'):
+      return Math.sin(phase + phaseOffset) * 0.4;
+    case jointName.includes('hip_roll'):
+      return Math.sin(phase) * 0.05;
+    case jointName.includes('hip_yaw'):
+      return Math.sin(phase + phaseOffset) * 0.02;
+    case jointName.includes('knee'):
+      return Math.max(0, Math.sin(phase + phaseOffset + 0.5) * 0.5 + 0.3);
+    case jointName.includes('ankle_pitch'):
+      return Math.sin(phase + phaseOffset + 1.0) * 0.2;
+    case jointName.includes('ankle_roll'):
+      return Math.sin(phase + phaseOffset) * 0.03;
+
+    // Waist - counter-rotation with 3 DOF
+    case jointName === 'waist_yaw_joint':
+      return Math.sin(phase) * 0.08;
+    case jointName === 'waist_roll_joint':
+      return Math.sin(phase * 2) * 0.02;
+    case jointName === 'waist_pitch_joint':
+      return Math.sin(phase) * 0.03;
+
+    // Arms - counter-swing while walking
+    case jointName.includes('shoulder_pitch'):
+      return Math.sin(phase + phaseOffset + Math.PI) * 0.3;
+    case jointName.includes('shoulder_roll'):
+      return isLeft ? 0.2 : -0.2;
+    case jointName.includes('shoulder_yaw'):
+      return 0;
+    case jointName.includes('elbow'):
+      return isHolding ? 0.8 : 0.4 + Math.sin(phase + phaseOffset) * 0.1;
+    case jointName.includes('wrist_roll'):
+      return isHolding ? 0 : Math.sin(phase + phaseOffset) * 0.05;
+    case jointName.includes('wrist_pitch'):
+      return isHolding ? 0.1 : 0;
+    case jointName.includes('wrist_yaw'):
+      return 0;
 
     default:
       return 0;

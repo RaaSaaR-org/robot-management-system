@@ -54,7 +54,9 @@ export const Robot3DViewer = memo(function Robot3DViewer({
 
   // Camera position based on robot type
   const cameraPosition: [number, number, number] =
-    robotType === 'so101' ? [0.5, 0.4, 0.5] : [2, 1.5, 2];
+    robotType === 'so101' ? [0.5, 0.4, 0.5] :
+    robotType === 'g1' ? [1.5, 1.0, 1.5] :
+    [2, 1.5, 2];
 
   return (
     <div className={cn('w-full h-full min-h-[300px] rounded-lg overflow-hidden', className)}>
@@ -104,7 +106,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
             sectionThickness={1}
             sectionColor="#18E4C3"
             fadeDistance={12}
-            position={[0, robotType === 'so101' ? -0.05 : -0.95, 0]}
+            position={[0, robotType === 'so101' ? -0.05 : robotType === 'g1' ? -0.75 : -0.95, 0]}
           />
 
           {/* Controls */}

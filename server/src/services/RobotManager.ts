@@ -37,7 +37,7 @@ export type CommandType =
   | 'custom';
 
 /** Robot type for 3D visualization */
-export type RobotType = 'h1' | 'so101' | 'generic';
+export type RobotType = 'h1' | 'g1' | 'so101' | 'generic';
 
 /** Joint state for 3D animation */
 export interface JointState {

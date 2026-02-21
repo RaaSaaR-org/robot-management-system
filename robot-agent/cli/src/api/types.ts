@@ -24,7 +24,7 @@ export type CommandType =
   | 'emergency_stop'
   | 'custom';
 
-export type RobotType = 'h1' | 'so101' | 'generic';
+export type RobotType = 'h1' | 'g1' | 'so101' | 'generic';
 
 // Location
 export interface RobotLocation {

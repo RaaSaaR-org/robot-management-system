@@ -29,6 +29,7 @@ export interface RobotModelProps {
 
 const URDF_PATHS: Record<string, string> = {
   h1: '/assets/robots/h1/h1.urdf',
+  g1: '/assets/robots/g1/g1.urdf',
   so101: '/assets/robots/so101/so101.urdf',
 };
 
