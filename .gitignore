@@ -45,6 +45,7 @@ node_modules/
 .playwright-mcp
 .hive-mind
 .claude-flow
+.mcp.json
 
 # Python
 __pycache__/
