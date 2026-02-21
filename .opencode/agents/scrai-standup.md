@@ -1,6 +1,6 @@
 ---
 description: SCRAI Daily Standup — reads MC task board and generates standup report
-mode: subagent
+mode: agent
 model: google/gemini-2.5-flash
 tools:
   edit: false

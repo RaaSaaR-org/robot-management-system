@@ -1,6 +1,6 @@
 ---
 description: SCRAI Backlog Grooming — analyzes MC backlog for dependency resolution and prioritization
-mode: subagent
+mode: agent
 model: google/gemini-2.5-flash
 tools:
   edit: false

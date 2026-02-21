@@ -1,6 +1,6 @@
 ---
 description: SCRAI Sprint Retrospective — closes active sprint and generates retrospective
-mode: subagent
+mode: agent
 model: google/gemini-2.5-pro
 tools:
   edit: true

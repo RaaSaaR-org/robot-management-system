@@ -1,6 +1,6 @@
 ---
 description: SCRAI Sprint Planning — creates MC sprint, assigns tasks, generates sprint plan
-mode: subagent
+mode: agent
 model: google/gemini-2.5-pro
 tools:
   edit: true
