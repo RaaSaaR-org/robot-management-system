@@ -106,11 +106,11 @@ class VLAConfig:
         """
         errors = []
         
-        valid_models = ["pi0", "pi0_6", "openvla", "groot"]
+        valid_models = ["pi0", "pi0_6", "openvla", "groot", "smolvla", "smolvla_base"]
         if self.model_type.lower() not in valid_models:
             errors.append(f"Invalid model_type: {self.model_type}. Valid: {valid_models}")
             
-        valid_devices = ["cpu", "cuda"] + [f"cuda:{i}" for i in range(8)]
+        valid_devices = ["cpu", "cuda", "mps"] + [f"cuda:{i}" for i in range(8)]
         if self.device not in valid_devices:
             errors.append(f"Invalid device: {self.device}. Valid: cpu, cuda, cuda:N")
             

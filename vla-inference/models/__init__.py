@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .pi0 import Pi0Model
     from .openvla import OpenVLAModel
     from .groot import GR00TModel
+    from .smolvla import SmolVLAModel
 
 
 def create_model(model_type: str) -> VLAModel:
@@ -37,12 +38,15 @@ def create_model(model_type: str) -> VLAModel:
     from .pi0 import Pi0Model
     from .openvla import OpenVLAModel
     from .groot import GR00TModel
-    
+    from .smolvla import SmolVLAModel
+
     model_map = {
         "pi0": Pi0Model,
         "pi0_6": Pi0Model,  # Alias
         "openvla": OpenVLAModel,
         "groot": GR00TModel,
+        "smolvla": SmolVLAModel,
+        "smolvla_base": SmolVLAModel,  # Alias
     }
     
     model_type_lower = model_type.lower()
@@ -63,6 +67,8 @@ __all__ = [
     "Observation",
     "Action",
     "ActionChunk",
+    # Model implementations
+    "SmolVLAModel",
     # Factory
     "create_model",
 ]

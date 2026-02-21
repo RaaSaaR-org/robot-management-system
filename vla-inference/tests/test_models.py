@@ -16,6 +16,8 @@ from models import (
 from models.pi0 import Pi0Model
 from models.openvla import OpenVLAModel
 from models.groot import GR00TModel, GR00TNotAvailableError
+from models.smolvla import SmolVLAModel
+from config import VLAConfig
 
 
 # ============================================================================
@@ -69,6 +71,16 @@ class TestModelFactory:
         model2 = create_model("OpenVLA")
         assert isinstance(model1, Pi0Model)
         assert isinstance(model2, OpenVLAModel)
+
+    def test_create_smolvla_model(self):
+        """Test creating SmolVLA model."""
+        model = create_model("smolvla")
+        assert isinstance(model, SmolVLAModel)
+
+    def test_create_smolvla_base_alias(self):
+        """Test creating SmolVLA model with smolvla_base alias."""
+        model = create_model("smolvla_base")
+        assert isinstance(model, SmolVLAModel)
 
     def test_create_unknown_model_raises(self):
         """Test that unknown model type raises ValueError."""
@@ -262,8 +274,8 @@ class TestModelIntegration:
 
     def test_all_models_implement_interface(self):
         """Test that all models implement VLAModel interface."""
-        models = [Pi0Model(), OpenVLAModel(), GR00TModel()]
-        
+        models = [Pi0Model(), OpenVLAModel(), GR00TModel(), SmolVLAModel()]
+
         for model in models:
             assert isinstance(model, VLAModel)
             assert hasattr(model, 'load')
@@ -275,8 +287,8 @@ class TestModelIntegration:
 
     def test_model_info_returns_valid_data(self):
         """Test that model info contains all required fields."""
-        models = [Pi0Model(), OpenVLAModel(), GR00TModel()]
-        
+        models = [Pi0Model(), OpenVLAModel(), GR00TModel(), SmolVLAModel()]
+
         for model in models:
             info = model.model_info
             assert isinstance(info, ModelInfo)
@@ -287,3 +299,75 @@ class TestModelIntegration:
             assert len(info.supported_embodiments) > 0
             assert info.image_width > 0
             assert info.image_height > 0
+
+
+# ============================================================================
+# SmolVLA Model Tests
+# ============================================================================
+
+class TestSmolVLAModel:
+    """Test SmolVLA model implementation."""
+
+    def test_model_info(self):
+        """Test model info properties."""
+        model = SmolVLAModel()
+        info = model.model_info
+
+        assert info.model_name == "smolvla"
+        assert info.base_model == "smolvla"
+        assert info.chunk_size == 10
+        assert info.action_dim == 6
+        assert "so101" in info.supported_embodiments
+
+    def test_implements_interface(self):
+        """Test SmolVLAModel implements VLAModel interface."""
+        model = SmolVLAModel()
+        assert isinstance(model, VLAModel)
+
+    def test_initial_state(self):
+        """Test initial model state before loading."""
+        model = SmolVLAModel()
+        assert not model.is_loaded
+        assert model.device == "cpu"
+
+    def test_predict_requires_loading(self, sample_observation):
+        """Test that predict raises error if not loaded."""
+        model = SmolVLAModel()
+
+        with pytest.raises(RuntimeError) as exc:
+            model.predict(sample_observation)
+        assert "not loaded" in str(exc.value)
+
+    def test_load_without_lerobot(self):
+        """Test that load raises RuntimeError when LeRobot is not installed."""
+        model = SmolVLAModel()
+
+        with pytest.raises(RuntimeError) as exc:
+            model.load(device="cpu")
+        assert "LeRobot" in str(exc.value) or "lerobot" in str(exc.value).lower()
+
+
+# ============================================================================
+# Config Validation Tests
+# ============================================================================
+
+class TestConfigValidation:
+    """Test VLAConfig validation for SmolVLA and device support."""
+
+    def test_smolvla_accepted(self):
+        """Test that smolvla is accepted as a valid model type."""
+        config = VLAConfig(model_type="smolvla")
+        errors = config.validate()
+        assert not errors
+
+    def test_smolvla_base_accepted(self):
+        """Test that smolvla_base is accepted as a valid model type."""
+        config = VLAConfig(model_type="smolvla_base")
+        errors = config.validate()
+        assert not errors
+
+    def test_mps_device_accepted(self):
+        """Test that mps is accepted as a valid device."""
+        config = VLAConfig(device="mps")
+        errors = config.validate()
+        assert not errors
