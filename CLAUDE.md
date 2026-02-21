@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-RoboMindOS is a distributed fleet management platform for autonomous robots. It consists of four main components:
+RoboMindOS is a distributed fleet management platform for autonomous robots. It consists of five main components:
 
 | Component          | Location         | Description                          | Port  |
 | ------------------ | ---------------- | ------------------------------------ | ----- |
@@ -12,6 +12,7 @@ RoboMindOS is a distributed fleet management platform for autonomous robots. It 
 | **Server**         | `server/`        | Node.js A2A protocol server          | 3001  |
 | **Robot Agent**    | `robot-agent/`   | AI-powered robot software            | 41243 |
 | **VLA Inference**  | `vla-inference/` | Python gRPC inference server for VLA | 50051 |
+| **SmolVLA Server** | `smolvla-server/` | FastAPI inference for Mac M1        | 8000  |
 
 ## Component-Specific Guidance
 
@@ -179,13 +180,19 @@ robo-mind-app/
 │   │   ├── api/            # REST & WebSocket
 │   │   ├── config/         # Environment configuration
 │   │   └── prompts/        # AI prompt templates
+│   ├── smolvla/            # Python client for real SO-101 hardware via LeRobot
 │   └── AGENTS.md
 │
 ├── vla-inference/          # VLA Model Inference (Python)
 │   ├── server.py           # gRPC server entry point
-│   ├── models/             # Model backends (OpenVLA, Pi0, GR00T)
+│   ├── models/             # Model backends (OpenVLA, Pi0, GR00T, SmolVLA)
 │   ├── Dockerfile
 │   └── README.md
+│
+├── smolvla-server/         # SmolVLA FastAPI Inference (Python)
+│   ├── pyproject.toml
+│   ├── config.yaml
+│   └── src/smolvla_server/ # FastAPI app, inference engine, protocol
 │
 ├── helm/                   # Kubernetes Helm Chart
 │   └── robomind/           # Chart with 30 resource templates
@@ -262,6 +269,7 @@ When building features across the stack:
 | `genkit`                | Robot         | AI framework               |
 | `@a2a-js/sdk`           | Robot         | A2A protocol               |
 | `@grpc/grpc-js`         | Robot         | VLA inference gRPC client  |
+| `lerobot`               | VLA, SmolVLA  | VLA model loading + robot hardware |
 
 ## Task Management
 
