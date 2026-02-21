@@ -45,3 +45,10 @@ node_modules/
 .playwright-mcp
 .hive-mind
 .claude-flow
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
