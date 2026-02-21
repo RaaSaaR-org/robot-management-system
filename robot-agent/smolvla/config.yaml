@@ -1,0 +1,35 @@
+# SmolVLA Remote Client Configuration (Raspberry Pi + SO-101)
+
+# Mac server URL — replace with your Mac's LAN IP.
+# Find it on your Mac with: ipconfig getifaddr en0
+server_url: "http://192.168.1.100:8000"
+
+# SO-101 robot configuration
+robot:
+  type: "so101_follower"
+  port: "/dev/ttyACM0"         # Typical Pi USB serial port. Run: ls /dev/ttyACM* to find yours.
+  id: "my_follower"
+
+# Camera configuration
+# Run `lerobot-find-cameras opencv` on the Pi to discover camera indices.
+cameras:
+  front:
+    type: "opencv"
+    index: 0
+    width: 640
+    height: 480
+    fps: 30
+
+# Task description — must match what was used during dataset recording / fine-tuning.
+task: "Pick up the cube and place it in the bin."
+
+# Control loop settings
+control_frequency_hz: 30       # Action execution rate (Hz). Must match training data fps.
+overlap_inference: true         # Pre-fetch next prediction while executing current chunk.
+jpeg_quality: 85               # JPEG compression quality for camera frames (1-100).
+                               # Lower = smaller payload = faster transfer, but lossier image.
+
+# Safety settings
+request_timeout_s: 2.0         # Max time to wait for server response.
+max_retries: 3                 # Retry count before holding position.
+retry_delay_s: 0.5             # Delay between retries.
