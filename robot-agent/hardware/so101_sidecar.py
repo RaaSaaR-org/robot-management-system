@@ -98,10 +98,10 @@ def _idle_watchdog():
             if connected and (time.time() - last_request_time) > IDLE_TIMEOUT_S:
                 _disconnect_unlocked()
         # Check if VLA subprocess died unexpectedly
-        if vla_active and vla_process is not None and vla_process.poll() is not None:
+        if vla_process is not None and vla_process.poll() is not None:
             rc = vla_process.returncode
             elapsed = time.time() - vla_start_time
-            print(f"[Sidecar/VLA] Process died unexpectedly (exit code {rc}) after {elapsed:.1f}s", flush=True)
+            print(f"[Sidecar/VLA] Process exited (rc={rc}), elapsed={elapsed:.1f}s — resetting state", flush=True)
             vla_process = None
             vla_active = False
 
@@ -184,8 +184,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/vla/status":
             running = vla_process is not None and vla_process.poll() is None
             self._json({
-                "active": vla_active or running,
-                "pid": vla_process.pid if (vla_process and running) else None,
+                "active": running,
+                "pid": vla_process.pid if running else None,
                 "instruction": vla_instruction,
             })
         else:
@@ -224,6 +224,7 @@ class Handler(BaseHTTPRequestHandler):
             vla_instruction = instruction
             vla_start_time = time.time()
             camera_type = body.get("cameraType", "picamera2")
+            wrist_camera_index = body.get("wristCameraIndex", -1)
             cmd = [
                 UV_BIN, "run", "python",
                 os.path.join(CLIENT_DIR, "client_pi.py"),
@@ -235,17 +236,24 @@ class Handler(BaseHTTPRequestHandler):
                 "--prompt", instruction,
                 "--camera-type", camera_type,
             ]
+            if isinstance(wrist_camera_index, int) and wrist_camera_index >= 0:
+                cmd += ["--wrist-camera-index", str(wrist_camera_index)]
             vla_process = subprocess.Popen(cmd, cwd=CLIENT_DIR)
             print(f"[Sidecar/VLA] Subprocess spawned: PID={vla_process.pid}", flush=True)
             self._json({"ok": True, "pid": vla_process.pid})
         elif self.path == "/vla/stop":
             elapsed = time.time() - vla_start_time if vla_start_time else 0
-            if vla_process and vla_process.poll() is None:
-                vla_process.terminate()
-                try: vla_process.wait(timeout=5)
-                except subprocess.TimeoutExpired: vla_process.kill()
+            if vla_process is not None:
+                if vla_process.poll() is None:
+                    vla_process.terminate()
+                    try:
+                        vla_process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        vla_process.kill()
+                        vla_process.wait(timeout=2)
             vla_process = None
             vla_active = False
+            vla_instruction = ""
             vla_start_time = 0.0
             print(f"[Sidecar/VLA] Stopped (ran for {elapsed:.1f}s)", flush=True)
             self._json({"ok": True})
