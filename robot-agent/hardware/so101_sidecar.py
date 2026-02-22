@@ -210,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
             server_port = body.get("port", 8080)
             robot_port = body.get("robotPort", "/dev/ttyACM0")
             model = body.get("model", "Elvinky/pi05_so101_pick_place_bottle")
-            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model}", flush=True)
+            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model} camera={camera_type}", flush=True)
             # Stop any existing VLA process
             if vla_process and vla_process.poll() is None:
                 vla_process.terminate()
@@ -223,6 +223,7 @@ class Handler(BaseHTTPRequestHandler):
             vla_active = True
             vla_instruction = instruction
             vla_start_time = time.time()
+            camera_type = body.get("cameraType", "picamera2")
             cmd = [
                 UV_BIN, "run", "python",
                 os.path.join(CLIENT_DIR, "client_pi.py"),
@@ -232,6 +233,7 @@ class Handler(BaseHTTPRequestHandler):
                 "--port", robot_port,
                 "--model", model,
                 "--prompt", instruction,
+                "--camera-type", camera_type,
             ]
             vla_process = subprocess.Popen(cmd, cwd=CLIENT_DIR)
             print(f"[Sidecar/VLA] Subprocess spawned: PID={vla_process.pid}", flush=True)
