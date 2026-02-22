@@ -83,6 +83,9 @@ export class RobotStateManager {
   private safetyMonitor: SafetyMonitor;
   private vlaController: VLAController | null = null;
   private vlaModelManager: VLAModelManager;
+  // Local VLA state — used when delegating to sidecar instead of gRPC VLAController
+  private vlaActiveLocal = false;
+  private vlaInstructionLocal = '';
 
   // Embodiment integration (Task 51)
   private jointMapper: JointMapper;
@@ -461,148 +464,99 @@ export class RobotStateManager {
     instruction: string,
     config?: Partial<VLAControllerConfig>
   ): Promise<void> {
-    if (this.vlaController && this.vlaController.isActive()) {
+    if (this.vlaActiveLocal) {
       throw new Error('VLA control is already active');
     }
 
-    // Create action executor that delegates to CommandExecutor
-    const actionExecutor: ActionExecutor = async (action) => {
-      const result = await this.commandExecutor.executeVLAAction(action);
-      this.notifyListeners();
-      return result;
-    };
+    // Delegate to the Python sidecar which spawns client_pi.py.
+    // client_pi.py handles real camera capture, joint reading, and LeRobot gRPC protocol —
+    // all of which are incompatible with the old VLAController/VLAClient (custom proto, placeholder images).
+    const host = process.env.VLA_SERVER_HOST ?? '100.125.78.40';
+    const serverPort = parseInt(process.env.VLA_SERVER_PORT ?? '8080', 10);
+    const robotPort = process.env.VLA_ROBOT_PORT ?? '/dev/ttyACM0';
+    const model = process.env.VLA_MODEL ?? 'Elvinky/pi05_so101_pick_place_bottle';
 
-    // Create observation generator from current robot state (Task 51)
-    const observationGenerator: ObservationGenerator = async () => {
-      const embodimentTag = config?.embodimentTag ?? this.state.robotType ?? 'generic';
+    console.log(`[RobotStateManager/VLA] Starting: instruction="${instruction}" host=${host}:${serverPort} model=${model}`);
 
-      // Get embodiment config for proper observation dimensions
-      let embodimentConfig: EmbodimentConfig | null = null;
-      try {
-        const loader = EmbodimentLoader.getInstance();
-        await loader.initialize();
-        embodimentConfig = await loader.loadEmbodiment(embodimentTag);
-      } catch {
-        console.warn(`[RobotStateManager] Could not load embodiment ${embodimentTag}, using defaults`);
-      }
+    let res: Response;
+    try {
+      res = await fetch('http://localhost:8765/vla/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction, host, port: serverPort, robotPort, model }),
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (err) {
+      console.error(`[RobotStateManager/VLA] Sidecar call failed:`, err);
+      throw err;
+    }
 
-      // Get camera resolution from embodiment config or use default
-      let imageWidth = 224;
-      let imageHeight = 224;
-      if (embodimentConfig) {
-        const primaryCamera = this.cameraConfigManager.getPrimaryCamera(embodimentConfig);
-        if (primaryCamera) {
-          [imageWidth, imageHeight] = primaryCamera.resolution;
-        }
-      }
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`[RobotStateManager/VLA] Start failed (HTTP ${res.status}): ${text}`);
+      throw new Error(`VLA start failed: ${text}`);
+    }
 
-      // Create placeholder image (in real implementation, this would be from camera)
-      const placeholderImage = this.cameraConfigManager.createPlaceholderImage(
-        'primary_camera',
-        embodimentConfig ?? {
-          embodiment_tag: 'generic',
-          manufacturer: 'Generic',
-          model: 'Generic',
-          action: { dim: 6, normalization: { mean: [], std: [] } },
-          proprioception: { dim: 12, joint_names: [] },
-          cameras: [{ name: 'primary_camera', resolution: [imageWidth, imageHeight], enabled: true }],
-          version: '1.0.0',
-        }
-      );
+    const body = await res.json() as { ok: boolean; pid?: number };
+    console.log(`[RobotStateManager/VLA] Sidecar responded: PID=${body.pid}`);
 
-      // Generate joint positions/velocities based on embodiment config
-      const numJoints = embodimentConfig?.action.dim ?? 6;
-      const jointPositions = new Array(numJoints).fill(0);
-      const jointVelocities = new Array(numJoints).fill(0);
-
-      const observation: Observation = {
-        cameraImage: placeholderImage,
-        jointPositions,
-        jointVelocities,
-        languageInstruction: instruction,
-        timestamp: Date.now() / 1000,
-        embodimentTag,
-        sessionId: undefined, // Will be set by controller
-      };
-
-      return observation;
-    };
-
-    // Create VLA controller with configuration
-    this.vlaController = new VLAController({
-      cloudEndpoint: process.env.VLA_CLOUD_ENDPOINT ?? 'localhost:50051',
-      edgeEndpoint: process.env.VLA_EDGE_ENDPOINT,
-      embodimentTag: this.state.robotType ?? 'generic',
-      ...config,
-    });
-
-    // Forward VLA events to safety and logging
-    this.vlaController.on('underrun', () => {
-      console.warn('[RobotStateManager] VLA buffer underrun detected');
-    });
-    this.vlaController.on('fallback:safe-retract', () => {
-      console.warn('[RobotStateManager] VLA safe retract initiated');
-      this.safetyMonitor.triggerProtectiveStop('protective_stop', 'VLA buffer underrun - safe retract');
-    });
-    this.vlaController.on('error', (error) => {
-      console.error('[RobotStateManager] VLA error:', error);
-    });
-
-    // Start VLA control
-    await this.vlaController.start(instruction, actionExecutor, observationGenerator);
-
-    console.log(`[RobotStateManager] VLA control started: "${instruction}"`);
+    this.vlaActiveLocal = true;
+    this.vlaInstructionLocal = instruction;
+    this.notifyListeners();
   }
 
   /**
    * Stop VLA control mode gracefully.
    */
   async stopVLAControl(): Promise<void> {
-    if (!this.vlaController) {
-      return;
-    }
+    console.log('[RobotStateManager/VLA] Stopping VLA control');
+    await fetch('http://localhost:8765/vla/stop', {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+    }).catch((err) => console.error('[RobotStateManager/VLA] Sidecar stop call failed:', err));
 
-    await this.vlaController.stop();
-    this.commandExecutor.stopVLAControl();
-    this.vlaController = null;
-
+    this.vlaActiveLocal = false;
+    this.vlaInstructionLocal = '';
     this.notifyListeners();
-    console.log('[RobotStateManager] VLA control stopped');
+    console.log('[RobotStateManager/VLA] VLA control stopped');
   }
 
   /**
    * Pause VLA control (holds current position).
    */
   pauseVLAControl(): void {
-    if (this.vlaController) {
-      this.vlaController.pause();
-    }
+    // Pause not supported in sidecar-delegated mode — stop instead
+    console.warn('[RobotStateManager] VLA pause not supported in sidecar mode, use stop');
   }
 
   /**
    * Resume VLA control from paused state.
    */
   resumeVLAControl(): void {
-    if (this.vlaController) {
-      this.vlaController.resume();
-    }
+    console.warn('[RobotStateManager] VLA resume not supported in sidecar mode, use start');
   }
 
   /**
    * Get current VLA control status.
    */
   getVLAStatus(): VLAStatus | null {
-    if (!this.vlaController) {
-      return null;
-    }
-    return this.vlaController.getStatus();
+    if (!this.vlaActiveLocal) return null;
+    // Return a minimal status compatible with VLAStatus shape
+    return {
+      phase: 'running',
+      instruction: this.vlaInstructionLocal,
+      bufferDepth: 0,
+      lastInferenceMs: 0,
+      totalSteps: 0,
+      errors: 0,
+    } as unknown as VLAStatus;
   }
 
   /**
    * Check if VLA control is currently active.
    */
   isVLAActive(): boolean {
-    return this.vlaController !== null && this.vlaController.isActive();
+    return this.vlaActiveLocal;
   }
 
   // ============================================================================
