@@ -476,37 +476,49 @@ export class RobotStateManager {
     const robotPort = process.env.VLA_ROBOT_PORT ?? '/dev/ttyACM0';
     const model = process.env.VLA_MODEL ?? 'Elvinky/pi05_so101_pick_place_bottle';
 
-    const res = await fetch('http://localhost:8765/vla/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instruction, host, port: serverPort, robotPort, model }),
-      signal: AbortSignal.timeout(5000),
-    });
+    console.log(`[RobotStateManager/VLA] Starting: instruction="${instruction}" host=${host}:${serverPort} model=${model}`);
+
+    let res: Response;
+    try {
+      res = await fetch('http://localhost:8765/vla/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction, host, port: serverPort, robotPort, model }),
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (err) {
+      console.error(`[RobotStateManager/VLA] Sidecar call failed:`, err);
+      throw err;
+    }
 
     if (!res.ok) {
       const text = await res.text();
+      console.error(`[RobotStateManager/VLA] Start failed (HTTP ${res.status}): ${text}`);
       throw new Error(`VLA start failed: ${text}`);
     }
+
+    const body = await res.json() as { ok: boolean; pid?: number };
+    console.log(`[RobotStateManager/VLA] Sidecar responded: PID=${body.pid}`);
 
     this.vlaActiveLocal = true;
     this.vlaInstructionLocal = instruction;
     this.notifyListeners();
-    console.log(`[RobotStateManager] VLA control started via sidecar: "${instruction}" → ${host}:${serverPort}`);
   }
 
   /**
    * Stop VLA control mode gracefully.
    */
   async stopVLAControl(): Promise<void> {
+    console.log('[RobotStateManager/VLA] Stopping VLA control');
     await fetch('http://localhost:8765/vla/stop', {
       method: 'POST',
       signal: AbortSignal.timeout(5000),
-    }).catch((err) => console.warn('[RobotStateManager] VLA stop sidecar call failed:', err));
+    }).catch((err) => console.error('[RobotStateManager/VLA] Sidecar stop call failed:', err));
 
     this.vlaActiveLocal = false;
     this.vlaInstructionLocal = '';
     this.notifyListeners();
-    console.log('[RobotStateManager] VLA control stopped');
+    console.log('[RobotStateManager/VLA] VLA control stopped');
   }
 
   /**

@@ -45,6 +45,7 @@ last_request_time = 0.0
 vla_process: subprocess.Popen | None = None
 vla_active = False
 vla_instruction = ""
+vla_start_time: float = 0.0
 CLIENT_DIR = os.path.expanduser("~/repos/vla-tests/pi05/client")
 UV_BIN = os.path.expanduser("~/.local/bin/uv")
 
@@ -90,11 +91,19 @@ def _disconnect_unlocked():
 
 def _idle_watchdog():
     """Background thread: disconnect if no /state request for IDLE_TIMEOUT_S."""
+    global vla_process, vla_active
     while True:
         time.sleep(1.0)
         with robot_lock:
             if connected and (time.time() - last_request_time) > IDLE_TIMEOUT_S:
                 _disconnect_unlocked()
+        # Check if VLA subprocess died unexpectedly
+        if vla_active and vla_process is not None and vla_process.poll() is not None:
+            rc = vla_process.returncode
+            elapsed = time.time() - vla_start_time
+            print(f"[Sidecar/VLA] Process died unexpectedly (exit code {rc}) after {elapsed:.1f}s", flush=True)
+            vla_process = None
+            vla_active = False
 
 
 def get_state():
@@ -201,16 +210,19 @@ class Handler(BaseHTTPRequestHandler):
             server_port = body.get("port", 8080)
             robot_port = body.get("robotPort", "/dev/ttyACM0")
             model = body.get("model", "Elvinky/pi05_so101_pick_place_bottle")
+            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model}", flush=True)
             # Stop any existing VLA process
             if vla_process and vla_process.poll() is None:
                 vla_process.terminate()
                 try: vla_process.wait(timeout=3)
                 except subprocess.TimeoutExpired: vla_process.kill()
             # Release arm so client_pi.py can claim /dev/ttyACM0
+            print("[Sidecar/VLA] Releasing arm for VLA", flush=True)
             with robot_lock:
                 _disconnect_unlocked()
             vla_active = True
             vla_instruction = instruction
+            vla_start_time = time.time()
             cmd = [
                 UV_BIN, "run", "python",
                 os.path.join(CLIENT_DIR, "client_pi.py"),
@@ -222,16 +234,18 @@ class Handler(BaseHTTPRequestHandler):
                 "--prompt", instruction,
             ]
             vla_process = subprocess.Popen(cmd, cwd=CLIENT_DIR)
-            print(f"[Sidecar] 🤖 VLA started: '{instruction}' | host={host}:{server_port} | PID={vla_process.pid}", flush=True)
+            print(f"[Sidecar/VLA] Subprocess spawned: PID={vla_process.pid}", flush=True)
             self._json({"ok": True, "pid": vla_process.pid})
         elif self.path == "/vla/stop":
+            elapsed = time.time() - vla_start_time if vla_start_time else 0
             if vla_process and vla_process.poll() is None:
                 vla_process.terminate()
                 try: vla_process.wait(timeout=5)
                 except subprocess.TimeoutExpired: vla_process.kill()
             vla_process = None
             vla_active = False
-            print("[Sidecar] 🛑 VLA stopped", flush=True)
+            vla_start_time = 0.0
+            print(f"[Sidecar/VLA] Stopped (ran for {elapsed:.1f}s)", flush=True)
             self._json({"ok": True})
         else:
             self.send_error(404)
