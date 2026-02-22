@@ -8,7 +8,7 @@ generator client {
 datasource db {
   // PostgreSQL for production/Kubernetes deployments
   // For local SQLite: provider = "sqlite", DATABASE_URL = "file:./dev.db"
-  // For PostgreSQL:   provider = "postgresql", DATABASE_URL = "postgresql://user:pass@host:5432/db"
+  // For PostgreSQL:   provider = "sqlite", DATABASE_URL = "postgresql://user:pass@host:5432/db"
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }

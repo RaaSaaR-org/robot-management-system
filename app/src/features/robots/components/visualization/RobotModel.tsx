@@ -24,6 +24,30 @@ export interface RobotModelProps {
 }
 
 // ============================================================================
+// PER-JOINT CORRECTION CONFIG (empirical calibration)
+// ============================================================================
+
+/**
+ * Fine-tune the mapping from LeRobot degrees → URDF radians.
+ * sign: +1 (same direction) or -1 (invert).
+ * offset_deg: add to LeRobot degrees before conversion (e.g. if URDF zero ≠ LeRobot zero).
+ * These are determined empirically by moving one joint at a time and comparing.
+ */
+const SO101_JOINT_CORRECTIONS: Record<string, { sign: number; offset_deg: number; range_deg: number }> = {
+  // range_deg: physical half-range in LeRobot degrees (from calibration: (range_max-range_min)/4095*180)
+  // shoulder_lift: sign=-1 because LeRobot+max=arm-up, URDF-min=arm-up
+  shoulder_pan:  { sign:  1, offset_deg:  0,     range_deg: 100.1 }, // (3323-1046)/4095*180
+  shoulder_lift: { sign: -1, offset_deg:  0,     range_deg: 180   },
+  elbow_flex:    { sign: -1, offset_deg:  0,     range_deg: 270   },
+  wrist_flex:    { sign: -1, offset_deg:  0,     range_deg:  45   },
+  wrist_roll:    { sign:  1, offset_deg: 90,     range_deg: 180   },
+  // Gripper: physical closed at LeRobot≈0° (confirmed by Sebastian at folded pose)
+  // URDF lower (-10°)=closed, upper (+100°)=open
+  // offset=-65 shifts so that LeRobot 0° → URDF lower (closed); opens toward +64.7°
+  gripper:       { sign:  1, offset_deg: -65,    range_deg: 64.7  },
+};
+
+// ============================================================================
 // URDF MODEL PATHS
 // ============================================================================
 
@@ -123,10 +147,24 @@ function URDFModel({
     if (!robot || !jointStates) return;
 
     jointStates.forEach(({ name, position }) => {
-      // Try exact match first
-      if (robot.joints[name]) {
-        robot.setJointValue(name, position);
-      }
+      // LeRobot reports degrees in range [-180, +180] based on motor encoder.
+      // The URDF defines physical limits [lower, upper] in radians.
+      // Mapping: LeRobot ±180° → URDF [lower, upper] with per-joint corrections.
+      const joint = robot.joints[name];
+      if (!joint) return;
+
+      const correction = SO101_JOINT_CORRECTIONS[name] ?? { sign: 1, offset_deg: 0, range_deg: 180 };
+      const corrected = correction.sign * (position + correction.offset_deg);
+
+      const lower = joint.limit?.lower ?? -Math.PI;
+      const upper = joint.limit?.upper ?? Math.PI;
+      const mid = (lower + upper) / 2;
+      const halfRange = (upper - lower) / 2;
+      // Normalize using the physical half-range from LeRobot calibration
+      const normalized = Math.max(-1, Math.min(1, corrected / correction.range_deg));
+      const radians = mid + normalized * halfRange;
+
+      robot.setJointValue(name, radians);
     });
   }, [robot, jointStates]);
 

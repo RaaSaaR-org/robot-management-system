@@ -18,6 +18,7 @@ import type {
 import { generateTelemetry } from './telemetry.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
+import { hardwareClient } from '../hardware/HardwareClient.js';
 import { SimulationEngine } from './SimulationEngine.js';
 import { TaskQueue } from './TaskQueue.js';
 import {
@@ -207,7 +208,16 @@ export class RobotStateManager {
   }
 
   getTelemetry(): RobotTelemetry {
-    return generateTelemetry(this.state);
+    const telemetry = generateTelemetry(this.state);
+    // Always prefer real joint states over simulated defaults.
+    // Even if the sidecar is temporarily unreachable, keep showing the last known
+    // real pose instead of snapping back to simulated defaults (avoids confusion).
+    const realJoints = hardwareClient.getJointStates();
+    if (realJoints.length > 0) {
+      telemetry.jointStates = realJoints;
+      (telemetry as unknown as Record<string, unknown>).hardwareConnected = hardwareClient.isConnected();
+    }
+    return telemetry;
   }
 
   getCommandHistory(): RobotCommand[] {
@@ -288,6 +298,8 @@ export class RobotStateManager {
 
   startSimulation(): void {
     this.simulation.start();
+    // Try to connect to real hardware sidecar (non-blocking)
+    void hardwareClient.init();
   }
 
   stopSimulation(): void {
