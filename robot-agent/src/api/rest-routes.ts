@@ -131,11 +131,13 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
   // GET /health - Health check endpoint
   router.get('/health', (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
+    const telemetry = robotStateManager.getTelemetry();
     res.json({
       status: 'healthy',
       robotId: robot.id,
       robotStatus: robot.status,
-      batteryLevel: robot.batteryLevel,
+      batteryLevel: telemetry.batteryLevel,
+      powerSource: telemetry.powerSource,
       timestamp: new Date().toISOString(),
     });
   });
