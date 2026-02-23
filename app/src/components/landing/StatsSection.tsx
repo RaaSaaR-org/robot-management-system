@@ -1,23 +1,23 @@
 const stats = [
   {
-    value: '10,000+',
-    label: 'Robots Managed',
-    description: 'Across home and enterprise deployments',
+    value: 'MIT',
+    label: 'Open Source',
+    description: 'Fully open-source under MIT License',
   },
   {
-    value: '99.9%',
-    label: 'Uptime',
-    description: 'Enterprise-grade reliability',
+    value: 'A2A',
+    label: 'Protocol',
+    description: 'Agent-to-Agent fleet communication',
   },
   {
-    value: '98.5%',
-    label: 'Task Completion',
-    description: 'Successfully executed commands',
+    value: '3+',
+    label: 'VLA Models',
+    description: 'pi0, OpenVLA, GR00T supported',
   },
   {
-    value: '<100ms',
-    label: 'E-Stop Response',
-    description: 'Instant emergency halt capability',
+    value: 'EU AI Act',
+    label: 'Compliant',
+    description: 'Built-in audit logging and explainability',
   },
 ];
 

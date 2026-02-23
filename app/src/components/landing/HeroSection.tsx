@@ -43,7 +43,7 @@ export function HeroSection() {
             {/* Trust badges */}
             <div className="mt-10 flex flex-wrap gap-3 justify-center lg:justify-start">
               <a
-                href="https://github.com/robomindos"
+                href="https://github.com/RaaSaaR-org/robot-management-system"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 px-4 py-2 rounded-full bg-theme-card border border-theme hover:border-theme-hover transition-colors"

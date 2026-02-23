@@ -1,12 +1,15 @@
-# NeoDEM: RoboMindOS
+# NeoDEM — Robot Fleet Management Platform
 
 <div align="center">
 
-**Neo-Deus Ex Machina** — The "One" System for the Divine Machine
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-green?logo=node.js)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-![NeoDEM Logo](neodem.png)
-
-_A fleet management platform for humanoid robots with Vision-Language-Action (VLA) model training, deployment, and EU AI Act compliance._
+A2A-protocol fleet management for humanoid robots — with VLA model training,
+EU AI Act compliance, and natural language control.
 
 [Getting Started](#quick-start) | [Documentation](#documentation) | [Architecture](#architecture) | [Contributing](#contributing)
 
@@ -14,31 +17,9 @@ _A fleet management platform for humanoid robots with Vision-Language-Action (VL
 
 ---
 
-## The NeoDEM Philosophy
+## What is NeoDEM?
 
-**NeoDEM** is the convergence of "The One" and the "Divine Machine" — the architectural bridge between raw hardware and sentient-like autonomy.
-
-| Concept | Origin                          | Meaning                                                                                                                    |
-| ------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Neo** | Greek _neos_ (New) + The Matrix | The "Chosen One" system — a singular, unified intelligence breaking the fleet free from hard-coded logic                   |
-| **DEM** | Deus Ex Machina                 | "God from the Machine" — the VLA model that emerges from silicon to solve high-dimensional challenges of humanoid movement |
-
-> _"I know Kung Fu."_
->
-> Just as Neo downloaded skills directly into his consciousness, **NeoDEM** allows operators to upload complex Vision-Language-Action behaviors across an entire fleet instantly. We aren't just managing robots — we are overseeing the awakening of the machine.
-
-While the Matrix was a simulation to control, **NeoDEM** is a framework to _empower_. With EU AI Act compliance and explainable AI built-in, we ensure that as the machine awakens, it remains transparent, safe, and aligned with human intent.
-
----
-
-## Overview
-
-NeoDEM enables operators to manage, monitor, and control humanoid robot fleets through an intuitive interface:
-
-- **Natural Language Commands** — Control robots with instructions like "Pick up the red cup"
-- **VLA Model Training** — Fine-tune vision-language-action models on your robot's data
-- **Fleet-Wide Deployment** — Train once, deploy skills across your entire fleet
-- **EU AI Act Compliance** — Built-in audit logging, explainability, and documentation
+NeoDEM is an open-source platform for managing fleets of autonomous robots. It connects a React/Tauri dashboard, a Node.js server, and AI-powered robot agents via the A2A (Agent-to-Agent) protocol — enabling operators to issue natural language commands, train and deploy Vision-Language-Action models, and maintain full EU AI Act compliance. Whether you're running a single robot arm or a warehouse full of humanoids, NeoDEM gives you one unified interface to monitor, control, and improve your fleet.
 
 ---
 
@@ -172,6 +153,16 @@ make run
 
 ---
 
+## Screenshots
+
+![Dashboard](docs/screenshots/dashboard.png)
+*Fleet dashboard with real-time robot status, telemetry, and task management.*
+
+![VLA Training](docs/screenshots/vla-training.png)
+*VLA model training interface with dataset management and experiment tracking.*
+
+---
+
 ## VLA Models
 
 NeoDEM supports multiple Vision-Language-Action model architectures:
@@ -273,14 +264,6 @@ neodem/
 | Robot Agent   | `npm run dev` | `npm run build` | `npm run typecheck` |
 | VLA Inference | `make run`    | `docker build`  | `mypy`              |
 
-### Task Management
-
-```bash
-npx task-master list     # List all tasks
-npx task-master next     # Get next task
-npx task-master show 1   # Show task details
-```
-
 ---
 
 ## Documentation
@@ -297,17 +280,34 @@ npx task-master show 1   # Show task details
 
 ## Contributing
 
-1. Check `.taskmaster/tasks/tasks.json` for open tasks
-2. Read the relevant `AGENTS.md` for the component you're working on
-3. Follow the code style guidelines
-4. Submit a PR with a clear description
+We welcome contributions of all kinds! Here's how to get started:
+
+1. **Fork the repository** and clone it locally
+2. **Pick an issue** — look for [`good first issue`](https://github.com/RaaSaaR-org/robot-management-system/labels/good%20first%20issue) labels
+3. **Read the relevant `AGENTS.md`** for the component you're working on (`app/`, `server/`, or `robot-agent/`)
+4. **Create a feature branch** from `main`
+5. **Follow the code style** — TypeScript strict mode, named exports, JSDoc headers
+6. **Submit a PR** with a clear description of what changed and why
+
+### Development Setup
+
+```bash
+git clone https://github.com/RaaSaaR-org/robot-management-system.git
+cd robot-management-system
+```
+
+Then follow the [Quick Start](#quick-start) instructions above.
+
+### Code of Conduct
+
+Please be respectful and constructive in all interactions. We are committed to providing a welcoming and inclusive experience for everyone.
 
 ---
 
 <div align="center">
 
-**NeoDEM** — _Overseeing the Awakening of the Machine_
+**NeoDEM** — Open-source fleet management for autonomous robots
 
-MIT License
+MIT License | Copyright (c) 2025 NeoDEM Contributors
 
 </div>
