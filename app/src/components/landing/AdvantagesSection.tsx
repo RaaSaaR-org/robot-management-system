@@ -1,6 +1,6 @@
 /**
  * @file AdvantagesSection.tsx
- * @description Section highlighting competitive advantages of RoboMindOS
+ * @description Section highlighting competitive advantages of NeoDEM
  * @feature landing
  */
 
@@ -84,14 +84,13 @@ export function AdvantagesSection() {
         {/* Section Header */}
         <div className="text-center mb-16">
           <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
-            Why RoboMindOS
+            Why NeoDEM
           </p>
           <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
             Built for the Future of Robotics
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            The only platform that combines regulatory compliance, advanced AI training, and
-            enterprise scalability — all in one open source solution.
+            The only open-source platform that combines regulatory compliance, VLA model training, and fleet-wide deployment.
           </p>
         </div>
 
