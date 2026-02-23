@@ -34,7 +34,7 @@ export function StatsSection() {
               <div className="text-theme-primary font-semibold mb-1">
                 {stat.label}
               </div>
-              <div className="text-theme-muted text-sm">
+              <div className="text-theme-muted text-xs sm:text-sm">
                 {stat.description}
               </div>
             </div>

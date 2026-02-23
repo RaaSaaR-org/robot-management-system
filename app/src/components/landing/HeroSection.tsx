@@ -73,8 +73,8 @@ export function HeroSection() {
           </div>
 
           {/* Hero Visual - Fleet of Autonomous Devices */}
-          <div className="relative">
-            <div className="aspect-square max-w-lg mx-auto relative">
+          <div className="relative mt-8 lg:mt-0">
+            <div className="aspect-square max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg mx-auto relative">
               {/* Connection lines and data flow (SVG) */}
               <svg className="absolute inset-0 w-full h-full" viewBox="0 0 400 400">
                 <defs>
