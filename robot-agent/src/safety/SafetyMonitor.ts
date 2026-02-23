@@ -128,7 +128,7 @@ export class SafetyMonitor {
   private operatingMode: OperatingMode = 'automatic';
 
   // Server connection tracking
-  private serverConnected = true;
+  private serverConnected = false; // Start false — only true after first heartbeat from server
   private lastServerHeartbeat: number = Date.now();
 
   // Force filter
