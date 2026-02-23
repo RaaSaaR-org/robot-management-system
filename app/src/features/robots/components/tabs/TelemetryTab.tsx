@@ -72,13 +72,16 @@ export function TelemetryTab({
                   voltage={telemetry.batteryVoltage}
                   temperature={telemetry.batteryTemperature}
                   charging={robot?.status === 'charging'}
+                  powerSource={telemetry.powerSource}
                   size="lg"
                   showDetails
                 />
                 <div className="flex-1">
-                  <div className="text-sm text-theme-secondary mb-1">Battery Status</div>
+                  <div className="text-sm text-theme-secondary mb-1">Power Status</div>
                   <div className="text-lg font-semibold text-theme-primary">
-                    {telemetry.batteryLevel.toFixed(0)}%
+                    {telemetry.batteryLevel === null || telemetry.powerSource === 'ac_powered'
+                      ? 'AC Powered'
+                      : `${telemetry.batteryLevel.toFixed(0)}%`}
                   </div>
                 </div>
               </div>

@@ -4,7 +4,7 @@ aliases:
 - TASK-067
 title: LeRobot Export Implementation
 slug: lerobot-export-implementation
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -18,8 +18,9 @@ depends_on:
 - "[[TASK-066]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-23
 ---
+
 
 
 
@@ -30,3 +31,4 @@ Replace the stub exportToLeRobot() implementation with full Parquet conversion, 
 
 ## Notes
 Migrated from task-master TM-62. Status: pending.
+%% mc-links: [[TASK-057]] [[TASK-066]] %%

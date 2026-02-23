@@ -147,8 +147,8 @@ export function RobotMarker({ robot, position, isSelected, onClick }: RobotMarke
         {robot.name.length > 10 ? `${robot.name.substring(0, 10)}...` : robot.name}
       </text>
 
-      {/* Battery indicator for low battery */}
-      {robot.batteryLevel < 20 && (
+      {/* Battery indicator for low battery (skip for AC-powered) */}
+      {robot.metadata?.powerSource !== 'ac_powered' && robot.batteryLevel < 20 && (
         <g transform="translate(10, -14)">
           {/* Glow background */}
           <circle cx="6" cy="4" r="10" fill="#ef444430" style={{ filter: 'blur(3px)' }} />

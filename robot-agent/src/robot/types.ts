@@ -93,14 +93,15 @@ export interface Robot {
 export interface RobotTelemetry {
   robotId: string;
   robotType?: RobotType;
-  batteryLevel: number;
-  batteryVoltage?: number;
-  batteryTemperature?: number;
+  batteryLevel: number | null;        // null = no battery / AC-powered
+  batteryVoltage?: number | null;
+  batteryTemperature?: number | null;
+  powerSource?: 'battery' | 'ac_powered';
   cpuUsage: number;
   memoryUsage: number;
   diskUsage?: number;
   temperature: number;
-  humidity?: number;
+  humidity?: number | null;            // null = no humidity sensor
   speed?: number;
   sensors: Record<string, number | boolean | string>;
   jointStates?: JointState[];
@@ -193,6 +194,7 @@ export interface RobotConfig {
   description: string;
   initialLocation: RobotLocation;
   capabilities: string[];
+  powerSource?: 'battery' | 'ac_powered';
 }
 
 export interface CommandResult {

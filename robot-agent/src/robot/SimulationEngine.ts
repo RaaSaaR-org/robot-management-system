@@ -295,6 +295,10 @@ export class SimulationEngine {
    */
   private drainBattery(deltaTime: number): boolean {
     const state = this.stateGetter();
+
+    // SO-101 is AC-powered — no battery drain
+    if (state.robotType === 'so101') return false;
+
     const drainRate =
       state.status === 'busy'
         ? this.config.batteryDrainPerSecond * 2

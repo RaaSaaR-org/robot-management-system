@@ -115,6 +115,8 @@ export interface RobotMapMarker {
   floor: string;
   /** Current zone name */
   zone?: string;
+  /** Robot metadata (power source, etc.) */
+  metadata?: Record<string, unknown>;
 }
 
 // ============================================================================

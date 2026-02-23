@@ -4,7 +4,7 @@ aliases:
 - TASK-066
 title: Teleoperation Robot Agent Modules
 slug: teleoperation-robot-agent-modules
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -16,8 +16,9 @@ depends_on:
 - "[[TASK-057]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-23
 ---
+
 
 
 
@@ -28,3 +29,4 @@ Implement teleoperation modules on robot-agent for receiving teleop commands, re
 
 ## Notes
 Migrated from task-master TM-61. Status: pending.
+%% mc-links: [[TASK-057]] %%

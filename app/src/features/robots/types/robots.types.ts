@@ -97,14 +97,15 @@ export interface Robot {
 export interface RobotTelemetry {
   robotId: string;
   robotType?: RobotType;
-  batteryLevel: number;
-  batteryVoltage?: number;
-  batteryTemperature?: number;
+  batteryLevel: number | null;        // null = no battery / AC-powered
+  batteryVoltage?: number | null;
+  batteryTemperature?: number | null;
+  powerSource?: 'battery' | 'ac_powered';
   cpuUsage: number;
   memoryUsage: number;
   diskUsage?: number;
   temperature: number;
-  humidity?: number;
+  humidity?: number | null;            // null = no humidity sensor
   speed?: number;
   sensors: Record<string, number | boolean | string>;
   jointStates?: JointState[];
@@ -354,9 +355,10 @@ export function robotNeedsAttention(robot: Robot): boolean {
 }
 
 /**
- * Get battery level category
+ * Get battery level category. Returns null for AC-powered robots (no battery).
  */
-export function getBatteryCategory(level: number): 'critical' | 'low' | 'medium' | 'high' | 'full' {
+export function getBatteryCategory(level: number | null): 'critical' | 'low' | 'medium' | 'high' | 'full' | null {
+  if (level === null) return null;
   if (level <= 10) return 'critical';
   if (level <= 25) return 'low';
   if (level <= 50) return 'medium';

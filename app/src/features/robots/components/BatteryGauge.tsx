@@ -12,14 +12,16 @@ import { cn } from '@/shared/utils/cn';
 // ============================================================================
 
 export interface BatteryGaugeProps {
-  /** Battery level 0-100 */
-  level: number;
+  /** Battery level 0-100, or null for AC-powered (no battery) */
+  level: number | null;
   /** Battery voltage (optional) */
-  voltage?: number;
+  voltage?: number | null;
   /** Battery temperature in Celsius (optional) */
-  temperature?: number;
+  temperature?: number | null;
   /** Whether the battery is charging */
   charging?: boolean;
+  /** Power source type */
+  powerSource?: 'battery' | 'ac_powered';
   /** Size variant */
   size?: 'sm' | 'md' | 'lg';
   /** Show detailed metrics below gauge */
@@ -102,15 +104,51 @@ export function BatteryGauge({
   voltage,
   temperature,
   charging = false,
+  powerSource,
   size = 'md',
   showDetails = false,
   showPercentage = true,
   className,
 }: BatteryGaugeProps) {
+  const sizeConfig = SIZE_CONFIG[size];
+  const isAcPowered = level === null || powerSource === 'ac_powered';
+
+  // AC-powered: show plug icon instead of battery gauge
+  if (isAcPowered) {
+    return (
+      <div className={cn('inline-flex flex-col items-center', className)}>
+        <div className="flex items-center gap-1.5">
+          <svg
+            className={cn(
+              'text-green-500',
+              size === 'sm' ? 'h-5 w-5' : size === 'md' ? 'h-7 w-7' : 'h-10 w-10'
+            )}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+            aria-label="AC Powered"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          {showPercentage && (
+            <span className={cn('font-medium text-green-500', sizeConfig.text)}>
+              AC
+            </span>
+          )}
+        </div>
+        {showDetails && (
+          <div className={cn('mt-1', sizeConfig.text)}>
+            <span className="text-theme-secondary">AC Powered</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const clampedLevel = Math.max(0, Math.min(100, level));
   const state = getBatteryState(clampedLevel);
   const colors = BATTERY_COLORS[state];
-  const sizeConfig = SIZE_CONFIG[size];
 
   return (
     <div className={cn('inline-flex flex-col items-center', className)}>
@@ -187,7 +225,7 @@ export function BatteryGauge({
       {/* Details Section */}
       {showDetails && (
         <div className={cn('flex items-center mt-2', sizeConfig.details)}>
-          {voltage !== undefined && (
+          {voltage != null && (
             <div className="flex items-center gap-1 text-theme-secondary">
               <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -195,7 +233,7 @@ export function BatteryGauge({
               <span>{voltage.toFixed(1)}V</span>
             </div>
           )}
-          {temperature !== undefined && (
+          {temperature != null && (
             <div className="flex items-center gap-1 text-theme-secondary">
               <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
@@ -224,12 +262,27 @@ export function BatteryGauge({
 export function BatteryIndicator({
   level,
   charging = false,
+  powerSource,
   className,
 }: {
-  level: number;
+  level: number | null;
   charging?: boolean;
+  powerSource?: 'battery' | 'ac_powered';
   className?: string;
 }) {
+  const isAcPowered = level === null || powerSource === 'ac_powered';
+
+  if (isAcPowered) {
+    return (
+      <div className={cn('inline-flex items-center gap-1.5', className)}>
+        <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span className="text-sm font-medium text-green-500">AC</span>
+      </div>
+    );
+  }
+
   const state = getBatteryState(level);
   const colors = BATTERY_COLORS[state];
 

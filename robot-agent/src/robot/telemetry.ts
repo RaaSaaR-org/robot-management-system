@@ -3,12 +3,46 @@
  * @description Telemetry and alert generation utilities
  */
 
+import os from 'os';
+import { readFileSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import type { RobotTelemetry, SimulatedRobotState, RobotAlert, AlertSeverity, JointState, RobotType } from './types.js';
 import { getJointConfig } from './joint-configs/index.js';
 
 // Simulation time counter for joint animations
 let simulationTime = 0;
+
+// ============================================================================
+// REAL SYSTEM DATA HELPERS
+// ============================================================================
+
+/** Read Raspberry Pi CPU temperature in °C */
+function getPiTemperature(): number {
+  try {
+    const raw = readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8');
+    return parseFloat(raw.trim()) / 1000;
+  } catch {
+    return 35 + Math.random() * 5; // fallback if not on Pi
+  }
+}
+
+/** Real CPU usage % from os.loadavg (1-minute average) */
+function getRealCpuUsage(): number {
+  const cpuCount = os.cpus().length;
+  const loadAvg = os.loadavg()[0];
+  return Math.min(100, Math.round((loadAvg / cpuCount) * 100 * 10) / 10);
+}
+
+/** Real memory usage % */
+function getRealMemoryUsage(): number {
+  const total = os.totalmem();
+  const free = os.freemem();
+  return Math.round(((total - free) / total) * 100 * 10) / 10;
+}
+
+// ============================================================================
+// TELEMETRY GENERATION
+// ============================================================================
 
 /**
  * Generate telemetry data from robot state
@@ -17,17 +51,23 @@ export function generateTelemetry(state: SimulatedRobotState): RobotTelemetry {
   // Increment simulation time for smooth animations
   simulationTime += 0.1;
 
+  const isSO101 = state.robotType === 'so101';
+  const piTemp = getPiTemperature();
+
   return {
     robotId: state.id,
     robotType: state.robotType,
-    batteryLevel: Math.round(state.batteryLevel),
-    batteryVoltage: 48.0 + (state.batteryLevel / 100) * 4,
-    batteryTemperature: 25 + Math.random() * 5,
-    cpuUsage: 15 + Math.random() * 20,
-    memoryUsage: 40 + Math.random() * 15,
+    // SO-101 has no battery — null signals "AC-powered"
+    batteryLevel: isSO101 ? null : Math.round(state.batteryLevel),
+    batteryVoltage: isSO101 ? null : 48.0 + (state.batteryLevel / 100) * 4,
+    batteryTemperature: isSO101 ? null : 25 + Math.random() * 5,
+    powerSource: isSO101 ? 'ac_powered' : 'battery',
+    // Real system data
+    cpuUsage: getRealCpuUsage(),
+    memoryUsage: getRealMemoryUsage(),
     diskUsage: 35,
-    temperature: 35 + Math.random() * 10,
-    humidity: 45 + Math.random() * 10,
+    temperature: piTemp,
+    humidity: isSO101 ? null : 45 + Math.random() * 10, // SO-101 has no humidity sensor
     speed: state.speed,
     sensors: generateSensorData(state),
     jointStates: generateJointStates(state.robotType, state, simulationTime),
@@ -236,9 +276,21 @@ function simulateSO101Joint(jointName: string, time: number, isMoving: boolean, 
 }
 
 /**
- * Generate simulated sensor data
+ * Generate simulated sensor data (SO-101 only has gripper/arm — no sonars, bumpers, IMU)
  */
 function generateSensorData(state: SimulatedRobotState): Record<string, number | boolean | string> {
+  const isSO101 = state.robotType === 'so101';
+
+  if (isSO101) {
+    // SO-101: only arm/gripper sensors — no sonars, bumpers, IMU, wheel motors
+    return {
+      gripperClosed: !!state.heldObject,
+      gripperForce: state.heldObject ? 5.0 + Math.random() * 2 : 0,
+      armPosition: state.heldObject ? 'holding' : 'idle',
+    };
+  }
+
+  // Generic/H1/G1: full sensor simulation
   const isMoving = state.status === 'busy' && state.speed > 0;
 
   return {
@@ -338,8 +390,8 @@ function createAlert(
 export function generateAlerts(state: SimulatedRobotState): RobotAlert[] {
   const alerts: RobotAlert[] = [];
 
-  // Battery alerts
-  if (state.batteryLevel < 5) {
+  // Battery alerts (skip for SO-101 — no battery, AC-powered)
+  if (state.robotType !== 'so101' && state.batteryLevel < 5) {
     const key = getAlertKey('critical', 'Critical Battery Level', state.id);
     if (!emittedAlerts.has(key)) {
       alerts.push(
@@ -352,7 +404,7 @@ export function generateAlerts(state: SimulatedRobotState): RobotAlert[] {
       );
       emittedAlerts.add(key);
     }
-  } else if (state.batteryLevel < 20) {
+  } else if (state.robotType !== 'so101' && state.batteryLevel < 20) {
     const key = getAlertKey('warning', 'Low Battery', state.id);
     if (!emittedAlerts.has(key)) {
       alerts.push(

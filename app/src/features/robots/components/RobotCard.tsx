@@ -32,7 +32,7 @@ export interface RobotCardProps {
 // ============================================================================
 
 function BatteryIcon({ level, className }: { level: number; className?: string }) {
-  const category = getBatteryCategory(level);
+  const category = getBatteryCategory(level) ?? 'full';
   const fillWidth = Math.max(0, Math.min(100, level));
 
   const colorClass = {
@@ -95,7 +95,8 @@ export function RobotCard({
   compact = false,
   className,
 }: RobotCardProps) {
-  const batteryCategory = getBatteryCategory(robot.batteryLevel);
+  const isAcPowered = robot.metadata?.powerSource === 'ac_powered';
+  const batteryCategory = isAcPowered ? null : getBatteryCategory(robot.batteryLevel);
   const needsAttention = robot.status === 'error' || batteryCategory === 'critical';
 
   return (
@@ -163,17 +164,28 @@ export function RobotCard({
           <div className="flex items-center justify-between">
             {/* Battery indicator */}
             <div className="flex items-center gap-2">
-              <BatteryIcon level={robot.batteryLevel} className="h-4 w-4" />
-              <span
-                className={cn(
-                  'text-sm font-medium',
-                  batteryCategory === 'critical' && 'text-red-400',
-                  batteryCategory === 'low' && 'text-orange-400',
-                  batteryCategory !== 'critical' && batteryCategory !== 'low' && 'text-theme-secondary'
-                )}
-              >
-                {robot.batteryLevel}%
-              </span>
+              {isAcPowered ? (
+                <>
+                  <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span className="text-sm font-medium text-green-500">AC</span>
+                </>
+              ) : (
+                <>
+                  <BatteryIcon level={robot.batteryLevel} className="h-4 w-4" />
+                  <span
+                    className={cn(
+                      'text-sm font-medium',
+                      batteryCategory === 'critical' && 'text-red-400',
+                      batteryCategory === 'low' && 'text-orange-400',
+                      batteryCategory !== 'critical' && batteryCategory !== 'low' && 'text-theme-secondary'
+                    )}
+                  >
+                    {robot.batteryLevel}%
+                  </span>
+                </>
+              )}
             </div>
 
             {/* Location */}
@@ -198,8 +210,19 @@ export function RobotCard({
       {compact && (
         <div className="flex items-center gap-4 ml-auto">
           <div className="flex items-center gap-1.5">
-            <BatteryIcon level={robot.batteryLevel} className="h-4 w-4" />
-            <span className="card-meta">{robot.batteryLevel}%</span>
+            {isAcPowered ? (
+              <>
+                <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span className="card-meta text-green-500">AC</span>
+              </>
+            ) : (
+              <>
+                <BatteryIcon level={robot.batteryLevel} className="h-4 w-4" />
+                <span className="card-meta">{robot.batteryLevel}%</span>
+              </>
+            )}
           </div>
           <span className="card-meta">{formatRobotLocation(robot.location)}</span>
         </div>

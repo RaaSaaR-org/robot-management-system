@@ -103,6 +103,8 @@ interface HexagonalDataHUDProps {
   status: RobotStatus;
   telemetry?: RobotTelemetry | null;
   batteryLevel: number;
+  /** Whether the robot is AC-powered (no battery) */
+  isAcPowered?: boolean;
   /** Whether the robot is offline (affects data display) */
   isOffline?: boolean;
   className?: string;
@@ -137,6 +139,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
   status,
   telemetry,
   batteryLevel,
+  isAcPowered = false,
   isOffline = false,
   className
 }: HexagonalDataHUDProps) {
@@ -160,7 +163,9 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
   const memory = showUnavailable ? null : (telemetry?.memoryUsage ?? 0);
   const temp = showUnavailable ? null : (telemetry?.temperature ?? 0);
   const speed = telemetry?.speed;
-  const battery = telemetry?.batteryLevel ?? batteryLevel;
+  const batteryRaw = telemetry?.batteryLevel ?? batteryLevel;
+  const battery = batteryRaw ?? 0;
+  const showAcPowered = isAcPowered || telemetry?.powerSource === 'ac_powered' || batteryRaw === null;
 
   return (
     <svg
@@ -368,7 +373,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
         cx={cx}
         cy={cy}
         r={coreR}
-        stroke={getValueColor(battery, 'battery')}
+        stroke={showAcPowered ? '#22c55e' : getValueColor(battery, 'battery')}
         strokeWidth="2"
         fill={colors.glow}
         filter="url(#coreGlow)"
@@ -377,30 +382,61 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
         }}
       />
 
-      {/* Battery value in center */}
-      <text
-        x={cx}
-        y={cy - 4}
-        textAnchor="middle"
-        fill={getValueColor(battery, 'battery')}
-        fontSize="18"
-        fontFamily="monospace"
-        fontWeight="700"
-      >
-        {battery.toFixed(0)}%
-      </text>
-      <text
-        x={cx}
-        y={cy + 12}
-        textAnchor="middle"
-        fill="rgba(255,255,255,0.6)"
-        fontSize="8"
-        fontFamily="monospace"
-        fontWeight="500"
-        letterSpacing="1"
-      >
-        BATTERY
-      </text>
+      {/* Battery/Power value in center */}
+      {showAcPowered ? (
+        <>
+          {/* Lightning bolt for AC */}
+          <text
+            x={cx}
+            y={cy - 2}
+            textAnchor="middle"
+            fill="#22c55e"
+            fontSize="20"
+            fontFamily="monospace"
+            fontWeight="700"
+          >
+            &#x26A1;
+          </text>
+          <text
+            x={cx}
+            y={cy + 14}
+            textAnchor="middle"
+            fill="rgba(255,255,255,0.6)"
+            fontSize="7"
+            fontFamily="monospace"
+            fontWeight="500"
+            letterSpacing="1"
+          >
+            AC POWER
+          </text>
+        </>
+      ) : (
+        <>
+          <text
+            x={cx}
+            y={cy - 4}
+            textAnchor="middle"
+            fill={getValueColor(battery, 'battery')}
+            fontSize="18"
+            fontFamily="monospace"
+            fontWeight="700"
+          >
+            {battery.toFixed(0)}%
+          </text>
+          <text
+            x={cx}
+            y={cy + 12}
+            textAnchor="middle"
+            fill="rgba(255,255,255,0.6)"
+            fontSize="8"
+            fontFamily="monospace"
+            fontWeight="500"
+            letterSpacing="1"
+          >
+            BATTERY
+          </text>
+        </>
+      )}
 
       {/* Corner tech brackets */}
       <path d="M 20 40 L 20 20 L 40 20" stroke="url(#hexGradient)" strokeWidth="2" fill="none" opacity="0.6" />
@@ -606,6 +642,7 @@ export const RobotHeroSection = memo(function RobotHeroSection({
                 status={robot.status}
                 telemetry={telemetry}
                 batteryLevel={robot.batteryLevel}
+                isAcPowered={robot.metadata?.powerSource === 'ac_powered'}
                 isOffline={robot.status === 'offline'}
                 className="h-[300px] w-[300px]"
               />
