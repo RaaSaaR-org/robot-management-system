@@ -29,6 +29,13 @@ import {
 // TYPES
 // ============================================================================
 
+/** 3D grip point for pickup/drop commands */
+export interface GripPoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface UseSimulationReturn {
   /** Full simulation state */
   simulation: SimulationState;
@@ -40,6 +47,8 @@ export interface UseSimulationReturn {
   canvasDestination: SimulationPoint | null;
   /** Canvas-transformed obstacles */
   canvasObstacles: SimulationObstacle[];
+  /** Grip point for pickup/drop commands (last path point) */
+  gripPoint: GripPoint | undefined;
 }
 
 // ============================================================================
@@ -173,6 +182,19 @@ export function useSimulation(
     );
   }, [canvasRobotPosition, canvasDestination, canvasObstacles, speed]);
 
+  // Compute grip point for pickup/drop commands
+  const gripPoint: GripPoint | undefined = useMemo(() => {
+    const cmdType = interpretation?.commandType;
+    if (cmdType !== 'pickup' && cmdType !== 'drop') return undefined;
+    if (!canvasDestination) return undefined;
+
+    return {
+      x: canvasDestination.x,
+      y: canvasDestination.y,
+      z: 0,
+    };
+  }, [interpretation?.commandType, canvasDestination]);
+
   // Build full simulation state
   const simulation: SimulationState = useMemo(
     () => ({
@@ -193,5 +215,6 @@ export function useSimulation(
     canvasRobotPosition,
     canvasDestination,
     canvasObstacles,
+    gripPoint,
   };
 }

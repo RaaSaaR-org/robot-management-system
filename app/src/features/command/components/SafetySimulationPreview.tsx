@@ -5,7 +5,9 @@
  * @dependencies @/shared/utils/cn, @/features/command/types, @/features/command/utils
  */
 
+import { useState } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { SafetySimulation3D } from './SafetySimulation3D';
 import type {
   SimulationPoint,
   SimulationObstacle,
@@ -39,6 +41,8 @@ export interface SafetySimulationPreviewProps {
   speed?: number;
   /** Whether the simulation is visible */
   isVisible: boolean;
+  /** Command type for grip point visualization in 3D */
+  commandType?: string;
   /** Additional class names */
   className?: string;
 }
@@ -447,12 +451,15 @@ export function SafetySimulationPreview({
   safetyClassification,
   speed = DEFAULT_ROBOT_SPEED,
   isVisible,
+  commandType,
   className,
 }: SafetySimulationPreviewProps) {
+  const [use3D, setUse3D] = useState(false);
+
   // Don't render if no destination or not visible
   if (!destination || !isVisible) return null;
 
-  // Generate path data
+  // Generate path data (for 2D mode)
   const simulationPath = generateSimulationPath(robotPosition, destination, obstacles, speed);
 
   return (
@@ -469,8 +476,22 @@ export function SafetySimulationPreview({
           </div>
           <span className="text-theme-secondary text-sm font-mono">Safety Preview Active</span>
         </div>
-        {/* Animated countdown */}
+        {/* Right side: toggle + countdown */}
         <div className="flex items-center gap-3">
+          {/* 2D/3D Toggle */}
+          <button
+            type="button"
+            onClick={() => setUse3D((prev) => !prev)}
+            className={cn(
+              'px-2.5 py-1 rounded text-xs font-mono border transition-colors',
+              use3D
+                ? 'bg-cobalt/20 border-cobalt/40 text-cobalt-300'
+                : 'bg-surface-700 border-theme text-theme-tertiary hover:text-theme-secondary'
+            )}
+          >
+            {use3D ? '3D' : '2D'}
+          </button>
+          {/* Animated countdown */}
           <div className="w-24 h-1.5 bg-surface-700 rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-turquoise to-cobalt rounded-full"
@@ -482,45 +503,57 @@ export function SafetySimulationPreview({
       </div>
 
       <div className="p-4">
-        {/* Visualization area */}
-        <div className="aspect-video section-primary rounded-xl relative overflow-hidden">
-          <GridBackground />
-          <ScanLine />
+        {use3D ? (
+          /* 3D Three.js scene */
+          <SafetySimulation3D
+            robotPosition={robotPosition}
+            destination={destination}
+            obstacles={obstacles}
+            safetyClassification={safetyClassification}
+            speed={speed}
+            commandType={commandType}
+          />
+        ) : (
+          /* 2D SVG visualization */
+          <div className="aspect-video section-primary rounded-xl relative overflow-hidden">
+            <GridBackground />
+            <ScanLine />
 
-          {/* SVG for paths and animations */}
-          <svg
-            className="absolute inset-0 w-full h-full"
-            viewBox={`0 0 ${CANVAS_SIZE.width} ${CANVAS_SIZE.height}`}
-          >
-            <SvgDefs />
+            {/* SVG for paths and animations */}
+            <svg
+              className="absolute inset-0 w-full h-full"
+              viewBox={`0 0 ${CANVAS_SIZE.width} ${CANVAS_SIZE.height}`}
+            >
+              <SvgDefs />
 
-            {/* Obstacles */}
-            {obstacles.map((obstacle) => (
-              <ObstacleMarker key={obstacle.id} obstacle={obstacle} />
-            ))}
+              {/* Obstacles */}
+              {obstacles.map((obstacle) => (
+                <ObstacleMarker key={obstacle.id} obstacle={obstacle} />
+              ))}
 
-            {/* Animated path */}
-            <PathLine pathData={simulationPath.pathData} />
+              {/* Animated path */}
+              <PathLine pathData={simulationPath.pathData} />
 
-            {/* Waypoints */}
-            <Waypoints start={robotPosition} end={destination} />
+              {/* Waypoints */}
+              <Waypoints start={robotPosition} end={destination} />
 
-            {/* Start marker */}
-            <StartMarker position={robotPosition} />
+              {/* Start marker */}
+              <StartMarker position={robotPosition} />
 
-            {/* Target marker */}
-            <TargetMarker position={destination} />
+              {/* Target marker */}
+              <TargetMarker position={destination} />
 
-            {/* Animated robot */}
-            <AnimatedRobot pathData={simulationPath.pathData} />
-          </svg>
+              {/* Animated robot */}
+              <AnimatedRobot pathData={simulationPath.pathData} />
+            </svg>
 
-          {/* Data overlay */}
-          <DataOverlay distance={simulationPath.distance} eta={simulationPath.eta} />
+            {/* Data overlay */}
+            <DataOverlay distance={simulationPath.distance} eta={simulationPath.eta} />
 
-          {/* Collision warning */}
-          <CollisionWarning obstacleCount={obstacles.length} />
-        </div>
+            {/* Collision warning */}
+            <CollisionWarning obstacleCount={obstacles.length} />
+          </div>
+        )}
       </div>
 
       {/* Safety badges */}
