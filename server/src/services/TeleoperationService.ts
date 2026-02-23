@@ -25,6 +25,9 @@ import type {
 } from '../types/teleoperation.types.js';
 import { DEFAULT_QUALITY_THRESHOLDS } from '../types/teleoperation.types.js';
 import { dataQualityService } from './DataQualityService.js';
+import { LeRobotExportService } from './LeRobotExportService.js';
+import { RustFSClient } from '../storage/rustfs-client.js';
+import type { FrameRow } from './LeRobotExportService.js';
 
 // ============================================================================
 // CONSTANTS
@@ -665,7 +668,7 @@ export class TeleoperationService extends EventEmitter {
   // ============================================================================
 
   /**
-   * Export session to LeRobot v3 format (stub)
+   * Export session to LeRobot v3 format (Parquet + metadata → RustFS)
    */
   async exportToLeRobot(
     sessionId: string,
@@ -685,19 +688,40 @@ export class TeleoperationService extends EventEmitter {
       );
     }
 
-    const frameCount = await this.prisma.teleoperationFrame.count({
+    // Load all frames ordered by index
+    const dbFrames = await this.prisma.teleoperationFrame.findMany({
       where: { sessionId },
+      orderBy: { frameIndex: 'asc' },
     });
 
-    if (frameCount === 0) {
+    if (dbFrames.length === 0) {
       throw new Error('Cannot export session with no frames');
     }
 
-    // Stub response - full implementation would convert to parquet and upload to RustFS
-    const datasetId = crypto.randomUUID();
-    const datasetName = dto.datasetName ?? `teleop_${sessionId.slice(0, 8)}`;
-    const storagePath = `datasets/${datasetId}/`;
+    // Map DB rows → FrameRow for the export service
+    const frames: FrameRow[] = dbFrames.map((f) => ({
+      frameIndex: f.frameIndex,
+      timestamp: f.timestamp,
+      jointPositions: f.jointPositions as number[],
+      action: f.action as number[],
+      isIntervention: f.isIntervention,
+    }));
 
+    // Create a RustFS client for the export
+    const storage = new RustFSClient({
+      endpoint: process.env.RUSTFS_ENDPOINT ?? 'http://localhost:9000',
+      accessKeyId: process.env.RUSTFS_ACCESS_KEY ?? 'minioadmin',
+      secretAccessKey: process.env.RUSTFS_SECRET_KEY ?? 'minioadmin',
+    });
+
+    const exportService = new LeRobotExportService(storage);
+    const { datasetId, storagePath } = await exportService.exportSession(frames, {
+      sessionFps: session.fps,
+    });
+
+    const datasetName = dto.datasetName ?? `teleop_${sessionId.slice(0, 8)}`;
+
+    // Persist the dataset ID on the session
     await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
       data: { exportedDatasetId: datasetId },
@@ -708,7 +732,7 @@ export class TeleoperationService extends EventEmitter {
       datasetId,
       datasetName,
       trajectoryCount: 1,
-      totalFrames: frameCount,
+      totalFrames: dbFrames.length,
       storagePath,
     };
 
