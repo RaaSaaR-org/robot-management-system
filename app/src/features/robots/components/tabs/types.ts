@@ -72,3 +72,8 @@ export interface Model3DTabProps extends TabCommonProps {
  * Props for the ChatTab component
  */
 export interface ChatTabProps extends TabCommonProps {}
+
+/**
+ * Props for the TeleopTab component
+ */
+export interface TeleopTabProps extends TabCommonProps {}
