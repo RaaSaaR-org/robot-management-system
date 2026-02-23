@@ -18,6 +18,7 @@
     "@aws-sdk/client-s3": "^3.966.0",
     "@aws-sdk/lib-storage": "^3.966.0",
     "@aws-sdk/s3-request-presigner": "^3.966.0",
+    "@dsnp/parquetjs": "^1.8.7",
     "@google/generative-ai": "^0.21.0",
     "@prisma/client": "^6.19.1",
     "ajv": "^8.17.1",
