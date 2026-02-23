@@ -47,6 +47,9 @@ node_modules/
 .claude-flow
 .mcp.json
 
+# Robot agent persisted state
+robot-agent/data/state.json
+
 # Python
 __pycache__/
 *.py[cod]

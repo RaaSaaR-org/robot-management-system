@@ -78,6 +78,16 @@ export class TaskQueue {
   }
 
   /**
+   * Restore queued tasks from persisted state (called once on startup).
+   * Does not trigger execution — the simulation loop handles that.
+   */
+  restoreQueue(tasks: PushedTask[]): void {
+    this.queue = [...tasks];
+    this.sortQueue();
+    console.log(`[TaskQueue] Restored ${this.queue.length} task(s) from persisted state`);
+  }
+
+  /**
    * Accept a task pushed from the server
    * @returns true if task was accepted
    */

@@ -151,6 +151,10 @@ async function main() {
   const shutdown = async () => {
     console.log('\n[SimulatedRobot] Shutting down...');
 
+    // Persist state synchronously before anything else (Task 39)
+    robotStateManager.saveStateSync();
+    console.log('[SimulatedRobot] State persisted to disk');
+
     // Log shutdown and end compliance session
     try {
       await complianceLogClient.logSystemEvent({
