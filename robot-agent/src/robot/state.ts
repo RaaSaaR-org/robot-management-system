@@ -278,6 +278,7 @@ export class RobotStateManager {
         robotType: this.state.robotType,
         maxPayloadKg: this.state.maxPayloadKg,
         description: this.state.description,
+        powerSource: this.state.robotType === 'so101' ? 'ac_powered' : 'battery',
       },
       createdAt: this.state.createdAt,
       updatedAt: this.state.updatedAt,

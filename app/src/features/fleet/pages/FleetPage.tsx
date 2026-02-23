@@ -92,6 +92,7 @@ export function FleetPage({ className }: FleetPageProps) {
     },
     floor: robot.location.floor || '1',
     currentTask: robot.currentTaskName,
+    metadata: robot.metadata,
   }));
 
   // Handle robot click - navigate to detail

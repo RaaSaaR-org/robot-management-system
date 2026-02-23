@@ -4,7 +4,7 @@ aliases:
 - TASK-036
 title: Fleet Map Enhancements (Dashboard)
 slug: fleet-map-enhancements-dashboard
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -16,8 +16,9 @@ depends_on:
 - "[[TASK-009]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-23
 ---
+
 
 
 # Fleet Map Enhancements (Dashboard)

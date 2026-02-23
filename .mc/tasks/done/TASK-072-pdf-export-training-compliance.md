@@ -4,7 +4,7 @@ aliases:
 - TASK-072
 title: PDF Export for Training Compliance
 slug: pdf-export-training-compliance
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -17,8 +17,10 @@ depends_on:
 - "[[TASK-061]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-23
 ---
+
+
 
 
 
@@ -29,3 +31,4 @@ Implement PDF generation for EU AI Act training data documentation with complian
 
 ## Notes
 Migrated from task-master TM-67. Status: pending.
+%% mc-links: [[TASK-061]] %%
