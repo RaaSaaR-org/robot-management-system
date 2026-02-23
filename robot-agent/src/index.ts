@@ -21,6 +21,8 @@ import { setRobotStateManager as setNavigationStateManager } from './tools/navig
 import { setRobotStateManager as setManipulationStateManager } from './tools/manipulation.js';
 import { setRobotStateManager as setStatusStateManager } from './tools/status.js';
 import { complianceLogClient } from './compliance/ComplianceLogClient.js';
+import { createBilateralTeleopWebSocket } from './api/bilateral-teleop.js';
+import { FrameRecorder } from './teleop/FrameRecorder.js';
 
 async function main() {
   console.log('='.repeat(60));
@@ -115,6 +117,10 @@ async function main() {
 
   // Setup WebSocket for telemetry streaming
   createTelemetryWebSocket(server, robotStateManager);
+
+  // Setup bilateral teleop WebSocket with frame recorder
+  const frameRecorder = new FrameRecorder();
+  createBilateralTeleopWebSocket(server, frameRecorder);
 
   // Start server
   server.listen(PORT, () => {
