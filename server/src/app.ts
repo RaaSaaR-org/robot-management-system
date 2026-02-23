@@ -69,15 +69,16 @@ function getCorsOrigins(): string[] {
 }
 
 // Rate limiting configuration
-// In development: 1000 req/min (robot agent + UI generate many compliance logs)
+// In development: high limit (robot agent + UI generate many compliance logs)
 // In production: 100 req/min
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
+  max: process.env.NODE_ENV === 'production' ? 100 : 5000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
-  skip: (req) => req.path === '/health', // Skip health checks
+  // Skip health checks + compliance logs (robot agent sends these constantly)
+  skip: (req) => req.path === '/health' || req.path.startsWith('/api/compliance'),
 });
 
 // Stricter rate limit for auth endpoints
