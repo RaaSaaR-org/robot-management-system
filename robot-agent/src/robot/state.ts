@@ -43,6 +43,7 @@ import {
   CameraConfigManager,
   type EmbodimentConfig,
 } from '../embodiment/index.js';
+import { StatePersistence, type PersistedState } from './StatePersistence.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -90,6 +91,9 @@ export class RobotStateManager {
   // Embodiment integration (Task 51)
   private jointMapper: JointMapper;
   private cameraConfigManager: CameraConfigManager;
+
+  // State persistence (Task 39)
+  private persistence: StatePersistence;
 
   constructor(config: RobotConfig) {
     // Initialize state
@@ -172,6 +176,75 @@ export class RobotStateManager {
     // Initialize embodiment utilities (Task 51)
     this.jointMapper = new JointMapper();
     this.cameraConfigManager = new CameraConfigManager();
+
+    // Initialize state persistence (Task 39)
+    this.persistence = new StatePersistence();
+    this.restorePersistedState();
+  }
+
+  // ============================================================================
+  // STATE PERSISTENCE (Task 39)
+  // ============================================================================
+
+  /** Build a PersistedState snapshot from current in-memory state */
+  private buildPersistedState(): PersistedState {
+    return {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      robotState: {
+        status: this.state.status,
+        batteryLevel: this.state.batteryLevel,
+        location: { ...this.state.location },
+        heldObject: this.state.heldObject,
+        speed: this.state.speed,
+        errors: [...this.state.errors],
+        warnings: [...this.state.warnings],
+      },
+      taskQueue: this.taskQueue.getTasks(),
+    };
+  }
+
+  /** Trigger a debounced persist of current state */
+  private persistState(): void {
+    this.persistence.save(this.buildPersistedState());
+  }
+
+  /** Restore persisted state into memory (called once from constructor) */
+  private restorePersistedState(): void {
+    const persisted = this.persistence.load();
+    if (!persisted) return;
+
+    const rs = persisted.robotState;
+    this.state.status = rs.status;
+    this.state.batteryLevel = rs.batteryLevel;
+    this.state.location = { ...rs.location };
+    this.state.heldObject = rs.heldObject;
+    this.state.speed = rs.speed;
+    this.state.errors = [...rs.errors];
+    this.state.warnings = [...rs.warnings];
+
+    // Restore queued tasks
+    if (persisted.taskQueue.length > 0) {
+      this.taskQueue.restoreQueue(persisted.taskQueue);
+    }
+
+    console.log(
+      `[RobotStateManager] Restored persisted state (battery=${rs.batteryLevel.toFixed(1)}%, status=${rs.status})`,
+    );
+  }
+
+  /**
+   * Synchronous save — call during shutdown (SIGTERM / SIGINT).
+   */
+  saveStateSync(): void {
+    this.persistence.saveSync(this.buildPersistedState());
+  }
+
+  /**
+   * Get the StatePersistence instance (for shutdown hooks in index.ts).
+   */
+  getStatePersistence(): StatePersistence {
+    return this.persistence;
   }
 
   // ============================================================================
@@ -319,6 +392,7 @@ export class RobotStateManager {
 
   private notifyListeners(): void {
     this.publisher.notify(this.getState());
+    this.persistState();
   }
 
   // ============================================================================
