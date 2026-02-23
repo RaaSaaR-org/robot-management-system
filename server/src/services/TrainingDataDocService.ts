@@ -6,6 +6,7 @@
 
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
+import PDFDocument from 'pdfkit';
 import { PrismaClient } from '@prisma/client';
 import type {
   DatasetProvenance,
@@ -642,6 +643,148 @@ export class TrainingDataDocService extends EventEmitter {
       generatedAt,
       sections,
     };
+  }
+
+  /**
+   * Generate a PDF buffer with EU AI Act formatted training data documentation
+   */
+  async generatePdfBuffer(
+    modelVersionId: string,
+    includeProvenance: boolean = true,
+    includeBiasAssessment: boolean = true
+  ): Promise<Buffer> {
+    // Gather data
+    const summary = await this.prisma.trainingDataSummary.findUnique({
+      where: { modelVersionId },
+    });
+    const summaryData = summary ? this.toTrainingDataSummary(summary) : null;
+
+    const provenanceRecords: DatasetProvenance[] = [];
+    if (summary && includeProvenance) {
+      const datasetIds = summary.datasetIds as string[];
+      for (const datasetId of datasetIds) {
+        const provenance = await this.prisma.datasetProvenance.findUnique({
+          where: { datasetId },
+        });
+        if (provenance) {
+          provenanceRecords.push(this.toDatasetProvenance(provenance));
+        }
+      }
+    }
+
+    const biasAssessments = includeBiasAssessment
+      ? await this.getBiasAssessmentHistory(modelVersionId)
+      : [];
+
+    const generatedAt = new Date();
+
+    // Build PDF
+    const doc = new PDFDocument({ margin: 50 });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+
+    const pdfDone = new Promise<void>((resolve) => {
+      doc.on('end', resolve);
+    });
+
+    // --- Title Page ---
+    doc.fontSize(24).font('Helvetica-Bold').text('Training Data Documentation', {
+      align: 'center',
+    });
+    doc.moveDown(0.5);
+    doc.fontSize(14).font('Helvetica').text('EU AI Act GPAI Compliance', {
+      align: 'center',
+    });
+    doc.moveDown(1.5);
+    doc.fontSize(11).text(`Model Version ID: ${modelVersionId}`, { align: 'center' });
+    doc.text(`Generated: ${generatedAt.toISOString()}`, { align: 'center' });
+    doc.moveDown(3);
+
+    // --- Section 1: Training Data Summary ---
+    doc.fontSize(16).font('Helvetica-Bold').text('1. Training Data Summary');
+    doc.moveDown(0.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.5);
+
+    if (summaryData) {
+      doc.fontSize(11).font('Helvetica');
+      doc.text(`Total Trajectories: ${summaryData.totalTrajectories.toLocaleString()}`);
+      doc.text(`Copyright Measures: ${summaryData.copyrightMeasures}`);
+      doc.text(`Processing Purposes: ${summaryData.processingPurposes.join(', ')}`);
+
+      if (summaryData.knownGaps.length > 0) {
+        doc.text(`Known Gaps: ${summaryData.knownGaps.join('; ')}`);
+      }
+
+      doc.moveDown(0.5);
+      doc.font('Helvetica-Bold').text('Datasets:');
+      doc.font('Helvetica');
+      for (const datasetId of summaryData.datasetIds) {
+        const prov = provenanceRecords.find((p) => p.datasetId === datasetId);
+        doc.text(`  - ${prov?.sourceName ?? datasetId.slice(0, 8)} (${prov?.sourceType ?? 'unknown'})`, { indent: 10 });
+      }
+    } else {
+      doc.fontSize(11).font('Helvetica').text('No training data summary available.');
+    }
+
+    doc.moveDown(1);
+
+    // --- Section 2: Bias Assessments ---
+    if (includeBiasAssessment) {
+      doc.fontSize(16).font('Helvetica-Bold').text('2. Bias Assessments');
+      doc.moveDown(0.5);
+      doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(0.5);
+
+      if (biasAssessments.length > 0) {
+        for (const assessment of biasAssessments) {
+          doc.fontSize(12).font('Helvetica-Bold')
+            .text(`Assessment v${assessment.assessmentVersion} (${assessment.status})`);
+          doc.fontSize(11).font('Helvetica');
+          doc.text(`Date: ${assessment.assessmentDate.toISOString()}`);
+          doc.text(`Known Limitations: ${assessment.knownLimitations.join('; ')}`);
+          doc.text(`Mitigation Measures: ${assessment.mitigationMeasures.join('; ')}`);
+          doc.moveDown(0.5);
+        }
+      } else {
+        doc.fontSize(11).font('Helvetica').text('No bias assessments recorded.');
+      }
+
+      doc.moveDown(1);
+    }
+
+    // --- Section 3: Dataset Provenance ---
+    if (includeProvenance) {
+      const sectionNum = includeBiasAssessment ? '3' : '2';
+      doc.fontSize(16).font('Helvetica-Bold').text(`${sectionNum}. Dataset Provenance`);
+      doc.moveDown(0.5);
+      doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(0.5);
+
+      if (provenanceRecords.length > 0) {
+        for (const prov of provenanceRecords) {
+          doc.fontSize(12).font('Helvetica-Bold')
+            .text(prov.sourceName ?? prov.datasetId);
+          doc.fontSize(11).font('Helvetica');
+          doc.text(`Source Type: ${prov.sourceType}`);
+          if (prov.collectionMethod) doc.text(`Collection Method: ${prov.collectionMethod}`);
+          if (prov.licenseType) doc.text(`License: ${prov.licenseType}`);
+          doc.moveDown(0.5);
+        }
+      } else {
+        doc.fontSize(11).font('Helvetica').text('No provenance records available.');
+      }
+    }
+
+    // --- Footer ---
+    doc.moveDown(2);
+    doc.fontSize(9).font('Helvetica-Oblique').fillColor('#666666')
+      .text('Generated by RoboMindOS NeoDEM | Confidential', { align: 'center' });
+
+    doc.end();
+    await pdfDone;
+
+    return Buffer.concat(chunks);
   }
 
   // ============================================================================
