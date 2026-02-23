@@ -225,6 +225,22 @@ trainingDocsRoutes.get(
       const includeProvenance = query.includeProvenance !== 'false';
       const includeBiasAssessment = query.includeBiasAssessment !== 'false';
 
+      // PDF export has its own code path (binary buffer)
+      if (format === 'pdf') {
+        const pdfBuffer = await trainingDataDocService.generatePdfBuffer(
+          modelVersionId,
+          includeProvenance,
+          includeBiasAssessment
+        );
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="training-docs-${modelVersionId}.pdf"`
+        );
+        res.send(pdfBuffer);
+        return;
+      }
+
       const document = await trainingDataDocService.exportDocumentation(
         modelVersionId,
         format,
@@ -239,9 +255,6 @@ trainingDocsRoutes.get(
           break;
         case 'markdown':
           res.setHeader('Content-Type', 'text/markdown');
-          break;
-        case 'pdf':
-          res.setHeader('Content-Type', 'text/markdown'); // PDF not implemented
           break;
       }
 
