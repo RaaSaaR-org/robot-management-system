@@ -69,9 +69,11 @@ function getCorsOrigins(): string[] {
 }
 
 // Rate limiting configuration
+// In development: 1000 req/min (robot agent + UI generate many compliance logs)
+// In production: 100 req/min
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
