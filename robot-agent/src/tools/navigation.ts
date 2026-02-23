@@ -89,6 +89,11 @@ async function fetchZones(): Promise<Zone[]> {
     console.log(
       `[Navigation] Fetched ${cachedZones.length} zones, derived ${Object.keys(cachedNamedLocations).length} named locations`
     );
+
+    // Share zone cache with simulation engine for real-time zone tracking
+    if (robotStateManager) {
+      robotStateManager.setZoneCache(cachedZones);
+    }
   } catch (error) {
     // Log a concise message - this is expected when server isn't running yet
     const message = error instanceof Error ? error.message : 'Unknown error';

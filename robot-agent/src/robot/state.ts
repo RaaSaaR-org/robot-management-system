@@ -14,6 +14,7 @@ import type {
   CommandType,
   RobotLocation,
   PushedTask,
+  Zone,
 } from './types.js';
 import { generateTelemetry } from './telemetry.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
@@ -380,6 +381,13 @@ export class RobotStateManager {
 
   stopSimulation(): void {
     this.simulation.stop();
+  }
+
+  /**
+   * Update the zone cache used for real-time zone tracking in the simulation engine.
+   */
+  setZoneCache(zones: Zone[]): void {
+    this.simulation.setZoneCache(zones);
   }
 
   // ============================================================================

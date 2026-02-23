@@ -279,14 +279,17 @@ export class ZoneService {
       }
     }
 
-    // Check for overlapping zones (optional - can enable if desired)
-    // const overlapping = await zoneRepository.findOverlappingZones(input.bounds, input.floor);
-    // if (overlapping.length > 0) {
-    //   errors.push({
-    //     field: 'bounds',
-    //     message: `Zone overlaps with: ${overlapping.map(z => z.name).join(', ')}`,
-    //   });
-    // }
+    // Check for overlapping restricted zones
+    if (input.bounds && input.floor && input.type === 'restricted') {
+      const overlapping = await zoneRepository.findOverlappingZones(input.bounds, input.floor);
+      const restrictedOverlaps = overlapping.filter((z) => z.type === 'restricted');
+      if (restrictedOverlaps.length > 0) {
+        errors.push({
+          field: 'bounds',
+          message: `Restricted zone overlaps with other restricted zone(s): ${restrictedOverlaps.map((z) => z.name).join(', ')}`,
+        });
+      }
+    }
 
     return errors;
   }
@@ -331,6 +334,20 @@ export class ZoneService {
         errors.push({
           field: 'name',
           message: `Zone with name "${newName}" already exists on floor ${newFloor}`,
+        });
+      }
+    }
+
+    // Check for overlapping restricted zones
+    const effectiveBounds = input.bounds ?? existingZone.bounds;
+    const effectiveType = input.type ?? existingZone.type;
+    if (effectiveType === 'restricted') {
+      const overlapping = await zoneRepository.findOverlappingZones(effectiveBounds, newFloor, id);
+      const restrictedOverlaps = overlapping.filter((z) => z.type === 'restricted');
+      if (restrictedOverlaps.length > 0) {
+        errors.push({
+          field: 'bounds',
+          message: `Restricted zone overlaps with other restricted zone(s): ${restrictedOverlaps.map((z) => z.name).join(', ')}`,
         });
       }
     }
