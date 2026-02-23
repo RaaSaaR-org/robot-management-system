@@ -146,6 +146,10 @@ export interface FleetMapProps {
   onEditZone?: (zone: Zone) => void;
   /** Callback when new zone bounds are drawn */
   onZoneDrawn?: (bounds: ZoneBounds) => void;
+  /** Optional floor plan background image URL (PNG or SVG) */
+  floorPlanUrl?: string;
+  /** Distance threshold for marker clustering (default: 20) */
+  clusterThreshold?: number;
   /** Additional class names */
   className?: string;
 }

@@ -11,6 +11,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
 import { AlertBanner } from '@/features/alerts/components';
 import { FleetEmergencyStopButton } from '@/features/safety';
+import { CommandBar } from '@/features/command/components/CommandBar';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
 
@@ -107,6 +108,14 @@ export function DashboardPage() {
         onFloorChange={setSelectedFloor}
         onRobotClick={handleRobotClick}
       />
+
+      {/* Command Bar (uses first available robot) */}
+      {robotMarkers.length > 0 && (
+        <CommandBar
+          robotId={robotMarkers[0].robotId}
+          robotName={robotMarkers[0].name}
+        />
+      )}
 
       {/* Quick Actions */}
       <div className="card-elevated p-6">
