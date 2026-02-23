@@ -73,7 +73,7 @@ const pillars = [
 
 function FlywheelDiagram() {
   return (
-    <div className="relative w-96 h-96 mx-auto mb-16">
+    <div className="relative w-full max-w-sm sm:max-w-md mx-auto mb-16 aspect-square">
       {/* Ambient glow effects */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-turquoise/10 rounded-full blur-3xl" />
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-cobalt/15 rounded-full blur-2xl" />
