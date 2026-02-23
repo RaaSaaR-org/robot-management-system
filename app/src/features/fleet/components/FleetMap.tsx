@@ -11,6 +11,8 @@ import type { FleetMapProps, RobotMapMarker, Zone } from '../types/fleet.types';
 import { MAP_CANVAS_SIZE, MOCK_ZONES } from '../types/fleet.types';
 import { RobotMarker } from './RobotMarker';
 import { ZoneEditor } from './ZoneEditor';
+import { clusterRobots } from '../utils/markerClustering';
+import type { Cluster } from '../utils/markerClustering';
 
 // ============================================================================
 // CONSTANTS
@@ -298,9 +300,12 @@ export function FleetMap({
   onSelectZone,
   onEditZone,
   onZoneDrawn,
+  floorPlanUrl,
+  clusterThreshold = 20,
   className,
 }: FleetMapProps) {
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
+  const [hoveredCluster, setHoveredCluster] = useState<Cluster | null>(null);
 
   // Get unique floors from robots
   const floors = useMemo(() => {
@@ -385,6 +390,34 @@ export function FleetMap({
     return counts;
   }, [filteredRobots]);
 
+  // Cluster nearby robots
+  const clusters = useMemo(() => {
+    const markers = filteredRobots.map((r) => {
+      const pos = transformPoint(r.position.x, r.position.y);
+      return {
+        id: r.robotId,
+        x: pos.x,
+        y: pos.y,
+        name: r.name,
+        status: r.status,
+      };
+    });
+    return clusterRobots(markers, clusterThreshold);
+  }, [filteredRobots, transformPoint, clusterThreshold]);
+
+  // Set of robot IDs that are in multi-robot clusters (rendered as cluster badge)
+  const clusteredRobotIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const cluster of clusters) {
+      if (cluster.robots.length > 1) {
+        for (const r of cluster.robots) {
+          ids.add(r.id);
+        }
+      }
+    }
+    return ids;
+  }, [clusters]);
+
   return (
     <div className={cn('section-primary rounded-2xl border border-cobalt/20 overflow-hidden', className)}>
       {/* Header */}
@@ -429,6 +462,19 @@ export function FleetMap({
             >
               <SVGDefs />
 
+              {/* Optional floor plan background */}
+              {floorPlanUrl && (
+                <image
+                  href={floorPlanUrl}
+                  x="0"
+                  y="0"
+                  width="100%"
+                  height="100%"
+                  opacity={0.3}
+                  preserveAspectRatio="xMidYMid slice"
+                />
+              )}
+
               {/* Grid fill */}
               <rect x="0" y="0" width="100%" height="100%" fill="url(#fleetGrid)" />
 
@@ -443,19 +489,100 @@ export function FleetMap({
                 onZoneDrawn={onZoneDrawn || (() => {})}
               />
 
-              {/* Robot markers */}
-              {filteredRobots.map((robot) => {
-                const pos = transformPoint(robot.position.x, robot.position.y);
-                return (
-                  <RobotMarker
-                    key={robot.robotId}
-                    robot={robot}
-                    position={pos}
-                    isSelected={robot.robotId === selectedRobotId}
-                    onClick={() => handleRobotClick(robot.robotId)}
-                  />
-                );
-              })}
+              {/* Robot markers (unclustered) */}
+              {filteredRobots
+                .filter((robot) => !clusteredRobotIds.has(robot.robotId))
+                .map((robot) => {
+                  const pos = transformPoint(robot.position.x, robot.position.y);
+                  return (
+                    <RobotMarker
+                      key={robot.robotId}
+                      robot={robot}
+                      position={pos}
+                      isSelected={robot.robotId === selectedRobotId}
+                      onClick={() => handleRobotClick(robot.robotId)}
+                    />
+                  );
+                })}
+
+              {/* Cluster badges */}
+              {clusters
+                .filter((c) => c.robots.length > 1)
+                .map((cluster) => {
+                  const key = cluster.robots.map((r) => r.id).join('-');
+                  const isHovered = hoveredCluster === cluster;
+                  return (
+                    <g
+                      key={key}
+                      transform={`translate(${cluster.x}, ${cluster.y})`}
+                      className="cursor-pointer"
+                      onMouseEnter={() => setHoveredCluster(cluster)}
+                      onMouseLeave={() => setHoveredCluster(null)}
+                    >
+                      {/* Outer glow ring */}
+                      <circle
+                        cx="0"
+                        cy="0"
+                        r={isHovered ? 22 : 18}
+                        fill="rgba(42, 95, 255, 0.15)"
+                        stroke="#2A5FFF"
+                        strokeWidth="1"
+                        style={{ transition: 'r 0.2s ease' }}
+                      />
+                      {/* Inner circle */}
+                      <circle
+                        cx="0"
+                        cy="0"
+                        r="14"
+                        fill="rgba(15, 23, 42, 0.9)"
+                        stroke="#18E4C3"
+                        strokeWidth="1.5"
+                        filter="url(#fleetGlow)"
+                      />
+                      {/* Count text */}
+                      <text
+                        x="0"
+                        y="1"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize="11"
+                        fontWeight="700"
+                        fill="#18E4C3"
+                        fontFamily="monospace"
+                      >
+                        {cluster.robots.length}
+                      </text>
+
+                      {/* Hover tooltip with robot names */}
+                      {isHovered && (
+                        <g transform="translate(24, -10)">
+                          <rect
+                            x="0"
+                            y="0"
+                            width="130"
+                            height={cluster.robots.length * 16 + 12}
+                            rx="6"
+                            fill="rgba(15, 23, 42, 0.95)"
+                            stroke="rgba(42, 95, 255, 0.3)"
+                            strokeWidth="1"
+                          />
+                          {cluster.robots.map((r, i) => (
+                            <text
+                              key={r.id}
+                              x="8"
+                              y={16 + i * 16}
+                              fontSize="9"
+                              fill="#f8fafc"
+                              fontFamily="monospace"
+                            >
+                              {r.name}
+                            </text>
+                          ))}
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
 
               {/* Selected robot popup */}
               {selectedRobot && (
