@@ -62,7 +62,7 @@ const TASK_QUEUE_CONFIG = {
 };
 
 const SAFETY_CONFIG = {
-  communicationTimeoutMs: 1000, // 1 second default
+  communicationTimeoutMs: 30000, // 30 second timeout (was 1s — too short, caused immediate PROTECTIVE STOP)
   maxManualSpeedMmPerSec: 250,  // ISO 10218-1 limit
   maxAutoSpeedMmPerSec: 1500,
   forceLimitN: 140,              // Conservative default

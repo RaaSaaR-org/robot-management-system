@@ -224,7 +224,7 @@ export interface SafetyConfig {
  */
 export const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
   monitoringFrequencyHz: 1000,          // 1kHz monitoring (simulated at lower rate)
-  communicationTimeoutMs: 1000,          // 1 second timeout
+  communicationTimeoutMs: 30000,         // 30 second timeout (was 1s — too short for startup)
   maxManualSpeedMmPerSec: 250,           // ISO 10218-1 limit
   maxAutoSpeedMmPerSec: 1500,            // Higher limit for auto mode
   forceLimitN: 140,                      // Conservative default (hands/fingers quasi-static)
