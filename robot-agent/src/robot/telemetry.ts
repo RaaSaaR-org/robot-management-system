@@ -434,3 +434,44 @@ export function clearAlertTracking(robotId: string): void {
     }
   }
 }
+
+// ============================================================================
+// ZONE EVENT FORMATTERS
+// ============================================================================
+
+/** Minimal zone info for zone enter/exit events */
+export interface ZoneEventInfo {
+  id: string;
+  name: string;
+  type: string;
+}
+
+/**
+ * Format a zone_enter event payload
+ */
+export function formatZoneEnterEvent(
+  robotId: string,
+  zone: ZoneEventInfo
+): { type: 'zone_enter'; robotId: string; zone: ZoneEventInfo; timestamp: string } {
+  return {
+    type: 'zone_enter',
+    robotId,
+    zone,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Format a zone_exit event payload
+ */
+export function formatZoneExitEvent(
+  robotId: string,
+  zone: ZoneEventInfo
+): { type: 'zone_exit'; robotId: string; zone: ZoneEventInfo; timestamp: string } {
+  return {
+    type: 'zone_exit',
+    robotId,
+    zone,
+    timestamp: new Date().toISOString(),
+  };
+}

@@ -4,8 +4,10 @@
  * @feature robot
  */
 
-import type { SimulatedRobotState, RobotLocation } from './types.js';
+import type { SimulatedRobotState, RobotLocation, Zone } from './types.js';
 import { getChargingStationLocation } from '../tools/navigation.js';
+import { isPointInZone } from './zoneUtils.js';
+import { formatZoneEnterEvent, formatZoneExitEvent } from './telemetry.js';
 
 /**
  * Callback to update robot state
@@ -44,6 +46,8 @@ const DEFAULT_CONFIG: SimulationConfig = {
 export class SimulationEngine {
   private simulationInterval: NodeJS.Timeout | null = null;
   private cachedChargingStation: RobotLocation | null = null;
+  private zoneCache: Zone[] = [];
+  private previousZone: Zone | null = null;
   private readonly config: SimulationConfig;
   private stateGetter: () => SimulatedRobotState;
   private stateUpdater: StateUpdater;
@@ -105,6 +109,14 @@ export class SimulationEngine {
   }
 
   /**
+   * Set the zone cache for real-time zone tracking.
+   * Called from navigation tools after zone data is fetched from the server.
+   */
+  setZoneCache(zones: Zone[]): void {
+    this.zoneCache = zones;
+  }
+
+  /**
    * Prefetch charging station location from server
    */
   private async prefetchChargingStation(): Promise<void> {
@@ -130,6 +142,12 @@ export class SimulationEngine {
     if (state.targetLocation && state.status === 'busy') {
       const moved = this.updatePosition(deltaTime);
       stateChanged = moved;
+    }
+
+    // Zone tracking — synchronous, reads from cached zone data
+    if (this.zoneCache.length > 0) {
+      const zoneChanged = this.updateZoneTracking();
+      stateChanged = zoneChanged || stateChanged;
     }
 
     // Handle battery
@@ -216,6 +234,59 @@ export class SimulationEngine {
         s.currentTaskName = 'Charging';
       });
     }
+  }
+
+  /**
+   * Check current zone and emit enter/exit events on transitions.
+   * Fully synchronous — reads from in-memory zoneCache.
+   * @returns true if zone changed
+   */
+  private updateZoneTracking(): boolean {
+    const state = this.stateGetter();
+    const floor = state.location.floor ?? '1';
+
+    // Find which cached zone the robot is currently in
+    let currentZone: Zone | null = null;
+    for (const zone of this.zoneCache) {
+      if (zone.floor === floor && isPointInZone(state.location.x, state.location.y, zone.bounds)) {
+        currentZone = zone;
+        break;
+      }
+    }
+
+    const prevId = this.previousZone?.id ?? null;
+    const currId = currentZone?.id ?? null;
+
+    if (currId === prevId) {
+      return false;
+    }
+
+    // Zone transition detected
+    if (this.previousZone) {
+      const exitEvent = formatZoneExitEvent(state.id, {
+        id: this.previousZone.id,
+        name: this.previousZone.name,
+        type: this.previousZone.type,
+      });
+      console.log(`[SimulationEngine] ${exitEvent.type}: ${this.previousZone.name}`);
+    }
+
+    if (currentZone) {
+      const enterEvent = formatZoneEnterEvent(state.id, {
+        id: currentZone.id,
+        name: currentZone.name,
+        type: currentZone.type,
+      });
+      console.log(`[SimulationEngine] ${enterEvent.type}: ${currentZone.name}`);
+    }
+
+    // Update location.zone on state
+    this.stateUpdater((s) => {
+      s.location.zone = currentZone?.name ?? '';
+    });
+
+    this.previousZone = currentZone;
+    return true;
   }
 
   /**
