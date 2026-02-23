@@ -43,7 +43,7 @@ export function Logo({ showText = true, size = 'default', linkTo = '/' }: LogoPr
         </svg>
       </div>
       {showText && (
-        <span className={`text-theme-primary font-semibold ${textSize}`}>RoboMindOS</span>
+        <span className={`text-theme-primary font-semibold ${textSize}`}>NeoDEM</span>
       )}
     </div>
   );

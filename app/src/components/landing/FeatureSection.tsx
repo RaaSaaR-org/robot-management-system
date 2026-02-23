@@ -32,8 +32,8 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
       </svg>
     ),
-    title: 'Two Marketplaces',
-    description: 'Find skills and integrations in our Consumer Marketplace for home use, or explore enterprise-grade solutions in the Industry Marketplace.',
+    title: 'Skill Library',
+    description: 'Browse and deploy reusable robot skills. Share behaviors across your fleet — from pick-and-place routines to navigation policies.',
   },
   {
     icon: (
@@ -69,7 +69,7 @@ export function FeatureSection() {
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
             Powerful tools designed around you. From a single robot at home to thousands of
-            drones and vehicles at work — RoboMindOS adapts to your world.
+            drones and vehicles at work — NeoDEM adapts to your world.
           </p>
         </div>
 

@@ -71,10 +71,10 @@ export function AudienceSection() {
             Industry Solutions
           </p>
           <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
-            Built for Managing Robots
+            Works Across Every Sector
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            From factory floors to hospital corridors — RoboMindOS adapts to your operational needs.
+            From factory floors to hospital corridors — NeoDEM adapts to your operational needs.
           </p>
         </div>
 
