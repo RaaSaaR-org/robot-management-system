@@ -259,11 +259,11 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
       {/* Battery */}
       <StatCard
         title="Avg Battery"
-        value={`${avgBatteryLevel}%`}
+        value={avgBatteryLevel !== null ? `${avgBatteryLevel}%` : 'AC Power'}
         icon={<BatteryIcon />}
-        color={avgBatteryLevel >= 60 ? '#22c55e' : avgBatteryLevel >= 30 ? '#eab308' : '#ef4444'}
+        color={avgBatteryLevel === null ? '#6b7280' : avgBatteryLevel >= 60 ? '#22c55e' : avgBatteryLevel >= 30 ? '#eab308' : '#ef4444'}
       >
-        <BatteryIndicator level={avgBatteryLevel} />
+        <BatteryIndicator level={avgBatteryLevel ?? 100} />
       </StatCard>
 
       {/* Active Tasks */}
