@@ -130,6 +130,8 @@ export class SafetyMonitor {
   // Server connection tracking
   private serverConnected = false; // Start false — only true after first heartbeat from server
   private lastServerHeartbeat: number = Date.now();
+  /** Throttle compliance log sends: same event type max once per 60s */
+  private lastComplianceLogByType: Map<string, number> = new Map();
 
   // Force filter
   private forceFilter: ButterworthFilter;
@@ -512,6 +514,11 @@ export class SafetyMonitor {
     // This is a simplified check - real systems would have redundant monitoring
     const state = this.stateGetter();
 
+    // Don't re-trigger if already in protective stop — prevents flooding compliance logs
+    if (this.estopState.status === 'triggered') {
+      return;
+    }
+
     // Check for any critical errors that require immediate stop
     if (state.errors.some((e) => e.includes('Critical'))) {
       this.triggerProtectiveStop('system_failure', 'Critical system error detected');
@@ -643,7 +650,14 @@ export class SafetyMonitor {
       this.safetyEvents.pop();
     }
 
-    // Log to compliance system (safety events are high priority - sent immediately)
+    // Log to compliance system — throttled: same type max once per 60s to avoid DB flooding
+    const now = Date.now();
+    const lastLog = this.lastComplianceLogByType.get(type) ?? 0;
+    if (now - lastLog < 60_000) {
+      return; // Skip duplicate within throttle window
+    }
+    this.lastComplianceLogByType.set(type, now);
+
     complianceLogClient.logSafetyAction({
       payload: {
         description: `Safety event: ${type}`,
