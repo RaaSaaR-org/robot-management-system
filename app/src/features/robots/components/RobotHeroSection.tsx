@@ -641,7 +641,7 @@ export const RobotHeroSection = memo(function RobotHeroSection({
               <HexagonalDataHUD
                 status={robot.status}
                 telemetry={telemetry}
-                batteryLevel={robot.batteryLevel}
+                batteryLevel={robot.batteryLevel ?? 0}
                 isAcPowered={robot.metadata?.powerSource === 'ac_powered'}
                 isOffline={robot.status === 'offline'}
                 className="h-[300px] w-[300px]"

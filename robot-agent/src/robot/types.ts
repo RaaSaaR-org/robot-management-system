@@ -73,7 +73,7 @@ export interface Robot {
   model: string;
   serialNumber?: string;
   status: RobotStatus;
-  batteryLevel: number;
+  batteryLevel: number | null;  // null = no battery / AC-powered
   location: RobotLocation;
   lastSeen: string;
   currentTaskId?: string;

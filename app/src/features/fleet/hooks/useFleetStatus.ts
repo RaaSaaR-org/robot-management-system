@@ -134,7 +134,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
       (robot) =>
         robot.status === 'error' ||
         robot.status === 'maintenance' ||
-        (robot.batteryLevel !== undefined && robot.batteryLevel < 20)
+        (robot.batteryLevel !== null && robot.batteryLevel !== undefined && robot.batteryLevel < 20)
     ).length;
   }, [robots]);
 

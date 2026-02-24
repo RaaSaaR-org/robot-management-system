@@ -593,8 +593,8 @@ export class DeploymentService extends EventEmitter {
         score += 50;
       }
 
-      // Prefer higher battery
-      score += robot.batteryLevel / 2;
+      // Prefer higher battery (AC-powered robots score full marks)
+      score += (robot.batteryLevel ?? 100) / 2;
 
       // Add randomization (0-20)
       score += Math.random() * 20;

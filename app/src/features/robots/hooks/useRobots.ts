@@ -535,7 +535,7 @@ export function useRobotsByStatus(status: RobotStatus): Robot[] {
 export function useRobotsNeedingAttention(): Robot[] {
   const robots = useRobotsStore(selectRobots);
   return useMemo(
-    () => robots.filter((r) => r.status === 'error' || r.batteryLevel < 20),
+    () => robots.filter((r) => r.status === 'error' || (r.batteryLevel !== null && r.batteryLevel < 20)),
     [robots]
   );
 }

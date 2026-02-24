@@ -263,7 +263,8 @@ export class RobotStateManager {
       model: this.state.model,
       serialNumber: this.state.serialNumber,
       status: this.state.status,
-      batteryLevel: Math.round(this.state.batteryLevel),
+      // SO-101 is AC-powered → null signals "no battery"
+      batteryLevel: this.state.robotType === 'so101' ? null : Math.round(this.state.batteryLevel),
       location: { ...this.state.location },
       lastSeen: this.state.lastSeen,
       currentTaskId: this.state.currentTaskId,

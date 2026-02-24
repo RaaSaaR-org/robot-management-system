@@ -288,10 +288,10 @@ export class TaskDistributor extends EventEmitter {
       reasons.push('Busy (+0)');
     }
 
-    // 3. Battery level
-    const batteryScore = robot.batteryLevel;
+    // 3. Battery level (AC-powered robots score full marks)
+    const batteryScore = robot.batteryLevel ?? 100;
     score += batteryScore;
-    reasons.push(`Battery: ${robot.batteryLevel}% (+${batteryScore})`);
+    reasons.push(`Battery: ${robot.batteryLevel !== null ? `${robot.batteryLevel}%` : 'AC'} (+${batteryScore})`);
 
     // 4. Proximity to task location (if applicable)
     const taskLocation = task.actionConfig.location as RobotLocation | undefined;
@@ -303,7 +303,7 @@ export class TaskDistributor extends EventEmitter {
     }
 
     // 5. Priority preference (assign high-priority tasks to healthier robots)
-    if (['critical', 'high'].includes(task.priority) && robot.batteryLevel > 50) {
+    if (['critical', 'high'].includes(task.priority) && (robot.batteryLevel === null || robot.batteryLevel > 50)) {
       score += 25;
       reasons.push('High-priority capable (+25)');
     }

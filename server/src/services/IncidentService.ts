@@ -310,7 +310,7 @@ export class IncidentService {
             }
           : undefined,
         operatingMode: robot.metadata?.operatingMode as string | undefined,
-        batteryLevel: robot.batteryLevel,
+        batteryLevel: robot.batteryLevel ?? undefined,
         currentTask: robot.currentTaskName ?? undefined,
       })),
       activeAlerts: activeAlerts.slice(0, 20).map((alert) => ({

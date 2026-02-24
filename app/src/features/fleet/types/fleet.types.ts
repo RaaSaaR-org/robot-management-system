@@ -109,8 +109,8 @@ export interface RobotMapMarker {
   position: { x: number; y: number };
   /** Robot status */
   status: RobotStatus;
-  /** Battery level (0-100) */
-  batteryLevel: number;
+  /** Battery level (0-100), or null for AC-powered robots */
+  batteryLevel: number | null;
   /** Floor identifier */
   floor: string;
   /** Current zone name */

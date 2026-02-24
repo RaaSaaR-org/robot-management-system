@@ -64,7 +64,7 @@ export interface Robot {
   model: string;
   serialNumber?: string;
   status: RobotStatus;
-  batteryLevel: number;
+  batteryLevel: number | null;
   location: RobotLocation;
   lastSeen: string;
   currentTaskId?: string;
@@ -83,7 +83,7 @@ export interface Robot {
 export interface RobotTelemetry {
   robotId: string;
   robotType?: RobotType;
-  batteryLevel: number;
+  batteryLevel: number | null;
   batteryVoltage?: number;
   batteryTemperature?: number;
   cpuUsage: number;
@@ -473,7 +473,7 @@ export class RobotManager {
         const healthData = await httpClient.get<{
           status: string;
           robotStatus: RobotStatus;
-          batteryLevel: number;
+          batteryLevel: number | null;
         }>('/api/v1/health');
 
         const now = new Date().toISOString();
@@ -484,7 +484,10 @@ export class RobotManager {
         registered.isConnected = true;
 
         // Always update battery level from health check
-        const newBatteryLevel = healthData.batteryLevel ?? registered.robot.batteryLevel;
+        // null is a valid value (AC-powered robots have no battery), only fall back for undefined
+        const newBatteryLevel = healthData.batteryLevel !== undefined
+          ? healthData.batteryLevel
+          : registered.robot.batteryLevel;
         const statusChanged = healthData.robotStatus && healthData.robotStatus !== registered.robot.status;
         const batteryChanged = newBatteryLevel !== registered.robot.batteryLevel;
 

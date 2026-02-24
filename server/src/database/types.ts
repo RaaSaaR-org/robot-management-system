@@ -101,7 +101,7 @@ export function domainRobotToDb(robot: Robot): {
   model: string;
   serialNumber?: string;
   status: string;
-  batteryLevel: number;
+  batteryLevel: number | null;
   location: string;
   lastSeen: Date;
   currentTaskId?: string;

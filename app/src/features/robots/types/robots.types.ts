@@ -72,7 +72,7 @@ export interface Robot {
   model: string;
   serialNumber?: string;
   status: RobotStatus;
-  batteryLevel: number;
+  batteryLevel: number | null;  // null = no battery / AC-powered
   location: RobotLocation;
   lastSeen: string;
   currentTaskId?: string;
@@ -351,7 +351,7 @@ export function isRobotAvailable(robot: Robot): boolean {
  * Check if a robot needs attention (error or low battery)
  */
 export function robotNeedsAttention(robot: Robot): boolean {
-  return robot.status === 'error' || robot.batteryLevel < 20;
+  return robot.status === 'error' || (robot.batteryLevel !== null && robot.batteryLevel < 20);
 }
 
 /**
