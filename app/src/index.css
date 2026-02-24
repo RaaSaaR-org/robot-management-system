@@ -256,6 +256,15 @@
 }
 
 @layer utilities {
+  /* Hide scrollbar for tab navigation */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Theme-aware text utilities */
   .text-theme-primary {
     color: var(--text-primary);
