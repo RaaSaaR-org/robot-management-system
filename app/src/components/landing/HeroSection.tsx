@@ -160,10 +160,28 @@ export function HeroSection() {
                 <div className="absolute inset-0 rounded-full bg-gradient-to-br from-cobalt/30 to-turquoise/30 blur-xl" />
                 <div className="relative w-full h-full rounded-full bg-gradient-to-br from-cobalt to-turquoise p-[2px] shadow-2xl shadow-cobalt/30">
                   <div className="w-full h-full rounded-full bg-gradient-to-br from-cobalt/95 to-turquoise/95 flex items-center justify-center">
-                    <div className="text-center">
-                      <span className="text-white font-bold text-base">R</span>
-                      <p className="text-white/70 text-[8px] font-mono tracking-wider">HUB</p>
-                    </div>
+                    {/* NeoDEM logo mark */}
+                    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-10 h-10">
+                      <path
+                        d="M8 10 L24 10 M8 10 L16 24 M24 10 L16 24"
+                        stroke="white"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeOpacity="0.7"
+                      />
+                      <circle cx="8" cy="10" r="5" fill="white" fillOpacity="0.9" />
+                      <circle cx="6.5" cy="9" r="1" fill="#2A5FFF" />
+                      <circle cx="9.5" cy="9" r="1" fill="#2A5FFF" />
+                      <rect x="6" y="11" width="4" height="1" rx="0.5" fill="#2A5FFF" fillOpacity="0.6" />
+                      <circle cx="24" cy="10" r="5" fill="white" fillOpacity="0.9" />
+                      <circle cx="22.5" cy="9" r="1" fill="#2A5FFF" />
+                      <circle cx="25.5" cy="9" r="1" fill="#2A5FFF" />
+                      <rect x="22" y="11" width="4" height="1" rx="0.5" fill="#2A5FFF" fillOpacity="0.6" />
+                      <circle cx="16" cy="24" r="5" fill="white" fillOpacity="0.9" />
+                      <circle cx="14.5" cy="23" r="1" fill="#2A5FFF" />
+                      <circle cx="17.5" cy="23" r="1" fill="#2A5FFF" />
+                      <rect x="14" y="25" width="4" height="1" rx="0.5" fill="#2A5FFF" fillOpacity="0.6" />
+                    </svg>
                   </div>
                 </div>
               </div>
