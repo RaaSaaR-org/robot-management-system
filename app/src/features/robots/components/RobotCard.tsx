@@ -95,7 +95,7 @@ export function RobotCard({
   compact = false,
   className,
 }: RobotCardProps) {
-  const isAcPowered = robot.metadata?.powerSource === 'ac_powered';
+  const isAcPowered = robot.metadata?.powerSource === 'ac_powered' || robot.batteryLevel === null;
   const batteryCategory = isAcPowered ? null : getBatteryCategory(robot.batteryLevel);
   const needsAttention = robot.status === 'error' || batteryCategory === 'critical';
 

@@ -135,7 +135,7 @@ export const Tabs = memo(function Tabs({
         role="tablist"
         aria-orientation="horizontal"
         className={cn(
-          'flex gap-1',
+          'flex gap-1 overflow-x-auto scrollbar-hide',
           variant === 'default' && 'border-b border-glass-subtle',
           variant === 'pills' && 'glass-subtle p-1 rounded-xl'
         )}
@@ -158,7 +158,7 @@ export const Tabs = memo(function Tabs({
               onClick={() => !tab.disabled && handleTabClick(tab.id)}
               onKeyDown={(e) => handleKeyDown(e, index)}
               className={cn(
-                'flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all duration-200',
+                'flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all duration-200 shrink-0',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
                 variant === 'default' && [
                   'relative -mb-px border-b-2',
