@@ -211,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
             robot_port = body.get("robotPort", "/dev/ttyACM0")
             model = body.get("model", "Elvinky/pi05_so101_pick_place_bottle")
             camera_type = body.get("cameraType", "picamera2")
-            wrist_camera_index = body.get("wristCameraIndex", -1)
+            wrist_camera_index = body.get("wristCameraIndex", 1)
             print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model} camera={camera_type} wrist_cam={wrist_camera_index}", flush=True)
             # Stop any existing VLA process
             if vla_process and vla_process.poll() is None:
