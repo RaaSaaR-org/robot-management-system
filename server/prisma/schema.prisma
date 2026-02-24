@@ -23,7 +23,7 @@ model Robot {
   model           String
   serialNumber    String?  @unique
   status          String   @default("offline") // RobotStatus enum as string
-  batteryLevel    Int      @default(100)
+  batteryLevel    Int?     @default(100)  // null = no battery / AC-powered
   location        String   @default("{}") // JSON: RobotLocation
   lastSeen        DateTime @default(now())
   currentTaskId   String?
@@ -62,7 +62,7 @@ model Robot {
 model RobotTelemetry {
   id                 String   @id @default(uuid())
   robotId            String
-  batteryLevel       Int
+  batteryLevel       Int?     // null = no battery / AC-powered
   batteryVoltage     Float?
   batteryTemperature Float?
   cpuUsage           Float

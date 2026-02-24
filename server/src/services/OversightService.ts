@@ -550,7 +550,7 @@ export class OversightService {
     if (robot.status === 'offline') {
       limitations.push('Robot is offline');
     }
-    if (robot.batteryLevel < 20) {
+    if (robot.batteryLevel !== null && robot.batteryLevel < 20) {
       limitations.push(`Low battery (${robot.batteryLevel}%)`);
     }
     if (manualSession) {
@@ -626,7 +626,7 @@ export class OversightService {
     const averageBatteryLevel =
       robotsWithBattery.length > 0
         ? Math.round(
-            robotsWithBattery.reduce((sum, r) => sum + r.batteryLevel, 0) / robotsWithBattery.length
+            robotsWithBattery.reduce((sum, r) => sum + (r.batteryLevel ?? 0), 0) / robotsWithBattery.length
           )
         : null;
 

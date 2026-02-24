@@ -225,10 +225,10 @@ function RobotPopup({
       <rect
         x="60"
         y="49"
-        width={Math.max(0, Math.min(70, robot.batteryLevel * 0.7))}
+        width={Math.max(0, Math.min(70, (robot.batteryLevel ?? 100) * 0.7))}
         height="4"
         rx="2"
-        fill={robot.batteryLevel > 20 ? '#18E4C3' : '#ef4444'}
+        fill={(robot.batteryLevel ?? 100) > 20 ? '#18E4C3' : '#ef4444'}
       />
 
       {/* View Details Button */}

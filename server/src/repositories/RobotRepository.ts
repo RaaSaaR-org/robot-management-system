@@ -292,7 +292,7 @@ export class RobotRepository {
     id: string,
     isConnected: boolean,
     status?: RobotStatus,
-    batteryLevel?: number,
+    batteryLevel?: number | null,
     location?: RobotLocation
   ): Promise<boolean> {
     try {

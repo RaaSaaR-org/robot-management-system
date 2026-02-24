@@ -173,7 +173,7 @@ export function RobotCard({
                 </>
               ) : (
                 <>
-                  <BatteryIcon level={robot.batteryLevel} className="h-4 w-4" />
+                  <BatteryIcon level={robot.batteryLevel ?? 0} className="h-4 w-4" />
                   <span
                     className={cn(
                       'text-sm font-medium',
@@ -182,7 +182,7 @@ export function RobotCard({
                       batteryCategory !== 'critical' && batteryCategory !== 'low' && 'text-theme-secondary'
                     )}
                   >
-                    {robot.batteryLevel}%
+                    {robot.batteryLevel ?? 0}%
                   </span>
                 </>
               )}
@@ -219,8 +219,8 @@ export function RobotCard({
               </>
             ) : (
               <>
-                <BatteryIcon level={robot.batteryLevel} className="h-4 w-4" />
-                <span className="card-meta">{robot.batteryLevel}%</span>
+                <BatteryIcon level={robot.batteryLevel ?? 0} className="h-4 w-4" />
+                <span className="card-meta">{robot.batteryLevel ?? 0}%</span>
               </>
             )}
           </div>

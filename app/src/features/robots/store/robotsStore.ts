@@ -402,7 +402,7 @@ export const selectRobotsByStatus = (status: RobotStatus) => (state: RobotsStore
 
 /** Select robots that need attention */
 export const selectRobotsNeedingAttention = (state: RobotsStore) =>
-  state.robots.filter((r) => r.status === 'error' || r.batteryLevel < 20);
+  state.robots.filter((r) => r.status === 'error' || (r.batteryLevel !== null && r.batteryLevel < 20));
 
 /** Select telemetry for a specific robot */
 export const selectRobotTelemetry = (robotId: string) => (state: RobotsStore) =>
