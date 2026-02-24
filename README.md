@@ -1,4 +1,4 @@
-# NeoDEM — Robot Fleet Management Platform
+# NeoDEM — Open-Source Robotics AI Platform
 
 <div align="center">
 
@@ -7,9 +7,12 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green?logo=node.js)](https://nodejs.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![EU AI Act Ready](https://img.shields.io/badge/EU%20AI%20Act-Ready-green)](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai)
+[![LeRobot Compatible](https://img.shields.io/badge/LeRobot-Compatible-orange?logo=huggingface)](https://github.com/huggingface/lerobot)
+[![HuggingFace Hub](https://img.shields.io/badge/HuggingFace-Hub-yellow?logo=huggingface)](https://huggingface.co/)
 
-A2A-protocol fleet management for humanoid robots — with VLA model training,
-EU AI Act compliance, and natural language control.
+The open platform for Physical AI — collect demonstrations, train VLA models,
+deploy to your fleet, EU AI Act compliant by design.
 
 [Getting Started](#quick-start) | [Documentation](#documentation) | [Architecture](#architecture) | [Contributing](#contributing)
 
@@ -19,7 +22,22 @@ EU AI Act compliance, and natural language control.
 
 ## What is NeoDEM?
 
-NeoDEM is an open-source platform for managing fleets of autonomous robots. It connects a React/Tauri dashboard, a Node.js server, and AI-powered robot agents via the A2A (Agent-to-Agent) protocol — enabling operators to issue natural language commands, train and deploy Vision-Language-Action models, and maintain full EU AI Act compliance. Whether you're running a single robot arm or a warehouse full of humanoids, NeoDEM gives you one unified interface to monitor, control, and improve your fleet.
+NeoDEM is the first open-source platform covering the full lifecycle of Robotics AI — from recording human demonstrations to deploying trained VLA models on a fleet of robots.
+
+**The problem:** Today's robotics AI tooling is fragmented. LeRobot handles training (CLI-only). Physical Intelligence builds models (closed-source). NVIDIA Isaac simulates (cloud-only). No single platform connects it all — and none are EU AI Act compliant.
+
+**The solution:** NeoDEM is the integrating layer. A web-based, hardware-agnostic platform that covers:
+
+| Stage | What you get |
+|-------|-------------|
+| 🎮 **Collect** | Record demonstrations via teleoperation, kinesthetic teaching, or VR. LeRobotDataset format, HuggingFace Hub sync. |
+| 🧠 **Train** | Fine-tune VLA models (Pi0, ACT, Diffusion Policy, OpenVLA) with one click. Local or cloud GPU. MLflow tracking. |
+| 🚀 **Deploy** | Model Registry, canary rollouts, A/B testing, auto-rollback. Know exactly what runs on which robot. |
+| 📊 **Evaluate** | Real-world success rate tracking, episode replay, error analysis, model comparison. |
+| 🤖 **Operate** | Fleet dashboard, natural language control via A2A Protocol, real-time telemetry, safety controls. |
+| ✅ **Comply** | EU AI Act compliance logging, decision audit trails, risk assessment — ready for August 2026. |
+
+Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM gives you one unified interface to collect, train, deploy, and improve.
 
 ---
 
@@ -56,6 +74,27 @@ NeoDEM is an open-source platform for managing fleets of autonomous robots. It c
 | **Server**        | Node.js + Express | 3001  | A2A protocol server, REST API, WebSocket   |
 | **Robot Agent**   | Node.js + Genkit  | 41243 | AI-powered robot control software          |
 | **VLA Inference** | Python + gRPC     | 50051 | Vision-Language-Action model serving       |
+
+## Platform Overview
+
+NeoDEM covers the complete **Collect → Train → Deploy → Evaluate** lifecycle:
+
+```
+        ┌─────────────────────────────────────────────────────────────┐
+        │                    NeoDEM Platform                          │
+        │                                                             │
+        │  Collect        Train         Deploy        Evaluate        │
+        │  ───────        ─────         ──────        ────────        │
+        │  Teleoperation  Training UI   Model         Success Rate    │
+        │  Kinesthetic    MLflow        Registry      Episode Replay  │
+        │  VR Control     Orchestration Canary        Error Analysis  │
+        │  Dataset Hub    Fine-Tune     Rollout       A/B Testing     │
+        │                                                             │
+        │  ─────────────────────────────────────────────────────────  │
+        │  Operate: Fleet Dashboard · NL Control · Safety · Telemetry │
+        │  Comply: EU AI Act Logging · Audit Trail · Risk Assessment  │
+        └─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -306,7 +345,7 @@ Please be respectful and constructive in all interactions. We are committed to p
 
 <div align="center">
 
-**NeoDEM** — Open-source fleet management for autonomous robots
+**NeoDEM** — The open platform for Physical AI
 
 MIT License | Copyright (c) 2025 NeoDEM Contributors
 
