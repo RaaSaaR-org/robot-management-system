@@ -192,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global vla_process, vla_active, vla_instruction
+        global vla_process, vla_active, vla_instruction, vla_start_time
         if self.path == "/action":
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -210,7 +210,9 @@ class Handler(BaseHTTPRequestHandler):
             server_port = body.get("port", 8080)
             robot_port = body.get("robotPort", "/dev/ttyACM0")
             model = body.get("model", "Elvinky/pi05_so101_pick_place_bottle")
-            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model} camera={camera_type}", flush=True)
+            camera_type = body.get("cameraType", "picamera2")
+            wrist_camera_index = body.get("wristCameraIndex", -1)
+            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model} camera={camera_type} wrist_cam={wrist_camera_index}", flush=True)
             # Stop any existing VLA process
             if vla_process and vla_process.poll() is None:
                 vla_process.terminate()
@@ -223,8 +225,6 @@ class Handler(BaseHTTPRequestHandler):
             vla_active = True
             vla_instruction = instruction
             vla_start_time = time.time()
-            camera_type = body.get("cameraType", "picamera2")
-            wrist_camera_index = body.get("wristCameraIndex", -1)
             cmd = [
                 UV_BIN, "run", "python",
                 os.path.join(CLIENT_DIR, "client_pi.py"),
