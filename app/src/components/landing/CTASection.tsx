@@ -54,19 +54,19 @@ export function CTASection() {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
-            <span>MIT License</span>
+            <span>Hardware-agnostic: SO-101 today, humanoids tomorrow</span>
           </div>
           <div className="flex items-center gap-2">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
-            <span>Self-Hosted</span>
+            <span>LeRobotDataset · HuggingFace Hub · A2A Protocol · gRPC</span>
           </div>
           <div className="flex items-center gap-2">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
-            <span>EU AI Act Compliant</span>
+            <span>Your data, your models: self-hosted, privacy-first</span>
           </div>
         </div>
       </div>

@@ -44,7 +44,7 @@ export function Footer() {
               <Logo linkTo="" />
             </div>
             <p className="text-theme-muted text-sm mb-4">
-              Open-source robot fleet management — built for the era of embodied AI.
+              The open platform for Physical AI — collect, train, deploy, evaluate.
             </p>
             {/* Social Links */}
             <div className="flex gap-4">

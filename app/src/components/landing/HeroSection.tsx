@@ -13,17 +13,17 @@ export function HeroSection() {
           {/* Text Content */}
           <div className="text-center lg:text-left">
             <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
-              Fleet Management for the Embodied AI Era
+              Open-Source Robotics AI Platform
             </p>
             <h1 className="text-3xl sm:text-4xl lg:text-6xl font-bold text-theme-primary leading-tight mb-6">
               The Open Platform for{' '}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-cobalt to-turquoise">
-                Robot Fleet Management
+                Physical AI
               </span>
             </h1>
             <p className="text-xl text-theme-secondary mb-8 max-w-xl mx-auto lg:mx-0">
-              Train VLA models from demonstrations, deploy skills fleet-wide,
-              and maintain EU AI Act compliance — all from one open-source platform.
+              Collect demonstrations, train VLA models, deploy to your fleet —
+              EU AI Act compliant by design.
             </p>
 
             {/* CTAs */}
