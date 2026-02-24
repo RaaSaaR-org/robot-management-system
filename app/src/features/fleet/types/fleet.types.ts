@@ -19,7 +19,7 @@ export interface FleetStatus {
   /** Count of robots by status */
   robotsByStatus: Record<RobotStatus, number>;
   /** Average battery level across fleet (0-100) */
-  avgBatteryLevel: number;
+  avgBatteryLevel: number | null;
   /** Count of alerts by severity */
   alertCounts: Record<AlertSeverity, number>;
   /** Total unacknowledged alerts */

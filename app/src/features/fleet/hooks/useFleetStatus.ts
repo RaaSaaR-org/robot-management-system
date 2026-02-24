@@ -105,11 +105,13 @@ export function useFleetStatus(): UseFleetStatusReturn {
     return counts;
   }, [robots]);
 
-  // Calculate average battery level
+  // Calculate average battery level — only include robots with real battery (non-null)
+  // AC-powered robots (batteryLevel: null) are excluded from the average
   const avgBatteryLevel = useMemo(() => {
-    if (robots.length === 0) return 0;
-    const totalBattery = robots.reduce((sum, robot) => sum + (robot.batteryLevel ?? 0), 0);
-    return Math.round(totalBattery / robots.length);
+    const batteryRobots = robots.filter((r) => r.batteryLevel !== null && r.batteryLevel !== undefined);
+    if (batteryRobots.length === 0) return null;
+    const totalBattery = batteryRobots.reduce((sum, robot) => sum + (robot.batteryLevel as number), 0);
+    return Math.round(totalBattery / batteryRobots.length);
   }, [robots]);
 
   // Count alerts by severity
