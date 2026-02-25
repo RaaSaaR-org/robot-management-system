@@ -47,6 +47,7 @@ import { federatedRoutes } from './routes/federated.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
+import { updateRoutes } from './routes/update.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -235,6 +236,9 @@ export function createApp(): Express {
 
   // Security routes (protected) - Device identity & certificate management (CRA Annex I)
   app.use('/api/security', authMiddleware, securityRoutes);
+
+  // Secure OTA update routes (protected) - CRA Art. 13, MR Art. 10
+  app.use('/api/updates', authMiddleware, updateRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

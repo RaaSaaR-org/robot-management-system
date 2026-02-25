@@ -324,7 +324,6 @@ model User {
   gdprRequests     GDPRRequest[]
   consents         UserConsent[]
   dataRestrictions DataRestriction[]
-  mfaCredentials   MFACredential[]
   accountLockout   AccountLockout?
 
   @@index([email])
@@ -358,23 +357,6 @@ model RefreshToken {
   @@index([userId])
   @@index([expiresAt])
   @@index([token])
-}
-
-model MFACredential {
-  id        String    @id @default(cuid())
-  userId    String
-  type      String    // "totp" | "webauthn" | "recovery"
-  name      String    // "Authenticator App", "YubiKey", etc.
-  secret    String    // encrypted TOTP secret or WebAuthn credential ID
-  isActive  Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  lastUsed  DateTime?
-
-  // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([userId, type])
 }
 
 model AccountLockout {
@@ -1903,4 +1885,47 @@ model EvaluationEpisode {
   @@index([modelVersion])
   @@index([createdAt])
   @@index([success])
+}
+
+// ============================================================================
+// SECURE OTA UPDATES (CRA Art. 13, MR Art. 10)
+// ============================================================================
+
+model UpdatePackage {
+  id          String   @id @default(cuid())
+  version     String
+  changelog   String
+  signature   String   // Base64 Ed25519 signature
+  publicKey   String   // Base64 public key
+  checksum    String   // SHA-256 of package
+  fileSize    Int      @default(0)
+  status      String   @default("pending") // 'pending' | 'approved' | 'deployed' | 'rolled_back'
+  approvedBy  String?
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  deployments UpdateDeployment[]
+
+  @@index([status])
+  @@index([version])
+  @@index([createdAt])
+}
+
+model UpdateDeployment {
+  id              String    @id @default(cuid())
+  packageId       String
+  robotId         String
+  status          String    @default("pending") // 'pending' | 'downloading' | 'installing' | 'success' | 'failed' | 'rolled_back'
+  previousVersion String?
+  deployedAt      DateTime?
+  rolledBackAt    DateTime?
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+
+  package UpdatePackage @relation(fields: [packageId], references: [id])
+
+  @@index([packageId])
+  @@index([robotId])
+  @@index([status])
+  @@index([createdAt])
 }

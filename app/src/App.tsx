@@ -49,6 +49,7 @@ import {
   LazyNewContributionPage,
   LazyContributionDetailPage,
   LazyEvaluationDashboardPage,
+  LazyUpdatesPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -369,6 +370,16 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyContributionDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Updates - Secure OTA update management (CRA Art. 13, MR Art. 10) */}
+          <Route
+            path="/updates"
+            element={
+              <ProtectedAppRoute>
+                <LazyUpdatesPage />
               </ProtectedAppRoute>
             }
           />
