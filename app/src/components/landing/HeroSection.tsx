@@ -13,18 +13,34 @@ export function HeroSection() {
           {/* Text Content */}
           <div className="text-center lg:text-left">
             <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
-              Open-Source Robotics AI Platform
+              Open Physical AI Platform
             </p>
             <h1 className="text-3xl sm:text-4xl lg:text-6xl font-bold text-theme-primary leading-tight mb-6">
-              The Open Platform for{' '}
+              The Open{' '}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-cobalt to-turquoise">
                 Physical AI
               </span>
+              {' '}Platform
             </h1>
             <p className="text-xl text-theme-secondary mb-8 max-w-xl mx-auto lg:mx-0">
-              Collect demonstrations, train VLA models, deploy to your fleet —
-              EU AI Act compliant by design.
+              From first demonstration to compliant production — the complete
+              Physical AI lifecycle, open source.
             </p>
+
+            {/* Pipeline stages */}
+            <div className="flex flex-wrap items-center gap-2 justify-center lg:justify-start mb-8 text-sm font-mono">
+              <span className="px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20">Collect</span>
+              <span className="text-theme-muted">→</span>
+              <span className="px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20">Train</span>
+              <span className="text-theme-muted">→</span>
+              <span className="px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20">Deploy</span>
+              <span className="text-theme-muted">→</span>
+              <span className="px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20">Evaluate</span>
+              <span className="text-theme-muted">→</span>
+              <span className="px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20">Operate</span>
+              <span className="text-theme-muted">→</span>
+              <span className="px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20">Comply</span>
+            </div>
 
             {/* CTAs */}
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">

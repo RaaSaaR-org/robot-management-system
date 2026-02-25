@@ -1,4 +1,4 @@
-# NeoDEM — Open-Source Robotics AI Platform
+# NeoDEM — The Open Physical AI Platform
 
 <div align="center">
 
@@ -11,8 +11,8 @@
 [![LeRobot Compatible](https://img.shields.io/badge/LeRobot-Compatible-orange?logo=huggingface)](https://github.com/huggingface/lerobot)
 [![HuggingFace Hub](https://img.shields.io/badge/HuggingFace-Hub-yellow?logo=huggingface)](https://huggingface.co/)
 
-The open platform for Physical AI — collect demonstrations, train VLA models,
-deploy to your fleet, EU AI Act compliant by design.
+The Open Physical AI Platform — the complete lifecycle from first demonstration to compliant production.
+**Collect → Train → Deploy → Evaluate → Operate → Comply** — open source.
 
 [Getting Started](#quick-start) | [Documentation](#documentation) | [Architecture](#architecture) | [Contributing](#contributing)
 
@@ -22,11 +22,11 @@ deploy to your fleet, EU AI Act compliant by design.
 
 ## What is NeoDEM?
 
-NeoDEM is the first open-source platform covering the full lifecycle of Robotics AI — from recording human demonstrations to deploying trained VLA models on a fleet of robots.
+NeoDEM is the first open-source platform covering the complete Physical AI pipeline — from recording human demonstrations to deploying trained VLA models in compliant production. No other open-source tool covers the full lifecycle.
 
-**The problem:** Today's robotics AI tooling is fragmented. LeRobot handles training (CLI-only). Physical Intelligence builds models (closed-source). NVIDIA Isaac simulates (cloud-only). No single platform connects it all — and none are EU AI Act compliant.
+**The problem:** Today's Physical AI tooling is fragmented. LeRobot handles training (CLI-only). Physical Intelligence builds models (closed-source). NVIDIA Isaac simulates (cloud-only). No single platform connects it all — and none are EU AI Act compliant.
 
-**The solution:** NeoDEM is the integrating layer. A web-based, hardware-agnostic platform that covers:
+**The solution:** NeoDEM is the integrating layer. A web-based, hardware-agnostic platform that covers the six stages of the Physical AI lifecycle:
 
 | Stage | What you get |
 |-------|-------------|
@@ -37,7 +37,7 @@ NeoDEM is the first open-source platform covering the full lifecycle of Robotics
 | 🤖 **Operate** | Fleet dashboard, natural language control via A2A Protocol, real-time telemetry, safety controls. |
 | ✅ **Comply** | EU AI Act compliance logging, decision audit trails, risk assessment — ready for August 2026. |
 
-Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM gives you one unified interface to collect, train, deploy, and improve.
+Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM gives you one unified interface to manage the entire Physical AI lifecycle.
 
 ---
 
@@ -70,29 +70,30 @@ Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM g
 
 | Component         | Tech Stack        | Port  | Description                                |
 | ----------------- | ----------------- | ----- | ------------------------------------------ |
-| **App**           | React + Tauri     | 1420  | Desktop/web dashboard for fleet management |
+| **App**           | React + Tauri     | 1420  | Desktop/web dashboard for Physical AI ops  |
 | **Server**        | Node.js + Express | 3001  | A2A protocol server, REST API, WebSocket   |
 | **Robot Agent**   | Node.js + Genkit  | 41243 | AI-powered robot control software          |
 | **VLA Inference** | Python + gRPC     | 50051 | Vision-Language-Action model serving       |
 
 ## Platform Overview
 
-NeoDEM covers the complete **Collect → Train → Deploy → Evaluate** lifecycle:
+NeoDEM covers the complete **Collect → Train → Deploy → Evaluate → Operate → Comply** lifecycle:
 
 ```
         ┌─────────────────────────────────────────────────────────────┐
-        │                    NeoDEM Platform                          │
-        │                                                             │
-        │  Collect        Train         Deploy        Evaluate        │
-        │  ───────        ─────         ──────        ────────        │
-        │  Teleoperation  Training UI   Model         Success Rate    │
-        │  Kinesthetic    MLflow        Registry      Episode Replay  │
-        │  VR Control     Orchestration Canary        Error Analysis  │
-        │  Dataset Hub    Fine-Tune     Rollout       A/B Testing     │
-        │                                                             │
-        │  ─────────────────────────────────────────────────────────  │
-        │  Operate: Fleet Dashboard · NL Control · Safety · Telemetry │
-        │  Comply: EU AI Act Logging · Audit Trail · Risk Assessment  │
+        │                    NeoDEM Platform                                   │
+        │                                                                      │
+        │  Collect        Train         Deploy        Evaluate                 │
+        │  ───────        ─────         ──────        ────────                 │
+        │  Teleoperation  Training UI   Model         Success Rate             │
+        │  Kinesthetic    MLflow        Registry      Episode Replay           │
+        │  VR Control     Orchestration Canary        Error Analysis           │
+        │  Dataset Hub    Fine-Tune     Rollout       A/B Testing              │
+        │                                                                      │
+        │  Operate                          Comply                             │
+        │  ───────                          ──────                             │
+        │  Fleet Dashboard · NL Control     EU AI Act Logging · Audit Trail    │
+        │  Safety · Telemetry               Risk Assessment · GDPR             │
         └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -154,7 +155,7 @@ make run
 
 ## Features
 
-### Robot Fleet Management
+### Operate — Fleet Operations
 
 | Feature         | Description                                             |
 | --------------- | ------------------------------------------------------- |
@@ -345,7 +346,7 @@ Please be respectful and constructive in all interactions. We are committed to p
 
 <div align="center">
 
-**NeoDEM** — The open platform for Physical AI
+**NeoDEM** — The Open Physical AI Platform
 
 MIT License | Copyright (c) 2025 NeoDEM Contributors
 

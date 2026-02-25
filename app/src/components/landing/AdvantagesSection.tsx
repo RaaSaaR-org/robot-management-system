@@ -90,7 +90,7 @@ export function AdvantagesSection() {
             Built for the Future of Robotics
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            The only open-source platform that combines regulatory compliance, VLA model training, and fleet-wide deployment.
+            The only open-source platform covering the complete Physical AI pipeline — from data collection to compliant production.
           </p>
         </div>
 
