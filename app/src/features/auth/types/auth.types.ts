@@ -110,6 +110,58 @@ export interface ChangePasswordRequest {
 }
 
 // ============================================================================
+// MFA TYPES
+// ============================================================================
+
+/** MFA credential info returned from server */
+export interface MFACredentialInfo {
+  id: string;
+  type: 'totp' | 'webauthn' | 'recovery';
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  lastUsed: string | null;
+}
+
+/** MFA status response */
+export interface MFAStatus {
+  enabled: boolean;
+  methods: MFACredentialInfo[];
+  hasRecoveryCodes: boolean;
+}
+
+/** TOTP setup response */
+export interface TOTPSetupResponse {
+  secret: string;
+  otpauthUrl: string;
+  qrCodeUrl: string;
+}
+
+/** TOTP verify-setup response */
+export interface TOTPVerifySetupResponse {
+  credential: MFACredentialInfo;
+  recoveryCodes: string[];
+  message: string;
+}
+
+/** Recovery code count response */
+export interface RecoveryCodeInfo {
+  total: number;
+  remaining: number;
+}
+
+/** Recovery code generation response */
+export interface RecoveryCodeGenerateResponse {
+  codes: string[];
+  message: string;
+}
+
+/** MFA verify response (for login) */
+export interface MFAVerifyResponse {
+  verified: boolean;
+}
+
+// ============================================================================
 // AUTH STATE TYPES
 // ============================================================================
 

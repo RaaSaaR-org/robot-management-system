@@ -47,6 +47,7 @@ import { federatedRoutes } from './routes/federated.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
+import { mfaRoutes } from './routes/mfa.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -127,6 +128,9 @@ export function createApp(): Express {
 
   // Auth Routes (public) - with stricter rate limiting
   app.use('/api/auth', authLimiter, authRoutes);
+
+  // MFA Routes - mixed public (verify) and protected (setup/manage)
+  app.use('/api/auth/mfa', authLimiter, mfaRoutes);
 
   // Protected API Routes
   app.use('/api/a2a/conversation', authMiddleware, conversationRoutes);

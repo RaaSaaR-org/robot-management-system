@@ -306,6 +306,8 @@ model User {
   passwordResetToken   String?
   passwordResetExpires DateTime?
   lastLoginAt          DateTime?
+  lastPasswordChange   DateTime?
+  forcePasswordChange  Boolean   @default(true)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -314,6 +316,8 @@ model User {
   gdprRequests     GDPRRequest[]
   consents         UserConsent[]
   dataRestrictions DataRestriction[]
+  mfaCredentials   MFACredential[]
+  accountLockout   AccountLockout?
 
   @@index([email])
   @@index([role])
@@ -332,6 +336,34 @@ model RefreshToken {
   @@index([userId])
   @@index([expiresAt])
   @@index([token])
+}
+
+model MFACredential {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String    // "totp" | "webauthn" | "recovery"
+  name      String    // "Authenticator App", "YubiKey", etc.
+  secret    String    // encrypted TOTP secret or WebAuthn credential ID
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  lastUsed  DateTime?
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, type])
+}
+
+model AccountLockout {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  lastAttempt    DateTime  @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ============================================================================
