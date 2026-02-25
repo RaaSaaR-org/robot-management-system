@@ -311,8 +311,16 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  // MFA fields (TASK-022)
+  mfaEnabled        Boolean   @default(false)
+  loginAttempts     Int       @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+  recoveryCodes     String?   // JSON array of hashed recovery codes
+
   // Relations
   refreshTokens    RefreshToken[]
+  mfaCredentials   MFACredential[]
   gdprRequests     GDPRRequest[]
   consents         UserConsent[]
   dataRestrictions DataRestriction[]
@@ -321,6 +329,20 @@ model User {
 
   @@index([email])
   @@index([role])
+}
+
+model MFACredential {
+  id         String    @id @default(uuid())
+  userId     String
+  type       String    // "totp" | "webauthn" | "recovery"
+  secret     String    // TOTP secret or WebAuthn credential ID
+  name       String?   // "Authenticator App", "YubiKey", etc.
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model RefreshToken {

@@ -110,55 +110,40 @@ export interface ChangePasswordRequest {
 }
 
 // ============================================================================
-// MFA TYPES
+// MFA TYPES (TASK-022)
 // ============================================================================
 
-/** MFA credential info returned from server */
-export interface MFACredentialInfo {
-  id: string;
-  type: 'totp' | 'webauthn' | 'recovery';
-  name: string;
-  isActive: boolean;
-  createdAt: string;
-  lastUsed: string | null;
+/** MFA TOTP setup response */
+export interface MFATOTPSetupResponse {
+  secret: string;
+  otpauthUrl: string;
 }
 
-/** MFA status response */
+/** MFA TOTP verify response */
+export interface MFATOTPVerifyResponse {
+  message: string;
+  recoveryCodes: string[];
+}
+
+/** MFA status */
 export interface MFAStatus {
-  enabled: boolean;
-  methods: MFACredentialInfo[];
+  mfaEnabled: boolean;
+  totpConfigured: boolean;
   hasRecoveryCodes: boolean;
 }
 
-/** TOTP setup response */
-export interface TOTPSetupResponse {
-  secret: string;
-  otpauthUrl: string;
-  qrCodeUrl: string;
+/** Login response when MFA is required */
+export interface MFAChallengeResponse {
+  mfaRequired: true;
+  mfaToken: string;
+  userId: string;
 }
 
-/** TOTP verify-setup response */
-export interface TOTPVerifySetupResponse {
-  credential: MFACredentialInfo;
-  recoveryCodes: string[];
-  message: string;
-}
-
-/** Recovery code count response */
-export interface RecoveryCodeInfo {
-  total: number;
-  remaining: number;
-}
-
-/** Recovery code generation response */
-export interface RecoveryCodeGenerateResponse {
-  codes: string[];
-  message: string;
-}
-
-/** MFA verify response (for login) */
-export interface MFAVerifyResponse {
-  verified: boolean;
+/** Check if a login response requires MFA */
+export function isMFAChallengeResponse(
+  response: LoginResponse | MFAChallengeResponse
+): response is MFAChallengeResponse {
+  return 'mfaRequired' in response && response.mfaRequired === true;
 }
 
 // ============================================================================

@@ -10,6 +10,7 @@
 import { createStore } from '@/store';
 import { tokenStorage } from '@/api/client';
 import { authApi } from '../api/authApi';
+import { isMFAChallengeResponse } from '../types/auth.types';
 import type { AuthStore, User, AuthErrorCode } from '../types/auth.types';
 
 // ============================================================================
@@ -49,7 +50,7 @@ export const useAuthStore = createStore<AuthStore>(
     ...initialState,
 
     // --------------------------------------------------------------------------
-    // Login Action
+    // Login Action (MFA-aware)
     // --------------------------------------------------------------------------
     login: async (email: string, password: string) => {
       set((state) => {
@@ -58,9 +59,21 @@ export const useAuthStore = createStore<AuthStore>(
       });
 
       try {
-        const response = await authApi.login(email, password);
+        const response = await authApi.loginWithMFA(email, password);
 
-        // Store tokens
+        // Check if MFA challenge is required
+        if (isMFAChallengeResponse(response)) {
+          set((state) => {
+            state.isLoading = false;
+          });
+          // Throw a special error the LoginForm can catch to show MFA challenge
+          const mfaError = new Error('MFA_REQUIRED');
+          (mfaError as Error & { mfaToken: string; userId: string }).mfaToken = response.mfaToken;
+          (mfaError as Error & { mfaToken: string; userId: string }).userId = response.userId;
+          throw mfaError;
+        }
+
+        // Standard login — store tokens
         tokenStorage.setTokens(response.accessToken, response.refreshToken);
 
         set((state) => {
@@ -71,6 +84,10 @@ export const useAuthStore = createStore<AuthStore>(
           state.error = null;
         });
       } catch (error) {
+        // Re-throw MFA_REQUIRED errors without mapping to error message
+        if (error instanceof Error && error.message === 'MFA_REQUIRED') {
+          throw error;
+        }
         const errorMessage = getErrorMessage(error);
         set((state) => {
           state.isLoading = false;
@@ -78,6 +95,20 @@ export const useAuthStore = createStore<AuthStore>(
         });
         throw new Error(errorMessage);
       }
+    },
+
+    // --------------------------------------------------------------------------
+    // Complete MFA Login (after TOTP/recovery code verified)
+    // --------------------------------------------------------------------------
+    completeMFALogin: (response: { user: User; accessToken: string; refreshToken: string }) => {
+      tokenStorage.setTokens(response.accessToken, response.refreshToken);
+      set((state) => {
+        state.user = response.user;
+        state.isAuthenticated = true;
+        state.isLoading = false;
+        state.isInitialized = true;
+        state.error = null;
+      });
     },
 
     // --------------------------------------------------------------------------

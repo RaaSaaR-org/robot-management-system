@@ -12,6 +12,6 @@ export * from './ForgotPasswordForm';
 export * from './ResetPasswordForm';
 export * from './ChangePasswordForm';
 export * from './AccountSettingsPanel';
-export * from './MFAEnrollment';
+export * from './MFASetup';
 export * from './MFAChallenge';
-export * from './MFASettings';
+export * from './SecuritySettings';

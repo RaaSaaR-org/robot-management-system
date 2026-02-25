@@ -19,6 +19,10 @@ import type {
   ResetPasswordRequest,
   ChangePasswordRequest,
   User,
+  MFATOTPSetupResponse,
+  MFATOTPVerifyResponse,
+  MFAStatus,
+  MFAChallengeResponse,
 } from '../types/auth.types';
 
 // ============================================================================
@@ -34,6 +38,13 @@ const ENDPOINTS = {
   forgotPassword: '/auth/forgot-password',
   resetPassword: '/auth/reset-password',
   changePassword: '/auth/change-password',
+  mfaTotpSetup: '/auth/mfa/totp/setup',
+  mfaTotpVerify: '/auth/mfa/totp/verify',
+  mfaTotpValidate: '/auth/mfa/totp/validate',
+  mfaRecoveryCodes: '/auth/mfa/recovery-codes',
+  mfaRecoveryUse: '/auth/mfa/recovery/use',
+  mfaTotpDisable: '/auth/mfa/totp',
+  mfaStatus: '/auth/mfa/status',
 } as const;
 
 // ============================================================================
@@ -136,5 +147,100 @@ export const authApi = {
   ): Promise<void> {
     const payload: ChangePasswordRequest = { currentPassword, newPassword };
     await apiClient.post(ENDPOINTS.changePassword, payload);
+  },
+
+  // ==========================================================================
+  // MFA API (TASK-022)
+  // ==========================================================================
+
+  /**
+   * Login with potential MFA challenge.
+   */
+  async loginWithMFA(
+    email: string,
+    password: string
+  ): Promise<LoginResponse | MFAChallengeResponse> {
+    const payload: LoginRequest = { email, password };
+    const response = await apiClient.post<LoginResponse | MFAChallengeResponse>(
+      ENDPOINTS.login,
+      payload
+    );
+    return response.data;
+  },
+
+  /**
+   * Start TOTP MFA setup — returns secret + otpauth URL.
+   */
+  async mfaTotpSetup(): Promise<MFATOTPSetupResponse> {
+    const response = await apiClient.post<MFATOTPSetupResponse>(ENDPOINTS.mfaTotpSetup);
+    return response.data;
+  },
+
+  /**
+   * Verify TOTP code during setup and enable MFA.
+   */
+  async mfaTotpVerify(secret: string, code: string): Promise<MFATOTPVerifyResponse> {
+    const response = await apiClient.post<MFATOTPVerifyResponse>(ENDPOINTS.mfaTotpVerify, {
+      secret,
+      code,
+    });
+    return response.data;
+  },
+
+  /**
+   * Validate TOTP code during login.
+   */
+  async mfaTotpValidate(
+    userId: string,
+    code: string,
+    mfaToken: string
+  ): Promise<LoginResponse> {
+    const response = await apiClient.post<LoginResponse>(ENDPOINTS.mfaTotpValidate, {
+      userId,
+      code,
+      mfaToken,
+    });
+    return response.data;
+  },
+
+  /**
+   * Generate new recovery codes.
+   */
+  async mfaGenerateRecoveryCodes(): Promise<{ recoveryCodes: string[] }> {
+    const response = await apiClient.post<{ recoveryCodes: string[] }>(
+      ENDPOINTS.mfaRecoveryCodes
+    );
+    return response.data;
+  },
+
+  /**
+   * Use a recovery code during login.
+   */
+  async mfaUseRecoveryCode(
+    userId: string,
+    code: string,
+    mfaToken: string
+  ): Promise<LoginResponse> {
+    const response = await apiClient.post<LoginResponse>(ENDPOINTS.mfaRecoveryUse, {
+      userId,
+      code,
+      mfaToken,
+    });
+    return response.data;
+  },
+
+  /**
+   * Disable TOTP MFA.
+   */
+  async mfaDisableTotp(): Promise<void> {
+    await apiClient.delete(ENDPOINTS.mfaTotpDisable);
+  },
+
+  /**
+   * Get MFA status for current user.
+   */
+  async mfaGetStatus(): Promise<MFAStatus> {
+    const response = await apiClient.get<MFAStatus>(ENDPOINTS.mfaStatus);
+    return response.data;
   },
 };
