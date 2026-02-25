@@ -25,6 +25,7 @@ import { createBilateralTeleopWebSocket } from './api/bilateral-teleop.js';
 import { FrameRecorder } from './teleop/FrameRecorder.js';
 import { DeviceIdentityManager } from './security/device-identity.js';
 import { SecureBootVerifier } from './security/secure-boot.js';
+import { secureUpdateClient } from './updates/SecureUpdateClient.js';
 
 async function main() {
   console.log('='.repeat(60));
@@ -160,6 +161,9 @@ async function main() {
     console.log('');
     console.log('  Press Ctrl+C to stop the server');
     console.log('='.repeat(60));
+
+    // Start secure OTA update checks (CRA Art. 13)
+    secureUpdateClient.startPeriodicChecks();
   });
 
   // Graceful shutdown
@@ -187,6 +191,7 @@ async function main() {
       console.error('[SimulatedRobot] Failed to end compliance session:', error);
     }
 
+    secureUpdateClient.stopPeriodicChecks();
     robotStateManager.stopSafetyMonitoring();
     robotStateManager.stopSimulation();
     server.close(() => {
