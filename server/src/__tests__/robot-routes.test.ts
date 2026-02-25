@@ -1,0 +1,183 @@
+/**
+ * @file robot-routes.test.ts
+ * @description Tests for robot API routes
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+
+// Mock robotManager
+const mockRobotManager = {
+  listRobots: vi.fn(),
+  getRobot: vi.fn(),
+  registerRobot: vi.fn(),
+  unregisterRobot: vi.fn(),
+  sendCommand: vi.fn(),
+  getTelemetry: vi.fn(),
+};
+
+// Mock the robotManager import
+vi.mock('../services/RobotManager.js', () => ({
+  robotManager: mockRobotManager,
+}));
+
+// Import after mocking
+const { robotRoutes } = await import('../routes/robot.routes.js');
+
+function createTestApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/robots', robotRoutes);
+  return app;
+}
+
+describe('Robot Routes', () => {
+  const app = createTestApp();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('GET /api/robots', () => {
+    it('returns list of robots', async () => {
+      const robots = [
+        { id: 'r1', name: 'Bot-1', status: 'idle' },
+        { id: 'r2', name: 'Bot-2', status: 'busy' },
+      ];
+      mockRobotManager.listRobots.mockResolvedValue(robots);
+
+      const res = await request(app).get('/api/robots');
+
+      expect(res.status).toBe(200);
+      expect(res.body.robots).toHaveLength(2);
+      expect(res.body.pagination.total).toBe(2);
+    });
+
+    it('returns empty list when no robots', async () => {
+      mockRobotManager.listRobots.mockResolvedValue([]);
+
+      const res = await request(app).get('/api/robots');
+
+      expect(res.status).toBe(200);
+      expect(res.body.robots).toHaveLength(0);
+    });
+
+    it('returns 500 on service error', async () => {
+      mockRobotManager.listRobots.mockRejectedValue(new Error('DB error'));
+
+      const res = await request(app).get('/api/robots');
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to list robots');
+    });
+  });
+
+  describe('GET /api/robots/:id', () => {
+    it('returns a robot by ID', async () => {
+      const robot = { id: 'r1', name: 'Bot-1', status: 'idle' };
+      mockRobotManager.getRobot.mockResolvedValue(robot);
+
+      const res = await request(app).get('/api/robots/r1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('r1');
+    });
+
+    it('returns 404 for unknown robot', async () => {
+      mockRobotManager.getRobot.mockResolvedValue(null);
+
+      const res = await request(app).get('/api/robots/unknown');
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Robot not found');
+    });
+  });
+
+  describe('POST /api/robots/register', () => {
+    it('registers a robot from URL', async () => {
+      mockRobotManager.registerRobot.mockResolvedValue({
+        robot: { id: 'r1', name: 'New Bot' },
+        endpoints: { rest: 'http://localhost:41243' },
+        agentCard: { name: 'New Bot' },
+      });
+
+      const res = await request(app)
+        .post('/api/robots/register')
+        .send({ robotUrl: 'http://localhost:41243' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.robot.id).toBe('r1');
+    });
+
+    it('returns 400 when robotUrl is missing', async () => {
+      const res = await request(app)
+        .post('/api/robots/register')
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('robotUrl is required');
+    });
+
+    it('returns 400 for invalid URL', async () => {
+      const res = await request(app)
+        .post('/api/robots/register')
+        .send({ robotUrl: 'not-a-url' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid URL format');
+    });
+  });
+
+  describe('DELETE /api/robots/:id', () => {
+    it('unregisters a robot', async () => {
+      mockRobotManager.unregisterRobot.mockResolvedValue(true);
+
+      const res = await request(app).delete('/api/robots/r1');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it('returns 404 for unknown robot', async () => {
+      mockRobotManager.unregisterRobot.mockResolvedValue(false);
+
+      const res = await request(app).delete('/api/robots/unknown');
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/robots/:id/command', () => {
+    it('sends command to robot', async () => {
+      const cmd = { id: 'cmd-1', type: 'move', status: 'sent' };
+      mockRobotManager.sendCommand.mockResolvedValue(cmd);
+
+      const res = await request(app)
+        .post('/api/robots/r1/command')
+        .send({ type: 'move', payload: { x: 10, y: 20 } });
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('cmd-1');
+    });
+
+    it('returns 400 when type is missing', async () => {
+      const res = await request(app)
+        .post('/api/robots/r1/command')
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Command type is required');
+    });
+
+    it('returns 404 when robot not found', async () => {
+      mockRobotManager.sendCommand.mockRejectedValue(new Error('Robot not found'));
+
+      const res = await request(app)
+        .post('/api/robots/r1/command')
+        .send({ type: 'move' });
+
+      expect(res.status).toBe(404);
+    });
+  });
+});
