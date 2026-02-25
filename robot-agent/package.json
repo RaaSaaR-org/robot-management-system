@@ -18,8 +18,9 @@
         "start:heavy": "DOTENV_CONFIG_PATH=.env.heavy node dist/index.js",
         "typecheck": "tsc --noEmit",
         "proto:build": "bash ../protos/build.sh",
-        "test": "vitest",
-        "test:run": "vitest run"
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@a2a-js/sdk": "^0.3.3",
@@ -43,6 +44,7 @@
         "@types/node": "^22.13.14",
         "@types/uuid": "^10.0.0",
         "@types/ws": "^8.5.13",
+        "@vitest/coverage-v8": "^4.0.18",
         "tsx": "^4.19.3",
         "typescript": "^5.8.2",
         "vitest": "^4.0.17"

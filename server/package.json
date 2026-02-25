@@ -13,7 +13,10 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "seed:evaluation": "tsx src/scripts/seed-evaluation.ts"
+    "seed:evaluation": "tsx src/scripts/seed-evaluation.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.966.0",
@@ -45,9 +48,13 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.10.2",
     "@types/pdfkit": "^0.17.5",
+    "@types/supertest": "^6.0.3",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.5.13",
+    "@vitest/coverage-v8": "^4.0.18",
+    "supertest": "^7.2.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.18"
   }
 }
