@@ -110,6 +110,43 @@ export interface ChangePasswordRequest {
 }
 
 // ============================================================================
+// MFA TYPES (TASK-022)
+// ============================================================================
+
+/** MFA TOTP setup response */
+export interface MFATOTPSetupResponse {
+  secret: string;
+  otpauthUrl: string;
+}
+
+/** MFA TOTP verify response */
+export interface MFATOTPVerifyResponse {
+  message: string;
+  recoveryCodes: string[];
+}
+
+/** MFA status */
+export interface MFAStatus {
+  mfaEnabled: boolean;
+  totpConfigured: boolean;
+  hasRecoveryCodes: boolean;
+}
+
+/** Login response when MFA is required */
+export interface MFAChallengeResponse {
+  mfaRequired: true;
+  mfaToken: string;
+  userId: string;
+}
+
+/** Check if a login response requires MFA */
+export function isMFAChallengeResponse(
+  response: LoginResponse | MFAChallengeResponse
+): response is MFAChallengeResponse {
+  return 'mfaRequired' in response && response.mfaRequired === true;
+}
+
+// ============================================================================
 // AUTH STATE TYPES
 // ============================================================================
 

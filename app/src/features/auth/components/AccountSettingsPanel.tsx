@@ -8,6 +8,7 @@
 import { Card } from '@/shared/components/ui';
 import { useAuth } from '../hooks/useAuth';
 import { ChangePasswordForm } from './ChangePasswordForm';
+import { SecuritySettings } from './SecuritySettings';
 
 export interface AccountSettingsPanelProps {
   /** Callback when password is changed */
@@ -94,6 +95,9 @@ export function AccountSettingsPanel({ onPasswordChanged }: AccountSettingsPanel
         </h2>
         <ChangePasswordForm onSuccess={onPasswordChanged} />
       </Card>
+
+      {/* Two-Factor Authentication */}
+      <SecuritySettings />
 
       {/* Logout Section */}
       <Card className="p-6">

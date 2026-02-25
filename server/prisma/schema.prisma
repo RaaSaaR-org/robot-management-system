@@ -306,17 +306,43 @@ model User {
   passwordResetToken   String?
   passwordResetExpires DateTime?
   lastLoginAt          DateTime?
+  lastPasswordChange   DateTime?
+  forcePasswordChange  Boolean   @default(true)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  // MFA fields (TASK-022)
+  mfaEnabled        Boolean   @default(false)
+  loginAttempts     Int       @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+  recoveryCodes     String?   // JSON array of hashed recovery codes
+
   // Relations
   refreshTokens    RefreshToken[]
+  mfaCredentials   MFACredential[]
   gdprRequests     GDPRRequest[]
   consents         UserConsent[]
   dataRestrictions DataRestriction[]
+  mfaCredentials   MFACredential[]
+  accountLockout   AccountLockout?
 
   @@index([email])
   @@index([role])
+}
+
+model MFACredential {
+  id         String    @id @default(uuid())
+  userId     String
+  type       String    // "totp" | "webauthn" | "recovery"
+  secret     String    // TOTP secret or WebAuthn credential ID
+  name       String?   // "Authenticator App", "YubiKey", etc.
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model RefreshToken {
@@ -332,6 +358,34 @@ model RefreshToken {
   @@index([userId])
   @@index([expiresAt])
   @@index([token])
+}
+
+model MFACredential {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String    // "totp" | "webauthn" | "recovery"
+  name      String    // "Authenticator App", "YubiKey", etc.
+  secret    String    // encrypted TOTP secret or WebAuthn credential ID
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  lastUsed  DateTime?
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, type])
+}
+
+model AccountLockout {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  lastAttempt    DateTime  @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ============================================================================
