@@ -76,6 +76,28 @@ describe('UpdateService', () => {
     });
   });
 
+  describe('version validation', () => {
+    it('rejects invalid semver versions', async () => {
+      const fileBuffer = Buffer.from('test-update-package');
+
+      await expect(service.createUpdatePackage({
+        version: '../../../etc/passwd',
+        changelog: 'malicious',
+        fileBuffer,
+      })).rejects.toThrow('Invalid version format');
+    });
+
+    it('rejects partial semver versions', async () => {
+      const fileBuffer = Buffer.from('test-update-package');
+
+      await expect(service.createUpdatePackage({
+        version: '1.2',
+        changelog: 'partial',
+        fileBuffer,
+      })).rejects.toThrow('Invalid version format');
+    });
+  });
+
   // --------------------------------------------------------------------------
   // SIGNATURE VERIFICATION
   // --------------------------------------------------------------------------

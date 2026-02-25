@@ -25,6 +25,7 @@ const { mockUpdateService } = vi.hoisted(() => ({
 
 vi.mock('../services/UpdateService.js', () => ({
   updateService: mockUpdateService,
+  SEMVER_REGEX: /^\d+\.\d+\.\d+$/,
 }));
 
 vi.mock('../middleware/auth.middleware.js', () => ({
@@ -122,6 +123,24 @@ describe('Update Routes', () => {
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('Missing required fields');
     });
+
+    it('returns 400 for invalid semver version', async () => {
+      const response = await request(app)
+        .post('/api/updates')
+        .send({ version: '../../../etc/passwd', changelog: 'malicious' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('Invalid version format');
+    });
+
+    it('returns 400 for non-semver version', async () => {
+      const response = await request(app)
+        .post('/api/updates')
+        .send({ version: 'v1.2', changelog: 'bad version' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('Invalid version format');
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -147,6 +166,47 @@ describe('Update Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('approved');
       expect(mockUpdateService.approveUpdate).toHaveBeenCalledWith('pkg-001', 'admin-001');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/updates/deployments/:robotId
+  // --------------------------------------------------------------------------
+
+  describe('GET /api/updates/deployments/:robotId', () => {
+    it('returns deployment history for a robot', async () => {
+      const mockDeployments = [
+        {
+          id: 'dep-001',
+          packageId: 'pkg-001',
+          robotId: 'robot-001',
+          status: 'success',
+          previousVersion: '1.0.0',
+          deployedAt: '2026-02-25T00:00:00.000Z',
+          rolledBackAt: null,
+          errorMessage: null,
+          createdAt: '2026-02-25T00:00:00.000Z',
+        },
+      ];
+      mockUpdateService.getDeploymentHistory.mockResolvedValue(mockDeployments);
+
+      const response = await request(app).get('/api/updates/deployments/robot-001');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].robotId).toBe('robot-001');
+      expect(mockUpdateService.getDeploymentHistory).toHaveBeenCalledWith('robot-001');
+    });
+
+    it('does not match as /:id (route ordering fix)', async () => {
+      mockUpdateService.getDeploymentHistory.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/updates/deployments/robot-001');
+
+      // Should call getDeploymentHistory, NOT getUpdatePackage
+      expect(response.status).toBe(200);
+      expect(mockUpdateService.getDeploymentHistory).toHaveBeenCalled();
+      expect(mockUpdateService.getUpdatePackage).not.toHaveBeenCalled();
     });
   });
 

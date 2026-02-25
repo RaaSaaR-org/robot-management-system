@@ -60,6 +60,9 @@ export interface UpdateEvent {
 /** Minimum allowed version for anti-rollback protection */
 const MIN_ALLOWED_VERSION = '0.0.1';
 
+/** Semver validation regex */
+export const SEMVER_REGEX = /^\d+\.\d+\.\d+$/;
+
 // ============================================================================
 // SERVICE
 // ============================================================================
@@ -76,6 +79,10 @@ export class UpdateService {
    */
   async createUpdatePackage(input: CreateUpdateInput): Promise<UpdatePackage> {
     const { version, changelog, fileBuffer } = input;
+
+    if (!SEMVER_REGEX.test(version)) {
+      throw new Error(`Invalid version format: ${version}. Must be semver (e.g. 1.2.3)`);
+    }
 
     // Generate Ed25519 keypair for this package
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');

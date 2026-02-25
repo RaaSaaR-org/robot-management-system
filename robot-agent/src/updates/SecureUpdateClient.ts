@@ -49,13 +49,30 @@ export class SecureUpdateClient {
   private robotId: string;
   private currentVersion: string;
   private backupDir: string;
+  private readonly versionFile: string;
   private checkInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(robotId?: string, serverUrl?: string) {
     this.robotId = robotId ?? config.robotId;
     this.serverUrl = serverUrl ?? config.serverUrl;
-    this.currentVersion = '1.0.0';
     this.backupDir = path.join(process.cwd(), 'data', 'update-backups');
+    this.versionFile = path.join(process.cwd(), 'state', 'current-version.json');
+    this.currentVersion = this.loadCurrentVersion();
+  }
+
+  private loadCurrentVersion(): string {
+    try {
+      const data = JSON.parse(fs.readFileSync(this.versionFile, 'utf-8'));
+      return data.version || '1.0.0';
+    } catch {
+      return '1.0.0';
+    }
+  }
+
+  private saveCurrentVersion(version: string): void {
+    fs.mkdirSync(path.dirname(this.versionFile), { recursive: true });
+    fs.writeFileSync(this.versionFile, JSON.stringify({ version, updatedAt: new Date().toISOString() }));
+    this.currentVersion = version;
   }
 
   // --------------------------------------------------------------------------
@@ -120,8 +137,16 @@ export class SecureUpdateClient {
     }
     const info = (await response.json()) as UpdatePackageInfo;
 
-    // For the prototype, the actual file content is not served separately,
-    // so we create a buffer representing the package content
+    // Anti-rollback: reject versions below current
+    if (!this.isVersionAcceptable(info.version)) {
+      throw new Error(`Anti-rollback: version ${info.version} is below minimum allowed`);
+    }
+
+    // TODO: Implement actual file download from server storage endpoint
+    // Currently using placeholder buffer — real implementation requires:
+    // 1. Server: file storage (local filesystem or S3)
+    // 2. Client: HTTP download of actual binary
+    // Tracked in TASK-029 follow-up
     const buffer = Buffer.from(`update-package-${info.version}`);
 
     // Verify SHA-256 checksum
@@ -130,7 +155,14 @@ export class SecureUpdateClient {
       throw new Error(`Checksum mismatch: expected ${info.checksum}, got ${checksum}`);
     }
 
-    console.log(`[SecureUpdateClient] Downloaded and verified update ${info.version} (checksum OK)`);
+    // Verify Ed25519 signature
+    const isValid = this.verifySignature(info.checksum, info.signature, info.publicKey);
+    if (!isValid) {
+      throw new Error(`Signature verification failed for update ${updateId}`);
+    }
+    console.log(`[SecureUpdateClient] Update ${updateId} signature verified`);
+
+    console.log(`[SecureUpdateClient] Downloaded and verified update ${info.version} (checksum + signature OK)`);
     return { buffer, info };
   }
 
@@ -156,7 +188,7 @@ export class SecureUpdateClient {
   /**
    * Apply an update atomically: backup -> install -> verify -> cleanup
    */
-  async applyUpdate(packagePath: string): Promise<boolean> {
+  async applyUpdate(packagePath: string, newVersion?: string): Promise<boolean> {
     // Step 1: Create backup
     const backupPath = await this.createBackup();
     console.log(`[SecureUpdateClient] Backup created at ${backupPath}`);
@@ -171,7 +203,12 @@ export class SecureUpdateClient {
         throw new Error('Update verification failed: package not found after install');
       }
 
-      // Step 4: Cleanup backup on success
+      // Step 4: Persist new version on success
+      if (newVersion) {
+        this.saveCurrentVersion(newVersion);
+      }
+
+      // Step 5: Cleanup backup on success
       console.log('[SecureUpdateClient] Update applied successfully');
       return true;
     } catch (error) {
@@ -190,9 +227,9 @@ export class SecureUpdateClient {
    * Rollback to a previous version from backup
    */
   async rollback(targetVersion: string): Promise<boolean> {
-    // Anti-rollback: reject downgrade below current version
-    if (this.compareVersions(targetVersion, this.currentVersion) > 0) {
-      console.warn(`[SecureUpdateClient] Rollback target ${targetVersion} is newer than current ${this.currentVersion}`);
+    // Anti-rollback: reject downgrade below minimum acceptable version
+    if (!this.isVersionAcceptable(targetVersion)) {
+      throw new Error(`Anti-rollback protection: cannot rollback to version ${targetVersion}`);
     }
 
     const backupPath = path.join(this.backupDir, `backup-${targetVersion}`);

@@ -104,6 +104,101 @@ describe('SecureUpdateClient', () => {
   });
 
   // --------------------------------------------------------------------------
+  // DOWNLOAD & VERIFY (signature + anti-rollback)
+  // --------------------------------------------------------------------------
+
+  describe('downloadUpdate', () => {
+    it('verifies signature during download', async () => {
+      const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+      const version = '1.1.0';
+      const fileBuffer = Buffer.from(`update-package-${version}`);
+      const checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      const signature = crypto.sign(null, Buffer.from(checksum), privateKey);
+      const signatureBase64 = signature.toString('base64');
+      const publicKeyBase64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+
+      const mockInfo = {
+        id: 'pkg-001',
+        version,
+        changelog: 'Test',
+        signature: signatureBase64,
+        publicKey: publicKeyBase64,
+        checksum,
+        fileSize: fileBuffer.length,
+        status: 'approved',
+        approvedBy: 'admin',
+        approvedAt: '2026-02-25T00:00:00.000Z',
+        createdAt: '2026-02-25T00:00:00.000Z',
+      };
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => mockInfo,
+      });
+
+      const result = await client.downloadUpdate('pkg-001');
+      expect(result.info.version).toBe('1.1.0');
+      expect(result.buffer).toBeDefined();
+    });
+
+    it('rejects download when signature is invalid', async () => {
+      const { publicKey: wrongKey } = crypto.generateKeyPairSync('ed25519');
+      const { privateKey: otherKey } = crypto.generateKeyPairSync('ed25519');
+      const version = '1.1.0';
+      const fileBuffer = Buffer.from(`update-package-${version}`);
+      const checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      // Sign with one key, provide different public key
+      const signature = crypto.sign(null, Buffer.from(checksum), otherKey);
+      const signatureBase64 = signature.toString('base64');
+      const publicKeyBase64 = wrongKey.export({ type: 'spki', format: 'der' }).toString('base64');
+
+      const mockInfo = {
+        id: 'pkg-001',
+        version,
+        changelog: 'Test',
+        signature: signatureBase64,
+        publicKey: publicKeyBase64,
+        checksum,
+        fileSize: fileBuffer.length,
+        status: 'approved',
+        approvedBy: 'admin',
+        approvedAt: '2026-02-25T00:00:00.000Z',
+        createdAt: '2026-02-25T00:00:00.000Z',
+      };
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => mockInfo,
+      });
+
+      await expect(client.downloadUpdate('pkg-001')).rejects.toThrow('Signature verification failed');
+    });
+
+    it('rejects download when version is below current (anti-rollback)', async () => {
+      const mockInfo = {
+        id: 'pkg-old',
+        version: '0.9.0',
+        changelog: 'Old version',
+        signature: 'sig',
+        publicKey: 'pk',
+        checksum: 'cs',
+        fileSize: 10,
+        status: 'approved',
+        approvedBy: null,
+        approvedAt: null,
+        createdAt: '2026-02-25T00:00:00.000Z',
+      };
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => mockInfo,
+      });
+
+      await expect(client.downloadUpdate('pkg-old')).rejects.toThrow('Anti-rollback');
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // APPLY UPDATE
   // --------------------------------------------------------------------------
 
@@ -132,6 +227,10 @@ describe('SecureUpdateClient', () => {
       const result = await client.rollback('1.0.0');
       // If no backups exist, it returns false
       expect(typeof result).toBe('boolean');
+    });
+
+    it('rejects rollback to version below current (anti-rollback)', async () => {
+      await expect(client.rollback('0.5.0')).rejects.toThrow('Anti-rollback protection');
     });
   });
 

@@ -6,7 +6,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { updateService } from '../services/UpdateService.js';
+import { updateService, SEMVER_REGEX } from '../services/UpdateService.js';
 import type { UpdatePackageStatus } from '../services/UpdateService.js';
 
 export const updateRoutes = Router();
@@ -43,6 +43,10 @@ updateRoutes.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required fields: version, changelog' });
     }
 
+    if (!SEMVER_REGEX.test(version)) {
+      return res.status(400).json({ error: `Invalid version format: ${version}. Must be semver (e.g. 1.2.3)` });
+    }
+
     // Use provided file data or create a placeholder buffer
     const fileBuffer = fileData
       ? Buffer.from(fileData, 'base64')
@@ -53,6 +57,21 @@ updateRoutes.post('/', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error creating update package:', error);
     res.status(500).json({ error: 'Failed to create update package' });
+  }
+});
+
+/**
+ * GET /deployments/:robotId - Get deployment history for a robot
+ * NOTE: Must be registered BEFORE /:id to prevent Express matching
+ * "/deployments/abc" as /:id with id="deployments"
+ */
+updateRoutes.get('/deployments/:robotId', async (req: Request, res: Response) => {
+  try {
+    const deployments = await updateService.getDeploymentHistory(req.params.robotId);
+    res.json(deployments);
+  } catch (error) {
+    console.error('Error getting deployment history:', error);
+    res.status(500).json({ error: 'Failed to get deployment history' });
   }
 });
 
@@ -137,18 +156,5 @@ updateRoutes.post('/:id/rollback/:robotId', async (req: Request, res: Response) 
     const message = error instanceof Error ? error.message : 'Failed to trigger rollback';
     console.error('Error triggering rollback:', error);
     res.status(400).json({ error: message });
-  }
-});
-
-/**
- * GET /deployments/:robotId - Get deployment history for a robot
- */
-updateRoutes.get('/deployments/:robotId', async (req: Request, res: Response) => {
-  try {
-    const deployments = await updateService.getDeploymentHistory(req.params.robotId);
-    res.json(deployments);
-  } catch (error) {
-    console.error('Error getting deployment history:', error);
-    res.status(500).json({ error: 'Failed to get deployment history' });
   }
 });
