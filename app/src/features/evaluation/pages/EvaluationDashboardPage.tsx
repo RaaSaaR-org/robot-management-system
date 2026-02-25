@@ -139,25 +139,25 @@ export function EvaluationDashboardPage() {
           </div>
 
           {/* Row 2: Success Rate Chart */}
-          <div className="rounded-lg border border-theme section-primary p-5">
+          <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
             <h2 className="text-lg font-semibold text-theme-primary mb-4">Success Rate Over Time</h2>
             <SuccessRateChart episodes={episodes} height={300} />
           </div>
 
           {/* Row 3: Error Analysis + Model Comparison */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="rounded-lg border border-theme section-primary p-5">
+            <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
               <h2 className="text-lg font-semibold text-theme-primary mb-4">Error Analysis</h2>
               <ErrorAnalysisPanel errors={errors} height={300} />
             </div>
-            <div className="rounded-lg border border-theme section-primary p-5">
+            <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
               <h2 className="text-lg font-semibold text-theme-primary mb-4">Model Comparison</h2>
               <ModelComparisonTable comparison={comparison} loading={comparisonLoading} />
             </div>
           </div>
 
           {/* Row 4: Rollout Timeline */}
-          <div className="rounded-lg border border-theme section-primary p-5">
+          <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
             <h2 className="text-lg font-semibold text-theme-primary mb-4">Recent Rollouts</h2>
             <RolloutTimeline episodes={episodes} maxItems={10} />
           </div>

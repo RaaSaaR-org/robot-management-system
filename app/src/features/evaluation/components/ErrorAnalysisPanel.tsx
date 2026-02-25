@@ -40,7 +40,7 @@ export function ErrorAnalysisPanel({ errors, height = 300 }: ErrorAnalysisPanelP
   }));
 
   return (
-    <div className="w-full" style={{ height }}>
+    <div className="w-full min-w-0" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <PieChart>
           <Pie
