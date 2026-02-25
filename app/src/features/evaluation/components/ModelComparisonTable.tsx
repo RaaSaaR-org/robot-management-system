@@ -64,6 +64,7 @@ export function ModelComparisonTable({ comparison, loading }: ModelComparisonTab
 
   return (
     <div className="overflow-hidden rounded-lg border border-theme">
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="section-secondary">
@@ -98,6 +99,7 @@ export function ModelComparisonTable({ comparison, loading }: ModelComparisonTab
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

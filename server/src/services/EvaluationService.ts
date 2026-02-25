@@ -99,7 +99,7 @@ export class EvaluationService {
     if (filters.robotId) where.robotId = filters.robotId;
     if (filters.modelVersion) where.modelVersion = filters.modelVersion;
     if (filters.period) {
-      where.createdAt = { gte: this.getPeriodStart(filters.period) };
+      where.startedAt = { gte: this.getPeriodStart(filters.period) };
     }
     if (filters.success !== undefined) where.success = filters.success;
     return where;
@@ -164,7 +164,7 @@ export class EvaluationService {
       prisma.evaluationEpisode.findMany({
         where,
         include: { robot: { select: { id: true, name: true, model: true } } },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { startedAt: 'desc' },
         skip,
         take: limit,
       }),

@@ -78,7 +78,7 @@ export function SuccessRateChart({ episodes, height = 300 }: SuccessRateChartPro
 
   return (
     <div className="w-full" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <LineChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis dataKey="date" stroke="#6b7280" />
