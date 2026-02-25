@@ -45,6 +45,7 @@ import { activeLearningRoutes } from './routes/active-learning.routes.js';
 import { syntheticRoutes } from './routes/synthetic.routes.js';
 import { federatedRoutes } from './routes/federated.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
+import { evaluationRoutes } from './routes/evaluation.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -227,6 +228,9 @@ export function createApp(): Express {
 
   // Customer data contribution routes (protected) - Data contribution portal
   app.use('/api/contributions', authMiddleware, contributionsRoutes);
+
+  // Evaluation routes (protected) - VLA model evaluation dashboard
+  app.use('/api/evaluation', authMiddleware, evaluationRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
