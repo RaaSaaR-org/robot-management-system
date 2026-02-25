@@ -13,8 +13,14 @@ import type {
   TaskStatusUpdateRequest,
 } from '../robot/types.js';
 import { config } from '../config/config.js';
+import type { DeviceIdentityManager } from '../security/device-identity.js';
+import type { SecureBootVerifier } from '../security/secure-boot.js';
 
-export function createRestRoutes(robotStateManager: RobotStateManager): Router {
+export function createRestRoutes(
+  robotStateManager: RobotStateManager,
+  deviceIdentity?: DeviceIdentityManager,
+  secureBoot?: SecureBootVerifier,
+): Router {
   const router = Router();
 
   // GET /robots/:id - Get robot details (RoboMindOS compatible)
@@ -661,6 +667,66 @@ export function createRestRoutes(robotStateManager: RobotStateManager): Router {
       metrics: robotStateManager.getVLAInferenceMetrics(),
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // ============================================================================
+  // SECURITY ENDPOINTS (CRA Annex I, TASK-023)
+  // ============================================================================
+
+  // GET /security/attestation - Boot attestation record
+  router.get('/security/attestation', (_req: Request, res: Response) => {
+    if (!secureBoot) {
+      res.status(503).json({ code: 'SECURE_BOOT_UNAVAILABLE', message: 'Secure boot not initialized' });
+      return;
+    }
+
+    const attestation = secureBoot.getAttestation();
+    if (!attestation) {
+      res.status(503).json({ code: 'NO_ATTESTATION', message: 'Boot attestation not yet available' });
+      return;
+    }
+
+    res.json(attestation);
+  });
+
+  // GET /security/certificate - Public device certificate (PEM)
+  router.get('/security/certificate', (_req: Request, res: Response) => {
+    if (!deviceIdentity) {
+      res.status(503).json({ code: 'IDENTITY_UNAVAILABLE', message: 'Device identity not initialized' });
+      return;
+    }
+
+    const identity = deviceIdentity.getIdentity();
+    res.json({
+      deviceId: identity.deviceId,
+      fingerprint: identity.fingerprint,
+      certificate: identity.certificate,
+      publicKey: identity.publicKey,
+      issuedAt: identity.issuedAt,
+      expiresAt: identity.expiresAt,
+    });
+  });
+
+  // POST /security/verify - Challenge-response verification
+  router.post('/security/verify', (req: Request, res: Response) => {
+    if (!deviceIdentity) {
+      res.status(503).json({ code: 'IDENTITY_UNAVAILABLE', message: 'Device identity not initialized' });
+      return;
+    }
+
+    const { nonce } = req.body;
+    if (!nonce || typeof nonce !== 'string') {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'nonce (string) is required' });
+      return;
+    }
+
+    try {
+      const response = deviceIdentity.signChallenge(nonce);
+      res.json(response);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Signing failed';
+      res.status(500).json({ code: 'SIGNING_FAILED', message: msg });
+    }
   });
 
   return router;

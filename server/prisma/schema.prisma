@@ -55,9 +55,31 @@ model Robot {
   robotTasks    RobotTask[]
   incidents     Incident[]
   evaluationEpisodes EvaluationEpisode[]
+  deviceCertificate  DeviceCertificate?
 
   @@index([status])
   @@index([a2aEnabled])
+}
+
+// ============================================================================
+// DEVICE IDENTITY (CRA Annex I, TASK-023)
+// ============================================================================
+
+model DeviceCertificate {
+  id          String    @id @default(cuid())
+  robotId     String    @unique
+  fingerprint String    @unique
+  publicKey   String    // PEM-encoded public key
+  certificate String    // PEM-encoded certificate
+  issuedAt    DateTime  @default(now())
+  expiresAt   DateTime?
+  status      String    @default("active") // active, revoked, expired
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([status])
 }
 
 model RobotTelemetry {

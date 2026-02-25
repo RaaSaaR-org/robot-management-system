@@ -23,6 +23,8 @@ import { setRobotStateManager as setStatusStateManager } from './tools/status.js
 import { complianceLogClient } from './compliance/ComplianceLogClient.js';
 import { createBilateralTeleopWebSocket } from './api/bilateral-teleop.js';
 import { FrameRecorder } from './teleop/FrameRecorder.js';
+import { DeviceIdentityManager } from './security/device-identity.js';
+import { SecureBootVerifier } from './security/secure-boot.js';
 
 async function main() {
   console.log('='.repeat(60));
@@ -35,6 +37,19 @@ async function main() {
   const PORT = config.port;
   const ROBOT_ID = config.robotId;
   const ROBOT_NAME = config.robotName;
+
+  // Initialize device identity (CRA Annex I — unique device identity)
+  const deviceIdentity = new DeviceIdentityManager(ROBOT_ID);
+  await deviceIdentity.initialize();
+  console.log(`[DeviceIdentity] Device fingerprint: ${deviceIdentity.getDeviceFingerprint().slice(0, 20)}...`);
+
+  // Secure boot verification (CRA Annex I — software integrity)
+  const packageDir = new URL('..', import.meta.url).pathname;
+  const secureBoot = new SecureBootVerifier(packageDir);
+  const attestation = secureBoot.verify(ROBOT_ID, deviceIdentity.getDeviceFingerprint());
+  if (!attestation.versionCompliant) {
+    console.warn('[SecureBoot] WARNING: Anti-rollback violation detected');
+  }
 
   // Initialize robot state manager
   const robotStateManager = new RobotStateManager({
@@ -106,7 +121,7 @@ async function main() {
   app.use(express.json());
 
   // Mount REST API routes (RoboMindOS compatible)
-  app.use('/api/v1', createRestRoutes(robotStateManager));
+  app.use('/api/v1', createRestRoutes(robotStateManager, deviceIdentity, secureBoot));
 
   // Mount A2A routes
   const a2aApp = new A2AExpressApp(requestHandler);
