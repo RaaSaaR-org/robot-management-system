@@ -44,7 +44,7 @@ export function Footer() {
               <Logo linkTo="" />
             </div>
             <p className="text-theme-muted text-sm mb-4">
-              The open platform for Physical AI — collect, train, deploy, evaluate.
+              The Open Physical AI Platform — Collect → Train → Deploy → Evaluate → Operate → Comply.
             </p>
             {/* Social Links */}
             <div className="flex gap-4">

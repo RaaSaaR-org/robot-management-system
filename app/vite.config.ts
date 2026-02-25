@@ -35,7 +35,7 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**", "**/server/**", "**/packages/**"],
     },
     proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true },
+      '/api': { target: 'http://localhost:3001', changeOrigin: true, ws: true },
       '/.well-known': { target: 'http://localhost:3001', changeOrigin: true },
     },
   },

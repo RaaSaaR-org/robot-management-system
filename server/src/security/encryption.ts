@@ -33,8 +33,13 @@ const TAG_LENGTH = 16; // 128 bits
 /**
  * Get encryption key from environment variable.
  * Key must be 64 hex characters (256 bits).
+ * Cached after first call to avoid repeated warnings in dev mode.
  */
+let _cachedKey: Buffer | null = null;
+
 function getEncryptionKey(): Buffer {
+  if (_cachedKey) return _cachedKey;
+
   const keyHex = process.env.COMPLIANCE_LOG_ENCRYPTION_KEY;
 
   if (!keyHex) {
@@ -44,7 +49,8 @@ function getEncryptionKey(): Buffer {
       console.warn(
         '[Encryption] COMPLIANCE_LOG_ENCRYPTION_KEY not set, using development key. DO NOT use in production!',
       );
-      return createHash('sha256').update('development-compliance-key-do-not-use-in-production').digest();
+      _cachedKey = createHash('sha256').update('development-compliance-key-do-not-use-in-production').digest();
+      return _cachedKey;
     }
     throw new Error('COMPLIANCE_LOG_ENCRYPTION_KEY environment variable is required in production');
   }
@@ -57,7 +63,8 @@ function getEncryptionKey(): Buffer {
     throw new Error('COMPLIANCE_LOG_ENCRYPTION_KEY must contain only hexadecimal characters');
   }
 
-  return Buffer.from(keyHex, 'hex');
+  _cachedKey = Buffer.from(keyHex, 'hex');
+  return _cachedKey;
 }
 
 // ============================================================================

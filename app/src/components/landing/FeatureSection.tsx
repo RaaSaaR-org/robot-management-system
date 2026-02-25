@@ -88,14 +88,14 @@ export function FeatureSection() {
         {/* Section Header */}
         <div className="text-center mb-16">
           <p className="text-cobalt font-mono text-sm mb-4 tracking-wider uppercase">
-            Platform
+            The Full Pipeline
           </p>
           <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
-            Collect, Train, Deploy, Evaluate
+            Collect → Train → Deploy → Evaluate → Operate → Comply
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            The complete lifecycle for Robotics AI — from recording demonstrations
-            to deploying trained models on your fleet.
+            The complete Physical AI lifecycle — from recording demonstrations
+            to compliant production deployment.
           </p>
         </div>
 
