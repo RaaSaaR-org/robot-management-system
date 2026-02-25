@@ -4,7 +4,7 @@ aliases:
 - TASK-023
 title: Device Identity & Secure Boot (Compliance)
 slug: device-identity-secure-boot-compliance
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,8 +17,9 @@ depends_on:
 - "[[TASK-001]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-25
 ---
+
 
 
 

@@ -1,12 +1,20 @@
 ---
 id: TASK-080
-title: "Evaluation Dashboard — Rollout Metrics, Episode Replay & Error Analysis"
-status: todo
+title: Evaluation Dashboard — Rollout Metrics, Episode Replay & Error Analysis
+status: done
 priority: 1
-tags: [vla, evaluation, platform]
-depends_on: ["TASK-045", "TASK-052", "TASK-054"]
+tags:
+- vla
+- evaluation
+- platform
+depends_on:
+- TASK-045
+- TASK-052
+- TASK-054
 created: 2026-02-24
+updated: 2026-02-25
 ---
+
 
 # TASK-080 — Evaluation Dashboard
 
