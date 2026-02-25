@@ -224,6 +224,13 @@ export const LazyContributionDetailPage = lazy(() =>
   import('@/features/contributions').then((m) => ({ default: m.ContributionDetailPage }))
 );
 
+/**
+ * Evaluation dashboard page - VLA model evaluation metrics
+ */
+export const LazyEvaluationDashboardPage = lazy(() =>
+  import('@/features/evaluation').then((m) => ({ default: m.EvaluationDashboardPage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================

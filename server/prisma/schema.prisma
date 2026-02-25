@@ -54,6 +54,7 @@ model Robot {
   alerts        Alert[]
   robotTasks    RobotTask[]
   incidents     Incident[]
+  evaluationEpisodes EvaluationEpisode[]
 
   @@index([status])
   @@index([a2aEnabled])
@@ -1803,4 +1804,27 @@ model Deployment {
 
   @@index([modelVersionId])
   @@index([status])
+}
+
+// EvaluationEpisode - Track VLA model evaluation rollouts
+model EvaluationEpisode {
+  id            String   @id @default(uuid())
+  robotId       String
+  modelVersion  String
+  taskPrompt    String
+  startedAt     DateTime
+  endedAt       DateTime
+  durationMs    Int
+  success       Boolean
+  errorType     String?
+  videoUrl      String?
+  metadata      String   @default("{}") // JSON: Record<string, unknown>
+  createdAt     DateTime @default(now())
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([robotId])
+  @@index([modelVersion])
+  @@index([createdAt])
+  @@index([success])
 }

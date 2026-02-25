@@ -48,6 +48,7 @@ import {
   LazyContributionsPage,
   LazyNewContributionPage,
   LazyContributionDetailPage,
+  LazyEvaluationDashboardPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -332,6 +333,16 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazySkillsPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Evaluation - VLA model evaluation dashboard */}
+          <Route
+            path="/evaluation"
+            element={
+              <ProtectedAppRoute>
+                <LazyEvaluationDashboardPage />
               </ProtectedAppRoute>
             }
           />
