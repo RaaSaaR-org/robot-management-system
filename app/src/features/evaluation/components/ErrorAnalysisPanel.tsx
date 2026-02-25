@@ -40,36 +40,55 @@ export function ErrorAnalysisPanel({ errors, height = 300 }: ErrorAnalysisPanelP
   }));
 
   return (
-    <div className="w-full min-w-0">
+    <div className="w-full min-w-0 overflow-hidden">
       <ResponsiveContainer width="100%" height={height} minWidth={0}>
         <PieChart>
           <Pie
             data={data}
             cx="50%"
-            cy="50%"
-            innerRadius={60}
-            outerRadius={100}
+            cy="45%"
+            innerRadius={55}
+            outerRadius={85}
             paddingAngle={2}
             dataKey="value"
-            label={(props: PieLabelRenderProps) => {
-              const name = String(props.name ?? '');
-              const pct = typeof props.percent === 'number' ? (props.percent * 100).toFixed(0) : '0';
-              return `${name} (${pct}%)`;
+            label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }: PieLabelRenderProps) => {
+              const RADIAN = Math.PI / 180;
+              const cxN = typeof cx === 'number' ? cx : 0;
+              const cyN = typeof cy === 'number' ? cy : 0;
+              const innerR = typeof innerRadius === 'number' ? innerRadius : 0;
+              const outerR = typeof outerRadius === 'number' ? outerRadius : 0;
+              const angle = typeof midAngle === 'number' ? midAngle : 0;
+              const radius = innerR + (outerR - innerR) * 0.5;
+              const x = cxN + radius * Math.cos(-angle * RADIAN);
+              const y = cyN + radius * Math.sin(-angle * RADIAN);
+              const pct = typeof percent === 'number' ? (percent * 100).toFixed(0) : '0';
+              if (Number(pct) < 5) return null;
+              return (
+                <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={12} fontWeight="bold">
+                  {`${pct}%`}
+                </text>
+              );
             }}
+            labelLine={false}
           >
             {data.map((_entry, index) => (
               <Cell key={index} fill={COLORS[index % COLORS.length]} />
             ))}
           </Pie>
           <Tooltip
-            formatter={(value) => [String(value), '']}
+            formatter={(value, name) => [`${String(value)} errors`, String(name)]}
             contentStyle={{
               backgroundColor: 'rgba(255, 255, 255, 0.95)',
               border: '1px solid #e5e7eb',
               borderRadius: '8px',
             }}
           />
-          <Legend />
+          <Legend
+            formatter={(value, entry) => {
+              const pct = (entry as { payload?: { percentage?: number } }).payload?.percentage;
+              return pct !== undefined ? `${value} (${pct.toFixed(0)}%)` : value;
+            }}
+          />
         </PieChart>
       </ResponsiveContainer>
     </div>
