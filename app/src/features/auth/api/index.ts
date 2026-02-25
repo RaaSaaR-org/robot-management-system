@@ -4,5 +4,4 @@
  * @feature auth
  */
 
-export * from './authApi';
-export * from './mfaApi';
+export { authApi } from './authApi';
