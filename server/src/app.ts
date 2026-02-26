@@ -52,6 +52,7 @@ import { securityRoutes } from './routes/security.routes.js';
 import { updateRoutes } from './routes/update.routes.js';
 import { settingsRoutes } from './routes/settings.routes.js';
 import { uncertaintyRoutes } from './routes/uncertainty.routes.js';
+import { isaacLabRoutes } from './routes/isaac-lab.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -256,6 +257,9 @@ export function createApp(): Express {
 
   // Uncertainty routes (protected) - TASK-073 Ensemble uncertainty for active learning
   app.use('/api/uncertainty', authMiddleware, uncertaintyRoutes);
+
+  // Isaac Lab REST client routes (protected) - TASK-069 Synthetic data generation
+  app.use('/api/isaac-lab', authMiddleware, isaacLabRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
