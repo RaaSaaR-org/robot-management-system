@@ -225,3 +225,4 @@ export * from './retention.types.js';
 export * from './gdpr.types.js';
 export * from './process.types.js';
 export * from './robotTask.types.js';
+export * from './uncertainty.types.js';
