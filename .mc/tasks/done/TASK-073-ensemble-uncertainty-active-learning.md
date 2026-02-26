@@ -4,7 +4,7 @@ aliases:
 - TASK-073
 title: Ensemble Uncertainty for Active Learning
 slug: ensemble-uncertainty-active-learning
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -17,8 +17,9 @@ depends_on:
 - "[[TASK-062]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-26
 ---
+
 
 
 
@@ -29,3 +30,4 @@ Implement multi-model ensemble disagreement and MC Dropout uncertainty estimatio
 
 ## Notes
 Migrated from task-master TM-68. Status: pending.
+%% mc-links: [[TASK-062]] %%
