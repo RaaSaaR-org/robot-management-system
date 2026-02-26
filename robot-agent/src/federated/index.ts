@@ -10,6 +10,8 @@ export type { JoinRoundResponse, UploadGradientsResponse, DownloadModelResponse 
 export { LocalTrainer } from './LocalTrainer.js';
 export { RoundLifecycle } from './RoundLifecycle.js';
 export type { RoundLifecycleConfig } from './RoundLifecycle.js';
+export { SecureAggregation } from './SecureAggregation.js';
+export type { AggregationRound, MaskedUpdate } from './SecureAggregation.js';
 
 export type {
   LoRAConfig,
