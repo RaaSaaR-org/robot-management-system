@@ -47,20 +47,20 @@ class SmolVLAModel(VLAModel):
 
         logger.info(f"Loading SmolVLA from {self.model_path} on {self.device}")
 
-        # Pattern A: Direct import
+        # Pattern A: lerobot >= 0.4 (policies moved to lerobot.policies.*)
         try:
-            from lerobot.common.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+            from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
             self.policy = SmolVLAPolicy.from_pretrained(self.model_path)
         except (ImportError, AttributeError):
-            # Pattern B: Factory
+            # Pattern B: lerobot < 0.4 (lerobot.common.policies.*)
             try:
-                from lerobot.common.policies.factory import make_policy
+                from lerobot.common.policies.smolvla.modeling_smolvla import SmolVLAPolicy as SmolVLAPolicyLegacy
 
-                self.policy = make_policy(type="smolvla", pretrained_path=self.model_path)
+                self.policy = SmolVLAPolicyLegacy.from_pretrained(self.model_path)
             except (ImportError, AttributeError) as e:
                 raise RuntimeError(
-                    f"Could not load SmolVLA. Tried direct import and factory. "
+                    f"Could not load SmolVLA. Tried lerobot.policies and lerobot.common.policies. "
                     f"Check LeRobot installation. Error: {e}"
                 ) from e
 
