@@ -186,6 +186,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(vla_runner.status())
             else:
                 self._json({"active": False, "instruction": "", "step": 0, "queue_size": 0, "error": None})
+        elif self.path == "/safety/status":
+            if vla_runner is not None:
+                self._json(vla_runner.safety_status())
+            else:
+                self._json({
+                    "validator_enabled": True,
+                    "rate_limiter_enabled": True,
+                    "watchdog_healthy": True,
+                    "last_watchdog_latency_ms": None,
+                    "actions_validated": 0,
+                    "actions_rejected": 0,
+                    "actions_clipped": 0,
+                    "rate_limiter_max_delta": 10.0,
+                    "watchdog_timeout_ms": 100.0,
+                    "degradation_events": [],
+                })
         else:
             self.send_error(404)
 
@@ -237,6 +253,17 @@ class Handler(BaseHTTPRequestHandler):
             vla_start_time = 0.0
             print(f"[Sidecar/VLA] Stopped (ran for {elapsed:.1f}s)", flush=True)
             self._json({"ok": True})
+        elif self.path == "/safety/config":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            if vla_runner is not None:
+                vla_runner.update_safety_config(body)
+                self._json({"ok": True, "config": {
+                    "max_delta_degrees": vla_runner.rate_limiter.max_delta,
+                    "watchdog_timeout_ms": vla_runner.watchdog.timeout_ms,
+                }})
+            else:
+                self._json({"ok": False, "error": "VLA runner not active"})
         else:
             self.send_error(404)
 

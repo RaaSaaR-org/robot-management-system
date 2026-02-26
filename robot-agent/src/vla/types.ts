@@ -78,6 +78,36 @@ export interface VLAStatus {
 }
 
 /**
+ * VLA safety monitoring status from the hardware sidecar.
+ */
+export interface VLASafetyStatus {
+  /** Whether joint-limit validation is enabled */
+  validatorEnabled: boolean;
+  /** Whether movement rate limiting is enabled */
+  rateLimiterEnabled: boolean;
+  /** Whether the network watchdog considers the VLA server healthy */
+  watchdogHealthy: boolean;
+  /** Most recent VLA server response latency in ms */
+  lastLatencyMs: number | null;
+  /** Total actions that passed validation */
+  actionsValidated: number;
+  /** Total actions rejected by joint-limit validation */
+  actionsRejected: number;
+  /** Total actions clipped by joint-limit or rate-limit */
+  actionsClipped: number;
+  /** Current max delta degrees setting for rate limiter */
+  rateLimiterMaxDelta: number;
+  /** Current watchdog timeout threshold in ms */
+  watchdogTimeoutMs: number;
+  /** Degradation events (safe stops) */
+  degradationEvents: Array<{
+    type: string;
+    reason: string;
+    timestamp: number;
+  }>;
+}
+
+/**
  * Observation represents the robot's current sensory state for VLA inference.
  */
 export interface Observation {

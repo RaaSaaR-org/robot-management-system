@@ -573,6 +573,33 @@ export function createRestRoutes(
     });
   });
 
+  // GET /robots/:id/vla/safety - Get VLA safety monitoring status (Task 63)
+  router.get('/robots/:id/vla/safety', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    try {
+      const safetyStatus = await robotStateManager.getVLASafetyStatus();
+      res.json({
+        robotId: robot.id,
+        safety: safetyStatus,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch safety status';
+      res.status(500).json({
+        code: 'VLA_SAFETY_STATUS_FAILED',
+        message: errorMessage,
+      });
+    }
+  });
+
   // ============================================================================
   // VLA MODEL MANAGEMENT ENDPOINTS (Task 47)
   // ============================================================================
