@@ -4,7 +4,7 @@ aliases:
 - TASK-029
 title: Secure Update System OTA (Compliance)
 slug: secure-update-system-ota-compliance
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
