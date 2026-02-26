@@ -63,8 +63,11 @@ class ServerConfig:
 # ── Pydantic models ──────────────────────────────────────────────
 
 class PredictRequest(BaseModel):
-    images: dict[str, str] = Field(
-        ..., description="camera_name -> base64-encoded JPEG"
+    image_b64: str | None = Field(
+        None, description="Backward-compat: single base64-encoded JPEG (treated as front)"
+    )
+    images: dict[str, str] | None = Field(
+        None, description="camera_name -> base64-encoded JPEG"
     )
     state: list[float] = Field(
         ..., description="Current joint positions"
@@ -72,6 +75,14 @@ class PredictRequest(BaseModel):
     task: str = Field(
         ..., description="Natural language instruction"
     )
+
+    def resolved_images(self) -> dict[str, str]:
+        """Return images dict, converting image_b64 to front if needed."""
+        if self.images:
+            return self.images
+        if self.image_b64:
+            return {"front": self.image_b64}
+        return {}
 
 
 class PredictResponse(BaseModel):
@@ -176,10 +187,12 @@ async def predict(request: PredictRequest):
     if not engine or not engine.is_loaded:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    # Validate cameras
+    images = request.resolved_images()
+
+    # Validate that all required cameras are present (extra cameras like wrist are OK)
     model_info = engine.info()
     expected = set(model_info.cameras)
-    provided = set(request.images.keys())
+    provided = set(images.keys())
     if not expected.issubset(provided):
         missing = expected - provided
         raise HTTPException(
@@ -190,7 +203,7 @@ async def predict(request: PredictRequest):
     task = request.task or (config.default_task if config else "")
 
     try:
-        result = engine.predict(images=request.images, state=request.state, task=task)
+        result = engine.predict(images=images, state=request.state, task=task)
     except Exception as e:
         logger.error(f"Inference error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Inference failed: {e}")

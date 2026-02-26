@@ -135,3 +135,48 @@ class TestModelFactory:
         cfg = ServerConfig(model="unknown", stub=False)
         with pytest.raises(ValueError, match="Unknown model"):
             create_model(cfg)
+
+
+class TestPredictMultiCamera:
+    def test_predict_with_images_dict(self, client, dummy_image_b64):
+        """POST with images dict containing front + wrist cameras."""
+        resp = client.post("/predict", json={
+            "images": {"front": dummy_image_b64, "wrist": dummy_image_b64},
+            "state": [0.0] * 6,
+            "task": "pick up the cube",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "actions" in data
+        assert len(data["actions"]) == 50
+
+    def test_predict_backward_compat_image_b64(self, client, dummy_image_b64):
+        """POST with legacy image_b64 field (no images dict)."""
+        resp = client.post("/predict", json={
+            "image_b64": dummy_image_b64,
+            "state": [0.0] * 6,
+            "task": "pick up the cube",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "actions" in data
+        assert len(data["actions"]) == 50
+        assert len(data["actions"][0]) == 6
+
+    def test_predict_no_images_fails(self, client):
+        """POST with neither images nor image_b64 → 422."""
+        resp = client.post("/predict", json={
+            "state": [0.0] * 6,
+            "task": "test",
+        })
+        assert resp.status_code == 422
+
+    def test_predict_images_takes_precedence(self, client, dummy_image_b64):
+        """When both images and image_b64 provided, images wins."""
+        resp = client.post("/predict", json={
+            "image_b64": "should_be_ignored",
+            "images": {"front": dummy_image_b64},
+            "state": [0.0] * 6,
+            "task": "test",
+        })
+        assert resp.status_code == 200
