@@ -53,6 +53,7 @@ import { updateRoutes } from './routes/update.routes.js';
 import { settingsRoutes } from './routes/settings.routes.js';
 import { uncertaintyRoutes } from './routes/uncertainty.routes.js';
 import { isaacLabRoutes } from './routes/isaac-lab.routes.js';
+import { simulationRoutes } from './routes/simulation.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -260,6 +261,9 @@ export function createApp(): Express {
 
   // Isaac Lab REST client routes (protected) - TASK-069 Synthetic data generation
   app.use('/api/isaac-lab', authMiddleware, isaacLabRoutes);
+
+  // Simulation routes (protected) - TASK-081 MuJoCo/Isaac Lab policy testing
+  app.use('/api/simulation', authMiddleware, simulationRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

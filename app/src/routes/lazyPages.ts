@@ -238,6 +238,13 @@ export const LazyUpdatesPage = lazy(() =>
   import('@/features/updates').then((m) => ({ default: m.UpdatesPage }))
 );
 
+/**
+ * Simulation page - MuJoCo/Isaac Lab policy testing (TASK-081)
+ */
+export const LazySimulationPage = lazy(() =>
+  import('@/features/simulation').then((m) => ({ default: m.SimulationPage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================
