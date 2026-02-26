@@ -26,6 +26,8 @@ import { FrameRecorder } from './teleop/FrameRecorder.js';
 import { DeviceIdentityManager } from './security/device-identity.js';
 import { SecureBootVerifier } from './security/secure-boot.js';
 import { secureUpdateClient } from './updates/SecureUpdateClient.js';
+import { RoundLifecycle } from './federated/RoundLifecycle.js';
+import type { FederatedStatus, TrainingEpisode } from './federated/types.js';
 
 async function main() {
   console.log('='.repeat(60));
@@ -103,6 +105,25 @@ async function main() {
     console.warn('[SimulatedRobot] Failed to start compliance session:', error);
   }
 
+  // Start federated learning lifecycle (if enabled)
+  let federatedLifecycle: RoundLifecycle | null = null;
+
+  if (process.env.FEDERATED_ENABLED === 'true') {
+    federatedLifecycle = new RoundLifecycle({
+      serverUrl: config.serverUrl,
+      robotId: ROBOT_ID,
+      pollIntervalMs: parseInt(process.env.FEDERATED_POLL_INTERVAL_MS || '30000', 10),
+      trainingBridgePort: parseInt(process.env.FEDERATED_BRIDGE_PORT || '8766', 10),
+      getLocalEpisodes: async (): Promise<TrainingEpisode[]> => {
+        // Return empty array by default — real implementation would
+        // pull from the robot's local data collection store
+        return [];
+      },
+    });
+    federatedLifecycle.start();
+    console.log('[FederatedLearning] Federated learning lifecycle started');
+  }
+
   // Create A2A components
   const agentCard = createRobotAgentCard({
     robotId: ROBOT_ID,
@@ -123,6 +144,24 @@ async function main() {
 
   // Mount REST API routes (RoboMindOS compatible)
   app.use('/api/v1', createRestRoutes(robotStateManager, deviceIdentity, secureBoot));
+
+  // Federated learning status endpoint
+  app.get('/api/v1/federated/status', (_req, res) => {
+    if (!federatedLifecycle) {
+      const status: FederatedStatus = {
+        enabled: false,
+        running: false,
+        currentRoundId: null,
+        phase: 'idle',
+        lastError: null,
+        roundsParticipated: 0,
+        lastParticipation: null,
+      };
+      res.json(status);
+      return;
+    }
+    res.json(federatedLifecycle.getStatus());
+  });
 
   // Mount A2A routes
   const a2aApp = new A2AExpressApp(requestHandler);
@@ -191,6 +230,10 @@ async function main() {
       console.error('[SimulatedRobot] Failed to end compliance session:', error);
     }
 
+    if (federatedLifecycle) {
+      federatedLifecycle.stop();
+      console.log('[FederatedLearning] Federated learning lifecycle stopped');
+    }
     secureUpdateClient.stopPeriodicChecks();
     robotStateManager.stopSafetyMonitoring();
     robotStateManager.stopSimulation();
