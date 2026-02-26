@@ -172,26 +172,6 @@ contributionsRoutes.get('/', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/contributions/:id
- * Get a specific contribution
- */
-contributionsRoutes.get('/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const contribution = dataContributionService.getContribution(id);
-    if (!contribution) {
-      return res.status(404).json({ error: 'Contribution not found' });
-    }
-
-    res.json(contribution);
-  } catch (error) {
-    console.error('[ContributionsRoutes] Error getting contribution:', error);
-    res.status(500).json({ error: 'Failed to get contribution' });
-  }
-});
-
-/**
  * POST /api/contributions/:id/review
  * Review a contribution (admin only)
  */
@@ -463,6 +443,30 @@ contributionsRoutes.get('/stats', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[ContributionsRoutes] Error getting stats:', error);
     res.status(500).json({ error: 'Failed to get contributor stats' });
+  }
+});
+
+// ============================================================================
+// DYNAMIC PARAMETER ROUTES (must be after all static routes)
+// ============================================================================
+
+/**
+ * GET /api/contributions/:id
+ * Get a specific contribution
+ */
+contributionsRoutes.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const contribution = dataContributionService.getContribution(id);
+    if (!contribution) {
+      return res.status(404).json({ error: 'Contribution not found' });
+    }
+
+    res.json(contribution);
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting contribution:', error);
+    res.status(500).json({ error: 'Failed to get contribution' });
   }
 });
 
