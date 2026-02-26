@@ -4,7 +4,7 @@ aliases:
 - TASK-014
 title: User Settings & Preferences (Full Stack)
 slug: user-settings-preferences-full-stack
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -19,8 +19,9 @@ depends_on:
 - "[[TASK-011]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-26
 ---
+
 
 
 
