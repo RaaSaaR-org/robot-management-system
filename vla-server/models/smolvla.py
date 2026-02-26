@@ -131,23 +131,23 @@ class SmolVLAModel(VLAModel):
         cameras = ["front"]
         if self.policy is not None:
             try:
-                # LeRobot SmolVLA exposes image_features with the actual camera keys
-                if hasattr(self.policy, "image_features") and self.policy.image_features:
+                # LeRobot 0.4+: cfg.image_features is a dict keyed by
+                # "observation.images.<camera>" → PolicyFeature(...)
+                cfg = self.policy.config
+                if hasattr(cfg, "image_features") and cfg.image_features:
                     cameras = [
                         k.replace("observation.images.", "")
-                        for k in self.policy.image_features
+                        for k in cfg.image_features
                         if k.startswith("observation.images.")
                     ]
-                else:
-                    cfg = self.policy.config
-                    if hasattr(cfg, "camera_names"):
-                        cameras = list(cfg.camera_names)
-                    elif hasattr(cfg, "input_shapes"):
-                        cameras = [
-                            k.replace("observation.images.", "")
-                            for k in cfg.input_shapes
-                            if k.startswith("observation.images.")
-                        ]
+                elif hasattr(cfg, "camera_names"):
+                    cameras = list(cfg.camera_names)
+                elif hasattr(cfg, "input_shapes"):
+                    cameras = [
+                        k.replace("observation.images.", "")
+                        for k in cfg.input_shapes
+                        if k.startswith("observation.images.")
+                    ]
             except Exception:
                 pass
         return ModelConfig(
@@ -183,10 +183,14 @@ class SmolVLAModel(VLAModel):
         1 available on the robot), the single image is duplicated into all slots.
         """
         # Auto-expand: if model needs specific camera keys, remap / duplicate
-        if self.policy is not None and hasattr(self.policy, "image_features"):
+        # LeRobot 0.4+: camera names live in policy.config.image_features
+        _img_features = (
+            getattr(getattr(self.policy, "config", None), "image_features", None) or {}
+        )
+        if self.policy is not None and _img_features:
             expected = [
                 k.replace("observation.images.", "")
-                for k in self.policy.image_features
+                for k in _img_features
                 if k.startswith("observation.images.")
             ]
             if expected:
