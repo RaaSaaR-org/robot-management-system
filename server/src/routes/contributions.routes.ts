@@ -246,39 +246,6 @@ contributionsRoutes.post('/:id/revoke', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
-// IMPACT
-// ============================================================================
-
-/**
- * GET /api/contributions/:id/impact
- * Get impact report for a contribution
- */
-contributionsRoutes.get('/:id/impact', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const contribution = dataContributionService.getContribution(id);
-    if (!contribution) {
-      return res.status(404).json({ error: 'Contribution not found' });
-    }
-
-    const impact = dataContributionService.getImpactSummary(id);
-
-    res.json({
-      contributionId: id,
-      impact,
-      message:
-        impact.totalModelsUsedIn > 0
-          ? `Your data has been used in ${impact.totalModelsUsedIn} model(s)`
-          : 'Your data has not yet been used in any models',
-    });
-  } catch (error) {
-    console.error('[ContributionsRoutes] Error getting impact:', error);
-    res.status(500).json({ error: 'Failed to get impact report' });
-  }
-});
-
-// ============================================================================
 // CREDITS
 // ============================================================================
 
@@ -447,30 +414,6 @@ contributionsRoutes.get('/stats', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
-// DYNAMIC PARAMETER ROUTES (must be after all static routes)
-// ============================================================================
-
-/**
- * GET /api/contributions/:id
- * Get a specific contribution
- */
-contributionsRoutes.get('/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const contribution = dataContributionService.getContribution(id);
-    if (!contribution) {
-      return res.status(404).json({ error: 'Contribution not found' });
-    }
-
-    res.json(contribution);
-  } catch (error) {
-    console.error('[ContributionsRoutes] Error getting contribution:', error);
-    res.status(500).json({ error: 'Failed to get contribution' });
-  }
-});
-
-// ============================================================================
 // PRISMA-BACKED ENDPOINTS (TASK-065)
 // ============================================================================
 
@@ -542,51 +485,6 @@ contributionsRoutes.get('/db', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/contributions/db/:id
- * Get a single contribution (Prisma-backed)
- */
-contributionsRoutes.get('/db/:id', async (req: Request, res: Response) => {
-  try {
-    const contribution = await contributionService.getContribution(req.params.id);
-    if (!contribution) {
-      return res.status(404).json({ error: 'Contribution not found' });
-    }
-
-    res.json({
-      ...contribution,
-      sizeBytes: contribution.sizeBytes.toString(),
-    });
-  } catch (error) {
-    console.error('[ContributionsRoutes] Error getting contribution (db):', error);
-    res.status(500).json({ error: 'Failed to get contribution' });
-  }
-});
-
-/**
- * PUT /api/contributions/db/:id/approve
- * Approve a contribution (admin only, Prisma-backed)
- */
-contributionsRoutes.put(
-  '/db/:id/approve',
-  roleMiddleware('admin'),
-  async (req: Request, res: Response) => {
-    try {
-      const updated = await contributionService.approveContribution(req.params.id);
-
-      res.json({
-        ...updated,
-        sizeBytes: updated.sizeBytes.toString(),
-        message: `Contribution approved. ${updated.creditAwarded} credits awarded.`,
-      });
-    } catch (error) {
-      console.error('[ContributionsRoutes] Error approving contribution (db):', error);
-      const message = error instanceof Error ? error.message : 'Failed to approve contribution';
-      res.status(400).json({ error: message });
-    }
-  }
-);
-
-/**
  * GET /api/contributions/credits/balance
  * Get user's credit balance (Prisma-backed)
  */
@@ -636,3 +534,106 @@ contributionsRoutes.get('/db/impact', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to get impact stats' });
   }
 });
+
+/**
+ * PUT /api/contributions/db/:id/approve
+ * Approve a contribution (admin only, Prisma-backed)
+ */
+contributionsRoutes.put(
+  '/db/:id/approve',
+  roleMiddleware('admin'),
+  async (req: Request, res: Response) => {
+    try {
+      const updated = await contributionService.approveContribution(req.params.id);
+
+      res.json({
+        ...updated,
+        sizeBytes: updated.sizeBytes.toString(),
+        message: `Contribution approved. ${updated.creditAwarded} credits awarded.`,
+      });
+    } catch (error) {
+      console.error('[ContributionsRoutes] Error approving contribution (db):', error);
+      const message = error instanceof Error ? error.message : 'Failed to approve contribution';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+/**
+ * GET /api/contributions/db/:id
+ * Get a single contribution (Prisma-backed)
+ */
+contributionsRoutes.get('/db/:id', async (req: Request, res: Response) => {
+  try {
+    const contribution = await contributionService.getContribution(req.params.id);
+    if (!contribution) {
+      return res.status(404).json({ error: 'Contribution not found' });
+    }
+
+    res.json({
+      ...contribution,
+      sizeBytes: contribution.sizeBytes.toString(),
+    });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting contribution (db):', error);
+    res.status(500).json({ error: 'Failed to get contribution' });
+  }
+});
+
+// ============================================================================
+// IMPACT
+// ============================================================================
+
+/**
+ * GET /api/contributions/:id/impact
+ * Get impact report for a contribution
+ */
+contributionsRoutes.get('/:id/impact', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const contribution = dataContributionService.getContribution(id);
+    if (!contribution) {
+      return res.status(404).json({ error: 'Contribution not found' });
+    }
+
+    const impact = dataContributionService.getImpactSummary(id);
+
+    res.json({
+      contributionId: id,
+      impact,
+      message:
+        impact.totalModelsUsedIn > 0
+          ? `Your data has been used in ${impact.totalModelsUsedIn} model(s)`
+          : 'Your data has not yet been used in any models',
+    });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting impact:', error);
+    res.status(500).json({ error: 'Failed to get impact report' });
+  }
+});
+
+// ============================================================================
+// DYNAMIC PARAMETER ROUTES (must be after all static routes)
+// ============================================================================
+
+/**
+ * GET /api/contributions/:id
+ * Get a specific contribution
+ */
+contributionsRoutes.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const contribution = dataContributionService.getContribution(id);
+    if (!contribution) {
+      return res.status(404).json({ error: 'Contribution not found' });
+    }
+
+    res.json(contribution);
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting contribution:', error);
+    res.status(500).json({ error: 'Failed to get contribution' });
+  }
+});
+
