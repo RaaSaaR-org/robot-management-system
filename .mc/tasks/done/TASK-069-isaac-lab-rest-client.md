@@ -4,7 +4,7 @@ aliases:
 - TASK-069
 title: Isaac Lab REST Client
 slug: isaac-lab-rest-client
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -17,8 +17,9 @@ depends_on:
 - "[[TASK-068]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-26
 ---
+
 
 
 
@@ -29,3 +30,4 @@ Implement REST client for Isaac Lab synthetic data generation service with job s
 
 ## Notes
 Migrated from task-master TM-64. Status: pending.
+%% mc-links: [[TASK-058]] [[TASK-068]] %%
