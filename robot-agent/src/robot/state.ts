@@ -30,7 +30,6 @@ import {
   type EStopState,
   type OperatingMode,
 } from '../safety/index.js';
-import { VLAController, type ActionExecutor, type ObservationGenerator } from '../vla/vla-controller.js';
 import {
   VLAModelManager,
   type ModelSwitchRequest,
@@ -83,7 +82,6 @@ export class RobotStateManager {
   private simulation: SimulationEngine;
   private taskQueue: TaskQueue;
   private safetyMonitor: SafetyMonitor;
-  private vlaController: VLAController | null = null;
   private vlaModelManager: VLAModelManager;
   // Local VLA state — used when delegating to sidecar instead of gRPC VLAController
   private vlaActiveLocal = false;
@@ -552,22 +550,20 @@ export class RobotStateManager {
       throw new Error('VLA control is already active');
     }
 
-    // Delegate to the Python sidecar which spawns client_pi.py.
-    // client_pi.py handles real camera capture, joint reading, and LeRobot gRPC protocol —
-    // all of which are incompatible with the old VLAController/VLAClient (custom proto, placeholder images).
-    const host = process.env.VLA_SERVER_HOST ?? '100.125.78.40';
-    const serverPort = parseInt(process.env.VLA_SERVER_PORT ?? '8080', 10);
+    // Delegate to the Python sidecar which runs VLARunner.
+    // VLARunner handles real camera capture, joint reading, and HTTP inference
+    // against the consolidated vla-server.
+    const serverUrl = process.env.VLA_SERVER_URL ?? 'http://192.168.178.40:8000';
     const robotPort = process.env.VLA_ROBOT_PORT ?? '/dev/ttyACM0';
-    const model = process.env.VLA_MODEL ?? 'Elvinky/pi05_so101_pick_place_bottle';
 
-    console.log(`[RobotStateManager/VLA] Starting: instruction="${instruction}" host=${host}:${serverPort} model=${model}`);
+    console.log(`[RobotStateManager/VLA] Starting: instruction="${instruction}" server=${serverUrl}`);
 
     let res: Response;
     try {
       res = await fetch('http://localhost:8765/vla/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, host, port: serverPort, robotPort, model }),
+        body: JSON.stringify({ instruction, serverUrl, robotPort }),
         signal: AbortSignal.timeout(5000),
       });
     } catch (err) {
@@ -581,8 +577,8 @@ export class RobotStateManager {
       throw new Error(`VLA start failed: ${text}`);
     }
 
-    const body = await res.json() as { ok: boolean; pid?: number };
-    console.log(`[RobotStateManager/VLA] Sidecar responded: PID=${body.pid}`);
+    const body = await res.json() as { ok: boolean };
+    console.log(`[RobotStateManager/VLA] VLARunner started`);
 
     this.vlaActiveLocal = true;
     this.vlaInstructionLocal = instruction;
@@ -655,12 +651,8 @@ export class RobotStateManager {
    * @returns Result of the switch operation
    */
   async switchVLAModel(request: ModelSwitchRequest): Promise<ModelSwitchResult> {
-    const wasActive = this.isVLAActive();
-    let currentInstruction: string | undefined;
-
     // If VLA is active, stop it first
-    if (wasActive && this.vlaController) {
-      currentInstruction = this.vlaController.getStatus()?.instruction;
+    if (this.isVLAActive()) {
       await this.stopVLAControl();
     }
 
@@ -699,9 +691,8 @@ export class RobotStateManager {
 
   reset(): void {
     // Stop VLA control if active
-    if (this.vlaController) {
-      this.vlaController.stop().catch(() => {});
-      this.vlaController = null;
+    if (this.vlaActiveLocal) {
+      this.stopVLAControl().catch(() => {});
     }
 
     this.state.batteryLevel = 95 + Math.random() * 5;

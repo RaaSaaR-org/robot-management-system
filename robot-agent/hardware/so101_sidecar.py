@@ -5,20 +5,24 @@ Exposes a lightweight HTTP API on port 8765:
   GET  /health  → {"status": "ok", "connected": true/false}
   GET  /state   → {"joints": [...], "timestamp": ..., "simulated": false}
   POST /action  → {"shoulder_pan": deg, ...} → sends to real arm
+  POST /vla/start → Start VLA control loop via VLARunner
+  POST /vla/stop  → Stop VLA control loop
+  GET  /vla/status → VLA runner status
 
 Run via:
-  cd ~/repos/vla-tests/pi05/client
   uv run python ~/develop/robot-management-system/robot-agent/hardware/so101_sidecar.py
 """
 
 import io
 import json
 import os
-import subprocess
 import sys
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+from vla_runner import VLARunner
 
 PORT = 8765
 ROBOT_ID = "my_so101"
@@ -41,13 +45,10 @@ last_state = None
 connected = False
 last_request_time = 0.0
 
-# --- VLA subprocess management ---
-vla_process: subprocess.Popen | None = None
-vla_active = False
-vla_instruction = ""
+# --- VLA runner (replaces subprocess.Popen of client_pi.py) ---
+VLA_SERVER_URL = os.environ.get("VLA_SERVER_URL", "http://192.168.178.40:8000")
+vla_runner: VLARunner | None = None
 vla_start_time: float = 0.0
-CLIENT_DIR = os.path.expanduser("~/repos/vla-tests/pi05/client")
-UV_BIN = os.path.expanduser("~/.local/bin/uv")
 
 
 def _connect_unlocked() -> bool:
@@ -91,25 +92,24 @@ def _disconnect_unlocked():
 
 def _idle_watchdog():
     """Background thread: disconnect if no /state request for IDLE_TIMEOUT_S."""
-    global vla_process, vla_active
+    global vla_runner
     while True:
         time.sleep(1.0)
         with robot_lock:
             if connected and (time.time() - last_request_time) > IDLE_TIMEOUT_S:
                 _disconnect_unlocked()
-        # Check if VLA subprocess died unexpectedly
-        if vla_process is not None and vla_process.poll() is not None:
-            rc = vla_process.returncode
+        # Check if VLA runner stopped unexpectedly
+        if vla_runner is not None and not vla_runner.is_running:
             elapsed = time.time() - vla_start_time
-            print(f"[Sidecar/VLA] Process exited (rc={rc}), elapsed={elapsed:.1f}s — resetting state", flush=True)
-            vla_process = None
-            vla_active = False
+            err = vla_runner.last_error
+            print(f"[Sidecar/VLA] Runner stopped, elapsed={elapsed:.1f}s error={err} — resetting state", flush=True)
+            vla_runner = None
 
 
 def get_state():
     global last_state, last_request_time
     # While VLA is running, don't attempt to reconnect (it owns the port)
-    if vla_active:
+    if vla_runner is not None and vla_runner.is_running:
         return {"joints": last_state or [], "timestamp": time.time(), "simulated": True, "vla_active": True}
     with robot_lock:
         last_request_time = time.time()
@@ -182,17 +182,15 @@ class Handler(BaseHTTPRequestHandler):
                 _disconnect_unlocked()
             self._json({"ok": True, "message": f"Port {ROBOT_PORT} released"})
         elif self.path == "/vla/status":
-            running = vla_process is not None and vla_process.poll() is None
-            self._json({
-                "active": running,
-                "pid": vla_process.pid if running else None,
-                "instruction": vla_instruction,
-            })
+            if vla_runner is not None:
+                self._json(vla_runner.status())
+            else:
+                self._json({"active": False, "instruction": "", "step": 0, "queue_size": 0, "error": None})
         else:
             self.send_error(404)
 
     def do_POST(self):
-        global vla_process, vla_active, vla_instruction, vla_start_time
+        global vla_runner, vla_start_time
         if self.path == "/action":
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -206,54 +204,36 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             instruction = body.get("instruction", "pick up the object")
-            host = body.get("host", "100.125.78.40")
-            server_port = body.get("port", 8080)
-            robot_port = body.get("robotPort", "/dev/ttyACM0")
-            model = body.get("model", "Elvinky/pi05_so101_pick_place_bottle")
+            server_url = body.get("serverUrl", VLA_SERVER_URL)
+            robot_port = body.get("robotPort", ROBOT_PORT)
             camera_type = body.get("cameraType", "picamera2")
             wrist_camera_index = body.get("wristCameraIndex", 1)
-            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' host={host} port={server_port} model={model} camera={camera_type} wrist_cam={wrist_camera_index}", flush=True)
-            # Stop any existing VLA process
-            if vla_process and vla_process.poll() is None:
-                vla_process.terminate()
-                try: vla_process.wait(timeout=3)
-                except subprocess.TimeoutExpired: vla_process.kill()
-            # Release arm so client_pi.py can claim /dev/ttyACM0
+            hz = body.get("hz", 5.0)
+            print(f"[Sidecar/VLA] Start requested: instruction='{instruction}' server={server_url} camera={camera_type} wrist_cam={wrist_camera_index}", flush=True)
+            # Stop any existing VLA runner
+            if vla_runner is not None and vla_runner.is_running:
+                vla_runner.stop()
+            # Release arm so VLARunner can claim /dev/ttyACM0
             print("[Sidecar/VLA] Releasing arm for VLA", flush=True)
             with robot_lock:
                 _disconnect_unlocked()
-            vla_active = True
-            vla_instruction = instruction
             vla_start_time = time.time()
-            cmd = [
-                UV_BIN, "run", "python",
-                os.path.join(CLIENT_DIR, "client_pi.py"),
-                "--backend", "lerobot",
-                "--host", host,
-                "--server-port", str(server_port),
-                "--port", robot_port,
-                "--model", model,
-                "--prompt", instruction,
-                "--camera-type", camera_type,
-            ]
-            if isinstance(wrist_camera_index, int) and wrist_camera_index >= 0:
-                cmd += ["--wrist-camera-index", str(wrist_camera_index)]
-            vla_process = subprocess.Popen(cmd, cwd=CLIENT_DIR)
-            print(f"[Sidecar/VLA] Subprocess spawned: PID={vla_process.pid}", flush=True)
-            self._json({"ok": True, "pid": vla_process.pid})
+            vla_runner = VLARunner(
+                server_url=server_url,
+                robot_port=robot_port,
+                robot_id=ROBOT_ID,
+                camera_type=camera_type,
+                wrist_camera_index=wrist_camera_index if isinstance(wrist_camera_index, int) else -1,
+                hz=hz,
+            )
+            vla_runner.start(instruction)
+            print(f"[Sidecar/VLA] VLARunner started", flush=True)
+            self._json({"ok": True})
         elif self.path == "/vla/stop":
             elapsed = time.time() - vla_start_time if vla_start_time else 0
-            if vla_process is not None:
-                if vla_process.poll() is None:
-                    vla_process.terminate()
-                    try:
-                        vla_process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        vla_process.kill()
-                        vla_process.wait(timeout=2)
-            vla_process = None
-            vla_active = False
-            vla_instruction = ""
+            if vla_runner is not None:
+                vla_runner.stop()
+            vla_runner = None
             vla_start_time = 0.0
             print(f"[Sidecar/VLA] Stopped (ran for {elapsed:.1f}s)", flush=True)
             self._json({"ok": True})

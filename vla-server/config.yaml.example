@@ -1,0 +1,23 @@
+# VLA Server Configuration
+#
+# Copy to config.yaml and adjust for your setup:
+#   cp config.yaml.example config.yaml
+
+# Model backend: "smolvla" or "pi05"
+model: smolvla
+
+# HuggingFace repo ID or local checkpoint path
+model_path: lerobot/smolvla_base
+
+# Device: "mps" (Mac), "cuda" (NVIDIA GPU), "cpu"
+device: mps
+
+# Server bind address and port
+host: 0.0.0.0
+port: 8000
+
+# Default task if none provided in /predict request
+default_task: "Pick up the object."
+
+# Stub mode: sine-wave actions, no ML dependencies (for testing)
+stub: false
