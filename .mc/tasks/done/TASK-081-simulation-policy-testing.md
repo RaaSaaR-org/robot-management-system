@@ -1,12 +1,20 @@
 ---
 id: TASK-081
-title: "Simulation Integration — MuJoCo/Isaac Lab Policy Testing & Synthetic Evaluation"
-status: todo
+title: Simulation Integration — MuJoCo/Isaac Lab Policy Testing & Synthetic Evaluation
+status: done
 priority: 2
-tags: [vla, simulation, evaluation, platform]
-depends_on: ["TASK-069", "TASK-080"]
+tags:
+- vla
+- simulation
+- evaluation
+- platform
+depends_on:
+- TASK-069
+- TASK-080
 created: 2026-02-24
+updated: 2026-02-26
 ---
+
 
 # TASK-081 — Simulation Integration for Policy Testing
 
