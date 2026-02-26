@@ -215,5 +215,19 @@ class SmolVLAModel(VLAModel):
         obs["observation.state"] = torch.tensor(
             state_padded[: self._state_dim], dtype=torch.float32
         ).unsqueeze(0).to(self.device)
-        obs["task"] = task
+
+        # Tokenize task string → observation.language.tokens + attention_mask
+        # (SmolVLA expects pre-tokenized language input, not raw text)
+        tokenizer = self.policy.model.vlm_with_expert.processor.tokenizer
+        max_len = getattr(self.policy.config, "tokenizer_max_length", 48)
+        tokenized = tokenizer(
+            task,
+            max_length=max_len,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+        )
+        obs["observation.language.tokens"] = tokenized["input_ids"].to(self.device)
+        obs["observation.language.attention_mask"] = tokenized["attention_mask"].bool().to(self.device)
+
         return obs
