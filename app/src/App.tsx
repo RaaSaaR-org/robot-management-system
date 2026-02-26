@@ -50,6 +50,7 @@ import {
   LazyContributionDetailPage,
   LazyEvaluationDashboardPage,
   LazyUpdatesPage,
+  LazySimulationPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -370,6 +371,16 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyContributionDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Simulation - MuJoCo/Isaac Lab policy testing (TASK-081) */}
+          <Route
+            path="/simulation"
+            element={
+              <ProtectedAppRoute>
+                <LazySimulationPage />
               </ProtectedAppRoute>
             }
           />
