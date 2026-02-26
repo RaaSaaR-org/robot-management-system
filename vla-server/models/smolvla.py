@@ -206,7 +206,7 @@ class SmolVLAModel(VLAModel):
             jpeg_bytes = base64.b64decode(b64_jpeg)
             pil_image = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
             img_array = np.array(pil_image, dtype=np.float32) / 255.0
-            img_tensor = torch.from_numpy(img_array).permute(2, 0, 1)
+            img_tensor = torch.from_numpy(img_array).permute(2, 0, 1).unsqueeze(0)
             obs[f"observation.images.{camera_name}"] = img_tensor.to(self.device)
 
         state_padded = list(state)
@@ -214,6 +214,6 @@ class SmolVLAModel(VLAModel):
             state_padded += [0.0] * (self._state_dim - len(state_padded))
         obs["observation.state"] = torch.tensor(
             state_padded[: self._state_dim], dtype=torch.float32
-        ).to(self.device)
+        ).unsqueeze(0).to(self.device)
         obs["task"] = task
         return obs
