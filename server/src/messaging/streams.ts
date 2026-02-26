@@ -21,12 +21,14 @@ import {
 export const STREAM_NAMES = {
   TRAINING_JOBS: 'TRAINING_JOBS',
   DATASET_VALIDATION: 'DATASET_VALIDATION',
+  SYNTHETIC_DATA: 'SYNTHETIC_DATA',
   DEAD_LETTER_QUEUE: 'DEAD_LETTER_QUEUE',
 } as const;
 
 export const CONSUMER_NAMES = {
   TRAINING_WORKERS: 'training-workers',
   DATASET_VALIDATORS: 'dataset-validators',
+  SYNTHETIC_WORKERS: 'synthetic-workers',
 } as const;
 
 export const SUBJECTS = {
@@ -35,6 +37,7 @@ export const SUBJECTS = {
   TRAINING_EXPORT: 'jobs.training.export',
   DATASET_VALIDATE: 'jobs.dataset.validate',
   DATASET_COMPUTE_STATS: 'jobs.dataset.compute-stats',
+  SYNTHETIC_GENERATE: 'synthetic.jobs.generate',
 } as const;
 
 // ============================================================================
@@ -47,6 +50,7 @@ export const SUBJECTS = {
 export async function createStreams(jsm: JetStreamManager): Promise<void> {
   await createTrainingJobsStream(jsm);
   await createDatasetValidationStream(jsm);
+  await createSyntheticDataStream(jsm);
   await createDeadLetterQueueStream(jsm);
   console.log('[Streams] All streams created successfully');
 }
@@ -217,6 +221,95 @@ async function createDatasetValidatorsConsumer(jsm: JetStreamManager): Promise<v
       deliver_policy: DeliverPolicy.All,
       replay_policy: ReplayPolicy.Instant,
       filter_subjects: ['jobs.dataset.>'],
+      // Exponential backoff for retries
+      backoff: [
+        30 * 1e9, // 30 seconds
+        2 * 60 * 1e9, // 2 minutes
+        10 * 60 * 1e9, // 10 minutes
+      ],
+    });
+
+    console.log(`[Streams] Created consumer: ${consumerName}`);
+  } catch (error) {
+    console.error(`[Streams] Error creating consumer ${consumerName}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Create SYNTHETIC_DATA stream for synthetic data generation jobs
+ */
+async function createSyntheticDataStream(jsm: JetStreamManager): Promise<void> {
+  const streamName = STREAM_NAMES.SYNTHETIC_DATA;
+
+  try {
+    // Check if stream exists
+    const existingStream = await jsm.streams.info(streamName).catch(() => null);
+
+    if (existingStream) {
+      console.log(`[Streams] Stream ${streamName} already exists`);
+      // Ensure consumer exists
+      await createSyntheticWorkersConsumer(jsm);
+      return;
+    }
+
+    // Create stream
+    await jsm.streams.add({
+      name: streamName,
+      description: 'Synthetic data generation job queue',
+      subjects: [
+        SUBJECTS.SYNTHETIC_GENERATE,
+      ],
+      retention: RetentionPolicy.Workqueue,
+      storage: StorageType.File,
+      num_replicas: 1,
+      max_msgs: 5000,
+      max_bytes: 50 * 1024 * 1024, // 50MB
+      max_age: 3 * 24 * 60 * 60 * 1e9, // 3 days in nanoseconds
+      max_msg_size: 256 * 1024, // 256KB per message
+      duplicate_window: 5 * 60 * 1e9, // 5 minute deduplication window
+      discard: DiscardPolicy.Old,
+      deny_delete: false,
+      deny_purge: false,
+    });
+
+    console.log(`[Streams] Created stream: ${streamName}`);
+
+    // Create consumer
+    await createSyntheticWorkersConsumer(jsm);
+  } catch (error) {
+    console.error(`[Streams] Error creating stream ${streamName}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Create synthetic-workers consumer for SYNTHETIC_DATA stream
+ */
+async function createSyntheticWorkersConsumer(jsm: JetStreamManager): Promise<void> {
+  const streamName = STREAM_NAMES.SYNTHETIC_DATA;
+  const consumerName = CONSUMER_NAMES.SYNTHETIC_WORKERS;
+
+  try {
+    // Check if consumer exists
+    const existingConsumer = await jsm.consumers.info(streamName, consumerName).catch(() => null);
+
+    if (existingConsumer) {
+      console.log(`[Streams] Consumer ${consumerName} already exists`);
+      return;
+    }
+
+    await jsm.consumers.add(streamName, {
+      name: consumerName,
+      durable_name: consumerName,
+      description: 'Durable consumer for synthetic data generation workers',
+      ack_policy: AckPolicy.Explicit,
+      ack_wait: 5 * 60 * 1e9, // 5 minutes for synthetic generation
+      max_deliver: 3, // Max 3 delivery attempts
+      max_ack_pending: 10, // Max 10 concurrent jobs
+      deliver_policy: DeliverPolicy.All,
+      replay_policy: ReplayPolicy.Instant,
+      filter_subjects: ['synthetic.jobs.>'],
       // Exponential backoff for retries
       backoff: [
         30 * 1e9, // 30 seconds
