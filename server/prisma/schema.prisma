@@ -325,9 +325,38 @@ model User {
   consents         UserConsent[]
   dataRestrictions DataRestriction[]
   accountLockout   AccountLockout?
+  settings         UserSettings?
 
   @@index([email])
   @@index([role])
+}
+
+// ============================================================================
+// USER SETTINGS (TASK-014)
+// ============================================================================
+
+model UserSettings {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Appearance
+  theme                 String   @default("system")  // "light" | "dark" | "system"
+  language              String   @default("en")
+  compactMode           Boolean  @default(false)
+
+  // Notifications
+  emailNotifications    Boolean  @default(true)
+  alertsEnabled         Boolean  @default(true)
+  maintenanceReminders  Boolean  @default(true)
+  weeklyDigest          Boolean  @default(false)
+
+  // Dashboard
+  defaultDashboardView  String   @default("fleet")   // "fleet" | "robots" | "training"
+  refreshIntervalSec    Int      @default(30)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
 
 model MFACredential {
