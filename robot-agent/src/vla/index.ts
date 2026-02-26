@@ -16,3 +16,5 @@ export {
   type ModelSwitchEvent,
   type VLAInferenceMetrics,
 } from './vla-model-manager.js';
+
+export { type VLASafetyStatus } from './types.js';

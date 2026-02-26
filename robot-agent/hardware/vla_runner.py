@@ -28,6 +28,13 @@ from collections import deque
 
 import numpy as np
 
+from vla_safety import (
+    ActionValidator,
+    GracefulDegradation,
+    MovementRateLimiter,
+    NetworkWatchdog,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +55,7 @@ class VLARunner:
         wrist_camera_index: int = -1,
         hz: float = 5.0,
         timeout: float = 10.0,
+        config: dict | None = None,
     ):
         self.server_url = server_url.rstrip("/")
         self.robot_port = robot_port
@@ -64,6 +72,17 @@ class VLARunner:
         self._step = 0
         self._instruction = ""
         self._error: str | None = None
+
+        # Safety modules
+        cfg = config or {}
+        self.validator = ActionValidator()
+        self.rate_limiter = MovementRateLimiter(
+            max_delta=cfg.get("max_delta_degrees", 10.0)
+        )
+        self.watchdog = NetworkWatchdog(
+            timeout_ms=cfg.get("watchdog_timeout_ms", 100.0)
+        )
+        self.degradation = GracefulDegradation()
 
     @property
     def is_running(self) -> bool:
@@ -84,6 +103,11 @@ class VLARunner:
         self._step = 0
         self._instruction = instruction
         self._error = None
+
+        # Reset safety state for new run
+        self.rate_limiter.reset()
+        self.watchdog.reset()
+        self.degradation.clear_events()
 
         self._thread = threading.Thread(
             target=self._control_loop,
@@ -110,6 +134,31 @@ class VLARunner:
             "queue_size": len(self._action_queue),
             "error": self._error,
         }
+
+    def safety_status(self) -> dict:
+        """Return safety module status."""
+        validator_stats = self.validator.stats
+        return {
+            "validator_enabled": True,
+            "rate_limiter_enabled": True,
+            "watchdog_healthy": self.watchdog.is_healthy(),
+            "last_watchdog_latency_ms": self.watchdog.last_latency_ms,
+            "actions_validated": validator_stats["validated"],
+            "actions_rejected": validator_stats["rejected"],
+            "actions_clipped": validator_stats["clipped"],
+            "rate_limiter_max_delta": self.rate_limiter.max_delta,
+            "watchdog_timeout_ms": self.watchdog.timeout_ms,
+            "degradation_events": self.degradation.events,
+        }
+
+    def update_safety_config(self, config: dict) -> None:
+        """Update safety parameters at runtime."""
+        if "max_delta_degrees" in config:
+            self.rate_limiter.max_delta = float(config["max_delta_degrees"])
+            logger.info(f"Safety: max_delta updated to {self.rate_limiter.max_delta}")
+        if "watchdog_timeout_ms" in config:
+            self.watchdog.timeout_ms = float(config["watchdog_timeout_ms"])
+            logger.info(f"Safety: watchdog timeout updated to {self.watchdog.timeout_ms}ms")
 
     def _control_loop(self) -> None:
         """Main control loop — runs in a background thread."""
@@ -147,6 +196,7 @@ class VLARunner:
                         images["wrist"] = self._capture_b64(wrist_cam)
 
                     try:
+                        t_predict = time.time()
                         resp = client.post(
                             f"{self.server_url}/predict",
                             json={
@@ -156,6 +206,9 @@ class VLARunner:
                             },
                         )
                         resp.raise_for_status()
+                        latency_ms = (time.time() - t_predict) * 1000
+                        self.watchdog.record_latency(latency_ms)
+
                         actions = resp.json()["actions"]
                         self._action_queue.extend(actions)
 
@@ -163,6 +216,7 @@ class VLARunner:
                             elapsed = time.time() - t_start
                             logger.info(
                                 f"[Step {self._step}] inference={elapsed*1000:.0f}ms "
+                                f"latency={latency_ms:.0f}ms "
                                 f"chunk_size={len(actions)}"
                             )
                     except Exception as e:
@@ -171,10 +225,29 @@ class VLARunner:
                         time.sleep(1.0)
                         continue
 
-                # Execute next action
+                # Check watchdog health
+                if not self.watchdog.is_healthy():
+                    logger.warning("[Safety] Watchdog unhealthy — triggering safe stop")
+                    self.degradation.safe_stop(
+                        reason="Network watchdog timeout exceeded",
+                        sidecar_url="http://localhost:8765",
+                    )
+                    self._error = "safety: watchdog timeout"
+                    break
+
+                # Execute next action with safety pipeline
                 if self._action_queue:
                     action = self._action_queue.popleft()
+
+                    # 1. Validate joint limits (clip, don't block)
+                    action = self.validator.clip(action)
+
+                    # 2. Rate-limit movement deltas (clip to max delta)
+                    action = self.rate_limiter.clip(action)
+
+                    # 3. Apply to robot
                     self._send_action(robot, action)
+                    self.degradation.record_good_action(action)
                     self._step += 1
 
                 elapsed = time.time() - t_start

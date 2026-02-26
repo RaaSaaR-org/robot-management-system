@@ -36,7 +36,7 @@ import {
   type ModelSwitchResult,
   type VLAInferenceMetrics,
 } from '../vla/vla-model-manager.js';
-import type { VLAStatus, VLAControllerConfig, Observation } from '../vla/types.js';
+import type { VLAStatus, VLAControllerConfig, Observation, VLASafetyStatus } from '../vla/types.js';
 import {
   EmbodimentLoader,
   JointMapper,
@@ -637,6 +637,52 @@ export class RobotStateManager {
    */
   isVLAActive(): boolean {
     return this.vlaActiveLocal;
+  }
+
+  /**
+   * Get VLA safety monitoring status from the hardware sidecar.
+   */
+  async getVLASafetyStatus(): Promise<VLASafetyStatus> {
+    try {
+      const res = await fetch('http://localhost:8765/safety/status', {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) {
+        throw new Error(`Sidecar returned HTTP ${res.status}`);
+      }
+      const data = await res.json() as Record<string, unknown>;
+      return {
+        validatorEnabled: data.validator_enabled as boolean,
+        rateLimiterEnabled: data.rate_limiter_enabled as boolean,
+        watchdogHealthy: data.watchdog_healthy as boolean,
+        lastLatencyMs: data.last_watchdog_latency_ms as number | null,
+        actionsValidated: data.actions_validated as number,
+        actionsRejected: data.actions_rejected as number,
+        actionsClipped: data.actions_clipped as number,
+        rateLimiterMaxDelta: data.rate_limiter_max_delta as number,
+        watchdogTimeoutMs: data.watchdog_timeout_ms as number,
+        degradationEvents: (data.degradation_events as Array<{
+          type: string;
+          reason: string;
+          timestamp: number;
+        }>) ?? [],
+      };
+    } catch (err) {
+      console.error('[RobotStateManager] Failed to fetch VLA safety status:', err);
+      // Return defaults when sidecar is unreachable
+      return {
+        validatorEnabled: true,
+        rateLimiterEnabled: true,
+        watchdogHealthy: true,
+        lastLatencyMs: null,
+        actionsValidated: 0,
+        actionsRejected: 0,
+        actionsClipped: 0,
+        rateLimiterMaxDelta: 10.0,
+        watchdogTimeoutMs: 100.0,
+        degradationEvents: [],
+      };
+    }
   }
 
   // ============================================================================
