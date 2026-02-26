@@ -185,9 +185,19 @@ class VLARunner:
             client = httpx.Client(timeout=self.timeout)
             period = 1.0 / self.hz
 
+            # Fetch expected camera names from server config
+            try:
+                cfg_resp = client.get(f"{self.server_url}/config")
+                cfg_resp.raise_for_status()
+                camera_names = cfg_resp.json().get("cameras", ["front"])
+            except Exception as e:
+                logger.warning(f"Could not fetch /config, defaulting to ['front']: {e}")
+                camera_names = ["front"]
+
             logger.info(
                 f"VLA loop running at {self.hz} Hz, "
-                f"instruction: '{self._instruction}'"
+                f"instruction: '{self._instruction}', "
+                f"cameras: {camera_names}"
             )
 
             while not self._stop_event.is_set():
@@ -198,9 +208,12 @@ class VLARunner:
                     img_b64 = self._capture_b64(camera)
                     state = self._get_state(robot)
 
-                    images = {"front": img_b64}
-                    if wrist_cam is not None:
-                        images["wrist"] = self._capture_b64(wrist_cam)
+                    # Map available cameras to model-expected names
+                    # Duplicate front image into all slots the model expects
+                    images = {cam: img_b64 for cam in camera_names}
+                    if wrist_cam is not None and len(camera_names) > 1:
+                        # Use last camera slot for wrist view
+                        images[camera_names[-1]] = self._capture_b64(wrist_cam)
 
                     try:
                         t_predict = time.time()

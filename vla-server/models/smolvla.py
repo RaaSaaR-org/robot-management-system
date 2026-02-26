@@ -131,15 +131,23 @@ class SmolVLAModel(VLAModel):
         cameras = ["front"]
         if self.policy is not None:
             try:
-                cfg = self.policy.config
-                if hasattr(cfg, "camera_names"):
-                    cameras = list(cfg.camera_names)
-                elif hasattr(cfg, "input_shapes"):
+                # LeRobot SmolVLA exposes image_features with the actual camera keys
+                if hasattr(self.policy, "image_features") and self.policy.image_features:
                     cameras = [
                         k.replace("observation.images.", "")
-                        for k in cfg.input_shapes
+                        for k in self.policy.image_features
                         if k.startswith("observation.images.")
                     ]
+                else:
+                    cfg = self.policy.config
+                    if hasattr(cfg, "camera_names"):
+                        cameras = list(cfg.camera_names)
+                    elif hasattr(cfg, "input_shapes"):
+                        cameras = [
+                            k.replace("observation.images.", "")
+                            for k in cfg.input_shapes
+                            if k.startswith("observation.images.")
+                        ]
             except Exception:
                 pass
         return ModelConfig(
@@ -169,7 +177,26 @@ class SmolVLAModel(VLAModel):
     def _build_observation(
         self, images: dict[str, str], state: list[float], task: str
     ) -> dict:
-        """Convert raw inputs to LeRobot observation dict."""
+        """Convert raw inputs to LeRobot observation dict.
+
+        If the model expects more cameras than provided (e.g. 3 cameras but only
+        1 available on the robot), the single image is duplicated into all slots.
+        """
+        # Auto-expand: if model needs specific camera keys, remap / duplicate
+        if self.policy is not None and hasattr(self.policy, "image_features"):
+            expected = [
+                k.replace("observation.images.", "")
+                for k in self.policy.image_features
+                if k.startswith("observation.images.")
+            ]
+            if expected:
+                provided_vals = list(images.values())
+                if provided_vals:
+                    images = {
+                        cam: provided_vals[i % len(provided_vals)]
+                        for i, cam in enumerate(expected)
+                    }
+
         obs: dict = {}
         for camera_name, b64_jpeg in images.items():
             jpeg_bytes = base64.b64decode(b64_jpeg)
