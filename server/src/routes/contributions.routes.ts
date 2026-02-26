@@ -6,6 +6,9 @@
 
 import { Router, Request, Response } from 'express';
 import { dataContributionService } from '../services/DataContributionService.js';
+import { contributionService } from '../services/ContributionService.js';
+import { roleMiddleware } from '../middleware/auth.middleware.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import type {
   InitiateContributionRequest,
   UploadContributionDataRequest,
@@ -460,5 +463,172 @@ contributionsRoutes.get('/stats', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[ContributionsRoutes] Error getting stats:', error);
     res.status(500).json({ error: 'Failed to get contributor stats' });
+  }
+});
+
+// ============================================================================
+// PRISMA-BACKED ENDPOINTS (TASK-065)
+// ============================================================================
+
+/**
+ * POST /api/contributions/db
+ * Submit a new data contribution (Prisma-backed)
+ */
+contributionsRoutes.post('/db', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as AuthenticatedRequest).user?.id || 'anonymous-user';
+    const { robotId, episodeCount, frameCount, sizeBytes, metadata } = req.body;
+
+    if (!robotId) {
+      return res.status(400).json({ error: 'robotId is required' });
+    }
+    if (episodeCount === undefined || episodeCount < 0) {
+      return res.status(400).json({ error: 'episodeCount must be a non-negative integer' });
+    }
+    if (frameCount === undefined || frameCount < 0) {
+      return res.status(400).json({ error: 'frameCount must be a non-negative integer' });
+    }
+
+    const contribution = await contributionService.submitContribution({
+      userId,
+      robotId,
+      episodeCount: parseInt(String(episodeCount), 10),
+      frameCount: parseInt(String(frameCount), 10),
+      sizeBytes: BigInt(sizeBytes || 0),
+      metadata: metadata ? JSON.stringify(metadata) : undefined,
+    });
+
+    res.status(201).json({
+      ...contribution,
+      sizeBytes: contribution.sizeBytes.toString(),
+    });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error submitting contribution (db):', error);
+    res.status(500).json({ error: 'Failed to submit contribution' });
+  }
+});
+
+/**
+ * GET /api/contributions/db
+ * List contributions (Prisma-backed)
+ */
+contributionsRoutes.get('/db', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as AuthenticatedRequest).user?.id;
+    const { status, limit, offset } = req.query;
+
+    const result = await contributionService.getContributions({
+      userId: userId || undefined,
+      status: status as string | undefined,
+      limit: limit ? parseInt(String(limit), 10) : 50,
+      offset: offset ? parseInt(String(offset), 10) : 0,
+    });
+
+    res.json({
+      contributions: result.contributions.map((c) => ({
+        ...c,
+        sizeBytes: c.sizeBytes.toString(),
+      })),
+      total: result.total,
+    });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error listing contributions (db):', error);
+    res.status(500).json({ error: 'Failed to list contributions' });
+  }
+});
+
+/**
+ * GET /api/contributions/db/:id
+ * Get a single contribution (Prisma-backed)
+ */
+contributionsRoutes.get('/db/:id', async (req: Request, res: Response) => {
+  try {
+    const contribution = await contributionService.getContribution(req.params.id);
+    if (!contribution) {
+      return res.status(404).json({ error: 'Contribution not found' });
+    }
+
+    res.json({
+      ...contribution,
+      sizeBytes: contribution.sizeBytes.toString(),
+    });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting contribution (db):', error);
+    res.status(500).json({ error: 'Failed to get contribution' });
+  }
+});
+
+/**
+ * PUT /api/contributions/db/:id/approve
+ * Approve a contribution (admin only, Prisma-backed)
+ */
+contributionsRoutes.put(
+  '/db/:id/approve',
+  roleMiddleware('admin'),
+  async (req: Request, res: Response) => {
+    try {
+      const updated = await contributionService.approveContribution(req.params.id);
+
+      res.json({
+        ...updated,
+        sizeBytes: updated.sizeBytes.toString(),
+        message: `Contribution approved. ${updated.creditAwarded} credits awarded.`,
+      });
+    } catch (error) {
+      console.error('[ContributionsRoutes] Error approving contribution (db):', error);
+      const message = error instanceof Error ? error.message : 'Failed to approve contribution';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+/**
+ * GET /api/contributions/credits/balance
+ * Get user's credit balance (Prisma-backed)
+ */
+contributionsRoutes.get('/credits/balance', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as AuthenticatedRequest).user?.id || 'anonymous-user';
+    const totalCredits = await contributionService.getUserCredits(userId);
+
+    res.json({ userId, totalCredits });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting credit balance (db):', error);
+    res.status(500).json({ error: 'Failed to get credit balance' });
+  }
+});
+
+/**
+ * GET /api/contributions/db/leaderboard
+ * Get top contributors (Prisma-backed)
+ */
+contributionsRoutes.get('/db/leaderboard', async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 10;
+    const leaderboard = await contributionService.getLeaderboard(limit);
+
+    res.json({ leaderboard, count: leaderboard.length });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting leaderboard (db):', error);
+    res.status(500).json({ error: 'Failed to get leaderboard' });
+  }
+});
+
+/**
+ * GET /api/contributions/db/impact
+ * Get user's aggregate impact stats (Prisma-backed)
+ */
+contributionsRoutes.get('/db/impact', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as AuthenticatedRequest).user?.id || 'anonymous-user';
+    const stats = await contributionService.getImpactStats(userId);
+
+    res.json({
+      ...stats,
+      totalSizeBytes: stats.totalSizeBytes.toString(),
+    });
+  } catch (error) {
+    console.error('[ContributionsRoutes] Error getting impact stats (db):', error);
+    res.status(500).json({ error: 'Failed to get impact stats' });
   }
 });

@@ -64,6 +64,9 @@ export {
   RewardsList,
   Leaderboard,
   ImpactVisualization,
+  ContributionBadge,
+  CreditBalance,
+  LeaderboardTable,
 } from './components';
 export type {
   ContributionStatusBadgeProps,
@@ -78,6 +81,11 @@ export type {
   RewardsListProps,
   LeaderboardProps,
   ImpactVisualizationProps,
+  ContributionBadgeProps,
+  DbContributionStatus,
+  CreditBalanceProps,
+  LeaderboardTableProps,
+  LeaderboardRow,
 } from './components';
 
 // Pages

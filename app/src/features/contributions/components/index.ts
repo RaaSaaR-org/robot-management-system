@@ -36,3 +36,13 @@ export type { LeaderboardProps } from './Leaderboard';
 
 export { ImpactVisualization } from './ImpactVisualization';
 export type { ImpactVisualizationProps } from './ImpactVisualization';
+
+// TASK-065 additions
+export { ContributionBadge } from './ContributionBadge';
+export type { ContributionBadgeProps, DbContributionStatus } from './ContributionBadge';
+
+export { CreditBalance } from './CreditBalance';
+export type { CreditBalanceProps } from './CreditBalance';
+
+export { LeaderboardTable } from './LeaderboardTable';
+export type { LeaderboardTableProps, LeaderboardRow } from './LeaderboardTable';
