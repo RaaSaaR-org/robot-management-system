@@ -44,6 +44,7 @@ import { curationRoutes } from './routes/curation.routes.js';
 import { activeLearningRoutes } from './routes/active-learning.routes.js';
 import { syntheticRoutes } from './routes/synthetic.routes.js';
 import { federatedRoutes } from './routes/federated.routes.js';
+import { aggregationRoutes } from './routes/aggregation.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
@@ -226,6 +227,10 @@ export function createApp(): Express {
 
   // Synthetic data generation routes (protected) - Isaac Lab integration
   app.use('/api/synthetic', authMiddleware, syntheticRoutes);
+
+  // Secure aggregation routes (protected) - Masked gradient aggregation (TASK-071)
+  // Registered before general federated routes so secure-aggregation endpoints take precedence
+  app.use('/api/federated', authMiddleware, aggregationRoutes);
 
   // Federated learning routes (protected) - Fleet learning infrastructure
   app.use('/api/federated', authMiddleware, federatedRoutes);
