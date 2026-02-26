@@ -20,6 +20,7 @@ import { trainingJobService } from './services/TrainingJobService.js';
 import { datasetService } from './services/DatasetService.js';
 import { datasetValidationWorker } from './workers/dataset-validation.worker.js';
 import { trainingWorker } from './workers/training.worker.js';
+import { syntheticDataWorker } from './workers/SyntheticDataWorker.js';
 import { initializeRustFSClient } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { mlflowService } from './services/MLflowService.js';
@@ -63,6 +64,7 @@ async function main() {
       await datasetValidationWorker.start();
       await trainingOrchestrator.initialize();
       await trainingWorker.start();
+      await syntheticDataWorker.start();
       console.log('[NATS] JetStream initialized with streams and KV stores');
     }
   } catch (error) {
@@ -108,6 +110,7 @@ async function main() {
     retentionCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
     trainingJobService.stopAllWatchers();
+    await syntheticDataWorker.stop();
     await trainingWorker.stop();
     await datasetValidationWorker.stop();
     await natsClient.close();
