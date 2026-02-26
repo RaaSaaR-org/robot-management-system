@@ -1958,3 +1958,38 @@ model UpdateDeployment {
   @@index([status])
   @@index([createdAt])
 }
+
+// ============================================================================
+// DATA CONTRIBUTION MODELS (TASK-065)
+// ============================================================================
+
+model DataContribution {
+  id            String   @id @default(cuid())
+  userId        String
+  robotId       String
+  episodeCount  Int      @default(0)
+  frameCount    Int      @default(0)
+  sizeBytes     BigInt   @default(0)
+  status        String   @default("pending") // pending | processing | approved | rejected
+  creditAwarded Int      @default(0)
+  impactScore   Float    @default(0)
+  metadata      String?  // JSON string
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([robotId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ContributionCredit {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Int
+  reason    String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
