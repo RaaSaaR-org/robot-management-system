@@ -3,7 +3,26 @@
 ## Status: todo
 ## Priority: high
 ## Component: robot-agent, sidecar
-## Blocked-by: TASK-075 (wait for successful end-to-end VLA test to inform implementation)
+
+---
+## 🚨 BLOCKED — Muss TASK-082 zuerst abgeschlossen sein
+
+**Blocked-by: TASK-082 (VLA Server Consolidation)**
+
+TASK-082 konsolidiert alle VLA-Server-Implementierungen in eine saubere Struktur
+(`vla-server/` + `vla_runner.py`). TASK-077 darf erst starten wenn TASK-082 done ist,
+weil sonst Code gebaut wird der sofort wieder weggeworfen werden muss.
+
+**Nach TASK-082 ist der Scope von TASK-077 reduziert:**
+- `vla_runner.py` (sidecar-native VLA loop) → bereits in TASK-082 enthalten
+- TASK-077 fokussiert sich NUR noch auf: **TypeScript/UI-Integration**
+  - VLA Status in Robot Detail Page (läuft/gestoppt, welcher Prompt)
+  - Start/Stop Button aus dem Dashboard
+  - VLA Sessions in DB loggen (Compliance)
+
+Kein Python-Code mehr in TASK-077. Nur TypeScript + UI.
+
+---
 
 ## Goal
 

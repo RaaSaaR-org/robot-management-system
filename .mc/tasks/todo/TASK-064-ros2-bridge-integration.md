@@ -25,6 +25,17 @@ updated: 2026-02-19
 
 # ROS 2 Bridge Integration
 
+---
+## 🚨 BLOCKED — Muss TASK-082 zuerst abgeschlossen sein
+
+**Blocked-by: TASK-082 (VLA Server Consolidation)**
+
+ROS2 wird als Modell-Backend implementiert — **nicht** als `rclnodejs` im TypeScript Agent.
+Nach TASK-082: `vla-server/models/ros2.py` mit `rclpy` (Python-native ROS2).
+Gleiche HTTP-Schnittstelle wie alle anderen Modelle.
+
+---
+
 ## Description
 ROS 2 integration für real hardware. **NICHT via rclnodejs** — stattdessen als Python Backend-Plugin in `robot-agent/hardware/backends/ros2_backend.py` via `rclpy` (TASK-079 Plugin System).
 

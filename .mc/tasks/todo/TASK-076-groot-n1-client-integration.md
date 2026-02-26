@@ -1,8 +1,25 @@
 # TASK-076: GR00T N1 Client Integration
 
-**Component:** vla-tests / robot-agent  
+**Component:** vla-server/models/  
 **Priority:** Medium  
 **Status:** todo
+
+---
+## 🚨 BLOCKED — Muss TASK-082 zuerst abgeschlossen sein
+
+**Blocked-by: TASK-082 (VLA Server Consolidation)**
+
+GR00T wird als **Modell-Backend in `vla-server/`** implementiert, nicht als
+separater Client in `vla-tests/` oder `robot-agent/`.
+
+**Nach TASK-082 ist der Scope:**
+- `vla-server/models/groot.py` → GR00T N1 via ZMQ/TCP (port 5555)
+- Gleiche HTTP-Schnittstelle wie SmolVLA (`/predict`, `/health`, `/reset`)
+- Sidecar wechselt Model via `VLA_MODEL=groot` env-Variable
+
+Kein neuer Ordner, kein neues Protokoll — nur ein neues `models/groot.py`.
+
+---
 
 ## Problem
 

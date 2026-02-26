@@ -4,11 +4,31 @@ title: Peter GPU Server Setup & First End-to-End VLA Test
 status: todo
 priority: 1
 tags: [vla, hardware]
-depends_on: []
+depends_on: ["TASK-082"]
 created: 2026-02-24
+updated: 2026-02-26
 ---
 
 # TASK-078 — Peter GPU Server Setup & First E2E VLA Test
+
+---
+## 🚨 REIHENFOLGE — TASK-082 zuerst
+
+**Depends-on: TASK-082 (VLA Server Consolidation)**
+
+Erst wenn `vla-server/` existiert und sauber ist, setup Peter's GPU damit.
+Peter soll das **konsolidierte** `vla-server/` deployen — nicht das alte
+`smolvla-server/` oder `vla-inference/`.
+
+**Setup auf Peter's GPU nach TASK-082:**
+```bash
+git pull origin main   # holt neues vla-server/
+cd vla-server
+uv venv && uv pip install -e ".[smolvla]"
+VLA_DEVICE=cuda uv run python server.py
+```
+
+---
 
 ## Goal
 

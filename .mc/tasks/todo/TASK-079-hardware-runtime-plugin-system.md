@@ -4,11 +4,33 @@ title: "Architecture: Hardware Runtime Plugin System (Sidecar Evolution)"
 status: todo
 priority: 2
 tags: [architecture, vla, hardware]
-depends_on: ["TASK-075", "TASK-078"]
+depends_on: ["TASK-082", "TASK-078"]
 created: 2026-02-24
+updated: 2026-02-26
 ---
 
 # TASK-079 — Hardware Runtime Plugin System
+
+---
+## 🚨 BLOCKED — Muss TASK-082 zuerst abgeschlossen sein
+
+**Blocked-by: TASK-082 (VLA Server Consolidation)**
+
+Die in TASK-079 geplante Plugin-Architektur (`backends/lerobot_backend.py`, etc.)
+ist überholt. TASK-082 definiert die neue Architektur:
+
+- **Server-seitig:** `vla-server/` mit `models/` Ordner statt `backends/` in der Sidecar
+- **Client-seitig:** `vla_runner.py` in der Sidecar (HTTP, nicht gRPC)
+
+TASK-079 muss nach TASK-082 **neu bewertet** werden:
+- Was von der Plugin-Idee noch sinnvoll ist → in TASK-082-Architektur integrieren
+- `backends/` Konzept → wird zu `vla-server/models/` (server-seitig)
+- `rclpy` ROS2 backend → später als Modell in `vla-server/models/ros2.py`
+
+**Scope nach TASK-082:** Nur noch Erweiterungen des `vla-server/` für neue Modelle
+(GR00T, ROS2) — kein neues Architektur-Design mehr nötig.
+
+---
 
 ## Architektur-Entscheidung: Sidecar + Plugins vs. Python Rewrite
 
