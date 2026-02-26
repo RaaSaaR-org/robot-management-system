@@ -4,7 +4,7 @@ aliases:
 - TASK-068
 title: Synthetic Data NATS Worker
 slug: synthetic-data-nats-worker
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -17,8 +17,9 @@ depends_on:
 - "[[TASK-058]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-26
 ---
+
 
 
 
@@ -29,3 +30,4 @@ Implement NATS-based background worker for synthetic data generation jobs, repla
 
 ## Notes
 Migrated from task-master TM-63. Status: pending.
+%% mc-links: [[TASK-058]] %%
