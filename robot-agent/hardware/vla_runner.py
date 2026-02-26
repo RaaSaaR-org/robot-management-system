@@ -80,7 +80,7 @@ class VLARunner:
             max_delta=cfg.get("max_delta_degrees", 10.0)
         )
         self.watchdog = NetworkWatchdog(
-            timeout_ms=cfg.get("watchdog_timeout_ms", 100.0)
+            timeout_ms=cfg.get("watchdog_timeout_ms", 30000.0)
         )
         self.degradation = GracefulDegradation()
 

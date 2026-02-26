@@ -214,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
                     "actions_rejected": 0,
                     "actions_clipped": 0,
                     "rate_limiter_max_delta": 10.0,
-                    "watchdog_timeout_ms": 100.0,
+                    "watchdog_timeout_ms": 30000.0,
                     "degradation_events": [],
                 })
         else:
