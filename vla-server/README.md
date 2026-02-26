@@ -4,10 +4,11 @@ Consolidated VLA inference server for RoboMindOS. Replaces the previous `smolvla
 
 ## Supported Models
 
-| Model   | Status | Device       | Description                    |
-|---------|--------|--------------|--------------------------------|
-| SmolVLA | Ready  | MPS/CUDA/CPU | SmolVLA via LeRobot            |
-| pi0.5   | Stub   | CUDA         | pi0.5 via LeRobot (TASK-078)   |
+| Model    | Status | Device       | Description                          |
+|----------|--------|--------------|--------------------------------------|
+| SmolVLA  | Ready  | MPS/CUDA/CPU | SmolVLA via LeRobot                  |
+| pi0.5    | Stub   | CUDA         | pi0.5 via LeRobot (TASK-078)         |
+| GR00T N1 | Ready  | ZMQ remote   | NVIDIA Isaac-GR00T via ZMQ (port 5555) |
 
 ## Setup
 
@@ -93,6 +94,31 @@ uv run python server.py --stub
 }
 ```
 
+### GR00T N1 (NVIDIA Isaac-GR00T)
+
+`VLA_MODEL=groot` connects to an Isaac-GR00T Policy Server via ZMQ (port 5555).
+
+#### Setup (GPU server side)
+
+```bash
+pip install "gr00t @ git+https://github.com/NVIDIA/Isaac-GR00T.git"
+python run_gr00t_server.py --model nvidia/GR00T-N1.6-3B
+```
+
+#### Setup (Pi side)
+
+```bash
+cd vla-server
+uv pip install -e ".[groot]"
+VLA_MODEL=groot VLA_HOST=<gpu-server-ip> uv run python server.py
+```
+
+#### Stub mode (no GPU)
+
+```bash
+VLA_MODEL=groot VLA_STUB=true uv run python server.py
+```
+
 ## Environment Variables
 
 | Variable         | Description                | Default              |
@@ -101,6 +127,9 @@ uv run python server.py --stub
 | `VLA_MODEL`      | Override model backend     | from config.yaml     |
 | `VLA_MODEL_PATH` | Override model path        | from config.yaml     |
 | `VLA_PORT`       | Override server port       | from config.yaml     |
+| `VLA_HOST`       | GR00T ZMQ server host      | `localhost`          |
+| `VLA_ZMQ_PORT`   | GR00T ZMQ server port      | `5555`               |
+| `VLA_STUB`       | Force stub mode (`true`/`1`) | `false`            |
 
 ## Tests
 

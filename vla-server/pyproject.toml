@@ -18,6 +18,12 @@ smolvla = [
     "torch>=2.1.0",
     "opencv-python>=4.8.0",
 ]
+# Install GR00T deps: uv pip install -e ".[groot]"
+groot = [
+    "pyzmq>=25.0",
+    "msgpack>=1.0",
+    "msgpack-numpy>=0.4",
+]
 dev = [
     "httpx",
     "pytest",
