@@ -4,11 +4,11 @@ aliases:
 - TASK-063
 title: Enhanced VLA Safety Monitoring
 slug: enhanced-vla-safety-monitoring
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
-depends_on_note: "TASK-082 — VLA Server Consolidation muss zuerst done sein"
+depends_on_note: TASK-082 — VLA Server Consolidation muss zuerst done sein
 customers: []
 tags:
 - vla
@@ -19,8 +19,10 @@ depends_on:
 - "[[TASK-051]]"
 due_date: ''
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-02-26
 ---
+
+
 
 
 
@@ -40,3 +42,4 @@ Extend robot safety monitoring for VLA control with action validation, rate limi
 
 ## Notes
 Migrated from task-master TM-50. Status: deferred.
+%% mc-links: [[TASK-030]] [[TASK-051]] %%

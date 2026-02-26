@@ -4,7 +4,7 @@ aliases:
 - TASK-022
 title: Multi-Factor Authentication (Compliance)
 slug: multi-factor-authentication-compliance
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -20,6 +20,7 @@ due_date: ''
 created: 2026-02-19
 updated: 2026-02-25
 ---
+
 
 
 

@@ -1,12 +1,18 @@
 ---
 id: TASK-082
-title: "VLA Server Consolidation — Ein Server, ein Client, keine Duplikate"
-status: todo
+title: VLA Server Consolidation — Ein Server, ein Client, keine Duplikate
+status: done
 priority: 1
-tags: [vla, architecture, cleanup]
+tags:
+- vla
+- architecture
+- cleanup
 depends_on: []
 created: 2026-02-26
+updated: 2026-02-26
 ---
+
+
 
 # TASK-082 — VLA Server Consolidation
 
