@@ -169,6 +169,24 @@ def send_action(joint_positions: dict):
     return False
 
 
+def _vla_status() -> dict:
+    """Return accurate VLA status with thread.is_alive() check.
+
+    If the runner's thread has died (crash or normal exit), immediately
+    clean up the global reference so /vla/status reflects the true state.
+    """
+    global vla_runner
+    if vla_runner is not None:
+        if vla_runner.is_running:
+            return vla_runner.status()
+        # Runner exists but thread is dead — clean up
+        err = vla_runner.last_error
+        step = vla_runner._step
+        print(f"[Sidecar/VLA] Runner thread dead (step={step} error={err}) — cleaning up", flush=True)
+        vla_runner = None
+    return {"active": False, "instruction": "", "step": 0, "queue_size": 0, "error": None}
+
+
 # --- HTTP Handler ---
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -182,10 +200,7 @@ class Handler(BaseHTTPRequestHandler):
                 _disconnect_unlocked()
             self._json({"ok": True, "message": f"Port {ROBOT_PORT} released"})
         elif self.path == "/vla/status":
-            if vla_runner is not None:
-                self._json(vla_runner.status())
-            else:
-                self._json({"active": False, "instruction": "", "step": 0, "queue_size": 0, "error": None})
+            self._json(_vla_status())
         elif self.path == "/safety/status":
             if vla_runner is not None:
                 self._json(vla_runner.safety_status())

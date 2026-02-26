@@ -173,7 +173,14 @@ class VLARunner:
             robot = self._connect_robot()
             camera = self._make_camera(self.camera_index)
             if self.wrist_camera_index >= 0:
-                wrist_cam = self._make_camera(self.wrist_camera_index)
+                try:
+                    wrist_cam = self._make_camera(self.wrist_camera_index)
+                except Exception as e:
+                    logger.warning(
+                        f"Wrist camera {self.wrist_camera_index} not available: {e} "
+                        "— proceeding with front camera only"
+                    )
+                    wrist_cam = None
 
             client = httpx.Client(timeout=self.timeout)
             period = 1.0 / self.hz

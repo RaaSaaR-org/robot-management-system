@@ -279,3 +279,145 @@ class TestVLARunnerIntegration:
         assert total_actions > predict_calls, (
             f"Expected more action executions ({total_actions}) than predict calls ({predict_calls})"
         )
+
+    @patch("vla_runner.VLARunner._connect_robot")
+    @patch("vla_runner.VLARunner._disconnect_robot")
+    @patch("vla_runner.VLARunner._make_camera")
+    @patch("vla_runner.VLARunner._release_camera")
+    @patch("vla_runner.VLARunner._capture_b64", return_value=_dummy_image_b64())
+    @patch("vla_runner.VLARunner._get_state", return_value=[0.0] * 6)
+    @patch("vla_runner.VLARunner._send_action")
+    def test_wrist_camera_capture(
+        self,
+        mock_send_action,
+        mock_get_state,
+        mock_capture,
+        mock_release_cam,
+        mock_make_cam,
+        mock_disconnect,
+        mock_connect,
+        mock_server,
+    ):
+        """Wrist camera enabled → images dict includes 'wrist' key."""
+        from vla_runner import VLARunner
+
+        mock_connect.return_value = MagicMock()
+        mock_make_cam.return_value = ("mock", MagicMock())
+
+        runner = VLARunner(
+            server_url=mock_server.url, hz=10.0, wrist_camera_index=1
+        )
+        runner.start("pick up object")
+        time.sleep(0.5)
+        runner.stop()
+
+        assert mock_server.predict_count > 0
+        # _make_camera should be called twice: front (index 0) + wrist (index 1)
+        assert mock_make_cam.call_count >= 2
+        # Server should receive images dict with front key
+        assert "images" in mock_server.last_request
+        assert "front" in mock_server.last_request["images"]
+
+    @patch("vla_runner.VLARunner._connect_robot")
+    @patch("vla_runner.VLARunner._disconnect_robot")
+    @patch("vla_runner.VLARunner._release_camera")
+    @patch("vla_runner.VLARunner._capture_b64", return_value=_dummy_image_b64())
+    @patch("vla_runner.VLARunner._get_state", return_value=[0.0] * 6)
+    @patch("vla_runner.VLARunner._send_action")
+    def test_wrist_camera_fallback(
+        self,
+        mock_send_action,
+        mock_get_state,
+        mock_capture,
+        mock_release_cam,
+        mock_disconnect,
+        mock_connect,
+        mock_server,
+    ):
+        """Wrist camera unavailable → graceful degradation, front only."""
+        from vla_runner import VLARunner
+
+        mock_connect.return_value = MagicMock()
+
+        call_count = 0
+
+        def make_camera_side_effect(index):
+            nonlocal call_count
+            call_count += 1
+            if index == 1:
+                raise RuntimeError("Wrist camera not available")
+            return ("mock", MagicMock())
+
+        with patch.object(VLARunner, "_make_camera", side_effect=make_camera_side_effect):
+            runner = VLARunner(
+                server_url=mock_server.url, hz=10.0, wrist_camera_index=1
+            )
+            runner.start("pick up object")
+            time.sleep(0.5)
+            runner.stop()
+
+        # Runner should still be functional (front camera only)
+        assert runner._step > 0
+        assert runner.last_error is None
+        assert mock_server.predict_count > 0
+
+    @patch("vla_runner.VLARunner._connect_robot")
+    @patch("vla_runner.VLARunner._disconnect_robot")
+    @patch("vla_runner.VLARunner._make_camera")
+    @patch("vla_runner.VLARunner._release_camera")
+    @patch("vla_runner.VLARunner._get_state", return_value=[0.0] * 6)
+    @patch("vla_runner.VLARunner._send_action")
+    def test_crash_recovery(
+        self,
+        mock_send_action,
+        mock_get_state,
+        mock_release_cam,
+        mock_make_cam,
+        mock_disconnect,
+        mock_connect,
+        mock_server,
+    ):
+        """Runner crash → is_running becomes False, error is recorded."""
+        from vla_runner import VLARunner
+
+        mock_connect.return_value = MagicMock()
+        mock_make_cam.return_value = ("mock", MagicMock())
+
+        # Make _capture_b64 raise after first successful call to simulate a crash
+        call_idx = 0
+
+        def capture_crash(*args, **kwargs):
+            nonlocal call_idx
+            call_idx += 1
+            if call_idx > 1:
+                raise RuntimeError("Camera hardware failure")
+            return _dummy_image_b64()
+
+        with patch.object(VLARunner, "_capture_b64", side_effect=capture_crash):
+            runner = VLARunner(server_url=mock_server.url, hz=50.0)
+            runner.start("test crash")
+            # Wait for the crash to propagate (1st chunk executes, 2nd capture crashes)
+            time.sleep(2.0)
+
+        assert not runner.is_running
+        assert runner.status()["active"] is False
+        assert runner.last_error is not None
+
+    def test_vla_status_accuracy(self, mock_server):
+        """Thread not alive → status active=False immediately."""
+        from vla_runner import VLARunner
+
+        runner = VLARunner(server_url=mock_server.url)
+        # Never started — thread is None
+        assert runner.status()["active"] is False
+        assert not runner.is_running
+
+        # Manually set a dead thread to simulate post-crash state
+        dead_thread = threading.Thread(target=lambda: None)
+        dead_thread.start()
+        dead_thread.join()  # Ensure it's done
+        runner._thread = dead_thread
+
+        # is_alive() should be False since the thread completed
+        assert not runner.is_running
+        assert runner.status()["active"] is False
