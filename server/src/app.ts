@@ -48,6 +48,7 @@ import { contributionsRoutes } from './routes/contributions.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
 import { updateRoutes } from './routes/update.routes.js';
+import { settingsRoutes } from './routes/settings.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -239,6 +240,9 @@ export function createApp(): Express {
 
   // Secure OTA update routes (protected) - CRA Art. 13, MR Art. 10
   app.use('/api/updates', authMiddleware, updateRoutes);
+
+  // User settings routes (protected) - TASK-014
+  app.use('/api/settings', authMiddleware, settingsRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

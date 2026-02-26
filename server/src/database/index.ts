@@ -14,6 +14,23 @@ export async function connectDatabase(): Promise<void> {
   try {
     await prisma.$connect();
     console.log('[Database] Connected successfully');
+
+    // Seed dev user when auth is disabled so FK constraints are satisfied
+    if (process.env.AUTH_DISABLED === 'true') {
+      await prisma.user.upsert({
+        where: { id: 'dev-user-id' },
+        create: {
+          id: 'dev-user-id',
+          email: 'dev@robomindos.local',
+          passwordHash: 'disabled',
+          name: 'Dev User',
+          role: 'admin',
+          forcePasswordChange: false,
+        },
+        update: {},
+      });
+      console.log('[Database] Dev user seeded (AUTH_DISABLED=true)');
+    }
   } catch (error) {
     console.error('[Database] Connection failed:', error);
     throw error;

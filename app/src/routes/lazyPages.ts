@@ -243,10 +243,10 @@ export const LazyUpdatesPage = lazy(() =>
 // ============================================================================
 
 /**
- * Settings page - User preferences and app configuration
+ * Settings page - User preferences and app configuration (TASK-014)
  */
 export const LazySettingsPage = lazy(() =>
-  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+  import('@/features/settings').then((m) => ({ default: m.SettingsPage }))
 );
 
 /**
