@@ -2,7 +2,7 @@
 
 **Component:** robot-agent / vla-tests  
 **Priority:** High  
-**Status:** todo
+**Status:** done
 
 ## Problem
 
