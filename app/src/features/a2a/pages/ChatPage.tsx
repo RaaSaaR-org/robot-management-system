@@ -107,7 +107,7 @@ const ConversationDrawer = memo(function ConversationDrawer({
 // ============================================================================
 
 /**
- * Main A2A chat page - focused chat experience
+ * Main A2A chat page - demo guard + inner component to respect Rules of Hooks
  */
 export const ChatPage = memo(function ChatPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
@@ -127,6 +127,13 @@ export const ChatPage = memo(function ChatPage() {
     );
   }
 
+  return <ChatPageInner />;
+});
+
+/**
+ * Inner chat page component with hooks - only rendered when not in demo mode
+ */
+const ChatPageInner = memo(function ChatPageInner() {
   const {
     conversations,
     currentConversation,

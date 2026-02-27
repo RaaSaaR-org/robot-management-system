@@ -6,11 +6,9 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth, LogoutButton } from '@/features/auth';
 import { Logo } from '@/components/common/Logo';
 
 export function Header() {
-  const { isAuthenticated, user } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const closeMenu = () => setMobileMenuOpen(false);
@@ -49,32 +47,14 @@ export function Header() {
             </Link>
           </nav>
 
-          {/* Auth Buttons + Mobile Toggle */}
+          {/* CTA + Mobile Toggle */}
           <div className="flex items-center gap-3">
-            {isAuthenticated ? (
-              <>
-                <Link
-                  to="/dashboard"
-                  className="text-theme-secondary hover:text-theme-primary transition-colors hidden sm:block"
-                >
-                  {user?.name || 'Dashboard'}
-                </Link>
-                <LogoutButton
-                  variant="ghost"
-                  size="sm"
-                  onLogout={() => window.location.href = '/'}
-                >
-                  Logout
-                </LogoutButton>
-              </>
-            ) : (
-              <Link
-                to="/dashboard"
-                className="bg-cobalt text-white px-4 py-2 rounded-brand font-medium hover:bg-cobalt-600 transition-colors"
-              >
-                Open App
-              </Link>
-            )}
+            <Link
+              to="/dashboard"
+              className="bg-cobalt text-white px-4 py-2 rounded-brand font-medium hover:bg-cobalt-600 transition-colors hidden sm:block"
+            >
+              Open App
+            </Link>
 
             {/* Hamburger Toggle (mobile only) */}
             <button
