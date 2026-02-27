@@ -1,385 +1,175 @@
 # Robot Integration Guide
 
-This guide explains how to integrate new robot types into the RoboMindOS platform.
+This guide covers the SO-101 robot arm setup: hardware connection, calibration, sidecar service, and known issues.
 
-## Overview
+## SO-101 Overview
 
-Integrating a new robot requires updates across three components:
+| | |
+|---|---|
+| Type | 6-DOF robot arm |
+| Joints | shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper |
+| Serial Port | `/dev/ttyACM0` |
+| Power | AC powered (`batteryLevel: null`) |
+| Max Payload | 0.5 kg |
+| Interface | LeRobot `SO101Follower` via Python |
 
-1. **Robot Agent** - Joint configurations and telemetry simulation
-2. **Server** - Robot metadata handling (automatic)
-3. **Frontend App** - 3D visualization with URDF models
+## Hardware Setup
 
----
+1. Connect the SO-101 arm via USB to the Raspberry Pi
+2. Verify the serial port is available:
+   ```bash
+   ls /dev/ttyACM*
+   # Should show /dev/ttyACM0
+   ```
+3. Ensure the user has permission to access the port:
+   ```bash
+   sudo usermod -a -G dialout $USER
+   # Log out and back in
+   ```
 
-## Available Robot Models
+## Calibration
 
-### Unitree Robots
-
-Source: `temp/unitree_ros/robots/`
-
-| Robot | Folder | Type | Joints |
-|-------|--------|------|--------|
-| **H1** | `h1_description/urdf/h1.urdf` | Humanoid | 19 |
-| **H1 v2** | `h1_2_description/` | Humanoid | ~19 |
-| **G1** | `g1_description/` | Humanoid | ~23 |
-| **Go1** | `go1_description/` | Quadruped | 12 |
-| **Go2** | `go2_description/` | Quadruped | 12 |
-| **B1** | `b1_description/` | Quadruped | 12 |
-| **B2** | `b2_description/` | Quadruped | 12 |
-| **A1** | `a1_description/` | Quadruped | 12 |
-| **Aliengo** | `aliengo_description/` | Quadruped | 12 |
-| **Z1** | `z1_description/` | Robotic Arm | 6 |
-
-### SO-ARM100
-
-Source: `temp/SO-ARM100/Simulation/SO101/`
-
-| Robot | File | Type | Joints |
-|-------|------|------|--------|
-| **SO101** | `so101_new_calib.urdf` | 6-DOF Arm | 6 |
-
-Mesh assets: `assets/*.stl`
-
----
-
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────┐     ┌─────────────────┐
-│  Robot Agent    │────▶│   Server    │────▶│   Frontend      │
-│                 │     │             │     │                 │
-│ • Joint configs │     │ • Robot     │     │ • 3D Viewer     │
-│ • Telemetry gen │     │   registry  │     │ • URDF loading  │
-│ • ROBOT_TYPE    │     │ • WebSocket │     │ • Joint anim    │
-└─────────────────┘     └─────────────┘     └─────────────────┘
-        │                                           │
-        │           RobotTelemetry                  │
-        │  { robotType, jointStates[], ... }        │
-        └───────────────────────────────────────────┘
-```
-
-**Data Flow:**
-1. Robot Agent reads `ROBOT_TYPE` environment variable
-2. Loads joint configuration for that robot type
-3. Generates telemetry with `robotType` field and `jointStates[]`
-4. Server relays telemetry to frontend via WebSocket
-5. Frontend loads URDF model matching `robotType`
-6. Joint states animate the 3D model in real-time
-
----
-
-## Step-by-Step Integration
-
-### Step 1: Add Robot Type Definition
-
-Update the `RobotType` union in both locations:
-
-**`robot-agent/src/robot/types.ts`**
-```typescript
-export type RobotType = 'h1' | 'so101' | 'go2' | 'generic';  // Add your type
-```
-
-**`app/src/features/robots/types/robots.types.ts`**
-```typescript
-export type RobotType = 'h1' | 'so101' | 'go2' | 'generic';  // Keep in sync
-```
-
----
-
-### Step 2: Create Joint Configuration
-
-Create a new config file in `robot-agent/src/robot/joint-configs/`:
-
-**`robot-agent/src/robot/joint-configs/go2.config.ts`**
-```typescript
-/**
- * @file go2.config.ts
- * @description Joint configuration for Unitree Go2 quadruped robot
- */
-
-import type { JointConfig } from '../types.js';
-
-export const GO2_JOINTS: JointConfig[] = [
-  // Front Left Leg
-  { name: 'FL_hip_joint', axis: 'x', limitLower: -0.86, limitUpper: 0.86, defaultPosition: 0 },
-  { name: 'FL_thigh_joint', axis: 'y', limitLower: -0.69, limitUpper: 2.79, defaultPosition: 0.8 },
-  { name: 'FL_calf_joint', axis: 'y', limitLower: -2.72, limitUpper: -0.84, defaultPosition: -1.5 },
-
-  // Front Right Leg
-  { name: 'FR_hip_joint', axis: 'x', limitLower: -0.86, limitUpper: 0.86, defaultPosition: 0 },
-  { name: 'FR_thigh_joint', axis: 'y', limitLower: -0.69, limitUpper: 2.79, defaultPosition: 0.8 },
-  { name: 'FR_calf_joint', axis: 'y', limitLower: -2.72, limitUpper: -0.84, defaultPosition: -1.5 },
-
-  // Rear Left Leg
-  { name: 'RL_hip_joint', axis: 'x', limitLower: -0.86, limitUpper: 0.86, defaultPosition: 0 },
-  { name: 'RL_thigh_joint', axis: 'y', limitLower: -0.69, limitUpper: 2.79, defaultPosition: 0.8 },
-  { name: 'RL_calf_joint', axis: 'y', limitLower: -2.72, limitUpper: -0.84, defaultPosition: -1.5 },
-
-  // Rear Right Leg
-  { name: 'RR_hip_joint', axis: 'x', limitLower: -0.86, limitUpper: 0.86, defaultPosition: 0 },
-  { name: 'RR_thigh_joint', axis: 'y', limitLower: -0.69, limitUpper: 2.79, defaultPosition: 0.8 },
-  { name: 'RR_calf_joint', axis: 'y', limitLower: -2.72, limitUpper: -0.84, defaultPosition: -1.5 },
-];
-```
-
-**Update the index export:**
-
-**`robot-agent/src/robot/joint-configs/index.ts`**
-```typescript
-import { H1_JOINTS } from './h1.config.js';
-import { SO101_JOINTS } from './so101.config.js';
-import { GO2_JOINTS } from './go2.config.js';  // Add import
-import type { JointConfig, RobotType } from '../types.js';
-
-export function getJointConfig(robotType: RobotType): JointConfig[] {
-  switch (robotType) {
-    case 'h1': return H1_JOINTS;
-    case 'so101': return SO101_JOINTS;
-    case 'go2': return GO2_JOINTS;  // Add case
-    default: return [];
-  }
-}
-
-export { H1_JOINTS, SO101_JOINTS, GO2_JOINTS };
-```
-
----
-
-### Step 3: Copy URDF and Mesh Files
-
-Copy the URDF file and meshes to the app's public assets:
+Calibration maps raw servo values to joint angles. Run this once per arm (or after mechanical changes):
 
 ```bash
-# Create robot directory
-mkdir -p app/public/assets/robots/go2/meshes
-
-# Copy URDF (update paths inside URDF if needed)
-cp temp/unitree_ros/robots/go2_description/urdf/go2.urdf \
-   app/public/assets/robots/go2/go2.urdf
-
-# Copy mesh files (DAE or STL)
-cp temp/unitree_ros/robots/go2_description/meshes/*.dae \
-   app/public/assets/robots/go2/meshes/
+lerobot-calibrate \
+  --robot.type=so101_follower \
+  --robot.id=my_so101 \
+  --robot.port=/dev/ttyACM0
 ```
 
-**Important:** Edit the URDF file to update mesh paths:
-```xml
-<!-- Before -->
-<mesh filename="package://go2_description/meshes/base.dae"/>
+Follow the on-screen instructions to move each joint to its limits. The calibration file is saved to:
 
-<!-- After -->
-<mesh filename="meshes/base.dae"/>
+```
+~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_so101.json
 ```
 
----
+The sidecar and VLA runner read this file automatically via LeRobot.
 
-### Step 4: Add Telemetry Simulation
+## Sidecar Service
 
-Add a simulation function in `robot-agent/src/robot/telemetry.ts`:
+The hardware sidecar (`robot-agent/hardware/so101_sidecar.py`) is a lightweight HTTP server on port 8765 that bridges the Node.js robot agent and the physical arm.
 
-```typescript
-// Add to telemetry.ts
+### Starting
 
-function simulateGo2Joint(
-  jointName: string,
-  config: JointConfig,
-  state: SimulatedRobotState,
-  time: number
-): number {
-  const isMoving = state.taskStatus === 'in_progress';
-  const trotFreq = 3.0;  // Trotting frequency
+```bash
+# Via systemd (production)
+sudo systemctl start so101-sidecar
+sudo systemctl status so101-sidecar
 
-  // Determine leg and joint type from name
-  const isFrontLeg = jointName.startsWith('FL') || jointName.startsWith('FR');
-  const isLeftLeg = jointName.startsWith('FL') || jointName.startsWith('RL');
-  const isHip = jointName.includes('hip');
-  const isThigh = jointName.includes('thigh');
-  const isCalf = jointName.includes('calf');
-
-  if (!isMoving) {
-    return config.defaultPosition;
-  }
-
-  // Diagonal legs move together (trot gait)
-  const phase = (isFrontLeg === isLeftLeg) ? 0 : Math.PI;
-
-  if (isHip) {
-    // Hip abduction/adduction
-    return Math.sin(time * trotFreq + phase) * 0.1;
-  } else if (isThigh) {
-    // Thigh swing
-    return 0.8 + Math.sin(time * trotFreq + phase) * 0.3;
-  } else if (isCalf) {
-    // Calf extension
-    return -1.5 + Math.sin(time * trotFreq + phase) * 0.2;
-  }
-
-  return config.defaultPosition;
-}
+# Manual (development)
+uv run python robot-agent/hardware/so101_sidecar.py
 ```
 
-Update `generateJointStates()` to use the new function:
-```typescript
-function generateJointStates(
-  robotType: RobotType,
-  state: SimulatedRobotState,
-  time: number
-): JointState[] {
-  const joints = getJointConfig(robotType);
+### How It Works
 
-  return joints.map((config) => {
-    let position: number;
+- **On-demand connection**: The sidecar only opens the serial port when a request arrives. After 5 seconds of inactivity, it releases the port automatically.
+- **Port sharing**: This allows other tools (LeRobot CLI, teleoperation scripts) to use `/dev/ttyACM0` when the dashboard isn't actively reading state.
+- **VLA delegation**: When VLA is started via `POST /vla/start`, the sidecar spawns a `VLARunner` thread that takes over arm control. The sidecar's `POST /action` endpoint is disabled during VLA sessions.
 
-    switch (robotType) {
-      case 'h1':
-        position = simulateH1Joint(config.name, config, state, time);
-        break;
-      case 'so101':
-        position = simulateSO101Joint(config.name, config, state, time);
-        break;
-      case 'go2':
-        position = simulateGo2Joint(config.name, config, state, time);
-        break;
-      default:
-        position = config.defaultPosition;
-    }
+### Key Endpoints
 
-    // Clamp to limits
-    position = Math.max(config.limitLower, Math.min(config.limitUpper, position));
+```bash
+# Check connection
+curl http://localhost:8765/health
+# {"status": "ok", "connected": false, "port": "/dev/ttyACM0"}
 
-    return {
-      name: config.name,
-      position,
-      velocity: 0,
-      effort: 0,
-    };
-  });
-}
+# Read joint positions
+curl http://localhost:8765/state
+# {"joints": [{"name": "shoulder_pan", "position": 0.0, ...}, ...], "simulated": false}
+
+# Send joint command (degrees)
+curl -X POST http://localhost:8765/action \
+  -H "Content-Type: application/json" \
+  -d '{"shoulder_pan": 0, "shoulder_lift": 45, "elbow_flex": -30, "wrist_flex": 10, "wrist_roll": 0, "gripper": 50}'
+
+# Release port for other tools
+curl http://localhost:8765/disconnect
 ```
 
----
+### Simulated Fallback
 
-### Step 5: Update 3D Viewer
+If the arm is not connected or the serial port is unavailable, `GET /state` returns simulated joint positions (`"simulated": true`). This allows the dashboard and agent to run without hardware.
 
-Add the URDF path in `app/src/features/robots/components/visualization/RobotModel.tsx`:
+## Robot Agent Configuration
 
-```typescript
-const URDF_PATHS: Record<string, string> = {
-  h1: '/assets/robots/h1/h1.urdf',
-  go2: '/assets/robots/go2/go2.urdf',  // Add new robot
-};
+The agent uses `.env.so101` for SO-101 specific settings:
+
+```env
+PORT=41245
+ROBOT_ID=so101-igor-001
+ROBOT_NAME=Igor
+ROBOT_MODEL=SO-101
+ROBOT_TYPE=so101
+ROBOT_CLASS=lightweight
+MAX_PAYLOAD_KG=0.5
+VLA_ROBOT_PORT=/dev/ttyACM0
 ```
 
-Update camera positioning in `Robot3DViewer.tsx` if needed:
+Start the agent with the SO-101 profile:
 
-```typescript
-const cameraPosition: [number, number, number] = (() => {
-  switch (robotType) {
-    case 'so101': return [0.5, 0.4, 0.5];
-    case 'go2': return [1.5, 1, 1.5];  // Quadruped view
-    default: return [2, 1.5, 2];
-  }
-})();
+```bash
+cd robot-agent
+npm run dev:so101
 ```
 
----
+Or via systemd:
 
-### Step 6: Test the Integration
+```bash
+sudo systemctl start robomind-agent
+```
 
-1. **Start the robot agent with new type:**
-   ```bash
-   cd robot-agent
-   ROBOT_TYPE=go2 npm run dev
-   ```
+The systemd unit uses `--env-file=.env.so101` automatically.
 
-2. **Start the server:**
-   ```bash
-   cd server
-   npm run dev
-   ```
+## State Persistence
 
-3. **Start the app:**
-   ```bash
-   cd app
-   npm run dev
-   ```
+The agent saves robot state to `robot-agent/data/state.json` on shutdown (SIGTERM). On startup, it restores from this file. If the state file accumulates errors or stale data:
 
-4. **Verify:**
-   - Check robot appears in fleet list
-   - Open robot detail page
-   - Confirm 3D model loads correctly
-   - Verify joint animations when telemetry is received
+```bash
+sudo systemctl stop robomind-agent
+rm robot-agent/data/state.json
+sudo systemctl start robomind-agent
+```
 
----
+## Adding a New Robot Type
 
-## Reference: Existing Implementations
+To integrate a different robot (e.g., Unitree H1, Go2):
 
-### H1 Humanoid (19 joints)
+1. Add the type to `robot-agent/src/robot/types.ts` (`RobotType` union)
+2. Create joint config in `robot-agent/src/robot/joint-configs/`
+3. Add telemetry simulation in `robot-agent/src/robot/telemetry.ts`
+4. Copy URDF + meshes to `app/public/assets/robots/{type}/`
+5. Add URDF path in `app/src/features/robots/components/visualization/RobotModel.tsx`
+6. Keep `app/src/features/robots/types/robots.types.ts` in sync
 
-**Joint Groups:**
-- Left Leg: hip_yaw, hip_roll, hip_pitch, knee, ankle
-- Right Leg: hip_yaw, hip_roll, hip_pitch, knee, ankle
-- Torso: torso_joint
-- Left Arm: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow
-- Right Arm: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow
+See the existing H1 and SO-101 implementations as reference.
 
-**Animation:** Walking cycle with coordinated leg movement, arm counter-swing
+## Known Issues
 
-**Files:**
-- Config: `robot-agent/src/robot/joint-configs/h1.config.ts`
-- URDF: `app/public/assets/robots/h1/h1.urdf`
-- Meshes: `app/public/assets/robots/h1/meshes/*.dae`
+### wrist_roll Cable Problem
 
-### SO101 Robotic Arm (6 joints)
+The wrist_roll joint cable can cause erratic position readings and jitter during VLA control. Workaround: limit wrist_roll range to +/-90 degrees in the safety validator or via `POST /safety/config`:
 
-**Joint Groups:**
-- Arm: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll
-- End Effector: gripper
+```bash
+curl -X POST http://localhost:8765/safety/config \
+  -H "Content-Type: application/json" \
+  -d '{"max_delta_degrees": 5.0}'
+```
 
-**Animation:** Reach and grasp cycles with smooth interpolation
+### Serial Port Busy
 
-**Files:**
-- Config: `robot-agent/src/robot/joint-configs/so101.config.ts`
-- URDF: Not yet integrated (uses procedural model)
-- Source: `temp/SO-ARM100/Simulation/SO101/so101_new_calib.urdf`
+If you get "port busy" errors, another process is holding `/dev/ttyACM0`. Check with:
 
----
+```bash
+fuser /dev/ttyACM0
+```
 
-## Troubleshooting
+Common causes: a previous sidecar process didn't shut down, or the LeRobot CLI is running. Kill the process or wait for the 5-second idle timeout.
 
-### Robot appears as wireframe box
-- URDF path not found - check `URDF_PATHS` in RobotModel.tsx
-- Mesh files missing - copy all DAE/STL files to assets
+### Agent State File Bloat
 
-### Robot is dark/invisible
-- Check lighting in Robot3DViewer.tsx
-- Material may not be applied - RobotModel applies custom material after 3 seconds
+The state file (`robot-agent/data/state.json`) can accumulate error entries over time. If the agent behaves unexpectedly after restarts, delete the state file and restart.
 
-### Robot is sideways or upside down
-- ROS uses Z-up, Three.js uses Y-up
-- Apply rotation: `rotation={[-Math.PI / 2, 0, 0]}`
+### batteryLevel: null
 
-### Joints don't animate
-- Check joint names match between URDF and config
-- Verify `jointStates` prop is being passed
-- Check telemetry is being received via WebSocket
-
-### URDF mesh paths broken
-- Edit URDF to use relative paths: `meshes/part.dae`
-- Ensure mesh folder structure matches URDF expectations
-
----
-
-## File Reference
-
-| Purpose | Path |
-|---------|------|
-| Robot types | `robot-agent/src/robot/types.ts` |
-| Joint configs | `robot-agent/src/robot/joint-configs/` |
-| Telemetry | `robot-agent/src/robot/telemetry.ts` |
-| Agent config | `robot-agent/src/config/config.ts` |
-| 3D model | `app/src/features/robots/components/visualization/RobotModel.tsx` |
-| 3D viewer | `app/src/features/robots/components/visualization/Robot3DViewer.tsx` |
-| URDF assets | `app/public/assets/robots/{type}/` |
-| App types | `app/src/features/robots/types/robots.types.ts` |
+The SO-101 is AC-powered. `batteryLevel` is `null` throughout the stack (database, API, frontend). This is intentional — the `??` operator was fixed to handle null correctly (not fall back to a default).

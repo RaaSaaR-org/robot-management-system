@@ -1,455 +1,180 @@
-# NeoDEM: RoboMindOS — System Architecture
+# System Architecture
 
-> *"The body cannot live without the mind."* — Morpheus
-
-**Version**: 2.0
-**Last Updated**: January 2025
-
----
-
-## System Overview
-
-NeoDEM is a distributed system for managing fleets of humanoid robots. It combines Vision-Language-Action (VLA) model integration for skill learning with EU AI Act compliance — enabling the "awakening of the machine" while keeping it transparent and aligned.
+NeoDEM is a distributed system with five services. In development, all run on a Raspberry Pi 5 except the VLA inference server, which runs on a separate machine with GPU/MPS.
 
 ```
-                                    NeoDEM: RoboMindOS
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                                                                         │
-    │   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        │
-    │   │             │  REST  │             │  A2A   │             │        │
-    │   │     App     │◄──────►│   Server    │◄──────►│ Robot Agent │        │
-    │   │  React/Tauri│   WS   │   Node.js   │Protocol│  Genkit AI  │        │
-    │   │             │        │             │        │             │        │
-    │   └─────────────┘        └──────┬──────┘        └──────┬──────┘        │
-    │         :1420                   │                      │               │
-    │                                 │                      │ gRPC          │
-    │                                 ▼                      ▼               │
-    │                          ┌─────────────┐        ┌─────────────┐        │
-    │                          │ PostgreSQL  │        │     VLA     │        │
-    │                          │  + MLflow   │        │  Inference  │        │
-    │                          │             │        │  (Oracle)   │        │
-    │                          └─────────────┘        └─────────────┘        │
-    │                               :5432                  :50051            │
-    │                                                                         │
-    │   ─────────────────────────────────────────────────────────────────    │
-    │   Infrastructure:  NATS :4222  │  RustFS :9000  │  Prometheus :9090    │
-    └─────────────────────────────────────────────────────────────────────────┘
+┌─────────────┐     REST/WS      ┌─────────────┐      A2A        ┌──────────────┐
+│     App      │◄───────────────►│   Server     │◄──────────────►│ Robot Agent   │
+│  React/Tauri │                 │  Express     │                │  Genkit AI    │
+│    :1420     │                 │    :3001     │                │    :41245     │
+└─────────────┘                  └──────┬───────┘                └──────┬───────┘
+                                        │                               │
+                                        ▼                               ▼
+                                 ┌─────────────┐                ┌──────────────┐
+                                 │   SQLite     │                │   Sidecar    │
+                                 │  (Prisma)    │                │  Python HTTP │
+                                 │  dev.db      │                │    :8765     │
+                                 └─────────────┘                └──────┬───────┘
+                                                                       │
+                                                             ┌─────────┴─────────┐
+                                                             │                   │
+                                                        ┌────▼────┐       ┌──────▼──────┐
+                                                        │ SO-101  │       │ VLA Server  │
+                                                        │/dev/tty │       │    :8000    │
+                                                        │ ACM0    │       │  (remote)   │
+                                                        └─────────┘       └─────────────┘
 ```
 
----
+## Services
 
-## Component Architecture
+### App (Frontend)
 
-### 1. App (Frontend)
+| | |
+|---|---|
+| Location | `app/` |
+| Stack | React 18, TypeScript, Tailwind CSS, Zustand, Vite |
+| Port | 1420 |
+| Wrapper | Tauri 2.0 (desktop) |
 
-The operator interface for managing and monitoring the fleet.
+Feature-first organization: `app/src/features/{name}/`. 21 feature modules including fleet dashboard, robot management, VLA training, A2A chat, compliance logging, and GDPR self-service.
 
-| Aspect | Details |
-|--------|---------|
-| **Location** | `app/` |
-| **Stack** | React 18, TypeScript, Tailwind CSS, Zustand |
-| **Wrapper** | Tauri 2.0 (desktop) |
-| **Port** | 1420 (development), 80 (production) |
-| **Build** | Vite |
+### Server (Backend)
 
-**Key Features:**
+| | |
+|---|---|
+| Location | `server/` |
+| Stack | Node.js, Express, Prisma ORM, TypeScript |
+| Port | 3001 |
+| Database | SQLite (dev: `server/prisma/dev.db`), PostgreSQL (production) |
+| Auth | JWT with MFA (TOTP). Disabled in dev via `AUTH_DISABLED=true` |
 
-- Fleet dashboard with real-time robot positions
-- Natural language command interface
-- VLA model training UI
-- Skill library and deployment
-- Live telemetry visualization
-- EU AI Act compliance logging
-- Emergency stop controls
+Architecture: Routes -> Services -> Repositories. 37 route files, 45 services, 18 repositories, 73 Prisma models.
 
-**Architecture Pattern:** Feature-first organization with Zustand stores.
+Key endpoints:
+- `GET /health` — health check
+- `GET /.well-known/a2a/agent_card.json` — A2A discovery
+- `/api/auth/*` — authentication (register, login, MFA)
+- `/api/robots/*` — robot management
+- `/api/a2a/*` — A2A conversations, messages, tasks
+- `/api/training/*` — VLA training jobs
+- `/api/datasets/*` — dataset management
+- `/api/deployments/*` — VLA model deployment
+- `ws://localhost:3001/api/a2a/ws` — WebSocket for real-time events
 
-```
-app/src/
-├── features/
-│   ├── robots/         # Robot management
-│   ├── fleet/          # Fleet overview & map
-│   ├── training/       # VLA training UI
-│   ├── deployment/     # Model deployment
-│   ├── command/        # NL command interface
-│   ├── compliance/     # EU AI Act logging
-│   ├── explainability/ # AI decision viewer
-│   ├── safety/         # Safety monitoring
-│   └── alerts/         # Alert system
-├── shared/             # Shared components, hooks, utils
-└── app/                # App shell, routing, providers
-```
+See [api.md](api.md) for the full endpoint list.
 
----
+### Robot Agent
 
-### 2. Server (Backend)
+| | |
+|---|---|
+| Location | `robot-agent/` |
+| Stack | Node.js, Genkit (Gemini 2.5 Flash), A2A SDK |
+| Port | 41245 (SO-101 profile) |
+| Config | `.env.so101` |
 
-Central orchestration server implementing the A2A protocol.
+AI-powered agent that interprets natural language commands, manages robot state, and orchestrates VLA inference. Persists state to `robot-agent/data/state.json` on shutdown.
 
-| Aspect | Details |
-|--------|---------|
-| **Location** | `server/` |
-| **Stack** | Node.js, Express, Prisma, TypeScript |
-| **Protocol** | A2A (Agent-to-Agent) |
-| **Port** | 3001 |
-| **Database** | PostgreSQL |
+Key endpoints:
+- `GET /.well-known/agent-card.json` — A2A agent card
+- `/api/v1/robots/:id/*` — telemetry, commands, tasks, safety, VLA control
+- `/api/v1/health` — health check
+- `ws://localhost:41245/ws/telemetry/:robotId` — telemetry stream
+- `ws://localhost:41245/ws/bilateral-teleop` — ALOHA-style teleoperation
 
-**Key Features:**
+### Hardware Sidecar
 
-- Robot registration and discovery
-- A2A conversation management
-- VLA training orchestration
-- Model deployment to fleet
-- Skill library management
-- EU AI Act compliance logging
-- MLflow integration
+| | |
+|---|---|
+| Location | `robot-agent/hardware/so101_sidecar.py` |
+| Stack | Python, BaseHTTPRequestHandler |
+| Port | 8765 |
 
-**Architecture Pattern:** Routes + Services with repository layer.
+Lightweight HTTP bridge between the Node.js agent and the SO-101 arm hardware. Manages serial port access with on-demand connection and 5-second idle timeout (releases `/dev/ttyACM0` for other tools like LeRobot CLI).
 
-```
-server/src/
-├── routes/              # API endpoints
-│   ├── robot.routes.ts
-│   ├── training.routes.ts
-│   ├── deployment.routes.ts
-│   └── compliance.routes.ts
-├── services/            # Business logic
-│   ├── RobotManager.ts
-│   ├── TrainingOrchestrator.ts
-│   ├── DeploymentService.ts
-│   ├── SkillLibraryService.ts
-│   └── ComplianceLogger.ts
-├── repositories/        # Data access
-├── websocket/           # Real-time communication
-└── types/               # TypeScript definitions
-```
+Key endpoints:
+- `GET /health` — connection status
+- `GET /state` — current joint positions
+- `POST /action` — send joint commands
+- `POST /vla/start` — start VLA control loop
+- `POST /vla/stop` — stop VLA control
+- `GET /vla/status` — VLA runner status
+- `GET /safety/status` — safety metrics
 
----
+### VLA Server (Inference)
 
-### 3. Robot Agent
+| | |
+|---|---|
+| Location | `vla-server/` |
+| Stack | Python, FastAPI, Uvicorn |
+| Port | 8000 |
+| Models | SmolVLA (active), GR00T N1 (ZMQ), pi0.5 (stub) |
 
-AI-powered software that runs on each robot (or in simulation).
+Runs on a separate machine (Mac with Apple Silicon for SmolVLA, or NVIDIA GPU for GR00T). Provides a unified HTTP inference API for multiple VLA model backends.
 
-| Aspect | Details |
-|--------|---------|
-| **Location** | `robot-agent/` |
-| **Stack** | Node.js, Genkit, Gemini AI |
-| **Protocol** | A2A SDK |
-| **Port** | 41243+ |
-| **Modes** | Production (hardware) / Simulation (dev) |
-
-**Key Features:**
-
-- Natural language command interpretation
-- VLA model inference client
-- A2A protocol compliance
-- Robot state management
-- Telemetry streaming
-- Safety monitoring & E-stop
-
-**Architecture Pattern:** AI agent with Genkit tools.
-
-```
-robot-agent/src/
-├── agent/           # A2A agent & AI
-│   ├── agent-card.ts
-│   ├── agent-executor.ts
-│   └── genkit.ts
-├── robot/           # Robot state & telemetry
-├── tools/           # Genkit AI tools
-│   ├── navigation.ts
-│   ├── manipulation.ts
-│   └── vla-skill.ts
-├── vla/             # VLA inference client
-│   ├── client.ts
-│   └── controller.ts
-├── safety/          # Safety monitoring
-└── compliance/      # Compliance logging client
-```
-
----
-
-### 4. VLA Inference Server (The Oracle)
-
-> *"I'm going to let you in on a little secret. Being The One is just like being in love."* — The Oracle
-
-Vision-Language-Action model serving for skill execution.
-
-| Aspect | Details |
-|--------|---------|
-| **Location** | `vla-inference/` |
-| **Stack** | Python, gRPC, PyTorch |
-| **Protocol** | gRPC (Predict, StreamControl) |
-| **Port** | 50051 (gRPC), 9090 (metrics) |
-| **Models** | pi0.6, OpenVLA, GR00T |
-
-**Key Features:**
-
-- Multi-model support (factory pattern)
-- Streaming action predictions
-- GPU acceleration (CUDA)
-- Prometheus metrics
-- Health checks
-
-**Architecture Pattern:** gRPC servicer with model factory.
-
-```
-vla-inference/
-├── server.py           # Async gRPC server
-├── servicer.py         # gRPC service implementation
-├── config.py           # Configuration
-├── metrics.py          # Prometheus metrics
-├── models/
-│   ├── __init__.py     # Model factory
-│   ├── pi0.py          # pi0.6 model
-│   ├── openvla.py      # OpenVLA 7B
-│   └── groot.py        # GR00T (stub)
-└── protos/             # Generated gRPC code
-```
-
----
+Key endpoints:
+- `GET /health` — model load status
+- `GET /config` — model metadata (action_dim, cameras, chunk_size)
+- `POST /predict` — run inference (images + state + instruction -> actions)
+- `POST /reset` — reset model state between episodes
 
 ## Communication Protocols
 
-### A2A Protocol (Agent-to-Agent)
+| Path | Protocol | Purpose |
+|------|----------|---------|
+| App <-> Server | REST + WebSocket | UI operations, real-time telemetry |
+| Server <-> Agent | A2A (HTTP) | Task distribution, commands |
+| Agent <-> Sidecar | HTTP | Hardware control, VLA orchestration |
+| Sidecar <-> SO-101 | Serial (LeRobot) | Joint commands via `/dev/ttyACM0` |
+| Sidecar <-> VLA Server | HTTP | Inference requests (POST /predict) |
+| VLA Server <-> GR00T | ZMQ (port 5555) | GR00T N1 model inference |
 
-Primary protocol for server-robot communication.
+## Hardware
 
-```
-┌──────────┐                    ┌──────────────┐
-│  Server  │                    │ Robot Agent  │
-└────┬─────┘                    └──────┬───────┘
-     │                                 │
-     │  GET /.well-known/agent-card.json
-     │────────────────────────────────>│
-     │         AgentCard               │
-     │<────────────────────────────────│
-     │                                 │
-     │  POST / (A2A Message)           │
-     │────────────────────────────────>│
-     │                                 │
-     │         Task Created            │
-     │<────────────────────────────────│
-     │                                 │
-```
+### SO-101 Robot Arm
+- 6 DOF: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
+- Serial port: `/dev/ttyACM0`
+- Power: AC (no battery, `batteryLevel: null`)
+- Max payload: 0.5 kg
 
-### gRPC (Robot ↔ VLA Inference)
+### Cameras
+- **Front camera** (cam 0): IMX477 (CSI), used for VLA inference
+- **Wrist camera** (cam 1): OV5647 (CSI), optional for VLA inference
+- Capture: 640x480, resized to 224x224 for inference
 
-High-performance streaming for VLA predictions.
+## Database
 
-```
-┌──────────────┐                    ┌──────────────┐
-│ Robot Agent  │                    │ VLA Inference│
-└──────┬───────┘                    └──────┬───────┘
-       │                                   │
-       │  Predict(image, instruction)      │
-       │──────────────────────────────────>│
-       │         ActionPrediction          │
-       │<──────────────────────────────────│
-       │                                   │
-       │  StreamControl(stream of images)  │
-       │──────────────────────────────────>│
-       │         Stream of actions         │
-       │<──────────────────────────────────│
-       │                                   │
+SQLite for development (`server/prisma/dev.db`), PostgreSQL for production. Prisma ORM with 73 models. Array fields stored as JSON strings in SQLite.
+
+```bash
+cd server
+npm run db:generate   # Generate Prisma client
+npm run db:push       # Push schema to dev database
+npm run db:migrate    # Run migrations (production)
+npm run db:studio     # Open Prisma Studio GUI
 ```
 
-### WebSocket
+## Systemd Services
 
-Real-time telemetry and events.
+All four services run as systemd units on the Raspberry Pi:
 
-| Event | Description |
-|-------|-------------|
-| `telemetry` | Position, battery, sensors |
-| `status` | Robot state changes |
-| `alert` | Warnings and errors |
-| `task` | Task progress updates |
-| `compliance` | Audit log events |
+| Unit | Working Directory | After |
+|------|-------------------|-------|
+| `robomind-server` | `server/` | network.target |
+| `robomind-app` | `app/` | network.target |
+| `so101-sidecar` | — | — |
+| `robomind-agent` | `robot-agent/` | robomind-server, so101-sidecar |
 
----
-
-## Data Flow
-
-### Skill Upload Flow ("I know Kung Fu")
-
-```
-1. Operator uploads training demonstrations
-   │
-   ▼
-2. Server stores in RustFS, creates dataset
-   │
-   ▼
-3. Training job submitted to orchestrator
-   │
-   ▼
-4. VLA model fine-tuned (MLflow tracking)
-   │
-   ▼
-5. Model deployed to VLA Inference server
-   │
-   ▼
-6. Skill added to Skill Library
-   │
-   ▼
-7. Robot agents load new skill via gRPC
-   │
-   ▼
-8. Fleet "knows Kung Fu"
+```bash
+sudo systemctl status robomind-server robomind-agent robomind-app so101-sidecar
+journalctl -u robomind-agent -f --no-pager
 ```
 
-### Command Execution Flow
+## Optional Infrastructure
 
-```
-1. User: "Pick up the red cup"
-   │
-   ▼
-2. Server routes to Robot Agent via A2A
-   │
-   ▼
-3. Genkit AI interprets command
-   │
-   ▼
-4. VLA skill invoked if available
-   │
-   ▼
-5. Robot Agent → VLA Inference (gRPC)
-   │
-   ▼
-6. VLA model predicts actions (50 Hz)
-   │
-   ▼
-7. Robot executes actions
-   │
-   ▼
-8. Telemetry streamed back via WebSocket
-```
+These are configured but not required for local development:
 
----
-
-## Infrastructure
-
-### Databases & Storage
-
-| Service | Purpose | Port |
-|---------|---------|------|
-| **PostgreSQL** | Primary database (Prisma ORM) | 5432 |
-| **MLflow** | Experiment tracking, model registry | 5000 |
-| **RustFS** | S3-compatible object storage | 9000 |
-| **NATS** | Message queue for async tasks | 4222 |
-
-### Monitoring
-
-| Service | Purpose | Port |
-|---------|---------|------|
-| **Prometheus** | Metrics collection | 9090 |
-| **Grafana** | Dashboards (optional) | 3000 |
-
----
-
-## Deployment Architecture
-
-### Development
-
-```
-┌──────────────────────────────────────────────────┐
-│                  Developer Machine               │
-│                                                  │
-│  ┌─────────┐   ┌─────────┐   ┌──────────────┐   │
-│  │   App   │   │ Server  │   │ Robot Agent  │   │
-│  │  :1420  │   │  :3001  │   │    :41243    │   │
-│  └─────────┘   └─────────┘   └──────────────┘   │
-│                                                  │
-│  docker-compose up -d postgres nats rustfs       │
-└──────────────────────────────────────────────────┘
-```
-
-### Production (Kubernetes)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Kubernetes Cluster                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │     App     │  │   Server    │  │ Robot Agent │         │
-│  │  (2-5 pods) │  │ (2-10 pods) │  │  (1+ pods)  │         │
-│  │     HPA     │  │     HPA     │  │             │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-│                                                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │ PostgreSQL  │  │    NATS     │  │   RustFS    │         │
-│  │ StatefulSet │  │ StatefulSet │  │ StatefulSet │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-│                                                              │
-│  ┌─────────────┐  ┌─────────────┐                          │
-│  │   MLflow    │  │VLA Inference│  (GPU nodes)             │
-│  │             │  │    (GPU)    │                          │
-│  └─────────────┘  └─────────────┘                          │
-│                                                              │
-│  NetworkPolicies │ PodDisruptionBudgets │ Secrets          │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Security Architecture
-
-### Authentication & Authorization
-
-| Layer | Implementation |
-|-------|----------------|
-| **User Auth** | JWT tokens |
-| **Robot Auth** | API keys |
-| **RBAC** | Admin, Operator, Viewer roles |
-
-### Transport Security
-
-- TLS/HTTPS for all connections
-- WSS for WebSocket
-- gRPC with TLS for VLA inference
-
-### EU AI Act Compliance
-
-| Requirement | Implementation |
-|-------------|----------------|
-| **Art. 12 Logging** | Tamper-evident audit trail |
-| **Art. 13 Transparency** | AI decision explainability |
-| **Art. 14 Human Oversight** | Emergency stop, supervision |
-| **GDPR Art. 30** | Records of Processing Activities |
-
----
-
-## Technology Stack
-
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| **Frontend** | React, TypeScript, Tailwind | UI |
-| **Desktop** | Tauri 2.0 (Rust) | Native wrapper |
-| **Server** | Node.js, Express, Prisma | API & orchestration |
-| **Protocol** | A2A | Agent communication |
-| **AI** | Genkit, Gemini | NL interpretation |
-| **VLA** | Python, PyTorch, gRPC | Vision-Language-Action |
-| **Real-time** | WebSocket, NATS | Streaming |
-| **Database** | PostgreSQL | Persistence |
-| **Storage** | RustFS (S3) | Object storage |
-| **ML Ops** | MLflow | Experiment tracking |
-| **Orchestration** | Kubernetes, Helm | Deployment |
-
----
-
-## Related Documentation
-
-| Document | Description |
-|----------|-------------|
-| [VLA Integration Guide](./VLA-integration-guide.md) | VLA model integration |
-| [Deployment Guide](./deployment.md) | Kubernetes deployment |
-| [Brand Guide](./brand.md) | Visual design system |
-| [PRD](./prd.md) | Product requirements |
-
----
-
-<div align="center">
-
-**NeoDEM** — *Overseeing the Awakening of the Machine*
-
-</div>
+| Service | Purpose | Status |
+|---------|---------|--------|
+| NATS (4222) | Async job queues, KV stores | Optional, logs warning if unavailable |
+| RustFS/S3 (9000) | Object storage for models/datasets | Optional |
+| MLflow (5000) | Experiment tracking, model registry | Optional |
