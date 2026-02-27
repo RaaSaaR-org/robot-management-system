@@ -53,12 +53,12 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
   const buttonStyle = SEVERITY_BUTTON_STYLES[alert.severity];
 
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
-      <div className="flex items-center gap-3 min-w-0">
+    <div className="flex items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 sm:py-3">
+      <div className="flex items-center gap-2 min-w-0 sm:gap-3">
         <AlertSeverityBadge severity={alert.severity} showDot />
-        <div className="min-w-0">
+        <div className="min-w-0 truncate">
           <span className="font-medium">{alert.title}</span>
-          <span className="mx-2">-</span>
+          <span className="mx-1 sm:mx-2">-</span>
           <span className="opacity-90">{alert.message}</span>
         </div>
       </div>
@@ -136,7 +136,7 @@ export function AlertBanner({ className }: AlertBannerProps) {
       role="alert"
       aria-live="assertive"
       className={cn(
-        'fixed top-14 left-56 right-0 z-30 border-b transition-all duration-300 animate-in slide-in-from-top',
+        'fixed top-14 left-0 right-0 z-30 border-b transition-all duration-300 animate-in slide-in-from-top sm:left-56',
         SEVERITY_STYLES[mostCriticalAlert.severity],
         className
       )}
