@@ -20,6 +20,14 @@ The Open Physical AI Platform — the complete lifecycle from first demonstratio
 
 ---
 
+## Live Demo
+
+> **[Open Live Demo](https://raasaar-org.github.io/robot-management-system/)** — Fully interactive demo with simulated H1 humanoid fleet (no backend required)
+
+[![Deploy Demo to GitHub Pages](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/deploy-demo.yml/badge.svg)](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/deploy-demo.yml)
+
+---
+
 ## What is NeoDEM?
 
 NeoDEM is the first open-source platform covering the complete Physical AI pipeline — from recording human demonstrations to deploying trained VLA models in compliant production. No other open-source tool covers the full lifecycle.
