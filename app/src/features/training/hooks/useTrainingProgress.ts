@@ -38,6 +38,11 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
   const handleEvent = useTrainingStore((state) => state.handleTrainingEvent);
 
   const connect = useCallback(() => {
+    if (import.meta.env.VITE_DEMO_MODE === 'true') {
+      console.info('[Demo] WebSocket disabled in demo mode');
+      return;
+    }
+
     // Clean up existing connection
     if (wsRef.current) {
       wsRef.current.close();

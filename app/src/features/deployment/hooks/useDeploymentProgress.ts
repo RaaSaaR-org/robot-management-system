@@ -77,6 +77,11 @@ export function useDeploymentProgress(
   );
 
   const connect = useCallback(() => {
+    if (import.meta.env.VITE_DEMO_MODE === 'true') {
+      console.info('[Demo] WebSocket disabled in demo mode');
+      return;
+    }
+
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
     }

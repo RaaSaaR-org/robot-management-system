@@ -52,9 +52,9 @@ const SO101_JOINT_CORRECTIONS: Record<string, { sign: number; offset_deg: number
 // ============================================================================
 
 const URDF_PATHS: Record<string, string> = {
-  h1: '/assets/robots/h1/h1.urdf',
-  g1: '/assets/robots/g1/g1.urdf',
-  so101: '/assets/robots/so101/so101.urdf',
+  h1: `${import.meta.env.BASE_URL}assets/robots/h1/h1.urdf`,
+  g1: `${import.meta.env.BASE_URL}assets/robots/g1/g1.urdf`,
+  so101: `${import.meta.env.BASE_URL}assets/robots/so101/so101.urdf`,
 };
 
 // ============================================================================

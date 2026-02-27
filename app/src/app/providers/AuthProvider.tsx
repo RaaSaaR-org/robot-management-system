@@ -93,7 +93,7 @@ export function AuthProvider({
   useEffect(() => {
     if (!isInitialized) {
       // In development mode, auto-login with mock user
-      if (import.meta.env.DEV) {
+      if (import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true') {
         devLogin(MOCK_USER);
       } else {
         initialize();

@@ -59,6 +59,11 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
   const { setWsConnected, handleTaskEvent, fetchMessages } = useA2AStore();
 
   const connect = useCallback(() => {
+    if (import.meta.env.VITE_DEMO_MODE === 'true') {
+      console.info('[Demo] WebSocket disabled in demo mode');
+      return;
+    }
+
     // Don't reconnect if already connected
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
