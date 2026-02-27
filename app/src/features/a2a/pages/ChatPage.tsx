@@ -5,6 +5,8 @@
  */
 
 import { memo, useState, useCallback } from 'react';
+import { MessageSquare } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -108,6 +110,23 @@ const ConversationDrawer = memo(function ConversationDrawer({
  * Main A2A chat page - focused chat experience
  */
 export const ChatPage = memo(function ChatPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="A2A Robot Chat"
+        icon={<MessageSquare className="w-12 h-12" />}
+        description="Real-time A2A communication with your robot fleet using natural language commands and structured agent protocols."
+        capabilities={[
+          'Send natural language commands to any robot',
+          'Monitor robot responses and status updates in real-time',
+          'Create automated task sequences via agent dialogue',
+          'Integrate with external AI agents via A2A protocol',
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
   const {
     conversations,
     currentConversation,

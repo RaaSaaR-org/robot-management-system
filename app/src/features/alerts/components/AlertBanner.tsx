@@ -6,6 +6,7 @@
  */
 
 import { useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { useAlerts } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
@@ -113,7 +114,13 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
  * ```
  */
 export function AlertBanner({ className }: AlertBannerProps) {
+  const location = useLocation();
   const { mostCriticalAlert, acknowledgeAlert, removeAlert } = useAlerts();
+
+  // Hide banner on landing page
+  if (location.pathname === '/') {
+    return null;
+  }
 
   const handleAcknowledge = useCallback(() => {
     if (mostCriticalAlert) {

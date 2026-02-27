@@ -5,6 +5,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { BarChart3 } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import type { EvaluationPeriod, EvaluationEpisode, SuccessRateResult, ErrorBreakdownItem, ModelComparisonResult } from '../types';
 import { evaluationApi } from '../api';
 import { PeriodSelector } from '../components/PeriodSelector';
@@ -32,6 +34,23 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 // ============================================================================
 
 export function EvaluationDashboardPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Model Evaluation"
+        icon={<BarChart3 className="w-12 h-12" />}
+        description="Evaluate robot model performance with standardized benchmarks. Compare models, track regressions, and generate compliance reports."
+        capabilities={[
+          'Run standardized evaluation suites on robot hardware',
+          'Compare model versions with performance benchmarks',
+          'Generate EU AI Act compliance reports',
+          'Track performance regressions over time',
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
   const [period, setPeriod] = useState<EvaluationPeriod>('7d');
   const [loading, setLoading] = useState(true);
 

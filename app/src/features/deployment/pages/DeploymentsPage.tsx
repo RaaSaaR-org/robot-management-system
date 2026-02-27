@@ -5,6 +5,8 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import { Rocket } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Card, Button } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import { DeploymentCard, CanaryConfig, RollbackConfirmation } from '../components';
@@ -13,6 +15,23 @@ import type { Deployment, CreateDeploymentInput } from '../types';
 type TabValue = 'active' | 'history';
 
 export function DeploymentsPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Deployment Manager"
+        icon={<Rocket className="w-12 h-12" />}
+        description="Manage model deployments across your robot fleet. Track rollout status, rollback failed deployments, and monitor deployment health."
+        capabilities={[
+          'Deploy models to individual robots or entire fleet',
+          'Canary deployments with automatic rollback',
+          'Track deployment history and success rates',
+          'A/B test model versions in production',
+        ]}
+        docsSlug="deployment"
+      />
+    );
+  }
+
   const [activeTab, setActiveTab] = useState<TabValue>('active');
   const [showCanaryConfig, setShowCanaryConfig] = useState(false);
   const [rollbackDeployment, setRollbackDeployment] = useState<Deployment | null>(null);

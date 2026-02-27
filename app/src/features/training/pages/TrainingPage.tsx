@@ -5,6 +5,8 @@
  */
 
 import { useState, useEffect } from 'react';
+import { Brain } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Tabs } from '@/shared/components/ui';
 import { TrainingJobList } from '../components/TrainingJobList';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
@@ -26,6 +28,23 @@ type TabValue = 'active' | 'history';
  * Main training management page
  */
 export function TrainingPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Training Studio"
+        icon={<Brain className="w-12 h-12" />}
+        description="End-to-end ML training pipeline for robot behavior models. Collect teleoperation data, train VLA models, and deploy to your fleet."
+        capabilities={[
+          'Record teleoperation episodes with your robot',
+          'Train SmolVLA / GR00T models on custom data',
+          'Monitor training progress with live metrics',
+          'Manage training jobs across GPU clusters',
+        ]}
+        docsSlug="VLA-integration-guide"
+      />
+    );
+  }
+
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<TrainingJob | null>(null);
   const [activeTab, setActiveTab] = useState<TabValue>('active');

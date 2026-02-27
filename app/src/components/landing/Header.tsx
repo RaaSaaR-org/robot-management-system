@@ -44,6 +44,9 @@ export function Header() {
             <a href="#deploy" className="text-theme-secondary hover:text-theme-primary transition-colors">
               Deploy
             </a>
+            <Link to="/docs" className="text-theme-secondary hover:text-theme-primary transition-colors">
+              Docs
+            </Link>
           </nav>
 
           {/* Auth Buttons + Mobile Toggle */}
@@ -130,6 +133,13 @@ export function Header() {
           >
             Deploy
           </a>
+          <Link
+            to="/docs"
+            onClick={closeMenu}
+            className="flex items-center min-h-[44px] px-3 rounded-lg text-theme-secondary hover:text-theme-primary hover:bg-theme-card transition-colors"
+          >
+            Docs
+          </Link>
           <div className="mt-2 pt-2 border-t border-theme">
             <Link
               to="/dashboard"

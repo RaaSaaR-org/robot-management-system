@@ -5,6 +5,8 @@
  */
 
 import { useState, useCallback } from 'react';
+import { Cpu } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs, Spinner } from '@/shared/components/ui';
 import { ModelRegistryList } from '../components/ModelRegistryList';
 import { ModelVersionList } from '../components/ModelVersionList';
@@ -18,6 +20,23 @@ type TabValue = 'registry' | 'compare';
  * Main page for model registry management
  */
 export function ModelsPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Model Registry"
+        icon={<Cpu className="w-12 h-12" />}
+        description="Model registry for your robot AI. Track versions, compare benchmarks, and deploy models to your fleet."
+        capabilities={[
+          'Register and version VLA models (SmolVLA, GR00T, pi0)',
+          'Compare model performance across evaluation runs',
+          'One-click deployment to robot fleet',
+          'Monitor inference performance in production',
+        ]}
+        docsSlug="VLA-integration-guide"
+      />
+    );
+  }
+
   const [activeTab, setActiveTab] = useState<TabValue>('registry');
   const [selectedModel, setSelectedModel] = useState<RegisteredModel | null>(null);
   const [selectedVersions, setSelectedVersions] = useState<ModelVersion[]>([]);
