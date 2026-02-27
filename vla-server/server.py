@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ServerConfig:
-    model: str = "smolvla"          # "smolvla" | "pi05"
+    model: str = "smolvla"          # "smolvla" | "pi05" | "groot"
     model_path: str = "lerobot/smolvla_base"
     device: str = "mps"
     host: str = "0.0.0.0"
@@ -109,6 +109,14 @@ class ConfigResponse(BaseModel):
 
 def create_model(config: ServerConfig) -> VLAModel:
     """Create the appropriate model backend."""
+    if config.model == "groot":
+        from models.groot import GR00TModel
+
+        host = os.environ.get("VLA_HOST", "localhost")
+        port = int(os.environ.get("VLA_ZMQ_PORT", "5555"))
+        stub = config.stub or os.environ.get("VLA_STUB", "").lower() in ("1", "true")
+        return GR00TModel(host=host, port=port, stub=stub)
+
     if config.stub or config.model == "pi05":
         from models.pi05 import Pi05Model
         return Pi05Model(model_path=config.model_path, device=config.device)
@@ -154,7 +162,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="VLA Inference Server",
-    description="Consolidated VLA inference (SmolVLA, pi0.5, ...)",
+    description="Consolidated VLA inference (SmolVLA, pi0.5, GR00T N1, ...)",
     lifespan=lifespan,
 )
 
