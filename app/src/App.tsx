@@ -51,6 +51,7 @@ import {
   LazyEvaluationDashboardPage,
   LazyUpdatesPage,
   LazySimulationPage,
+  LazyDocsPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -381,6 +382,24 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazySimulationPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Docs - Documentation viewer */}
+          <Route
+            path="/docs"
+            element={
+              <ProtectedAppRoute>
+                <LazyDocsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/docs/:slug"
+            element={
+              <ProtectedAppRoute>
+                <LazyDocsPage />
               </ProtectedAppRoute>
             }
           />

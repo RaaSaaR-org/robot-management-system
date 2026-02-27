@@ -250,6 +250,13 @@ export const LazySimulationPage = lazy(() =>
 // ============================================================================
 
 /**
+ * Docs page - Documentation viewer with markdown rendering
+ */
+export const LazyDocsPage = lazy(() =>
+  import('@/pages/DocsPage').then((m) => ({ default: m.DocsPage }))
+);
+
+/**
  * Settings page - User preferences and app configuration (TASK-014)
  */
 export const LazySettingsPage = lazy(() =>
