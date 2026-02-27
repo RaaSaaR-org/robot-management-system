@@ -7,6 +7,9 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  base: process.env.VITE_DEMO_MODE === 'true'
+    ? '/robot-management-system/'
+    : '/',
   plugins: [react()],
   resolve: {
     alias: {

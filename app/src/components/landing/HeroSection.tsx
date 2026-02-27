@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+
 export function HeroSection() {
   return (
     <section className="min-h-screen section-primary pt-16 flex items-center relative overflow-hidden">
@@ -44,9 +46,9 @@ export function HeroSection() {
 
             {/* CTAs */}
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-              <a href="/dashboard" className="btn-primary text-center">
+              <Link to="/dashboard" className="btn-primary text-center">
                 Open Dashboard
-              </a>
+              </Link>
               <a
                 href="https://github.com/RaaSaaR-org/robot-management-system"
                 target="_blank"

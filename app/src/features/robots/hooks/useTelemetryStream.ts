@@ -108,8 +108,8 @@ export function useTelemetryStream(
 
   const updateTelemetry = useRobotsStore((state) => state.updateTelemetry);
 
-  // Check if we're in development mode
-  const isDev = import.meta.env.DEV;
+  // Check if we're in development or demo mode (both use HTTP polling instead of WebSocket)
+  const isDev = import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true';
 
   // WebSocket URL for production
   const wsUrl = `wss://api.robomind.io/telemetry/${robotId}`;
