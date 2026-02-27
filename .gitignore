@@ -50,6 +50,11 @@ node_modules/
 # Robot agent persisted state
 robot-agent/data/state.json
 
+# Playwright
+app/e2e/results/
+app/e2e/report/
+app/e2e/test-results/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -10,7 +10,10 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "e2e": "playwright test",
+    "e2e:screenshots": "playwright test e2e/screenshots",
+    "e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
