@@ -104,7 +104,7 @@ export interface UseAlertReturn {
  * }
  * ```
  */
-export function useAlerts(): UseAlertsReturn {
+export function useAlerts(autoFetch = true): UseAlertsReturn {
   const alerts = useAlertsStore(selectAlerts);
   const isLoading = useAlertsStore(selectIsLoading);
   const error = useAlertsStore(selectError);
@@ -138,6 +138,13 @@ export function useAlerts(): UseAlertsReturn {
   const storeClearAll = useAlertsStore((state) => state.clearAllAlerts);
   const storeClearAcknowledged = useAlertsStore((state) => state.clearAcknowledgedAlerts);
   const storeFetchAlerts = useAlertsStore((state) => state.fetchActiveAlerts);
+
+  // Auto-fetch active alerts on mount
+  useEffect(() => {
+    if (autoFetch) {
+      storeFetchAlerts();
+    }
+  }, [autoFetch, storeFetchAlerts]);
 
   const addAlert = useCallback(
     (request: CreateAlertRequest): Alert => {
