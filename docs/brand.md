@@ -311,9 +311,5 @@ Always maintain:
 
 ---
 
-<div align="center">
-
 **NeoDEM: RoboMindOS**
 *Neo-Deus Ex Machina*
-
-</div>
