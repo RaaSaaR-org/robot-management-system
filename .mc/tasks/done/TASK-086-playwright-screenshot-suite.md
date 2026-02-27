@@ -7,4 +7,4 @@ tags: [e2e, playwright, screenshots]
 created: 2026-02-27
 completed: 2026-02-27
 ---
-Playwright config + e2e/screenshots/ spec. 7/7 tests pass, 14 screenshots (desktop+mobile). Dark mode, 1440x900. PR #55 merged. Quinn PASS.
+playwright.config.ts + e2e/screenshots/demo-pages.spec.ts + demoReady.ts helper. 7/7 tests pass, 14 screenshots (desktop + mobile, dark mode). PR #55 merged. CI screenshots.yml needs manual add (same workflows permission issue).
