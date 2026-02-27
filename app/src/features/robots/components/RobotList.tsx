@@ -173,9 +173,9 @@ export function RobotList({
           </div>
 
           {/* Status filter + View toggle */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0 w-full sm:w-auto">
             {/* Status filter - glass pill container */}
-            <div className="glass-subtle rounded-xl p-1 flex items-center gap-1 overflow-x-auto">
+            <div className="glass-subtle rounded-xl p-1 flex items-center gap-1 overflow-x-auto min-w-0" style={{ scrollbarWidth: 'none' }}>
               {STATUS_OPTIONS.map((status) => (
                 <button
                   key={status}
