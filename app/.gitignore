@@ -41,3 +41,7 @@ node_modules/
 
 # Test coverage output
 coverage/
+
+# Playwright video & test output
+e2e/results/videos/
+e2e/test-results-videos/
