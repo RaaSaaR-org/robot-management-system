@@ -171,6 +171,14 @@ class VLARunner:
         try:
             # Initialize robot and camera
             robot = self._connect_robot()
+
+            # Seed rate limiter with current robot state so the FIRST action
+            # is also rate-limited. Without this, the first VLA action has no
+            # delta cap and can command a 60°+ single-step jump → servo stall.
+            initial_state = self._get_state(robot)
+            self.rate_limiter._last_action = initial_state[:]
+            logger.info(f"Rate limiter seeded from robot state: {[round(s,1) for s in initial_state]}")
+
             camera = self._make_camera(self.camera_index)
             if self.wrist_camera_index >= 0:
                 try:
