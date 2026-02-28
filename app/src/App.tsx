@@ -63,7 +63,13 @@ import {
  */
 function ProtectedAppRoute({ children }: { children: React.ReactNode }) {
   return (
-    <ProtectedRoute onUnauthenticated={() => (window.location.href = '/login')}>
+    <ProtectedRoute onUnauthenticated={() => {
+        if (import.meta.env.VITE_DEMO_MODE === 'true') {
+          window.location.href = import.meta.env.BASE_URL || '/';
+        } else {
+          window.location.href = '/login';
+        }
+      }}>
       <AppLayout>{children}</AppLayout>
     </ProtectedRoute>
   );
