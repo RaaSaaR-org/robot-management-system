@@ -7,6 +7,8 @@
 
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { GitBranch } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { TaskList as ProcessList } from '../components/TaskList';
 import { CreateProcessModal } from '../components/CreateProcessModal';
 
@@ -24,6 +26,27 @@ import { CreateProcessModal } from '../components/CreateProcessModal';
  * ```
  */
 export function ProcessesPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Process Management"
+        icon={<GitBranch className="w-12 h-12" />}
+        description="Orchestrate complex multi-robot workflows and automate repetitive task sequences across your fleet."
+        capabilities={[
+          "Define multi-step robot task pipelines",
+          "Schedule recurring processes (daily inspections, charging routines)",
+          "Monitor process execution with real-time logs",
+          "Handle failures with automatic retry and escalation",
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
+  return <ProcessesPageInner />;
+}
+
+function ProcessesPageInner() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);

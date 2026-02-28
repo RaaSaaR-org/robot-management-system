@@ -58,6 +58,7 @@ function titleFromSlug(slug: string): string {
 // ---------------------------------------------------------------------------
 
 const CATEGORY_MAP: Record<string, string> = {
+  'demo-intro': 'Getting Started',
   'README': 'Getting Started',
   'architecture': 'Architecture',
   'app-architecture': 'Architecture',
@@ -119,10 +120,15 @@ function buildDocEntries(): {
     contentMap.set(slug, content);
   }
 
-  // Sort: README first, then alphabetical by title
+  // Sort: demo-intro first (in demo mode), then README, then alphabetical
+  const isDemo = import.meta.env.VITE_DEMO_MODE === 'true';
   entries.sort((a, b) => {
+    const aIsDemoIntro = a.slug === 'demo-intro';
+    const bIsDemoIntro = b.slug === 'demo-intro';
     const aIsReadme = a.slug.toUpperCase() === 'README';
     const bIsReadme = b.slug.toUpperCase() === 'README';
+    if (isDemo && aIsDemoIntro && !bIsDemoIntro) return -1;
+    if (isDemo && !aIsDemoIntro && bIsDemoIntro) return 1;
     if (aIsReadme && !bIsReadme) return -1;
     if (!aIsReadme && bIsReadme) return 1;
     return a.title.localeCompare(b.title);
@@ -142,6 +148,7 @@ function buildDocEntries(): {
 
 const { entries: DOC_ENTRIES, contentMap: DOC_CONTENT, grouped: DOC_GROUPS } = buildDocEntries();
 
+// In demo mode, demo-intro is sorted first; otherwise README is first
 const DEFAULT_SLUG = DOC_ENTRIES[0]?.slug ?? '';
 
 // Ordered categories (only those that have entries)

@@ -15,6 +15,8 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
+import { FlaskConical } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { simulationApi } from '../api/simulationApi';
 import type { SimJob, SimEnvironment, SimToRealComparison } from '../types';
 
@@ -459,6 +461,27 @@ function SimVsRealTab() {
 // ============================================================================
 
 export function SimulationPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Simulation Environment"
+        icon={<FlaskConical className="w-12 h-12" />}
+        description="Test robot behaviors and AI models in a physics-accurate simulation before deploying to real hardware."
+        capabilities={[
+          "Import real-world maps and environments",
+          "Simulate H1, SO-101, G1 robot kinematics",
+          "Run VLA model inference against simulated sensors",
+          "A/B test model variants without hardware risk",
+        ]}
+        docsSlug="VLA-integration-guide"
+      />
+    );
+  }
+
+  return <SimulationPageInner />;
+}
+
+function SimulationPageInner() {
   const [activeTab, setActiveTab] = useState<TabId>('launch');
   const [jobs, setJobs] = useState<SimJob[]>([]);
   const [environments, setEnvironments] = useState<SimEnvironment[]>([]);
