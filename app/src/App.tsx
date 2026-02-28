@@ -405,7 +405,7 @@ function App() {
             }
           />
           <Route
-            path="/docs/:slug"
+            path="/docs/*"
             element={
               <ProtectedAppRoute>
                 <LazyDocsPage />

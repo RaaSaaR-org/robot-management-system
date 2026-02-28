@@ -1,6 +1,6 @@
 /**
  * @file FleetStats.tsx
- * @description Fleet statistics KPI cards component
+ * @description Fleet statistics KPI cards component with entrance animations
  * @feature fleet
  * @dependencies @/shared/utils/cn, @/shared/components/ui, @/features/fleet/types
  */
@@ -15,13 +15,15 @@ import { ROBOT_STATUS_COLORS } from '../types/fleet.types';
 // SUB-COMPONENTS
 // ============================================================================
 
-/** Single stat card */
+/** Single stat card with entrance animation */
 function StatCard({
   title,
   value,
   subtitle,
   icon,
   color,
+  index = 0,
+  showPulse,
   children,
 }: {
   title: string;
@@ -29,25 +31,38 @@ function StatCard({
   subtitle?: string;
   icon: React.ReactNode;
   color?: string;
+  index?: number;
+  showPulse?: boolean;
   children?: React.ReactNode;
 }) {
   return (
-    <Card className="p-4 flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-theme-tertiary uppercase tracking-wide">{title}</span>
-        <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center"
-          style={{ backgroundColor: color ? `${color}20` : 'rgb(var(--color-cobalt-100))' }}
-        >
-          <span style={{ color: color || 'rgb(var(--color-cobalt-500))' }}>{icon}</span>
+    <div
+      className="opacity-0"
+      style={{ animation: `cardEntrance 0.5s ease-out ${index * 80}ms forwards` }}
+    >
+      <Card className="p-4 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-theme-tertiary uppercase tracking-wide">{title}</span>
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center"
+            style={{ backgroundColor: color ? `${color}20` : 'rgb(var(--color-cobalt-100))' }}
+          >
+            <span style={{ color: color || 'rgb(var(--color-cobalt-500))' }}>{icon}</span>
+          </div>
         </div>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-theme-primary">{value}</span>
-        {subtitle && <span className="text-sm text-theme-tertiary">{subtitle}</span>}
-      </div>
-      {children}
-    </Card>
+        <div className="flex items-baseline gap-2">
+          <span className="text-2xl font-bold text-theme-primary">{value}</span>
+          {subtitle && <span className="text-sm text-theme-tertiary">{subtitle}</span>}
+          {showPulse && (
+            <span className="relative flex h-2.5 w-2.5 ml-1">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
+            </span>
+          )}
+        </div>
+        {children}
+      </Card>
+    </div>
   );
 }
 
@@ -183,16 +198,7 @@ const TaskIcon = () => (
 // ============================================================================
 
 /**
- * Fleet statistics component displaying KPI cards.
- *
- * @example
- * ```tsx
- * function FleetDashboard() {
- *   const { status, isLoading } = useFleetStatus();
- *
- *   return <FleetStats status={status} isLoading={isLoading} />;
- * }
- * ```
+ * Fleet statistics component displaying KPI cards with entrance animations.
  */
 export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
   if (isLoading) {
@@ -223,6 +229,7 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
         title="Total Robots"
         value={totalRobots}
         icon={<RobotIcon />}
+        index={0}
       >
         <StatusBreakdown robotsByStatus={robotsByStatus} total={totalRobots} />
       </StatCard>
@@ -234,6 +241,8 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
         subtitle={`of ${totalRobots}`}
         icon={<OnlineIcon />}
         color={ROBOT_STATUS_COLORS.online}
+        index={1}
+        showPulse
       />
 
       {/* Busy */}
@@ -243,6 +252,7 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
         subtitle="active"
         icon={<BusyIcon />}
         color={ROBOT_STATUS_COLORS.busy}
+        index={2}
       />
 
       {/* Alerts */}
@@ -252,6 +262,7 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
         subtitle="unacknowledged"
         icon={<AlertIcon />}
         color={totalUnacknowledgedAlerts > 0 ? '#ef4444' : '#22c55e'}
+        index={3}
       >
         <AlertIndicator counts={alertCounts} total={totalUnacknowledgedAlerts} />
       </StatCard>
@@ -262,6 +273,7 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
         value={avgBatteryLevel !== null ? `${avgBatteryLevel}%` : 'AC Power'}
         icon={<BatteryIcon />}
         color={avgBatteryLevel === null ? '#6b7280' : avgBatteryLevel >= 60 ? '#22c55e' : avgBatteryLevel >= 30 ? '#eab308' : '#ef4444'}
+        index={4}
       >
         <BatteryIndicator level={avgBatteryLevel ?? 100} />
       </StatCard>
@@ -273,6 +285,7 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
         subtitle="running"
         icon={<TaskIcon />}
         color="#3b82f6"
+        index={5}
       />
     </div>
   );
