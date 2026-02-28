@@ -42,14 +42,14 @@ export function SettingsPage() {
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-bold text-theme-primary">Settings</h1>
-        <p className="text-theme-secondary mt-1">Configure your RoboMindOS preferences</p>
+        <p className="text-theme-secondary mt-1">Configure your NeoDEM preferences</p>
       </header>
 
       {/* Appearance Section */}
       <div className="card p-6">
         <h2 className="text-lg font-semibold text-theme-primary mb-4">Appearance</h2>
         <p className="text-theme-secondary text-sm mb-4">
-          Choose how RoboMindOS looks to you. Select a theme preference below.
+          Choose how NeoDEM looks to you. Select a theme preference below.
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

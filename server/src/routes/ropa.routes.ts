@@ -27,11 +27,11 @@ ropaRoutes.get('/', async (_req: Request, res: Response) => {
 /**
  * GET /ropa/report - Generate RoPA report for regulatory submission
  * Query params:
- *   - organizationName: string (optional, default: 'RoboMindOS')
+ *   - organizationName: string (optional, default: 'NeoDEM')
  */
 ropaRoutes.get('/report', async (req: Request, res: Response) => {
   try {
-    const organizationName = (req.query.organizationName as string) || 'RoboMindOS';
+    const organizationName = (req.query.organizationName as string) || 'NeoDEM';
     const report = await ropaService.generateReport(organizationName);
 
     // Set headers for download

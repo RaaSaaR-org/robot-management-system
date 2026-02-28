@@ -112,7 +112,7 @@ export function useTelemetryStream(
   const isDev = import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true';
 
   // WebSocket URL for production
-  const wsUrl = `wss://api.robomind.io/telemetry/${robotId}`;
+  const wsUrl = `wss://api.neodem.io/telemetry/${robotId}`;
 
   // Handle incoming telemetry (both real and simulated)
   const handleTelemetry = useCallback(

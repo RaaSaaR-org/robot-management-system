@@ -77,7 +77,7 @@ function DefaultLogo() {
 export function LoginPage({
   onLoginSuccess,
   logo,
-  title = 'RoboMindOS',
+  title = 'NeoDEM',
   tagline = 'Fleet Management System',
 }: LoginPageProps) {
   return (
@@ -148,7 +148,7 @@ export function LoginPage({
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} RoboMindOS. All rights reserved.
+          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
         </p>
       </div>
     </div>

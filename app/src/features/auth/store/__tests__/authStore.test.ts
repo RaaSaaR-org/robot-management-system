@@ -9,7 +9,7 @@ import type { User } from '../../types/auth.types';
 
 const MOCK_USER: User = {
   id: 'test-user-001',
-  email: 'test@robomind.local',
+  email: 'test@neodem.local',
   name: 'Test User',
   role: 'admin',
   avatar: undefined,

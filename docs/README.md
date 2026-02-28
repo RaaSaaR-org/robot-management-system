@@ -1,4 +1,4 @@
-# NeoDEM / RoboMindOS
+# NeoDEM
 
 NeoDEM is a fleet management platform for autonomous robots. It handles robot registration, telemetry, AI-driven task execution, VLA (Vision-Language-Action) model inference, and EU AI Act compliance logging. The current deployment runs a single SO-101 robot arm on a Raspberry Pi 5.
 

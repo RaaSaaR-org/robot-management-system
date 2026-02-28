@@ -46,7 +46,7 @@ describe('MFASetup', () => {
     const user = userEvent.setup();
     vi.mocked(authApi.mfaTotpSetup).mockResolvedValue({
       secret: 'JBSWY3DPEHPK3PXP',
-      otpauthUrl: 'otpauth://totp/RoboMindOS:test@example.com?secret=JBSWY3DPEHPK3PXP&issuer=RoboMindOS',
+      otpauthUrl: 'otpauth://totp/NeoDEM:test@example.com?secret=JBSWY3DPEHPK3PXP&issuer=NeoDEM',
     });
 
     render(<MFASetup />);

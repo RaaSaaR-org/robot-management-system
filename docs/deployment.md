@@ -1,4 +1,4 @@
-# NeoDEM: RoboMindOS — Deployment Guide
+# NeoDEM — Deployment Guide
 
 > *"Free your mind."* — Morpheus
 
@@ -76,7 +76,7 @@ kubectl get pods -n robomind
 
 ## Services Overview
 
-RoboMindOS consists of 9 services in Docker Compose:
+NeoDEM consists of 9 services in Docker Compose:
 
 | Service | Port(s) | Description |
 |---------|---------|-------------|

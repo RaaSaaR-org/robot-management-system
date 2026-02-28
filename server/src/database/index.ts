@@ -21,7 +21,7 @@ export async function connectDatabase(): Promise<void> {
         where: { id: 'dev-user-id' },
         create: {
           id: 'dev-user-id',
-          email: 'dev@robomindos.local',
+          email: 'dev@neodem.local',
           passwordHash: 'disabled',
           name: 'Dev User',
           role: 'admin',

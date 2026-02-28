@@ -28,7 +28,7 @@ export interface AuthenticatedRequest extends Request {
  */
 const MOCK_USER: AuthUser = {
   id: 'dev-user-id',
-  email: 'dev@robomindos.local',
+  email: 'dev@neodem.local',
   name: 'Dev User',
   role: 'admin',
 };

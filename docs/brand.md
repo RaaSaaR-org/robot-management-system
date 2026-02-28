@@ -1,4 +1,4 @@
-# NeoDEM: RoboMindOS — Brand Guide
+# NeoDEM — Brand Guide
 
 > *"What is the Matrix? Control."*
 > *"What is NeoDEM? Empowerment."*
@@ -311,5 +311,5 @@ Always maintain:
 
 ---
 
-**NeoDEM: RoboMindOS**
+**NeoDEM**
 *Neo-Deus Ex Machina*

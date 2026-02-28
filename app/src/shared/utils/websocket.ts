@@ -16,7 +16,7 @@
  * ```ts
  * const wsUrl = getWebSocketUrl();
  * // If page is at http://192.168.178.67/, returns ws://192.168.178.67/api/a2a/ws
- * // If page is at https://robomind.local/, returns wss://robomind.local/api/a2a/ws
+ * // If page is at https://neodem.local/, returns wss://neodem.local/api/a2a/ws
  * ```
  */
 export function getWebSocketUrl(path: string = '/api/a2a/ws'): string {

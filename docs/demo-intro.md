@@ -1,6 +1,6 @@
 # NeoDEM Documentation
 
-Welcome to the NeoDEM / RoboMindOS documentation.
+Welcome to the NeoDEM documentation.
 
 NeoDEM is an open-source fleet management platform for autonomous robots — from single-arm manipulators to full humanoid fleets.
 

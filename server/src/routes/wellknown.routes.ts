@@ -13,16 +13,16 @@ const PUBLIC_URL = process.env.PUBLIC_URL || 'http://localhost:3001';
 
 /**
  * Fleet-level agent card
- * This represents the RoboMindOS fleet as an A2A agent
+ * This represents the NeoDEM fleet as an A2A agent
  */
 const FLEET_AGENT_CARD: A2AAgentCard = {
-  name: 'RoboMindOS Fleet',
+  name: 'NeoDEM Fleet',
   description: 'Robot fleet management system with natural language control. Manages humanoid robots for various tasks including logistics, inspection, and assistance.',
   url: PUBLIC_URL,
   version: '0.1.0',
   provider: {
-    organization: 'RoboMindOS',
-    url: 'https://robomind.io',
+    organization: 'NeoDEM',
+    url: 'https://neodem.io',
   },
   capabilities: {
     streaming: true,
@@ -89,8 +89,8 @@ wellKnownRoutes.get('/robots/:robotId/agent_card.json', (req: Request, res: Resp
     url: `${PUBLIC_URL}/robots/${robotId}`,
     version: '0.1.0',
     provider: {
-      organization: 'RoboMindOS',
-      url: 'https://robomind.io',
+      organization: 'NeoDEM',
+      url: 'https://neodem.io',
     },
     capabilities: {
       streaming: true,
