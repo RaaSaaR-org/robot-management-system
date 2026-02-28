@@ -1,0 +1,41 @@
+{{/*
+configmap.yaml - NeoDEM ConfigMap
+=============================================================================
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "neodem.fullname" . }}-config
+  labels:
+    {{- include "neodem.labels" . | nindent 4 }}
+data:
+  # Database configuration
+  DATABASE_URL: {{ include "neodem.postgres.url" . | quote }}
+  
+  # NATS configuration
+  {{- if or .Values.nats.enabled .Values.nats.external.enabled }}
+  NATS_SERVERS: {{ include "neodem.nats.servers" . | quote }}
+  {{- end }}
+  
+  # RustFS configuration
+  {{- if or .Values.rustfs.enabled .Values.rustfs.external.enabled }}
+  RUSTFS_ENDPOINT: {{ include "neodem.rustfs.endpoint" . | quote }}
+  {{- if .Values.rustfs.external.enabled }}
+  RUSTFS_REGION: {{ .Values.rustfs.external.region | quote }}
+  {{- end }}
+  {{- end }}
+  
+  # MLflow configuration
+  {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
+  MLFLOW_TRACKING_URI: {{ include "neodem.mlflow.trackingUri" . | quote }}
+  {{- end }}
+  
+  # Server configuration
+  NODE_ENV: {{ .Values.server.env.nodeEnv | quote }}
+  AUTH_DISABLED: {{ .Values.server.env.authDisabled | quote }}
+  {{- if .Values.server.env.publicUrl }}
+  PUBLIC_URL: {{ .Values.server.env.publicUrl | quote }}
+  {{- end }}
+  {{- if .Values.server.env.corsOrigins }}
+  CORS_ORIGINS: {{ .Values.server.env.corsOrigins | quote }}
+  {{- end }}

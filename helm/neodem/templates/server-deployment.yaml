@@ -1,0 +1,161 @@
+{{/*
+server-deployment.yaml - NeoDEM Server Deployment
+=============================================================================
+*/}}
+{{- if .Values.server.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "neodem.server.fullname" . }}
+  labels:
+    {{- include "neodem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "neodem.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "neodem.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      {{- include "neodem.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "neodem.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+          env:
+            # Core configuration from ConfigMap
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: NODE_ENV
+            - name: AUTH_DISABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: AUTH_DISABLED
+            # Database
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: DATABASE_URL
+            # JWT Secret
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "neodem.fullname" . }}-secrets
+                  key: JWT_SECRET
+            # Google API Key (optional)
+            {{- if .Values.secrets.googleApiKey }}
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "neodem.fullname" . }}-secrets
+                  key: GOOGLE_API_KEY
+            {{- end }}
+            # NATS
+            {{- if or .Values.nats.enabled .Values.nats.external.enabled }}
+            - name: NATS_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: NATS_SERVERS
+            {{- end }}
+            # RustFS / S3
+            {{- if or .Values.rustfs.enabled .Values.rustfs.external.enabled }}
+            - name: RUSTFS_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: RUSTFS_ENDPOINT
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "neodem.fullname" . }}-secrets
+                  key: RUSTFS_ACCESS_KEY
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "neodem.fullname" . }}-secrets
+                  key: RUSTFS_SECRET_KEY
+            {{- end }}
+            # MLflow
+            {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: MLFLOW_TRACKING_URI
+            {{- end }}
+            # Optional: Public URL
+            {{- if .Values.server.env.publicUrl }}
+            - name: PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: PUBLIC_URL
+            {{- end }}
+            # Optional: CORS Origins
+            {{- if .Values.server.env.corsOrigins }}
+            - name: CORS_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "neodem.fullname" . }}-config
+                  key: CORS_ORIGINS
+            {{- end }}
+          {{- if .Values.server.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.server.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.server.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.server.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.server.healthCheck.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.server.healthCheck.path }}
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- end }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          {{- if .Values.securityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if .Values.securityContext.readOnlyRootFilesystem }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
