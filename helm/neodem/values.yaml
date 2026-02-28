@@ -160,7 +160,7 @@ mlflow:
 server:
   enabled: true
   image:
-    repository: neodem/server
+    repository: ghcr.io/raasaar-org/neodem-server
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -200,7 +200,7 @@ server:
 app:
   enabled: true
   image:
-    repository: neodem/app
+    repository: ghcr.io/raasaar-org/neodem-app
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -239,7 +239,7 @@ app:
 robotAgent:
   enabled: true
   image:
-    repository: neodem/robot-agent
+    repository: ghcr.io/raasaar-org/neodem-robot-agent
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -271,7 +271,7 @@ robotAgent:
 vlaInference:
   enabled: false
   image:
-    repository: neodem/vla-inference
+    repository: ghcr.io/raasaar-org/neodem-vla-inference
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 1
