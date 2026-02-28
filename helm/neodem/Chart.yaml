@@ -1,0 +1,28 @@
+# Chart.yaml - NeoDEM: NeoDEM Helm Chart
+apiVersion: v2
+name: neodem
+description: >-
+  NeoDEM (Neo-Deus Ex Machina) - Fleet management platform for humanoid robots
+  with Vision-Language-Action (VLA) model integration and EU AI Act compliance.
+  Overseeing the Awakening of the Machine.
+type: application
+version: 0.3.0
+appVersion: "2.0.0"
+keywords:
+  - robotics
+  - fleet-management
+  - vla
+  - vision-language-action
+  - ai
+  - humanoid
+  - eu-ai-act
+  - compliance
+  - kubernetes
+home: https://github.com/RaaSaaR-org/robot-management-system
+maintainers:
+  - name: NeoDEM Team
+sources:
+  - https://github.com/RaaSaaR-org/robot-management-system
+annotations:
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/license: MIT

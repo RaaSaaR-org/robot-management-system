@@ -1,0 +1,23 @@
+{{/*
+mlflow-service.yaml - MLflow Service
+=============================================================================
+*/}}
+{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "neodem.mlflow.fullname" . }}
+  labels:
+    {{- include "neodem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "neodem.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mlflow
+{{- end }}
