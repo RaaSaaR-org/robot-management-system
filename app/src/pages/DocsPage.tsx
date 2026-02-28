@@ -183,6 +183,13 @@ export function DocsPage() {
             <article className="prose prose-sm md:prose-base dark:prose-invert max-w-none prose-headings:text-theme-primary prose-a:text-cobalt prose-a:no-underline hover:prose-a:underline prose-code:before:content-none prose-code:after:content-none prose-pre:p-0 prose-pre:bg-transparent prose-img:rounded-brand prose-table:text-sm">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                urlTransform={(url) => {
+                  // Resolve relative screenshot/image paths to public assets
+                  if (url && !url.startsWith('http') && !url.startsWith('/')) {
+                    return `${import.meta.env.BASE_URL}${url}`;
+                  }
+                  return url;
+                }}
                 components={{ code: CodeBlock as never }}
               >
                 {content}

@@ -6,6 +6,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { AlertTriangle } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -199,6 +201,23 @@ function OpenIncidentsContent() {
  * Main page for incident management and regulatory reporting.
  */
 export function IncidentsPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Incident Management"
+        icon={<AlertTriangle className="w-12 h-12" />}
+        description="Track and resolve robot incidents. Log failures, analyze root causes, and implement corrective actions."
+        capabilities={[
+          'Automatic incident creation from robot errors',
+          'Root cause analysis with AI assistance',
+          'Track corrective actions and resolutions',
+          'Generate incident reports for compliance',
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
   const [activeTab, setActiveTab] = useState('dashboard');
   const navigate = useNavigate();
   const { fetchIncidents } = useIncidents(false);

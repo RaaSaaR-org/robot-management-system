@@ -6,11 +6,9 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth, LogoutButton } from '@/features/auth';
 import { Logo } from '@/components/common/Logo';
 
 export function Header() {
-  const { isAuthenticated, user } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const closeMenu = () => setMobileMenuOpen(false);
@@ -44,34 +42,19 @@ export function Header() {
             <a href="#deploy" className="text-theme-secondary hover:text-theme-primary transition-colors">
               Deploy
             </a>
+            <Link to="/docs" className="text-theme-secondary hover:text-theme-primary transition-colors">
+              Docs
+            </Link>
           </nav>
 
-          {/* Auth Buttons + Mobile Toggle */}
+          {/* CTA + Mobile Toggle */}
           <div className="flex items-center gap-3">
-            {isAuthenticated ? (
-              <>
-                <Link
-                  to="/dashboard"
-                  className="text-theme-secondary hover:text-theme-primary transition-colors hidden sm:block"
-                >
-                  {user?.name || 'Dashboard'}
-                </Link>
-                <LogoutButton
-                  variant="ghost"
-                  size="sm"
-                  onLogout={() => window.location.href = '/'}
-                >
-                  Logout
-                </LogoutButton>
-              </>
-            ) : (
-              <Link
-                to="/dashboard"
-                className="bg-cobalt text-white px-4 py-2 rounded-brand font-medium hover:bg-cobalt-600 transition-colors"
-              >
-                Open App
-              </Link>
-            )}
+            <Link
+              to="/dashboard"
+              className="bg-cobalt text-white px-4 py-2 rounded-brand font-medium hover:bg-cobalt-600 transition-colors hidden sm:block"
+            >
+              Open App
+            </Link>
 
             {/* Hamburger Toggle (mobile only) */}
             <button
@@ -130,6 +113,13 @@ export function Header() {
           >
             Deploy
           </a>
+          <Link
+            to="/docs"
+            onClick={closeMenu}
+            className="flex items-center min-h-[44px] px-3 rounded-lg text-theme-secondary hover:text-theme-primary hover:bg-theme-card transition-colors"
+          >
+            Docs
+          </Link>
           <div className="mt-2 pt-2 border-t border-theme">
             <Link
               to="/dashboard"

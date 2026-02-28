@@ -5,6 +5,8 @@
  */
 
 import { useState, useEffect } from 'react';
+import { Zap } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Card, Button, Badge } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import { SkillBrowser, SkillEditor, SkillStatusBadge } from '../components';
@@ -13,6 +15,23 @@ import type { SkillDefinition, CreateSkillInput, UpdateSkillInput } from '../typ
 type TabValue = 'skills' | 'chains';
 
 export function SkillsPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Robot Skills"
+        icon={<Zap className="w-12 h-12" />}
+        description="Create, share, and deploy robot skills. Package reusable robot behaviors and deploy them across your fleet."
+        capabilities={[
+          'Define parameterized robot skills (pick, place, navigate)',
+          'Version and test skills before deployment',
+          'Share skills via the community marketplace',
+          'Chain skills into complex workflows',
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
   const [activeTab, setActiveTab] = useState<TabValue>('skills');
   const [showSkillEditor, setShowSkillEditor] = useState(false);
   const [editingSkill, setEditingSkill] = useState<SkillDefinition | undefined>();

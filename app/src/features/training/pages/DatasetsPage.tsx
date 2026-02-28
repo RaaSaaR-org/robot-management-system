@@ -5,6 +5,8 @@
  */
 
 import { useState } from 'react';
+import { Database } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Modal } from '@/shared/components/ui';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
@@ -16,6 +18,23 @@ import type { Dataset, DatasetQueryParams } from '../types';
  * Main page for dataset management
  */
 export function DatasetsPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Dataset Hub"
+        icon={<Database className="w-12 h-12" />}
+        description="Manage and version your robot training datasets. Import from LeRobot, annotate episodes, and prepare data for training."
+        capabilities={[
+          'Browse and filter teleoperation episodes',
+          'Import datasets from Hugging Face / LeRobot format',
+          'Annotate and label robot trajectories',
+          'Export datasets for training pipelines',
+        ]}
+        docsSlug="VLA-integration-guide"
+      />
+    );
+  }
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);

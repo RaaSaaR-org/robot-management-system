@@ -5,6 +5,8 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import { Eye } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
 import { DecisionList } from '../components/DecisionList';
 import { DecisionViewer } from '../components/DecisionViewer';
@@ -19,6 +21,23 @@ import type { DecisionExplanation, MetricsPeriod } from '../types';
  * Main page for AI Explainability (EU AI Act compliance)
  */
 export function ExplainabilityPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="AI Explainability"
+        icon={<Eye className="w-12 h-12" />}
+        description="Understand what your robot AI is doing and why. Visualize attention maps, action explanations, and decision traces."
+        capabilities={[
+          'Visualize VLA attention maps during inference',
+          'Explain individual robot actions in natural language',
+          'Audit model decisions for compliance',
+          'Detect and alert on anomalous behavior patterns',
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
   const [activeTab, setActiveTab] = useState('decisions');
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(null);
 

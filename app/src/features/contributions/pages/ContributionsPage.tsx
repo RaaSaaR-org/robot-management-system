@@ -7,7 +7,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
-import { Database, Upload, Trophy, BarChart3 } from 'lucide-react';
+import { Database, Upload, Trophy, BarChart3, GitMerge } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { ContributionList } from '../components/ContributionList';
 import { ContributionBadge } from '../components/ContributionBadge';
 import { CreditBalance } from '../components/CreditBalance';
@@ -90,6 +91,23 @@ function formatBytes(bytes: number): string {
 // ============================================================================
 
 export function ContributionsPage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Community Contributions"
+        icon={<GitMerge className="w-12 h-12" />}
+        description="Contribute to and benefit from the NeoDEM community. Share datasets, models, and skills with other teams."
+        capabilities={[
+          'Share anonymized datasets with the community',
+          'Download community-contributed robot skills',
+          'Participate in federated training initiatives',
+          'Track your contribution impact metrics',
+        ]}
+        docsSlug="architecture"
+      />
+    );
+  }
+
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabId>('contributions');
 

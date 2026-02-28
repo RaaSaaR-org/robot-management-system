@@ -168,6 +168,15 @@ function App() {
           {/* Redirect old /tasks routes to /processes */}
           <Route path="/tasks" element={<Navigate to="/processes" replace />} />
           <Route path="/tasks/:id" element={<Navigate to="/processes" replace />} />
+          {/* /chat route — shows A2A chat (demo placeholder in demo mode) */}
+          <Route
+            path="/chat"
+            element={
+              <ProtectedAppRoute>
+                <LazyA2AChatPage />
+              </ProtectedAppRoute>
+            }
+          />
           <Route
             path="/settings"
             element={

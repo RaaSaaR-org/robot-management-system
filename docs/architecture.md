@@ -117,6 +117,10 @@ Key endpoints:
 - `POST /predict` — run inference (images + state + instruction -> actions)
 - `POST /reset` — reset model state between episodes
 
+## Fleet Map
+
+![Fleet Map](screenshots/fleet-map.png)
+
 ## Communication Protocols
 
 | Path | Protocol | Purpose |

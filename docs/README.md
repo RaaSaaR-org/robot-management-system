@@ -68,6 +68,17 @@ cp robot-agent/.env.example robot-agent/.env # Set GEMINI_API_KEY
 
 The robot agent uses `.env.so101` for SO-101 configuration (port 41245, robot type, VLA settings).
 
+## Screenshots
+
+### Fleet Dashboard
+![Fleet Dashboard](screenshots/dashboard.png)
+
+### Robot Fleet
+![Robot Fleet](screenshots/robots.png)
+
+### H1 Robot Detail
+![Robot Detail](screenshots/robot-h1-detail.png)
+
 ## Documentation
 
 | Document | Description |
