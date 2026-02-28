@@ -6,6 +6,8 @@
 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Shield } from 'lucide-react';
+import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
 import { Button } from '@/shared/components/ui/Button';
 import { ComplianceLogList } from '../components/ComplianceLogList';
@@ -30,6 +32,27 @@ import type { ComplianceLog, ComplianceEventType } from '../types';
  * Main page for Compliance Logging (EU AI Act Art. 12, GDPR Art. 30)
  */
 export function CompliancePage() {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return (
+      <DemoFeaturePlaceholder
+        featureName="Compliance Center"
+        icon={<Shield className="w-12 h-12" />}
+        description="Ensure your robot fleet meets EU AI Act, ISO 10218, and industry-specific safety standards with automated compliance tracking."
+        capabilities={[
+          "Automated EU AI Act compliance checks",
+          "ISO 10218 safety standard monitoring",
+          "Audit trail for all robot decisions and actions",
+          "Generate compliance reports for regulators",
+        ]}
+        docsSlug="regulatory-compliance"
+      />
+    );
+  }
+
+  return <CompliancePageInner />;
+}
+
+function CompliancePageInner() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLog, setSelectedLog] = useState<ComplianceLog | null>(null);
