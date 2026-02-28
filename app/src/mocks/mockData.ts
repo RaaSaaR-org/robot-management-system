@@ -21,7 +21,7 @@ import type {
 
 export const MOCK_USER: User = {
   id: 'dev-user-001',
-  email: 'dev@robomind.local',
+  email: 'dev@neodem.local',
   name: 'Dev Admin',
   role: 'admin',
   avatar: undefined,

@@ -452,7 +452,7 @@ export const a2aApi = {
     if (USE_MOCK) {
       await delay(100);
       return {
-        name: 'RoboMindOS Fleet',
+        name: 'NeoDEM Fleet',
         description: 'Robot fleet management system',
         url: A2A_BASE_URL,
         version: '0.1.0',

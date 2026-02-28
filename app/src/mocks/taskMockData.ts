@@ -77,7 +77,7 @@ export const MOCK_TASKS: Task[] = [
     createdAt: new Date(Date.now() - 2400000).toISOString(),
     startedAt: new Date(Date.now() - 1800000).toISOString(),
     updatedAt: new Date().toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
   },
   {
     id: 'task-098',
@@ -119,7 +119,7 @@ export const MOCK_TASKS: Task[] = [
     startedAt: new Date(Date.now() - 3600000).toISOString(),
     completedAt: new Date(Date.now() - 3000000).toISOString(),
     updatedAt: new Date(Date.now() - 3000000).toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
   },
   {
     id: 'task-105',
@@ -178,7 +178,7 @@ export const MOCK_TASKS: Task[] = [
     createdAt: new Date(Date.now() - 900000).toISOString(),
     startedAt: new Date(Date.now() - 600000).toISOString(),
     updatedAt: new Date().toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
   },
   {
     id: 'task-110',
@@ -229,7 +229,7 @@ export const MOCK_TASKS: Task[] = [
     createdAt: new Date(Date.now() - 7500000).toISOString(),
     startedAt: new Date(Date.now() - 7200000).toISOString(),
     updatedAt: new Date(Date.now() - 3600000).toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
     metadata: { pauseReason: 'Robot scheduled for maintenance' },
   },
   {
@@ -277,7 +277,7 @@ export const MOCK_TASKS: Task[] = [
     estimatedDuration: 2400,
     createdAt: new Date(Date.now() - 300000).toISOString(),
     updatedAt: new Date(Date.now() - 300000).toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
   },
   {
     id: 'task-095',
@@ -327,7 +327,7 @@ export const MOCK_TASKS: Task[] = [
     startedAt: new Date(Date.now() - 14400000).toISOString(),
     completedAt: new Date(Date.now() - 12000000).toISOString(),
     updatedAt: new Date(Date.now() - 12000000).toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
   },
   {
     id: 'task-113',
@@ -362,7 +362,7 @@ export const MOCK_TASKS: Task[] = [
     estimatedDuration: 600,
     createdAt: new Date(Date.now() - 60000).toISOString(),
     updatedAt: new Date(Date.now() - 60000).toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
   },
   {
     id: 'task-090',
@@ -391,7 +391,7 @@ export const MOCK_TASKS: Task[] = [
     createdAt: new Date(Date.now() - 86400000).toISOString(),
     completedAt: new Date(Date.now() - 85000000).toISOString(),
     updatedAt: new Date(Date.now() - 85000000).toISOString(),
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
     metadata: { cancelReason: 'Higher priority task assigned' },
   },
 ];
@@ -535,7 +535,7 @@ export function createMockTask(data: CreateTaskRequest): Task {
     steps,
     createdAt: now,
     updatedAt: now,
-    createdBy: 'dev@robomind.local',
+    createdBy: 'dev@neodem.local',
     metadata: data.metadata,
   };
 

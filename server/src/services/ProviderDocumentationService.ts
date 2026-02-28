@@ -325,15 +325,15 @@ Limitations:
         validFrom: new Date('2024-01-01'),
       },
 
-      // RoboMindOS Technical Documentation (AI Act Annex IV)
+      // NeoDEM Technical Documentation (AI Act Annex IV)
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'general_description',
-        content: `RoboMindOS - General Description (AI Act Annex IV Section 1)
+        content: `NeoDEM - General Description (AI Act Annex IV Section 1)
 
 1. SYSTEM OVERVIEW
-RoboMindOS is a fleet management platform for humanoid robots enabling:
+NeoDEM is a fleet management platform for humanoid robots enabling:
 - Natural language command interpretation using AI
 - Real-time robot monitoring and control
 - Safety-critical operation management
@@ -355,10 +355,10 @@ High-risk AI system per EU AI Act Annex III (machinery with safety components)`,
         validFrom: new Date(),
       },
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'design_specification',
-        content: `RoboMindOS - Design Specifications (AI Act Annex IV Section 2)
+        content: `NeoDEM - Design Specifications (AI Act Annex IV Section 2)
 
 ARCHITECTURE
 - Server: Node.js/Express with PostgreSQL
@@ -380,10 +380,10 @@ QUALITY MANAGEMENT
         validFrom: new Date(),
       },
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'risk_assessment',
-        content: `RoboMindOS - Risk Assessment (AI Act Article 9)
+        content: `NeoDEM - Risk Assessment (AI Act Article 9)
 
 RISK IDENTIFICATION
 1. Misinterpretation of commands leading to unsafe actions
@@ -404,10 +404,10 @@ RESIDUAL RISK
         validFrom: new Date(),
       },
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'testing_validation',
-        content: `RoboMindOS - Testing & Validation Results (AI Act Annex IV Section 6)
+        content: `NeoDEM - Testing & Validation Results (AI Act Annex IV Section 6)
 
 TEST COVERAGE
 - Unit tests: 85% code coverage
@@ -433,13 +433,13 @@ CONFORMITY TESTING
 
       // EU Declaration of Conformity
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'eu_declaration_of_conformity',
         content: `EU DECLARATION OF CONFORMITY
 
-Manufacturer: RoboMindOS
-Product: RoboMindOS Fleet Management Platform v1.0.0
+Manufacturer: NeoDEM
+Product: NeoDEM Fleet Management Platform v1.0.0
 
 We declare under our sole responsibility that the above product complies with:
 
@@ -463,10 +463,10 @@ Signature: [Digital signature]`,
 
       // Security Documentation (CRA Annex V)
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'security_architecture',
-        content: `RoboMindOS - Security Architecture (CRA Annex V)
+        content: `NeoDEM - Security Architecture (CRA Annex V)
 
 AUTHENTICATION
 - JWT-based authentication for API access
@@ -490,10 +490,10 @@ SECURE DEVELOPMENT
         validFrom: new Date(),
       },
       {
-        providerName: 'RoboMindOS',
+        providerName: 'NeoDEM',
         modelVersion: '1.0.0',
         documentType: 'sbom',
-        content: `RoboMindOS - Software Bill of Materials (CRA Annex V)
+        content: `NeoDEM - Software Bill of Materials (CRA Annex V)
 
 FORMAT: CycloneDX 1.5
 

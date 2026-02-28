@@ -1,6 +1,6 @@
 # AI Operations Guide
 
-This guide is designed for AI assistants working with the RoboMindOS codebase. It provides comprehensive information about all services, their ports, how to access and test them, and common operational tasks.
+This guide is designed for AI assistants working with the NeoDEM codebase. It provides comprehensive information about all services, their ports, how to access and test them, and common operational tasks.
 
 ## Quick Reference: Service Endpoints
 

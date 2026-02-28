@@ -2,7 +2,7 @@
 
 ## Overview
 
-RoboMindOS uses a hierarchical workflow system to delegate work to robots. This document explains how processes are defined, executed, and how individual steps are assigned to robots as tasks.
+NeoDEM uses a hierarchical workflow system to delegate work to robots. This document explains how processes are defined, executed, and how individual steps are assigned to robots as tasks.
 
 ## Terminology
 

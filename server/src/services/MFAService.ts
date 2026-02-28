@@ -20,7 +20,7 @@ const RECOVERY_CODE_LENGTH = 10;
 const BCRYPT_ROUNDS = 10;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 30;
-const ISSUER = 'RoboMindOS';
+const ISSUER = 'NeoDEM';
 
 // ============================================================================
 // TYPES

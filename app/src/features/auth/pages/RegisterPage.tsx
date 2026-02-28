@@ -37,7 +37,7 @@ export function RegisterPage({ onRegisterSuccess }: RegisterPageProps) {
             Create your account
           </h1>
           <p className="mt-2 text-sm text-theme-secondary">
-            Join RoboMindOS to manage your robot fleet
+            Join NeoDEM to manage your robot fleet
           </p>
         </div>
 
@@ -61,7 +61,7 @@ export function RegisterPage({ onRegisterSuccess }: RegisterPageProps) {
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} RoboMindOS. All rights reserved.
+          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
         </p>
       </div>
     </div>

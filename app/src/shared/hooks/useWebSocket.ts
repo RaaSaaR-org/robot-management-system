@@ -38,7 +38,7 @@ export interface UseWebSocketOptions<T> {
  * @example
  * ```typescript
  * const { status, lastMessage, send, connect, disconnect } = useWebSocket<RobotTelemetry>(
- *   'wss://api.robomind.io/telemetry',
+ *   'wss://api.neodem.io/telemetry',
  *   {
  *     onMessage: (msg) => updateTelemetry(msg.payload),
  *     onConnect: () => console.log('Connected to telemetry'),

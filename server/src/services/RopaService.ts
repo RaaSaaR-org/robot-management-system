@@ -132,7 +132,7 @@ export class RopaService {
   /**
    * Generate RoPA report for regulatory submission
    */
-  async generateReport(organizationName: string = 'RoboMindOS'): Promise<RopaReport> {
+  async generateReport(organizationName: string = 'NeoDEM'): Promise<RopaReport> {
     const entries = await this.getAllEntries();
 
     return {

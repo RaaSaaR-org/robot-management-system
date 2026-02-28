@@ -39,7 +39,7 @@ const LICENSE_CONFIG: Record<
     creditMultiplier: '2x',
     features: [
       'Highest credit rewards',
-      'Data used exclusively for RoboMind',
+      'Data used exclusively for NeoDEM',
       'Priority review processing',
     ],
   },

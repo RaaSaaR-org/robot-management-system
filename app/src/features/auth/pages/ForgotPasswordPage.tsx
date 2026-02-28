@@ -58,7 +58,7 @@ export function ForgotPasswordPage({ onSuccess }: ForgotPasswordPageProps) {
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} RoboMindOS. All rights reserved.
+          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
         </p>
       </div>
     </div>

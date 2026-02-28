@@ -1,4 +1,4 @@
-# RoboMindOS Frontend Architecture
+# NeoDEM Frontend Architecture
 
 > **Stack**: React 18 + TypeScript + Tauri 2.0 + Tailwind CSS + Zustand  
 > **API**: REST Backend (OpenAPI 3.1 spec)  
