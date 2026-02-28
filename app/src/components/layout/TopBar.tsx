@@ -123,7 +123,13 @@ export function TopBar() {
           <LogoutButton
             variant="ghost"
             size="sm"
-            onLogout={() => window.location.href = '/'}
+            onLogout={() => {
+              if (import.meta.env.VITE_DEMO_MODE === 'true') {
+                window.location.href = import.meta.env.BASE_URL || '/';
+              } else {
+                window.location.href = '/';
+              }
+            }}
           >
             <LogoutIcon />
           </LogoutButton>

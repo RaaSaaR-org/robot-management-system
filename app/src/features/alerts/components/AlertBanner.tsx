@@ -122,6 +122,11 @@ export function AlertBanner({ className }: AlertBannerProps) {
     return null;
   }
 
+  // Hide alerts in demo mode — they show mock data that confuses visitors
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return null;
+  }
+
   const handleAcknowledge = useCallback(() => {
     if (mostCriticalAlert) {
       acknowledgeAlert(mostCriticalAlert.id);

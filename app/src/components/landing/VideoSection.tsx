@@ -1,10 +1,22 @@
 /**
  * @file VideoSection.tsx
- * @description Landing page section with platform demo video
+ * @description Landing page section with tabbed platform demo videos
  * @feature landing
  */
 
+import { useState } from 'react';
+
+const VIDEO_TABS = [
+  { id: 'platform-overview', label: 'Platform Overview', file: 'platform-overview.webm' },
+  { id: 'robot-control', label: 'Robot Control', file: 'robot-control.webm' },
+  { id: 'fleet-status', label: 'Fleet Status', file: 'fleet-status.webm' },
+] as const;
+
 export function VideoSection() {
+  const [activeTab, setActiveTab] = useState<(typeof VIDEO_TABS)[number]['id']>(VIDEO_TABS[0].id);
+
+  const activeVideo = VIDEO_TABS.find((t) => t.id === activeTab) ?? VIDEO_TABS[0];
+
   return (
     <section className="py-20 section-primary">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -15,9 +27,28 @@ export function VideoSection() {
           </p>
         </div>
 
+        {/* Tab buttons */}
+        <div className="flex justify-center gap-2 mb-6">
+          {VIDEO_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 text-sm font-medium rounded-brand transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-cobalt text-white'
+                  : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Video player */}
         <div className="max-w-[900px] mx-auto">
           <div className="overflow-hidden rounded-xl border border-theme shadow-lg">
             <video
+              key={activeVideo.id}
               autoPlay
               muted
               loop
@@ -25,7 +56,7 @@ export function VideoSection() {
               className="w-full h-auto"
             >
               <source
-                src={`${import.meta.env.BASE_URL}videos/platform-overview.webm`}
+                src={`${import.meta.env.BASE_URL}videos/${activeVideo.file}`}
                 type="video/webm"
               />
               Your browser does not support the video tag.
