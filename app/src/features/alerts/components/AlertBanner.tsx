@@ -117,16 +117,7 @@ export function AlertBanner({ className }: AlertBannerProps) {
   const location = useLocation();
   const { mostCriticalAlert, acknowledgeAlert, removeAlert } = useAlerts();
 
-  // Hide banner on landing page
-  if (location.pathname === '/') {
-    return null;
-  }
-
-  // Hide alerts in demo mode — they show mock data that confuses visitors
-  if (import.meta.env.VITE_DEMO_MODE === 'true') {
-    return null;
-  }
-
+  // Hooks must be declared before any early returns (React Rules of Hooks)
   const handleAcknowledge = useCallback(() => {
     if (mostCriticalAlert) {
       acknowledgeAlert(mostCriticalAlert.id);
@@ -138,6 +129,16 @@ export function AlertBanner({ className }: AlertBannerProps) {
       removeAlert(mostCriticalAlert.id);
     }
   }, [mostCriticalAlert, removeAlert]);
+
+  // Hide banner on landing page
+  if (location.pathname === '/') {
+    return null;
+  }
+
+  // Hide alerts in demo mode — they show mock data that confuses visitors
+  if (import.meta.env.VITE_DEMO_MODE === 'true') {
+    return null;
+  }
 
   if (!mostCriticalAlert) {
     return null;
