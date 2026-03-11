@@ -54,6 +54,7 @@ import { settingsRoutes } from './routes/settings.routes.js';
 import { uncertaintyRoutes } from './routes/uncertainty.routes.js';
 import { isaacLabRoutes } from './routes/isaac-lab.routes.js';
 import { simulationRoutes } from './routes/simulation.routes.js';
+import { vlaSessionRoutes } from './routes/vla-session.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -264,6 +265,9 @@ export function createApp(): Express {
 
   // Simulation routes (protected) - TASK-081 MuJoCo/Isaac Lab policy testing
   app.use('/api/simulation', authMiddleware, simulationRoutes);
+
+  // VLA session routes (protected) - TASK-077 VLA session compliance logging
+  app.use('/api/robots', authMiddleware, vlaSessionRoutes);
 
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);

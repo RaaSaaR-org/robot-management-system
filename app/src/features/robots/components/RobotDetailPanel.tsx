@@ -12,6 +12,7 @@ import { RobotHeroSection } from './RobotHeroSection';
 import { RobotOfflineBanner } from './RobotOfflineBanner';
 import { RobotErrorBanner } from './RobotErrorBanner';
 import { RobotEmergencyStopButton } from '@/features/safety';
+import { VlaControlSection } from './VlaControlSection';
 import {
   TelemetryTab,
   CommandsTab,
@@ -268,6 +269,9 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
         </div>
         <RobotEmergencyStopButton robotId={robotId} robotName={robot.name} size="md" />
       </div>
+
+      {/* VLA Control Section */}
+      <VlaControlSection robotId={robotId} />
 
       {/* Offline Banner */}
       {robot.status === 'offline' && (
