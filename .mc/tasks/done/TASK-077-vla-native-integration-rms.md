@@ -1,6 +1,6 @@
 # TASK-077 — VLA Native Integration in RMS
 
-## Status: todo
+## Status: done
 ## Priority: high
 ## Component: robot-agent, sidecar
 
