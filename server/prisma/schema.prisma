@@ -56,6 +56,7 @@ model Robot {
   incidents     Incident[]
   evaluationEpisodes EvaluationEpisode[]
   deviceCertificate  DeviceCertificate?
+  vlaSessions        VlaSession[]
 
   @@index([status])
   @@index([a2aEnabled])
@@ -1992,4 +1993,24 @@ model ContributionCredit {
 
   @@index([userId])
   @@index([createdAt])
+}
+
+// ============================================================================
+// VLA SESSION TRACKING (TASK-077)
+// ============================================================================
+
+model VlaSession {
+  id        String    @id @default(cuid())
+  robotId   String
+  robot     Robot     @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  startedAt DateTime  @default(now())
+  stoppedAt DateTime?
+  prompt    String
+  serverUrl String
+  status    String    @default("running") // "running" | "stopped" | "error"
+  errorMsg  String?
+  createdAt DateTime  @default(now())
+
+  @@index([robotId])
+  @@index([startedAt])
 }
