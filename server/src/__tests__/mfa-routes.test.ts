@@ -96,7 +96,7 @@ describe('MFA Routes', () => {
       mockMfaService.getTOTPCredential.mockResolvedValue(null);
       mockMfaService.generateTOTPSecret.mockReturnValue({
         secret: 'JBSWY3DPEHPK3PXP',
-        otpauthUrl: 'otpauth://totp/RoboMindOS:test@example.com?secret=JBSWY3DPEHPK3PXP&issuer=RoboMindOS',
+        otpauthUrl: 'otpauth://totp/NeoDEM:test@example.com?secret=JBSWY3DPEHPK3PXP&issuer=NeoDEM',
       });
 
       const app = createApp();

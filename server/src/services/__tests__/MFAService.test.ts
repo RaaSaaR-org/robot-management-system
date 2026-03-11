@@ -49,7 +49,7 @@ describe('MFAService', () => {
     it('returns an otpauth:// URI', () => {
       const result = service.generateTOTPSecret('user@example.com');
       expect(result.otpauthUrl).toMatch(/^otpauth:\/\/totp\//);
-      expect(result.otpauthUrl).toContain('RoboMindOS');
+      expect(result.otpauthUrl).toContain('NeoDEM');
       expect(result.otpauthUrl).toContain('user%40example.com');
     });
 
