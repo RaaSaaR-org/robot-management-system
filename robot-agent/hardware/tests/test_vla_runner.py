@@ -421,3 +421,185 @@ class TestVLARunnerIntegration:
         # is_alive() should be False since the thread completed
         assert not runner.is_running
         assert runner.status()["active"] is False
+
+
+# ---------------------------------------------------------------------------
+# RTC: _blend_actions + RTCActionQueue unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestBlendActions:
+    """Tests for the _blend_actions() helper (no hardware needed)."""
+
+    def test_basic_blend_single_step(self):
+        from vla_runner import _blend_actions
+
+        old = [[0.0, 0.0]]
+        new = [[1.0, 1.0]]
+        result = _blend_actions(old, new, blend_steps=1)
+        # With n=1: w_new = 1/(1+1) = 0.5
+        assert len(result) == 1
+        assert result[0] == pytest.approx([0.5, 0.5])
+
+    def test_blend_ramp_increases(self):
+        from vla_runner import _blend_actions
+
+        old = [[0.0]] * 5
+        new = [[1.0]] * 5
+        result = _blend_actions(old, new, blend_steps=5)
+        assert len(result) == 5
+        # Each step should be increasing (new chunk weight grows)
+        values = [r[0] for r in result]
+        assert values == sorted(values), "Blend should be monotonically increasing"
+        assert values[0] < 0.5, "First step should still be old-chunk-dominant"
+        assert values[-1] > 0.5, "Last step should be new-chunk-dominant"
+
+    def test_blend_never_exactly_0_or_1(self):
+        """w_new is in (0, 1) open interval — no hard switch."""
+        from vla_runner import _blend_actions
+
+        old = [[0.0]] * 5
+        new = [[1.0]] * 5
+        result = _blend_actions(old, new, blend_steps=5)
+        for r in result:
+            assert 0.0 < r[0] < 1.0
+
+    def test_blend_empty_old(self):
+        from vla_runner import _blend_actions
+
+        result = _blend_actions([], [[1.0]], blend_steps=3)
+        assert result == []
+
+    def test_blend_empty_new(self):
+        from vla_runner import _blend_actions
+
+        result = _blend_actions([[0.0]], [], blend_steps=3)
+        assert result == []
+
+    def test_blend_clamped_by_shortest(self):
+        """blend_steps=10 but both lists have 3 items → n=3."""
+        from vla_runner import _blend_actions
+
+        old = [[0.0]] * 3
+        new = [[1.0]] * 3
+        result = _blend_actions(old, new, blend_steps=10)
+        assert len(result) == 3
+
+    def test_blend_multi_joint(self):
+        """Works correctly with 6-joint action vectors."""
+        from vla_runner import _blend_actions
+
+        n_joints = 6
+        old = [[float(i) for i in range(n_joints)]] * 3
+        new = [[float(i + 10) for i in range(n_joints)]] * 3
+        result = _blend_actions(old, new, blend_steps=3)
+        assert len(result) == 3
+        assert len(result[0]) == n_joints
+        # Values should be between old and new for each joint
+        for step in result:
+            for j in range(n_joints):
+                assert float(j) <= step[j] <= float(j + 10)
+
+
+class TestRTCActionQueue:
+    """Tests for RTCActionQueue — thread-safe merge/get with blending."""
+
+    def _make_actions(self, n: int, value: float = 1.0) -> list[list[float]]:
+        return [[value, value]] * n
+
+    def test_get_from_empty(self):
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue()
+        assert q.get() is None
+
+    def test_len_empty(self):
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue()
+        assert len(q) == 0
+
+    def test_merge_into_empty_queue(self):
+        """First merge: no blending, all actions queued directly."""
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue(blend_steps=3, chunk_overlap=2)
+        actions = self._make_actions(10, value=1.0)
+        q.merge(actions)
+        assert len(q) == 10
+
+    def test_get_returns_fifo_order(self):
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue()
+        q.merge([[1.0], [2.0], [3.0]])
+        assert q.get() == [1.0]
+        assert q.get() == pytest.approx([2.0])
+        assert q.get() == pytest.approx([3.0])
+        assert q.get() is None
+
+    def test_merge_with_remaining_queue_blends(self):
+        """Second merge blends tail of old queue with head of new chunk."""
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue(blend_steps=2, chunk_overlap=2)
+        # First chunk: 5 actions at value 0.0
+        q.merge(self._make_actions(5, value=0.0))
+        # Consume 3 → 2 remaining in queue
+        for _ in range(3):
+            q.get()
+        assert len(q) == 2
+
+        # Second chunk: 5 actions at value 1.0
+        q.merge(self._make_actions(5, value=1.0))
+        # After blend: 2 blended + 5 new (overlap up to chunk_overlap from remaining)
+        # Total should be > 0
+        assert len(q) > 0
+
+        # Blended values should be between 0.0 and 1.0
+        while len(q) > 0:
+            action = q.get()
+            assert action is not None
+            for v in action:
+                assert 0.0 <= v <= 1.0
+
+    def test_get_left_over_non_destructive(self):
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue()
+        q.merge([[1.0], [2.0], [3.0]])
+        left_over = q.get_left_over()
+        # get_left_over doesn't consume items
+        assert len(left_over) == 3
+        assert len(q) == 3
+
+    def test_thread_safety(self):
+        """Multiple threads can merge/get concurrently without errors."""
+        from vla_runner import RTCActionQueue
+
+        q = RTCActionQueue(blend_steps=3, chunk_overlap=2)
+        errors = []
+
+        def producer():
+            try:
+                for _ in range(50):
+                    q.merge(self._make_actions(5, value=0.5))
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        def consumer():
+            try:
+                for _ in range(200):
+                    q.get()
+                    time.sleep(0.0005)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=producer), threading.Thread(target=consumer)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert errors == [], f"Thread safety errors: {errors}"
