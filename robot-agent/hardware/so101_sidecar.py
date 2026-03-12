@@ -13,10 +13,8 @@ Run via:
   uv run python ~/develop/robot-management-system/robot-agent/hardware/so101_sidecar.py
 """
 
-import io
 import json
 import os
-import sys
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -56,16 +54,15 @@ def _connect_unlocked() -> bool:
     global robot, connected
     try:
         from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
-        config = SO101FollowerConfig(port=ROBOT_PORT, id=ROBOT_ID)
+        config = SO101FollowerConfig(
+            port=ROBOT_PORT,
+            id=ROBOT_ID,
+            disable_torque_on_disconnect=True,  # LeRobot v0.5.0: safe cleanup on disconnect
+        )
         r = SO101Follower(config)
-        # LeRobot's connect() prompts interactively for calibration.
-        # We auto-accept (ENTER) to use the existing calibration file.
-        old_stdin = sys.stdin
-        sys.stdin = io.StringIO("\n")
-        try:
-            r.connect()
-        finally:
-            sys.stdin = old_stdin
+        # LeRobot v0.5.0: calibrate=False uses existing calibration file without prompting.
+        # (v0.4.x required a stdin redirect workaround — no longer needed.)
+        r.connect(calibrate=False)
         robot = r
         connected = True
         print(f"[Sidecar] ✅ Connected to SO-101 on {ROBOT_PORT}", flush=True)
