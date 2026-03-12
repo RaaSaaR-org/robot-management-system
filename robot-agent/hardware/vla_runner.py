@@ -1,27 +1,45 @@
 """
 @file vla_runner.py
-@description Thread-based VLA control loop.
+@description Thread-based VLA control loop with optional Real-Time Chunking (RTC).
 
 Replaces the subprocess.Popen(client_pi.py) approach with a native
 Python thread that talks to the consolidated vla-server over HTTP.
 
-Control loop:
+Control loop (standard):
     1. Capture camera frame (picamera2 or opencv)
     2. Read current joint state from the robot
     3. If action queue is empty, call vla-server /predict to refill
     4. Pop next action from queue and send to robot
     5. Sleep to maintain target frequency (default 5 Hz)
 
+Control loop (RTC enabled):
+    1. Execute actions from merged queue continuously
+    2. Async inference thread pre-fetches next chunk while executing
+    3. At chunk boundary, blend overlapping actions via weighted average
+    4. Result: smoother, more reactive arm movements with no pauses
+
+RTC is inspired by Physical Intelligence's Real-Time Chunking paper and
+LeRobot v0.5.0's native RTCConfig. This client-side implementation handles
+the action queue blending while the server handles inference. When upgrading
+to LeRobot v0.5.0, the server can additionally use native RTC guidance
+during denoising for even smoother results.
+
 Usage from so101_sidecar.py:
     runner = VLARunner(server_url="http://192.168.178.40:8000")
     runner.start(instruction="pick up the green object")
     ...
     runner.stop()
+
+RTC env vars:
+    VLA_RTC_ENABLED=true        Enable async inference + chunk blending
+    VLA_RTC_BLEND_STEPS=5       Steps to blend at chunk boundaries
+    VLA_RTC_CHUNK_OVERLAP=3     Steps of overlap between consecutive chunks
 """
 
 import base64
 import io
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -36,6 +54,101 @@ from vla_safety import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# RTC: Client-side Real-Time Chunking action queue
+# ---------------------------------------------------------------------------
+
+def _blend_actions(
+    tail: list[list[float]],
+    head: list[list[float]],
+    blend_steps: int,
+) -> list[list[float]]:
+    """Weighted-average blend between the tail of the old chunk and the head of the new one.
+
+    Uses a linear ramp: weight of new chunk goes from 0→1 over *blend_steps*.
+    Returns the blended region (length = blend_steps).
+    """
+    n = min(blend_steps, len(tail), len(head))
+    if n == 0:
+        return []
+    blended: list[list[float]] = []
+    for i in range(n):
+        w_new = (i + 1) / (n + 1)  # 0 < w < 1, never exactly 0 or 1
+        w_old = 1.0 - w_new
+        merged = [
+            w_old * old_val + w_new * new_val
+            for old_val, new_val in zip(tail[i], head[i])
+        ]
+        blended.append(merged)
+    return blended
+
+
+class RTCActionQueue:
+    """Thread-safe action queue with chunk blending for Real-Time Chunking.
+
+    Manages two concerns:
+      1. Merging new action chunks with the remainder of the previous chunk
+         using weighted blending at the overlap region.
+      2. Providing a simple get() interface for the control loop.
+    """
+
+    def __init__(self, blend_steps: int = 5, chunk_overlap: int = 3):
+        self.blend_steps = blend_steps
+        self.chunk_overlap = chunk_overlap
+        self._queue: deque[list[float]] = deque()
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._queue)
+
+    def get(self) -> list[float] | None:
+        """Pop and return the next action, or None if empty."""
+        with self._lock:
+            return self._queue.popleft() if self._queue else None
+
+    def get_left_over(self) -> list[list[float]]:
+        """Return remaining actions without consuming them (for RTC server-side guidance)."""
+        with self._lock:
+            return list(self._queue)
+
+    def merge(self, new_actions: list[list[float]]) -> None:
+        """Merge a new action chunk into the queue with blending.
+
+        If the queue still has actions remaining (overlap region), blend
+        the tail of the remaining queue with the head of the new chunk.
+        Otherwise, just append.
+        """
+        with self._lock:
+            remaining = list(self._queue)
+            self._queue.clear()
+
+            if not remaining:
+                self._queue.extend(new_actions)
+                return
+
+            overlap = min(self.blend_steps, len(remaining), len(new_actions))
+            if overlap > 0:
+                # Keep non-overlapping prefix from old queue
+                self._queue.extend(remaining[:-overlap])
+                # Blend the overlap region
+                blended = _blend_actions(
+                    remaining[-overlap:],
+                    new_actions[:overlap],
+                    overlap,
+                )
+                self._queue.extend(blended)
+                # Append remainder of new chunk after overlap
+                self._queue.extend(new_actions[overlap:])
+            else:
+                self._queue.extend(remaining)
+                self._queue.extend(new_actions)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._queue.clear()
 
 
 class VLARunner:
@@ -68,10 +181,27 @@ class VLARunner:
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._action_queue: deque = deque()
         self._step = 0
         self._instruction = ""
         self._error: str | None = None
+
+        # RTC (Real-Time Chunking) configuration
+        self.rtc_enabled = os.environ.get("VLA_RTC_ENABLED", "false").lower() in ("true", "1", "yes")
+        self.rtc_blend_steps = int(os.environ.get("VLA_RTC_BLEND_STEPS", "5"))
+        self.rtc_chunk_overlap = int(os.environ.get("VLA_RTC_CHUNK_OVERLAP", "3"))
+
+        if self.rtc_enabled:
+            self._action_queue = RTCActionQueue(
+                blend_steps=self.rtc_blend_steps,
+                chunk_overlap=self.rtc_chunk_overlap,
+            )
+        else:
+            self._action_queue: deque | RTCActionQueue = deque()
+
+        # Async inference state (RTC mode)
+        self._inference_thread: threading.Thread | None = None
+        self._pending_actions: list[list[float]] | None = None
+        self._inference_lock = threading.Lock()
 
         # Safety modules
         cfg = config or {}
@@ -103,6 +233,7 @@ class VLARunner:
         self._step = 0
         self._instruction = instruction
         self._error = None
+        self._pending_actions = None
 
         # Reset safety state for new run
         self.rate_limiter.reset()
@@ -110,12 +241,16 @@ class VLARunner:
         self.degradation.clear_events()
 
         self._thread = threading.Thread(
-            target=self._control_loop,
+            target=self._control_loop_rtc if self.rtc_enabled else self._control_loop,
             name="vla-runner",
             daemon=True,
         )
         self._thread.start()
-        logger.info(f"VLARunner started: instruction='{instruction}' server={self.server_url}")
+        mode = "RTC" if self.rtc_enabled else "standard"
+        logger.info(
+            f"VLARunner started ({mode}): instruction='{instruction}' "
+            f"server={self.server_url}"
+        )
 
     def stop(self) -> None:
         """Stop the control loop and wait for the thread to finish."""
@@ -133,6 +268,7 @@ class VLARunner:
             "step": self._step,
             "queue_size": len(self._action_queue),
             "error": self._error,
+            "rtc_enabled": self.rtc_enabled,
         }
 
     def safety_status(self) -> dict:
@@ -403,3 +539,187 @@ class VLARunner:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         return base64.b64encode(buf.getvalue()).decode()
+
+    # -------------------------------------------------------------------
+    # RTC control loop — async inference + action blending
+    # -------------------------------------------------------------------
+
+    def _control_loop_rtc(self) -> None:
+        """RTC-enabled control loop.
+
+        Differs from _control_loop in two key ways:
+          1. Inference runs in a background thread so the robot keeps moving
+             while the next chunk is being computed.
+          2. New chunks are merged into an RTCActionQueue with weighted
+             blending at the overlap boundary — no pauses or jumps.
+        """
+        import httpx
+
+        robot = None
+        camera = None
+        wrist_cam = None
+        assert isinstance(self._action_queue, RTCActionQueue)
+
+        try:
+            robot = self._connect_robot()
+
+            initial_state = self._get_state(robot)
+            self.rate_limiter._last_action = initial_state[:]
+            logger.info(f"[RTC] Rate limiter seeded: {[round(s,1) for s in initial_state]}")
+
+            camera = self._make_camera(self.camera_index)
+            if self.wrist_camera_index >= 0:
+                try:
+                    wrist_cam = self._make_camera(self.wrist_camera_index)
+                except Exception as e:
+                    logger.warning(f"Wrist camera {self.wrist_camera_index} not available: {e}")
+                    wrist_cam = None
+
+            client = httpx.Client(timeout=self.timeout)
+            period = 1.0 / self.hz
+
+            # Fetch camera names from server
+            try:
+                cfg_resp = client.get(f"{self.server_url}/config")
+                cfg_resp.raise_for_status()
+                camera_names = cfg_resp.json().get("cameras", ["front"])
+            except Exception as e:
+                logger.warning(f"Could not fetch /config, defaulting to ['front']: {e}")
+                camera_names = ["front"]
+
+            logger.info(
+                f"[RTC] Loop running at {self.hz} Hz, "
+                f"blend_steps={self.rtc_blend_steps}, "
+                f"chunk_overlap={self.rtc_chunk_overlap}, "
+                f"cameras={camera_names}"
+            )
+
+            # Kick off first inference synchronously to prime the queue
+            self._fetch_and_merge(client, robot, camera, wrist_cam, camera_names)
+
+            while not self._stop_event.is_set():
+                t_start = time.time()
+
+                # Start async inference when queue is running low
+                queue_len = len(self._action_queue)
+                if queue_len <= self.rtc_blend_steps and not self._is_inferring():
+                    self._start_async_inference(client, robot, camera, wrist_cam, camera_names)
+
+                # Collect completed async inference results
+                self._collect_async_results()
+
+                # Check watchdog
+                if not self.watchdog.is_healthy():
+                    logger.warning("[RTC/Safety] Watchdog unhealthy — safe stop")
+                    self.degradation.safe_stop(
+                        reason="Network watchdog timeout exceeded",
+                        sidecar_url="http://localhost:8765",
+                    )
+                    self._error = "safety: watchdog timeout"
+                    break
+
+                # Execute next action
+                action = self._action_queue.get()
+                if action is not None:
+                    action = self.validator.clip(action)
+                    action = self.rate_limiter.clip(action)
+                    self._send_action(robot, action)
+                    self.degradation.record_good_action(action)
+                    self._step += 1
+                else:
+                    # Queue empty — do a synchronous fetch to avoid stalling
+                    logger.debug("[RTC] Queue empty, synchronous refill")
+                    self._fetch_and_merge(client, robot, camera, wrist_cam, camera_names)
+
+                elapsed = time.time() - t_start
+                sleep_time = max(0, period - elapsed)
+                if sleep_time > 0 and not self._stop_event.is_set():
+                    self._stop_event.wait(timeout=sleep_time)
+
+        except Exception as e:
+            logger.error(f"[RTC] Loop error: {e}", exc_info=True)
+            self._error = str(e)
+        finally:
+            # Wait for any in-flight inference
+            if self._inference_thread is not None:
+                self._inference_thread.join(timeout=3.0)
+            if camera is not None:
+                self._release_camera(camera)
+            if wrist_cam is not None:
+                self._release_camera(wrist_cam)
+            if robot is not None:
+                self._disconnect_robot(robot)
+
+    def _fetch_and_merge(self, client, robot, camera, wrist_cam, camera_names) -> None:
+        """Synchronous: capture → predict → merge into RTCActionQueue."""
+        img_b64 = self._capture_b64(camera)
+        state = self._get_state(robot)
+
+        images = {cam: img_b64 for cam in camera_names}
+        if wrist_cam is not None and len(camera_names) > 1:
+            images[camera_names[-1]] = self._capture_b64(wrist_cam)
+
+        try:
+            t_predict = time.time()
+            resp = client.post(
+                f"{self.server_url}/predict",
+                json={"images": images, "state": state, "task": self._instruction},
+            )
+            resp.raise_for_status()
+            latency_ms = (time.time() - t_predict) * 1000
+            self.watchdog.record_latency(latency_ms)
+
+            actions = resp.json()["actions"]
+            assert isinstance(self._action_queue, RTCActionQueue)
+            self._action_queue.merge(actions)
+
+            if self._step % 10 == 0:
+                logger.info(
+                    f"[RTC Step {self._step}] latency={latency_ms:.0f}ms "
+                    f"chunk={len(actions)} queue={len(self._action_queue)}"
+                )
+        except Exception as e:
+            logger.error(f"[RTC] Predict failed: {e}")
+            self._error = str(e)
+
+    def _is_inferring(self) -> bool:
+        return self._inference_thread is not None and self._inference_thread.is_alive()
+
+    def _start_async_inference(self, client, robot, camera, wrist_cam, camera_names) -> None:
+        """Kick off inference in a background thread."""
+        # Capture observation NOW (before inference latency)
+        img_b64 = self._capture_b64(camera)
+        state = self._get_state(robot)
+        images = {cam: img_b64 for cam in camera_names}
+        if wrist_cam is not None and len(camera_names) > 1:
+            images[camera_names[-1]] = self._capture_b64(wrist_cam)
+
+        def _infer():
+            try:
+                t_predict = time.time()
+                resp = client.post(
+                    f"{self.server_url}/predict",
+                    json={"images": images, "state": state, "task": self._instruction},
+                )
+                resp.raise_for_status()
+                latency_ms = (time.time() - t_predict) * 1000
+                self.watchdog.record_latency(latency_ms)
+
+                actions = resp.json()["actions"]
+                with self._inference_lock:
+                    self._pending_actions = actions
+            except Exception as e:
+                logger.error(f"[RTC async] Predict failed: {e}")
+                self._error = str(e)
+
+        self._inference_thread = threading.Thread(target=_infer, name="vla-rtc-infer", daemon=True)
+        self._inference_thread.start()
+
+    def _collect_async_results(self) -> None:
+        """If async inference finished, merge results into queue."""
+        with self._inference_lock:
+            if self._pending_actions is not None:
+                assert isinstance(self._action_queue, RTCActionQueue)
+                self._action_queue.merge(self._pending_actions)
+                logger.debug(f"[RTC] Merged async chunk ({len(self._pending_actions)} actions)")
+                self._pending_actions = None
