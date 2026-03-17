@@ -1,13 +1,19 @@
 ---
 id: TASK-079
-title: "Architecture: Hardware Runtime Plugin System (Sidecar Evolution)"
-status: todo
+title: 'Architecture: Hardware Runtime Plugin System (Sidecar Evolution)'
+status: done
 priority: 2
-tags: [architecture, vla, hardware]
-depends_on: ["TASK-082", "TASK-078"]
+tags:
+- architecture
+- vla
+- hardware
+depends_on:
+- TASK-082
+- TASK-078
 created: 2026-02-24
-updated: 2026-02-26
+updated: 2026-03-17
 ---
+
 
 # TASK-079 — Hardware Runtime Plugin System
 
