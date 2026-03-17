@@ -46,6 +46,7 @@ from collections import deque
 
 import numpy as np
 
+from backends import SmolVLABackend, VLABackend
 from vla_safety import (
     ActionValidator,
     GracefulDegradation,
@@ -169,6 +170,7 @@ class VLARunner:
         hz: float = 5.0,
         timeout: float = 10.0,
         config: dict | None = None,
+        backend: VLABackend | None = None,
     ):
         self.server_url = server_url.rstrip("/")
         self.robot_port = robot_port
@@ -178,6 +180,9 @@ class VLARunner:
         self.wrist_camera_index = wrist_camera_index
         self.hz = hz
         self.timeout = timeout
+
+        # VLA inference backend (default: SmolVLABackend over HTTP)
+        self._backend: VLABackend = backend or SmolVLABackend(timeout=timeout)
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -296,15 +301,26 @@ class VLARunner:
             self.watchdog.timeout_ms = float(config["watchdog_timeout_ms"])
             logger.info(f"Safety: watchdog timeout updated to {self.watchdog.timeout_ms}ms")
 
+    def _connect_backend(self) -> None:
+        """Connect the VLA backend to the server (if not already connected)."""
+        if not self._backend.is_connected:
+            self._backend.connect(self.server_url, {"timeout": self.timeout})
+
     def _control_loop(self) -> None:
         """Main control loop — runs in a background thread."""
-        import httpx
-
         robot = None
         camera = None
         wrist_cam = None
 
         try:
+            # Connect backend to VLA server
+            self._connect_backend()
+            camera_names = (
+                self._backend.camera_names
+                if hasattr(self._backend, "camera_names")
+                else ["front"]
+            )
+
             # Initialize robot and camera
             robot = self._connect_robot()
 
@@ -326,17 +342,7 @@ class VLARunner:
                     )
                     wrist_cam = None
 
-            client = httpx.Client(timeout=self.timeout)
             period = 1.0 / self.hz
-
-            # Fetch expected camera names from server config
-            try:
-                cfg_resp = client.get(f"{self.server_url}/config")
-                cfg_resp.raise_for_status()
-                camera_names = cfg_resp.json().get("cameras", ["front"])
-            except Exception as e:
-                logger.warning(f"Could not fetch /config, defaulting to ['front']: {e}")
-                camera_names = ["front"]
 
             logger.info(
                 f"VLA loop running at {self.hz} Hz, "
@@ -353,27 +359,15 @@ class VLARunner:
                     state = self._get_state(robot)
 
                     # Map available cameras to model-expected names
-                    # Duplicate front image into all slots the model expects
                     images = {cam: img_b64 for cam in camera_names}
                     if wrist_cam is not None and len(camera_names) > 1:
-                        # Use last camera slot for wrist view
                         images[camera_names[-1]] = self._capture_b64(wrist_cam)
 
                     try:
-                        t_predict = time.time()
-                        resp = client.post(
-                            f"{self.server_url}/predict",
-                            json={
-                                "images": images,
-                                "state": state,
-                                "task": self._instruction,
-                            },
+                        actions, latency_ms = self._backend.predict_with_latency(
+                            images, state, self._instruction,
                         )
-                        resp.raise_for_status()
-                        latency_ms = (time.time() - t_predict) * 1000
                         self.watchdog.record_latency(latency_ms)
-
-                        actions = resp.json()["actions"]
                         self._action_queue.extend(actions)
 
                         if self._step % 10 == 0:
@@ -429,6 +423,7 @@ class VLARunner:
                 self._release_camera(wrist_cam)
             if robot is not None:
                 self._disconnect_robot(robot)
+            self._backend.disconnect()
 
     def _connect_robot(self):
         """Connect to SO-101 via LeRobot."""
@@ -553,14 +548,20 @@ class VLARunner:
           2. New chunks are merged into an RTCActionQueue with weighted
              blending at the overlap boundary — no pauses or jumps.
         """
-        import httpx
-
         robot = None
         camera = None
         wrist_cam = None
         assert isinstance(self._action_queue, RTCActionQueue)
 
         try:
+            # Connect backend to VLA server
+            self._connect_backend()
+            camera_names = (
+                self._backend.camera_names
+                if hasattr(self._backend, "camera_names")
+                else ["front"]
+            )
+
             robot = self._connect_robot()
 
             initial_state = self._get_state(robot)
@@ -575,17 +576,7 @@ class VLARunner:
                     logger.warning(f"Wrist camera {self.wrist_camera_index} not available: {e}")
                     wrist_cam = None
 
-            client = httpx.Client(timeout=self.timeout)
             period = 1.0 / self.hz
-
-            # Fetch camera names from server
-            try:
-                cfg_resp = client.get(f"{self.server_url}/config")
-                cfg_resp.raise_for_status()
-                camera_names = cfg_resp.json().get("cameras", ["front"])
-            except Exception as e:
-                logger.warning(f"Could not fetch /config, defaulting to ['front']: {e}")
-                camera_names = ["front"]
 
             logger.info(
                 f"[RTC] Loop running at {self.hz} Hz, "
@@ -595,7 +586,7 @@ class VLARunner:
             )
 
             # Kick off first inference synchronously to prime the queue
-            self._fetch_and_merge(client, robot, camera, wrist_cam, camera_names)
+            self._fetch_and_merge(robot, camera, wrist_cam, camera_names)
 
             while not self._stop_event.is_set():
                 t_start = time.time()
@@ -603,7 +594,7 @@ class VLARunner:
                 # Start async inference when queue is running low
                 queue_len = len(self._action_queue)
                 if queue_len <= self.rtc_blend_steps and not self._is_inferring():
-                    self._start_async_inference(client, robot, camera, wrist_cam, camera_names)
+                    self._start_async_inference(robot, camera, wrist_cam, camera_names)
 
                 # Collect completed async inference results
                 self._collect_async_results()
@@ -629,7 +620,7 @@ class VLARunner:
                 else:
                     # Queue empty — do a synchronous fetch to avoid stalling
                     logger.debug("[RTC] Queue empty, synchronous refill")
-                    self._fetch_and_merge(client, robot, camera, wrist_cam, camera_names)
+                    self._fetch_and_merge(robot, camera, wrist_cam, camera_names)
 
                 elapsed = time.time() - t_start
                 sleep_time = max(0, period - elapsed)
@@ -649,9 +640,10 @@ class VLARunner:
                 self._release_camera(wrist_cam)
             if robot is not None:
                 self._disconnect_robot(robot)
+            self._backend.disconnect()
 
-    def _fetch_and_merge(self, client, robot, camera, wrist_cam, camera_names) -> None:
-        """Synchronous: capture → predict → merge into RTCActionQueue."""
+    def _fetch_and_merge(self, robot, camera, wrist_cam, camera_names) -> None:
+        """Synchronous: capture → predict via backend → merge into RTCActionQueue."""
         img_b64 = self._capture_b64(camera)
         state = self._get_state(robot)
 
@@ -660,16 +652,11 @@ class VLARunner:
             images[camera_names[-1]] = self._capture_b64(wrist_cam)
 
         try:
-            t_predict = time.time()
-            resp = client.post(
-                f"{self.server_url}/predict",
-                json={"images": images, "state": state, "task": self._instruction},
+            actions, latency_ms = self._backend.predict_with_latency(
+                images, state, self._instruction,
             )
-            resp.raise_for_status()
-            latency_ms = (time.time() - t_predict) * 1000
             self.watchdog.record_latency(latency_ms)
 
-            actions = resp.json()["actions"]
             assert isinstance(self._action_queue, RTCActionQueue)
             self._action_queue.merge(actions)
 
@@ -685,7 +672,7 @@ class VLARunner:
     def _is_inferring(self) -> bool:
         return self._inference_thread is not None and self._inference_thread.is_alive()
 
-    def _start_async_inference(self, client, robot, camera, wrist_cam, camera_names) -> None:
+    def _start_async_inference(self, robot, camera, wrist_cam, camera_names) -> None:
         """Kick off inference in a background thread."""
         # Capture observation NOW (before inference latency)
         img_b64 = self._capture_b64(camera)
@@ -696,16 +683,10 @@ class VLARunner:
 
         def _infer():
             try:
-                t_predict = time.time()
-                resp = client.post(
-                    f"{self.server_url}/predict",
-                    json={"images": images, "state": state, "task": self._instruction},
+                actions, latency_ms = self._backend.predict_with_latency(
+                    images, state, self._instruction,
                 )
-                resp.raise_for_status()
-                latency_ms = (time.time() - t_predict) * 1000
                 self.watchdog.record_latency(latency_ms)
-
-                actions = resp.json()["actions"]
                 with self._inference_lock:
                     self._pending_actions = actions
             except Exception as e:
