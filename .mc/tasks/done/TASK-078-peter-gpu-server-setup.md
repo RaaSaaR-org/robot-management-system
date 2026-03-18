@@ -1,13 +1,17 @@
 ---
 id: TASK-078
 title: Peter GPU Server Setup & First End-to-End VLA Test
-status: todo
+status: done
 priority: 1
-tags: [vla, hardware]
-depends_on: ["TASK-082"]
+tags:
+- vla
+- hardware
+depends_on:
+- TASK-082
 created: 2026-02-24
-updated: 2026-02-26
+updated: 2026-03-18
 ---
+
 
 # TASK-078 — Peter GPU Server Setup & First E2E VLA Test
 
