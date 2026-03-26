@@ -24,9 +24,9 @@ export function useCountUp(target: number, duration = 1000, delay = 0): number {
     if (target === prevTargetRef.current) return;
 
     const from = prevTargetRef.current;
-    prevTargetRef.current = target;
 
     const timeout = setTimeout(() => {
+      prevTargetRef.current = target;
       const startTime = performance.now();
       const step = () => {
         const elapsed = performance.now() - startTime;
@@ -44,6 +44,7 @@ export function useCountUp(target: number, duration = 1000, delay = 0): number {
     return () => {
       clearTimeout(timeout);
       cancelAnimationFrame(rafRef.current);
+      setCount(target);
     };
   }, [target, duration, delay]);
 
