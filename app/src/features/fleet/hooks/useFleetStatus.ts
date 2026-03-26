@@ -114,11 +114,11 @@ export function useFleetStatus(): UseFleetStatusReturn {
     return Math.round(totalBattery / batteryRobots.length);
   }, [robots]);
 
-  // Count alerts by severity
+  // Count unacknowledged alerts by severity (consistent with totalUnacknowledgedAlerts)
   const alertCounts = useMemo(() => {
     const counts = { ...INITIAL_ALERT_COUNTS };
     for (const alert of alerts) {
-      if (alert.severity in counts) {
+      if (!alert.acknowledged && alert.severity in counts) {
         counts[alert.severity]++;
       }
     }
