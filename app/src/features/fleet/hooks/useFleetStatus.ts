@@ -43,6 +43,7 @@ const INITIAL_ROBOTS_BY_STATUS: Record<RobotStatus, number> = {
   error: 0,
   charging: 0,
   maintenance: 0,
+  protective_stop: 0,
 };
 
 const INITIAL_ALERT_COUNTS: Record<AlertSeverity, number> = {

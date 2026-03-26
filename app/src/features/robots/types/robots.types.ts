@@ -16,7 +16,8 @@ export type RobotStatus =
   | 'busy'
   | 'error'
   | 'charging'
-  | 'maintenance';
+  | 'maintenance'
+  | 'protective_stop';
 
 /** Command execution status */
 export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'cancelled';
@@ -301,6 +302,7 @@ export const ROBOT_STATUS_LABELS: Record<RobotStatus, string> = {
   error: 'Error',
   charging: 'Charging',
   maintenance: 'Maintenance',
+  protective_stop: 'Protective Stop',
 };
 
 /** Status colors for UI (maps to Badge variants) */
@@ -311,6 +313,7 @@ export const ROBOT_STATUS_COLORS: Record<RobotStatus, 'success' | 'default' | 'i
   error: 'error',
   charging: 'warning',
   maintenance: 'warning',
+  protective_stop: 'error',
 };
 
 /** Command type labels */

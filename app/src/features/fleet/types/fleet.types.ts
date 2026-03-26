@@ -206,6 +206,7 @@ export const ROBOT_STATUS_COLORS: Record<RobotStatus, string> = {
   error: '#ef4444', // red-500
   maintenance: '#f97316', // orange-500
   offline: '#6b7280', // gray-500
+  protective_stop: '#ef4444', // red-500 — safety state requiring attention
 };
 
 /** Zone type colors (futuristic theme) */
