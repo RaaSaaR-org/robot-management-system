@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 NeoDEM is a distributed fleet management platform for autonomous robots. It consists of four main components:
 
-| Component         | Location         | Description                          | Port  |
-| ----------------- | ---------------- | ------------------------------------ | ----- |
-| **App**           | `app/`           | React + Tauri frontend               | 1420  |
-| **Server**        | `server/`        | Node.js A2A protocol server          | 3001  |
-| **Robot Agent**   | `robot-agent/`   | AI-powered robot software            | 41243 |
-| **VLA Server**    | `vla-server/`    | Consolidated VLA inference (SmolVLA, pi0.5, GR00T, etc.) | 50051 |
+| Component          | Location         | Description                          | Port  |
+| ------------------ | ---------------- | ------------------------------------ | ----- |
+| **App**            | `app/`           | React + Tauri frontend               | 1420  |
+| **Server**         | `server/`        | Node.js A2A protocol server          | 3001  |
+| **Robot Agent**    | `robot-agent/`   | AI-powered robot software            | 41243 |
+| **VLA Server**     | `vla-server/`    | FastAPI VLA inference (SmolVLA, Pi0.5, GR00T) | 8000  |
 
 ## Component-Specific Guidance
 
@@ -20,7 +20,7 @@ Each component has its own `AGENTS.md` file with detailed guidance:
 - `app/AGENTS.md` — Frontend development patterns, Zustand stores, Tailwind, routes
 - `server/AGENTS.md` — Server routes, services, A2A protocol, database
 - `robot-agent/AGENTS.md` — Genkit tools, robot state, telemetry, simulation
-- `vla-server/README.md` — VLA inference server (SmolVLA, pi0.5, GR00T, future models)
+- `vla-server/README.md` — VLA model inference (SmolVLA, Pi0.5, GR00T)
 
 **Always check the relevant AGENTS.md file when working in a specific component.**
 

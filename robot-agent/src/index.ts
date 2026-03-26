@@ -142,7 +142,12 @@ async function main() {
   app.use(cors());
   app.use(express.json());
 
-  // Mount REST API routes (RoboMindOS compatible)
+  // Top-level health check (used by Docker healthcheck and load balancers)
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', robotId: ROBOT_ID, uptime: process.uptime() });
+  });
+
+  // Mount REST API routes (NeoDEM compatible)
   app.use('/api/v1', createRestRoutes(robotStateManager, deviceIdentity, secureBoot));
 
   // Federated learning status endpoint

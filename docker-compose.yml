@@ -247,28 +247,26 @@ services:
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
-  # VLA Inference Server (Python gRPC)
-  # Vision-Language-Action model inference service
+  # VLA Server (FastAPI HTTP)
+  # Vision-Language-Action model inference (SmolVLA, Pi0.5, GR00T)
+  # Optional: only needed for local dev with VLA; runs on Mac for production
   # --------------------------------------------------------------------------
-  vla-inference:
+  vla-server:
     build:
-      context: .
-      dockerfile: vla-inference/Dockerfile
-    container_name: robomind-vla-inference
+      context: ./vla-server
+    container_name: neodem-vla-server
     environment:
-      VLA_GRPC_PORT: 50051
-      VLA_MAX_WORKERS: 4
-      VLA_DEVICE: cpu
-      VLA_METRICS_PORT: 9090
+      VLA_DEVICE: ${VLA_DEVICE:-cpu}
+      VLA_MODEL: ${VLA_MODEL:-smolvla}
+      VLA_STUB: ${VLA_STUB:-true}
     ports:
-      - "50051:50051"
-      - "9090:9090"    # Prometheus metrics
+      - "8000:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import grpc; ch = grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     networks:
       - robomind-network
     restart: unless-stopped
