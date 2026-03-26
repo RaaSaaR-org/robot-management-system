@@ -87,7 +87,7 @@ NeoDEM consists of 9 services in Docker Compose:
 | **NATS** | 4222, 8222 | Message queue (JetStream) |
 | **RustFS** | 9000, 9001 | S3-compatible object storage |
 | **MLflow** | 5000 | Model registry & tracking |
-| **VLA Inference** | 50051, 9090 | Vision-Language-Action model server |
+| **VLA Server** | 8000 | Vision-Language-Action model server |
 | **RustFS-Init** | - | Bucket initialization (one-shot) |
 
 ---
@@ -160,9 +160,8 @@ docker-compose logs -f nats
 | **RustFS Console** | http://localhost:9001 | S3 storage web console |
 | **RustFS S3 API** | http://localhost:9000 | S3-compatible API |
 | **MLflow UI** | http://localhost:5000 | Model tracking dashboard |
-| **VLA gRPC** | localhost:50051 | VLA inference gRPC |
-| **VLA Metrics** | http://localhost:9090 | Prometheus metrics |
-| **PostgreSQL** | localhost:5432 | Database (user: robomind) |
+| **VLA Server** | http://localhost:8000 | VLA inference HTTP |
+| **PostgreSQL** | localhost:5432 | Database (user: neodem) |
 
 ### 5. Test Service Connectivity
 
@@ -178,8 +177,8 @@ aws --endpoint-url http://localhost:9000 s3 ls
 # Test MLflow
 curl http://localhost:5000/api/2.0/mlflow/experiments/list
 
-# Test VLA Inference (requires grpcurl)
-grpcurl -plaintext localhost:50051 list
+# Test VLA Server
+curl http://localhost:8000/health
 ```
 
 ### 6. Stop Services
@@ -516,9 +515,9 @@ helm uninstall robomind
           │               │                   │                 │
           ▼               ▼                   ▼                 ▼
   ┌───────────────┐ ┌───────────┐   ┌───────────────┐  ┌───────────────┐
-  │     NATS      │ │ PostgreSQL│   │  Robot Agent  │  │ VLA Inference │
-  │  JetStream    │ │   + MLflow│   │  A2A Protocol │  │  gRPC Server  │
-  │ 4222 / 8222   │ │    5432   │   │    41243      │  │    50051      │
+  │     NATS      │ │ PostgreSQL│   │  Robot Agent  │  │  VLA Server   │
+  │  JetStream    │ │   + MLflow│   │  A2A Protocol │  │   FastAPI     │
+  │ 4222 / 8222   │ │    5432   │   │    41243      │  │    8000       │
   └───────────────┘ └───────────┘   └───────────────┘  └───────────────┘
           │                                 │
           │         ┌───────────────────────┘

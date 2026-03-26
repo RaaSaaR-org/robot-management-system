@@ -66,7 +66,7 @@ export const config: Config = {
   serverUrl: process.env.SERVER_URL || 'http://localhost:3001',
   vla: {
     host: process.env.VLA_INFERENCE_HOST || 'localhost',
-    port: parseInt(process.env.VLA_INFERENCE_PORT || '50051', 10),
+    port: parseInt(process.env.VLA_INFERENCE_PORT || '8000', 10),
     poolSize: parseInt(process.env.VLA_CONNECTION_POOL_SIZE || '4', 10),
     healthCheckIntervalMs: parseInt(process.env.VLA_HEALTH_CHECK_INTERVAL_MS || '5000', 10),
     timeoutMs: parseInt(process.env.VLA_TIMEOUT_MS || '5000', 10),

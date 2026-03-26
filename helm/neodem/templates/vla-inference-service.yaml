@@ -13,14 +13,10 @@ metadata:
 spec:
   type: {{ .Values.vlaInference.service.type }}
   ports:
-    - port: {{ .Values.vlaInference.service.grpcPort }}
-      targetPort: grpc
+    - port: {{ .Values.vlaInference.service.httpPort }}
+      targetPort: http
       protocol: TCP
-      name: grpc
-    - port: {{ .Values.vlaInference.service.metricsPort }}
-      targetPort: metrics
-      protocol: TCP
-      name: metrics
+      name: http
   selector:
     {{- include "neodem.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: vla-inference

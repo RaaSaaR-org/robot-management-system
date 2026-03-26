@@ -277,15 +277,12 @@ vlaInference:
   replicaCount: 1
   service:
     type: ClusterIP
-    grpcPort: 50051
-    metricsPort: 9090
+    httpPort: 8000
   config:
     # Model type: pi0, openvla, etc.
     modelType: "pi0"
-    # Device: cpu or cuda
+    # Device: cpu, cuda, or mps (Apple Silicon)
     device: "cpu"
-    # Number of gRPC workers
-    maxWorkers: 4
   # GPU configuration (NVIDIA)
   gpu:
     enabled: false

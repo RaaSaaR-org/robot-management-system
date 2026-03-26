@@ -392,7 +392,7 @@ spec:
               app.kubernetes.io/component: vla-inference
       ports:
         - protocol: TCP
-          port: {{ .Values.vlaInference.service.grpcPort }}
+          port: {{ .Values.vlaInference.service.httpPort }}
     {{- end }}
     # Allow DNS
     - to:
@@ -436,7 +436,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Allow from robot-agent (gRPC)
+    # Allow from robot-agent (HTTP)
     - from:
         - podSelector:
             matchLabels:
@@ -444,15 +444,7 @@ spec:
               app.kubernetes.io/component: robot-agent
       ports:
         - protocol: TCP
-          port: {{ .Values.vlaInference.service.grpcPort }}
-    # Allow Prometheus scraping
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-      ports:
-        - protocol: TCP
-          port: {{ .Values.vlaInference.service.metricsPort }}
+          port: {{ .Values.vlaInference.service.httpPort }}
 {{- end }}
 
 {{- end }}

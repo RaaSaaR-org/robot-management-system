@@ -17,8 +17,7 @@ This guide is designed for AI assistants working with the NeoDEM codebase. It pr
 | **RustFS S3** | 9000 | HTTP (S3) | - | Object storage API |
 | **RustFS Console** | 9001 | HTTP | `GET /rustfs/console/index.html` | Storage UI |
 | **MLflow** | 5000 | HTTP | `GET /health` | Model registry |
-| **VLA Inference** | 50051 | gRPC | gRPC health | VLA model server |
-| **VLA Metrics** | 9090 | HTTP | - | Prometheus metrics |
+| **VLA Server** | 8000 | HTTP | `GET /health` | VLA model server |
 
 ---
 
@@ -312,30 +311,17 @@ with mlflow.start_run():
 
 ---
 
-### 8. VLA Inference Server
+### 8. VLA Server
 
-**Technology:** Python + gRPC
+**Technology:** Python + FastAPI
 
-**Ports:**
-- 50051: gRPC service
-- 9090: Prometheus metrics
+**Port:** 8000
 
-**Testing gRPC (using grpcurl):**
+**Testing HTTP:**
 ```bash
-# List services
-grpcurl -plaintext localhost:50051 list
-
-# Describe service
-grpcurl -plaintext localhost:50051 describe vla.VLAService
-
-# Call inference (example)
-grpcurl -plaintext -d '{"image": "base64...", "instruction": "pick up the cup"}' \
-  localhost:50051 vla.VLAService/Predict
-```
-
-**Prometheus Metrics:**
-```bash
-curl http://localhost:9090/metrics
+curl http://localhost:8000/health
+curl http://localhost:8000/config
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"images": {}, "state": [], "task": "test"}'
 ```
 
 ---
@@ -631,9 +617,7 @@ ws.onmessage = (event) => {
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VLA_GRPC_PORT` | `50051` | gRPC server port |
-| `VLA_METRICS_PORT` | `9090` | Prometheus metrics port |
-| `VLA_MAX_WORKERS` | `4` | Number of gRPC workers |
+| `VLA_PORT` | `8000` | HTTP server port |
 | `VLA_DEVICE` | `cpu` | Compute device (cpu/cuda) |
 
 ---

@@ -130,12 +130,12 @@ npm run db:studio     # Open Prisma Studio GUI
 
 **Communication Protocols:**
 
-- App <> Server: REST API + WebSocket (`ws://localhost:3001/api/a2a/ws`)
-- Server <> Robot: A2A (Agent-to-Agent) protocol + REST API
-- Server > Robot: Push-model task distribution
-- Robot Agent <> VLA Inference: gRPC (protobuf in `protos/`)
-- Server <> NATS: Async messaging for training jobs (optional)
-- Server <> RustFS: S3-compatible object storage for models/datasets (optional)
+- App ↔ Server: REST API + WebSocket (`ws://localhost:3001/api/a2a/ws`)
+- Server ↔ Robot: A2A (Agent-to-Agent) protocol + REST API
+- Server → Robot: Push-model task distribution
+- Robot Agent ↔ VLA Server: HTTP (FastAPI)
+- Server ↔ NATS: Async messaging for training jobs (optional)
+- Server ↔ RustFS: S3-compatible object storage for models/datasets (optional)
 
 **Key Infrastructure:**
 

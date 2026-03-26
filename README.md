@@ -62,14 +62,14 @@ Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM g
     │   │             │        │             │        │             │        │
     │   └─────────────┘        └──────┬──────┘        └──────┬──────┘        │
     │         :1420                   │                      │               │
-    │                                 │                      │ gRPC          │
+    │                                 │                      │ HTTP          │
     │                                 ▼                      ▼               │
     │                          ┌─────────────┐        ┌─────────────┐        │
     │                          │ PostgreSQL  │        │     VLA     │        │
-    │                          │  + MLflow   │        │  Inference  │        │
-    │                          │             │        │   Python    │        │
+    │                          │  + MLflow   │        │   Server    │        │
+    │                          │             │        │   FastAPI   │        │
     │                          └─────────────┘        └─────────────┘        │
-    │                               :5432                  :50051            │
+    │                               :5432                  :8000             │
     │                                                                         │
     │   ─────────────────────────────────────────────────────────────────    │
     │   Infrastructure:  NATS :4222  │  RustFS :9000  │  Prometheus :9090    │
@@ -81,7 +81,7 @@ Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM g
 | **App**           | React + Tauri     | 1420  | Desktop/web dashboard for Physical AI ops  |
 | **Server**        | Node.js + Express | 3001  | A2A protocol server, REST API, WebSocket   |
 | **Robot Agent**   | Node.js + Genkit  | 41243 | AI-powered robot control software          |
-| **VLA Inference** | Python + gRPC     | 50051 | Vision-Language-Action model serving       |
+| **VLA Server**    | Python + FastAPI   | 8000  | Vision-Language-Action model serving       |
 
 ## Platform Overview
 

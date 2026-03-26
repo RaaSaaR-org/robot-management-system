@@ -34,39 +34,28 @@ spec:
           image: "{{ .Values.vlaInference.image.repository }}:{{ .Values.vlaInference.image.tag }}"
           imagePullPolicy: {{ .Values.vlaInference.image.pullPolicy }}
           ports:
-            - name: grpc
-              containerPort: {{ .Values.vlaInference.service.grpcPort }}
-              protocol: TCP
-            - name: metrics
-              containerPort: {{ .Values.vlaInference.service.metricsPort }}
+            - name: http
+              containerPort: {{ .Values.vlaInference.service.httpPort }}
               protocol: TCP
           env:
-            - name: VLA_GRPC_PORT
-              value: {{ .Values.vlaInference.service.grpcPort | quote }}
-            - name: VLA_METRICS_PORT
-              value: {{ .Values.vlaInference.service.metricsPort | quote }}
-            - name: VLA_MAX_WORKERS
-              value: {{ .Values.vlaInference.config.maxWorkers | quote }}
+            - name: VLA_PORT
+              value: {{ .Values.vlaInference.service.httpPort | quote }}
             - name: VLA_DEVICE
               value: {{ .Values.vlaInference.config.device | quote }}
             - name: VLA_MODEL_TYPE
               value: {{ .Values.vlaInference.config.modelType | quote }}
           livenessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - "import grpc; ch = grpc.insecure_channel('localhost:{{ .Values.vlaInference.service.grpcPort }}'); grpc.channel_ready_future(ch).result(timeout=5)"
+            httpGet:
+              path: /health
+              port: http
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5
           readinessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - "import grpc; ch = grpc.insecure_channel('localhost:{{ .Values.vlaInference.service.grpcPort }}'); grpc.channel_ready_future(ch).result(timeout=5)"
+            httpGet:
+              path: /health
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5

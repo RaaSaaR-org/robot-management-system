@@ -67,7 +67,7 @@ spec:
             # VLA Inference Server URL (if enabled)
             {{- if .Values.vlaInference.enabled }}
             - name: VLA_SERVER_URL
-              value: "{{ include "neodem.vlaInference.fullname" . }}:{{ .Values.vlaInference.service.grpcPort }}"
+              value: "http://{{ include "neodem.vlaInference.fullname" . }}:{{ .Values.vlaInference.service.httpPort }}"
             - name: VLA_ENABLED
               value: "true"
             {{- end }}
