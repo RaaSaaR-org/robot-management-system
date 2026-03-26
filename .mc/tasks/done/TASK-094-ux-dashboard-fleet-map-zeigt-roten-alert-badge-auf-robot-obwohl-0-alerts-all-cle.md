@@ -4,7 +4,7 @@ aliases:
 - TASK-094
 title: 'UX: Dashboard Fleet Map zeigt roten Alert-Badge auf Robot obwohl 0 Alerts / All clear'
 slug: ux-dashboard-fleet-map-zeigt-roten-alert-badge-auf-robot-obwohl-0-alerts-all-cle
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -16,6 +16,7 @@ due_date: ''
 created: 2026-03-26
 updated: 2026-03-26
 ---
+
 
 
 
