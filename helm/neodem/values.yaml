@@ -271,7 +271,7 @@ robotAgent:
 vlaInference:
   enabled: false
   image:
-    repository: ghcr.io/raasaar-org/neodem-vla-inference
+    repository: ghcr.io/raasaar-org/neodem-vla-server
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 1
