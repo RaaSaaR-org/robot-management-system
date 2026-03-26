@@ -4,7 +4,7 @@ aliases:
 - TASK-098
 title: 'UX: Zero-Values in Danger-Farben Rot/Pink auf Alerts, Training, Compliance — falsche Semantik'
 slug: ux-zero-values-in-danger-farben-rot-pink-auf-alerts-training-compliance-falsche
-status: backlog
+status: in-progress
 priority: 2
 owner: ''
 projects: []
@@ -16,6 +16,7 @@ due_date: ''
 created: 2026-03-26
 updated: 2026-03-26
 ---
+
 
 
 # UX: Zero-Values in Danger-Farben Rot/Pink auf Alerts, Training, Compliance — falsche Semantik

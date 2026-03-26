@@ -4,7 +4,7 @@ aliases:
 - TASK-101
 title: 'UX: Mobile alle Dashboard-Seiten — Top-Nav-Icons unter 44px Touch-Target (Theme, Avatar, Logout)'
 slug: ux-mobile-alle-dashboard-seiten-top-nav-icons-unter-44px-touch-target-theme-avat
-status: backlog
+status: in-progress
 priority: 2
 owner: ''
 projects: []
@@ -16,6 +16,7 @@ due_date: ''
 created: 2026-03-26
 updated: 2026-03-26
 ---
+
 
 
 # UX: Mobile alle Dashboard-Seiten — Top-Nav-Icons unter 44px Touch-Target (Theme, Avatar, Logout)
