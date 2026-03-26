@@ -40,9 +40,9 @@ function StatCard({
       className="opacity-0"
       style={{ animation: `cardEntrance 0.5s ease-out ${index * 80}ms forwards` }}
     >
-      <Card className="p-4 flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-theme-tertiary uppercase tracking-wide">{title}</span>
+      <Card className="p-4 flex flex-col gap-2 overflow-visible">
+        <div className="flex items-center justify-between gap-1">
+          <span className="text-xs font-medium text-theme-tertiary uppercase tracking-wide truncate">{title}</span>
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center"
             style={{ backgroundColor: color ? `${color}20` : 'rgb(var(--color-cobalt-100))' }}
@@ -202,7 +202,7 @@ const TaskIcon = () => (
 export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
   if (isLoading) {
     return (
-      <div className={cn('grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6', className)}>
+      <div className={cn('grid gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-6', className)}>
         {[...Array(6)].map((_, i) => (
           <Card key={i} className="p-4 h-28 flex items-center justify-center">
             <Spinner size="sm" />
@@ -222,7 +222,7 @@ export function FleetStats({ status, isLoading, className }: FleetStatsProps) {
   } = status;
 
   return (
-    <div className={cn('grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6', className)}>
+    <div className={cn('grid gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-6', className)}>
       {/* Total Robots */}
       <StatCard
         title="Total Robots"

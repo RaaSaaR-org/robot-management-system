@@ -50,6 +50,9 @@ export function RobotMarker({ robot, position, isSelected, onClick }: RobotMarke
       tabIndex={0}
       aria-label={`${robot.name} - ${robot.status}`}
     >
+      {/* Invisible hit area for 44px touch target */}
+      <circle cx="0" cy="0" r="22" fill="transparent" />
+
       {/* Outer pulse rings - always visible but subtle */}
       <circle
         cx="0"
