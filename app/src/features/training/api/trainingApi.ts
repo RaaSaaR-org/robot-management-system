@@ -220,8 +220,27 @@ export const trainingApi = {
    * Get GPU availability status
    */
   async getGpuAvailability(): Promise<GpuAvailability> {
-    const response = await apiClient.get<GpuAvailability>(ENDPOINTS.gpuAvailability);
-    return response.data;
+    // Server returns { totalCount, availableCount, byType, ... } — transform to frontend shape
+    const response = await apiClient.get<Record<string, unknown>>(ENDPOINTS.gpuAvailability);
+    const raw = response.data;
+    return {
+      total_gpus: typeof raw.total_gpus === 'number' ? raw.total_gpus
+        : typeof raw.totalCount === 'number' ? raw.totalCount : 0,
+      available_gpus: typeof raw.available_gpus === 'number' ? raw.available_gpus
+        : typeof raw.availableCount === 'number' ? raw.availableCount : 0,
+      gpu_types: raw.gpu_types
+        ? (raw.gpu_types as Record<string, number>)
+        : raw.byType
+          ? Object.fromEntries(
+              Object.entries(raw.byType as Record<string, { total: number; available: number; memoryGb?: number }>)
+                .map(([type, info]) => [type, typeof info === 'number' ? info : info.available])
+            )
+          : undefined,
+      queued_jobs: typeof raw.queued_jobs === 'number' ? raw.queued_jobs
+        : typeof raw.queuedJobs === 'number' ? raw.queuedJobs : 0,
+      estimated_wait_time: typeof raw.estimated_wait_time === 'number' ? raw.estimated_wait_time
+        : typeof raw.estimatedWaitTime === 'number' ? raw.estimatedWaitTime : undefined,
+    };
   },
 
   /**

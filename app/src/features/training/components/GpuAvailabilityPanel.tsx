@@ -49,9 +49,12 @@ export function GpuAvailabilityPanel({
     );
   }
 
-  const utilizationPercent = Math.round(
-    ((availability.total_gpus - availability.available_gpus) / availability.total_gpus) * 100
-  );
+  const totalGpus = availability.total_gpus ?? 0;
+  const availableGpus = availability.available_gpus ?? 0;
+  const rawUtilization = totalGpus > 0
+    ? ((totalGpus - availableGpus) / totalGpus) * 100
+    : 0;
+  const utilizationPercent = Number.isFinite(rawUtilization) ? Math.round(rawUtilization) : 0;
 
   return (
     <Card>
@@ -125,23 +128,41 @@ export function GpuAvailabilityPanel({
         </div>
 
         {/* Status indicator */}
-        <div
-          className={`p-2 rounded text-center text-sm ${
-            availability.available_gpus > 0
-              ? 'bg-green-100 text-green-800'
-              : availability.queued_jobs < 5
-                ? 'bg-yellow-100 text-yellow-800'
-                : 'bg-red-100 text-red-800'
-          }`}
-        >
-          {availability.available_gpus > 0
-            ? 'GPUs available - jobs will start immediately'
-            : availability.queued_jobs < 5
-              ? 'Short queue - jobs will start soon'
-              : 'High demand - expect longer wait times'}
-        </div>
+        <StatusIndicator
+          availableGpus={availability.available_gpus ?? 0}
+          queuedJobs={availability.queued_jobs ?? 0}
+        />
       </Card.Body>
     </Card>
+  );
+}
+
+function StatusIndicator({ availableGpus, queuedJobs }: { availableGpus: number; queuedJobs: number }) {
+  if (availableGpus > 0) {
+    return (
+      <div className="p-2 rounded text-center text-sm bg-green-100 text-green-800">
+        GPUs available - jobs will start immediately
+      </div>
+    );
+  }
+  if (queuedJobs === 0) {
+    return (
+      <div className="p-2 rounded text-center text-sm bg-theme-secondary/10 text-theme-secondary">
+        No jobs in queue
+      </div>
+    );
+  }
+  if (queuedJobs < 5) {
+    return (
+      <div className="p-2 rounded text-center text-sm bg-yellow-100 text-yellow-800">
+        Short queue - jobs will start soon
+      </div>
+    );
+  }
+  return (
+    <div className="p-2 rounded text-center text-sm bg-red-100 text-red-800">
+      High demand - expect longer wait times
+    </div>
   );
 }
 
