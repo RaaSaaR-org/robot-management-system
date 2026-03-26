@@ -129,10 +129,11 @@ function EditableZone({
       {/* Zone label */}
       <text
         x={x + 6}
-        y={y + 14}
-        fontSize="10"
+        y={y + 16}
+        fontSize="12"
         fontFamily="monospace"
-        fill={isSelected ? colors.stroke : '#888'}
+        fontWeight="500"
+        fill={isSelected ? colors.stroke : '#a0a0a0'}
         style={{ pointerEvents: 'none' }}
       >
         {zone.name}

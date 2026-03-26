@@ -96,23 +96,25 @@ export function TopBar() {
         </div>
 
         {/* Right section: Theme toggle + User menu */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-brand text-theme-secondary hover:text-theme-primary hover:bg-theme-hover transition-colors"
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-brand text-theme-secondary hover:text-theme-primary hover:bg-theme-hover transition-colors"
             title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           >
             {isDark ? <SunIcon /> : <MoonIcon />}
           </button>
 
-          <div className="flex items-center gap-3 ml-2">
+          <div className="flex items-center gap-3 ml-1">
             {/* Avatar */}
-            <div className="w-8 h-8 rounded-full bg-cobalt/20 flex items-center justify-center">
-              <span className="text-cobalt font-medium text-sm">
-                {user?.name?.charAt(0).toUpperCase() || 'U'}
-              </span>
+            <div className="min-w-[44px] min-h-[44px] flex items-center justify-center">
+              <div className="w-8 h-8 rounded-full bg-cobalt/20 flex items-center justify-center">
+                <span className="text-cobalt font-medium text-sm">
+                  {user?.name?.charAt(0).toUpperCase() || 'U'}
+                </span>
+              </div>
             </div>
             {/* Name - hidden on small screens */}
             <span className="text-theme-primary font-medium hidden sm:block">
@@ -130,6 +132,7 @@ export function TopBar() {
                 window.location.href = '/';
               }
             }}
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center"
           >
             <LogoutIcon />
           </LogoutButton>

@@ -119,15 +119,15 @@ function ZoneRect({
         </g>
       )}
 
-      {/* Zone label - monospace, subtle */}
+      {/* Zone label - monospace, readable contrast */}
       <text
         x={x + 8}
-        y={y + 14}
-        fontSize="8"
+        y={y + 16}
+        fontSize="12"
         fontFamily="monospace"
-        fontWeight="500"
+        fontWeight="600"
         fill={colors.stroke}
-        opacity="0.7"
+        opacity="0.9"
       >
         {zone.name.toUpperCase()}
       </text>
