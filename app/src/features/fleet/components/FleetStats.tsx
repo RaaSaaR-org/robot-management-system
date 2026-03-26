@@ -126,7 +126,6 @@ function BatteryIndicator({ level }: { level: number }) {
 /** Alert count with severity indicator */
 function AlertIndicator({
   counts,
-  total,
 }: {
   counts: Record<string, number>;
   total: number;
@@ -146,7 +145,7 @@ function AlertIndicator({
           {errorCount} error
         </span>
       )}
-      {criticalCount === 0 && errorCount === 0 && total === 0 && (
+      {criticalCount === 0 && errorCount === 0 && (
         <span className="text-green-600 dark:text-green-400">All clear</span>
       )}
     </div>
