@@ -4,7 +4,7 @@ aliases:
 - TASK-102
 title: 'UX: Mobile Fleet Map — Zonen-Labels 8px und hellgrau auf weissem Hintergrund, WCAG-Kontrast-Fail'
 slug: ux-mobile-fleet-map-zonen-labels-8px-und-hellgrau-auf-weissem-hintergrund-wcag-k
-status: in-progress
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -16,6 +16,7 @@ due_date: ''
 created: 2026-03-26
 updated: 2026-03-26
 ---
+
 
 
 
