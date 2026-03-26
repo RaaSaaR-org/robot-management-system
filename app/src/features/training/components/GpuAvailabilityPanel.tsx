@@ -49,9 +49,12 @@ export function GpuAvailabilityPanel({
     );
   }
 
-  const utilizationPercent = Math.round(
-    ((availability.total_gpus - availability.available_gpus) / availability.total_gpus) * 100
-  );
+  const totalGpus = availability.total_gpus ?? 0;
+  const availableGpus = availability.available_gpus ?? 0;
+  const rawUtilization = totalGpus > 0
+    ? ((totalGpus - availableGpus) / totalGpus) * 100
+    : 0;
+  const utilizationPercent = Number.isFinite(rawUtilization) ? Math.round(rawUtilization) : 0;
 
   return (
     <Card>
