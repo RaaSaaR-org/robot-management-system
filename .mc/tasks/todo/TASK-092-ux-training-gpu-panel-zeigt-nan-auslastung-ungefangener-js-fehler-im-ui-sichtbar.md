@@ -4,7 +4,7 @@ aliases:
 - TASK-092
 title: 'UX: Training GPU-Panel zeigt NaN% Auslastung — ungefangener JS-Fehler im UI sichtbar'
 slug: ux-training-gpu-panel-zeigt-nan-auslastung-ungefangener-js-fehler-im-ui-sichtbar
-status: backlog
+status: todo
 priority: 1
 owner: ''
 projects: []
@@ -16,6 +16,7 @@ due_date: ''
 created: 2026-03-26
 updated: 2026-03-26
 ---
+
 
 
 # UX: Training GPU-Panel zeigt NaN% Auslastung — ungefangener JS-Fehler im UI sichtbar
