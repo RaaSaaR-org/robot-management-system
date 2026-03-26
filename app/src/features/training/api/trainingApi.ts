@@ -228,7 +228,14 @@ export const trainingApi = {
         : typeof raw.totalCount === 'number' ? raw.totalCount : 0,
       available_gpus: typeof raw.available_gpus === 'number' ? raw.available_gpus
         : typeof raw.availableCount === 'number' ? raw.availableCount : 0,
-      gpu_types: (raw.gpu_types ?? raw.byType ?? undefined) as Record<string, number> | undefined,
+      gpu_types: raw.gpu_types
+        ? (raw.gpu_types as Record<string, number>)
+        : raw.byType
+          ? Object.fromEntries(
+              Object.entries(raw.byType as Record<string, { total: number; available: number; memoryGb?: number }>)
+                .map(([type, info]) => [type, typeof info === 'number' ? info : info.available])
+            )
+          : undefined,
       queued_jobs: typeof raw.queued_jobs === 'number' ? raw.queued_jobs
         : typeof raw.queuedJobs === 'number' ? raw.queuedJobs : 0,
       estimated_wait_time: typeof raw.estimated_wait_time === 'number' ? raw.estimated_wait_time
