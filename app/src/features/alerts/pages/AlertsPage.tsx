@@ -66,8 +66,11 @@ interface StatsCardProps {
 }
 
 function StatsCard({ label, count, severity }: StatsCardProps) {
-  const colorClass =
-    severity === 'critical'
+  const isZero = count === 0;
+
+  const colorClass = isZero
+    ? 'border-theme bg-theme-elevated'
+    : severity === 'critical'
       ? 'border-red-500/50 bg-red-500/10'
       : severity === 'error'
         ? 'border-red-400/50 bg-red-400/10'
@@ -75,8 +78,9 @@ function StatsCard({ label, count, severity }: StatsCardProps) {
           ? 'border-yellow-500/50 bg-yellow-500/10'
           : 'border-blue-500/50 bg-blue-500/10';
 
-  const textClass =
-    severity === 'critical'
+  const textClass = isZero
+    ? 'text-theme-secondary'
+    : severity === 'critical'
       ? 'text-red-400'
       : severity === 'error'
         ? 'text-red-300'

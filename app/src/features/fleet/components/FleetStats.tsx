@@ -76,7 +76,7 @@ function StatusBreakdown({
 }) {
   if (total === 0) return null;
 
-  const statuses = ['online', 'busy', 'charging', 'error', 'maintenance', 'offline'] as const;
+  const statuses = ['online', 'busy', 'charging', 'error', 'protective_stop', 'maintenance', 'offline'] as const;
 
   return (
     <div className="flex h-2 rounded-full overflow-hidden bg-theme-elevated">

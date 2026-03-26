@@ -65,6 +65,11 @@ const STATUS_COLORS: Record<RobotStatus, { primary: string; glow: string; stroke
     glow: 'rgba(249, 115, 22, 0.4)',
     stroke: '#f97316',
   },
+  protective_stop: {
+    primary: '#ef4444',
+    glow: 'rgba(239, 68, 68, 0.5)',
+    stroke: '#ef4444',
+  },
 };
 
 // ============================================================================
