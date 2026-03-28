@@ -38,9 +38,15 @@ export const OrchestratorChatPage = memo(function OrchestratorChatPage() {
 
   // Get robots from robots store for display count
   const robots = useRobotsStore(selectRobots);
+  const fetchRobots = useRobotsStore((s) => s.fetchRobots);
 
   // WebSocket connection
   const { isConnected } = useA2AStream();
+
+  // Fetch robots on mount so the count is populated
+  useEffect(() => {
+    fetchRobots();
+  }, [fetchRobots]);
 
   // Always use orchestration mode on this page
   useEffect(() => {
