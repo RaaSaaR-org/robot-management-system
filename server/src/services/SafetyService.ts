@@ -504,7 +504,7 @@ class SafetyService {
             stopCategory: 0,
             requiresManualReset: false,
             operatingMode: 'automatic' as const,
-            serverConnected: false,
+            serverConnected: robot.status === 'online',
             currentSpeed: 0,
             activeSpeedLimit: 0,
             activeForceLimit: 0,
