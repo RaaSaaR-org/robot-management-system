@@ -59,6 +59,38 @@ export interface LeRobotEpisode {
 }
 
 // ============================================================================
+// HUGGINGFACE IMPORT TYPES
+// ============================================================================
+
+/**
+ * Request body for HuggingFace dataset import
+ */
+export interface HuggingFaceImportRequest {
+  /** HuggingFace repo ID, e.g. "lerobot/svla_so101_pickplace" */
+  repoId: string;
+  /** Git revision/branch, default: "main" */
+  revision?: string;
+  /** Optional robot type ID to associate with the dataset */
+  robotTypeId?: string;
+  /** Whether to include video files (can be very large), default: false */
+  includeVideos?: boolean;
+}
+
+/**
+ * Progress tracking for HuggingFace import
+ */
+export interface HuggingFaceImportProgress {
+  datasetId: string;
+  status: 'importing' | 'validating' | 'ready' | 'failed';
+  phase: 'metadata' | 'downloading' | 'storing' | 'validating';
+  progress: number;
+  currentFile?: string;
+  totalFiles?: number;
+  completedFiles?: number;
+  error?: string;
+}
+
+// ============================================================================
 // DTO TYPES
 // ============================================================================
 
@@ -294,7 +326,11 @@ export type DatasetEventType =
   | 'dataset:validation:started'
   | 'dataset:validation:progress'
   | 'dataset:validation:completed'
-  | 'dataset:validation:failed';
+  | 'dataset:validation:failed'
+  | 'dataset:import:started'
+  | 'dataset:import:progress'
+  | 'dataset:import:completed'
+  | 'dataset:import:failed';
 
 /**
  * Dataset event payload
@@ -304,6 +340,7 @@ export interface DatasetEvent {
   datasetId: string;
   dataset?: DatasetResponse;
   progress?: DatasetValidationProgress;
+  importProgress?: HuggingFaceImportProgress;
   error?: string;
   timestamp: string;
 }

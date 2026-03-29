@@ -13,8 +13,10 @@ import type {
   DatasetListQuery,
   InitiateUploadRequest,
   ComputeStatsRequest,
+  HuggingFaceImportRequest,
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
+import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
 import type {
   TriggerValidationRequest,
   UnflagTrajectoryRequest,
@@ -81,6 +83,32 @@ datasetRoutes.get('/', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[DatasetRoutes] Error listing datasets:', error);
     res.status(500).json({ error: 'Failed to list datasets' });
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/import/huggingface - Import dataset from HuggingFace Hub
+// ============================================================================
+
+datasetRoutes.post('/import/huggingface', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as HuggingFaceImportRequest;
+
+    if (!body.repoId) {
+      return res.status(400).json({ error: 'repoId is required' });
+    }
+
+    const datasetId = await huggingFaceImportService.importDataset(body);
+
+    res.status(202).json({
+      datasetId,
+      status: 'importing',
+      message: `Import started for ${body.repoId}`,
+    });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error importing from HuggingFace:', error);
+    const message = error instanceof Error ? error.message : 'Failed to import dataset';
+    res.status(400).json({ error: message });
   }
 });
 
