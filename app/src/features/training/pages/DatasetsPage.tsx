@@ -222,6 +222,7 @@ export function DatasetsPage() {
         isOpen={isHFBrowserOpen}
         onClose={() => setIsHFBrowserOpen(false)}
         onSuccess={handleUploadSuccess}
+        existingDatasets={datasets}
       />
 
       {/* Episode viewer modal */}

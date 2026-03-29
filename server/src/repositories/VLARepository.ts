@@ -182,6 +182,7 @@ function dbDatasetToDomain(db: PrismaDataset): Dataset {
     infoJson: JSON.parse(db.infoJson) as LeRobotInfo,
     statsJson: JSON.parse(db.statsJson) as LeRobotStats,
     status: db.status as DatasetStatus,
+    huggingFaceRepoId: db.huggingFaceRepoId ?? undefined,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
@@ -576,6 +577,7 @@ export class DatasetRepository {
         infoJson: JSON.stringify(input.infoJson ?? {}),
         statsJson: JSON.stringify(input.statsJson ?? {}),
         status: input.status ?? 'uploading',
+        huggingFaceRepoId: input.huggingFaceRepoId,
       },
     });
     return dbDatasetToDomain(dataset);

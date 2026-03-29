@@ -1800,6 +1800,7 @@ model Dataset {
   infoJson           String   @default("{}") // JSON: LeRobot metadata
   statsJson          String   @default("{}") // JSON: LeRobot stats
   status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
+  huggingFaceRepoId  String?  // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -1811,6 +1812,7 @@ model Dataset {
   @@index([robotTypeId])
   @@index([skillId])
   @@index([status])
+  @@index([huggingFaceRepoId])
 }
 
 // TrainingJob - Training job queue entries

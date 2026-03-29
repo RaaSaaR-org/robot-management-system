@@ -322,6 +322,7 @@ export interface Dataset {
   infoJson: LeRobotInfo;
   statsJson: LeRobotStats;
   status: DatasetStatus;
+  huggingFaceRepoId?: string;
   createdAt: Date;
   updatedAt: Date;
 
@@ -345,6 +346,7 @@ export interface CreateDatasetInput {
   infoJson?: LeRobotInfo;
   statsJson?: LeRobotStats;
   status?: DatasetStatus;
+  huggingFaceRepoId?: string;
 }
 
 export interface UpdateDatasetInput {
