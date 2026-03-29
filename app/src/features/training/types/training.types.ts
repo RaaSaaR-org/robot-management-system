@@ -391,6 +391,26 @@ export interface RunComparison {
 }
 
 // ============================================================================
+// HUGGINGFACE TYPES
+// ============================================================================
+
+export interface HFDataset {
+  id: string;
+  downloads?: number;
+  lastModified?: string;
+  tags?: string[];
+  description?: string;
+}
+
+export interface HFImportProgress {
+  datasetId: string;
+  status: 'importing' | 'validating' | 'ready' | 'failed';
+  progress: number;
+  currentFile?: string;
+  error?: string;
+}
+
+// ============================================================================
 // WEBSOCKET EVENT TYPES
 // ============================================================================
 

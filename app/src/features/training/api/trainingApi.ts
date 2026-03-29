@@ -22,6 +22,7 @@ import type {
   RegisteredModel,
   ModelVersion,
   RunComparison,
+  HFDataset,
 } from '../types';
 
 const ENDPOINTS = {
@@ -48,6 +49,9 @@ const ENDPOINTS = {
   modelVersions: (name: string) => `/models/registry/${encodeURIComponent(name)}/versions`,
   modelVersionStage: (name: string, version: string) => `/models/registry/${encodeURIComponent(name)}/versions/${version}/stage`,
   modelsCompare: '/models/compare',
+
+  // HuggingFace Import
+  huggingFaceImport: '/datasets/import/huggingface',
 } as const;
 
 export const trainingApi = {
@@ -292,5 +296,38 @@ export const trainingApi = {
    */
   async promoteModelVersion(modelName: string, version: string, stage: string): Promise<void> {
     await apiClient.post(ENDPOINTS.modelVersionStage(modelName, version), { stage });
+  },
+
+  // ============================================================================
+  // HUGGINGFACE
+  // ============================================================================
+
+  /**
+   * Import a dataset from HuggingFace Hub
+   */
+  async importFromHuggingFace(repoId: string, includeVideos?: boolean): Promise<{ datasetId: string }> {
+    const response = await apiClient.post<{ datasetId: string }>(
+      ENDPOINTS.huggingFaceImport,
+      { repoId, includeVideos }
+    );
+    return response.data;
+  },
+
+  /**
+   * Search HuggingFace Hub for LeRobot datasets (public API, no backend proxy)
+   */
+  async searchHuggingFace(query: string): Promise<HFDataset[]> {
+    const params = new URLSearchParams({
+      search: query,
+      filter: 'lerobot',
+      limit: '20',
+    });
+    const response = await fetch(
+      `https://huggingface.co/api/datasets?${params.toString()}`
+    );
+    if (!response.ok) {
+      throw new Error(`HuggingFace API error: ${response.status}`);
+    }
+    return response.json() as Promise<HFDataset[]>;
   },
 };
