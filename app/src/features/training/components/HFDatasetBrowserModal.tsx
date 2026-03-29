@@ -9,12 +9,81 @@ import { Modal, Button, Input, ProgressBar, Spinner, Tabs } from '@/shared/compo
 import type { Tab } from '@/shared/components/ui';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 import { trainingApi } from '../api';
-import type { HFDataset, HFImportProgress } from '../types';
+import type { Dataset, HFDataset, HFImportProgress } from '../types';
+
+// ============================================================================
+// FEATURED DATASETS
+// ============================================================================
+
+interface FeaturedDataset {
+  repoId: string;
+  displayName: string;
+  description: string;
+  robotType: string;
+  episodeCount: number | null;
+  tags: string[];
+}
+
+const FEATURED_DATASETS: FeaturedDataset[] = [
+  {
+    repoId: 'lerobot/svla_so101_pickplace',
+    displayName: 'SO-101 Pick & Place',
+    description: 'Pick & place task with SO-101 arm. 50 episodes, 6 DOF, 2 cameras.',
+    robotType: 'SO-101',
+    episodeCount: 50,
+    tags: ['manipulation', 'pick-place', 'so-101'],
+  },
+  {
+    repoId: 'unitreerobotics/g1_dex3_agilex_dual_arm_pick_place',
+    displayName: 'G1 Dex3 — Dual Arm Pick & Place',
+    description: 'Tabletop dual-arm pick & place with Unitree G1 + Dex3-1 hands.',
+    robotType: 'G1 + Dex3',
+    episodeCount: null,
+    tags: ['manipulation', 'dual-arm', 'g1', 'dex3'],
+  },
+  {
+    repoId: 'unitreerobotics/g1_dex3_bottle_cap',
+    displayName: 'G1 Dex3 — Bottle Cap',
+    description: 'Bottle cap manipulation task with Unitree G1 + Dex3-1 hands.',
+    robotType: 'G1 + Dex3',
+    episodeCount: null,
+    tags: ['manipulation', 'dexterous', 'g1', 'dex3'],
+  },
+  {
+    repoId: 'unitreerobotics/g1_dex3_cup_stacking',
+    displayName: 'G1 Dex3 — Cup Stacking',
+    description: 'Cup stacking with Unitree G1 + Dex3-1 hands.',
+    robotType: 'G1 + Dex3',
+    episodeCount: null,
+    tags: ['manipulation', 'stacking', 'g1', 'dex3'],
+  },
+  {
+    repoId: 'lerobot/aloha_static_coffee',
+    displayName: 'ALOHA — Coffee',
+    description: 'Classic coffee-making task with ALOHA robot.',
+    robotType: 'ALOHA',
+    episodeCount: 50,
+    tags: ['manipulation', 'bimanual', 'aloha'],
+  },
+  {
+    repoId: 'lerobot/pusht',
+    displayName: 'PushT Benchmark',
+    description: 'Classic 2D push-T benchmark — great for baseline comparisons.',
+    robotType: 'PushT (sim)',
+    episodeCount: 206,
+    tags: ['benchmark', 'simulation', 'pusht'],
+  },
+];
+
+// ============================================================================
+// MODAL COMPONENT
+// ============================================================================
 
 export interface HFDatasetBrowserModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  existingDatasets?: Dataset[];
 }
 
 type ImportState = 'idle' | 'importing' | 'done' | 'error';
@@ -26,6 +95,7 @@ export function HFDatasetBrowserModal({
   isOpen,
   onClose,
   onSuccess,
+  existingDatasets = [],
 }: HFDatasetBrowserModalProps) {
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -285,7 +355,31 @@ export function HFDatasetBrowserModal({
     </div>
   );
 
+  const isDatasetImported = useCallback(
+    (repoId: string) =>
+      existingDatasets.some((d) => d.huggingFaceRepoId === repoId),
+    [existingDatasets]
+  );
+
+  const featuredTab = (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto">
+      {FEATURED_DATASETS.map((ds) => {
+        const imported = isDatasetImported(ds.repoId);
+        return (
+          <FeaturedDatasetCard
+            key={ds.repoId}
+            dataset={ds}
+            imported={imported}
+            onImport={() => handleImport(ds.repoId)}
+            disabled={isImporting || imported}
+          />
+        );
+      })}
+    </div>
+  );
+
   const tabs: Tab[] = [
+    { id: 'featured', label: 'Featured', content: featuredTab },
     { id: 'search', label: 'Search', content: searchTab },
     { id: 'direct', label: 'Direct Link', content: directLinkTab },
   ];
@@ -294,7 +388,7 @@ export function HFDatasetBrowserModal({
     <Modal isOpen={isOpen} onClose={handleClose} title="Import from HuggingFace Hub" size="lg">
       <div className="space-y-6">
         {importState === 'idle' && (
-          <Tabs tabs={tabs} defaultTab="search" />
+          <Tabs tabs={tabs} defaultTab="featured" />
         )}
 
         {importState === 'importing' && (
@@ -403,6 +497,67 @@ interface HFDatasetCardProps {
   dataset: HFDataset;
   onImport: () => void;
   disabled?: boolean;
+}
+
+interface FeaturedDatasetCardProps {
+  dataset: FeaturedDataset;
+  imported: boolean;
+  onImport: () => void;
+  disabled?: boolean;
+}
+
+function FeaturedDatasetCard({ dataset, imported, onImport, disabled }: FeaturedDatasetCardProps) {
+  return (
+    <div
+      className={`flex items-start justify-between p-4 rounded-lg border transition-colors ${
+        imported
+          ? 'border-green-500/30 bg-theme-secondary/5 opacity-75'
+          : 'border-theme-secondary/20 bg-theme-secondary/5 hover:bg-theme-secondary/10'
+      }`}
+    >
+      <div className="min-w-0 flex-1 mr-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="font-semibold text-theme-primary text-sm">
+            {dataset.displayName}
+          </p>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
+            {dataset.robotType}
+          </span>
+          {imported && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+              Imported
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-theme-secondary mt-1">
+          {dataset.description}
+        </p>
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          {dataset.episodeCount !== null && (
+            <span className="text-xs text-theme-tertiary">
+              {dataset.episodeCount} episodes
+            </span>
+          )}
+          {dataset.tags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-theme-secondary/10 text-theme-tertiary"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      </div>
+      <Button
+        size="sm"
+        onClick={onImport}
+        disabled={disabled}
+        className="shrink-0 mt-0.5"
+      >
+        {imported ? 'Imported' : 'Import'}
+      </Button>
+    </div>
+  );
 }
 
 function HFDatasetCard({ dataset, onImport, disabled }: HFDatasetCardProps) {

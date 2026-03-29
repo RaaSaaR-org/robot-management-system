@@ -84,6 +84,7 @@ export class HuggingFaceImportService {
       totalDuration: info.fps > 0 ? (info.total_frames ?? 0) / info.fps : 0,
       demonstrationCount: info.total_episodes ?? 0,
       status: 'importing',
+      huggingFaceRepoId: repoId,
     };
 
     await datasetRepository.create(input);

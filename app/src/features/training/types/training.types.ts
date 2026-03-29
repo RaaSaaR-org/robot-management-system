@@ -151,6 +151,7 @@ export interface Dataset {
   infoJson: LeRobotInfo;
   statsJson: LeRobotStats;
   status: DatasetStatus;
+  huggingFaceRepoId?: string;
   createdAt: string;
   updatedAt: string;
   robotType?: RobotType;
