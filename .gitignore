@@ -61,3 +61,6 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+
+# Robot agent update backups (auto-generated)
+robot-agent/data/update-backups/
