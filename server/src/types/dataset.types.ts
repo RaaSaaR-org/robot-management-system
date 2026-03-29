@@ -349,3 +349,29 @@ export interface DatasetEvent {
  * Dataset event callback type
  */
 export type DatasetEventCallback = (event: DatasetEvent) => void;
+
+// ============================================================================
+// EPISODE VIEWER TYPES
+// ============================================================================
+
+/**
+ * Episode metadata for the episode list
+ */
+export interface EpisodeMeta {
+  index: number;
+  frameCount: number;
+  durationSeconds: number;
+  flagged: boolean;
+}
+
+/**
+ * Single frame of an episode with action and observation data
+ */
+export interface FrameData {
+  frameIndex: number;
+  timestamp: number;
+  /** 6 DOF: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper */
+  action: number[];
+  /** 6 DOF: same joint ordering as action */
+  observationState: number[];
+}

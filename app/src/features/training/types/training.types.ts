@@ -411,6 +411,26 @@ export interface HFImportProgress {
 }
 
 // ============================================================================
+// EPISODE VIEWER TYPES
+// ============================================================================
+
+export interface EpisodeMeta {
+  index: number;
+  frameCount: number;
+  durationSeconds: number;
+  flagged: boolean;
+}
+
+export interface FrameData {
+  frameIndex: number;
+  timestamp: number;
+  /** 6 DOF: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper */
+  action: number[];
+  /** 6 DOF: same joint ordering as action */
+  observationState: number[];
+}
+
+// ============================================================================
 // WEBSOCKET EVENT TYPES
 // ============================================================================
 
