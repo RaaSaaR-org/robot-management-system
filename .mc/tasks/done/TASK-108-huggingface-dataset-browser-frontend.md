@@ -4,18 +4,23 @@ aliases:
 - TASK-108
 title: HuggingFace Dataset Browser — Frontend
 slug: huggingface-dataset-browser-frontend
-status: todo
+status: done
 priority: 2
 owner: Devin
 projects: []
 customers: []
-tags: [datasets, huggingface, frontend]
+tags:
+- datasets
+- huggingface
+- frontend
 sprint: ''
-depends_on: [TASK-107]
+depends_on:
+- TASK-107
 due_date: ''
 created: 2026-03-29
 updated: 2026-03-29
 ---
+
 
 
 # HuggingFace Dataset Browser — Frontend
