@@ -4,18 +4,23 @@ aliases:
 - TASK-109
 title: Dataset Episode Viewer
 slug: dataset-episode-viewer
-status: todo
+status: done
 priority: 3
 owner: Devin
 projects: []
 customers: []
-tags: [datasets, viewer, frontend]
+tags:
+- datasets
+- viewer
+- frontend
 sprint: ''
-depends_on: [TASK-107]
+depends_on:
+- TASK-107
 due_date: ''
 created: 2026-03-29
 updated: 2026-03-29
 ---
+
 
 
 # Dataset Episode Viewer
