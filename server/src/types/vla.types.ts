@@ -36,7 +36,7 @@ export const TrainingJobStatuses = [
 export type TrainingJobStatus = (typeof TrainingJobStatuses)[number];
 
 // Dataset status
-export const DatasetStatuses = ['uploading', 'validating', 'ready', 'failed'] as const;
+export const DatasetStatuses = ['uploading', 'importing', 'validating', 'ready', 'failed'] as const;
 export type DatasetStatus = (typeof DatasetStatuses)[number];
 
 // Skill definition status
