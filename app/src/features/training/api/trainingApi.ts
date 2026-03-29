@@ -23,6 +23,8 @@ import type {
   ModelVersion,
   RunComparison,
   HFDataset,
+  EpisodeMeta,
+  FrameData,
 } from '../types';
 
 const ENDPOINTS = {
@@ -49,6 +51,11 @@ const ENDPOINTS = {
   modelVersions: (name: string) => `/models/registry/${encodeURIComponent(name)}/versions`,
   modelVersionStage: (name: string, version: string) => `/models/registry/${encodeURIComponent(name)}/versions/${version}/stage`,
   modelsCompare: '/models/compare',
+
+  // Episodes
+  datasetEpisodes: (id: string) => `/datasets/${id}/episodes`,
+  datasetEpisodeFrames: (id: string, index: number) => `/datasets/${id}/episodes/${index}/frames`,
+  datasetEpisodeFlag: (id: string, index: number) => `/datasets/${id}/episodes/${index}/flag`,
 
   // HuggingFace Import
   huggingFaceImport: '/datasets/import/huggingface',
@@ -126,6 +133,58 @@ export const trainingApi = {
    */
   async completeUpload(datasetId: string): Promise<void> {
     await apiClient.post(ENDPOINTS.datasetUploadComplete(datasetId));
+  },
+
+  // ============================================================================
+  // EPISODES
+  // ============================================================================
+
+  /**
+   * List episodes for a dataset
+   */
+  async getEpisodes(datasetId: string): Promise<EpisodeMeta[]> {
+    const response = await apiClient.get<{ episodes: EpisodeMeta[] }>(
+      ENDPOINTS.datasetEpisodes(datasetId)
+    );
+    return response.data.episodes;
+  },
+
+  /**
+   * Get frame data for an episode
+   */
+  async getEpisodeFrames(
+    datasetId: string,
+    episodeIndex: number,
+    offset?: number,
+    limit?: number
+  ): Promise<{ frames: FrameData[]; total: number }> {
+    const params: Record<string, string> = {};
+    if (offset !== undefined) params.offset = String(offset);
+    if (limit !== undefined) params.limit = String(limit);
+
+    const response = await apiClient.get<{ frames: FrameData[]; total: number }>(
+      ENDPOINTS.datasetEpisodeFrames(datasetId, episodeIndex),
+      { params }
+    );
+    return response.data;
+  },
+
+  /**
+   * Flag or unflag an episode
+   */
+  async flagEpisode(datasetId: string, episodeIndex: number, flagged: boolean): Promise<void> {
+    await apiClient.patch(
+      ENDPOINTS.datasetEpisodeFlag(datasetId, episodeIndex),
+      { flagged }
+    );
+  },
+
+  /**
+   * Get video URL for an episode camera
+   */
+  getEpisodeVideoUrl(datasetId: string, episodeIndex: number, camera: string): string {
+    const baseUrl = apiClient.defaults.baseURL ?? '';
+    return `${baseUrl}/datasets/${datasetId}/episodes/${episodeIndex}/video/${camera}`;
   },
 
   // ============================================================================

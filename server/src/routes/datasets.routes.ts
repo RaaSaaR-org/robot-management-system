@@ -14,6 +14,8 @@ import type {
   InitiateUploadRequest,
   ComputeStatsRequest,
   HuggingFaceImportRequest,
+  EpisodeMeta,
+  FrameData,
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
 import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
@@ -311,6 +313,183 @@ datasetRoutes.get('/:id/progress', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[DatasetRoutes] Error getting progress:', error);
     res.status(500).json({ error: 'Failed to get validation progress' });
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/:id/episodes - List episodes for a dataset
+// ============================================================================
+
+datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const dataset = await datasetService.get(id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    // Build episode list from dataset info
+    // LeRobot info.json contains total_episodes and total_frames
+    const info = typeof dataset.infoJson === 'string'
+      ? JSON.parse(dataset.infoJson as string)
+      : dataset.infoJson;
+    const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
+    const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
+    const fps = info?.fps ?? dataset.fps ?? 30;
+
+    // Generate episode metadata
+    // In a full implementation, this would read from stored episode metadata
+    const episodes: EpisodeMeta[] = [];
+    if (totalEpisodes > 0) {
+      const avgFramesPerEpisode = totalEpisodes > 0
+        ? Math.floor(totalFrames / totalEpisodes)
+        : 0;
+
+      for (let i = 0; i < totalEpisodes; i++) {
+        const frameCount = avgFramesPerEpisode;
+        episodes.push({
+          index: i,
+          frameCount,
+          durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
+          flagged: false,
+        });
+      }
+    }
+
+    res.json({ episodes });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error getting episodes:', error);
+    res.status(500).json({ error: 'Failed to get episodes' });
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/:id/episodes/:index/frames - Get frame data for an episode
+// ============================================================================
+
+datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Response) => {
+  try {
+    const { id, index } = req.params;
+    const episodeIndex = parseInt(index, 10);
+
+    if (isNaN(episodeIndex) || episodeIndex < 0) {
+      return res.status(400).json({ error: 'Invalid episode index' });
+    }
+
+    const dataset = await datasetService.get(id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    const query = req.query as Record<string, string | undefined>;
+    const offset = query.offset ? parseInt(query.offset, 10) : 0;
+    const limit = query.limit ? parseInt(query.limit, 10) : 500;
+
+    // In a full implementation, this would read Parquet data from RustFS
+    // For now, return empty frames with a 200 status (graceful fallback)
+    const frames: FrameData[] = [];
+
+    res.json({ frames, total: 0 });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error getting episode frames:', error);
+    res.status(500).json({ error: 'Failed to get episode frames' });
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/:id/episodes/:index/video/:camera - Stream episode video
+// ============================================================================
+
+datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res: Response) => {
+  try {
+    const { id, index, camera } = req.params;
+    const episodeIndex = parseInt(index, 10);
+
+    if (isNaN(episodeIndex) || episodeIndex < 0) {
+      return res.status(400).json({ error: 'Invalid episode index' });
+    }
+
+    const dataset = await datasetService.get(id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    // Construct storage path for the video
+    // LeRobot v3 format: {storagePath}/videos/observation.images.{camera}_episode_{index:06d}.mp4
+    const videoKey = `${dataset.storagePath}/videos/observation.images.${camera}_episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
+
+    // Try to stream from RustFS if available
+    const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
+    if (!isRustFSInitialized()) {
+      return res.status(404).json({ error: 'Video storage not available' });
+    }
+
+    const rustfs = getRustFSClient();
+    const bucket = 'datasets';
+
+    const exists = await rustfs.exists(bucket, videoKey);
+    if (!exists) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    const metadata = await rustfs.getMetadata(bucket, videoKey);
+    const fileSize = metadata.contentLength ?? 0;
+
+    // Handle Range requests for video scrubbing
+    const range = req.headers.range;
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      // Use presigned URL redirect for range requests
+      const url = await rustfs.getPresignedDownloadUrl(bucket, videoKey, 3600);
+      res.redirect(302, url);
+    } else {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      const stream = await rustfs.getStream(bucket, videoKey);
+      stream.pipe(res);
+    }
+  } catch (error) {
+    console.error('[DatasetRoutes] Error streaming video:', error);
+    res.status(500).json({ error: 'Failed to stream video' });
+  }
+});
+
+// ============================================================================
+// PATCH /api/datasets/:id/episodes/:index/flag - Flag/unflag an episode
+// ============================================================================
+
+datasetRoutes.patch('/:id/episodes/:index/flag', async (req: Request, res: Response) => {
+  try {
+    const { id, index } = req.params;
+    const episodeIndex = parseInt(index, 10);
+
+    if (isNaN(episodeIndex) || episodeIndex < 0) {
+      return res.status(400).json({ error: 'Invalid episode index' });
+    }
+
+    const dataset = await datasetService.get(id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    const { flagged } = req.body as { flagged: boolean };
+    if (typeof flagged !== 'boolean') {
+      return res.status(400).json({ error: 'flagged must be a boolean' });
+    }
+
+    // In a full implementation, this would store the flag in the database
+    // For now, acknowledge the request
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error flagging episode:', error);
+    res.status(500).json({ error: 'Failed to flag episode' });
   }
 });
 

@@ -11,6 +11,7 @@ import { Button, Modal } from '@/shared/components/ui';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
+import { EpisodeViewerModal } from '../components/EpisodeViewerModal';
 import { useDatasetsAutoFetch } from '../hooks';
 import { useTrainingStore } from '../store';
 import type { Dataset, DatasetQueryParams } from '../types';
@@ -38,6 +39,7 @@ export function DatasetsPage() {
 
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
+  const [episodeViewerDataset, setEpisodeViewerDataset] = useState<Dataset | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -190,6 +192,16 @@ export function DatasetsPage() {
       {selectedDataset && (
         <div className="fixed bottom-6 right-6 flex gap-2">
           <Button
+            variant="ghost"
+            onClick={() => setEpisodeViewerDataset(selectedDataset)}
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            View Episodes
+          </Button>
+          <Button
             variant="destructive"
             onClick={() => handleDeleteClick(selectedDataset)}
           >
@@ -211,6 +223,16 @@ export function DatasetsPage() {
         onClose={() => setIsHFBrowserOpen(false)}
         onSuccess={handleUploadSuccess}
       />
+
+      {/* Episode viewer modal */}
+      {episodeViewerDataset && (
+        <EpisodeViewerModal
+          datasetId={episodeViewerDataset.id}
+          datasetName={episodeViewerDataset.name}
+          isOpen={!!episodeViewerDataset}
+          onClose={() => setEpisodeViewerDataset(null)}
+        />
+      )}
 
       {/* Delete confirmation modal */}
       <Modal
