@@ -254,21 +254,28 @@ export class HuggingFaceImportService {
     files.push('meta/info.json');
     files.push('meta/stats.json');
 
-    // Build episode parquet file paths
+    // Build parquet file paths
+    // LeRobot v3.0+: chunks_size = max episodes per chunk folder
+    //   → file naming: data/chunk-000/file-000.parquet (one file per chunk)
+    // LeRobot v1/v2: one parquet per episode
+    //   → file naming: data/chunk-000/episode_000000.parquet
     const totalEpisodes = info.total_episodes ?? 0;
     const chunksSize = info.chunks_size ?? 1000;
     const totalChunks = info.total_chunks ?? Math.ceil(totalEpisodes / chunksSize);
+    const isV3Format = (info.codebase_version ?? '').startsWith('v3');
 
     for (let chunk = 0; chunk < totalChunks; chunk++) {
       const chunkDir = `data/chunk-${String(chunk).padStart(3, '0')}`;
-      const episodesInChunk = Math.min(
-        chunksSize,
-        totalEpisodes - chunk * chunksSize
-      );
-
-      for (let ep = 0; ep < episodesInChunk; ep++) {
-        const globalEp = chunk * chunksSize + ep;
-        files.push(`${chunkDir}/episode_${String(globalEp).padStart(6, '0')}.parquet`);
+      if (isV3Format) {
+        // v3.0: one parquet file per chunk folder named file-000.parquet
+        files.push(`${chunkDir}/file-000.parquet`);
+      } else {
+        // Legacy: one parquet per episode
+        const episodesInChunk = Math.min(chunksSize, totalEpisodes - chunk * chunksSize);
+        for (let ep = 0; ep < episodesInChunk; ep++) {
+          const globalEp = chunk * chunksSize + ep;
+          files.push(`${chunkDir}/episode_${String(globalEp).padStart(6, '0')}.parquet`);
+        }
       }
     }
 
@@ -278,11 +285,7 @@ export class HuggingFaceImportService {
         if (feature.video) {
           for (let chunk = 0; chunk < totalChunks; chunk++) {
             const chunkDir = `videos/chunk-${String(chunk).padStart(3, '0')}`;
-            const episodesInChunk = Math.min(
-              chunksSize,
-              totalEpisodes - chunk * chunksSize
-            );
-
+            const episodesInChunk = Math.min(chunksSize, totalEpisodes - chunk * chunksSize);
             for (let ep = 0; ep < episodesInChunk; ep++) {
               const globalEp = chunk * chunksSize + ep;
               files.push(
