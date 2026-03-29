@@ -10,6 +10,7 @@ import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder
 import { Button, Modal } from '@/shared/components/ui';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
+import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
 import { useDatasetsAutoFetch } from '../hooks';
 import { useTrainingStore } from '../store';
 import type { Dataset, DatasetQueryParams } from '../types';
@@ -36,6 +37,7 @@ export function DatasetsPage() {
   }
 
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -90,22 +92,27 @@ export function DatasetsPage() {
             Manage training datasets for VLA models
           </p>
         </div>
-        <Button onClick={() => setIsUploadModalOpen(true)}>
-          <svg
-            className="w-4 h-4 mr-2"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-          Upload Dataset
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={() => setIsHFBrowserOpen(true)}>
+            Import from Hub
+          </Button>
+          <Button onClick={() => setIsUploadModalOpen(true)}>
+            <svg
+              className="w-4 h-4 mr-2"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+            Upload Dataset
+          </Button>
+        </div>
       </header>
 
       {/* Error state */}
@@ -195,6 +202,13 @@ export function DatasetsPage() {
       <DatasetUploadModal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
+        onSuccess={handleUploadSuccess}
+      />
+
+      {/* HuggingFace import modal */}
+      <HFDatasetBrowserModal
+        isOpen={isHFBrowserOpen}
+        onClose={() => setIsHFBrowserOpen(false)}
         onSuccess={handleUploadSuccess}
       />
 
