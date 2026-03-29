@@ -4,7 +4,7 @@ aliases:
 - TASK-110
 title: HuggingFace Featured Datasets Tab
 slug: hf-featured-datasets-tab
-status: todo
+status: done
 priority: 3
 owner: Devin
 projects: []
@@ -14,7 +14,9 @@ tags:
 - frontend
 - training
 - huggingface
+updated: 2026-03-29
 ---
+
 
 # TASK-110 — HuggingFace Featured Datasets Tab
 
