@@ -4,7 +4,7 @@ aliases:
 - TASK-113
 title: 'UX: Episode Viewer Videos 500 Error und keine Frame-Daten'
 slug: ux-episode-viewer-videos-500-error-und-keine-frame-daten
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -17,6 +17,7 @@ due_date: ''
 created: 2026-03-30
 updated: 2026-03-30
 ---
+
 
 
 # UX: Episode Viewer Videos 500 Error und keine Frame-Daten
