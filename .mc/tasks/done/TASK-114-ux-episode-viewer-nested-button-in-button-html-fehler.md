@@ -4,7 +4,7 @@ aliases:
 - TASK-114
 title: 'UX: Episode Viewer nested button-in-button HTML-Fehler'
 slug: ux-episode-viewer-nested-button-in-button-html-fehler
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,6 +17,7 @@ due_date: ''
 created: 2026-03-30
 updated: 2026-03-30
 ---
+
 
 
 # UX: Episode Viewer nested button-in-button HTML-Fehler
