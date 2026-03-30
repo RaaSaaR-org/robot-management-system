@@ -34,7 +34,7 @@ const statusLabels: Record<DatasetStatus, string> = {
  */
 export function DatasetCard({ dataset, onClick, selected, className }: DatasetCardProps) {
   const qualityPercent = dataset.qualityScore
-    ? Math.round(dataset.qualityScore * 100)
+    ? Math.round(dataset.qualityScore)
     : null;
 
   return (
@@ -119,7 +119,7 @@ export function DatasetCard({ dataset, onClick, selected, className }: DatasetCa
         )}
 
         <div className="mt-4 pt-3 border-t border-theme-secondary/20 text-xs text-theme-tertiary">
-          LeRobot v{dataset.lerobotVersion} &bull; Created{' '}
+          LeRobot {dataset.lerobotVersion} &bull; Created{' '}
           {new Date(dataset.createdAt).toLocaleDateString()}
         </div>
       </Card.Body>
@@ -129,10 +129,10 @@ export function DatasetCard({ dataset, onClick, selected, className }: DatasetCa
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) {
-    return `${seconds}s`;
+    return `${Math.round(seconds)}s`;
   }
   const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
+  const remainingSeconds = Math.round(seconds % 60);
   if (minutes < 60) {
     return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
   }

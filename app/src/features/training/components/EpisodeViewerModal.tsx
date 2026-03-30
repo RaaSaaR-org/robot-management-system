@@ -94,9 +94,13 @@ export function EpisodeViewerModal({
       .finally(() => setEpisodesLoading(false));
   }, [isOpen, datasetId]);
 
-  // Load frames when episode selected
+  // Load frames when episode selected + set duration from episode metadata
   useEffect(() => {
     if (selectedEpisode === null) return;
+
+    // Use episode metadata duration as fallback (video may not be available)
+    const ep = episodes.find((e) => e.index === selectedEpisode);
+    if (ep) setDuration(ep.durationSeconds);
 
     setFramesLoading(true);
     trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 500)
@@ -106,7 +110,7 @@ export function EpisodeViewerModal({
         setFrames([]);
       })
       .finally(() => setFramesLoading(false));
-  }, [datasetId, selectedEpisode]);
+  }, [datasetId, selectedEpisode, episodes]);
 
   // Sync video playback speed
   useEffect(() => {
@@ -127,7 +131,7 @@ export function EpisodeViewerModal({
   }, []);
 
   const handleLoadedMetadata = useCallback(() => {
-    if (videoUpRef.current) {
+    if (videoUpRef.current && isFinite(videoUpRef.current.duration)) {
       setDuration(videoUpRef.current.duration);
     }
   }, []);
@@ -228,10 +232,13 @@ export function EpisodeViewerModal({
             ) : (
               <div className="divide-y divide-theme-secondary/10">
                 {episodes.map((ep) => (
-                  <button
+                  <div
                     key={ep.index}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedEpisode(ep.index)}
-                    className={`w-full text-left px-4 py-3 hover:bg-theme-secondary/10 transition-colors ${
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedEpisode(ep.index); }}
+                    className={`w-full text-left px-4 py-3 hover:bg-theme-secondary/10 transition-colors cursor-pointer ${
                       selectedEpisode === ep.index ? 'bg-primary-500/10 border-l-2 border-primary-500' : ''
                     } ${flaggedMap[ep.index] ? 'bg-red-500/5' : ''}`}
                   >
@@ -255,7 +262,7 @@ export function EpisodeViewerModal({
                     <div className="text-xs text-theme-tertiary mt-1">
                       {ep.frameCount} frames &bull; {formatTime(ep.durationSeconds)}
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
