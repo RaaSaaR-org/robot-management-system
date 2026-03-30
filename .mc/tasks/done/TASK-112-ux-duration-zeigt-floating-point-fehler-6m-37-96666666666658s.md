@@ -4,7 +4,7 @@ aliases:
 - TASK-112
 title: 'UX: Duration zeigt Floating-Point-Fehler (6m 37.96666666666658s)'
 slug: ux-duration-zeigt-floating-point-fehler-6m-37-96666666666658s
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -17,6 +17,7 @@ due_date: ''
 created: 2026-03-30
 updated: 2026-03-30
 ---
+
 
 
 # UX: Duration zeigt Floating-Point-Fehler (6m 37.96666666666658s)
