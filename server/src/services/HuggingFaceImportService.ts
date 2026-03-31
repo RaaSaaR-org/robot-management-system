@@ -57,16 +57,11 @@ export class HuggingFaceImportService {
   async importDataset(request: HuggingFaceImportRequest): Promise<string> {
     const { repoId, revision = 'main', robotTypeId, includeVideos = false } = request;
 
-    // Validate robotTypeId if provided
-    if (robotTypeId) {
-      const robotType = await robotTypeRepository.findById(robotTypeId);
-      if (!robotType) {
-        throw new Error(`Robot type not found: ${robotTypeId}`);
-      }
-    }
-
     // Phase 1: Fetch info.json metadata
     const info = await this.fetchInfoJson(repoId, revision);
+
+    // Resolve robot type from explicit ID or HF info.json robot_type field
+    const resolvedRobotTypeId = await this.resolveRobotTypeId(robotTypeId, info.robot_type);
 
     // Create dataset record
     const datasetId = uuidv4();
@@ -76,7 +71,7 @@ export class HuggingFaceImportService {
     const input: CreateDatasetInput = {
       name: datasetName,
       description: `Imported from HuggingFace: ${repoId} (${revision})`,
-      robotTypeId: robotTypeId ?? '',
+      robotTypeId: resolvedRobotTypeId,
       storagePath,
       lerobotVersion: info.codebase_version ?? 'unknown',
       fps: info.fps ?? 0,
@@ -107,6 +102,55 @@ export class HuggingFaceImportService {
     );
 
     return datasetId;
+  }
+
+  // ============================================================================
+  // ROBOT TYPE RESOLUTION
+  // ============================================================================
+
+  /**
+   * Resolve a robotTypeId from an explicit override or the HF info.json robot_type field.
+   * Falls back to creating a new RobotType if no match is found.
+   */
+  private async resolveRobotTypeId(
+    requestedId: string | undefined,
+    hfRobotType: string
+  ): Promise<string> {
+    // Explicit override wins
+    if (requestedId) {
+      const rt = await robotTypeRepository.findById(requestedId);
+      if (!rt) throw new Error(`Robot type not found: ${requestedId}`);
+      return rt.id;
+    }
+
+    // Try to match hfRobotType to existing DB entries
+    const all = await robotTypeRepository.findAll();
+    const lower = hfRobotType.toLowerCase().replace(/_/g, '');
+
+    const matchers: Array<{ pattern: RegExp; name: string }> = [
+      { pattern: /so10[01]/, name: 'SO-101 Follower' },
+      { pattern: /aloha/, name: 'ALOHA' },
+      { pattern: /pusht/, name: 'PushT Sim' },
+      { pattern: /g1|dex3|unitree/, name: 'Unitree G1 + Dex3' },
+    ];
+
+    for (const { pattern, name } of matchers) {
+      if (pattern.test(lower)) {
+        const found = all.find((rt) => rt.name === name);
+        if (found) return found.id;
+      }
+    }
+
+    // No match — create a new RobotType on-the-fly
+    const created = await robotTypeRepository.create({
+      name: hfRobotType,
+      manufacturer: 'Unknown',
+      model: hfRobotType,
+      actionDim: 0,
+      proprioceptionDim: 0,
+    });
+    console.log(`[HFImport] Created new RobotType for "${hfRobotType}": ${created.id}`);
+    return created.id;
   }
 
   // ============================================================================
