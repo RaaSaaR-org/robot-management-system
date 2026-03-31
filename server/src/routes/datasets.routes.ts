@@ -109,8 +109,20 @@ datasetRoutes.post('/import/huggingface', async (req: Request, res: Response) =>
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error importing from HuggingFace:', error);
-    const message = error instanceof Error ? error.message : 'Failed to import dataset';
-    res.status(400).json({ error: message });
+
+    let message = 'Failed to import dataset';
+    if (error instanceof Error) {
+      if (error.message.includes('Foreign key constraint')) {
+        message = 'Invalid robot type reference. Please try again.';
+      } else if (error.message.includes('info.json')) {
+        message = error.message;
+      } else if (error.message.includes('Failed to fetch')) {
+        message = `Could not reach HuggingFace: ${error.message}`;
+      } else {
+        message = error.message;
+      }
+    }
+    res.status(400).json({ error: message, message, code: 'IMPORT_ERROR' });
   }
 });
 

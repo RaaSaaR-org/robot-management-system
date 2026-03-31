@@ -15,6 +15,10 @@ vi.mock('../../repositories/index.js', () => ({
   },
   robotTypeRepository: {
     findById: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'SO-101', manufacturer: 'Lerobot', model: 'so100' }),
+    findAll: vi.fn().mockResolvedValue([
+      { id: 'rt-so101', name: 'SO-101 Follower', manufacturer: 'TheRobotStudio', model: 'SO-ARM100', actionDim: 6, proprioceptionDim: 6, cameras: '[]', capabilities: '[]', limits: '{}', createdAt: new Date(), updatedAt: new Date() },
+      { id: 'rt-pusht', name: 'PushT Sim', manufacturer: 'Simulation', model: 'PushT', actionDim: 2, proprioceptionDim: 2, cameras: '[]', capabilities: '[]', limits: '{}', createdAt: new Date(), updatedAt: new Date() },
+    ]),
   },
 }));
 
@@ -344,8 +348,16 @@ describe('HuggingFaceImportService', () => {
     });
 
     it('rejects invalid robotTypeId', async () => {
+      // Mock fetchInfoJson to succeed so robotTypeId validation can be reached
+      const mockInfoResponse = new Response(JSON.stringify(SAMPLE_INFO_JSON), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockInfoResponse);
+
       const { robotTypeRepository } = await import('../../repositories/index.js');
-      (robotTypeRepository.findById as any).mockResolvedValueOnce(null);
+      vi.mocked(robotTypeRepository.findById).mockResolvedValueOnce(null);
+      vi.mocked(robotTypeRepository.findAll).mockResolvedValueOnce([]);
 
       await expect(
         service.importDataset({
