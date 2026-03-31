@@ -141,6 +141,10 @@ export class HuggingFaceImportService {
       }
     }
 
+    // Check exact name match in existing types before creating
+    const exactMatch = all.find((rt) => rt.name.toLowerCase() === hfRobotType.toLowerCase());
+    if (exactMatch) return exactMatch.id;
+
     // No match — create a new RobotType on-the-fly
     const created = await robotTypeRepository.create({
       name: hfRobotType,
