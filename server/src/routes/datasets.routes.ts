@@ -93,6 +93,11 @@ datasetRoutes.get('/', async (req: Request, res: Response) => {
 // POST /api/datasets/import/huggingface - Import dataset from HuggingFace Hub
 // ============================================================================
 
+// GET /import/huggingface — catch accidental GETs (browser prefetch, retries)
+datasetRoutes.get('/import/huggingface', (_req: Request, res: Response) => {
+  res.status(405).json({ error: 'Method Not Allowed. Use POST to import a dataset.' });
+});
+
 datasetRoutes.post('/import/huggingface', async (req: Request, res: Response) => {
   try {
     const body = req.body as HuggingFaceImportRequest;
