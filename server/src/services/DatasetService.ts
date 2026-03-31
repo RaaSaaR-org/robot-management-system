@@ -760,6 +760,7 @@ export class DatasetService extends EventEmitter {
       infoJson: dataset.infoJson,
       statsJson: dataset.statsJson,
       status: dataset.status,
+      huggingFaceRepoId: dataset.huggingFaceRepoId,
       createdAt: dataset.createdAt,
       updatedAt: dataset.updatedAt,
     };

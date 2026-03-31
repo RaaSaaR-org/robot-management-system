@@ -278,6 +278,7 @@ export function setupWebSocket(server: Server): void {
       datasetId: event.datasetId,
       dataset: event.dataset,
       progress: event.progress,
+      importProgress: event.importProgress,
       error: event.error,
       timestamp: event.timestamp,
     });

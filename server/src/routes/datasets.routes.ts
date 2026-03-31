@@ -19,6 +19,7 @@ import type {
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
 import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
+import { BUCKETS } from '../storage/model-storage.js';
 import type {
   TriggerValidationRequest,
   UnflagTrajectoryRequest,
@@ -455,53 +456,71 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    // Construct storage path for the video
-    // LeRobot v3 format: {storagePath}/videos/observation.images.{camera}_episode_{index:06d}.mp4
-    const videoKey = `${dataset.storagePath}/videos/observation.images.${camera}_episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
+    // LeRobot v3 video path: videos/observation.images.{camera}/chunk-{chunk:03d}/file-000.mp4
+    // One video file per chunk containing all episodes concatenated
+    const CHUNKS_SIZE = 1000;
+    const chunkIndex = Math.floor(episodeIndex / CHUNKS_SIZE);
+    const videoPath = `videos/observation.images.${camera}/chunk-${String(chunkIndex).padStart(3, '0')}/file-000.mp4`;
 
     // Try to stream from RustFS if available
-    let rustfsAvailable = false;
     try {
       const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
-      if (!isRustFSInitialized()) {
-        return res.status(404).json({ error: 'Video storage not available' });
+      if (isRustFSInitialized()) {
+        const rustfs = getRustFSClient();
+        const bucket = BUCKETS.TRAINING_DATASETS;
+        const videoKey = `${dataset.storagePath}${videoPath}`;
+
+        const exists = await rustfs.exists(bucket, videoKey);
+        if (exists) {
+          const metadata = await rustfs.getMetadata(bucket, videoKey);
+          const fileSize = metadata.contentLength ?? 0;
+
+          const range = req.headers.range;
+          if (range) {
+            const url = await rustfs.getPresignedDownloadUrl(bucket, videoKey, 3600);
+            return res.redirect(302, url);
+          }
+
+          res.setHeader('Content-Type', 'video/mp4');
+          res.setHeader('Content-Length', fileSize);
+          res.setHeader('Accept-Ranges', 'bytes');
+          const stream = await rustfs.getStream(bucket, videoKey);
+          return stream.pipe(res);
+        }
       }
-
-      const rustfs = getRustFSClient();
-      const bucket = 'datasets';
-
-      const exists = await rustfs.exists(bucket, videoKey);
-      if (!exists) {
-        return res.status(404).json({ error: 'Video not found' });
-      }
-      rustfsAvailable = true;
-
-      const metadata = await rustfs.getMetadata(bucket, videoKey);
-      const fileSize = metadata.contentLength ?? 0;
-
-      // Handle Range requests for video scrubbing
-      const range = req.headers.range;
-      if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-
-        // Use presigned URL redirect for range requests
-        const url = await rustfs.getPresignedDownloadUrl(bucket, videoKey, 3600);
-        res.redirect(302, url);
-      } else {
-        res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Content-Length', fileSize);
-        res.setHeader('Accept-Ranges', 'bytes');
-
-        const stream = await rustfs.getStream(bucket, videoKey);
-        stream.pipe(res);
-      }
-    } catch (storageError) {
-      console.warn('[DatasetRoutes] Video storage unavailable for key:', videoKey);
-      return res.status(404).json({ error: 'Video not found in storage' });
+    } catch {
+      // RustFS unavailable — fall through to HF proxy
     }
+
+    // Fallback: proxy from HuggingFace if we have a repo ID
+    const repoId = dataset.huggingFaceRepoId;
+    if (!repoId) {
+      return res.status(404).json({ error: 'Video not found and no HuggingFace repo to proxy from' });
+    }
+
+    const hfUrl = `https://huggingface.co/datasets/${repoId}/resolve/main/${videoPath}`;
+    const hfResponse = await fetch(hfUrl, {
+      headers: req.headers.range ? { Range: req.headers.range } : {},
+      redirect: 'follow',
+    });
+
+    if (!hfResponse.ok) {
+      return res.status(404).json({ error: 'Video not found on HuggingFace' });
+    }
+
+    res.setHeader('Content-Type', 'video/mp4');
+    if (hfResponse.headers.get('content-length')) {
+      res.setHeader('Content-Length', hfResponse.headers.get('content-length')!);
+    }
+    if (hfResponse.headers.get('content-range')) {
+      res.status(206);
+      res.setHeader('Content-Range', hfResponse.headers.get('content-range')!);
+    }
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    const { Readable } = await import('stream');
+    const nodeStream = Readable.fromWeb(hfResponse.body as import('stream/web').ReadableStream);
+    nodeStream.pipe(res);
   } catch (error) {
     console.error('[DatasetRoutes] Error streaming video:', error);
     res.status(500).json({ error: 'Failed to stream video' });

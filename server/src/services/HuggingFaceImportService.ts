@@ -64,8 +64,8 @@ export class HuggingFaceImportService {
     const resolvedRobotTypeId = await this.resolveRobotTypeId(robotTypeId, info.robot_type);
 
     // Create dataset record
-    const datasetId = uuidv4();
-    const storagePath = `${datasetId}/`;
+    const storageId = uuidv4();
+    const storagePath = `${storageId}/`;
     const datasetName = repoId.includes('/') ? repoId.split('/').pop()! : repoId;
 
     const input: CreateDatasetInput = {
@@ -82,7 +82,8 @@ export class HuggingFaceImportService {
       huggingFaceRepoId: repoId,
     };
 
-    await datasetRepository.create(input);
+    const created = await datasetRepository.create(input);
+    const datasetId = created.id;
 
     // Emit import started event
     this.emitProgress(datasetId, {

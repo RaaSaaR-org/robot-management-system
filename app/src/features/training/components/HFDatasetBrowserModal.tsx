@@ -192,27 +192,31 @@ export function HFDatasetBrowserModal({
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (
-            data.type === 'dataset:import:progress' &&
-            data.datasetId === datasetId
-          ) {
+          if (data.datasetId !== datasetId) return;
+
+          if (data.type === 'dataset:import:progress' && data.importProgress) {
+            const ip = data.importProgress;
             const progress: HFImportProgress = {
-              datasetId: data.datasetId,
-              status: data.status,
-              progress: data.progress ?? 0,
-              currentFile: data.currentFile,
-              error: data.error,
+              datasetId: ip.datasetId,
+              status: ip.status,
+              progress: ip.progress ?? 0,
+              currentFile: ip.currentFile,
+              error: ip.error,
             };
             setImportProgress(progress);
 
-            if (data.status === 'ready') {
-              setImportState('done');
-              ws.close();
-            } else if (data.status === 'failed') {
+            if (ip.status === 'failed') {
               setImportState('error');
-              setImportError(data.error ?? 'Import failed');
+              setImportError(ip.error ?? 'Import failed');
               ws.close();
             }
+          } else if (data.type === 'dataset:import:completed') {
+            setImportState('done');
+            ws.close();
+          } else if (data.type === 'dataset:import:failed') {
+            setImportState('error');
+            setImportError(data.error ?? 'Import failed');
+            ws.close();
           }
         } catch {
           // Ignore parse errors for non-JSON messages
