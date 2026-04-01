@@ -4,7 +4,7 @@ aliases:
 - TASK-116
 title: Teleop Export → automatischer Dataset-Eintrag
 slug: teleop-export-automatischer-dataset-eintrag
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,8 +17,9 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-03-31
-updated: 2026-03-31
+updated: 2026-04-01
 ---
+
 
 
 # Teleop Export → automatischer Dataset-Eintrag
