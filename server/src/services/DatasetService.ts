@@ -239,6 +239,7 @@ export class DatasetService extends EventEmitter {
       name: dto.name,
       description: dto.description,
       skillId: dto.skillId,
+      huggingFaceRepoId: dto.huggingFaceRepoId,
     };
 
     const updated = await datasetRepository.update(id, updateInput);

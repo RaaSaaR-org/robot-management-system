@@ -57,8 +57,10 @@ const ENDPOINTS = {
   datasetEpisodeFrames: (id: string, index: number) => `/datasets/${id}/episodes/${index}/frames`,
   datasetEpisodeFlag: (id: string, index: number) => `/datasets/${id}/episodes/${index}/flag`,
 
-  // HuggingFace Import
+  // HuggingFace Import & Push
   huggingFaceImport: '/datasets/import/huggingface',
+  datasetPushToHub: (id: string) => `/datasets/${id}/push-to-hub`,
+  datasetPushStatus: (id: string) => `/datasets/${id}/push-status`,
 } as const;
 
 export const trainingApi = {
@@ -368,6 +370,27 @@ export const trainingApi = {
     const response = await apiClient.post<{ datasetId: string }>(
       ENDPOINTS.huggingFaceImport,
       { repoId, includeVideos }
+    );
+    return response.data;
+  },
+
+  /**
+   * Push a dataset to HuggingFace Hub
+   */
+  async pushToHub(datasetId: string, config: { token: string; repoId: string; private?: boolean }): Promise<{ jobId: string }> {
+    const response = await apiClient.post<{ jobId: string }>(
+      ENDPOINTS.datasetPushToHub(datasetId),
+      config
+    );
+    return response.data;
+  },
+
+  /**
+   * Get push-to-hub job status
+   */
+  async getPushStatus(datasetId: string): Promise<{ status: string; progress?: string; url?: string; error?: string }> {
+    const response = await apiClient.get<{ status: string; progress?: string; url?: string; error?: string }>(
+      ENDPOINTS.datasetPushStatus(datasetId)
     );
     return response.data;
   },

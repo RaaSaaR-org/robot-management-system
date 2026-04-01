@@ -653,6 +653,7 @@ export class DatasetRepository {
       if (input.infoJson !== undefined) updateData.infoJson = JSON.stringify(input.infoJson);
       if (input.statsJson !== undefined) updateData.statsJson = JSON.stringify(input.statsJson);
       if (input.status !== undefined) updateData.status = input.status;
+      if (input.huggingFaceRepoId !== undefined) updateData.huggingFaceRepoId = input.huggingFaceRepoId;
 
       const dataset = await prisma.dataset.update({
         where: { id },
