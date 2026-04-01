@@ -5,7 +5,7 @@
  * @dependencies @/features/datacollection/store
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   useDataCollectionStore,
   selectSessions,
@@ -18,11 +18,10 @@ import {
   selectCollectionPriorities,
   selectIsLoading,
   selectError,
-  selectSessionById,
-  selectHighPriorityTargets,
 } from '../store/datacollectionStore';
 import type {
   TeleoperationSession,
+  CollectionPriority,
   SessionFilters,
   CreateSessionRequest,
   ExportSessionRequest,
@@ -72,7 +71,7 @@ export interface UseSessionDetailReturn {
 
 export interface UseCollectionPrioritiesReturn {
   priorities: ReturnType<typeof selectCollectionPriorities>;
-  highPriorityTargets: ReturnType<typeof selectHighPriorityTargets>;
+  highPriorityTargets: CollectionPriority[];
   isLoading: boolean;
   error: string | null;
   fetchPriorities: (params?: GetPrioritiesParams) => Promise<void>;
@@ -264,9 +263,16 @@ export function useActiveSession(): UseActiveSessionReturn {
  */
 export function useSessionDetail(id: string): UseSessionDetailReturn {
   const selectedSession = useDataCollectionStore(selectSelectedSession);
-  const sessionFromList = useDataCollectionStore(selectSessionById(id));
+  const sessions = useDataCollectionStore(selectSessions);
   const isLoading = useDataCollectionStore(selectIsLoading);
   const error = useDataCollectionStore(selectError);
+
+  // Derive session from list via useMemo instead of selectSessionById(id) which
+  // creates a new selector function on every render, violating useSyncExternalStore's contract.
+  const sessionFromList = useMemo(
+    () => sessions.find((s) => s.id === id) ?? null,
+    [sessions, id]
+  );
 
   const session = selectedSession?.id === id ? selectedSession : sessionFromList;
 
@@ -292,8 +298,12 @@ export function useSessionDetail(id: string): UseSessionDetailReturn {
     [id, storeExportSession]
   );
 
+  // Only fetch once on mount; do not re-fetch on session change to avoid
+  // infinite loop (fetch fails → session stays null → re-fetch → ...)
+  const hasFetched = useRef(false);
   useEffect(() => {
-    if (!session) {
+    if (!session && !hasFetched.current) {
+      hasFetched.current = true;
       fetchSession();
     }
   }, [session, fetchSession]);
@@ -318,9 +328,16 @@ export function useCollectionPriorities(
   modelId?: string
 ): UseCollectionPrioritiesReturn {
   const priorities = useDataCollectionStore(selectCollectionPriorities);
-  const highPriorityTargets = useDataCollectionStore(selectHighPriorityTargets);
   const isLoading = useDataCollectionStore(selectIsLoading);
   const error = useDataCollectionStore(selectError);
+
+  // Derive highPriorityTargets via useMemo instead of store selector.
+  // Using .filter() directly in a Zustand selector violates useSyncExternalStore's
+  // contract (must return same reference for unchanged state) and causes infinite re-renders.
+  const highPriorityTargets = useMemo(
+    () => priorities.filter((p) => p.priorityScore >= 0.6),
+    [priorities]
+  );
 
   const storeFetchPriorities = useDataCollectionStore((state) => state.fetchPriorities);
 
