@@ -17,6 +17,7 @@ export interface DatasetCardProps {
 
 const statusColors: Record<DatasetStatus, string> = {
   uploading: 'bg-blue-100 text-blue-800',
+  importing: 'bg-purple-100 text-purple-800',
   validating: 'bg-yellow-100 text-yellow-800',
   ready: 'bg-green-100 text-green-800',
   failed: 'bg-red-100 text-red-800',
@@ -24,6 +25,7 @@ const statusColors: Record<DatasetStatus, string> = {
 
 const statusLabels: Record<DatasetStatus, string> = {
   uploading: 'Uploading',
+  importing: 'Importing',
   validating: 'Validating',
   ready: 'Ready',
   failed: 'Failed',
@@ -57,8 +59,8 @@ export function DatasetCard({ dataset, onClick, selected, className }: DatasetCa
               </p>
             )}
           </div>
-          <Badge className={statusColors[dataset.status]}>
-            {statusLabels[dataset.status]}
+          <Badge className={statusColors[dataset.status] ?? 'bg-gray-100 text-gray-600'}>
+            {statusLabels[dataset.status] ?? dataset.status ?? 'Unknown'}
           </Badge>
         </div>
 

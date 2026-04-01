@@ -51,6 +51,9 @@ import {
   LazyEvaluationDashboardPage,
   LazyUpdatesPage,
   LazySimulationPage,
+  LazyDataCollectionPage,
+  LazyNewSessionPage,
+  LazySessionDetailPage,
   LazyDocsPage,
 } from './routes/lazyPages';
 
@@ -325,6 +328,32 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyModelsPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* DataCollection - Robot data collection sessions */}
+          <Route
+            path="/data-collection"
+            element={
+              <ProtectedAppRoute>
+                <LazyDataCollectionPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/data-collection/new"
+            element={
+              <ProtectedAppRoute>
+                <LazyNewSessionPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/data-collection/:sessionId"
+            element={
+              <ProtectedAppRoute>
+                <LazySessionDetailPage />
               </ProtectedAppRoute>
             }
           />

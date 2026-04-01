@@ -162,6 +162,27 @@ export const LazyApprovalsPage = lazy(() =>
 );
 
 /**
+ * DataCollection page - Robot data collection sessions
+ */
+export const LazyDataCollectionPage = lazy(() =>
+  import('@/features/datacollection').then((m) => ({ default: m.DataCollectionPage }))
+);
+
+/**
+ * New session page - Start new data collection session
+ */
+export const LazyNewSessionPage = lazy(() =>
+  import('@/features/datacollection').then((m) => ({ default: m.NewSessionPage }))
+);
+
+/**
+ * Session detail page - Single data collection session view
+ */
+export const LazySessionDetailPage = lazy(() =>
+  import('@/features/datacollection').then((m) => ({ default: m.SessionDetailPage }))
+);
+
+/**
  * Datasets page - VLA training dataset management
  */
 export const LazyDatasetsPage = lazy(() =>
