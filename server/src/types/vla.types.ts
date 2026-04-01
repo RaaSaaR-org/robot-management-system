@@ -357,6 +357,7 @@ export interface UpdateDatasetInput {
   infoJson?: LeRobotInfo;
   statsJson?: LeRobotStats;
   status?: DatasetStatus;
+  huggingFaceRepoId?: string;
 }
 
 export interface DatasetQueryParams {

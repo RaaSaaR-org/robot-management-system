@@ -111,6 +111,7 @@ export interface UpdateDatasetDto {
   name?: string;
   description?: string;
   skillId?: string;
+  huggingFaceRepoId?: string;
 }
 
 /**
@@ -330,7 +331,11 @@ export type DatasetEventType =
   | 'dataset:import:started'
   | 'dataset:import:progress'
   | 'dataset:import:completed'
-  | 'dataset:import:failed';
+  | 'dataset:import:failed'
+  | 'dataset:push-hf:started'
+  | 'dataset:push-hf:progress'
+  | 'dataset:push-hf:completed'
+  | 'dataset:push-hf:failed';
 
 /**
  * Dataset event payload
@@ -374,4 +379,36 @@ export interface FrameData {
   action: number[];
   /** 6 DOF: same joint ordering as action */
   observationState: number[];
+}
+
+// ============================================================================
+// HUGGINGFACE PUSH TYPES
+// ============================================================================
+
+/**
+ * Request body for pushing a dataset to HuggingFace Hub
+ */
+export interface PushToHubRequest {
+  /** HuggingFace access token */
+  token: string;
+  /** HuggingFace repo ID, e.g. "username/my-dataset" */
+  repoId: string;
+  /** Whether the repo should be private */
+  private?: boolean;
+}
+
+/**
+ * Status of a push-to-hub job
+ */
+export type PushToHubStatus = 'pending' | 'running' | 'done' | 'failed';
+
+/**
+ * Push-to-hub job state (in-memory)
+ */
+export interface PushToHubJobState {
+  status: PushToHubStatus;
+  progress?: string;
+  url?: string;
+  error?: string;
+  startedAt: string;
 }

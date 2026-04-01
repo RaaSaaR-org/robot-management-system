@@ -11,6 +11,7 @@ import { Button, Modal } from '@/shared/components/ui';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
+import { HFPushModal } from '../components/HFPushModal';
 import { EpisodeViewerModal } from '../components/EpisodeViewerModal';
 import { useDatasetsAutoFetch } from '../hooks';
 import { useTrainingStore } from '../store';
@@ -39,6 +40,7 @@ export function DatasetsPage() {
 
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
+  const [pushDataset, setPushDataset] = useState<Dataset | null>(null);
   const [episodeViewerDataset, setEpisodeViewerDataset] = useState<Dataset | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
@@ -191,6 +193,17 @@ export function DatasetsPage() {
       {/* Selected dataset actions */}
       {selectedDataset && (
         <div className="fixed bottom-6 right-6 flex gap-2">
+          {selectedDataset.status === 'ready' && !selectedDataset.huggingFaceRepoId && (
+            <Button
+              variant="ghost"
+              onClick={() => setPushDataset(selectedDataset)}
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              Push to HuggingFace
+            </Button>
+          )}
           <Button
             variant="ghost"
             onClick={() => setEpisodeViewerDataset(selectedDataset)}
@@ -224,6 +237,17 @@ export function DatasetsPage() {
         onSuccess={handleUploadSuccess}
         existingDatasets={datasets}
       />
+
+      {/* HuggingFace push modal */}
+      {pushDataset && (
+        <HFPushModal
+          isOpen={!!pushDataset}
+          onClose={() => setPushDataset(null)}
+          onSuccess={() => fetchDatasets()}
+          datasetId={pushDataset.id}
+          datasetName={pushDataset.name}
+        />
+      )}
 
       {/* Episode viewer modal */}
       {episodeViewerDataset && (
