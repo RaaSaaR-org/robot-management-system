@@ -4,7 +4,7 @@ aliases:
 - TASK-119
 title: 'Bug: DataCollectionPage — Maximum update depth exceeded (infinite re-render)'
 slug: bug-datacollectionpage-maximum-update-depth-exceeded-infinite-re-render
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -19,6 +19,7 @@ due_date: ''
 created: 2026-04-01
 updated: 2026-04-01
 ---
+
 
 
 # Bug: DataCollectionPage — Maximum update depth exceeded (infinite re-render)
