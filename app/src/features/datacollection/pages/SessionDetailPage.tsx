@@ -53,6 +53,7 @@ export function SessionDetailPage() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportName, setExportName] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+  const [exportSuccess, setExportSuccess] = useState(false);
 
   const handleBack = () => {
     navigate('/data-collection');
@@ -116,6 +117,8 @@ export function SessionDetailPage() {
       await exportSession({ datasetName: exportName || undefined });
       setShowExportModal(false);
       setExportName('');
+      setExportSuccess(true);
+      setTimeout(() => setExportSuccess(false), 5000);
     } finally {
       setActionLoading(false);
     }
@@ -351,11 +354,25 @@ export function SessionDetailPage() {
         </div>
       )}
 
+      {exportSuccess && (
+        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg animate-in fade-in">
+          <p className="text-green-700 dark:text-green-300 font-medium">
+            Dataset created successfully!
+          </p>
+        </div>
+      )}
+
       {session.exportedDatasetId && (
-        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-center justify-between">
           <p className="text-green-700 dark:text-green-300">
             Session exported to dataset: {session.exportedDatasetId}
           </p>
+          <button
+            onClick={() => navigate('/datasets')}
+            className="text-sm px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700"
+          >
+            View Datasets
+          </button>
         </div>
       )}
 
