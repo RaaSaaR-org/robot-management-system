@@ -24,7 +24,7 @@ export const TrainingJobStatuses = [
 ] as const;
 export type TrainingJobStatus = (typeof TrainingJobStatuses)[number];
 
-export const DatasetStatuses = ['uploading', 'validating', 'ready', 'failed'] as const;
+export const DatasetStatuses = ['uploading', 'importing', 'validating', 'ready', 'failed'] as const;
 export type DatasetStatus = (typeof DatasetStatuses)[number];
 
 export const ModelDeploymentStatuses = ['staging', 'canary', 'production', 'archived'] as const;
