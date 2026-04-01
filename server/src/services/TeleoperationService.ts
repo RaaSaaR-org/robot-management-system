@@ -27,6 +27,8 @@ import { DEFAULT_QUALITY_THRESHOLDS } from '../types/teleoperation.types.js';
 import { dataQualityService } from './DataQualityService.js';
 import { LeRobotExportService } from './LeRobotExportService.js';
 import { RustFSClient } from '../storage/rustfs-client.js';
+import { datasetRepository, robotTypeRepository } from '../repositories/index.js';
+import type { CreateDatasetInput } from '../types/vla.types.js';
 import type { FrameRow } from './LeRobotExportService.js';
 
 // ============================================================================
@@ -715,24 +717,44 @@ export class TeleoperationService extends EventEmitter {
     });
 
     const exportService = new LeRobotExportService(storage);
-    const { datasetId, storagePath } = await exportService.exportSession(frames, {
+    const { storagePath } = await exportService.exportSession(frames, {
       sessionFps: session.fps,
     });
 
     const datasetName = dto.datasetName ?? `teleop_${sessionId.slice(0, 8)}`;
 
+    // Resolve robotTypeId from session's robot
+    const robotTypeId = await this.resolveRobotTypeIdFromSession(session.robotId);
+
+    // Create a Dataset record so the export is visible in the UI
+    const totalFrames = dbFrames.length;
+    const totalDuration = session.duration ?? (totalFrames / session.fps);
+    const datasetInput: CreateDatasetInput = {
+      name: datasetName,
+      description: dto.description ?? `Teleoperation export from session ${sessionId}`,
+      robotTypeId,
+      storagePath,
+      lerobotVersion: 'v2.0',
+      fps: session.fps,
+      totalFrames,
+      totalDuration,
+      demonstrationCount: 1,
+      status: 'ready',
+    };
+    const dataset = await datasetRepository.create(datasetInput);
+
     // Persist the dataset ID on the session
     await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
-      data: { exportedDatasetId: datasetId },
+      data: { exportedDatasetId: dataset.id },
     });
 
     const response: ExportResultResponse = {
       sessionId,
-      datasetId,
+      datasetId: dataset.id,
       datasetName,
       trajectoryCount: 1,
-      totalFrames: dbFrames.length,
+      totalFrames,
       storagePath,
     };
 
@@ -748,6 +770,47 @@ export class TeleoperationService extends EventEmitter {
   // ============================================================================
   // HELPER METHODS
   // ============================================================================
+
+  /**
+   * Resolve a robotTypeId from a session's robotId.
+   * Looks up the Robot, then matches its model name to existing RobotType entries.
+   * Falls back to creating a new RobotType if no match is found.
+   */
+  async resolveRobotTypeIdFromSession(robotId: string): Promise<string> {
+    const robot = await this.prisma.robot.findUnique({ where: { id: robotId } });
+    const robotModel = robot?.model ?? 'unknown';
+
+    const all = await robotTypeRepository.findAll();
+    const lower = robotModel.toLowerCase().replace(/[_\-\s]/g, '');
+
+    const matchers: Array<{ pattern: RegExp; name: string }> = [
+      { pattern: /so10[01]/, name: 'SO-101 Follower' },
+      { pattern: /aloha/, name: 'ALOHA' },
+      { pattern: /pusht/, name: 'PushT Sim' },
+      { pattern: /g1|dex3|unitree/, name: 'Unitree G1 + Dex3' },
+    ];
+
+    for (const { pattern, name } of matchers) {
+      if (pattern.test(lower)) {
+        const found = all.find((rt) => rt.name === name);
+        if (found) return found.id;
+      }
+    }
+
+    const exactMatch = all.find((rt) => rt.name.toLowerCase() === robotModel.toLowerCase());
+    if (exactMatch) return exactMatch.id;
+
+    // No match — create a new RobotType on-the-fly
+    const created = await robotTypeRepository.create({
+      name: robotModel,
+      manufacturer: 'Unknown',
+      model: robotModel,
+      actionDim: 0,
+      proprioceptionDim: 0,
+    });
+    console.log(`[TeleoperationService] Created new RobotType for "${robotModel}": ${created.id}`);
+    return created.id;
+  }
 
   /**
    * Convert to session response
