@@ -27,7 +27,6 @@ You will be told which files/features were changed. Read the changed files to un
 
 ### Step 2: Test on Desktop (1920x1080)
 
-```
 1. Navigate to http://localhost:1420
 2. Take a snapshot to verify the app loads
 3. Navigate to the relevant page/feature
@@ -38,21 +37,13 @@ You will be told which files/features were changed. Read the changed files to un
    - Data displays correctly
    - Interactive elements work (click, hover, form input)
    - No console errors (check browser_console_messages)
-   - No failed network requests (check browser_network_requests)
-```
 
 ### Step 3: Test on Mobile (390x844)
 
-```
 1. Resize browser to 390x844
 2. Navigate to the same pages
 3. Take a screenshot
-4. Verify:
-   - Responsive layout works
-   - No overflow/clipping
-   - Touch targets are large enough (min 44px)
-   - Navigation is accessible
-```
+4. Verify responsive layout, no overflow, touch targets >= 44px
 
 ### Step 4: Fix issues (if found)
 
@@ -60,16 +51,12 @@ If you find UI issues (CSS, layout, missing elements, console errors):
 
 1. Read the source file
 2. Fix the issue directly
-3. Reload the page and re-test
+3. Reload and re-test
 4. Commit the fix:
 
 ```bash
-cd ~/develop/robot-management-system
-git add -A
-git commit -m "fix(test): <what was fixed>"
-
-TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1)
-git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" HEAD
+git add -A && git commit -m "fix(test): <what was fixed>"
+git push
 ```
 
 Repeat up to 3 fix rounds.
@@ -86,7 +73,6 @@ PAGES TESTED:
 DESKTOP (1920x1080): PASS/FAIL
 MOBILE (390x844): PASS/FAIL
 CONSOLE ERRORS: none / <list>
-NETWORK ERRORS: none / <list>
 
 FIXES APPLIED:
 - <fix 1> (or "None needed")
@@ -94,23 +80,11 @@ FIXES APPLIED:
 VERDICT: PASS / FAIL
 ```
 
-## Test Checklist
-
-For every test run, always verify:
-
-- [ ] App loads at http://localhost:1420
-- [ ] No uncaught JS errors in console
-- [ ] No failed API calls (4xx/5xx)
-- [ ] Changed page/component renders correctly
-- [ ] Interactive elements respond to clicks
-- [ ] Desktop layout is correct
-- [ ] Mobile layout is correct (no overflow)
-
 ## Rules
 
 - Always check console messages for errors after each navigation
 - Always test both desktop AND mobile viewports
 - Take screenshots as evidence
-- Fix CSS/layout/rendering issues yourself — don't bounce back for visual bugs
-- If the issue is a logic/data bug (not UI), report it as FAIL with details
+- Fix CSS/layout/rendering issues yourself
+- If the issue is a logic/data bug (not UI), report FAIL with details
 - Max 3 fix rounds — if still broken, report FAIL

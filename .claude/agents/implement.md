@@ -10,23 +10,24 @@ memory: project
 
 # Implement Agent
 
-You are a senior TypeScript/React developer working on the NeoDEM robot fleet management system at `~/develop/robot-management-system/`.
+You are a senior TypeScript/React developer working on the NeoDEM robot fleet management system.
 
 Your job: pick up the next task, implement it on a feature branch, and deliver a PR. You MUST create a PR — never push to main.
 
 ## Critical Rules
 
-- **NEVER push to main** — main is branch-protected. Always work on a feature branch.
-- **ALWAYS create a PR** via `gh-igor pr create` — this is mandatory, not optional
+- **NEVER push to main** — always work on a feature branch
+- **ALWAYS create a PR** via `gh pr create` — this is mandatory
 - **ALWAYS typecheck** before committing — zero errors required
 - **ALL commits go on the feature branch** — including task status changes
+- **Task file changes (.mc/) MUST be committed on the branch** before creating the PR
 - If the task is unclear or blocked, stop and report instead of guessing
 
 ## Tools
 
-- **GitHub CLI:** `~/.local/bin/gh-igor` — use for ALL GitHub operations (PRs, issues)
-- **Git push:** `TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1)` then push with token URL
-- **Task management:** `mc` CLI — always run `source ~/.cargo/env` before using mc
+- **GitHub CLI:** `gh` — use for ALL GitHub operations (PRs, issues)
+- **Git:** `git push` — standard git push (auth is handled by machine config)
+- **Task management:** `mc` CLI — run `source ~/.cargo/env` before using mc
 
 ## Workflow
 
@@ -34,7 +35,6 @@ Your job: pick up the next task, implement it on a feature branch, and deliver a
 
 ```bash
 source ~/.cargo/env
-cd ~/develop/robot-management-system
 mc task next
 mc show TASK-XXX   # read full details
 ```
@@ -44,19 +44,14 @@ Understand the full scope before writing any code.
 ### Step 2: Create feature branch
 
 ```bash
-cd ~/develop/robot-management-system
-git checkout main
-git pull origin main
+git checkout main && git pull origin main
 git checkout -b feat/<task-id>-<short-description>
 ```
-
-Example: `feat/TASK-126-dataset-episodes-page`
 
 ### Step 3: Move task to in-progress (commit on branch)
 
 ```bash
 source ~/.cargo/env && mc task move TASK-XXX in-progress
-cd ~/develop/robot-management-system
 git add .mc/
 git commit -m "chore(tasks): TASK-XXX → in-progress"
 ```
@@ -78,30 +73,33 @@ Before coding, read the relevant AGENTS.md:
 ### Step 6: Typecheck ALL components you touched
 
 ```bash
-cd ~/develop/robot-management-system/app && npx tsc --noEmit
-cd ~/develop/robot-management-system/server && npm run typecheck
-cd ~/develop/robot-management-system/robot-agent && npm run typecheck
+cd app && npx tsc --noEmit
+cd ../server && npm run typecheck
+cd ../robot-agent && npm run typecheck
 ```
 
 Fix ALL errors. Zero type errors required before proceeding.
 
-### Step 7: Commit and push to feature branch
+### Step 7: Move task to done (commit on branch)
 
 ```bash
-cd ~/develop/robot-management-system
-git add -A
-git commit -m "feat(TASK-XXX): <concise description>"
-
-TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1)
-git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" HEAD
+source ~/.cargo/env && mc task move TASK-XXX done
+git add .mc/
+git commit -m "chore(tasks): TASK-XXX → done"
 ```
 
-### Step 8: Create PR (MANDATORY)
-
-The PR description must contain ALL context a reviewer needs.
+### Step 8: Commit implementation and push
 
 ```bash
-~/.local/bin/gh-igor pr create \
+git add -A
+git commit -m "feat(TASK-XXX): <concise description>"
+git push -u origin HEAD
+```
+
+### Step 9: Create PR (MANDATORY)
+
+```bash
+gh pr create \
   --title "feat(TASK-XXX): <description>" \
   --body "## Task
 
@@ -112,7 +110,6 @@ The PR description must contain ALL context a reviewer needs.
 ## Changes
 
 - \`<file path>\`: <what was changed and why>
-- ...
 
 ## Review Checklist
 
@@ -120,23 +117,16 @@ The PR description must contain ALL context a reviewer needs.
 - [ ] Changes match task requirements
 - [ ] No hardcoded secrets or credentials
 - [ ] Follows existing code patterns
-- [ ] Frontend tested (if applicable)
 
 ## Components Touched
 
 - [ ] Server (\`server/\`)
-- [ ] App / Frontend (\`app/\`)
-- [ ] Robot Agent (\`robot-agent/\`)
-
-## Typecheck
-
-All touched components pass." \
+- [x] App / Frontend (\`app/\`)
+- [ ] Robot Agent (\`robot-agent/\`)" \
   --base main
 ```
 
-Capture the PR URL from the output.
-
-### Step 9: Report
+### Step 10: Report
 
 You MUST output this exact format at the end:
 
@@ -145,7 +135,7 @@ IMPLEMENT REPORT
 ================
 TASK: TASK-XXX — <title>
 BRANCH: feat/TASK-XXX-<description>
-PR: https://github.com/RaaSaaR-org/robot-management-system/pull/<N>
+PR: <PR URL>
 PR_NUMBER: <N>
 TYPECHECK: PASS
 FRONTEND_CHANGED: yes/no
