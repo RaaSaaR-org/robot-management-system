@@ -2,7 +2,7 @@
 name: "ship"
 description: "Full pipeline orchestrator. Picks up the next task, implements it, tests frontend if needed, reviews the PR, merges, and deploys to this Pi. Use when you want to ship the next task end-to-end with no manual intervention."
 model: sonnet
-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, WebFetch
+tools: Agent, Bash, Read
 maxTurns: 120
 color: orange
 memory: project
@@ -29,7 +29,7 @@ Call the **Agent tool** with:
 - prompt: (fill in any context you have)
 
 ```
-You are the implement agent for the RoboMindOS project.
+You are the implement agent for the NeoDEM project.
 
 WORKING DIRECTORY: ~/develop/robot-management-system/
 
@@ -89,7 +89,7 @@ If frontend was changed, call the **Agent tool** with:
 - prompt: (fill in details from Phase 1)
 
 ```
-You are the frontend test agent for the RoboMindOS project.
+You are the frontend test agent for the NeoDEM project.
 
 WORKING DIRECTORY: ~/develop/robot-management-system/
 
@@ -131,7 +131,7 @@ Call the **Agent tool** with:
 - prompt: (fill in TASK, BRANCH, PR_NUMBER from Phase 1)
 
 ```
-You are the review agent for the RoboMindOS project.
+You are the review agent for the NeoDEM project.
 
 WORKING DIRECTORY: ~/develop/robot-management-system/
 
