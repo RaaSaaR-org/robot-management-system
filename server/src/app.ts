@@ -12,7 +12,8 @@ import rateLimit from 'express-rate-limit';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
-const startedAt = new Date().toISOString();
+const startedAtMs = Date.now();
+const startedAt = new Date(startedAtMs).toISOString();
 
 // Import routes
 import { authRoutes } from './routes/auth.routes.js';
@@ -137,7 +138,7 @@ export function createApp(): Express {
 
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt, uptimeSeconds: Math.floor((Date.now() - startedAtMs) / 1000) });
   });
 
   // Auth Routes (public) - with stricter rate limiting
