@@ -3,9 +3,16 @@
  * @description Express application configuration
  */
 
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+const startedAt = new Date().toISOString();
 
 // Import routes
 import { authRoutes } from './routes/auth.routes.js';
@@ -130,7 +137,7 @@ export function createApp(): Express {
 
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt });
   });
 
   // Auth Routes (public) - with stricter rate limiting
