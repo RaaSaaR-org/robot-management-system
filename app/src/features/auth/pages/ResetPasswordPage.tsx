@@ -8,6 +8,7 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { Card } from '@/shared/components/ui';
 import { ResetPasswordForm } from '../components/ResetPasswordForm';
+import { useBrand } from '@/brand';
 
 export interface ResetPasswordPageProps {
   /** Callback when password is reset */
@@ -19,6 +20,7 @@ export interface ResetPasswordPageProps {
  * Expects a `token` query parameter in the URL.
  */
 export function ResetPasswordPage({ onSuccess }: ResetPasswordPageProps) {
+  const brand = useBrand();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token');
 
@@ -79,7 +81,7 @@ export function ResetPasswordPage({ onSuccess }: ResetPasswordPageProps) {
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
+          &copy; {new Date().getFullYear()} {brand.copyright}. All rights reserved.
         </p>
       </div>
     </div>

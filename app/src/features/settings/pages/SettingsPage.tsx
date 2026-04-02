@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { useBrand } from '@/brand';
 import { useSettings } from '../hooks/useSettings';
 import { useCurrentUser } from '@/features/auth';
 import type { ThemeValue, LanguageValue, DashboardView, UpdateSettingsDto } from '../types/settings.types';
@@ -79,6 +80,7 @@ const TABS: TabDef[] = [
 // ============================================================================
 
 export function SettingsPage() {
+  const brand = useBrand();
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
   const { settings, isLoading, error, fetchSettings, updateSetting, resetSettings } = useSettings();
 
@@ -92,7 +94,7 @@ export function SettingsPage() {
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-theme-primary">Settings</h1>
-          <p className="text-theme-secondary mt-1">Configure your NeoDEM preferences</p>
+          <p className="text-theme-secondary mt-1">Configure your {brand.name} preferences</p>
         </div>
         <button
           onClick={resetSettings}
@@ -192,6 +194,7 @@ function AppearanceTab({
   onLanguageChange: (v: LanguageValue) => void;
   onCompactModeChange: (v: boolean) => void;
 }) {
+  const brand = useBrand();
   const themeOptions: { value: ThemeValue; label: string; icon: React.ReactNode }[] = [
     {
       value: 'light',
@@ -235,7 +238,7 @@ function AppearanceTab({
       {/* Theme */}
       <div className="card p-6">
         <h3 className="text-lg font-semibold text-theme-primary mb-2">Theme</h3>
-        <p className="text-theme-secondary text-sm mb-4">Choose how NeoDEM looks to you.</p>
+        <p className="text-theme-secondary text-sm mb-4">Choose how {brand.name} looks to you.</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {themeOptions.map((opt) => (
             <button

@@ -330,7 +330,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
               label="Provider Name"
               value={formData.providerName}
               onChange={(e) => handleInputChange('providerName', e.target.value)}
-              placeholder="e.g., NeoDEM"
+              placeholder="e.g., Your Company"
               required
             />
             <Input

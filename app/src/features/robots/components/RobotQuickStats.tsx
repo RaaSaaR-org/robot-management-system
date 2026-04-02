@@ -6,6 +6,7 @@
 
 import { memo, type ReactNode } from 'react';
 import { cn } from '@/shared/utils';
+import { brandColors } from '@/brand';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 
 // ============================================================================
@@ -161,7 +162,7 @@ export const RobotQuickStats = memo(function RobotQuickStats({
   const tempColor = offline ? 'rgba(107,114,128,0.7)' : getColor(telemetry?.temperature, 'temp');
 
   const speedValue = telemetry?.speed !== undefined ? `${telemetry.speed.toFixed(1)} m/s` : na;
-  const speedColor = telemetry?.speed !== undefined ? '#18E4C3' : 'rgba(107,114,128,0.7)';
+  const speedColor = telemetry?.speed !== undefined ? brandColors().accent : 'rgba(107,114,128,0.7)';
 
   const taskColor = taskCount > 0 ? '#FF6700' : 'rgba(184,187,194,0.7)';
 

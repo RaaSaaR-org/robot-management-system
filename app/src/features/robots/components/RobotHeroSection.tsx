@@ -7,6 +7,7 @@
 import { memo, Suspense, lazy } from 'react';
 import { cn } from '@/shared/utils/cn';
 import { Robot3DViewerFallback } from './visualization';
+import { brandColors } from '@/brand';
 import type { Robot, RobotStatus, RobotTelemetry, RobotType } from '../types/robots.types';
 
 // Lazy load 3D viewer
@@ -35,6 +36,7 @@ export interface RobotHeroSectionProps {
 // STATUS COLOR MAPPING
 // ============================================================================
 
+const _bc = brandColors();
 const STATUS_COLORS: Record<RobotStatus, { primary: string; glow: string; stroke: string }> = {
   online: {
     primary: '#22c55e',
@@ -47,9 +49,9 @@ const STATUS_COLORS: Record<RobotStatus, { primary: string; glow: string; stroke
     stroke: '#6b7280',
   },
   busy: {
-    primary: '#2A5FFF',
-    glow: 'rgba(42, 95, 255, 0.4)',
-    stroke: '#2A5FFF',
+    primary: _bc.primary,
+    glow: `${_bc.primary}66`,
+    stroke: _bc.primary,
   },
   error: {
     primary: '#ef4444',
@@ -183,8 +185,8 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
       <defs>
         {/* Gradient for hexagon stroke */}
         <linearGradient id="hexGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#2A5FFF" />
-          <stop offset="100%" stopColor="#18E4C3" />
+          <stop offset="0%" stopColor={_bc.primary} />
+          <stop offset="100%" stopColor={_bc.accent} />
         </linearGradient>
 
         {/* Core glow filter */}
@@ -224,7 +226,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
             y1={i * 50}
             x2="300"
             y2={i * 50}
-            stroke="#2A5FFF"
+            stroke={_bc.primary}
             strokeWidth="0.5"
           />
         ))}
@@ -235,7 +237,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
             y1="0"
             x2={i * 50}
             y2="300"
-            stroke="#2A5FFF"
+            stroke={_bc.primary}
             strokeWidth="0.5"
           />
         ))}
@@ -548,7 +550,7 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
             x={cx}
             y="278"
             textAnchor="middle"
-            fill="#18E4C3"
+            fill={_bc.accent}
             fontSize="14"
             fontFamily="monospace"
             fontWeight="600"

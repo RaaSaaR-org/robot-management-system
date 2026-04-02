@@ -1,10 +1,13 @@
 /**
  * @file DeploymentSection.tsx
- * @description Deployment options for NeoDEM — self-hosted and Kubernetes
+ * @description Deployment options — self-hosted and Kubernetes
  * @feature landing
  */
 
+import { useBrand } from '@/brand';
+
 export function DeploymentSection() {
+  const brand = useBrand();
   return (
     <section id="deploy" className="py-20 section-tertiary">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -17,7 +20,7 @@ export function DeploymentSection() {
             Deploy Your Way
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            NeoDEM is open source at its core. Run it on a Raspberry Pi for development,
+            {brand.name} is open source at its core. Run it on a Raspberry Pi for development,
             Docker for production, or Kubernetes for fleet-scale operations.
           </p>
         </div>

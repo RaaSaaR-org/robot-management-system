@@ -5,6 +5,7 @@
  */
 
 import { Logo } from '@/components/common/Logo';
+import { useBrand } from '@/brand';
 
 const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 
@@ -34,6 +35,7 @@ const footerLinks: Record<string, FooterLink[]> = {
 };
 
 export function Footer() {
+  const brand = useBrand();
   return (
     <footer className="section-tertiary border-t border-theme">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -89,7 +91,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="mt-12 pt-8 border-t border-theme flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-theme-muted text-sm">
-            &copy; {new Date().getFullYear()} NeoDEM Contributors. MIT License.
+            &copy; {new Date().getFullYear()} {brand.copyright}. MIT License.
           </p>
           <div className="flex items-center gap-4 text-theme-muted text-sm">
             <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="hover:text-theme-primary transition-colors">Open Source Software</a>

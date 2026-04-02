@@ -96,7 +96,7 @@ export function ContributionsPage() {
       <DemoFeaturePlaceholder
         featureName="Community Contributions"
         icon={<GitMerge className="w-12 h-12" />}
-        description="Contribute to and benefit from the NeoDEM community. Share datasets, models, and skills with other teams."
+        description="Contribute to and benefit from the community. Share datasets, models, and skills with other teams."
         capabilities={[
           'Share anonymized datasets with the community',
           'Download community-contributed robot skills',

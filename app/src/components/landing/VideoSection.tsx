@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react';
+import { useBrand } from '@/brand';
 
 const VIDEO_TABS = [
   { id: 'platform-overview', label: 'Platform Overview', file: 'platform-overview.webm' },
@@ -13,6 +14,7 @@ const VIDEO_TABS = [
 ] as const;
 
 export function VideoSection() {
+  const brand = useBrand();
   const [activeTab, setActiveTab] = useState<(typeof VIDEO_TABS)[number]['id']>(VIDEO_TABS[0].id);
 
   const activeVideo = VIDEO_TABS.find((t) => t.id === activeTab) ?? VIDEO_TABS[0];
@@ -23,7 +25,7 @@ export function VideoSection() {
         <div className="text-center mb-10">
           <h2 className="text-3xl font-bold text-theme-primary mb-3">Watch the Demo</h2>
           <p className="text-theme-secondary max-w-2xl mx-auto">
-            See NeoDEM manage a multi-robot H1 fleet in real-time.
+            See {brand.name} manage a multi-robot H1 fleet in real-time.
           </p>
         </div>
 

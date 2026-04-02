@@ -1,10 +1,13 @@
 /**
  * @file CTASection.tsx
- * @description Call-to-action section for NeoDEM landing page
+ * @description Call-to-action section for landing page
  * @feature landing
  */
 
+import { useBrand } from '@/brand';
+
 export function CTASection() {
+  const brand = useBrand();
   return (
     <section id="contact" className="py-24 bg-gradient-to-br from-cobalt via-cobalt-600 to-midnight-blue relative overflow-hidden">
       {/* Background effects */}
@@ -15,7 +18,7 @@ export function CTASection() {
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
         <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white mb-6">
-          Start Building with NeoDEM
+          Start Building with {brand.name}
         </h2>
         <p className="text-xl text-white/80 mb-10 max-w-2xl mx-auto">
           Open source, self-hosted, and ready to run. Deploy on any Linux machine in minutes —

@@ -1,3 +1,5 @@
+import { useBrand } from '@/brand';
+
 const useCases = [
   {
     industry: 'Manufacturing & Logistics',
@@ -62,6 +64,7 @@ const useCases = [
 ];
 
 export function AudienceSection() {
+  const brand = useBrand();
   return (
     <section className="py-24 section-secondary">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -74,7 +77,7 @@ export function AudienceSection() {
             Works Across Every Sector
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            From factory floors to hospital corridors — NeoDEM adapts to your operational needs.
+            From factory floors to hospital corridors — {brand.name} adapts to your operational needs.
           </p>
         </div>
 

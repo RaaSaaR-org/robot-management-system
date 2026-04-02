@@ -1,8 +1,10 @@
 /**
  * @file AdvantagesSection.tsx
- * @description Section highlighting competitive advantages of NeoDEM
+ * @description Section highlighting competitive advantages
  * @feature landing
  */
+
+import { useBrand } from '@/brand';
 
 const advantages = [
   {
@@ -78,13 +80,14 @@ const advantages = [
 ];
 
 export function AdvantagesSection() {
+  const brand = useBrand();
   return (
     <section className="py-24 section-primary">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Section Header */}
         <div className="text-center mb-16">
           <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
-            Why NeoDEM
+            Why {brand.name}
           </p>
           <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
             Built for the Future of Robotics

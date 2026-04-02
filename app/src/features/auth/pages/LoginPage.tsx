@@ -8,6 +8,7 @@
 import { Link } from 'react-router-dom';
 import { Card } from '@/shared/components/ui';
 import { LoginForm } from '../components/LoginForm';
+import { useBrand } from '@/brand';
 
 // ============================================================================
 // TYPES
@@ -77,9 +78,12 @@ function DefaultLogo() {
 export function LoginPage({
   onLoginSuccess,
   logo,
-  title = 'NeoDEM',
-  tagline = 'Fleet Management System',
+  title,
+  tagline,
 }: LoginPageProps) {
+  const brand = useBrand();
+  const resolvedTitle = title ?? brand.name;
+  const resolvedTagline = tagline ?? brand.tagline;
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-theme-bg px-4 py-12">
       {/* Background gradient decoration */}
@@ -100,12 +104,12 @@ export function LoginPage({
 
           {/* Title */}
           <h1 className="text-2xl font-bold tracking-tight text-theme-primary">
-            {title}
+            {resolvedTitle}
           </h1>
 
           {/* Tagline */}
-          {tagline && (
-            <p className="mt-2 text-sm text-theme-secondary">{tagline}</p>
+          {resolvedTagline && (
+            <p className="mt-2 text-sm text-theme-secondary">{resolvedTagline}</p>
           )}
         </div>
 
@@ -148,7 +152,7 @@ export function LoginPage({
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
+          &copy; {new Date().getFullYear()} {brand.copyright}. All rights reserved.
         </p>
       </div>
     </div>

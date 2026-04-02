@@ -39,7 +39,7 @@ const LICENSE_CONFIG: Record<
     creditMultiplier: '2x',
     features: [
       'Highest credit rewards',
-      'Data used exclusively for NeoDEM',
+      'Data used exclusively for this platform',
       'Priority review processing',
     ],
   },

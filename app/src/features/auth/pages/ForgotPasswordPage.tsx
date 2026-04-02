@@ -8,6 +8,7 @@
 import { Link } from 'react-router-dom';
 import { Card } from '@/shared/components/ui';
 import { ForgotPasswordForm } from '../components/ForgotPasswordForm';
+import { useBrand } from '@/brand';
 
 export interface ForgotPasswordPageProps {
   /** Callback when reset is requested */
@@ -18,6 +19,7 @@ export interface ForgotPasswordPageProps {
  * Full-page forgot password layout.
  */
 export function ForgotPasswordPage({ onSuccess }: ForgotPasswordPageProps) {
+  const brand = useBrand();
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-theme-bg px-4 py-12">
       {/* Background gradient decoration */}
@@ -58,7 +60,7 @@ export function ForgotPasswordPage({ onSuccess }: ForgotPasswordPageProps) {
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
+          &copy; {new Date().getFullYear()} {brand.copyright}. All rights reserved.
         </p>
       </div>
     </div>

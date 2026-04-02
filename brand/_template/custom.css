@@ -1,0 +1,21 @@
+/*
+ * Custom CSS overrides for your brand.
+ *
+ * Copy this file to brand/custom.css. It is loaded after the default styles,
+ * so rules here take precedence.
+ *
+ * Examples:
+ *
+ * Override button border radius:
+ *   .btn-primary { border-radius: 999px; }
+ *
+ * Custom glass effect:
+ *   :root { --glass-bg: rgba(20, 20, 20, 0.8); }
+ *
+ * Add a custom font:
+ *   @import url('https://fonts.googleapis.com/css2?family=Roboto&display=swap');
+ *   :root { --font-sans: 'Roboto', sans-serif; }
+ *
+ * Override specific component colors:
+ *   .sidebar { background: #1a1a1a; }
+ */

@@ -9,6 +9,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import URDFLoader, { URDFRobot } from 'urdf-loader';
 import type { RobotType, JointState } from '../../types/robots.types';
+import { brandColors } from '@/brand';
 
 // ============================================================================
 // TYPES
@@ -190,7 +191,7 @@ function URDFModel({
             color: 0xc8d0dc,           // Light silver-gray (bright)
             metalness: 0.5,
             roughness: 0.35,
-            emissive: 0x18E4C3,        // Turquoise glow
+            emissive: new THREE.Color(brandColors().accent),
             emissiveIntensity: 0.35,   // Stronger glow
             side: THREE.DoubleSide,
           });

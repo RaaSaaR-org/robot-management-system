@@ -8,6 +8,7 @@
 import { Link } from 'react-router-dom';
 import { Card } from '@/shared/components/ui';
 import { RegistrationForm } from '../components/RegistrationForm';
+import { useBrand } from '@/brand';
 
 export interface RegisterPageProps {
   /** Callback when registration succeeds */
@@ -18,6 +19,7 @@ export interface RegisterPageProps {
  * Full-page registration layout with centered form card.
  */
 export function RegisterPage({ onRegisterSuccess }: RegisterPageProps) {
+  const brand = useBrand();
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-theme-bg px-4 py-12">
       {/* Background gradient decoration */}
@@ -37,7 +39,7 @@ export function RegisterPage({ onRegisterSuccess }: RegisterPageProps) {
             Create your account
           </h1>
           <p className="mt-2 text-sm text-theme-secondary">
-            Join NeoDEM to manage your robot fleet
+            Join {brand.name} to manage your robot fleet
           </p>
         </div>
 
@@ -61,7 +63,7 @@ export function RegisterPage({ onRegisterSuccess }: RegisterPageProps) {
 
         {/* Footer */}
         <p className="text-center text-xs text-theme-tertiary">
-          &copy; {new Date().getFullYear()} NeoDEM. All rights reserved.
+          &copy; {new Date().getFullYear()} {brand.copyright}. All rights reserved.
         </p>
       </div>
     </div>
