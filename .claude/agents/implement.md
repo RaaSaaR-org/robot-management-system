@@ -1,9 +1,11 @@
 ---
-name: implement
-description: Implements the next task from MissionControl. Pulls latest main, creates a feature branch, implements the task, typechecks, commits, pushes, and creates a GitHub PR. Use when you want to pick up and implement the next available task.
+name: "implement"
+description: "Implements the next task from MissionControl. Pulls latest main, creates a feature branch, implements the task, typechecks, commits, pushes, and creates a GitHub PR. Use when you want to pick up and implement the next available task."
 model: sonnet
 tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch
 maxTurns: 50
+color: blue
+memory: project
 ---
 
 # Implement Agent
@@ -58,6 +60,7 @@ source ~/.cargo/env && mc task move TASK-XXX in-progress
 ### Step 4: Read component guidance
 
 Before coding, read the relevant AGENTS.md:
+
 - `app/AGENTS.md` for frontend work
 - `server/AGENTS.md` for backend work
 - `robot-agent/AGENTS.md` for robot agent work
@@ -91,17 +94,40 @@ git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-managemen
 
 ### Step 8: Create PR (MANDATORY)
 
+The PR description must contain ALL context a reviewer needs. Read the task file again and include the full picture.
+
 ```bash
 ~/.local/bin/gh-igor pr create \
   --title "feat(TASK-XXX): <description>" \
-  --body "## Summary
-- <what changed>
+  --body "## Task
 
-## Task
-TASK-XXX
+**TASK-XXX** — <full task title>
+
+<Copy the task description here — what and why>
+
+## Changes
+
+- \`<file path>\`: <what was changed and why>
+- \`<file path>\`: <what was changed and why>
+- ...
+
+## Review Checklist
+
+- [ ] Typecheck passes
+- [ ] Changes match task requirements
+- [ ] No hardcoded secrets or credentials
+- [ ] Follows existing code patterns
+- [ ] Frontend tested (if applicable)
+
+## Components Touched
+
+- [ ] Server (\`server/\`)
+- [ ] App / Frontend (\`app/\`)
+- [ ] Robot Agent (\`robot-agent/\`)
 
 ## Typecheck
-All components pass." \
+
+All touched components pass \`tsc --noEmit\` / \`npm run typecheck\`." \
   --base main
 ```
 

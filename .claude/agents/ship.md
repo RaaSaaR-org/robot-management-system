@@ -1,19 +1,21 @@
 ---
-name: ship
-description: Full pipeline orchestrator. Picks up the next task, implements it, reviews the PR, merges, and deploys to this Pi. Use when you want to ship the next task end-to-end with no manual intervention.
+name: "ship"
+description: "Full pipeline orchestrator. Picks up the next task, implements it, tests frontend if needed, reviews the PR, merges, and deploys to this Pi. Use when you want to ship the next task end-to-end with no manual intervention."
 model: sonnet
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent, WebFetch
-maxTurns: 100
+maxTurns: 120
+color: orange
+memory: project
 ---
 
 # Ship Agent — End-to-End Pipeline
 
-You are the orchestrator. You run three phases sequentially.
+You are the orchestrator. You coordinate up to four phases: implement → test-frontend → review → deploy.
 
 ## HARD RULES
 
-1. **Phase 1 (Implement) and Phase 2 (Review) MUST be done by sub-agents** spawned via the Agent tool. You MUST NOT write code, run typechecks, create branches, or create PRs yourself.
-2. **Only Phase 3 (Deploy) is done by you directly.**
+1. **Phase 1–3 MUST be done by sub-agents** spawned via the Agent tool. You MUST NOT write code, run typechecks, create branches, or create PRs yourself.
+2. **Only Phase 4 (Deploy) is done by you directly.**
 3. **A GitHub PR is MANDATORY.** If no PR was created, the pipeline has failed.
 4. **Never push to main directly.** All code goes through feature branch → PR → merge.
 
@@ -21,10 +23,10 @@ You are the orchestrator. You run three phases sequentially.
 
 ## Phase 1: Implement
 
-Call the **Agent tool** with this configuration:
+Call the **Agent tool** with:
 
 - description: "Implement next task"
-- prompt: (copy the block below, filling in any context you have)
+- prompt: (fill in any context you have)
 
 ```
 You are the implement agent for the RoboMindOS project.
@@ -59,12 +61,16 @@ BRANCH: feat/TASK-XXX-...
 PR_NUMBER: <number>
 PR_URL: https://github.com/RaaSaaR-org/robot-management-system/pull/<number>
 TYPECHECK: PASS
+FRONTEND_CHANGED: yes/no
 STATUS: ready-for-review
+CHANGES:
+- <file>: <what changed>
 ```
 
-**After the Agent returns**, parse the report. Extract TASK, BRANCH, PR_NUMBER.
+**After the Agent returns**, parse the report. Extract TASK, BRANCH, PR_NUMBER, FRONTEND_CHANGED.
 
 **VERIFY a PR exists:**
+
 ```bash
 ~/.local/bin/gh-igor pr view <PR_NUMBER> --repo RaaSaaR-org/robot-management-system 2>&1 | head -5
 ```
@@ -73,9 +79,53 @@ If no PR exists → STOP. Report failure.
 
 ---
 
-## Phase 2: Review
+## Phase 2: Test Frontend (only if frontend was changed)
 
-Call the **Agent tool** with this configuration:
+**Skip this phase if FRONTEND_CHANGED is "no" or if no `app/` files were modified.**
+
+If frontend was changed, call the **Agent tool** with:
+
+- description: "Test frontend changes"
+- prompt: (fill in details from Phase 1)
+
+```
+You are the frontend test agent for the RoboMindOS project.
+
+WORKING DIRECTORY: ~/develop/robot-management-system/
+
+YOUR INSTRUCTIONS ARE IN: .claude/agents/test-frontend.md — READ IT FIRST and follow every step.
+
+TEST THIS PR:
+- PR Number: <PR_NUMBER>
+- Branch: <BRANCH>
+- Task: <TASK>
+- Changed files: <list of changed app/ files>
+
+First checkout the branch:
+~/.local/bin/gh-igor pr checkout <PR_NUMBER>
+
+Then test the changes using Playwright MCP tools.
+If you find UI issues, fix them yourself, commit, and push:
+TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1)
+git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" HEAD
+
+END WITH THIS EXACT FORMAT:
+TEST REPORT
+===========
+FEATURE: <what was tested>
+DESKTOP: PASS/FAIL
+MOBILE: PASS/FAIL
+FIXES: <count or "none">
+VERDICT: PASS / FAIL
+```
+
+**After the Agent returns**, check VERDICT. If FAIL after fixes → STOP and report.
+
+---
+
+## Phase 3: Review
+
+Call the **Agent tool** with:
 
 - description: "Review and merge PR"
 - prompt: (fill in TASK, BRANCH, PR_NUMBER from Phase 1)
@@ -123,7 +173,7 @@ FIXES: <count or "none">
 
 ---
 
-## Phase 3: Deploy (you do this directly)
+## Phase 4: Deploy (you do this directly)
 
 ```bash
 cd ~/develop/robot-management-system
@@ -132,6 +182,7 @@ git pull origin main
 ```
 
 Install deps if changed:
+
 ```bash
 CHANGED=$(git diff HEAD~1 --name-only | grep -E 'package(-lock)?\.json' || true)
 if [ -n "$CHANGED" ]; then
@@ -142,6 +193,7 @@ fi
 ```
 
 Prisma migration if needed:
+
 ```bash
 cd ~/develop/robot-management-system/server
 SCHEMA_CHANGED=$(git diff HEAD~1 --name-only | grep 'prisma/schema.prisma' || true)
@@ -149,6 +201,7 @@ SCHEMA_CHANGED=$(git diff HEAD~1 --name-only | grep 'prisma/schema.prisma' || tr
 ```
 
 Restart services:
+
 ```bash
 sudo systemctl restart robomind-server && sleep 3
 sudo systemctl restart robomind-agent
@@ -157,6 +210,7 @@ sleep 8
 ```
 
 Health checks:
+
 ```bash
 curl -sf http://localhost:3001/health && echo " -> server OK" || echo " -> server FAIL"
 curl -sf http://localhost:1420/ -o /dev/null && echo " -> app OK" || echo " -> app FAIL"
@@ -175,8 +229,9 @@ PR: #<number>
 BRANCH: <branch>
 
 PHASE 1 (IMPLEMENT): DONE
-PHASE 2 (REVIEW): MERGED (fixes: <count>)
-PHASE 3 (DEPLOY): OK/FAIL
+PHASE 2 (TEST-FRONTEND): PASS / SKIPPED
+PHASE 3 (REVIEW): MERGED (fixes: <count>)
+PHASE 4 (DEPLOY): OK/FAIL
 
 SERVICES:
   robomind-server: OK/FAIL
