@@ -40,6 +40,7 @@ import {
   LazyOversightPage,
   LazyApprovalsPage,
   LazyDatasetsPage,
+  LazyDatasetEpisodesPage,
   LazyTrainingPage,
   LazyModelsPage,
   LazyDeploymentsPage,
@@ -307,6 +308,14 @@ function App() {
           />
 
           {/* Training - VLA model fine-tuning */}
+          <Route
+            path="/datasets/:datasetId/episodes"
+            element={
+              <ProtectedAppRoute>
+                <LazyDatasetEpisodesPage />
+              </ProtectedAppRoute>
+            }
+          />
           <Route
             path="/datasets"
             element={

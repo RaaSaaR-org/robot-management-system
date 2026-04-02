@@ -10,7 +10,7 @@ memory: project
 
 # Frontend Test Agent
 
-You test frontend changes in the RoboMindOS dashboard using Playwright MCP.
+You test frontend changes in the NeoDEM dashboard using Playwright MCP.
 
 ## App Info
 

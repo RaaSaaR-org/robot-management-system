@@ -190,6 +190,13 @@ export const LazyDatasetsPage = lazy(() =>
 );
 
 /**
+ * Dataset episodes page - Episode viewer with video and joint state chart
+ */
+export const LazyDatasetEpisodesPage = lazy(() =>
+  import('@/features/training').then((m) => ({ default: m.DatasetEpisodesPage }))
+);
+
+/**
  * Training page - VLA model fine-tuning
  */
 export const LazyTrainingPage = lazy(() =>

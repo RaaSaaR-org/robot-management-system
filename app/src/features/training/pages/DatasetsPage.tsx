@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Database } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Modal } from '@/shared/components/ui';
@@ -12,7 +13,6 @@ import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
 import { HFPushModal } from '../components/HFPushModal';
-import { EpisodeViewerModal } from '../components/EpisodeViewerModal';
 import { useDatasetsAutoFetch } from '../hooks';
 import { useTrainingStore } from '../store';
 import type { Dataset, DatasetQueryParams } from '../types';
@@ -38,10 +38,10 @@ export function DatasetsPage() {
     );
   }
 
+  const navigate = useNavigate();
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
   const [pushDataset, setPushDataset] = useState<Dataset | null>(null);
-  const [episodeViewerDataset, setEpisodeViewerDataset] = useState<Dataset | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -206,7 +206,7 @@ export function DatasetsPage() {
           )}
           <Button
             variant="ghost"
-            onClick={() => setEpisodeViewerDataset(selectedDataset)}
+            onClick={() => navigate(`/datasets/${selectedDataset.id}/episodes`)}
           >
             <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -246,16 +246,6 @@ export function DatasetsPage() {
           onSuccess={() => fetchDatasets()}
           datasetId={pushDataset.id}
           datasetName={pushDataset.name}
-        />
-      )}
-
-      {/* Episode viewer modal */}
-      {episodeViewerDataset && (
-        <EpisodeViewerModal
-          datasetId={episodeViewerDataset.id}
-          datasetName={episodeViewerDataset.name}
-          isOpen={!!episodeViewerDataset}
-          onClose={() => setEpisodeViewerDataset(null)}
         />
       )}
 

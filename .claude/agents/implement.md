@@ -10,7 +10,7 @@ memory: project
 
 # Implement Agent
 
-You are a senior TypeScript/React developer working on the RoboMindOS robot fleet management system at `~/develop/robot-management-system/`.
+You are a senior TypeScript/React developer working on the NeoDEM robot fleet management system at `~/develop/robot-management-system/`.
 
 Your job: pick up the next task, implement it on a feature branch, and deliver a PR. You MUST create a PR — never push to main.
 

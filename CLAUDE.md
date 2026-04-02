@@ -1,18 +1,17 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMindOS codebase.
+This file provides guidance to Claude Code (claude.ai/code) when working with the NeoDEM codebase.
 
 ## Project Overview
 
-RoboMindOS is a distributed fleet management platform for autonomous robots. It consists of five main components:
+NeoDEM is a distributed fleet management platform for autonomous robots. It consists of four main components:
 
-| Component          | Location         | Description                          | Port  |
-| ------------------ | ---------------- | ------------------------------------ | ----- |
-| **App**            | `app/`           | React + Tauri frontend               | 1420  |
-| **Server**         | `server/`        | Node.js A2A protocol server          | 3001  |
-| **Robot Agent**    | `robot-agent/`   | AI-powered robot software            | 41243 |
-| **VLA Inference**  | `vla-inference/` | Python gRPC inference server for VLA | 50051 |
-| **SmolVLA Server** | `smolvla-server/` | FastAPI inference for Mac M1        | 8000  |
+| Component         | Location         | Description                          | Port  |
+| ----------------- | ---------------- | ------------------------------------ | ----- |
+| **App**           | `app/`           | React + Tauri frontend               | 1420  |
+| **Server**        | `server/`        | Node.js A2A protocol server          | 3001  |
+| **Robot Agent**   | `robot-agent/`   | AI-powered robot software            | 41243 |
+| **VLA Server**    | `vla-server/`    | Consolidated VLA inference (SmolVLA, pi0.5, GR00T, etc.) | 50051 |
 
 ## Component-Specific Guidance
 
@@ -21,9 +20,48 @@ Each component has its own `AGENTS.md` file with detailed guidance:
 - `app/AGENTS.md` — Frontend development patterns, Zustand stores, Tailwind, routes
 - `server/AGENTS.md` — Server routes, services, A2A protocol, database
 - `robot-agent/AGENTS.md` — Genkit tools, robot state, telemetry, simulation
-- `vla-inference/README.md` — VLA model inference (OpenVLA, Pi0, GR00T)
+- `vla-server/README.md` — VLA inference server (SmolVLA, pi0.5, GR00T, future models)
 
 **Always check the relevant AGENTS.md file when working in a specific component.**
+
+## Agent Development Workflow
+
+The project uses Claude Code subagents for automated development. The pipeline is:
+
+```
+claude --agent ship
+├── Phase 1: implement (blue)   → picks next task, branches, codes, typechecks, creates PR
+├── Phase 2: test-frontend (cyan) → Playwright MCP UI testing (only if app/ changed)
+├── Phase 3: review (purple)    → code review, PR comment, fixes, merges via gh-igor
+└── Phase 4: deploy (orange)    → pull main, restart systemd services, health checks
+```
+
+**Subagents:** defined in `.claude/agents/`
+
+| Agent | File | Description |
+|-------|------|-------------|
+| **ship** | `ship.md` | Orchestrator — spawns the others, handles deploy |
+| **implement** | `implement.md` | Implements next task from MissionControl |
+| **review** | `review.md` | Reviews PR, posts findings on GitHub, merges |
+| **test-frontend** | `test-frontend.md` | Tests UI via Playwright MCP (desktop + mobile) |
+
+**Usage:**
+
+```bash
+claude --agent ship                  # Full pipeline: implement → test → review → deploy
+claude --agent implement             # Just implement next task + create PR
+claude --agent review                # Just review latest open PR
+claude --agent test-frontend         # Just test frontend via Playwright
+```
+
+**Key tools:**
+
+- `~/.local/bin/gh-igor` — GitHub CLI wrapper with auto-injected token (all PR operations)
+- `~/.local/bin/github-token-igor` — generates GitHub App installation token
+- `~/.local/bin/git-push-igor` — git push with auto token
+- `mc` (MissionControl) — task management CLI (`source ~/.cargo/env` first)
+
+**GitHub repo:** `RaaSaaR-org/robot-management-system`
 
 ## Quick Start Commands
 
@@ -39,8 +77,8 @@ cd robot-agent && npm run dev
 # Terminal 3: Frontend
 cd app && npm run dev
 
-# Optional: VLA Inference (requires Python + GPU)
-cd vla-inference && python server.py
+# Optional: VLA Server (requires Python + GPU)
+cd vla-server && python server.py
 ```
 
 ### Environment Setup
@@ -92,16 +130,16 @@ npm run db:studio     # Open Prisma Studio GUI
 
 **Communication Protocols:**
 
-- App ↔ Server: REST API + WebSocket (`ws://localhost:3001/api/a2a/ws`)
-- Server ↔ Robot: A2A (Agent-to-Agent) protocol + REST API
-- Server → Robot: Push-model task distribution
-- Robot Agent ↔ VLA Inference: gRPC (protobuf in `protos/`)
-- Server ↔ NATS: Async messaging for training jobs (optional)
-- Server ↔ RustFS: S3-compatible object storage for models/datasets (optional)
+- App <> Server: REST API + WebSocket (`ws://localhost:3001/api/a2a/ws`)
+- Server <> Robot: A2A (Agent-to-Agent) protocol + REST API
+- Server > Robot: Push-model task distribution
+- Robot Agent <> VLA Inference: gRPC (protobuf in `protos/`)
+- Server <> NATS: Async messaging for training jobs (optional)
+- Server <> RustFS: S3-compatible object storage for models/datasets (optional)
 
 **Key Infrastructure:**
 
-- **Database**: Prisma ORM — SQLite (local dev) or PostgreSQL (production); 73 models
+- **Database**: Prisma ORM — SQLite (local dev) or PostgreSQL (production); 83 models
 - **Authentication**: JWT-based with RBAC (disabled in dev via `AUTH_DISABLED=true`)
 - **AI**: Gemini 2.5 Flash for NL command interpretation (server) and robot agent reasoning
 - **Storage**: RustFS/S3-compatible for model artifacts and datasets (optional, `server/src/storage/`)
@@ -113,10 +151,10 @@ See `docs/architecture.md` for comprehensive system architecture.
 ## Directory Structure
 
 ```
-robo-mind-app/
+robot-management-system/
 ├── app/                    # Frontend (React + Tauri)
 │   ├── src/
-│   │   ├── features/       # 21 feature modules (see app/AGENTS.md)
+│   │   ├── features/       # 25 feature modules (see app/AGENTS.md)
 │   │   │   ├── a2a/        # Agent-to-Agent chat & orchestration
 │   │   │   ├── alerts/     # Alert management
 │   │   │   ├── approvals/  # Human approval workflows (EU AI Act)
@@ -127,6 +165,7 @@ robo-mind-app/
 │   │   │   ├── dashboard/  # Fleet dashboard
 │   │   │   ├── datacollection/ # Robot data collection
 │   │   │   ├── deployment/ # VLA model deployment
+│   │   │   ├── evaluation/ # Model evaluation
 │   │   │   ├── explainability/ # AI decision transparency
 │   │   │   ├── fleet/      # Fleet map & zone management
 │   │   │   ├── fleetlearning/ # Federated learning
@@ -137,7 +176,9 @@ robo-mind-app/
 │   │   │   ├── robots/     # Robot management, telemetry, 3D viewer
 │   │   │   ├── safety/     # Safety monitoring
 │   │   │   ├── settings/   # Theme & UI preferences
-│   │   │   └── training/   # VLA dataset & training management
+│   │   │   ├── simulation/ # Robot simulation
+│   │   │   ├── training/   # VLA dataset & training management
+│   │   │   └── updates/    # OTA updates
 │   │   ├── shared/         # Shared components, hooks, utils, types
 │   │   ├── app/            # Providers (Auth, Theme)
 │   │   ├── api/            # Axios client with token refresh
@@ -150,21 +191,21 @@ robo-mind-app/
 │
 ├── server/                 # Backend (Node.js A2A Server)
 │   ├── src/
-│   │   ├── routes/         # API endpoints (37 route files)
-│   │   ├── services/       # Business logic (45 services)
-│   │   ├── repositories/   # Data access layer (18 repositories)
+│   │   ├── routes/         # API endpoints (47 route files)
+│   │   ├── services/       # Business logic (57 services)
+│   │   ├── repositories/   # Data access layer (19 repositories)
 │   │   ├── database/       # Prisma client, schemas, seeds
 │   │   ├── middleware/      # Auth middleware
 │   │   ├── interfaces/     # Service interfaces (DI/testing)
 │   │   ├── websocket/      # Real-time events
-│   │   ├── types/          # TypeScript definitions (24 type files)
+│   │   ├── types/          # TypeScript definitions (25 type files)
 │   │   ├── utils/          # Error hierarchy
 │   │   ├── storage/        # RustFS/S3 object storage client
 │   │   ├── messaging/      # NATS messaging (jobs, KV, streams)
 │   │   ├── jobs/           # Background jobs (retention cleanup)
 │   │   ├── workers/        # Worker threads (dataset validation, training)
 │   │   └── security/       # Encryption utilities
-│   ├── prisma/             # Prisma schema (73 models) & migrations
+│   ├── prisma/             # Prisma schema (83 models) & migrations
 │   └── AGENTS.md
 │
 ├── robot-agent/            # Robot Software
@@ -183,16 +224,11 @@ robo-mind-app/
 │   ├── smolvla/            # Python client for real SO-101 hardware via LeRobot
 │   └── AGENTS.md
 │
-├── vla-inference/          # VLA Model Inference (Python)
-│   ├── server.py           # gRPC server entry point
-│   ├── models/             # Model backends (OpenVLA, Pi0, GR00T, SmolVLA)
-│   ├── Dockerfile
-│   └── README.md
-│
-├── smolvla-server/         # SmolVLA FastAPI Inference (Python)
+├── vla-server/             # Consolidated VLA Inference Server (Python)
+│   ├── server.py           # Server entry point
+│   ├── models/             # Model backends (SmolVLA, pi0.5, GR00T, etc.)
 │   ├── pyproject.toml
-│   ├── config.yaml
-│   └── src/smolvla_server/ # FastAPI app, inference engine, protocol
+│   └── README.md
 │
 ├── helm/                   # Kubernetes Helm Chart
 │   └── robomind/           # Chart with 30 resource templates
@@ -200,14 +236,18 @@ robo-mind-app/
 ├── protos/                 # Shared protobuf definitions
 │   └── vla_inference.proto
 │
-├── docs/                   # Documentation (16 files)
+├── docs/                   # Documentation (14 files)
 │   ├── architecture.md     # System architecture
 │   ├── app-architecture.md # Frontend architecture (detailed)
-│   ├── prd.md              # Product requirements
+│   ├── api.md              # API reference
 │   ├── brand.md            # Colors, typography, design tokens
 │   ├── deployment.md       # Deployment guide
-│   ├── VLA-integration-guide.md
-│   └── ...                 # Compliance, protocols, workflows
+│   ├── dev-workflow.md     # Development workflow
+│   ├── vla-integration-guide.md
+│   └── ...                 # Compliance, operations, processes
+│
+├── .claude/                # Claude Code configuration
+│   └── agents/             # Subagent definitions (ship, implement, review, test-frontend)
 │
 └── .mc/                    # MissionControl (task management)
     ├── tasks/              # Task markdown files (todo/, done/)
@@ -246,7 +286,7 @@ When building features across the stack:
 | Component  | Pattern                      | Example                                               |
 | ---------- | ---------------------------- | ----------------------------------------------------- |
 | **App**    | Feature-first + Zustand      | `features/robots/store/robotsStore.ts`                |
-| **Server** | Routes → Services → Repos    | `routes/robot.routes.ts` → `services/RobotManager.ts` → `repositories/RobotRepository.ts` |
+| **Server** | Routes > Services > Repos    | `routes/robot.routes.ts` > `services/RobotManager.ts` > `repositories/RobotRepository.ts` |
 | **Robot**  | Genkit Tools + State Manager | `tools/navigation.ts` with `ai.defineTool()`          |
 
 ## Key Dependencies
@@ -269,13 +309,14 @@ When building features across the stack:
 | `genkit`                | Robot         | AI framework               |
 | `@a2a-js/sdk`           | Robot         | A2A protocol               |
 | `@grpc/grpc-js`         | Robot         | VLA inference gRPC client  |
-| `lerobot`               | VLA, SmolVLA  | VLA model loading + robot hardware |
+| `lerobot`               | VLA Server    | VLA model loading + robot hardware |
 
 ## Task Management
 
 Project tasks are tracked in `.mc/tasks/` using MissionControl (mc CLI). Tasks are markdown files with YAML frontmatter, organized in `todo/` and `done/` folders.
 
 ```bash
+source ~/.cargo/env          # make mc available
 mc task board                 # Show kanban board
 mc task next                  # Get next actionable task
 mc list tasks                 # List all tasks
@@ -306,16 +347,16 @@ Guidelines:
 
 ## Documentation
 
-| Document                                         | Description                       |
-| ------------------------------------------------ | --------------------------------- |
-| `docs/architecture.md`                           | Full system architecture          |
-| `docs/app-architecture.md`                       | Frontend patterns (detailed)      |
-| `docs/prd.md`                                    | Product requirements              |
-| `docs/brand.md`                                  | Colors, typography, design tokens |
-| `docs/deployment.md`                             | Deployment guide (Helm/K8s)       |
-| `docs/VLA-integration-guide.md`                  | VLA training pipeline             |
-| `docs/humanoid-robot-communication-protocols.md` | A2A protocol details              |
-| `docs/regulatory-compliance.md`                  | EU AI Act, GDPR compliance        |
+| Document                         | Description                       |
+| -------------------------------- | --------------------------------- |
+| `docs/architecture.md`           | Full system architecture          |
+| `docs/app-architecture.md`       | Frontend patterns (detailed)      |
+| `docs/api.md`                    | API reference                     |
+| `docs/brand.md`                  | Colors, typography, design tokens |
+| `docs/deployment.md`             | Deployment guide (Helm/K8s)       |
+| `docs/dev-workflow.md`           | Development workflow              |
+| `docs/vla-integration-guide.md`  | VLA integration (SmolVLA, pi0.5, GR00T) |
+| `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 
 ## Current Limitations
 
