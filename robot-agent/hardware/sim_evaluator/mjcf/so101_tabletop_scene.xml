@@ -1,0 +1,73 @@
+<mujoco model="so101_tabletop">
+  <!--
+    SO-101 tabletop manipulation scene.
+    Robot arm on a table with a graspable cube and a placement target.
+    Camera "front" matches VLA server expected camera name.
+
+    Design: The robot base is at z=0 (from the included MJCF), so the table
+    surface is also at z=0. Table legs extend downward. The cube and target
+    sit slightly above the table surface.
+  -->
+
+  <!-- Override meshdir so included robot XML resolves assets correctly -->
+  <compiler angle="radian" meshdir="so101/assets" autolimits="true"/>
+
+  <include file="so101/so101_new_calib.xml"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="160" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0"
+             width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true"
+              texrepeat="5 5" reflectance="0.2"/>
+    <material name="table_material" rgba="0.4 0.3 0.25 1"/>
+    <material name="cube_material" rgba="0.9 0.15 0.15 1"/>
+    <material name="target_material" rgba="0.2 0.8 0.3 0.4"/>
+  </asset>
+
+  <worldbody>
+    <!-- Lighting -->
+    <light pos="0 0 3.5" dir="0 0 -1" directional="true"/>
+    <light pos="0.3 -0.3 1.5" dir="-0.3 0.3 -1" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+
+    <!-- Ground plane below the table -->
+    <geom name="floor" size="0 0 0.05" pos="0 0 -0.36" type="plane" material="groundplane"/>
+
+    <!-- Table: surface at z=0 (aligned with robot base) -->
+    <body name="table" pos="0 0 -0.01">
+      <!-- Table top (half-height 0.01, so top surface at z=0) -->
+      <geom name="table_top" type="box" size="0.3 0.2 0.01"
+            material="table_material" friction="1.0 0.5 0.1"/>
+      <!-- Table legs (extend down to the floor) -->
+      <geom type="box" size="0.02 0.02 0.17" pos="0.26 0.16 -0.18" material="table_material"/>
+      <geom type="box" size="0.02 0.02 0.17" pos="-0.26 0.16 -0.18" material="table_material"/>
+      <geom type="box" size="0.02 0.02 0.17" pos="0.26 -0.16 -0.18" material="table_material"/>
+      <geom type="box" size="0.02 0.02 0.17" pos="-0.26 -0.16 -0.18" material="table_material"/>
+    </body>
+
+    <!-- Graspable red cube on the table -->
+    <body name="cube" pos="0.15 0.0 0.025">
+      <freejoint name="cube_joint"/>
+      <geom name="cube_geom" type="box" size="0.02 0.02 0.02" mass="0.05"
+            material="cube_material" friction="1.5 0.5 0.1"
+            solref="0.01 1" solimp="0.9 0.95 0.001"/>
+    </body>
+
+    <!-- Target placement zone (green translucent marker on table) -->
+    <site name="target_site" pos="-0.1 0.05 0.005" size="0.03 0.03 0.002"
+          type="box" material="target_material"/>
+
+    <!-- Front camera for VLA inference (looking down at the workspace) -->
+    <camera name="front" pos="0.0 -0.45 0.45" xyaxes="1 0 0 0 0.7 1" fovy="60"/>
+  </worldbody>
+</mujoco>

@@ -5,12 +5,16 @@ Defines the simulation environment for tabletop manipulation tasks
 with the SO-101 robot arm.
 """
 
+import os
+
+_MJCF_DIR = os.path.join(os.path.dirname(__file__), "..", "mjcf")
+
 SO101_TABLETOP_CONFIG = {
     "id": "so101_tabletop",
     "name": "SO-101 Tabletop",
     "description": "Tabletop manipulation environment for SO-101 robot arm with common objects",
     "backend": "mujoco",
-    "mjcf_path": "assets/so101_tabletop.xml",  # Placeholder path
+    "mjcf_path": os.path.join(_MJCF_DIR, "so101_tabletop_scene.xml"),
     "workspace_bounds": {
         "x_min": -0.3,
         "x_max": 0.3,
@@ -21,11 +25,9 @@ SO101_TABLETOP_CONFIG = {
     },
     "objects": [
         {"type": "cube", "size": 0.04, "color": "red"},
-        {"type": "cylinder", "radius": 0.02, "height": 0.06, "color": "blue"},
-        {"type": "sphere", "radius": 0.03, "color": "green"},
     ],
     "camera": {
-        "position": [0.0, -0.5, 0.5],
+        "position": [0.0, -0.45, 0.45],
         "target": [0.0, 0.0, 0.15],
         "fov": 60,
     },

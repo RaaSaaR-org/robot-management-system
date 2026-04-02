@@ -1,0 +1,15 @@
+[project]
+name = "sim-evaluator"
+version = "0.1.0"
+description = "MuJoCo closed-loop VLA evaluation for SO-101"
+requires-python = ">=3.11"
+dependencies = [
+    "mujoco>=3.0.0",
+    "gymnasium>=0.29.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "httpx>=0.25.0",
+]
+
+[project.scripts]
+evaluate-vla = "evaluate_vla:main"

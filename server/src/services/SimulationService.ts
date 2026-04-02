@@ -1,11 +1,23 @@
 /**
  * @file SimulationService.ts
- * @description Async simulation job lifecycle for MuJoCo/Isaac Lab policy testing
+ * @description Async simulation job lifecycle for MuJoCo/Isaac Lab policy testing.
+ *
+ * When SIMULATION_BACKEND=real (and the Python evaluator is available), jobs are
+ * executed via a real MuJoCo closed-loop evaluation subprocess. Otherwise, falls
+ * back to mock metric generation for development without Python/MuJoCo installed.
  * @feature simulation
  */
 
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
+import { spawn, type ChildProcess } from 'child_process';
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { createInterface } from 'readline';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ============================================================================
 // TYPES
@@ -85,6 +97,17 @@ const AVAILABLE_ENVIRONMENTS: SimEnvironment[] = [
 ];
 
 // ============================================================================
+// PATHS
+// ============================================================================
+
+const EVALUATOR_SCRIPT = path.resolve(
+  __dirname,
+  '../../robot-agent/hardware/sim_evaluator/evaluate_vla.py'
+);
+
+const VLA_SERVER_URL = process.env.VLA_SERVER_URL || 'http://localhost:8000';
+
+// ============================================================================
 // SERVICE
 // ============================================================================
 
@@ -92,6 +115,7 @@ export class SimulationService extends EventEmitter {
   private static instance: SimulationService;
   private jobs: Map<string, SimJob> = new Map();
   private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
+  private processes: Map<string, ChildProcess> = new Map();
 
   private constructor() {
     super();
@@ -153,8 +177,12 @@ export class SimulationService extends EventEmitter {
 
     this.emit('job:created', job);
 
-    // Start async progression: queued → running → completed
-    this.startJobProgression(job.jobId);
+    // Choose real or mock execution
+    if (this.canRunReal()) {
+      this.startRealJobProgression(job.jobId);
+    } else {
+      this.startMockJobProgression(job.jobId);
+    }
 
     return job;
   }
@@ -197,11 +225,18 @@ export class SimulationService extends EventEmitter {
       throw new Error(`Cannot cancel job in status: ${job.status}`);
     }
 
-    // Clear any running timer
+    // Clear any running timer (mock mode)
     const timer = this.timers.get(jobId);
     if (timer) {
       clearInterval(timer);
       this.timers.delete(jobId);
+    }
+
+    // Kill subprocess (real mode)
+    const proc = this.processes.get(jobId);
+    if (proc) {
+      proc.kill('SIGTERM');
+      this.processes.delete(jobId);
     }
 
     job.status = 'failed';
@@ -268,12 +303,126 @@ export class SimulationService extends EventEmitter {
   }
 
   // ==========================================================================
-  // INTERNAL: ASYNC JOB PROGRESSION
+  // INTERNAL: REAL JOB EXECUTION (MuJoCo subprocess)
   // ==========================================================================
 
-  private startJobProgression(jobId: string): void {
+  /**
+   * Check if real MuJoCo evaluation is available
+   */
+  private canRunReal(): boolean {
+    if (process.env.SIMULATION_BACKEND === 'mock') {
+      return false;
+    }
+    return existsSync(EVALUATOR_SCRIPT);
+  }
+
+  /**
+   * Run a real MuJoCo evaluation via Python subprocess
+   */
+  private startRealJobProgression(jobId: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
+
+    const outputPath = `/tmp/sim_results_${jobId}.json`;
+
+    // Transition to running
+    job.status = 'running';
+    job.updatedAt = new Date();
+    console.log(`[SimulationService] Job running (real): ${jobId}`);
+    this.emit('job:running', job);
+
+    const pythonCmd = process.env.PYTHON_CMD || 'python3';
+    const proc = spawn(pythonCmd, [
+      EVALUATOR_SCRIPT,
+      '--vla-server', VLA_SERVER_URL,
+      '--environment', job.environment,
+      '--episodes', String(job.rolloutCount),
+      '--max-steps', '200',
+      '--task', 'Pick up the red cube and place it on the target.',
+      '--output', outputPath,
+    ], {
+      cwd: path.dirname(EVALUATOR_SCRIPT),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    this.processes.set(jobId, proc);
+
+    // Parse stdout JSON lines for progress updates
+    if (proc.stdout) {
+      const rl = createInterface({ input: proc.stdout });
+      rl.on('line', (line) => {
+        try {
+          const msg = JSON.parse(line);
+          const current = this.jobs.get(jobId);
+          if (!current || current.status !== 'running') return;
+
+          if (msg.type === 'progress') {
+            current.progress = msg.percent;
+            current.updatedAt = new Date();
+          }
+        } catch {
+          // Non-JSON output (log lines from Python), ignore
+        }
+      });
+    }
+
+    // Log stderr
+    if (proc.stderr) {
+      const rl = createInterface({ input: proc.stderr });
+      rl.on('line', (line) => {
+        console.log(`[SimEval:${jobId.slice(0, 8)}] ${line}`);
+      });
+    }
+
+    // Handle process exit
+    proc.on('close', (code) => {
+      this.processes.delete(jobId);
+      const current = this.jobs.get(jobId);
+      if (!current || current.status !== 'running') return;
+
+      if (code === 0 && existsSync(outputPath)) {
+        try {
+          const raw = readFileSync(outputPath, 'utf-8');
+          const metrics: SimMetrics = JSON.parse(raw);
+          current.metrics = metrics;
+          current.status = 'completed';
+          current.progress = 100;
+          console.log(`[SimulationService] Job completed (real): ${jobId}`);
+          this.emit('job:completed', current);
+        } catch (err) {
+          current.status = 'failed';
+          console.error(`[SimulationService] Failed to parse results for ${jobId}:`, err);
+          this.emit('job:failed', current);
+        }
+      } else {
+        current.status = 'failed';
+        console.error(`[SimulationService] Evaluator exited with code ${code} for ${jobId}`);
+        this.emit('job:failed', current);
+      }
+      current.updatedAt = new Date();
+    });
+
+    proc.on('error', (err) => {
+      this.processes.delete(jobId);
+      const current = this.jobs.get(jobId);
+      if (current) {
+        current.status = 'failed';
+        current.updatedAt = new Date();
+        console.error(`[SimulationService] Evaluator spawn error for ${jobId}:`, err);
+        this.emit('job:failed', current);
+      }
+    });
+  }
+
+  // ==========================================================================
+  // INTERNAL: MOCK JOB PROGRESSION (fallback)
+  // ==========================================================================
+
+  private startMockJobProgression(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+
+    console.log(`[SimulationService] Job running (mock): ${jobId}`);
 
     // Transition to running after 1s
     setTimeout(() => {
@@ -282,7 +431,6 @@ export class SimulationService extends EventEmitter {
 
       j.status = 'running';
       j.updatedAt = new Date();
-      console.log(`[SimulationService] Job running: ${jobId}`);
       this.emit('job:running', j);
 
       // Progress increment every 500ms
@@ -303,7 +451,7 @@ export class SimulationService extends EventEmitter {
           this.timers.delete(jobId);
           current.status = 'completed';
           current.metrics = this.generateMockMetrics();
-          console.log(`[SimulationService] Job completed: ${jobId}`);
+          console.log(`[SimulationService] Job completed (mock): ${jobId}`);
           this.emit('job:completed', current);
         }
       }, 500);
@@ -329,13 +477,19 @@ export class SimulationService extends EventEmitter {
   // ==========================================================================
 
   /**
-   * Stop all running timers (for graceful shutdown / tests)
+   * Stop all running timers and processes (for graceful shutdown / tests)
    */
   cleanup(): void {
     for (const [, timer] of this.timers) {
       clearInterval(timer);
     }
     this.timers.clear();
+
+    for (const [, proc] of this.processes) {
+      proc.kill('SIGTERM');
+    }
+    this.processes.clear();
+
     this.jobs.clear();
   }
 }
