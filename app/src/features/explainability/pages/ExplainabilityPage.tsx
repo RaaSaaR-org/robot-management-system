@@ -227,17 +227,17 @@ export function ExplainabilityPage() {
 
       {/* Info Box */}
       <div className="flex-shrink-0 px-6 pt-4">
-        <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-300 mb-2">What is AI Explainability?</h3>
-          <p className="text-blue-200/80 text-sm">
+        <div className="bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700/50 rounded-lg p-4">
+          <h3 className="font-semibold text-blue-900 dark:text-blue-200 mb-2">What is AI Explainability?</h3>
+          <p className="text-blue-800 dark:text-blue-200 text-sm">
             When AI makes decisions about robot actions, this page shows you exactly what happened and why.
             Required by the EU AI Act for transparency, this helps you:
           </p>
-          <ul className="text-blue-200/80 text-sm mt-2 space-y-1 ml-4 list-disc">
-            <li><strong className="text-blue-300">Understand</strong> how the AI interprets your commands</li>
-            <li><strong className="text-blue-300">Verify</strong> that decisions are safe and appropriate</li>
-            <li><strong className="text-blue-300">Monitor</strong> AI performance over time</li>
-            <li><strong className="text-blue-300">Audit</strong> past decisions for compliance</li>
+          <ul className="text-blue-800 dark:text-blue-200 text-sm mt-2 space-y-1 ml-4 list-disc">
+            <li><strong className="text-blue-900 dark:text-blue-100">Understand</strong> how the AI interprets your commands</li>
+            <li><strong className="text-blue-900 dark:text-blue-100">Verify</strong> that decisions are safe and appropriate</li>
+            <li><strong className="text-blue-900 dark:text-blue-100">Monitor</strong> AI performance over time</li>
+            <li><strong className="text-blue-900 dark:text-blue-100">Audit</strong> past decisions for compliance</li>
           </ul>
         </div>
       </div>

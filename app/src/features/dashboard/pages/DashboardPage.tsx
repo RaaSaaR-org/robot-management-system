@@ -78,10 +78,8 @@ export function DashboardPage() {
               <p className="text-blue-200 text-sm mt-1">Real-time fleet monitoring and control</p>
             </div>
             <div className="flex items-center gap-3">
-              {/* E-Stop hidden on mobile */}
-              <div className="hidden sm:block">
-                <FleetEmergencyStopButton size="md" />
-              </div>
+              {/* E-Stop always visible — safety-critical, must be accessible on all viewports */}
+              <FleetEmergencyStopButton size="md" />
               <Button variant="outline" onClick={refresh} disabled={isLoading} className="!border-white/30 !text-white hover:!bg-white/10">
                 {isLoading ? (
                   <>

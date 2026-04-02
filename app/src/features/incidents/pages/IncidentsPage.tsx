@@ -285,16 +285,16 @@ export function IncidentsPage() {
 
       {/* Info Box */}
       <div className="flex-shrink-0 px-6 pt-4">
-        <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-300 mb-2">Regulatory Compliance</h3>
-          <p className="text-blue-200/80 text-sm">
+        <div className="bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700/50 rounded-lg p-4">
+          <h3 className="font-semibold text-blue-900 dark:text-blue-200 mb-2">Regulatory Compliance</h3>
+          <p className="text-blue-800 dark:text-blue-200 text-sm">
             This system tracks incidents and manages notification deadlines for multiple regulations:
           </p>
-          <ul className="text-blue-200/80 text-sm mt-2 space-y-1 ml-4 list-disc">
-            <li><strong className="text-blue-300">EU AI Act Art. 73</strong>: Serious incident reporting (2/10/15 days)</li>
-            <li><strong className="text-blue-300">GDPR Art. 33-34</strong>: Data breach notification (72 hours)</li>
-            <li><strong className="text-blue-300">NIS2 Art. 23</strong>: Cyber incident reporting (24h early warning, 72h notification)</li>
-            <li><strong className="text-blue-300">CRA Art. 14</strong>: Vulnerability disclosure (24 hours)</li>
+          <ul className="text-blue-800 dark:text-blue-200 text-sm mt-2 space-y-1 ml-4 list-disc">
+            <li><strong className="text-blue-900 dark:text-blue-100">EU AI Act Art. 73</strong>: Serious incident reporting (2/10/15 days)</li>
+            <li><strong className="text-blue-900 dark:text-blue-100">GDPR Art. 33-34</strong>: Data breach notification (72 hours)</li>
+            <li><strong className="text-blue-900 dark:text-blue-100">NIS2 Art. 23</strong>: Cyber incident reporting (24h early warning, 72h notification)</li>
+            <li><strong className="text-blue-900 dark:text-blue-100">CRA Art. 14</strong>: Vulnerability disclosure (24 hours)</li>
           </ul>
         </div>
       </div>
