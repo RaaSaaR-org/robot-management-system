@@ -352,8 +352,6 @@ export interface A2AState {
   wsConnected: boolean;
   /** Current chat mode (direct = 1:1 with agent, orchestration = AI routes to all agents) */
   chatMode: A2AChatMode;
-  /** Gemini API key for LLM-powered orchestration */
-  geminiApiKey: string | null;
 }
 
 /** A2A Feature actions */
@@ -400,9 +398,6 @@ export interface A2AActions {
 
   // Chat Mode
   setChatMode: (mode: A2AChatMode) => void;
-
-  // Orchestration
-  setGeminiApiKey: (key: string | null) => void;
 
   // Utility
   clearError: () => void;

@@ -19,7 +19,6 @@ export function useA2A() {
   const isLoading = useA2AStore((state) => state.isLoading);
   const error = useA2AStore((state) => state.error);
   const chatMode = useA2AStore((state) => state.chatMode);
-  const geminiApiKey = useA2AStore((state) => state.geminiApiKey);
 
   // Compute derived values with useMemo to avoid creating new references
   const currentConversation = useMemo(
@@ -48,7 +47,6 @@ export function useA2A() {
       clearError: state.clearError,
       reset: state.reset,
       setChatMode: state.setChatMode,
-      setGeminiApiKey: state.setGeminiApiKey,
     };
   }, []);
 
@@ -65,7 +63,6 @@ export function useA2A() {
     clearError,
     reset,
     setChatMode,
-    setGeminiApiKey,
   } = actions;
 
   // Fetch initial data on mount (only once)
@@ -134,7 +131,6 @@ export function useA2A() {
     isLoading,
     error,
     chatMode,
-    geminiApiKey,
 
     // Actions
     createConversation: createNewConversation,
@@ -147,6 +143,5 @@ export function useA2A() {
     clearError,
     reset,
     setChatMode,
-    setGeminiApiKey,
   };
 }

@@ -10,7 +10,6 @@ import { useIsMobile } from '@/shared/hooks/useMediaQuery';
 import { useA2AStore } from '../store';
 import { A2ASideNav } from './A2ASideNav';
 import { A2ABottomNav } from './A2ABottomNav';
-import { ApiKeyDialog, useLoadApiKey } from './ApiKeyDialog';
 
 // ============================================================================
 // TYPES
@@ -34,16 +33,9 @@ export interface A2ALayoutProps {
 export const A2ALayout = memo(function A2ALayout({ children, className }: A2ALayoutProps) {
   const isMobile = useIsMobile();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-
   // Get state from store
   const tasks = useA2AStore((state) => state.tasks);
   const registeredAgents = useA2AStore((state) => state.registeredAgents);
-  const geminiApiKey = useA2AStore((state) => state.geminiApiKey);
-  const setGeminiApiKey = useA2AStore((state) => state.setGeminiApiKey);
-
-  // Load API key from localStorage on mount
-  useLoadApiKey(setGeminiApiKey);
 
   // Compute active tasks count
   const activeTasksCount = tasks.filter(
@@ -54,13 +46,6 @@ export const A2ALayout = memo(function A2ALayout({ children, className }: A2ALay
     setSidebarCollapsed((prev) => !prev);
   }, []);
 
-  const handleSettingsClick = useCallback(() => {
-    setShowSettings(true);
-  }, []);
-
-  const handleSettingsClose = useCallback(() => {
-    setShowSettings(false);
-  }, []);
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -69,7 +54,6 @@ export const A2ALayout = memo(function A2ALayout({ children, className }: A2ALay
         <A2ASideNav
           collapsed={sidebarCollapsed}
           onToggleCollapse={handleToggleCollapse}
-          onSettingsClick={handleSettingsClick}
           activeTasksCount={activeTasksCount}
           agentsCount={registeredAgents.length}
         />
@@ -95,13 +79,6 @@ export const A2ALayout = memo(function A2ALayout({ children, className }: A2ALay
         />
       )}
 
-      {/* Settings Dialog */}
-      <ApiKeyDialog
-        isOpen={showSettings}
-        onClose={handleSettingsClose}
-        currentKey={geminiApiKey}
-        onSave={setGeminiApiKey}
-      />
     </div>
   );
 });

@@ -752,31 +752,128 @@ export class ConversationManager {
   }
 
   /**
-   * Select the best agent for a given message based on capabilities
-   * Only considers connected robots (not stale registrations)
+   * Select the best agent for a given message based on capabilities.
+   * Uses LLM (OpenRouter) if OPENROUTER_API_KEY is set, otherwise falls back to keyword matching.
+   * Only considers connected robots (not stale registrations).
    */
-  selectAgentForMessage(message: string, connectedAgents?: A2AAgentCard[]): A2AAgentCard | null {
+  async selectAgentForMessage(message: string, connectedAgents?: A2AAgentCard[]): Promise<A2AAgentCard | null> {
     // Use provided connected agents, or fall back to registered agents
     const agents = connectedAgents && connectedAgents.length > 0
       ? connectedAgents
       : this.listAgents();
 
     if (agents.length === 0) return null;
+    if (agents.length === 1) return agents[0];
 
+    // Try LLM-based selection first (if OpenRouter key is configured)
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+    if (openrouterKey) {
+      try {
+        const llmResult = await this.selectAgentWithLLM(message, agents, openrouterKey);
+        if (llmResult) return llmResult;
+      } catch (err) {
+        console.warn('[Orchestrator] LLM agent selection failed, using keyword fallback:', err);
+      }
+    }
+
+    // Fallback: keyword-based matching
+    return this.selectAgentByKeywords(message, agents);
+  }
+
+  /**
+   * LLM-powered agent selection via OpenRouter
+   */
+  private async selectAgentWithLLM(
+    message: string,
+    agents: A2AAgentCard[],
+    apiKey: string
+  ): Promise<A2AAgentCard | null> {
+    const model = process.env.ORCHESTRATOR_MODEL || 'stepfun/step-3.5-flash:free';
+
+    const agentDescriptions = agents
+      .map((a, i) => `${i + 1}. ${a.name}: ${a.description}`)
+      .join('\n');
+
+    const systemPrompt = `You are an intelligent task router for a robot fleet management system. Given the user's request and available robot agents, select the BEST agent to handle the task.
+
+Available Agents:
+${agentDescriptions}
+
+Instructions:
+- Analyze the user's request carefully
+- Consider each agent's capabilities and description
+- Select the agent that is best suited for the task
+- For heavy-duty tasks, prefer agents with higher payload capacity
+- For delicate tasks, prefer nimble or precise agents
+
+Respond with ONLY the exact agent name (nothing else).`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      console.log(`[Orchestrator] LLM selecting agent for: "${message}"`);
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: message },
+          ],
+          max_tokens: 50,
+          temperature: 0.1,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenRouter ${response.status}: ${await response.text()}`);
+      }
+
+      const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const selectedName = (data.choices?.[0]?.message?.content ?? '').trim();
+
+      console.log(`[Orchestrator] LLM selected: "${selectedName}"`);
+
+      // Exact match
+      const exact = agents.find((a) => a.name.toLowerCase() === selectedName.toLowerCase());
+      if (exact) return exact;
+
+      // Partial match
+      const partial = agents.find(
+        (a) => a.name.toLowerCase().includes(selectedName.toLowerCase()) ||
+               selectedName.toLowerCase().includes(a.name.toLowerCase())
+      );
+      if (partial) return partial;
+
+      console.warn(`[Orchestrator] LLM selected unknown agent "${selectedName}", falling back`);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Keyword-based agent selection (fallback when no LLM is available)
+   */
+  private selectAgentByKeywords(message: string, agents: A2AAgentCard[]): A2AAgentCard | null {
     const lowerMessage = message.toLowerCase();
 
-    // Parse weight requirements from message
     const weightMatch = lowerMessage.match(/(\d+)\s*kg/);
     const requiredWeight = weightMatch ? parseInt(weightMatch[1]) : 0;
 
-    // Keywords for heavy tasks
     const heavyKeywords = ['heavy', 'large', 'big', 'industrial', 'warehouse', 'pallet', 'crate'];
     const lightKeywords = ['light', 'small', 'quick', 'nimble', 'delicate', 'precise'];
 
     const isHeavyTask = heavyKeywords.some((k) => lowerMessage.includes(k)) || requiredWeight > 10;
     const isLightTask = lightKeywords.some((k) => lowerMessage.includes(k));
 
-    // Score agents based on task requirements
     let bestAgent: A2AAgentCard | null = null;
     let bestScore = -1;
 
@@ -784,16 +881,11 @@ export class ConversationManager {
       const desc = (agent.description || '').toLowerCase();
       let score = 0;
 
-      // Extract max payload from description
       const payloadMatch = desc.match(/max payload[:\s]*(\d+)\s*kg/i);
       const maxPayload = payloadMatch ? parseInt(payloadMatch[1]) : 10;
 
-      // Check if agent can handle the weight
-      if (requiredWeight > 0 && maxPayload < requiredWeight) {
-        continue; // Skip agents that can't handle the weight
-      }
+      if (requiredWeight > 0 && maxPayload < requiredWeight) continue;
 
-      // Score based on task type matching
       if (isHeavyTask) {
         if (desc.includes('heavy') || desc.includes('industrial')) score += 10;
         if (maxPayload >= 30) score += 5;
@@ -802,7 +894,6 @@ export class ConversationManager {
         if (desc.includes('light') || desc.includes('nimble')) score += 10;
       }
 
-      // Default score for matching agent
       score += 1;
 
       if (score > bestScore) {
@@ -862,7 +953,7 @@ export class ConversationManager {
     const connectedAgents = robotManager.getConnectedAgents();
 
     // Select best agent for this message (only from connected robots)
-    const selectedAgent = this.selectAgentForMessage(text, connectedAgents);
+    const selectedAgent = await this.selectAgentForMessage(text, connectedAgents);
 
     if (!selectedAgent) {
       throw new Error('No connected robots available. Please ensure a robot agent is running.');

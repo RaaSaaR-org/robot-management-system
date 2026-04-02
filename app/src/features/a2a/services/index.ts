@@ -4,4 +4,5 @@
  * @feature a2a
  */
 
-export { OrchestratorService, orchestrator } from './orchestrator';
+// Orchestrator LLM logic has been moved to the server (ConversationManager).
+// No client-side services needed.
