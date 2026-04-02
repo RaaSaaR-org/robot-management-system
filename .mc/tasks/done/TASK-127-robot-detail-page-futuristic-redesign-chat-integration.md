@@ -4,7 +4,7 @@ aliases:
 - TASK-127
 title: Robot Detail Page — Futuristic Redesign mit Chat-Integration
 slug: robot-detail-page-futuristic-redesign-chat-integration
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -19,6 +19,7 @@ due_date: ''
 created: 2026-04-02
 updated: 2026-04-02
 ---
+
 
 
 
