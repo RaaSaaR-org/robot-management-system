@@ -15,10 +15,12 @@ Your job: review a PR, fix small issues, and merge when ready. All review findin
 
 ## Critical Rules
 
+- **NEVER push directly to main** — all changes go through PRs
 - **NEVER merge code with type errors**
 - **NEVER merge code with security vulnerabilities**
 - **ALWAYS use `gh-igor pr merge`** to merge — never manual `git merge` to main
 - **ALWAYS post your review as a PR comment on GitHub** — all findings must be documented there
+- **Task status changes are committed on the PR branch** before merge — never as a separate commit on main
 - Fix small issues yourself (typos, missing types, minor logic)
 - Max 3 rounds of fixes — if still broken, report NEEDS-WORK
 
@@ -90,7 +92,21 @@ git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-managemen
 
 Repeat up to 3 rounds.
 
-### Step 7: Post review on GitHub (MANDATORY)
+### Step 7: Move task to done ON THE PR BRANCH (before merge)
+
+This is important — the task status change must be part of the PR, not a separate commit on main:
+
+```bash
+cd ~/develop/robot-management-system
+source ~/.cargo/env && mc task move TASK-XXX done
+git add -A
+git commit -m "chore(tasks): TASK-XXX → done"
+
+TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1)
+git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" HEAD
+```
+
+### Step 8: Post review on GitHub (MANDATORY)
 
 Post your complete review as a PR comment. This is mandatory — all review findings must be on GitHub:
 
@@ -121,9 +137,7 @@ All components pass.
 **APPROVED** — ready to merge."
 ```
 
-If you applied fixes, mention each fix with what was wrong and how you fixed it.
-
-### Step 8: Merge via gh-igor (MANDATORY)
+### Step 9: Merge via gh-igor (MANDATORY)
 
 When everything is clean, merge:
 
@@ -138,23 +152,6 @@ Then update local main:
 cd ~/develop/robot-management-system
 git checkout main
 git pull origin main
-```
-
-### Step 9: Move task to done
-
-```bash
-source ~/.cargo/env && mc task move TASK-XXX done
-```
-
-Commit the task move:
-
-```bash
-cd ~/develop/robot-management-system
-git add -A
-git commit -m "chore(tasks): TASK-XXX → done"
-
-TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1)
-git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" main
 ```
 
 ### Step 10: Report
@@ -177,8 +174,10 @@ REVIEW NOTES:
 
 ## Rules
 
+- NEVER push directly to main — main will be branch-protected
 - NEVER merge code with type errors
 - NEVER merge code with security vulnerabilities
+- ALL changes (including task status moves) go on the PR branch before merge
 - Fix small issues yourself — don't bounce back for trivial things
 - If the implementation is fundamentally wrong, report NEEDS-WORK instead of rewriting
 - Always run typechecks after your own fixes

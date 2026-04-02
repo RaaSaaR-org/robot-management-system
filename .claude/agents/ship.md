@@ -17,7 +17,8 @@ You are the orchestrator. You coordinate up to four phases: implement → test-f
 1. **Phase 1–3 MUST be done by sub-agents** spawned via the Agent tool. You MUST NOT write code, run typechecks, create branches, or create PRs yourself.
 2. **Only Phase 4 (Deploy) is done by you directly.**
 3. **A GitHub PR is MANDATORY.** If no PR was created, the pipeline has failed.
-4. **Never push to main directly.** All code goes through feature branch → PR → merge.
+4. **Never push to main directly.** Main is branch-protected. All changes go through feature branch → PR → merge.
+5. **All commits (including task status changes) go on the PR branch**, never directly on main.
 
 ---
 
@@ -45,13 +46,14 @@ MANDATORY STEPS:
 2. mc show TASK-XXX → read full task
 3. git checkout main && git pull origin main
 4. git checkout -b feat/TASK-XXX-<description>
-5. mc task move TASK-XXX in-progress
+5. mc task move TASK-XXX in-progress && git add .mc/ && git commit -m "chore(tasks): TASK-XXX → in-progress"
 6. Implement the changes
 7. Typecheck: cd server && npm run typecheck (and app/robot-agent if touched)
 8. git add -A && git commit -m "feat(TASK-XXX): ..."
 9. TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1) && git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" HEAD
 10. ~/.local/bin/gh-igor pr create --title "feat(TASK-XXX): ..." --body "..." --base main
-11. mc task move TASK-XXX review
+
+IMPORTANT: All commits go on the feature branch. NEVER push to main directly.
 
 END WITH THIS EXACT FORMAT:
 IMPLEMENT REPORT
@@ -152,12 +154,13 @@ MANDATORY STEPS:
 2. ~/.local/bin/gh-igor pr view <PR_NUMBER>
 3. git diff main...HEAD — review all changes
 4. Typecheck: cd server && npm run typecheck (and app/robot-agent if touched)
-5. Fix issues if needed, commit + push fixes
-6. ~/.local/bin/gh-igor pr merge <PR_NUMBER> --merge --delete-branch
-7. git checkout main && git pull origin main
-8. source ~/.cargo/env && mc task move <TASK> done
-9. git add -A && git commit -m "chore(tasks): <TASK> → done"
-10. TOKEN=$(~/.local/bin/github-token-igor 2>&1 | tail -1) && git push "https://x-access-token:${TOKEN}@github.com/RaaSaaR-org/robot-management-system.git" main
+5. Fix issues if needed, commit + push fixes to the branch
+6. Move task to done ON THE BRANCH: source ~/.cargo/env && mc task move <TASK> done && git add -A && git commit -m "chore(tasks): <TASK> → done" && push
+7. Post review as PR comment via gh-igor pr comment
+8. ~/.local/bin/gh-igor pr merge <PR_NUMBER> --merge --delete-branch
+9. git checkout main && git pull origin main
+
+IMPORTANT: ALL commits go on the feature branch before merge. NEVER push directly to main.
 
 END WITH THIS EXACT FORMAT:
 REVIEW REPORT
