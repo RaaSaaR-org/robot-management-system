@@ -972,7 +972,11 @@ Respond with ONLY the exact agent name (nothing else).`;
       conversation.taskIds.push(task.id);
     }
 
-    // --- Orchestration step 1: Analyzing ---
+    // --- Orchestration with timing ---
+    const orchStart = Date.now();
+    const agentNames = connectedAgents.map((a) => a.name);
+
+    // Step 1: Analyzing
     this.notifyTaskEvent({
       type: 'status_update',
       taskId: task.id,
@@ -987,20 +991,35 @@ Respond with ONLY the exact agent name (nothing else).`;
           metadata: {
             orchestrationStep: 'analyzing',
             agentCount: connectedAgents.length,
+            agentNames,
           },
         },
         timestamp: new Date().toISOString(),
       },
     });
 
-    // --- Orchestration step 2: Selecting agent ---
+    // Step 2: Select agent (with timing + method tracking)
+    let selectionMethod: 'llm' | 'keyword' = 'keyword';
+    const selectionStart = Date.now();
+
+    // Track which method was used — LLM if key is present, keyword otherwise
+    if (process.env.OPENROUTER_API_KEY) {
+      selectionMethod = 'llm';
+    }
+
     const selectedAgent = await this.selectAgentForMessage(text, connectedAgents);
+    const selectionMs = Date.now() - selectionStart;
 
     if (!selectedAgent) {
       throw new Error('No connected robots available. Please ensure a robot agent is running.');
     }
 
-    console.log(`[Orchestrator] Selected agent: ${selectedAgent.name} for message: "${text}"`);
+    console.log(`[Orchestrator] Selected agent: ${selectedAgent.name} (${selectionMethod}, ${selectionMs}ms) for: "${text}"`);
+
+    const consideredAgents = connectedAgents.map((a) => ({
+      name: a.name,
+      selected: a.name === selectedAgent.name,
+    }));
 
     this.notifyTaskEvent({
       type: 'status_update',
@@ -1016,14 +1035,18 @@ Respond with ONLY the exact agent name (nothing else).`;
           metadata: {
             orchestrationStep: 'agent_selected',
             selectedAgent: selectedAgent.name,
-            selectedAgentUrl: selectedAgent.url,
+            consideredAgents,
+            selectionMethod,
+            selectionMs,
           },
         },
         timestamp: new Date().toISOString(),
       },
     });
 
-    // --- Orchestration step 3: Forwarding (fire-and-forget with error handling) ---
+    // Step 3: Forwarding
+    const forwardStart = Date.now();
+
     this.notifyTaskEvent({
       type: 'status_update',
       taskId: task.id,
@@ -1044,7 +1067,16 @@ Respond with ONLY the exact agent name (nothing else).`;
       },
     });
 
-    this.sendToRemoteAgentOrchestrated(conversationId, task.id, userMessage, selectedAgent).catch(
+    // Build orchestration chain metadata for the response
+    const orchChainForResponse = {
+      selectionMethod,
+      consideredAgents,
+      timings: { selectionMs, orchStartTs: orchStart, forwardStartTs: forwardStart },
+    };
+
+    this.sendToRemoteAgentOrchestrated(
+      conversationId, task.id, userMessage, selectedAgent, orchChainForResponse
+    ).catch(
       (err) => {
         console.error('[ConversationManager] Orchestrated agent error:', err);
       }
@@ -1062,7 +1094,12 @@ Respond with ONLY the exact agent name (nothing else).`;
     conversationId: string,
     taskId: string,
     userMessage: A2AMessage,
-    agent: A2AAgentCard
+    agent: A2AAgentCard,
+    orchChain?: {
+      selectionMethod: 'llm' | 'keyword';
+      consideredAgents: Array<{ name: string; selected: boolean }>;
+      timings: { selectionMs: number; orchStartTs: number; forwardStartTs: number };
+    }
   ): Promise<void> {
     const conversation = await this.getConversation(conversationId);
     const task = await this.getTask(taskId);
@@ -1138,11 +1175,23 @@ Respond with ONLY the exact agent name (nothing else).`;
         };
       }
 
-      // Add orchestration metadata to response
+      // Add orchestration metadata + chain to response
+      const now = Date.now();
       agentMessage.metadata = {
         ...agentMessage.metadata,
         agentName: agent.name,
         orchestrated: true,
+        ...(orchChain && {
+          orchestrationChain: {
+            selectionMethod: orchChain.selectionMethod,
+            consideredAgents: orchChain.consideredAgents,
+            timings: {
+              selectionMs: orchChain.timings.selectionMs,
+              forwardingMs: now - orchChain.timings.forwardStartTs,
+              totalMs: now - orchChain.timings.orchStartTs,
+            },
+          },
+        }),
       };
 
       // Save to database

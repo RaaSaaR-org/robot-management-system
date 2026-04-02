@@ -8,6 +8,7 @@ import { memo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '@/shared/utils';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { OrchestrationChainSummary } from './OrchestrationChainSummary';
 import type { A2AMessage, A2APart, FormSchema } from '../types';
 import { isTextPart, isFilePart, isDataPart, isFileWithBytes, isFormData } from '../types';
 import { FormRenderer, CompletedFormCard } from './FormRenderer';
@@ -164,15 +165,27 @@ export const MessageBubble = memo(function MessageBubble({
   // Get agent name from metadata if available (for orchestration mode)
   const agentName = message.metadata?.agentName as string | undefined;
   const isOrchestrated = message.metadata?.orchestrated as boolean | undefined;
+  const orchestrationChain = (message.metadata as Record<string, unknown>)?.orchestrationChain as
+    | { selectionMethod: 'llm' | 'keyword'; consideredAgents: Array<{ name: string; selected: boolean }>; timings: { selectionMs: number; forwardingMs: number; totalMs: number } }
+    | undefined;
 
   return (
     <div
       className={cn(
-        'flex',
-        isUser ? 'justify-end' : 'justify-start',
+        'flex flex-col',
+        isUser ? 'items-end' : 'items-start',
         className
       )}
     >
+      {/* Orchestration chain summary — shown above orchestrated agent messages */}
+      {!isUser && isOrchestrated && orchestrationChain && agentName && (
+        <OrchestrationChainSummary
+          agentName={agentName}
+          chain={orchestrationChain}
+          className="w-full max-w-[85%]"
+        />
+      )}
+
       <div
         className={cn(
           'max-w-[80%] rounded-2xl px-4 py-3',
