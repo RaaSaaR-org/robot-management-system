@@ -952,20 +952,8 @@ Respond with ONLY the exact agent name (nothing else).`;
     const { robotManager } = await import('./RobotManager.js');
     const connectedAgents = robotManager.getConnectedAgents();
 
-    // Select best agent for this message (only from connected robots)
-    const selectedAgent = await this.selectAgentForMessage(text, connectedAgents);
-
-    if (!selectedAgent) {
-      throw new Error('No connected robots available. Please ensure a robot agent is running.');
-    }
-
-    console.log(`[Orchestrator] Selected agent: ${selectedAgent.name} for message: "${text}"`);
-
     // Check for open task to continue (A2A protocol)
     const openTask = this.getOpenTaskForConversation(conversationId);
-
-    // Mark as pending
-    this.pendingMessages.set(userMessage.messageId, 'pending');
 
     // Use existing open task or create a new one
     const task = openTask || (await this.createTask(conversationId));
@@ -973,6 +961,7 @@ Respond with ONLY the exact agent name (nothing else).`;
 
     // Track message-to-task mapping
     this.messageToTaskMap.set(userMessage.messageId, task.id);
+    this.pendingMessages.set(userMessage.messageId, 'pending');
 
     // Add message to task history
     if (!task.history) task.history = [];
@@ -983,7 +972,78 @@ Respond with ONLY the exact agent name (nothing else).`;
       conversation.taskIds.push(task.id);
     }
 
-    // Send to selected agent with metadata (fire-and-forget with error handling)
+    // --- Orchestration step 1: Analyzing ---
+    this.notifyTaskEvent({
+      type: 'status_update',
+      taskId: task.id,
+      contextId: conversationId,
+      status: {
+        state: 'working',
+        message: {
+          messageId: uuidv4(),
+          role: 'agent',
+          parts: [{ kind: 'text', text: '' }],
+          contextId: conversationId,
+          metadata: {
+            orchestrationStep: 'analyzing',
+            agentCount: connectedAgents.length,
+          },
+        },
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    // --- Orchestration step 2: Selecting agent ---
+    const selectedAgent = await this.selectAgentForMessage(text, connectedAgents);
+
+    if (!selectedAgent) {
+      throw new Error('No connected robots available. Please ensure a robot agent is running.');
+    }
+
+    console.log(`[Orchestrator] Selected agent: ${selectedAgent.name} for message: "${text}"`);
+
+    this.notifyTaskEvent({
+      type: 'status_update',
+      taskId: task.id,
+      contextId: conversationId,
+      status: {
+        state: 'working',
+        message: {
+          messageId: uuidv4(),
+          role: 'agent',
+          parts: [{ kind: 'text', text: '' }],
+          contextId: conversationId,
+          metadata: {
+            orchestrationStep: 'agent_selected',
+            selectedAgent: selectedAgent.name,
+            selectedAgentUrl: selectedAgent.url,
+          },
+        },
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    // --- Orchestration step 3: Forwarding (fire-and-forget with error handling) ---
+    this.notifyTaskEvent({
+      type: 'status_update',
+      taskId: task.id,
+      contextId: conversationId,
+      status: {
+        state: 'working',
+        message: {
+          messageId: uuidv4(),
+          role: 'agent',
+          parts: [{ kind: 'text', text: '' }],
+          contextId: conversationId,
+          metadata: {
+            orchestrationStep: 'forwarding',
+            selectedAgent: selectedAgent.name,
+          },
+        },
+        timestamp: new Date().toISOString(),
+      },
+    });
+
     this.sendToRemoteAgentOrchestrated(conversationId, task.id, userMessage, selectedAgent).catch(
       (err) => {
         console.error('[ConversationManager] Orchestrated agent error:', err);

@@ -4,10 +4,11 @@
  * @feature a2a
  */
 
-import { memo, useRef, useEffect, useState, useMemo, type FormEvent, type KeyboardEvent } from 'react';
+import { memo, useRef, useEffect, useState, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { MessageBubble } from './MessageBubble';
+import { OrchestrationTimeline } from './OrchestrationTimeline';
 import { useConversation } from '../hooks';
 import { useA2AStore, selectPendingMessages } from '../store';
 import type { A2AAgentCard, A2ATask, A2AChatMode } from '../types';
@@ -103,6 +104,53 @@ export const ConversationPanel = memo(function ConversationPanel({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Optimistic orchestration timeline — shows animated steps while waiting for response
+  type OrchPhase = 'analyzing' | 'selecting' | 'forwarding' | 'waiting';
+  const [orchPhase, setOrchPhase] = useState<OrchPhase | null>(null);
+  const orchTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // Clear orchestration when a new AGENT message arrives (not user messages)
+  const prevAgentMessageCountRef = useRef(0);
+  useEffect(() => {
+    const agentMsgCount = messages.filter((m) => m.role === 'agent').length;
+    if (agentMsgCount > prevAgentMessageCountRef.current && orchPhase !== null) {
+      setOrchPhase(null);
+      orchTimerRef.current.forEach(clearTimeout);
+      orchTimerRef.current = [];
+    }
+    prevAgentMessageCountRef.current = agentMsgCount;
+  }, [messages, orchPhase]);
+
+  // Start orchestration animation on send
+  const handleOrchestrationStart = useCallback(() => {
+    if (chatMode !== 'orchestration') return;
+    orchTimerRef.current.forEach(clearTimeout);
+    orchTimerRef.current = [];
+    setOrchPhase('analyzing');
+    // Stagger the phases for a realistic feel
+    orchTimerRef.current.push(setTimeout(() => setOrchPhase('selecting'), 1200));
+    orchTimerRef.current.push(setTimeout(() => setOrchPhase('forwarding'), 2800));
+    orchTimerRef.current.push(setTimeout(() => setOrchPhase('waiting'), 4000));
+  }, [chatMode]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => orchTimerRef.current.forEach(clearTimeout);
+  }, []);
+
+  // Extract agent name from the last orchestrated response for the timeline
+  const lastOrchAgent = useMemo(() => {
+    if (orchPhase === null) return undefined;
+    // Check the latest agent message for metadata
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'agent' && (m.metadata as Record<string, unknown>)?.orchestrated) {
+        return (m.metadata as Record<string, unknown>)?.agentName as string | undefined;
+      }
+    }
+    return undefined;
+  }, [messages, orchPhase]);
+
   // Check if any tasks require input
   const hasInputRequired = useMemo(
     () => activeTasks.some((t) => t.status.state === 'input_required'),
@@ -152,6 +200,7 @@ export const ConversationPanel = memo(function ConversationPanel({
 
     const message = inputValue.trim();
     setInputValue('');
+    handleOrchestrationStart();
     // Reset textarea height
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
@@ -231,8 +280,19 @@ export const ConversationPanel = memo(function ConversationPanel({
                 />
               ))}
 
-              {/* Typing indicator — shown while waiting for agent response */}
-              {isSending && (
+              {/* Orchestration timeline — shown during orchestrated message routing */}
+              {chatMode === 'orchestration' && orchPhase !== null && (
+                <OrchestrationTimeline
+                  steps={[
+                    ...(orchPhase ? [{ step: 'analyzing' as const, agentCount: 1 }] : []),
+                    ...(['selecting', 'forwarding', 'waiting'].includes(orchPhase) ? [{ step: 'agent_selected' as const, agentName: lastOrchAgent || 'Selecting...' }] : []),
+                    ...(['forwarding', 'waiting'].includes(orchPhase) ? [{ step: 'forwarding' as const, agentName: lastOrchAgent }] : []),
+                  ]}
+                />
+              )}
+
+              {/* Typing indicator — shown while waiting for agent response (direct mode only) */}
+              {isSending && chatMode !== 'orchestration' && (
                 <div className="flex justify-start">
                   <div className="glass-card rounded-2xl rounded-bl-md px-4 py-3">
                     <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Agent</div>
