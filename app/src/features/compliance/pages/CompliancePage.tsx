@@ -433,17 +433,17 @@ function CompliancePageInner() {
 
       {/* Info Box */}
       <div className="flex-shrink-0 px-6 pt-4">
-        <div className="bg-indigo-900/50 border border-indigo-600/50 rounded-lg p-4">
-          <h3 className="font-semibold text-indigo-100 mb-2">What is Compliance Logging?</h3>
-          <p className="text-indigo-100/90 text-sm">
+        <div className="bg-indigo-100 dark:bg-indigo-900/50 border border-indigo-300 dark:border-indigo-600/50 rounded-lg p-4">
+          <h3 className="font-semibold text-indigo-900 dark:text-indigo-200 mb-2">What is Compliance Logging?</h3>
+          <p className="text-indigo-800 dark:text-indigo-200 text-sm">
             This system maintains a cryptographically secured, tamper-evident record of all AI decisions and robot actions.
             Required by EU regulations, this helps you:
           </p>
-          <ul className="text-indigo-100/90 text-sm mt-2 space-y-1 ml-4 list-disc">
-            <li><strong className="text-indigo-50">Audit</strong> every AI decision and command execution</li>
-            <li><strong className="text-indigo-50">Verify</strong> log integrity using cryptographic hash chains</li>
-            <li><strong className="text-indigo-50">Comply</strong> with EU AI Act record-keeping requirements</li>
-            <li><strong className="text-indigo-50">Investigate</strong> incidents with complete audit trails</li>
+          <ul className="text-indigo-800 dark:text-indigo-200 text-sm mt-2 space-y-1 ml-4 list-disc">
+            <li><strong className="text-indigo-900 dark:text-indigo-100">Audit</strong> every AI decision and command execution</li>
+            <li><strong className="text-indigo-900 dark:text-indigo-100">Verify</strong> log integrity using cryptographic hash chains</li>
+            <li><strong className="text-indigo-900 dark:text-indigo-100">Comply</strong> with EU AI Act record-keeping requirements</li>
+            <li><strong className="text-indigo-900 dark:text-indigo-100">Investigate</strong> incidents with complete audit trails</li>
           </ul>
         </div>
       </div>
