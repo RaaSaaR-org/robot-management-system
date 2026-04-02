@@ -69,20 +69,9 @@ export function DatasetEpisodesPage() {
   const videoUpRef = useRef<HTMLVideoElement>(null);
   const videoSideRef = useRef<HTMLVideoElement>(null);
 
-  // Guard: invalid ID
-  if (!datasetId) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold text-theme-primary">Invalid Dataset ID</h1>
-          <p className="mt-2 text-theme-secondary">No dataset ID was provided.</p>
-        </div>
-      </div>
-    );
-  }
-
   // Fetch dataset name
   useEffect(() => {
+    if (!datasetId) return;
     trainingApi.getDataset(datasetId)
       .then((ds) => setDatasetName(ds.name))
       .catch(() => setDatasetName('Unknown Dataset'));
@@ -90,6 +79,7 @@ export function DatasetEpisodesPage() {
 
   // Load episodes
   useEffect(() => {
+    if (!datasetId) return;
     setEpisodesLoading(true);
     setSelectedEpisode(null);
     setFrames([]);
@@ -113,7 +103,7 @@ export function DatasetEpisodesPage() {
 
   // Load frames when episode selected + set duration from episode metadata
   useEffect(() => {
-    if (selectedEpisode === null) return;
+    if (!datasetId || selectedEpisode === null) return;
 
     const ep = episodes.find((e) => e.index === selectedEpisode);
     if (ep) setDuration(ep.durationSeconds);
@@ -172,6 +162,7 @@ export function DatasetEpisodesPage() {
   }, []);
 
   const handleFlagToggle = useCallback(async (episodeIndex: number) => {
+    if (!datasetId) return;
     const newFlagged = !flaggedMap[episodeIndex];
     setFlaggedMap((prev) => ({ ...prev, [episodeIndex]: newFlagged }));
     try {
@@ -197,6 +188,18 @@ export function DatasetEpisodesPage() {
     const s = Math.floor(seconds % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
+
+  // Guard: invalid ID — placed after all hooks to satisfy rules-of-hooks
+  if (!datasetId) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <h1 className="text-xl font-semibold text-theme-primary">Invalid Dataset ID</h1>
+          <p className="mt-2 text-theme-secondary">No dataset ID was provided.</p>
+        </div>
+      </div>
+    );
+  }
 
   const videoUpUrl = selectedEpisode !== null
     ? trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, 'up')
