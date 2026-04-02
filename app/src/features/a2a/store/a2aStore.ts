@@ -6,7 +6,6 @@
 
 import { createStore } from '@/store/createStore';
 import { a2aApi } from '../api';
-import { orchestrator } from '../services';
 import type {
   A2AStore,
   A2ATask,
@@ -37,7 +36,6 @@ const initialState: Omit<A2AStore, keyof import('../types').A2AActions> = {
   error: null,
   wsConnected: false,
   chatMode: 'direct' as A2AChatMode,
-  geminiApiKey: null,
 };
 
 // ============================================================================
@@ -133,46 +131,17 @@ export const useA2AStore = createStore<A2AStore>(
       });
 
       try {
-        // Use LLM-powered orchestration when in orchestration mode with no target agent
-        const { chatMode, registeredAgents, geminiApiKey } = get();
+        const { chatMode } = get();
         const isOrchestrationMode = chatMode === 'orchestration' && !request.targetAgentUrl;
 
-        let targetAgentUrl = request.targetAgentUrl;
-
-        // In orchestration mode, use LLM to select the best agent
-        if (isOrchestrationMode && registeredAgents.length > 0) {
-          // Initialize orchestrator if API key is set but not initialized
-          if (geminiApiKey && !orchestrator.isReady()) {
-            orchestrator.initialize(geminiApiKey);
-          }
-
-          if (orchestrator.isReady()) {
-            // Use LLM to select the best agent
-            console.log('[A2AStore] Using LLM orchestrator to select agent');
-            const selectedAgent = await orchestrator.selectAgent(request.message, registeredAgents);
-            if (selectedAgent) {
-              console.log('[A2AStore] LLM selected agent:', selectedAgent.name);
-              targetAgentUrl = selectedAgent.url;
-            }
-          } else {
-            // Fallback: use backend keyword-based orchestration
-            console.log('[A2AStore] No LLM available, using backend orchestration');
-          }
-        }
-
-        // Use orchestration API (backend) when no target agent selected and in orchestration mode
-        // Use direct message API when we have a target agent
-        const useBackendOrchestration = isOrchestrationMode && !targetAgentUrl;
-
-        const response = useBackendOrchestration
+        // In orchestration mode: use backend orchestration (server handles LLM agent selection)
+        // In direct mode: send directly to the target agent
+        const response = isOrchestrationMode
           ? await a2aApi.sendOrchestrated({
               conversationId: request.conversationId,
               message: request.message,
             })
-          : await a2aApi.sendMessage({
-              ...request,
-              targetAgentUrl,
-            });
+          : await a2aApi.sendMessage(request);
 
         set((state) => {
           state.pendingMessages[response.messageId] = 'pending';
@@ -572,22 +541,6 @@ export const useA2AStore = createStore<A2AStore>(
     },
 
     // =========================================================================
-    // ORCHESTRATION
-    // =========================================================================
-
-    setGeminiApiKey: (key: string | null) => {
-      set((state) => {
-        state.geminiApiKey = key;
-      });
-      // Initialize or reset orchestrator based on key
-      if (key) {
-        orchestrator.initialize(key);
-      } else {
-        orchestrator.reset();
-      }
-    },
-
-    // =========================================================================
     // UTILITY
     // =========================================================================
 
@@ -641,4 +594,3 @@ export const selectTasksAwaitingInput = (state: A2AStore) =>
   state.tasks.filter((t) => t.status.state === 'input_required');
 
 export const selectChatMode = (state: A2AStore) => state.chatMode;
-export const selectGeminiApiKey = (state: A2AStore) => state.geminiApiKey;

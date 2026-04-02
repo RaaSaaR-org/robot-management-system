@@ -18,8 +18,6 @@ export { AgentSelector } from './AgentSelector';
 export { ConversationSelector } from './ConversationSelector';
 export { ModeSwitcher } from './ModeSwitcher';
 export { EventList } from './EventList';
-export { ApiKeyDialog, useLoadApiKey } from './ApiKeyDialog';
-
 // Navigation components
 export { A2ALayout } from './A2ALayout';
 export { A2ASideNav } from './A2ASideNav';

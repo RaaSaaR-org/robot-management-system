@@ -17,7 +17,6 @@ import { TaskDrawer } from '../components/TaskDrawer';
 import { AgentSelector } from '../components/AgentSelector';
 import { ConversationSelector } from '../components/ConversationSelector';
 import { ModeSwitcher } from '../components/ModeSwitcher';
-import { ApiKeyDialog, useLoadApiKey } from '../components/ApiKeyDialog';
 import { useA2A } from '../hooks/useA2A';
 import { useA2AStream } from '../hooks/useA2AStream';
 import type { A2AAgentCard } from '../types';
@@ -43,19 +42,6 @@ function TaskIcon({ className }: { className?: string }) {
   );
 }
 
-function SettingsIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-      />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  );
-}
-
 /**
  * Main A2A dashboard page - full-screen chat experience
  */
@@ -69,7 +55,6 @@ export const A2APage = memo(function A2APage() {
     isLoading,
     error,
     chatMode,
-    geminiApiKey,
     createConversation,
     selectConversation,
     deleteConversation,
@@ -77,18 +62,13 @@ export const A2APage = memo(function A2APage() {
     unregisterAgent,
     clearError,
     setChatMode,
-    setGeminiApiKey,
   } = useA2A();
 
   // WebSocket connection
   const { isConnected } = useA2AStream();
 
-  // Load API key from localStorage on mount
-  useLoadApiKey(setGeminiApiKey);
-
   // UI state
   const [showRegisterDialog, setShowRegisterDialog] = useState(false);
-  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<A2AAgentCard | undefined>();
   const [sidebarTab, setSidebarTab] = useState<'conversations' | 'agents'>('conversations');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -175,23 +155,6 @@ export const A2APage = memo(function A2APage() {
               {isConnected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
-
-          {/* Settings button - shows indicator when API key is configured */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowSettingsDialog(true)}
-            className={cn(
-              'p-2 relative',
-              geminiApiKey && 'text-accent-600 dark:text-accent-400'
-            )}
-            aria-label="Orchestration settings"
-          >
-            <SettingsIcon className="w-5 h-5" />
-            {geminiApiKey && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-accent-500 rounded-full" />
-            )}
-          </Button>
 
           {/* Tasks button */}
           <Button
@@ -287,13 +250,6 @@ export const A2APage = memo(function A2APage() {
         onRegister={handleRegisterAgent}
       />
 
-      {/* API Key settings dialog */}
-      <ApiKeyDialog
-        isOpen={showSettingsDialog}
-        onClose={() => setShowSettingsDialog(false)}
-        currentKey={geminiApiKey}
-        onSave={setGeminiApiKey}
-      />
     </div>
   );
 });

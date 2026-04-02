@@ -24,5 +24,4 @@ export {
   selectPendingMessages,
   selectTasksAwaitingInput,
   selectChatMode,
-  selectGeminiApiKey,
 } from './a2aStore';
