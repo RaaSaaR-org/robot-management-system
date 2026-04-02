@@ -1,13 +1,14 @@
 ---
 id: TASK-126
 title: Replace episodes modal with dedicated detail page
-status: in-progress
+status: done
 priority: 2
 tags:
 - core
 created: 2026-04-02
 updated: 2026-04-02
 ---
+
 
 
 ## Description
