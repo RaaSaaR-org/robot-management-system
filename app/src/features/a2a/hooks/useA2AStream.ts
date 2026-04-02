@@ -58,6 +58,24 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
 
   const { setWsConnected, handleTaskEvent, fetchMessages } = useA2AStore();
 
+  // Debounce fetchMessages to prevent rapid-fire requests from WebSocket events
+  const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFetchRef = useRef<string | null>(null);
+
+  const debouncedFetchMessages = useCallback((contextId: string) => {
+    pendingFetchRef.current = contextId;
+    if (fetchDebounceRef.current) {
+      clearTimeout(fetchDebounceRef.current);
+    }
+    fetchDebounceRef.current = setTimeout(() => {
+      if (pendingFetchRef.current && mountedRef.current) {
+        fetchMessages(pendingFetchRef.current).catch(console.error);
+        pendingFetchRef.current = null;
+      }
+      fetchDebounceRef.current = null;
+    }, 500);
+  }, [fetchMessages]);
+
   const connect = useCallback(() => {
     if (import.meta.env.VITE_DEMO_MODE === 'true') {
       console.info('[Demo] WebSocket disabled in demo mode');
@@ -101,9 +119,9 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
             handleTaskEvent(taskEvent);
             onTaskEvent?.(taskEvent);
 
-            // Refresh messages for the affected conversation (with mounted check)
+            // Refresh messages for the affected conversation (debounced to prevent rapid requests)
             if (taskEvent.contextId && mountedRef.current) {
-              fetchMessages(taskEvent.contextId).catch(console.error);
+              debouncedFetchMessages(taskEvent.contextId);
             }
           }
         } catch (err) {
@@ -120,13 +138,17 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
         setWsConnected(false);
         onDisconnect?.();
 
-        // Attempt reconnection only if still mounted
+        // Attempt reconnection with exponential backoff
         if (mountedRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current += 1;
-          console.log(
-            `Attempting reconnection ${reconnectAttemptsRef.current}/${maxReconnectAttempts}...`
+          const backoffDelay = Math.min(
+            reconnectDelay * Math.pow(2, reconnectAttemptsRef.current - 1),
+            60000
           );
-          reconnectTimeoutRef.current = setTimeout(connect, reconnectDelay);
+          console.log(
+            `Attempting reconnection ${reconnectAttemptsRef.current}/${maxReconnectAttempts} in ${backoffDelay}ms...`
+          );
+          reconnectTimeoutRef.current = setTimeout(connect, backoffDelay);
         } else if (mountedRef.current) {
           setError('Max reconnection attempts reached');
         }
@@ -148,7 +170,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
     onTaskEvent,
     handleTaskEvent,
     setWsConnected,
-    fetchMessages,
+    debouncedFetchMessages,
     maxReconnectAttempts,
     reconnectDelay,
   ]);
@@ -189,6 +211,10 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
+      }
+      if (fetchDebounceRef.current) {
+        clearTimeout(fetchDebounceRef.current);
+        fetchDebounceRef.current = null;
       }
       if (wsRef.current) {
         wsRef.current.close();

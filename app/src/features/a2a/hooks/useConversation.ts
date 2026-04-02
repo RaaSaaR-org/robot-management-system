@@ -9,8 +9,7 @@ import { useA2AStore } from '../store';
 import type { A2AConversation, A2AMessage } from '../types';
 
 interface UseConversationOptions {
-  /** Auto-refresh messages interval in ms (0 to disable) */
-  refreshInterval?: number;
+  // Options reserved for future use
 }
 
 interface UseConversationReturn {
@@ -35,10 +34,8 @@ interface UseConversationReturn {
  */
 export function useConversation(
   conversationId: string | null,
-  options: UseConversationOptions = {}
+  _options: UseConversationOptions = {}
 ): UseConversationReturn {
-  const { refreshInterval = 0 } = options;
-
   // Use primitive selector and compute derived value with useMemo
   const conversations = useA2AStore((state) => state.conversations);
   const conversation = useMemo(
@@ -68,19 +65,6 @@ export function useConversation(
         .finally(() => setIsLoading(false));
     }
   }, [conversationId, fetchMessages]);
-
-  // Auto-refresh messages
-  useEffect(() => {
-    if (!conversationId || refreshInterval <= 0) {
-      return;
-    }
-
-    const interval = setInterval(() => {
-      fetchMessages(conversationId).catch(console.error);
-    }, refreshInterval);
-
-    return () => clearInterval(interval);
-  }, [conversationId, refreshInterval, fetchMessages]);
 
   const sendMessage = useCallback(
     async (text: string, targetAgentUrl?: string) => {

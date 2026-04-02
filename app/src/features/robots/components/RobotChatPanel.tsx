@@ -4,7 +4,7 @@
  * @feature robots
  */
 
-import { memo, useEffect, useCallback } from 'react';
+import { memo, useEffect, useCallback, useRef } from 'react';
 import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -63,30 +63,50 @@ export const RobotChatPanel = memo(function RobotChatPanel({
     setChatMode('direct');
   }, [setChatMode]);
 
-  // Get or create conversation for this robot
+  // Use refs for frequently-changing values to prevent effect re-fires
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+  const currentConversationRef = useRef(currentConversation);
+  currentConversationRef.current = currentConversation;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+  const hasInitConversation = useRef(false);
+
+  // Get or create conversation for this robot — only re-run when robotId changes
   useEffect(() => {
+    hasInitConversation.current = false;
+  }, [robotId]);
+
+  useEffect(() => {
+    if (hasInitConversation.current) return;
+
     const initConversation = async () => {
+      const convos = conversationsRef.current;
+      const currentConvo = currentConversationRef.current;
+
       // Look for existing conversation for this robot
-      const robotConvo = conversations.find(
+      const robotConvo = convos.find(
         (c) => c.robotId === robotId || c.name === `Chat with ${robotName}`
       );
 
       if (robotConvo) {
-        if (currentConversation?.conversationId !== robotConvo.conversationId) {
+        hasInitConversation.current = true;
+        if (currentConvo?.conversationId !== robotConvo.conversationId) {
           selectConversation(robotConvo.conversationId);
         }
-      } else if (!isLoading) {
-        // Create new conversation for this robot
+      } else if (!isLoadingRef.current) {
+        hasInitConversation.current = true;
         try {
           await createConversation(robotId, `Chat with ${robotName}`);
         } catch {
-          // Error handled by store
+          // Error handled by store — allow retry
+          hasInitConversation.current = false;
         }
       }
     };
 
     initConversation();
-  }, [robotId, robotName, conversations, currentConversation, isLoading, createConversation, selectConversation]);
+  }, [robotId, robotName, conversations, selectConversation, createConversation]);
 
   const handleNewConversation = useCallback(async () => {
     try {

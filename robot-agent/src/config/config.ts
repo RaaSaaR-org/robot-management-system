@@ -17,6 +17,12 @@ export interface Config {
   maxPayloadKg: number;
   robotDescription: string;
   geminiApiKey: string;
+  /** LLM provider: 'gemini' (default) or 'openrouter' */
+  llmProvider: 'gemini' | 'openrouter';
+  /** OpenRouter API key (required when llmProvider is 'openrouter') */
+  openrouterApiKey: string;
+  /** Override default model name per provider */
+  llmModel: string;
   initialLocation: {
     x: number;
     y: number;
@@ -56,6 +62,9 @@ export const config: Config = {
   maxPayloadKg: parseFloat(process.env.MAX_PAYLOAD_KG || '10'),
   robotDescription: process.env.ROBOT_DESCRIPTION || 'A versatile humanoid robot for general tasks',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  llmProvider: (process.env.LLM_PROVIDER as 'gemini' | 'openrouter') || 'gemini',
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+  llmModel: process.env.LLM_MODEL || '',
   initialLocation: {
     x: parseFloat(process.env.INITIAL_X || '10.0'),
     y: parseFloat(process.env.INITIAL_Y || '10.0'),
@@ -75,8 +84,24 @@ export const config: Config = {
   },
 };
 
+/** Default model names per provider */
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_OPENROUTER_MODEL = 'stepfun/step-3.5-flash:free';
+
+/** Resolve the active model name based on provider config */
+export function getActiveModelName(): string {
+  if (config.llmProvider === 'openrouter') {
+    return config.llmModel || DEFAULT_OPENROUTER_MODEL;
+  }
+  return config.llmModel || DEFAULT_GEMINI_MODEL;
+}
+
 export function validateConfig(): void {
-  if (!config.geminiApiKey) {
+  if (config.llmProvider === 'openrouter') {
+    if (!config.openrouterApiKey) {
+      console.warn('[Config] Warning: LLM_PROVIDER=openrouter but OPENROUTER_API_KEY not set. AI features will fail.');
+    }
+  } else if (!config.geminiApiKey) {
     console.warn('[Config] Warning: GEMINI_API_KEY not set. AI features will be limited.');
   }
 
@@ -90,6 +115,8 @@ export function validateConfig(): void {
   console.log(`  - Robot Name: ${config.robotName}`);
   console.log(`  - Robot Class: ${config.robotClass}`);
   console.log(`  - Robot Type: ${config.robotType}`);
+  console.log(`  - LLM Provider: ${config.llmProvider}`);
+  console.log(`  - LLM Model: ${getActiveModelName()}`);
   console.log(`  - Max Payload: ${config.maxPayloadKg}kg`);
   console.log(`  - Initial Location: (${config.initialLocation.x}, ${config.initialLocation.y}) in ${config.initialLocation.zone}`);
   console.log(`  - VLA Inference: ${config.vla.enabled ? 'enabled' : 'disabled'}`);

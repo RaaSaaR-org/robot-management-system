@@ -96,7 +96,7 @@ export const ConversationPanel = memo(function ConversationPanel({
     isSending,
     error,
     sendMessage,
-  } = useConversation(conversationId, { refreshInterval: 5000 });
+  } = useConversation(conversationId);
 
   const pendingMessages = useA2AStore(selectPendingMessages);
 

@@ -4,7 +4,7 @@
  * @feature a2a
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useA2AStore } from '../store';
 
 /**
@@ -68,8 +68,11 @@ export function useA2A() {
     setGeminiApiKey,
   } = actions;
 
-  // Fetch initial data on mount
+  // Fetch initial data on mount (only once)
+  const hasInitialized = useRef(false);
   useEffect(() => {
+    if (hasInitialized.current) return;
+    hasInitialized.current = true;
     fetchConversations();
     fetchAgents();
     fetchTasks();
