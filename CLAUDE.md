@@ -114,6 +114,24 @@ npm run dev:so101    # SO-ARM100 robot arm
 npm run dev:h1       # Unitree H1 humanoid
 ```
 
+### Robot Agent CLI (`roboctl`)
+
+A CLI for controlling robot agents lives in `robot-agent/cli/`. See `robot-agent/cli/README.md` for full usage.
+
+```bash
+cd robot-agent/cli && npm run dev -- status       # Robot status
+cd robot-agent/cli && npm run dev -- telemetry    # Live telemetry
+cd robot-agent/cli && npm run dev -- move "Warehouse A"  # Send to zone
+cd robot-agent/cli && npm run dev -- health       # Health check
+cd robot-agent/cli && npm run dev                 # Interactive REPL mode
+
+# Or install globally:
+cd robot-agent/cli && npm link
+roboctl status
+roboctl telemetry
+roboctl move "Warehouse A"
+```
+
 ### Database Commands (Server)
 
 ```bash
