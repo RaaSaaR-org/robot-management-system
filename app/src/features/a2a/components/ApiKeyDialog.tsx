@@ -16,7 +16,7 @@ interface ApiKeyDialogProps {
   onSave: (key: string | null) => void;
 }
 
-const STORAGE_KEY = 'robo-mind-gemini-api-key';
+const STORAGE_KEY = 'neodem-gemini-api-key';
 
 /**
  * API key configuration dialog component

@@ -2962,7 +2962,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "robo-mind-app"
+name = "neodem"
 version = "0.1.0"
 dependencies = [
  "serde",

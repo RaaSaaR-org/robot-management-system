@@ -1,5 +1,5 @@
 {
-  "name": "@robo-mind/roboctl",
+  "name": "@neodem/roboctl",
   "version": "1.0.0",
   "description": "CLI tool for controlling robot agents",
   "type": "module",

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# task-flow-next.sh - Robo Mind App Task Automation
+# task-flow-next.sh - NeoDEM Task Automation
 # Usage: ./task-flow-next.sh [task_id]
 #   - Without arguments: Gets the next available task
 #   - With task_id: Gets the specific task information
@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Display script name and purpose
-echo "🧠 Task Flow - Robo Mind App Task Automation"
+echo "🧠 Task Flow - NeoDEM Task Automation"
 echo "--------------------------------------------------------------"
 echo "📁 Working directory: $(pwd)"
 echo "🔧 Available tools:"
@@ -66,7 +66,7 @@ echo "🚀 Spawning Claude Flow Hive Mind..."
 claude-flow hive-mind spawn "solve the task: $TASK_INFO" \
   --agents 10 \
   --strategy parallel \
-  --memory-namespace robo-mind-agent \
+  --memory-namespace neodem-agent \
   --claude
 
 echo "✅ Task execution completed. Restarting in 60 seconds..."

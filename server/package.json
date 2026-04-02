@@ -1,5 +1,5 @@
 {
-  "name": "robo-mind-a2a-server",
+  "name": "@neodem/server",
   "version": "0.1.0",
   "description": "A2A Protocol Server for NeoDEM",
   "type": "module",
