@@ -4,7 +4,7 @@ aliases:
 - TASK-121
 title: 'UX: Info-Banner Text kaum lesbar auf Desktop (Low Contrast)'
 slug: ux-info-banner-text-kaum-lesbar-auf-desktop-low-contrast
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -18,6 +18,7 @@ due_date: ''
 created: 2026-04-02
 updated: 2026-04-02
 ---
+
 
 
 
