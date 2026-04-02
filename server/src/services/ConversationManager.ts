@@ -765,7 +765,14 @@ export class ConversationManager {
     if (agents.length === 0) return null;
     if (agents.length === 1) return agents[0];
 
-    // Try LLM-based selection first (if OpenRouter key is configured)
+    // Step 1: Check if user explicitly names a robot (direct match before LLM)
+    const namedAgent = this.matchAgentByName(message, agents);
+    if (namedAgent) {
+      console.log(`[Orchestrator] Direct name match: "${namedAgent.name}"`);
+      return namedAgent;
+    }
+
+    // Step 2: Try LLM-based selection (if OpenRouter key is configured)
     const openrouterKey = process.env.OPENROUTER_API_KEY;
     if (openrouterKey) {
       try {
@@ -776,8 +783,34 @@ export class ConversationManager {
       }
     }
 
-    // Fallback: keyword-based matching
+    // Step 3: Fallback — keyword-based matching
     return this.selectAgentByKeywords(message, agents);
+  }
+
+  /**
+   * Match an agent by explicit name reference in the user's message.
+   * Checks robot names, short names, and common abbreviations.
+   */
+  private matchAgentByName(message: string, agents: A2AAgentCard[]): A2AAgentCard | null {
+    const lower = message.toLowerCase();
+
+    for (const agent of agents) {
+      // Extract meaningful name parts from agent name like "Simulated Robot: Atlas-G1"
+      const fullName = agent.name.toLowerCase();
+      const nameParts = fullName
+        .replace(/simulated robot:\s*/i, '')
+        .split(/[\s\-_:]+/)
+        .filter((p) => p.length > 2); // ignore tiny fragments
+
+      // Check if any name part appears in the message
+      for (const part of nameParts) {
+        if (lower.includes(part)) {
+          return agent;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -800,13 +833,13 @@ Available Agents:
 ${agentDescriptions}
 
 Instructions:
-- Analyze the user's request carefully
-- Consider each agent's capabilities and description
-- Select the agent that is best suited for the task
-- For heavy-duty tasks, prefer agents with higher payload capacity
-- For delicate tasks, prefer nimble or precise agents
+- If the user mentions a specific robot by name (even partial name, nickname, or abbreviation), ALWAYS select that robot. Examples: "atlas" matches "Atlas-G1", "simbot" matches "SimBot-01".
+- If no specific robot is mentioned, select the best agent based on capabilities.
+- For heavy-duty tasks or heavy payloads, prefer agents described as heavy-duty or with higher payload capacity.
+- For delicate or precise tasks, prefer nimble or lightweight agents.
+- The selected agent will receive the command and execute it on itself — you are just routing.
 
-Respond with ONLY the exact agent name (nothing else).`;
+Respond with ONLY the exact agent name as shown above (nothing else).`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
