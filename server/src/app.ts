@@ -138,7 +138,7 @@ export function createApp(): Express {
 
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt, uptimeSeconds: Math.floor((Date.now() - startedAtMs) / 1000) });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt, uptimeSeconds: Math.floor((Date.now() - startedAtMs) / 1000), nodeVersion: process.version });
   });
 
   // Auth Routes (public) - with stricter rate limiting
