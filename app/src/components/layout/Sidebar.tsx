@@ -73,7 +73,7 @@ const NAV_CATEGORIES: NavCategory[] = [
         ),
       },
       {
-        label: "Chat",
+        label: "Orchestrator",
         path: "/orchestrator",
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -7,7 +7,6 @@
 import { memo, useRef, useEffect, useState, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
-import { Spinner } from '@/shared/components/ui/Spinner';
 import { MessageBubble } from './MessageBubble';
 import { useConversation } from '../hooks';
 import { useA2AStore, selectPendingMessages } from '../store';
