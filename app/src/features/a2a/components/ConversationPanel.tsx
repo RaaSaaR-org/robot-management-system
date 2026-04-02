@@ -199,24 +199,31 @@ export const ConversationPanel = memo(function ConversationPanel({
 
   return (
     <div className={cn('flex flex-col h-full overflow-hidden', className)}>
-      {/* Messages area - scrollable, bottom-anchored with flex-col-reverse */}
+      {/* Messages area - scrollable, bottom-anchored */}
       <div
         ref={messagesContainerRef}
         className="flex-1 min-h-0 overflow-y-auto flex flex-col-reverse"
       >
-        <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className="px-3 py-4">
           {isLoading && messages.length === 0 ? (
-            <div className="flex items-center justify-center py-12">
-              <Spinner size="lg" />
+            <div className="flex items-center justify-center py-8">
+              <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
+                <div className="flex gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-xs">Loading...</span>
+              </div>
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
-              <ChatIcon className="w-12 h-12 mb-3" />
-              <p className="text-sm">No messages yet</p>
-              <p className="text-xs mt-1">Send a message to start the conversation</p>
+            <div className="flex flex-col items-center justify-center py-8 text-gray-400 dark:text-gray-500">
+              <ChatIcon className="w-8 h-8 mb-2 opacity-50" />
+              <p className="text-xs">No messages yet</p>
+              <p className="text-[10px] mt-0.5 opacity-70">Send a message to start the conversation</p>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {messages.map((message) => (
                 <MessageBubble
                   key={message.messageId}
@@ -224,44 +231,59 @@ export const ConversationPanel = memo(function ConversationPanel({
                   pendingStatus={pendingMessages[message.messageId]}
                 />
               ))}
+
+              {/* Typing indicator — shown while waiting for agent response */}
+              {isSending && (
+                <div className="flex justify-start">
+                  <div className="glass-card rounded-2xl rounded-bl-md px-4 py-3">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Agent</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="text-xs text-gray-400 dark:text-gray-500 ml-1.5">Thinking...</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* Bottom section - fixed at bottom, never shrinks */}
-      <div className="flex-shrink-0 border-t border-glass-subtle glass-elevated">
+      {/* Bottom section */}
+      <div className="flex-shrink-0 border-t border-glass-subtle">
         {/* Active tasks inline */}
         {activeTasks.length > 0 && (
-          <div className="flex items-center gap-2 px-4 py-2 overflow-x-auto border-b border-gray-100 dark:border-gray-700/50">
-            <span className="text-xs text-gray-400 flex-shrink-0">Active:</span>
+          <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto border-b border-gray-100 dark:border-gray-700/50">
+            <span className="text-[10px] text-gray-400 flex-shrink-0">Active:</span>
             {activeTasks.slice(0, 3).map((task) => (
               <TaskBadge key={task.id} state={task.status.state} />
             ))}
             {activeTasks.length > 3 && (
-              <span className="text-xs text-gray-400">+{activeTasks.length - 3} more</span>
+              <span className="text-[10px] text-gray-400">+{activeTasks.length - 3}</span>
             )}
           </div>
         )}
 
         {/* Input required banner */}
         {hasInputRequired && (
-          <div className="px-4 py-2 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-sm flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-current animate-pulse" />
-            <span>A task requires your input. Please complete the form above.</span>
+          <div className="px-3 py-1.5 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 text-xs flex items-center gap-1.5">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+            <span>Input required</span>
           </div>
         )}
 
         {/* Error message */}
         {error && (
-          <div className="px-4 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
+          <div className="px-3 py-1.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-xs">
             {error}
           </div>
         )}
 
         {/* Input form */}
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto px-4 py-4">
-          <div className="flex items-end gap-3">
+        <form onSubmit={handleSubmit} className="px-3 py-2.5">
+          <div className="flex items-end gap-2">
             <div className="flex-1 relative">
               <textarea
                 ref={inputRef}
@@ -272,43 +294,42 @@ export const ConversationPanel = memo(function ConversationPanel({
                 disabled={isSending || !canSend}
                 rows={1}
                 className={cn(
-                  'w-full resize-none rounded-2xl border border-glass-subtle',
-                  'glass-subtle px-4 py-3 pr-12',
-                  'focus:ring-2 focus:ring-primary-500 focus:border-transparent focus:outline-none',
+                  'w-full resize-none rounded-xl border border-glass-subtle',
+                  'glass-subtle px-3 py-2.5 text-sm',
+                  'focus:ring-2 focus:ring-[#FF6700]/40 focus:border-[#FF6700]/50 focus:outline-none',
                   'placeholder:text-gray-400 dark:placeholder:text-gray-500',
                   'text-gray-900 dark:text-gray-100',
                   'transition-all duration-200',
-                  'min-h-[48px] max-h-24 overflow-y-auto',
+                  'min-h-[40px] max-h-20 overflow-y-auto',
                   !canSend && 'opacity-50 cursor-not-allowed'
                 )}
-                style={{ height: 'auto', maxHeight: '96px' }}
+                style={{ height: 'auto', maxHeight: '80px' }}
               />
             </div>
-            <Button
+            <button
               type="submit"
               disabled={!inputValue.trim() || isSending || !canSend}
               className={cn(
-                'h-12 w-12 rounded-full p-0 flex items-center justify-center flex-shrink-0',
-                'transition-all',
-                inputValue.trim() && canSend
-                  ? chatMode === 'orchestration'
-                    ? 'bg-accent-500 hover:bg-accent-600'
-                    : 'bg-primary-500 hover:bg-primary-600'
-                  : 'bg-gray-200 dark:bg-gray-700'
+                'h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0',
+                'transition-all duration-150',
+                inputValue.trim() && canSend && !isSending
+                  ? 'bg-[#FF6700] hover:bg-[#e55900] text-white shadow-md shadow-[#FF6700]/25 active:scale-95'
+                  : isSending
+                    ? 'bg-[#FF6700]/60 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-400'
               )}
             >
               {isSending ? (
-                <Spinner size="sm" />
+                <div className="flex gap-0.5">
+                  <span className="w-1 h-1 rounded-full bg-white animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1 h-1 rounded-full bg-white animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1 h-1 rounded-full bg-white animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
               ) : (
-                <SendIcon className="w-5 h-5" />
+                <SendIcon className="w-4 h-4" />
               )}
-            </Button>
+            </button>
           </div>
-          {!canSend && chatMode === 'direct' && (
-            <p className="text-xs text-gray-400 mt-2 text-center">
-              Select a robot from the header to start chatting
-            </p>
-          )}
         </form>
       </div>
     </div>

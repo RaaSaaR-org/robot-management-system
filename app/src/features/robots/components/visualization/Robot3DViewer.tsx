@@ -10,7 +10,6 @@ import { OrbitControls, Grid, Center } from '@react-three/drei';
 import { RobotModel } from './RobotModel';
 import type { RobotType, JointState } from '../../types/robots.types';
 import { cn } from '@/shared/utils/cn';
-import { Spinner } from '@/shared/components/ui';
 
 // ============================================================================
 // TYPES
@@ -134,9 +133,61 @@ export const Robot3DViewer = memo(function Robot3DViewer({
 // ============================================================================
 
 export function Robot3DViewerFallback({ className }: { className?: string }) {
+  const cx = 60, cy = 60, r = 40;
+  const hexPoints = (radius: number) => {
+    const pts: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 6;
+      pts.push(`${(cx + radius * Math.cos(angle)).toFixed(2)},${(cy + radius * Math.sin(angle)).toFixed(2)}`);
+    }
+    return pts.join(' ');
+  };
+
   return (
-    <div className={cn('w-full h-full min-h-[300px] flex items-center justify-center bg-surface-800 rounded-lg', className)}>
-      <Spinner size="lg" color="cobalt" label="Loading 3D viewer..." />
+    <div className={cn(
+      'w-full h-full min-h-[300px] flex flex-col items-center justify-center rounded-lg',
+      className
+    )} style={{ background: '#141414' }}>
+      {/* Animated hex loader */}
+      <svg viewBox="0 0 120 120" className="w-24 h-24" fill="none">
+        <defs>
+          <linearGradient id="fbGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#2A5FFF" />
+            <stop offset="100%" stopColor="#18E4C3" />
+          </linearGradient>
+          <filter id="fbGlow">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        {/* Outer hex — rotating dashed */}
+        <polygon
+          points={hexPoints(r)}
+          stroke="url(#fbGrad)"
+          strokeWidth="1.5"
+          strokeDasharray="12 6"
+          filter="url(#fbGlow)"
+          style={{ transformOrigin: `${cx}px ${cy}px`, animation: 'spin 4s linear infinite' }}
+        />
+        {/* Inner hex — counter-rotating */}
+        <polygon
+          points={hexPoints(r * 0.6)}
+          stroke="#FF6700"
+          strokeWidth="1.5"
+          opacity="0.7"
+          style={{ transformOrigin: `${cx}px ${cy}px`, animation: 'spin 3s linear infinite reverse' }}
+        />
+        {/* Core pulse */}
+        <circle cx={cx} cy={cy} r="8" fill="#FF6700" filter="url(#fbGlow)"
+          style={{ animation: 'hexGlow 1.5s ease-in-out infinite' }} />
+        {/* Orbiting dot */}
+        <circle cx={cx} cy={cy - r + 5} r="3" fill="#18E4C3" filter="url(#fbGlow)"
+          style={{ transformOrigin: `${cx}px ${cy}px`, animation: 'spin 2s linear infinite' }} />
+      </svg>
+      <p className="mt-4 font-mono text-[10px] tracking-[0.25em] uppercase"
+        style={{ color: '#FF6700', animation: 'hexGlow 2s ease-in-out infinite' }}>
+        LOADING 3D MODEL
+      </p>
     </div>
   );
 }
