@@ -6,7 +6,6 @@
 
 import { memo, Suspense, lazy } from 'react';
 import { cn } from '@/shared/utils/cn';
-import { RobotStatusBadge } from './RobotStatusBadge';
 import { Robot3DViewerFallback } from './visualization';
 import type { Robot, RobotStatus, RobotTelemetry, RobotType } from '../types/robots.types';
 
@@ -26,6 +25,8 @@ export interface RobotHeroSectionProps {
   telemetry?: RobotTelemetry | null;
   /** Whether telemetry is connected */
   isLive?: boolean;
+  /** Optional third-column content (e.g. chat panel) */
+  children?: React.ReactNode;
   /** Additional class names */
   className?: string;
 }
@@ -589,6 +590,7 @@ export const RobotHeroSection = memo(function RobotHeroSection({
   robot,
   telemetry,
   isLive = false,
+  children,
   className,
 }: RobotHeroSectionProps) {
   return (
@@ -604,26 +606,14 @@ export const RobotHeroSection = memo(function RobotHeroSection({
       <div className="absolute inset-0 bg-gradient-to-br from-cobalt-500/5 via-transparent to-turquoise-500/5" />
 
       {/* Content */}
-      <div className="relative z-10 p-6 lg:p-8 space-y-6">
-        {/* Header Row - Full Width */}
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-4 flex-wrap">
-            <h1 className="text-3xl lg:text-4xl font-bold text-theme-primary">{robot.name}</h1>
-            <RobotStatusBadge status={robot.status} size="lg" showPulse />
-            {isLive && (
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-xs text-green-500 font-medium">Live</span>
-              </div>
-            )}
-          </div>
-          <p className="text-theme-secondary text-lg">{robot.model}</p>
-        </div>
-
-        {/* Visualizations Row - Equal Size */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* 3D Robot Viewer - LEFT */}
-          <div className="h-[300px] rounded-xl overflow-hidden border border-glass-subtle">
+      <div className="relative z-10 p-3 lg:p-4">
+        {/* Command Center Grid — 3D (with Hex overlay) | Chat */}
+        <div className={cn(
+          'grid grid-cols-1 gap-3',
+          children ? 'lg:grid-cols-[1fr_380px]' : 'lg:grid-cols-1'
+        )}>
+          {/* 3D Robot Viewer with Hex HUD overlay */}
+          <div className="relative h-[280px] lg:h-[400px] rounded-xl overflow-hidden border border-glass-subtle">
             <Suspense fallback={<Robot3DViewerFallback className="h-full" />}>
               <Robot3DViewer
                 robotType={(telemetry?.robotType as RobotType) ?? 'generic'}
@@ -631,28 +621,34 @@ export const RobotHeroSection = memo(function RobotHeroSection({
                 isAnimating={isLive}
               />
             </Suspense>
-          </div>
 
-          {/* Hexagon Data HUD - RIGHT */}
-          <div className="h-[300px] flex items-center justify-center">
-            <div className="relative">
-              {/* Ambient glow */}
-              <div
-                className="absolute inset-0 blur-3xl opacity-30"
-                style={{
-                  background: `radial-gradient(circle, ${STATUS_COLORS[robot.status].glow} 0%, transparent 70%)`,
-                }}
-              />
-              <HexagonalDataHUD
-                status={robot.status}
-                telemetry={telemetry}
-                batteryLevel={robot.batteryLevel ?? 0}
-                isAcPowered={robot.metadata?.powerSource === 'ac_powered' || robot.batteryLevel === null}
-                isOffline={robot.status === 'offline'}
-                className="h-[300px] w-[300px]"
-              />
+            {/* Hex HUD overlay — bottom-left corner */}
+            <div className="absolute bottom-2 left-2 pointer-events-none">
+              <div className="relative">
+                <div
+                  className="absolute inset-0 blur-2xl opacity-20"
+                  style={{
+                    background: `radial-gradient(circle, ${STATUS_COLORS[robot.status].glow} 0%, transparent 70%)`,
+                  }}
+                />
+                <HexagonalDataHUD
+                  status={robot.status}
+                  telemetry={telemetry}
+                  batteryLevel={robot.batteryLevel ?? 0}
+                  isAcPowered={robot.metadata?.powerSource === 'ac_powered' || robot.batteryLevel === null}
+                  isOffline={robot.status === 'offline'}
+                  className="h-[160px] w-[160px] lg:h-[200px] lg:w-[200px] opacity-90"
+                />
+              </div>
             </div>
           </div>
+
+          {/* Chat column — hidden on mobile, shown via FAB instead */}
+          {children && (
+            <div className="hidden lg:flex h-[400px] rounded-xl overflow-hidden border border-glass-subtle">
+              {children}
+            </div>
+          )}
         </div>
       </div>
     </section>

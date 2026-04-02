@@ -87,8 +87,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
   const {
     alerts,
     unacknowledgedCount,
-    isLoading: alertsLoading,
-  } = useAlerts();
+  } = useAlerts(false);
 
   // Fetch robots on mount
   useEffect(() => {
@@ -193,7 +192,7 @@ export function useFleetStatus(): UseFleetStatusReturn {
     status,
     robotMarkers,
     floors,
-    isLoading: robotsLoading || alertsLoading,
+    isLoading: robotsLoading,
     error: robotsError,
     refresh,
   };

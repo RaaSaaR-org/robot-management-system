@@ -7,7 +7,9 @@ import { v4 as uuidv4 } from 'uuid';
 import type { MessageData } from 'genkit';
 import type { Task, TaskStatusUpdateEvent, TextPart, Message, TaskState } from '@a2a-js/sdk';
 import type { AgentExecutor, RequestContext, ExecutionEventBus } from '@a2a-js/sdk/server';
-import { ai } from './genkit.js';
+import { ai, configuredModel } from './genkit.js';
+import { RateLimiter } from './rate-limiter.js';
+import { config, getActiveModelName } from '../config/config.js';
 import { moveToLocation, stopMovement, goToCharge, returnHome } from '../tools/navigation.js';
 import { pickupObject, dropObject } from '../tools/manipulation.js';
 import { getRobotStatus, emergencyStop } from '../tools/status.js';
@@ -83,10 +85,16 @@ const contexts = new ContextCache();
 
 export class RobotAgentExecutor implements AgentExecutor {
   private cancelledTasks = new Set<string>();
+  private activeTasks = new Set<string>();
   private robotStateManager: RobotStateManager;
+  private rateLimiter: RateLimiter | null;
 
   constructor(robotStateManager: RobotStateManager) {
     this.robotStateManager = robotStateManager;
+    // Only enable rate limiting for free-tier providers
+    this.rateLimiter = config.llmProvider === 'openrouter'
+      ? new RateLimiter()
+      : null;
   }
 
   public async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
@@ -103,6 +111,14 @@ export class RobotAgentExecutor implements AgentExecutor {
     const taskId = existingTask?.id || uuidv4();
     const contextId = userMessage.contextId || existingTask?.contextId || uuidv4();
 
+    // Guard against re-entrant execution for the same task
+    if (this.activeTasks.has(taskId)) {
+      console.warn(`[RobotAgentExecutor] Rejecting duplicate execution for active task ${taskId}`);
+      return;
+    }
+    this.activeTasks.add(taskId);
+
+    try {
     console.log(
       `[RobotAgentExecutor] Processing message ${userMessage.messageId} for task ${taskId} (context: ${contextId})`
     );
@@ -190,8 +206,8 @@ export class RobotAgentExecutor implements AgentExecutor {
       // 4. Get current robot state for context
       const robotState = this.robotStateManager.getState();
 
-      // 5. Run the Genkit prompt with tools
-      const response = await robotAgentPrompt(
+      // 5. Run the Genkit prompt with tools (rate-limited for free-tier providers)
+      const callPrompt = () => robotAgentPrompt(
         {
           robotId: robotState.id,
           robotName: robotState.name,
@@ -205,6 +221,7 @@ export class RobotAgentExecutor implements AgentExecutor {
           now: new Date().toISOString(),
         },
         {
+          model: configuredModel,
           messages,
           tools: [
             moveToLocation,
@@ -218,6 +235,10 @@ export class RobotAgentExecutor implements AgentExecutor {
           ],
         }
       );
+
+      const response = this.rateLimiter
+        ? await this.rateLimiter.executeWithRetry(callPrompt)
+        : await callPrompt();
 
       // Check if the request has been cancelled
       if (this.cancelledTasks.has(taskId)) {
@@ -335,7 +356,7 @@ export class RobotAgentExecutor implements AgentExecutor {
             safetyClassification: 'safe',
             metadata: { taskId, contextId },
           },
-          modelVersion: 'gemini-2.0-flash',
+          modelVersion: getActiveModelName(),
           input: userText,
           output: agentReplyText,
           severity: finalA2AState === 'failed' ? 'warning' : 'info',
@@ -365,6 +386,9 @@ export class RobotAgentExecutor implements AgentExecutor {
         final: true,
       };
       eventBus.publish(errorUpdate);
+    }
+    } finally {
+      this.activeTasks.delete(taskId);
     }
   }
 }

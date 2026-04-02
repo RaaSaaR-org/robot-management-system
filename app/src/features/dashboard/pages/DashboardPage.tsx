@@ -9,7 +9,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
-import { AlertBanner } from '@/features/alerts/components';
 import { FleetEmergencyStopButton } from '@/features/safety';
 import { CommandBar } from '@/features/command/components/CommandBar';
 import { Button } from '@/shared/components/ui/Button';
@@ -123,8 +122,7 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Critical Alert Banner */}
-      <AlertBanner />
+      {/* Critical Alert Banner is rendered by AlertProvider in App.tsx */}
 
       {/* Fleet Statistics with entrance animation */}
       <FleetStats status={status} isLoading={isLoading} />

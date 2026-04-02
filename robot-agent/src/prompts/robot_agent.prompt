@@ -61,7 +61,7 @@ The last line MUST be one of: COMPLETED, AWAITING_USER_INPUT, or FAILED
 
 {{role "user"}}
 {{#each messages}}
-{{#if (eq role "user")}}{{content}}{{/if}}
+{{content}}
 {{/each}}
 
 {{role "model"}}

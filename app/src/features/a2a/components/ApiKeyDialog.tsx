@@ -1,6 +1,6 @@
 /**
  * @file ApiKeyDialog.tsx
- * @description Dialog for configuring Gemini API key for LLM-powered orchestration
+ * @description Dialog for configuring OpenRouter API key for LLM-powered orchestration
  * @feature a2a
  */
 
@@ -16,7 +16,7 @@ interface ApiKeyDialogProps {
   onSave: (key: string | null) => void;
 }
 
-const STORAGE_KEY = 'neodem-gemini-api-key';
+const STORAGE_KEY = 'neodem-openrouter-api-key';
 
 /**
  * API key configuration dialog component
@@ -76,7 +76,7 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
             htmlFor="api-key"
             className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
           >
-            Gemini API Key
+            OpenRouter API Key
           </label>
           <div className="relative">
             <Input
@@ -84,7 +84,7 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
               type={showKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="Enter your Gemini API key"
+              placeholder="sk-or-v1-..."
               className="w-full pr-20"
             />
             <button
@@ -96,14 +96,14 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
             </button>
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            Required for LLM-powered orchestration. Get your API key from{' '}
+            Required for LLM-powered orchestration. Uses free model (Step 3.5 Flash). Get your key from{' '}
             <a
-              href="https://aistudio.google.com/apikey"
+              href="https://openrouter.ai/keys"
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary-500 hover:text-primary-600 hover:underline"
             >
-              Google AI Studio
+              openrouter.ai
             </a>
           </p>
         </div>
@@ -117,6 +117,7 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
             <li>• It reads agent descriptions and capabilities</li>
             <li>• Automatically selects the best agent for your task</li>
             <li>• Without an API key, basic keyword matching is used</li>
+            <li>• Uses OpenRouter with free Step 3.5 Flash model ($0 cost)</li>
           </ul>
         </div>
 
@@ -157,11 +158,11 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
 /**
  * Hook to load API key from localStorage on app init
  */
-export function useLoadApiKey(setGeminiApiKey: (key: string | null) => void) {
+export function useLoadApiKey(setApiKey: (key: string | null) => void) {
   useEffect(() => {
     const storedKey = localStorage.getItem(STORAGE_KEY);
     if (storedKey) {
-      setGeminiApiKey(storedKey);
+      setApiKey(storedKey);
     }
-  }, [setGeminiApiKey]);
+  }, [setApiKey]);
 }

@@ -18,6 +18,14 @@ import {
   chargeCommand,
   homeCommand,
 } from './commands/control.js';
+import { robotCommand } from './commands/robot.js';
+import {
+  calibrateCommand,
+  teleoperateCommand,
+  recordCommand,
+  findPortCommand,
+  findCamerasCommand,
+} from './commands/lerobot.js';
 
 export const program = new Command()
   .name('roboctl')
@@ -42,3 +50,13 @@ program.addCommand(pickupCommand);
 program.addCommand(dropCommand);
 program.addCommand(chargeCommand);
 program.addCommand(homeCommand);
+
+// Robot profile management
+program.addCommand(robotCommand);
+
+// LeRobot wrapper commands
+program.addCommand(calibrateCommand);
+program.addCommand(teleoperateCommand);
+program.addCommand(recordCommand);
+program.addCommand(findPortCommand);
+program.addCommand(findCamerasCommand);

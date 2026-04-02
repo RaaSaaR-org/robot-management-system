@@ -149,14 +149,18 @@ export function useWebSocket<T = unknown>(
         setStatus('disconnected');
         callbacksRef.current.onDisconnect?.(event);
 
-        // Attempt reconnection if enabled and not a clean close
+        // Attempt reconnection with exponential backoff
         if (reconnect && !event.wasClean && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current += 1;
+          const backoffDelay = Math.min(
+            reconnectInterval * Math.pow(2, reconnectAttemptsRef.current - 1),
+            60000
+          );
           reconnectTimeoutRef.current = setTimeout(() => {
             if (mountedRef.current) {
               connect();
             }
-          }, reconnectInterval);
+          }, backoffDelay);
         }
       };
 
