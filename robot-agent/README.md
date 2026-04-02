@@ -1,6 +1,6 @@
-# RoboMind Robot Agent
+# NeoDEM Robot Agent
 
-The Robot Agent software that runs directly on humanoid robots, enabling A2A (Agent-to-Agent) protocol communication and natural language command processing via RoboMindOS.
+The Robot Agent software that runs directly on humanoid robots, enabling A2A (Agent-to-Agent) protocol communication and natural language command processing via NeoDEM.
 
 **For development and demo purposes**, this agent includes a simulation mode that emulates robot movement, sensors, and actions without requiring physical hardware.
 
@@ -8,7 +8,7 @@ The Robot Agent software that runs directly on humanoid robots, enabling A2A (Ag
 
 - **A2A Protocol Support**: Full A2A agent implementation with AgentCard, streaming, and task management
 - **Natural Language Commands**: Process commands via Gemini AI (e.g., "Move to Warehouse A", "Pick up the box")
-- **RoboMindOS Compatible**: REST API endpoints that integrate with the RoboMindOS control system
+- **NeoDEM Compatible**: REST API endpoints that integrate with the NeoDEM control system
 - **Real-time Telemetry**: WebSocket streaming of robot sensor data and status
 - **Simulation Mode**: Built-in simulation for development and demos (movement, battery, manipulation)
 
@@ -78,7 +78,7 @@ The server will start on `http://localhost:41243` by default.
 - **Agent Card**: `GET /.well-known/agent-card.json`
 - **A2A Messages**: `POST /` (handled by A2A SDK)
 
-### REST API (RoboMindOS Compatible)
+### REST API (NeoDEM Compatible)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -86,7 +86,7 @@ The server will start on `http://localhost:41243` by default.
 | `POST` | `/api/v1/robots/:id/command` | Send command to robot |
 | `GET` | `/api/v1/robots/:id/telemetry` | Get current telemetry |
 | `GET` | `/api/v1/robots/:id/commands` | Get command history |
-| `GET` | `/api/v1/register` | Get registration info for RoboMindOS |
+| `GET` | `/api/v1/register` | Get registration info for NeoDEM |
 | `GET` | `/api/v1/health` | Health check |
 
 ### WebSocket
@@ -118,7 +118,7 @@ The robot knows these pre-defined locations:
 - `entrance` - Building entrance (50, 0)
 - `exit` - Building exit (50, 50)
 
-## Integration with RoboMindOS
+## Integration with NeoDEM
 
 ### Option 1: Manual Registration
 

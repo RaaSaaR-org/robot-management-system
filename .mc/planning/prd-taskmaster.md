@@ -1,4 +1,4 @@
-# RoboMindOS PRD - TaskMaster RPG Format
+# NeoDEM PRD - TaskMaster RPG Format
 
 > This PRD follows the Repository Planning Graph (RPG) methodology for Task Master parsing.
 

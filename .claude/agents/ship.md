@@ -206,9 +206,9 @@ SCHEMA_CHANGED=$(git diff HEAD~1 --name-only | grep 'prisma/schema.prisma' || tr
 Restart services:
 
 ```bash
-sudo systemctl restart robomind-server && sleep 3
-sudo systemctl restart robomind-agent
-sudo systemctl restart robomind-app
+sudo systemctl restart neodem-server && sleep 3
+sudo systemctl restart neodem-agent
+sudo systemctl restart neodem-app
 sleep 8
 ```
 
@@ -237,9 +237,9 @@ PHASE 3 (REVIEW): MERGED (fixes: <count>)
 PHASE 4 (DEPLOY): OK/FAIL
 
 SERVICES:
-  robomind-server: OK/FAIL
-  robomind-app: OK/FAIL
-  robomind-agent: OK/FAIL
+  neodem-server: OK/FAIL
+  neodem-app: OK/FAIL
+  neodem-agent: OK/FAIL
 
 SHIPPED.
 ```

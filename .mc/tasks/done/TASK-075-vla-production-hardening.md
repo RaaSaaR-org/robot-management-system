@@ -20,7 +20,7 @@ The current VLA pipeline (pi0.5 via sidecar → client_pi.py) works in principle
 - [ ] Wrist camera: `/vla/start` body accepts `wristCameraIndex` (default: 1); `client_pi.py` gets `--wrist-camera-index` arg; `LeRobotClient` sends `observation.images.wrist` in addition to `front`
 - [ ] Crash recovery: sidecar watchdog polls subprocess every 2s; if it exits, sets `vla_active=false` and logs returncode (already partially done via existing watchdog, verify it resets state correctly)
 - [ ] Status endpoint accuracy: `GET /vla/status` returns `active: false` immediately after subprocess exits (not just at next state poll)
-- [ ] systemd fix: robomind-agent.service has correct NVM PATH and absolute ExecStart → `sudo systemctl enable --now robomind-agent`
+- [ ] systemd fix: neodem-agent.service has correct NVM PATH and absolute ExecStart → `sudo systemctl enable --now neodem-agent`
 
 ## Technical Notes
 

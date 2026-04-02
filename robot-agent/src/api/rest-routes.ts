@@ -1,6 +1,6 @@
 /**
  * @file rest-routes.ts
- * @description REST API routes compatible with RoboMindOS robot interface
+ * @description REST API routes compatible with NeoDEM robot interface
  */
 
 import { Router } from 'express';
@@ -23,7 +23,7 @@ export function createRestRoutes(
 ): Router {
   const router = Router();
 
-  // GET /robots/:id - Get robot details (RoboMindOS compatible)
+  // GET /robots/:id - Get robot details (NeoDEM compatible)
   router.get('/robots/:id', (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
     if (req.params.id !== robot.id) {
@@ -116,7 +116,7 @@ export function createRestRoutes(
     });
   });
 
-  // GET /register - Registration info for RoboMindOS
+  // GET /register - Registration info for NeoDEM
   router.get('/register', (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
     const registrationInfo: RegistrationInfo = {

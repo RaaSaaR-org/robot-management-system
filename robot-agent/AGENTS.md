@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMind Robot Agent.
+This file provides guidance to Claude Code (claude.ai/code) when working with the NeoDEM Robot Agent.
 
 ## Project Overview
 
-The Robot Agent is software that runs directly on humanoid robots, implementing the A2A (Agent-to-Agent) protocol for communication with RoboMindOS. It uses Genkit with Gemini AI to interpret natural language commands and execute robot actions.
+The Robot Agent is software that runs directly on humanoid robots, implementing the A2A (Agent-to-Agent) protocol for communication with NeoDEM. It uses Genkit with Gemini AI to interpret natural language commands and execute robot actions.
 
 For development and demos, the agent includes a **simulation mode** that emulates robot behavior (movement, battery, sensors, joint states) without physical hardware.
 
@@ -101,7 +101,7 @@ robot-agent/src/
 │       ├── h1.config.ts      # Unitree H1 - 19 joints
 │       └── so101.config.ts   # SO-ARM100 SO101 - 6 joints
 ├── api/
-│   ├── rest-routes.ts    # REST API endpoints (RoboMindOS compatible)
+│   ├── rest-routes.ts    # REST API endpoints (NeoDEM compatible)
 │   └── websocket.ts      # WebSocket telemetry streaming (2s interval)
 ├── tools/
 │   ├── navigation.ts     # Genkit tools: moveToLocation, stopMovement, goToCharge, returnHome
@@ -239,7 +239,7 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | ------------------ | ------------------ | ------------------------------ |
 | `GEMINI_API_KEY`   | (required)         | Google Gemini API key          |
 | `PORT`             | `41243`            | Server port                    |
-| `SERVER_URL`       | `http://localhost:3001` | RoboMindOS server URL     |
+| `SERVER_URL`       | `http://localhost:3001` | NeoDEM server URL     |
 | `ROBOT_ID`         | `sim-robot-001`    | Unique robot identifier        |
 | `ROBOT_NAME`       | `SimBot-01`        | Display name                   |
 | `ROBOT_MODEL`      | `SimBot H1`        | Model string                   |

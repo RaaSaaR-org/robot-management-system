@@ -154,21 +154,21 @@ ROBOT_ID=sim-robot-001
 # Docker Compose
 Host: localhost
 Port: 5432
-Database: robomind
-Username: robomind
-Password: ${POSTGRES_PASSWORD:-robomind-dev}
+Database: neodem
+Username: neodem
+Password: ${POSTGRES_PASSWORD:-neodem-dev}
 
 # Connection string
-postgresql://robomind:robomind-dev@localhost:5432/robomind
+postgresql://neodem:neodem-dev@localhost:5432/neodem
 ```
 
 **Direct Access:**
 ```bash
 # Connect via psql (in Docker)
-docker-compose exec postgres psql -U robomind -d robomind
+docker-compose exec postgres psql -U neodem -d neodem
 
 # Or from host (if psql installed)
-PGPASSWORD=robomind-dev psql -h localhost -U robomind -d robomind
+PGPASSWORD=neodem-dev psql -h localhost -U neodem -d neodem
 ```
 
 **Common Queries:**
@@ -424,7 +424,7 @@ docker-compose exec server sh
 docker-compose exec server npm run typecheck
 
 # Database shell
-docker-compose exec postgres psql -U robomind -d robomind
+docker-compose exec postgres psql -U neodem -d neodem
 ```
 
 ---

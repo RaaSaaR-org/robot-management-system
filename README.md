@@ -52,7 +52,7 @@ Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM g
 ## Architecture
 
 ```
-                                    NeoDEM: RoboMindOS
+                                    NeoDEM Platform
     ┌─────────────────────────────────────────────────────────────────────────┐
     │                                                                         │
     │   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        │
@@ -248,13 +248,13 @@ Deploy with Helm:
 
 ```bash
 # Development
-helm install neodem ./helm/robomind \
+helm install neodem ./helm/neodem \
   --set postgres.auth.password=yourpassword \
   --set secrets.jwtSecret=yourjwtsecret
 
 # Production (with autoscaling, network policies, PDBs)
-helm install neodem ./helm/robomind \
-  -f ./helm/robomind/values-production.yaml \
+helm install neodem ./helm/neodem \
+  -f ./helm/neodem/values-production.yaml \
   --set postgres.auth.password=$DB_PASSWORD \
   --set secrets.jwtSecret=$JWT_SECRET \
   --set secrets.geminiApiKey=$GEMINI_API_KEY
@@ -288,7 +288,7 @@ neodem/
 │   ├── models/             # Model implementations (pi0, openvla, groot)
 │   └── README.md           # VLA server documentation
 ├── protos/                 # Protocol Buffer definitions
-├── helm/robomind/          # Kubernetes Helm chart
+├── helm/neodem/          # Kubernetes Helm chart
 ├── docs/                   # Documentation
 └── CLAUDE.md               # AI assistant guidance
 ```

@@ -1,5 +1,5 @@
 # ============================================================================
-# RoboMindOS App Dockerfile
+# NeoDEM App Dockerfile
 # Multi-stage build for React + Vite frontend served by nginx
 # ============================================================================
 

@@ -2,7 +2,7 @@
 # Stored in .mc/ alongside an existing project.
 
 site:
-  name: RoboMindOS
+  name: NeoDEM
   description: Fleet management platform for humanoid robots
 
 paths:

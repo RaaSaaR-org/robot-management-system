@@ -163,14 +163,14 @@ All four services run as systemd units on the Raspberry Pi:
 
 | Unit | Working Directory | After |
 |------|-------------------|-------|
-| `robomind-server` | `server/` | network.target |
-| `robomind-app` | `app/` | network.target |
+| `neodem-server` | `server/` | network.target |
+| `neodem-app` | `app/` | network.target |
 | `so101-sidecar` | — | — |
-| `robomind-agent` | `robot-agent/` | robomind-server, so101-sidecar |
+| `neodem-agent` | `robot-agent/` | neodem-server, so101-sidecar |
 
 ```bash
-sudo systemctl status robomind-server robomind-agent robomind-app so101-sidecar
-journalctl -u robomind-agent -f --no-pager
+sudo systemctl status neodem-server neodem-agent neodem-app so101-sidecar
+journalctl -u neodem-agent -f --no-pager
 ```
 
 ## Optional Infrastructure

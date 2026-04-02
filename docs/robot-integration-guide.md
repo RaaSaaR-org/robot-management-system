@@ -116,7 +116,7 @@ npm run dev:so101
 Or via systemd:
 
 ```bash
-sudo systemctl start robomind-agent
+sudo systemctl start neodem-agent
 ```
 
 The systemd unit uses `--env-file=.env.so101` automatically.
@@ -126,9 +126,9 @@ The systemd unit uses `--env-file=.env.so101` automatically.
 The agent saves robot state to `robot-agent/data/state.json` on shutdown (SIGTERM). On startup, it restores from this file. If the state file accumulates errors or stale data:
 
 ```bash
-sudo systemctl stop robomind-agent
+sudo systemctl stop neodem-agent
 rm robot-agent/data/state.json
-sudo systemctl start robomind-agent
+sudo systemctl start neodem-agent
 ```
 
 ## Adding a New Robot Type

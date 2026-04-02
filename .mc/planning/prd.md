@@ -1,6 +1,6 @@
 # Product Requirements Document (PRD)
 
-# RoboMindOS - Robot Fleet Management Application
+# NeoDEM - Robot Fleet Management Application
 
 **Version:** 1.0  
 **Last Updated:** December 2025  
@@ -31,7 +31,7 @@
 
 ### 1.1 Product Overview
 
-**RoboMindOS** is a cross-platform application (mobile, desktop, web) that enables users to manage, monitor, and control humanoid robots at any scale—from a single home robot to enterprise fleets of 1000+ units. The application serves as the primary interface between humans and robots, translating natural language commands into robot actions through Vision-Language-Action (VLA) model integration.
+**NeoDEM** is a cross-platform application (mobile, desktop, web) that enables users to manage, monitor, and control humanoid robots at any scale—from a single home robot to enterprise fleets of 1000+ units. The application serves as the primary interface between humans and robots, translating natural language commands into robot actions through Vision-Language-Action (VLA) model integration.
 
 ### 1.2 Key Value Propositions
 
@@ -93,7 +93,7 @@ Germany faces a critical labor shortage with 86% of companies reporting hiring d
 
 ### 2.4 Opportunity
 
-RoboMindOS fills the gap between consumer-grade simplicity and enterprise-grade capability, providing a "single pane of glass" for humanoid robot management that scales with user needs.
+NeoDEM fills the gap between consumer-grade simplicity and enterprise-grade capability, providing a "single pane of glass" for humanoid robot management that scales with user needs.
 
 ---
 
@@ -176,7 +176,7 @@ RoboMindOS fills the gap between consumer-grade simplicity and enterprise-grade 
 
 > **"Make robot collaboration as natural as talking to a colleague."**
 
-RoboMindOS transforms humanoid robots from intimidating machines into trusted assistants by providing an interface that anyone can use confidently, regardless of technical expertise.
+NeoDEM transforms humanoid robots from intimidating machines into trusted assistants by providing an interface that anyone can use confidently, regardless of technical expertise.
 
 ### 4.2 Design Principles
 
@@ -194,7 +194,7 @@ RoboMindOS transforms humanoid robots from intimidating machines into trusted as
                     ┌─────────────────────────────────────┐
                     │         HIGH CAPABILITY             │
                     │                                     │
-                    │    Industrial        ★ RoboMindOS    │
+                    │    Industrial        ★ NeoDEM    │
                     │    SCADA Systems       (Target)     │
                     │                                     │
     LOW ────────────┼─────────────────────────────────────┼──────────── HIGH
@@ -1294,7 +1294,7 @@ Acceptance Criteria:
 
 ```
 ┌──────────────────┐
-│ 🤖 RoboMindOS     │
+│ 🤖 NeoDEM     │
 ├──────────────────┤
 │ 📊 Dashboard     │
 │ 🗺️ Fleet Map     │

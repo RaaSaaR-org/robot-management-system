@@ -231,7 +231,7 @@ robot-management-system/
 │   └── README.md
 │
 ├── helm/                   # Kubernetes Helm Chart
-│   └── robomind/           # Chart with 30 resource templates
+│   └── neodem/             # Chart with 30 resource templates
 │
 ├── protos/                 # Shared protobuf definitions
 │   └── vla_inference.proto

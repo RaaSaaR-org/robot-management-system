@@ -1,4 +1,4 @@
-# RoboMindOS App
+# NeoDEM App
 
 React + Tauri v2 desktop application for robot fleet management. See `AGENTS.md` for full development guidance.
 

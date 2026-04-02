@@ -1,10 +1,10 @@
 /**
  * @file types.ts
- * @description Robot type definitions aligned with RoboMindOS
+ * @description Robot type definitions aligned with NeoDEM
  */
 
 // ============================================================================
-// STATUS TYPES (aligned with RoboMindOS)
+// STATUS TYPES (aligned with NeoDEM)
 // ============================================================================
 
 export type RobotStatus =
@@ -64,7 +64,7 @@ export interface RobotLocation {
 }
 
 // ============================================================================
-// ROBOT ENTITY (aligned with RoboMindOS)
+// ROBOT ENTITY (aligned with NeoDEM)
 // ============================================================================
 
 export interface Robot {

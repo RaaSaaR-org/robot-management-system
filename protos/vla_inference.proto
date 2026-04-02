@@ -8,7 +8,7 @@ syntax = "proto3";
 
 package vla;
 
-option go_package = "github.com/robomindos/protos/vla";
+option go_package = "github.com/neodem/protos/vla";
 
 // VLAInference service provides low-latency inference for Vision-Language-Action models.
 // Supports both unary and bidirectional streaming RPCs for flexible robot control patterns.

@@ -80,7 +80,7 @@ export class NatsClient {
     try {
       const options: ConnectionOptions = {
         servers: this.config.servers,
-        name: this.config.name ?? 'robomind-server',
+        name: this.config.name ?? 'neodem-server',
         reconnect: this.config.reconnect ?? true,
         maxReconnectAttempts: this.config.maxReconnectAttempts ?? -1, // Infinite
         reconnectTimeWait: this.config.reconnectTimeWait ?? 2000,
@@ -164,7 +164,7 @@ export class NatsClient {
       servers: process.env.NATS_SERVERS ?? 'nats://localhost:4222',
       user: process.env.NATS_USER || undefined,
       pass: process.env.NATS_PASS || undefined,
-      name: 'robomind-server',
+      name: 'neodem-server',
     };
   }
 

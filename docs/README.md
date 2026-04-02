@@ -27,16 +27,16 @@ All services are configured as systemd units on the Pi:
 
 ```bash
 # Start all
-sudo systemctl start robomind-server robomind-app so101-sidecar robomind-agent
+sudo systemctl start neodem-server neodem-app so101-sidecar neodem-agent
 
 # Check status
-sudo systemctl status robomind-server robomind-app so101-sidecar robomind-agent
+sudo systemctl status neodem-server neodem-app so101-sidecar neodem-agent
 
 # View logs
-journalctl -u robomind-agent -f
+journalctl -u neodem-agent -f
 ```
 
-Boot order: `robomind-server` -> `so101-sidecar` -> `robomind-agent`. The app has no dependencies.
+Boot order: `neodem-server` -> `so101-sidecar` -> `neodem-agent`. The app has no dependencies.
 
 ## Quick Start (manual dev)
 

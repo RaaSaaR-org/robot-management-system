@@ -39,8 +39,8 @@ export function createRobotAgentCard(options: AgentCardOptions): AgentCard {
     description: `${classDescription}. ${robotDescription}. Can execute natural language commands for movement, picking up objects, and placing items. This robot can be controlled via A2A protocol or REST API.`,
     url: `${publicUrl}/`,
     provider: {
-      organization: 'RoboMindOS',
-      url: 'https://robomind.io',
+      organization: 'NeoDEM',
+      url: 'https://neodem.io',
     },
     version: '1.0.0',
     capabilities: {

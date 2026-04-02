@@ -1,6 +1,6 @@
 # VLA Server
 
-Consolidated VLA inference server for RoboMindOS. Replaces the previous `smolvla-server/` and `vla-inference/` directories with a single FastAPI HTTP server that supports multiple model backends.
+Consolidated VLA inference server for NeoDEM. Replaces the previous `smolvla-server/` and `vla-inference/` directories with a single FastAPI HTTP server that supports multiple model backends.
 
 ## Supported Models
 

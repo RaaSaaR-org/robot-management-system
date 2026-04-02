@@ -61,15 +61,15 @@ open http://localhost
 
 ```bash
 # Install with Helm
-helm install robomind helm/robomind \
-  -f helm/robomind/values-local.yaml \
+helm install neodem helm/neodem \
+  -f helm/neodem/values-local.yaml \
   --set postgres.auth.password=mypassword \
   --set secrets.jwtSecret=my-jwt-secret \
   --set rustfs.auth.accessKey=minio-key \
   --set rustfs.auth.secretKey=minio-secret
 
 # Check pods
-kubectl get pods -n robomind
+kubectl get pods -n neodem
 ```
 
 ---
@@ -204,14 +204,14 @@ Before deploying to Kubernetes, build and push your images:
 docker-compose build
 
 # Tag for your registry
-docker tag robomind/server:latest your-registry/robomind/server:v1.0.0
-docker tag robomind/app:latest your-registry/robomind/app:v1.0.0
-docker tag robomind/robot-agent:latest your-registry/robomind/robot-agent:v1.0.0
+docker tag neodem/server:latest your-registry/neodem/server:v1.0.0
+docker tag neodem/app:latest your-registry/neodem/app:v1.0.0
+docker tag neodem/robot-agent:latest your-registry/neodem/robot-agent:v1.0.0
 
 # Push to registry
-docker push your-registry/robomind/server:v1.0.0
-docker push your-registry/robomind/app:v1.0.0
-docker push your-registry/robomind/robot-agent:v1.0.0
+docker push your-registry/neodem/server:v1.0.0
+docker push your-registry/neodem/app:v1.0.0
+docker push your-registry/neodem/robot-agent:v1.0.0
 ```
 
 ### Local (minikube/kind)
@@ -236,16 +236,16 @@ eval $(minikube docker-env)
 docker-compose build
 
 # For kind
-kind load docker-image robomind/server:latest
-kind load docker-image robomind/app:latest
-kind load docker-image robomind/robot-agent:latest
+kind load docker-image neodem/server:latest
+kind load docker-image neodem/app:latest
+kind load docker-image neodem/robot-agent:latest
 ```
 
 #### 3. Install with Helm
 
 ```bash
-helm install robomind helm/robomind \
-  -f helm/robomind/values-local.yaml \
+helm install neodem helm/neodem \
+  -f helm/neodem/values-local.yaml \
   --set postgres.auth.password=localpassword \
   --set secrets.jwtSecret=local-dev-secret-32-chars-min
 ```
@@ -254,22 +254,22 @@ helm install robomind helm/robomind \
 
 Add to `/etc/hosts`:
 ```
-127.0.0.1 robomind.local
+127.0.0.1 neodem.local
 ```
 
 For minikube, use minikube IP:
 ```bash
-echo "$(minikube ip) robomind.local" | sudo tee -a /etc/hosts
+echo "$(minikube ip) neodem.local" | sudo tee -a /etc/hosts
 ```
 
 #### 5. Access the Application
 
 ```bash
 # With ingress
-open http://robomind.local
+open http://neodem.local
 
 # Or via port-forward
-kubectl port-forward -n robomind svc/robomind-app 8080:80
+kubectl port-forward -n neodem svc/neodem-app 8080:80
 open http://localhost:8080
 ```
 
@@ -277,36 +277,36 @@ open http://localhost:8080
 
 #### 1. Update Values
 
-Edit `helm/robomind/values-production.yaml`:
+Edit `helm/neodem/values-production.yaml`:
 
 ```yaml
 ingress:
-  host: robomind.yourdomain.com  # Your actual domain
+  host: neodem.yourdomain.com  # Your actual domain
   tls: true
-  tlsSecretName: robomind-tls
+  tlsSecretName: neodem-tls
 
 server:
   image:
-    repository: your-registry/robomind/server
+    repository: your-registry/neodem/server
     tag: v1.0.0
 
 app:
   image:
-    repository: your-registry/robomind/app
+    repository: your-registry/neodem/app
     tag: v1.0.0
 ```
 
 #### 2. Create Namespace
 
 ```bash
-kubectl create namespace robomind
+kubectl create namespace neodem
 ```
 
 #### 3. Setup Image Pull Secrets (if using private registry)
 
 ```bash
 kubectl create secret docker-registry regcred \
-  --namespace robomind \
+  --namespace neodem \
   --docker-server=your-registry.com \
   --docker-username=your-username \
   --docker-password=your-password
@@ -322,8 +322,8 @@ global:
 #### 4. Install with Helm
 
 ```bash
-helm install robomind helm/robomind \
-  -f helm/robomind/values-production.yaml \
+helm install neodem helm/neodem \
+  -f helm/neodem/values-production.yaml \
   --set postgres.auth.password=$DB_PASSWORD \
   --set secrets.jwtSecret=$JWT_SECRET \
   --set secrets.googleApiKey=$GOOGLE_API_KEY \
@@ -361,16 +361,16 @@ EOF
 
 ```bash
 # Check pods
-kubectl get pods -n robomind
+kubectl get pods -n neodem
 
 # Check services
-kubectl get svc -n robomind
+kubectl get svc -n neodem
 
 # Check ingress
-kubectl get ingress -n robomind
+kubectl get ingress -n neodem
 
 # Check logs
-kubectl logs -f deployment/robomind-server -n robomind
+kubectl logs -f deployment/neodem-server -n neodem
 ```
 
 ---
@@ -381,7 +381,7 @@ kubectl logs -f deployment/robomind-server -n robomind
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `global.namespace` | Kubernetes namespace | `robomind` |
+| `global.namespace` | Kubernetes namespace | `neodem` |
 | `global.imageRegistry` | Image registry prefix | `""` |
 | `postgres.enabled` | Deploy PostgreSQL | `true` |
 | `postgres.storage` | PVC storage size | `10Gi` |
@@ -391,7 +391,7 @@ kubectl logs -f deployment/robomind-server -n robomind
 | `app.replicaCount` | App replicas | `2` |
 | `robotAgent.enabled` | Deploy robot agent | `true` |
 | `ingress.enabled` | Enable ingress | `true` |
-| `ingress.host` | Ingress hostname | `robomind.local` |
+| `ingress.host` | Ingress hostname | `neodem.local` |
 | `ingress.tls` | Enable TLS | `false` |
 | `secrets.jwtSecret` | JWT signing secret | `""` (required) |
 | `secrets.googleApiKey` | Google API key | `""` |
@@ -421,23 +421,23 @@ kubectl logs -f deployment/robomind-server -n robomind
 
 ```bash
 # Check pod status
-kubectl describe pod <pod-name> -n robomind
+kubectl describe pod <pod-name> -n neodem
 
 # Check events
-kubectl get events -n robomind --sort-by='.lastTimestamp'
+kubectl get events -n neodem --sort-by='.lastTimestamp'
 ```
 
 #### Database connection errors
 
 ```bash
 # Check PostgreSQL is running
-kubectl get pods -n robomind | grep postgres
+kubectl get pods -n neodem | grep postgres
 
 # Check PostgreSQL logs
-kubectl logs deployment/robomind-postgres -n robomind
+kubectl logs deployment/neodem-postgres -n neodem
 
 # Verify secret exists
-kubectl get secret robomind-secrets -n robomind -o yaml
+kubectl get secret neodem-secrets -n neodem -o yaml
 ```
 
 #### Ingress not working
@@ -447,49 +447,49 @@ kubectl get secret robomind-secrets -n robomind -o yaml
 kubectl get pods -n ingress-nginx
 
 # Check ingress resource
-kubectl describe ingress robomind-ingress -n robomind
+kubectl describe ingress neodem-ingress -n neodem
 
 # Check if services are accessible
-kubectl port-forward -n robomind svc/robomind-app 8080:80
+kubectl port-forward -n neodem svc/neodem-app 8080:80
 ```
 
 #### Image pull errors
 
 ```bash
 # Check image pull secrets
-kubectl get secret -n robomind
+kubectl get secret -n neodem
 
 # Verify image exists
-docker pull your-registry/robomind/server:v1.0.0
+docker pull your-registry/neodem/server:v1.0.0
 ```
 
 ### Useful Commands
 
 ```bash
 # View all resources
-kubectl get all -n robomind
+kubectl get all -n neodem
 
 # Watch pod status
-kubectl get pods -n robomind -w
+kubectl get pods -n neodem -w
 
 # Execute into pod
-kubectl exec -it deployment/robomind-server -n robomind -- sh
+kubectl exec -it deployment/neodem-server -n neodem -- sh
 
 # Port forward for debugging
-kubectl port-forward -n robomind svc/robomind-server 3001:3001
+kubectl port-forward -n neodem svc/neodem-server 3001:3001
 
 # View Helm release
 helm list
-helm status robomind
+helm status neodem
 
 # Upgrade deployment
-helm upgrade robomind helm/robomind -f helm/robomind/values-production.yaml
+helm upgrade neodem helm/neodem -f helm/neodem/values-production.yaml
 
 # Rollback
-helm rollback robomind 1
+helm rollback neodem 1
 
 # Uninstall
-helm uninstall robomind
+helm uninstall neodem
 ```
 
 ---

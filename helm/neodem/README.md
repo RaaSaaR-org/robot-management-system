@@ -245,4 +245,4 @@ kubectl exec -n neodem deploy/neodem-server -- \
 
 ## License
 
-Copyright (c) RoboMind Team. All rights reserved.
+Copyright (c) NeoDEM Team. All rights reserved.

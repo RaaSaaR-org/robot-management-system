@@ -1,5 +1,5 @@
 # ============================================================================
-# RoboMindOS Docker Compose
+# NeoDEM Docker Compose
 # Development and testing environment
 # ============================================================================
 #
@@ -23,7 +23,7 @@ services:
   # --------------------------------------------------------------------------
   nats:
     image: nats:2.10-alpine
-    container_name: robomind-nats
+    container_name: neodem-nats
     command: ["--js", "--sd", "/data", "-m", "8222"]
     ports:
       - "4222:4222"   # Client connections
@@ -36,7 +36,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - robomind-network
+      - neodem-network
 
   # --------------------------------------------------------------------------
   # RustFS Object Storage (S3-compatible)
@@ -44,7 +44,7 @@ services:
   # --------------------------------------------------------------------------
   rustfs:
     image: rustfs/rustfs:latest
-    container_name: robomind-rustfs
+    container_name: neodem-rustfs
     ports:
       - "9000:9000"   # S3 API
       - "9001:9001"   # Console
@@ -57,12 +57,12 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - robomind-network
+      - neodem-network
 
   # Bucket initialization container (uses AWS CLI for S3-compatible operations)
   rustfs-init:
     image: amazon/aws-cli:latest
-    container_name: robomind-rustfs-init
+    container_name: neodem-rustfs-init
     depends_on:
       rustfs:
         condition: service_healthy
@@ -80,18 +80,18 @@ services:
       echo 'RustFS buckets initialized successfully'
       "
     networks:
-      - robomind-network
+      - neodem-network
 
   # --------------------------------------------------------------------------
   # PostgreSQL Database
   # --------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: robomind-postgres
+    container_name: neodem-postgres
     environment:
-      POSTGRES_DB: robomind
-      POSTGRES_USER: robomind
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robomind-dev}
+      POSTGRES_DB: neodem
+      POSTGRES_USER: neodem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-neodem-dev}
       POSTGRES_MULTIPLE_DATABASES: mlflow
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -99,24 +99,24 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U robomind -d robomind"]
+      test: ["CMD-SHELL", "pg_isready -U neodem -d neodem"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - robomind-network
+      - neodem-network
 
   # --------------------------------------------------------------------------
   # MLflow Model Registry
   # --------------------------------------------------------------------------
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.10.0
-    container_name: robomind-mlflow
+    container_name: neodem-mlflow
     command: >
       bash -c "pip install psycopg2-binary boto3 && mlflow server
       --host 0.0.0.0
       --port 5000
-      --backend-store-uri postgresql://robomind:${POSTGRES_PASSWORD:-robomind-dev}@postgres:5432/mlflow
+      --backend-store-uri postgresql://neodem:${POSTGRES_PASSWORD:-neodem-dev}@postgres:5432/mlflow
       --default-artifact-root s3://model-checkpoints/mlflow"
     environment:
       MLFLOW_S3_ENDPOINT_URL: http://rustfs:9000
@@ -136,7 +136,7 @@ services:
       retries: 10
       start_period: 60s
     networks:
-      - robomind-network
+      - neodem-network
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
@@ -146,10 +146,10 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    container_name: robomind-server
+    container_name: neodem-server
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://robomind:${POSTGRES_PASSWORD:-robomind-dev}@postgres:5432/robomind
+      DATABASE_URL: postgresql://neodem:${POSTGRES_PASSWORD:-neodem-dev}@postgres:5432/neodem
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -177,7 +177,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - robomind-network
+      - neodem-network
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
@@ -191,7 +191,7 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
         VITE_WS_URL: ${VITE_WS_URL:-}
         VITE_A2A_SERVER_URL: ${VITE_A2A_SERVER_URL:-}
-    container_name: robomind-app
+    container_name: neodem-app
     ports:
       - "80:80"
     depends_on:
@@ -203,7 +203,7 @@ services:
       timeout: 10s
       retries: 3
     networks:
-      - robomind-network
+      - neodem-network
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
@@ -214,7 +214,7 @@ services:
     build:
       context: ./robot-agent
       dockerfile: Dockerfile
-    container_name: robomind-robot-agent
+    container_name: neodem-robot-agent
     environment:
       NODE_ENV: production
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -243,7 +243,7 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - robomind-network
+      - neodem-network
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
@@ -268,7 +268,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - robomind-network
+      - neodem-network
     restart: unless-stopped
 
 # ============================================================================
@@ -288,5 +288,5 @@ volumes:
 # Networks
 # ============================================================================
 networks:
-  robomind-network:
+  neodem-network:
     driver: bridge

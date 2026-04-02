@@ -1,7 +1,7 @@
 {
     "name": "@robo-mind/simulated-robot-agent",
     "version": "1.0.0",
-    "description": "A2A agent that simulates a humanoid robot for RoboMindOS",
+    "description": "A2A agent that simulates a humanoid robot for NeoDEM",
     "type": "module",
     "main": "dist/index.js",
     "scripts": {

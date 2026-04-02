@@ -1,6 +1,6 @@
-# RoboMindOS Server
+# NeoDEM Server
 
-The backend server for RoboMindOS, implementing the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents.
+The backend server for NeoDEM, implementing the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents.
 
 ## Features
 

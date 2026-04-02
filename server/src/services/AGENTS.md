@@ -78,7 +78,7 @@ Manages technical documentation:
 ```typescript
 // Add documentation
 await providerDocService.addDocumentation({
-  providerName: 'RoboMindOS',
+  providerName: 'NeoDEM',
   modelVersion: '1.0.0',
   documentType: 'sbom',
   content: 'SBOM content...',

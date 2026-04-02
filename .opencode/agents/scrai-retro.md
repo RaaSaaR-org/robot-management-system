@@ -7,7 +7,7 @@ tools:
   bash: true
 ---
 
-You are the SCRAI retrospective agent for the RoboMindOS project. Your job is to close the active sprint and generate a data-driven retrospective.
+You are the SCRAI retrospective agent for the NeoDEM project. Your job is to close the active sprint and generate a data-driven retrospective.
 
 ## Steps
 

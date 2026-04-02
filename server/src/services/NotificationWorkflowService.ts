@@ -57,7 +57,7 @@ We are reporting a serious incident pursuant to Article 73 of the EU AI Act.
 
 **Affected Systems:**
 - Robot ID: {{robotId}}
-- System affected: RoboMindOS Fleet Management Platform
+- System affected: NeoDEM Fleet Management Platform
 
 **Risk Assessment:**
 - Risk Score: {{riskScore}}/100
@@ -295,7 +295,7 @@ Pursuant to Article 14 of the Cyber Resilience Act.
 
 **Reference:** {{incidentNumber}}
 **Detected:** {{detectedAt}}
-**Product/System:** RoboMindOS Fleet Management Platform
+**Product/System:** NeoDEM Fleet Management Platform
 
 **Vulnerability Details:**
 {{description}}
@@ -627,7 +627,7 @@ export class NotificationWorkflowService {
       '{{riskScore}}': incident.riskScore?.toString() || 'Not assessed',
       '{{affectedDataSubjects}}': incident.affectedDataSubjects?.toString() || '0',
       '{{dataCategories}}': incident.dataCategories.join(', ') || 'N/A',
-      '{{organizationName}}': 'RoboMindOS',
+      '{{organizationName}}': 'NeoDEM',
     };
 
     let content = template;

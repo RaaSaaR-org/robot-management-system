@@ -44,7 +44,7 @@ export interface ChallengeResponse {
 function getConfigDir(): string {
   const xdgConfig = process.env.XDG_CONFIG_HOME;
   const base = xdgConfig || path.join(os.homedir(), '.config');
-  return path.join(base, 'robomind');
+  return path.join(base, 'neodem');
 }
 
 /** SHA-256 fingerprint of a DER-encoded certificate (colon-separated hex) */
@@ -93,8 +93,8 @@ function generateSelfSignedCert(deviceId: string, validityDays: number = 365): {
   const certPayload = {
     version: 3,
     serialNumber: crypto.randomUUID(),
-    issuer: `CN=${deviceId},O=RoboMindOS,OU=DeviceIdentity`,
-    subject: `CN=${deviceId},O=RoboMindOS,OU=DeviceIdentity`,
+    issuer: `CN=${deviceId},O=NeoDEM,OU=DeviceIdentity`,
+    subject: `CN=${deviceId},O=NeoDEM,OU=DeviceIdentity`,
     notBefore: issuedAt.toISOString(),
     notAfter: expiresAt.toISOString(),
     publicKey,

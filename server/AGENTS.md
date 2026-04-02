@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the RoboMindOS server.
+This file provides guidance to Claude Code (claude.ai/code) when working with the NeoDEM server.
 
 ## Project Overview
 
-The A2A Protocol Server is the backend for RoboMindOS. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, zones, alerts, processes, compliance logging, incident management, GDPR, VLA training pipelines, and real-time events via WebSocket. Data is persisted via Prisma ORM (SQLite locally, PostgreSQL in production). The schema has 73 models.
+The A2A Protocol Server is the backend for NeoDEM. It implements the A2A (Agent-to-Agent) protocol to enable communication between the frontend application and robot agents. The server manages robot registration, conversations, tasks, zones, alerts, processes, compliance logging, incident management, GDPR, VLA training pipelines, and real-time events via WebSocket. Data is persisted via Prisma ORM (SQLite locally, PostgreSQL in production). The schema has 73 models.
 
 ## Commands
 

@@ -1,5 +1,5 @@
 # ============================================================================
-# RoboMindOS Server Dockerfile
+# NeoDEM Server Dockerfile
 # Multi-stage build for Node.js Express + Prisma server
 # ============================================================================
 
@@ -44,10 +44,10 @@ COPY --from=builder /app/prisma ./prisma
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 robomind && \
-    chown -R robomind:nodejs /app
+    adduser --system --uid 1001 neodem && \
+    chown -R neodem:nodejs /app
 
-USER robomind
+USER neodem
 
 # Expose port
 EXPOSE 3001
