@@ -43,7 +43,9 @@ import {
   CameraConfigManager,
   type EmbodimentConfig,
 } from '../embodiment/index.js';
+import path from 'path';
 import { StatePersistence, type PersistedState } from './StatePersistence.js';
+import { config as appConfig } from '../config/config.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -176,8 +178,10 @@ export class RobotStateManager {
     this.jointMapper = new JointMapper();
     this.cameraConfigManager = new CameraConfigManager();
 
-    // Initialize state persistence (Task 39)
-    this.persistence = new StatePersistence();
+    // Initialize state persistence — per-robot file to support multi-instance
+    this.persistence = new StatePersistence(
+      path.resolve(path.dirname(new URL(import.meta.url).pathname), `../../data/state-${appConfig.robotId}.json`)
+    );
     this.restorePersistedState();
   }
 
