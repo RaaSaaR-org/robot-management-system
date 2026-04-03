@@ -4,7 +4,7 @@
  * @feature simulation
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   BarChart,
   Bar,
@@ -158,17 +158,26 @@ function LaunchTab({
                 key={env.id}
                 type="button"
                 onClick={() => setEnvironment(env.id)}
-                className={`text-left p-4 rounded-brand-lg transition-all border ${
+                className={`text-left rounded-brand-lg transition-all border overflow-hidden ${
                   environment === env.id
                     ? 'bg-cobalt-500/10 border-cobalt-500/30 ring-1 ring-cobalt-500/20'
                     : 'glass-subtle border-glass-subtle hover:border-glass-highlight'
                 }`}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <Beaker className="w-4 h-4 text-cobalt-400" />
-                  <span className="text-sm font-medium text-theme-primary">{env.name}</span>
+                <img
+                  src={simulationApi.getPreviewUrl(env.id)}
+                  alt={env.name}
+                  className="w-full h-32 object-cover bg-glass-bg"
+                  loading="lazy"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+                <div className="p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Beaker className="w-4 h-4 text-cobalt-400" />
+                    <span className="text-sm font-medium text-theme-primary">{env.name}</span>
+                  </div>
+                  <p className="text-xs text-theme-muted leading-relaxed">{env.description}</p>
                 </div>
-                <p className="text-xs text-theme-muted leading-relaxed">{env.description}</p>
               </button>
             ))}
           </div>
@@ -350,6 +359,107 @@ function JobsTab({
 }
 
 // ============================================================================
+// FRAME VIEWER
+// ============================================================================
+
+function FrameViewer({ job }: { job: SimJob }) {
+  const [selectedFrame, setSelectedFrame] = useState(0);
+  const [selectedEpisode, setSelectedEpisode] = useState(1);
+
+  const frames = job.frames ?? [];
+  const episodes = useMemo(() => {
+    const eps = [...new Set(frames.map((f) => f.episode))];
+    return eps.sort((a, b) => a - b);
+  }, [frames]);
+
+  const episodeFrames = useMemo(
+    () => frames.filter((f) => f.episode === selectedEpisode),
+    [frames, selectedEpisode]
+  );
+
+  useEffect(() => {
+    setSelectedFrame(0);
+  }, [selectedEpisode]);
+
+  if (frames.length === 0) return null;
+
+  const currentFrame = episodeFrames[selectedFrame];
+
+  return (
+    <Card>
+      <Card.Header>
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-theme-primary">Episode Replay</h3>
+          {episodes.length > 1 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-theme-muted">Episode:</span>
+              <div className="flex gap-1">
+                {episodes.map((ep) => (
+                  <button
+                    key={ep}
+                    onClick={() => setSelectedEpisode(ep)}
+                    className={`px-2.5 py-1 text-xs rounded-brand font-medium transition-all ${
+                      selectedEpisode === ep
+                        ? 'bg-cobalt-500/20 text-cobalt-400 border border-cobalt-500/30'
+                        : 'glass-subtle text-theme-muted hover:text-theme-primary'
+                    }`}
+                  >
+                    {ep}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </Card.Header>
+      <Card.Body>
+        {/* Main frame display */}
+        {currentFrame && (
+          <div className="mb-4">
+            <img
+              src={simulationApi.getFrameUrl(job.jobId, currentFrame.file)}
+              alt={`Episode ${currentFrame.episode}, Step ${currentFrame.step}`}
+              className="w-full max-w-2xl mx-auto rounded-brand-lg border border-glass-subtle"
+              loading="lazy"
+            />
+            <div className="text-center mt-2 text-xs text-theme-muted">
+              Step {currentFrame.step}
+            </div>
+          </div>
+        )}
+
+        {/* Thumbnail strip */}
+        {episodeFrames.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            {episodeFrames.map((frame, idx) => (
+              <button
+                key={frame.file}
+                onClick={() => setSelectedFrame(idx)}
+                className={`shrink-0 rounded-brand overflow-hidden border-2 transition-all ${
+                  selectedFrame === idx
+                    ? 'border-cobalt-500 ring-1 ring-cobalt-500/30'
+                    : 'border-transparent opacity-60 hover:opacity-100'
+                }`}
+              >
+                <img
+                  src={simulationApi.getFrameUrl(job.jobId, frame.file)}
+                  alt={`Step ${frame.step}`}
+                  className="w-24 h-18 object-cover"
+                  loading="lazy"
+                />
+                <div className="text-center text-[10px] text-theme-muted py-0.5 glass-subtle">
+                  t={frame.step}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </Card.Body>
+    </Card>
+  );
+}
+
+// ============================================================================
 // RESULTS TAB
 // ============================================================================
 
@@ -449,6 +559,11 @@ function ResultsTab({ job }: { job: SimJob | null }) {
           </div>
         </Card>
       </div>
+
+      {/* Frame viewer */}
+      {job.frames && job.frames.length > 0 && (
+        <FrameViewer job={job} />
+      )}
 
       {/* Job metadata */}
       <Card variant="subtle">

@@ -4,14 +4,14 @@
 
 Connects a MuJoCo gym environment to the VLA inference server and runs
 evaluation episodes. Outputs metrics as JSON for the Node.js server to consume.
+Optionally captures key frames as JPEG images for visualization in the UI.
 
 Usage:
     python evaluate_vla.py \\
       --vla-server http://localhost:8000 \\
-      --environment so101_tabletop \\
-      --task "Pick up the red cube and place it on the target" \\
       --episodes 10 \\
-      --output /tmp/sim_results.json
+      --output /tmp/sim_results.json \\
+      --frames-dir /tmp/sim_frames
 
 Progress is printed to stdout as JSON lines:
     {"type": "progress", "episode": 3, "total": 10, "percent": 30}
@@ -23,6 +23,7 @@ import base64
 import io
 import json
 import logging
+import os
 import sys
 import time
 
@@ -38,6 +39,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Capture a frame every N steps (plus first and last)
+FRAME_INTERVAL = 10
+
 
 def encode_image_b64(rgb_array: np.ndarray) -> str:
     """Encode an RGB numpy array as base64 JPEG string."""
@@ -45,6 +49,12 @@ def encode_image_b64(rgb_array: np.ndarray) -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def save_frame(rgb_array: np.ndarray, path: str) -> None:
+    """Save an RGB numpy array as a JPEG file."""
+    img = Image.fromarray(rgb_array)
+    img.save(path, format="JPEG", quality=90)
 
 
 def emit_progress(episode: int, total: int):
@@ -62,7 +72,6 @@ def emit_episode_result(episode: int, success: bool, steps: int):
 
 def connect_backend(server_url: str, timeout: float = 10.0):
     """Connect to VLA server via SmolVLABackend."""
-    # Import from sibling package
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
     from backends.smolvla_backend import SmolVLABackend
 
@@ -76,23 +85,32 @@ def run_episode(
     backend,
     task: str,
     max_steps: int,
+    frames_dir: str | None = None,
+    episode_num: int = 1,
 ) -> dict:
     """Run a single evaluation episode.
 
     Returns:
-        dict with keys: success, steps, collisions, duration_s
+        dict with keys: success, steps, collisions, duration_s, frames
     """
     obs, info = env.reset()
     t_start = time.time()
     total_collisions = 0
     step_count = 0
+    captured_frames: list[dict] = []
+
+    # Capture first frame
+    if frames_dir:
+        filename = f"ep{episode_num}_step000.jpg"
+        save_frame(obs["image"], os.path.join(frames_dir, filename))
+        captured_frames.append({"episode": episode_num, "step": 0, "file": filename})
 
     # Reset VLA policy state
     try:
         import httpx
         httpx.post(f"{backend.server_url}/reset", timeout=5.0)
     except Exception:
-        pass  # reset is optional
+        pass
 
     action_queue = []
 
@@ -118,8 +136,20 @@ def run_episode(
         step_count += 1
         total_collisions += info.get("collision_count", 0)
 
+        # Capture frame at interval
+        if frames_dir and step_count % FRAME_INTERVAL == 0:
+            filename = f"ep{episode_num}_step{step_count:03d}.jpg"
+            save_frame(obs["image"], os.path.join(frames_dir, filename))
+            captured_frames.append({"episode": episode_num, "step": step_count, "file": filename})
+
         if terminated or truncated:
             break
+
+    # Capture last frame (if not already captured at interval)
+    if frames_dir and (step_count % FRAME_INTERVAL != 0):
+        filename = f"ep{episode_num}_step{step_count:03d}.jpg"
+        save_frame(obs["image"], os.path.join(frames_dir, filename))
+        captured_frames.append({"episode": episode_num, "step": step_count, "file": filename})
 
     duration_s = time.time() - t_start
     success = info.get("success", False)
@@ -129,6 +159,7 @@ def run_episode(
         "steps": step_count,
         "collisions": total_collisions,
         "duration_s": duration_s,
+        "frames": captured_frames,
     }
 
 
@@ -139,6 +170,7 @@ def evaluate(
     episodes: int,
     max_steps: int,
     output_path: str | None = None,
+    frames_dir: str | None = None,
 ) -> SimRunMetrics:
     """Run a full evaluation and return aggregated metrics."""
 
@@ -147,6 +179,10 @@ def evaluate(
         f"episodes={episodes}, max_steps={max_steps}"
     )
 
+    # Create frames directory
+    if frames_dir:
+        os.makedirs(frames_dir, exist_ok=True)
+
     # Create environment
     env = SO101TabletopEnv(max_steps=max_steps)
 
@@ -154,11 +190,19 @@ def evaluate(
     backend = connect_backend(server_url)
     logger.info(f"Connected to VLA server, cameras={backend.camera_names}")
 
+    # Render scene preview before episodes start
+    if frames_dir:
+        preview_obs, _ = env.reset()
+        save_frame(preview_obs["image"], os.path.join(frames_dir, "preview.jpg"))
+        logger.info(f"Scene preview saved to {frames_dir}/preview.jpg")
+
     results = []
+    all_frames: list[dict] = []
     try:
         for ep in range(1, episodes + 1):
             logger.info(f"Episode {ep}/{episodes}")
-            result = run_episode(env, backend, task, max_steps)
+            result = run_episode(env, backend, task, max_steps, frames_dir, ep)
+            all_frames.extend(result.pop("frames", []))
             results.append(result)
 
             emit_episode_result(ep, result["success"], result["steps"])
@@ -194,11 +238,15 @@ def evaluate(
     )
 
     logger.info(f"Evaluation complete: {metrics}")
+    if frames_dir:
+        logger.info(f"Captured {len(all_frames)} frames in {frames_dir}")
 
-    # Write output JSON
+    # Write output JSON (including frames manifest)
     if output_path:
+        output = metrics.to_dict()
+        output["frames"] = all_frames
         with open(output_path, "w") as f:
-            json.dump(metrics.to_dict(), f, indent=2)
+            json.dump(output, f, indent=2)
         logger.info(f"Results written to {output_path}")
 
     return metrics
@@ -238,6 +286,11 @@ def main():
         default=None,
         help="Path to write results JSON",
     )
+    parser.add_argument(
+        "--frames-dir",
+        default=None,
+        help="Directory to save captured frames (JPEG images)",
+    )
     args = parser.parse_args()
 
     metrics = evaluate(
@@ -247,6 +300,7 @@ def main():
         episodes=args.episodes,
         max_steps=args.max_steps,
         output_path=args.output,
+        frames_dir=args.frames_dir,
     )
 
     # Also print final metrics as JSON line for the server

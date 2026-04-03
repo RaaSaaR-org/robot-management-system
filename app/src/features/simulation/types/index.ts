@@ -16,6 +16,12 @@ export interface SimMetrics {
   simToRealGap?: number;
 }
 
+export interface SimFrame {
+  episode: number;
+  step: number;
+  file: string;
+}
+
 export interface SimJob {
   jobId: string;
   modelId: string;
@@ -25,6 +31,7 @@ export interface SimJob {
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
   metrics?: SimMetrics;
+  frames?: SimFrame[];
   createdAt: string;
   updatedAt: string;
 }

@@ -31,6 +31,12 @@ export interface SimMetrics {
   simToRealGap?: number;
 }
 
+export interface SimFrame {
+  episode: number;
+  step: number;
+  file: string;
+}
+
 export interface SimJob {
   jobId: string;
   modelId: string;
@@ -40,6 +46,8 @@ export interface SimJob {
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
   metrics?: SimMetrics;
+  frames?: SimFrame[];
+  framesDir?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -258,6 +266,56 @@ export class SimulationService extends EventEmitter {
     return [...AVAILABLE_ENVIRONMENTS];
   }
 
+  /**
+   * Get the frames directory path for a job
+   */
+  getFramesDir(jobId: string): string | null {
+    const job = this.jobs.get(jobId);
+    return job?.framesDir ?? null;
+  }
+
+  /**
+   * Get (or generate) an environment preview image path.
+   * Returns null if the preview script is not available.
+   */
+  async getEnvironmentPreview(envId: string): Promise<string | null> {
+    const previewPath = `/tmp/sim_preview_${envId}.jpg`;
+
+    if (existsSync(previewPath)) {
+      return previewPath;
+    }
+
+    // Generate preview via Python script
+    const previewScript = path.resolve(
+      path.dirname(EVALUATOR_SCRIPT),
+      'render_preview.py'
+    );
+    if (!existsSync(previewScript)) {
+      return null;
+    }
+
+    const pythonCmd = process.env.PYTHON_CMD || 'python3';
+    return new Promise((resolve) => {
+      const proc = spawn(pythonCmd, [
+        previewScript,
+        '--output', previewPath,
+      ], {
+        cwd: path.dirname(previewScript),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0 && existsSync(previewPath)) {
+          resolve(previewPath);
+        } else {
+          resolve(null);
+        }
+      });
+
+      proc.on('error', () => resolve(null));
+    });
+  }
+
   // ==========================================================================
   // SIM-TO-REAL COMPARISON
   // ==========================================================================
@@ -324,9 +382,11 @@ export class SimulationService extends EventEmitter {
     if (!job) return;
 
     const outputPath = `/tmp/sim_results_${jobId}.json`;
+    const framesDir = `/tmp/sim_frames_${jobId}`;
 
     // Transition to running
     job.status = 'running';
+    job.framesDir = framesDir;
     job.updatedAt = new Date();
     console.log(`[SimulationService] Job running (real): ${jobId}`);
     this.emit('job:running', job);
@@ -340,6 +400,7 @@ export class SimulationService extends EventEmitter {
       '--max-steps', '200',
       '--task', 'Pick up the red cube and place it on the target.',
       '--output', outputPath,
+      '--frames-dir', framesDir,
     ], {
       cwd: path.dirname(EVALUATOR_SCRIPT),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -383,11 +444,14 @@ export class SimulationService extends EventEmitter {
       if (code === 0 && existsSync(outputPath)) {
         try {
           const raw = readFileSync(outputPath, 'utf-8');
-          const metrics: SimMetrics = JSON.parse(raw);
-          current.metrics = metrics;
+          const parsed = JSON.parse(raw);
+          // Extract frames from output, rest is metrics
+          const { frames, ...metrics } = parsed;
+          current.metrics = metrics as SimMetrics;
+          current.frames = frames as SimFrame[] | undefined;
           current.status = 'completed';
           current.progress = 100;
-          console.log(`[SimulationService] Job completed (real): ${jobId}`);
+          console.log(`[SimulationService] Job completed (real): ${jobId}, frames=${frames?.length ?? 0}`);
           this.emit('job:completed', current);
         } catch (err) {
           current.status = 'failed';

@@ -5,6 +5,8 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import { existsSync, createReadStream } from 'fs';
+import path from 'path';
 import { simulationService } from '../services/SimulationService.js';
 
 export const simulationRoutes = Router();
@@ -139,5 +141,53 @@ simulationRoutes.get('/comparison/:modelId', async (req: Request, res: Response)
     console.error('[SimulationRoutes] Error getting comparison:', error);
     const message = error instanceof Error ? error.message : 'Failed to get sim-to-real comparison';
     res.status(500).json({ error: message });
+  }
+});
+
+// ============================================================================
+// GET /api/simulation/jobs/:id/frames/:filename — Serve a captured frame image
+// ============================================================================
+
+simulationRoutes.get('/jobs/:id/frames/:filename', async (req: Request, res: Response) => {
+  try {
+    const framesDir = simulationService.getFramesDir(req.params.id);
+    if (!framesDir) {
+      return res.status(404).json({ error: 'No frames available for this job' });
+    }
+
+    const filename = path.basename(req.params.filename); // Prevent path traversal
+    const framePath = path.join(framesDir, filename);
+
+    if (!existsSync(framePath)) {
+      return res.status(404).json({ error: 'Frame not found' });
+    }
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    createReadStream(framePath).pipe(res);
+  } catch (error) {
+    console.error('[SimulationRoutes] Error serving frame:', error);
+    res.status(500).json({ error: 'Failed to serve frame' });
+  }
+});
+
+// ============================================================================
+// GET /api/simulation/preview/:environment — Serve environment preview image
+// ============================================================================
+
+simulationRoutes.get('/preview/:environment', async (req: Request, res: Response) => {
+  try {
+    const previewPath = await simulationService.getEnvironmentPreview(req.params.environment);
+
+    if (!previewPath) {
+      return res.status(404).json({ error: 'Preview not available' });
+    }
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    createReadStream(previewPath).pipe(res);
+  } catch (error) {
+    console.error('[SimulationRoutes] Error serving preview:', error);
+    res.status(500).json({ error: 'Failed to serve preview' });
   }
 });

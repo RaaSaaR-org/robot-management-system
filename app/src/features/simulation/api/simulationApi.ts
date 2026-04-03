@@ -11,11 +11,15 @@ import type { SimJob, SimEnvironment, SimToRealComparison, SubmitSimJobInput } f
 // ENDPOINTS
 // ============================================================================
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+
 const ENDPOINTS = {
   jobs: '/simulation/jobs',
   job: (id: string) => `/simulation/jobs/${id}`,
   environments: '/simulation/environments',
   comparison: (modelId: string) => `/simulation/comparison/${modelId}`,
+  frame: (jobId: string, filename: string) => `/simulation/jobs/${jobId}/frames/${filename}`,
+  preview: (envId: string) => `/simulation/preview/${envId}`,
 } as const;
 
 // ============================================================================
@@ -89,5 +93,19 @@ export const simulationApi = {
       ENDPOINTS.comparison(modelId)
     );
     return response.data.comparisons;
+  },
+
+  /**
+   * Get the URL for a captured simulation frame
+   */
+  getFrameUrl(jobId: string, filename: string): string {
+    return `${API_BASE}${ENDPOINTS.frame(jobId, filename)}`;
+  },
+
+  /**
+   * Get the URL for an environment preview image
+   */
+  getPreviewUrl(envId: string): string {
+    return `${API_BASE}${ENDPOINTS.preview(envId)}`;
   },
 };
