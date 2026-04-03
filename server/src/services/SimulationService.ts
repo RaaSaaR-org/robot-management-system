@@ -108,9 +108,11 @@ const AVAILABLE_ENVIRONMENTS: SimEnvironment[] = [
 // PATHS
 // ============================================================================
 
-const EVALUATOR_SCRIPT = path.resolve(
-  __dirname,
-  '../../robot-agent/hardware/sim_evaluator/evaluate_vla.py'
+// Resolve relative to project root (one level up from server/)
+const PROJECT_ROOT = path.resolve(process.cwd(), '..');
+const EVALUATOR_SCRIPT = path.join(
+  PROJECT_ROOT,
+  'robot-agent/hardware/sim_evaluator/evaluate_vla.py'
 );
 
 const VLA_SERVER_URL = process.env.VLA_SERVER_URL || 'http://localhost:8000';
@@ -294,9 +296,8 @@ export class SimulationService extends EventEmitter {
       return null;
     }
 
-    const pythonCmd = process.env.PYTHON_CMD || 'python3';
     return new Promise((resolve) => {
-      const proc = spawn(pythonCmd, [
+      const proc = spawn('uv', ['run', 'python',
         previewScript,
         '--output', previewPath,
       ], {
@@ -304,15 +305,23 @@ export class SimulationService extends EventEmitter {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      proc.stderr?.on('data', (data: Buffer) => {
+        console.log(`[SimPreview] ${data.toString().trim()}`);
+      });
+
       proc.on('close', (code) => {
         if (code === 0 && existsSync(previewPath)) {
           resolve(previewPath);
         } else {
+          console.error(`[SimPreview] Preview generation failed with code ${code}`);
           resolve(null);
         }
       });
 
-      proc.on('error', () => resolve(null));
+      proc.on('error', (err) => {
+        console.error(`[SimPreview] Spawn error:`, err);
+        resolve(null);
+      });
     });
   }
 
@@ -391,8 +400,7 @@ export class SimulationService extends EventEmitter {
     console.log(`[SimulationService] Job running (real): ${jobId}`);
     this.emit('job:running', job);
 
-    const pythonCmd = process.env.PYTHON_CMD || 'python3';
-    const proc = spawn(pythonCmd, [
+    const proc = spawn('uv', ['run', 'python',
       EVALUATOR_SCRIPT,
       '--vla-server', VLA_SERVER_URL,
       '--environment', job.environment,
