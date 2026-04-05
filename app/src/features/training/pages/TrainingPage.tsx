@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import { Brain } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Tabs } from '@/shared/components/ui';
+import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { TrainingJobList } from '../components/TrainingJobList';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { TrainingProgressMonitor } from '../components/TrainingProgressMonitor';
@@ -109,22 +110,25 @@ export function TrainingPage() {
             Fine-tune VLA models on your robot datasets
           </p>
         </div>
-        <Button onClick={() => setIsWizardOpen(true)}>
-          <svg
-            className="w-4 h-4 mr-2"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-          New Training Job
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <PipelineBreadcrumb stage="train" />
+          <Button onClick={() => setIsWizardOpen(true)}>
+            <svg
+              className="w-4 h-4 mr-2"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+            New Training Job
+          </Button>
+        </div>
       </header>
 
       {/* Main content grid */}

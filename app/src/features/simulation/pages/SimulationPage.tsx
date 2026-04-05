@@ -35,6 +35,8 @@ import {
   CheckCircle2,
   XCircle,
   Hash,
+  Rocket,
+  Workflow,
 } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
@@ -44,6 +46,8 @@ import { Button } from '@/shared/components/ui/Button';
 import { ProgressBar } from '@/shared/components/ui/ProgressBar';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { InfoIcon } from '@/shared/components/ui/Tooltip';
+import { NextStepBanner } from '@/shared/components/ui/NextStepBanner';
+import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { simulationApi } from '../api/simulationApi';
 import type { SimJob, SimEnvironment, SimToRealComparison } from '../types';
 
@@ -956,6 +960,26 @@ function ResultsTab({ job }: { job: SimJob | null }) {
           </div>
         </div>
       </Card>
+
+      {/* Next-step CTA: only suggest deploy when sim shows real success */}
+      {rate >= 0.5 ? (
+        <NextStepBanner
+          title="Happy with this result? Ship it."
+          description={`Success rate is ${(rate * 100).toFixed(0)}% — ready to canary-deploy to the fleet.`}
+          ctaLabel="Deploy model"
+          ctaHref="/deployments"
+          icon={<Rocket className="w-4 h-4" />}
+        />
+      ) : (
+        <NextStepBanner
+          title="Not ready for deployment yet"
+          description="Low success rate — collect more demos or fine-tune before shipping to real robots."
+          ctaLabel="Back to pipeline"
+          ctaHref="/pipeline"
+          icon={<Workflow className="w-4 h-4" />}
+          variant="subtle"
+        />
+      )}
     </div>
   );
 }
@@ -1181,16 +1205,19 @@ function SimulationPageInner() {
     <div className="space-y-6">
       {/* Header */}
       <header>
-        <div className="flex items-center gap-3 mb-1">
-          <div className="p-2 rounded-brand bg-cobalt-500/10">
-            <FlaskConical className="w-6 h-6 text-cobalt-400" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="p-2 rounded-brand bg-cobalt-500/10">
+              <FlaskConical className="w-6 h-6 text-cobalt-400" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-theme-primary">Simulation</h1>
+              <p className="text-sm text-theme-muted">
+                MuJoCo / Isaac Lab policy testing and sim-to-real analysis
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-theme-primary">Simulation</h1>
-            <p className="text-sm text-theme-muted">
-              MuJoCo / Isaac Lab policy testing and sim-to-real analysis
-            </p>
-          </div>
+          <PipelineBreadcrumb stage="evaluate" />
         </div>
       </header>
 

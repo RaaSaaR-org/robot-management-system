@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Video, Target, BarChart3 } from 'lucide-react';
+import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { SessionList } from '../components/SessionList';
 import { PriorityDashboard } from '../components/PriorityDashboard';
 import { UncertaintyHeatmap } from '../components/UncertaintyHeatmap';
@@ -82,13 +83,16 @@ export function DataCollectionPage() {
   return (
     <div className="container mx-auto px-4 py-6 max-w-7xl">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-          Data Collection
-        </h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">
-          Collect teleoperation data and view collection priorities
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            Data Collection
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
+            Collect teleoperation data and view collection priorities
+          </p>
+        </div>
+        <PipelineBreadcrumb stage="collect" />
       </div>
 
       {/* Tabs */}

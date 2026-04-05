@@ -8,6 +8,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Rocket } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Card, Button } from '@/shared/components/ui';
+import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { useDeploymentStore } from '../store';
 import { DeploymentCard, CanaryConfig, RollbackConfirmation } from '../components';
 import type { Deployment, CreateDeploymentInput } from '../types';
@@ -106,12 +107,15 @@ export function DeploymentsPage() {
             Manage model deployments across your robot fleet
           </p>
         </div>
-        <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
-          <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          New Deployment
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <PipelineBreadcrumb stage="deploy" />
+          <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
+            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Deployment
+          </Button>
+        </div>
       </div>
 
       {/* Stats */}

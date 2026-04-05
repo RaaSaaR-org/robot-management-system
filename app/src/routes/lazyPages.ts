@@ -273,6 +273,13 @@ export const LazySimulationPage = lazy(() =>
   import('@/features/simulation').then((m) => ({ default: m.SimulationPage }))
 );
 
+/**
+ * Pipeline page - unified training pipeline overview (TASK-134)
+ */
+export const LazyPipelinePage = lazy(() =>
+  import('@/features/pipeline').then((m) => ({ default: m.PipelinePage }))
+);
+
 // ============================================================================
 // STANDALONE PAGES
 // ============================================================================
