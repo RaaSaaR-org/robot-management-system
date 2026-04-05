@@ -4,7 +4,7 @@ aliases:
 - TASK-132
 title: Persist simulation jobs to database
 slug: persist-simulation-jobs-to-database
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,6 +17,7 @@ due_date: ''
 created: 2026-04-05
 updated: 2026-04-05
 ---
+
 
 
 # Persist simulation jobs to database
