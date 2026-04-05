@@ -4,7 +4,7 @@ aliases:
 - TASK-131
 title: 'UX: Mobile Docs tables overflow horizontally without scroll container'
 slug: ux-mobile-docs-tables-overflow-horizontally-without-scroll-container
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,8 +15,9 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-04-04
-updated: 2026-04-04
+updated: 2026-04-05
 ---
+
 
 
 # UX: Mobile Docs tables overflow horizontally without scroll container
