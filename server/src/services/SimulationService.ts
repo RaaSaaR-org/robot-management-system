@@ -11,10 +11,11 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { spawn, type ChildProcess } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createInterface } from 'readline';
+import { simulationJobRepository } from '../repositories/SimulationJobRepository.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,6 +118,17 @@ const EVALUATOR_SCRIPT = path.join(
 
 const VLA_SERVER_URL = process.env.VLA_SERVER_URL || 'http://localhost:8000';
 
+// Stable on-disk location for simulation artifacts (survives reboots).
+// Layout: <PROJECT_ROOT>/data/sim_runs/<jobId>/{frames/,results.json}
+const SIM_RUNS_DIR = path.join(PROJECT_ROOT, 'data', 'sim_runs');
+
+function jobFramesDir(jobId: string): string {
+  return path.join(SIM_RUNS_DIR, jobId, 'frames');
+}
+function jobResultsPath(jobId: string): string {
+  return path.join(SIM_RUNS_DIR, jobId, 'results.json');
+}
+
 // ============================================================================
 // SERVICE
 // ============================================================================
@@ -129,6 +141,11 @@ export class SimulationService extends EventEmitter {
 
   private constructor() {
     super();
+    // Fire-and-forget: load historical jobs from DB and mark any
+    // queued/running entries as failed (their processes died with the
+    // previous server). Any requests that arrive before this finishes
+    // will still work — they just query the DB directly on cache miss.
+    void this.loadFromDatabase();
   }
 
   static getInstance(): SimulationService {
@@ -136,6 +153,22 @@ export class SimulationService extends EventEmitter {
       SimulationService.instance = new SimulationService();
     }
     return SimulationService.instance;
+  }
+
+  private async loadFromDatabase(): Promise<void> {
+    try {
+      const failed = await simulationJobRepository.markFailedOnBoot();
+      if (failed > 0) {
+        console.log(`[SimulationService] Marked ${failed} orphaned job(s) as failed (server restart)`);
+      }
+      const jobs = await simulationJobRepository.findAll();
+      for (const job of jobs) {
+        this.jobs.set(job.jobId, job);
+      }
+      console.log(`[SimulationService] Loaded ${jobs.length} job(s) from database`);
+    } catch (err) {
+      console.error('[SimulationService] Failed to load jobs from database:', err);
+    }
   }
 
   // ==========================================================================
@@ -184,6 +217,12 @@ export class SimulationService extends EventEmitter {
 
     this.jobs.set(job.jobId, job);
     console.log(`[SimulationService] Job queued: ${job.jobId} (model=${modelId}, env=${environment})`);
+
+    // Persist to DB — fire-and-forget; the in-memory copy is authoritative
+    // for live progress, the DB is updated on state transitions.
+    void simulationJobRepository.create(job).catch((err) => {
+      console.error(`[SimulationService] Failed to persist job ${job.jobId}:`, err);
+    });
 
     this.emit('job:created', job);
 
@@ -252,6 +291,9 @@ export class SimulationService extends EventEmitter {
     job.status = 'failed';
     job.updatedAt = new Date();
     console.log(`[SimulationService] Job cancelled: ${jobId}`);
+    void simulationJobRepository
+      .update(jobId, { status: 'failed', failureReason: 'cancelled' })
+      .catch((err) => console.error(`[SimulationService] Failed to persist cancel for ${jobId}:`, err));
     this.emit('job:cancelled', job);
 
     return job;
@@ -390,14 +432,24 @@ export class SimulationService extends EventEmitter {
     const job = this.jobs.get(jobId);
     if (!job) return;
 
-    const outputPath = `/tmp/sim_results_${jobId}.json`;
-    const framesDir = `/tmp/sim_frames_${jobId}`;
+    const outputPath = jobResultsPath(jobId);
+    const framesDir = jobFramesDir(jobId);
+
+    // Ensure the run directory exists for the Python subprocess to write into.
+    try {
+      mkdirSync(framesDir, { recursive: true });
+    } catch (err) {
+      console.error(`[SimulationService] Failed to create frames dir ${framesDir}:`, err);
+    }
 
     // Transition to running
     job.status = 'running';
     job.framesDir = framesDir;
     job.updatedAt = new Date();
     console.log(`[SimulationService] Job running (real): ${jobId}`);
+    void simulationJobRepository
+      .update(jobId, { status: 'running', framesDir })
+      .catch((err) => console.error(`[SimulationService] Failed to persist running for ${jobId}:`, err));
     this.emit('job:running', job);
 
     const proc = spawn('uv', ['run', 'python',
@@ -459,19 +511,37 @@ export class SimulationService extends EventEmitter {
           current.frames = frames as SimFrame[] | undefined;
           current.status = 'completed';
           current.progress = 100;
+          current.updatedAt = new Date();
           console.log(`[SimulationService] Job completed (real): ${jobId}, frames=${frames?.length ?? 0}`);
+          void simulationJobRepository
+            .update(jobId, { status: 'completed', progress: 100, metrics: current.metrics })
+            .then(() =>
+              current.frames && current.frames.length > 0
+                ? simulationJobRepository.createFrames(jobId, current.frames)
+                : undefined
+            )
+            .catch((err) =>
+              console.error(`[SimulationService] Failed to persist completion for ${jobId}:`, err)
+            );
           this.emit('job:completed', current);
         } catch (err) {
           current.status = 'failed';
+          current.updatedAt = new Date();
           console.error(`[SimulationService] Failed to parse results for ${jobId}:`, err);
+          void simulationJobRepository
+            .update(jobId, { status: 'failed', failureReason: 'parse error' })
+            .catch((e) => console.error(`[SimulationService] Failed to persist parse-fail for ${jobId}:`, e));
           this.emit('job:failed', current);
         }
       } else {
         current.status = 'failed';
+        current.updatedAt = new Date();
         console.error(`[SimulationService] Evaluator exited with code ${code} for ${jobId}`);
+        void simulationJobRepository
+          .update(jobId, { status: 'failed', failureReason: `evaluator exit ${code}` })
+          .catch((err) => console.error(`[SimulationService] Failed to persist exit-fail for ${jobId}:`, err));
         this.emit('job:failed', current);
       }
-      current.updatedAt = new Date();
     });
 
     proc.on('error', (err) => {
@@ -481,6 +551,9 @@ export class SimulationService extends EventEmitter {
         current.status = 'failed';
         current.updatedAt = new Date();
         console.error(`[SimulationService] Evaluator spawn error for ${jobId}:`, err);
+        void simulationJobRepository
+          .update(jobId, { status: 'failed', failureReason: `spawn error: ${err.message}` })
+          .catch((e) => console.error(`[SimulationService] Failed to persist spawn-fail for ${jobId}:`, e));
         this.emit('job:failed', current);
       }
     });
@@ -503,6 +576,9 @@ export class SimulationService extends EventEmitter {
 
       j.status = 'running';
       j.updatedAt = new Date();
+      void simulationJobRepository
+        .update(jobId, { status: 'running' })
+        .catch((err) => console.error(`[SimulationService] Failed to persist running (mock) for ${jobId}:`, err));
       this.emit('job:running', j);
 
       // Progress increment every 500ms
@@ -523,7 +599,13 @@ export class SimulationService extends EventEmitter {
           this.timers.delete(jobId);
           current.status = 'completed';
           current.metrics = this.generateMockMetrics();
+          current.updatedAt = new Date();
           console.log(`[SimulationService] Job completed (mock): ${jobId}`);
+          void simulationJobRepository
+            .update(jobId, { status: 'completed', progress: 100, metrics: current.metrics })
+            .catch((err) =>
+              console.error(`[SimulationService] Failed to persist mock completion for ${jobId}:`, err)
+            );
           this.emit('job:completed', current);
         }
       }, 500);
