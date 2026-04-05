@@ -275,7 +275,14 @@ export function DocsPage() {
                   }
                   return url;
                 }}
-                components={{ code: CodeBlock as never }}
+                components={{
+                  code: CodeBlock as never,
+                  table: ({ children, ...props }) => (
+                    <div className="overflow-x-auto -mx-4 sm:mx-0 my-4">
+                      <table {...props}>{children}</table>
+                    </div>
+                  ),
+                }}
               >
                 {content}
               </ReactMarkdown>

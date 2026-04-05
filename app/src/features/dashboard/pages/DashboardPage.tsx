@@ -71,12 +71,12 @@ export function DashboardPage() {
           <div className="absolute bottom-0 right-0 w-96 h-96 bg-cobalt-300 rounded-full filter blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
         </div>
         <div className="relative">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <div>
               <h1 className="text-2xl font-bold">Fleet Dashboard</h1>
               <p className="text-white/70 text-sm mt-1">Real-time fleet monitoring and control</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               {/* E-Stop always visible — safety-critical, must be accessible on all viewports */}
               <FleetEmergencyStopButton size="md" />
               <Button variant="outline" onClick={refresh} disabled={isLoading} className="!border-white/30 !text-white hover:!bg-white/10">
