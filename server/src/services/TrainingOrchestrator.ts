@@ -528,30 +528,31 @@ export class TrainingOrchestrator extends EventEmitter {
 
     let modelVersionId: string | null = null;
 
-    // Create ModelVersion
+    // Create ModelVersion — always, even when the dataset has no skill yet.
+    // Skill linkage can be set later via the model registry.
     try {
-      // Get dataset to determine skill
       const dataset = await datasetRepository.findById(job.datasetId);
-      if (dataset?.skillId) {
-        // Generate version string
-        const timestamp = Date.now();
-        const version = `v${timestamp}`;
+      const timestamp = Date.now();
+      const version = `v${timestamp}`;
 
-        const modelVersion = await modelVersionRepository.create({
-          skillId: dataset.skillId,
-          trainingJobId: jobId,
-          version,
-          artifactUri,
-          trainingMetrics: updatedMetrics,
-          validationMetrics: finalMetrics.validationLoss
-            ? { final_loss: finalMetrics.validationLoss }
-            : {},
-          deploymentStatus: 'staging',
-        });
+      const modelVersion = await modelVersionRepository.create({
+        skillId: dataset?.skillId ?? null,
+        trainingJobId: jobId,
+        version,
+        artifactUri,
+        trainingMetrics: updatedMetrics,
+        validationMetrics: finalMetrics.validationLoss
+          ? { final_loss: finalMetrics.validationLoss }
+          : {},
+        deploymentStatus: 'staging',
+      });
 
-        modelVersionId = modelVersion.id;
-        console.log(`[TrainingOrchestrator] Created ModelVersion: ${modelVersionId}`);
-      }
+      modelVersionId = modelVersion.id;
+      console.log(
+        `[TrainingOrchestrator] Created ModelVersion: ${modelVersionId} (skill=${
+          dataset?.skillId ?? 'none'
+        })`
+      );
     } catch (error) {
       console.error('[TrainingOrchestrator] Failed to create ModelVersion:', error);
     }

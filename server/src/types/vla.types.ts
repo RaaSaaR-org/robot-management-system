@@ -441,7 +441,7 @@ export interface TrainingJobQueryParams {
  */
 export interface ModelVersion {
   id: string;
-  skillId: string;
+  skillId: string | null;
   trainingJobId: string;
   version: string;
   artifactUri: string;
@@ -460,7 +460,7 @@ export interface ModelVersion {
 }
 
 export interface CreateModelVersionInput {
-  skillId: string;
+  skillId: string | null;
   trainingJobId: string;
   version: string;
   artifactUri: string;

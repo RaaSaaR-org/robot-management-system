@@ -21,7 +21,7 @@ from pathlib import Path
 
 from callbacks import ClaimedJob, ServerClient
 from config import Config, require_python_311
-from trainers import BaseTrainer, ProgressEvent, StubTrainer, TrainerContext
+from trainers import BaseTrainer, CancelledError, ProgressEvent, StubTrainer, TrainerContext
 from trainers.base import TrainerResult
 
 log = logging.getLogger("worker")
@@ -145,6 +145,12 @@ def _run_one_job(cfg: Config, server: ServerClient, trainer: BaseTrainer, job: C
 
         try:
             result: TrainerResult = trainer.train(ctx, on_progress)
+        except CancelledError as e:
+            heartbeat.stop()
+            log.info("Job %s cancelled by server: %s — skipping /failed POST", job.id, e)
+            # The server already set status='cancelled' via /jobs/:id/cancel.
+            # Posting /failed here would clobber that state.
+            return
         except Exception as e:  # noqa: BLE001
             heartbeat.stop()
             log.error("Job %s failed: %s\n%s", job.id, e, traceback.format_exc())

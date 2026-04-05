@@ -13,7 +13,14 @@ import math
 import time
 from time import monotonic
 
-from .base import BaseTrainer, ProgressEvent, TrainerContext, TrainerResult, ProgressCallback
+from .base import (
+    BaseTrainer,
+    CancelledError,
+    ProgressEvent,
+    TrainerContext,
+    TrainerResult,
+    ProgressCallback,
+)
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +69,7 @@ class StubTrainer(BaseTrainer):
             should_continue = on_progress(event)
             if not should_continue:
                 log.info("[Stub] cancellation received at step %d", step)
-                raise RuntimeError("cancelled")
+                raise CancelledError(f"cancelled at step {step}")
 
             # Sleep so the UI has time to poll/render progress
             time.sleep(1.0)

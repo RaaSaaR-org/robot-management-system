@@ -43,6 +43,12 @@ class TrainerResult:
     final_metrics: dict[str, Any]
 
 
+class CancelledError(Exception):
+    """Raised by a trainer when it detects a user-initiated cancel.
+    Distinct from generic failures — the server has already marked
+    the job as cancelled, so the worker should NOT POST /failed."""
+
+
 # A progress callback the trainer calls every step; returns True to continue,
 # False to stop (for cancellations sent via heartbeat).
 ProgressCallback = Callable[[ProgressEvent], bool]

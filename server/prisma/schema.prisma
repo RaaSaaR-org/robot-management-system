@@ -1887,7 +1887,7 @@ model TrainingJob {
 // ModelVersion - Trained model artifacts
 model ModelVersion {
   id                 String   @id @default(uuid())
-  skillId            String
+  skillId            String?  // Optional — models can be linked to a skill later
   trainingJobId      String
   version            String   // Semantic version string
   artifactUri        String   // MinIO model location
@@ -1901,12 +1901,13 @@ model ModelVersion {
   updatedAt          DateTime @updatedAt
 
   // Relations
-  skill       SkillDefinition @relation(fields: [skillId], references: [id])
-  trainingJob TrainingJob     @relation(fields: [trainingJobId], references: [id])
+  skill       SkillDefinition? @relation(fields: [skillId], references: [id])
+  trainingJob TrainingJob      @relation(fields: [trainingJobId], references: [id])
   deployments Deployment[]
 
   @@unique([skillId, version])
   @@index([deploymentStatus])
+  @@index([trainingJobId])
 }
 
 // Deployment - Fleet deployment tracking
