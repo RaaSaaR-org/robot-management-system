@@ -11,7 +11,10 @@ import type { SimJob, SimEnvironment, SimToRealComparison, SubmitSimJobInput } f
 // ENDPOINTS
 // ============================================================================
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+// Keep in sync with the axios client (src/api/client.ts): default to a
+// relative '/api' path so <img> src URLs route through the Vite proxy when
+// the app is served from a different origin than the backend.
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const ENDPOINTS = {
   jobs: '/simulation/jobs',

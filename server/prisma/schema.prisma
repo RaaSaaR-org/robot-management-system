@@ -1554,6 +1554,44 @@ model SimToRealValidation {
   @@index([validationDate])
 }
 
+model SimulationJob {
+  id                 String   @id @default(uuid())
+  modelId            String
+  environment        String
+  backend            String   // "mujoco" | "isaac"
+  rolloutCount       Int
+  status             String   // "queued" | "running" | "completed" | "failed"
+  progress           Int      @default(0)
+  successRate        Float?
+  avgSteps           Float?
+  collisionCount     Int?
+  avgDuration        Float?
+  simToRealGap       Float?
+  totalEpisodes      Int?
+  successfulEpisodes Int?
+  framesDir          String?
+  failureReason      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  frames SimulationFrame[]
+
+  @@index([modelId, status])
+  @@index([createdAt])
+}
+
+model SimulationFrame {
+  id       String @id @default(uuid())
+  jobId    String
+  episode  Int
+  step     Int
+  filename String
+
+  job SimulationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, episode, step])
+}
+
 // ============================================================================
 // FEDERATED LEARNING
 // ============================================================================
