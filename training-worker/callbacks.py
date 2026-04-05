@@ -27,6 +27,8 @@ class ClaimedJob:
 
     id: str
     dataset_id: str
+    dataset_storage_path: str  # RustFS prefix, e.g. "6c103435-.../" — NOT the same as dataset_id
+    dataset_lerobot_version: str | None
     base_model: str
     fine_tune_method: str
     hyperparameters: dict[str, Any]
@@ -36,9 +38,14 @@ class ClaimedJob:
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> "ClaimedJob":
         job = payload.get("job", payload)
+        dataset = payload.get("dataset") or {}
+        # storagePath comes from the server as "{uuid}/" — strip trailing slash
+        storage_path = (dataset.get("storagePath") or job["datasetId"]).rstrip("/")
         return cls(
             id=job["id"],
             dataset_id=job["datasetId"],
+            dataset_storage_path=storage_path,
+            dataset_lerobot_version=dataset.get("lerobotVersion"),
             base_model=job["baseModel"],
             fine_tune_method=job.get("fineTuneMethod", "lora"),
             hyperparameters=job.get("hyperparameters", {}) or {},

@@ -81,6 +81,17 @@ cd app && npm run dev
 cd vla-server && python server.py
 ```
 
+### Testing the training pipeline
+
+```bash
+./training-worker/scripts/test-e2e.sh
+```
+
+One-command end-to-end test — starts RustFS + server + worker, imports
+`lerobot/svla_so101_pickplace`, runs a 3-step SmolVLA+LoRA training job,
+uploads the adapter to RustFS. See `docs/training-pipeline-testing.md`
+for prerequisites + troubleshooting.
+
 ### Environment Setup
 
 Each component needs a `.env` file. Copy from examples and fill in API keys:

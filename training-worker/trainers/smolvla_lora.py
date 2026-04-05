@@ -86,10 +86,28 @@ class SmolVLALoraTrainer(BaseTrainer):
                 "Run `uv pip install -e .` in training-worker/ first."
             ) from e
 
-        # 1) Dataset — download from RustFS + load via LeRobot
+        # 1) Dataset — download from RustFS + load via LeRobot.
+        # First load WITHOUT delta_timestamps to read meta, then reload with
+        # the chunk deltas SmolVLA expects so actions come as [B, 50, 6].
         dataset_dir = ctx.work_dir / "dataset"
         self._download_dataset(ctx, dataset_dir)
         dataset = self._load_lerobot_dataset(ctx, dataset_dir)
+        dataset = self._reload_with_deltas(ctx, dataset_dir, dataset)
+
+        # 2) Count the dataset's camera features — SmolVLA's base expects
+        # 3 cameras, so pad missing slots via empty_cameras. make_policy
+        # (below) builds cfg.input_features from the dataset, so the
+        # policy's image_features will match the batch's actual keys.
+        camera_keys = sorted(
+            k for k, v in dataset.features.items()
+            if v.get("dtype") in ("video", "image")
+        )
+        empty_cameras = max(0, 3 - len(camera_keys))
+        log.info(
+            "[SmolVLA+LoRA] dataset cameras: %s (empty_cameras=%d)",
+            camera_keys,
+            empty_cameras,
+        )
 
         loader = DataLoader(
             dataset,
@@ -109,8 +127,9 @@ class SmolVLALoraTrainer(BaseTrainer):
             total_steps,
         )
 
-        # 2) Base model
-        policy = self._load_base_policy(ctx)
+        # 3) Base model — make_policy builds cfg.input_features from the
+        # dataset's own feature names, so image keys match the batch.
+        policy, preprocessor = self._load_base_policy(ctx, dataset, empty_cameras)
         device = torch.device(ctx.device)
         policy.to(device)
 
@@ -144,11 +163,23 @@ class SmolVLALoraTrainer(BaseTrainer):
                 if max_steps > 0 and step_idx > max_steps:
                     break
 
+                # Preprocessor handles normalization, tokenization, device
+                # placement. It expects (batch, task) tuple-like input
+                # internally mapped to a transition. For training, calling
+                # the pipeline directly on the batch dict is the convention.
+                batch = preprocessor(batch)
                 batch = self._move_batch(batch, device)
                 optimizer.zero_grad(set_to_none=True)
                 with self._amp_context(ctx.device):
-                    loss_dict = policy(batch)
-                    loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+                    result = policy(batch)
+                    # SmolVLA returns (loss_tensor, loss_dict); older
+                    # policies return just a tensor or dict.
+                    if isinstance(result, tuple):
+                        loss, _info = result
+                    elif isinstance(result, dict):
+                        loss = result["loss"]
+                    else:
+                        loss = result
                 loss.backward()
                 optimizer.step()
 
@@ -207,7 +238,9 @@ class SmolVLALoraTrainer(BaseTrainer):
             dataset_bucket=os.environ.get("RUSTFS_BUCKET_DATASETS", "datasets"),
             model_bucket=os.environ.get("RUSTFS_BUCKET_MODELS", "models"),
         )
-        storage.download_dataset(ctx.dataset_id, dest)
+        # Use storage_path (RustFS prefix) — this differs from dataset_id
+        # for HF-imported datasets (which have an internal storageId UUID).
+        storage.download_dataset(ctx.dataset_storage_path, dest)
 
     def _load_lerobot_dataset(self, ctx: TrainerContext, dataset_dir: Path) -> Any:
         """Load a LeRobot v3 dataset from a local directory.
@@ -238,22 +271,85 @@ class SmolVLALoraTrainer(BaseTrainer):
 
         # LeRobotDataset needs a repo_id for its metadata cache. Use the
         # datasetId as a stable local identifier.
+        #
+        # Pass revision explicitly to prevent LeRobot from hitting the
+        # HuggingFace Hub to resolve a "safe version" — our dataset is
+        # fully local. If meta/tasks.parquet or meta/episodes/* are
+        # missing, LeRobot falls back to Hub download which fails with
+        # 401 for our local/* repo_id.
+        revision = ctx.dataset_lerobot_version or "v3.0"
         return LeRobotDataset(
             repo_id=f"local/{ctx.dataset_id}",
             root=str(dataset_dir),
-            download_videos=False,
+            revision=revision,
+            download_videos=True,
         )
 
-    def _load_base_policy(self, ctx: TrainerContext) -> Any:
-        """Load lerobot/smolvla_base from HuggingFace (cached)."""
+    def _reload_with_deltas(
+        self,
+        ctx: TrainerContext,
+        dataset_dir: Path,
+        dataset: Any,
+    ) -> Any:
+        """Reload the dataset with SmolVLA's delta indices so actions come
+        in [B, chunk_size, action_dim] form and observations keep 1 step.
+        """
         try:
-            from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
         except ImportError:
-            from lerobot.common.policies.smolvla.modeling_smolvla import SmolVLAPolicy  # type: ignore
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset  # type: ignore
+        fps = dataset.fps
+        chunk_size = 50  # SmolVLAConfig default
+        delta_timestamps = {
+            "action": [i / fps for i in range(chunk_size)],
+        }
+        # Observation delta = [0] is the default (current frame only), so
+        # no need to set it explicitly for images/state.
+        revision = ctx.dataset_lerobot_version or "v3.0"
+        return LeRobotDataset(
+            repo_id=f"local/{ctx.dataset_id}",
+            root=str(dataset_dir),
+            revision=revision,
+            download_videos=True,
+            delta_timestamps=delta_timestamps,
+        )
+
+    def _load_base_policy(
+        self,
+        ctx: TrainerContext,
+        dataset: Any,
+        empty_cameras: int,
+    ) -> tuple[Any, Any]:
+        """Load lerobot/smolvla_base via make_policy so cfg.input_features
+        is built directly from the dataset's own feature names (e.g.
+        observation.images.up/side). With empty_cameras set, the policy
+        pads missing camera slots with zero tensors at forward time.
+
+        Returns (policy, preprocessor). The preprocessor pipeline handles
+        normalization, language tokenization, and device placement.
+        """
+        from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
+        from lerobot.policies.factory import make_policy, make_pre_post_processors
 
         os.environ.setdefault("HF_HOME", str(ctx.hf_cache_dir))
+
+        cfg = SmolVLAConfig(
+            pretrained_path="lerobot/smolvla_base",
+            device=ctx.device,
+            use_peft=False,  # we apply our own PEFT after loading
+            empty_cameras=empty_cameras,
+            # Force fixed-length language padding — the default "longest"
+            # causes attention mask size mismatches between the VLM prefix
+            # and the expert's cached att_masks.
+            pad_language_to="max_length",
+        )
         log.info("[SmolVLA+LoRA] loading lerobot/smolvla_base (HF cache=%s)", ctx.hf_cache_dir)
-        return SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
+        policy = make_policy(cfg, ds_meta=dataset.meta)
+        preprocessor, _postprocessor = make_pre_post_processors(
+            policy_cfg=cfg,
+            dataset_stats=dataset.meta.stats,
+        )
+        return policy, preprocessor
 
     def _discover_target_modules(self, model: Any) -> list[str]:
         """Find which LoRA target modules actually exist on this model.

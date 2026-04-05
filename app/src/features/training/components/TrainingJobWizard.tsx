@@ -37,6 +37,7 @@ const steps: { id: Step; label: string }[] = [
 ];
 
 const baseModels: { value: BaseModel; label: string; description: string }[] = [
+  { value: 'smolvla', label: 'SmolVLA', description: 'HuggingFace small VLA, LoRA-friendly on Apple Silicon' },
   { value: 'pi0', label: 'Pi0', description: 'Physical Intelligence base model' },
   { value: 'pi0_6', label: 'Pi0.6', description: 'Pi0 version 0.6 with improved action heads' },
   { value: 'openvla', label: 'OpenVLA', description: 'Open Vision-Language-Action model' },

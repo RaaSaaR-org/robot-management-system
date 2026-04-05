@@ -8,7 +8,7 @@
 // ENUMS & CONSTANTS
 // ============================================================================
 
-export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot'] as const;
+export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot', 'smolvla'] as const;
 export type BaseModel = (typeof BaseModels)[number];
 
 export const FineTuneMethods = ['lora', 'full', 'frozen_backbone'] as const;

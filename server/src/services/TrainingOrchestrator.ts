@@ -94,6 +94,13 @@ export const hyperparametersSchema = z.object({
     .min(1, 'gradient_accumulation_steps must be at least 1')
     .optional(),
   max_grad_norm: z.number().positive('max_grad_norm must be positive').optional(),
+  max_steps: z
+    .number()
+    .int('max_steps must be an integer')
+    .min(0, 'max_steps must be at least 0')
+    .optional(),
+  lora_alpha: z.number().int().positive().optional(),
+  lora_dropout: z.number().min(0).max(1).optional(),
 });
 
 // ============================================================================
@@ -198,16 +205,12 @@ export class TrainingOrchestrator extends EventEmitter {
     hyperparameters: Partial<Hyperparameters>,
     fineTuneMethod: string
   ): Hyperparameters {
-    // Add required defaults
+    // Add required defaults (spread input first so optional keys flow through)
     const toValidate = {
+      ...hyperparameters,
       learning_rate: hyperparameters.learning_rate ?? 1e-4,
       batch_size: hyperparameters.batch_size ?? 32,
       epochs: hyperparameters.epochs ?? 100,
-      lora_rank: hyperparameters.lora_rank,
-      warmup_steps: hyperparameters.warmup_steps,
-      weight_decay: hyperparameters.weight_decay,
-      gradient_accumulation_steps: hyperparameters.gradient_accumulation_steps,
-      max_grad_norm: hyperparameters.max_grad_norm,
     };
 
     // Validate with Zod
@@ -473,20 +476,25 @@ export class TrainingOrchestrator extends EventEmitter {
       metrics: updatedMetrics,
     });
 
-    // Update KV store progress
-    const jobQueue = getJobQueue();
-    if (jobQueue) {
-      const kvProgress: JobProgress = {
-        status: 'running',
-        progress,
-        currentEpoch: epoch,
-        totalEpochs: currentJob.totalEpochs,
-        metrics: updatedMetrics,
-        eta: etaState?.estimatedCompletionTime,
-        message: `Training epoch ${epoch}, step ${step}/${totalSteps}`,
-        updatedAt: new Date().toISOString(),
-      };
-      await jobQueue.updateJobProgress(jobId, kvProgress);
+    // Update KV store progress if NATS is up. The DB update above is
+    // the source of truth; the KV is a cache for push notifications.
+    if (natsClient.isConnected()) {
+      try {
+        const jobQueue = getJobQueue();
+        const kvProgress: JobProgress = {
+          status: 'running',
+          progress,
+          currentEpoch: epoch,
+          totalEpochs: currentJob.totalEpochs,
+          metrics: updatedMetrics,
+          eta: etaState?.estimatedCompletionTime,
+          message: `Training epoch ${epoch}, step ${step}/${totalSteps}`,
+          updatedAt: new Date().toISOString(),
+        };
+        await jobQueue.updateJobProgress(jobId, kvProgress);
+      } catch (err) {
+        console.warn('[TrainingOrchestrator] KV progress update failed:', err);
+      }
     }
 
     // Log metrics to MLflow

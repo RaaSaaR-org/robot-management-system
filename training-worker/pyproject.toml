@@ -2,7 +2,7 @@
 name = "neodem-training-worker"
 version = "0.1.0"
 description = "NeoDEM training worker — polls the server for training jobs, runs SmolVLA LoRA fine-tuning, POSTs progress callbacks"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # HTTP + polling
     "httpx>=0.27.0",

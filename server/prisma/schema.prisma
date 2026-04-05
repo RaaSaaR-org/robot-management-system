@@ -1857,7 +1857,7 @@ model Dataset {
 model TrainingJob {
   id                 String    @id @default(uuid())
   datasetId          String
-  baseModel          String    // 'pi0' | 'pi0_6' | 'openvla' | 'groot'
+  baseModel          String    // 'pi0' | 'pi0_6' | 'openvla' | 'groot' | 'smolvla'
   fineTuneMethod     String    // 'lora' | 'full' | 'oft'
   hyperparameters    String    @default("{}") // JSON: { learning_rate, batch_size, epochs, lora_rank, warmup_steps }
   gpuRequirements    String    @default("{}") // JSON: { count, memory, type }

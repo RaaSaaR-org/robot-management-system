@@ -313,6 +313,16 @@ export class HuggingFaceImportService {
     const totalChunks = info.total_chunks ?? Math.ceil(totalEpisodes / chunksSize);
     const isV3Format = (info.codebase_version ?? '').startsWith('v3');
 
+    // v3.0 requires additional meta files that LeRobotDataset loads at init time:
+    //   meta/tasks.parquet and meta/episodes/chunk-xxx/file-xxx.parquet
+    if (isV3Format) {
+      files.push('meta/tasks.parquet');
+      for (let chunk = 0; chunk < totalChunks; chunk++) {
+        const episodesChunkDir = `meta/episodes/chunk-${String(chunk).padStart(3, '0')}`;
+        files.push(`${episodesChunkDir}/file-000.parquet`);
+      }
+    }
+
     for (let chunk = 0; chunk < totalChunks; chunk++) {
       const chunkDir = `data/chunk-${String(chunk).padStart(3, '0')}`;
       if (isV3Format) {
@@ -329,10 +339,18 @@ export class HuggingFaceImportService {
     }
 
     // Include video files if requested
+    // v3: one mp4 per chunk per feature — videos/{feature_key}/chunk-{c:03d}/file-{f:03d}.mp4
+    // v1/v2: one mp4 per episode — videos/chunk-{c:03d}/{feature_key}/episode_{e:06d}.mp4
     if (includeVideos && info.features) {
       for (const [featureName, feature] of Object.entries(info.features)) {
-        if (feature.video) {
-          for (let chunk = 0; chunk < totalChunks; chunk++) {
+        const isVideoFeature = feature.video === true || feature.dtype === 'video';
+        if (!isVideoFeature) continue;
+        for (let chunk = 0; chunk < totalChunks; chunk++) {
+          if (isV3Format) {
+            files.push(
+              `videos/${featureName}/chunk-${String(chunk).padStart(3, '0')}/file-000.mp4`
+            );
+          } else {
             const chunkDir = `videos/chunk-${String(chunk).padStart(3, '0')}`;
             const episodesInChunk = Math.min(chunksSize, totalEpisodes - chunk * chunksSize);
             for (let ep = 0; ep < episodesInChunk; ep++) {
