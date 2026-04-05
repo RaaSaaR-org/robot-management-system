@@ -43,3 +43,7 @@ export type { TabsProps, Tab } from './Tabs';
 // ProgressBar
 export { ProgressBar } from './ProgressBar';
 export type { ProgressBarProps, ProgressBarVariant } from './ProgressBar';
+
+// Tooltip
+export { Tooltip, InfoIcon } from './Tooltip';
+export type { TooltipProps, InfoIconProps } from './Tooltip';

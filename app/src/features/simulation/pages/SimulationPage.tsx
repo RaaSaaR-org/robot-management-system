@@ -27,6 +27,14 @@ import {
   Target,
   Footprints,
   Clock,
+  ChevronDown,
+  ChevronRight,
+  GraduationCap,
+  Eye,
+  Timer,
+  CheckCircle2,
+  XCircle,
+  Hash,
 } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
@@ -35,8 +43,48 @@ import { Badge } from '@/shared/components/ui/Badge';
 import { Button } from '@/shared/components/ui/Button';
 import { ProgressBar } from '@/shared/components/ui/ProgressBar';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { simulationApi } from '../api/simulationApi';
 import type { SimJob, SimEnvironment, SimToRealComparison } from '../types';
+
+// ============================================================================
+// GLOSSARY — hover-tooltip explanations for domain terms
+// ============================================================================
+
+const GLOSSARY = {
+  simulation:
+    'Running a robot policy against a virtual physics scene to evaluate its performance safely — no real hardware involved.',
+  vla: 'Vision-Language-Action model. An AI policy that takes camera images + a text instruction, and outputs robot joint targets. Example: SmolVLA, pi0.5, GR00T.',
+  mujoco:
+    'An open-source physics simulator used for robotics research. Simulates contact, friction, and rigid-body dynamics at up to 500 Hz.',
+  isaac:
+    'NVIDIA\'s Isaac Lab — a GPU-accelerated simulation framework with domain randomization, useful for sim-to-real transfer training.',
+  modelId:
+    'Any label you want — a local tag to track which model this run used. Does NOT control which model is loaded. The VLA model itself is selected on the inference server side via VLA_MODEL_PATH.',
+  backend:
+    'Which physics simulator executes the scene. MuJoCo runs locally (fast, CPU). Isaac Lab requires a separate GPU process.',
+  environment:
+    'A pre-built scene (robot + task + objects). Each environment defines the robot, the objects to manipulate, and the success criterion.',
+  rolloutCount:
+    'How many independent attempts (episodes) to run. Each attempt randomizes the object start position. More rollouts = more reliable success rate estimate.',
+  episode:
+    'One complete attempt at the task, from reset to success or timeout. Each episode is independent.',
+  step: 'One control tick — the policy outputs an action, physics advances. Control runs at 5 Hz (200 ms per step) with 100 physics sub-steps.',
+  successRate:
+    'Fraction of episodes where the robot completed the task (success criterion met before timeout). 100% = solved every attempt.',
+  avgSteps:
+    'Average number of control ticks before success or timeout (max 200). Lower = faster task completion. At the cap, the policy didn\'t finish in time.',
+  collisions:
+    'Number of contact events between the gripper and the object across all episodes. Some contact is expected (grasping!); excessive contact suggests the policy is bumping rather than grasping.',
+  avgDuration:
+    'Average wall-clock time per episode, including inference calls to the VLA server. Lower is faster.',
+  simToReal:
+    'The performance drop when moving a policy from simulation to real hardware. A small gap means the sim is well-calibrated.',
+  frames:
+    'Camera images captured at regular intervals during episodes. Exactly the pixels the VLA server received at each step.',
+  chunkSize:
+    'How many future actions the VLA predicts per inference call. Larger chunks mean fewer server calls (faster) but less reactive.',
+} as const;
 
 // ============================================================================
 // HELPERS
@@ -60,6 +108,146 @@ function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = (seconds % 60).toFixed(0);
   return `${m}m ${s}s`;
+}
+
+function formatRelativeTime(isoDate: string | Date): string {
+  const date = typeof isoDate === 'string' ? new Date(isoDate) : isoDate;
+  const diff = Date.now() - date.getTime();
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return date.toLocaleDateString();
+}
+
+/** Rough per-episode wall-clock estimate in seconds. Assumes ~35s per episode
+ * for MuJoCo + remote VLA inference (empirically observed baseline). */
+function estimateJobDurationSec(rolloutCount: number): number {
+  return rolloutCount * 35;
+}
+
+/** Human-friendly interpretation of a success rate. */
+function successInterpretation(rate: number): { label: string; detail: string; variant: 'success' | 'warning' | 'error' } {
+  if (rate >= 0.8) {
+    return {
+      label: 'Strong performance',
+      detail: 'The policy reliably solves this task. Ready to consider sim-to-real deployment.',
+      variant: 'success',
+    };
+  }
+  if (rate >= 0.5) {
+    return {
+      label: 'Partial performance',
+      detail: 'The policy solves the task more often than not, but reliability is insufficient for deployment. Consider more training or fine-tuning.',
+      variant: 'warning',
+    };
+  }
+  if (rate > 0) {
+    return {
+      label: 'Weak performance',
+      detail: 'The policy can occasionally solve the task. Likely needs more in-domain data or task-specific fine-tuning.',
+      variant: 'error',
+    };
+  }
+  return {
+    label: 'No successes yet',
+    detail:
+      'The policy did not complete the task in any episode. Common causes: (1) model not trained on this exact scene, (2) sim-to-real gap in camera views or gripper dynamics, (3) action normalization mismatch. See the frame replay to inspect behavior.',
+    variant: 'error',
+  };
+}
+
+// ============================================================================
+// EDUCATIONAL BANNER
+// ============================================================================
+
+function EducationBanner() {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <Card variant="subtle" className="border border-cobalt-500/20">
+      <button
+        type="button"
+        onClick={() => setExpanded((x) => !x)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+      >
+        <div className="flex items-center gap-3">
+          <div className="p-1.5 rounded-brand bg-cobalt-500/10">
+            <GraduationCap className="w-4 h-4 text-cobalt-400" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-theme-primary">
+              How simulation evaluation works
+            </div>
+            <div className="text-xs text-theme-muted">
+              {expanded ? 'Click to collapse' : 'New here? Click to learn the basics'}
+            </div>
+          </div>
+        </div>
+        {expanded ? (
+          <ChevronDown className="w-4 h-4 text-theme-muted" />
+        ) : (
+          <ChevronRight className="w-4 h-4 text-theme-muted" />
+        )}
+      </button>
+      {expanded && (
+        <div className="px-4 pb-4 pt-1 space-y-3 text-sm text-theme-secondary leading-relaxed border-t border-glass-subtle">
+          <p className="pt-3">
+            <strong className="text-theme-primary">What this page does:</strong>{' '}
+            Runs a <strong>VLA (Vision-Language-Action) model</strong> against a virtual robot scene and reports
+            how often it completes the task. No real hardware is touched.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5 text-cobalt-400" /> 1. Camera → VLA
+              </div>
+              <p className="text-theme-muted">
+                The physics simulator renders the scene from a virtual camera. That image
+                plus a task instruction ("pick up the red cube…") is sent to the VLA
+                inference server.
+              </p>
+            </div>
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-turquoise-400" /> 2. VLA → actions
+              </div>
+              <p className="text-theme-muted">
+                The VLA outputs 6-DoF joint targets for the robot arm. Actions are
+                clipped to safe joint ranges before being applied.
+              </p>
+            </div>
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <Target className="w-3.5 h-3.5 text-cobalt-400" /> 3. Physics step
+              </div>
+              <p className="text-theme-muted">
+                MuJoCo advances the simulation 200&nbsp;ms per action (100 sub-steps at
+                500&nbsp;Hz). The new camera view feeds the next inference call — a
+                closed loop.
+              </p>
+            </div>
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-turquoise-400" /> 4. Success?
+              </div>
+              <p className="text-theme-muted">
+                An episode ends when the task is solved (e.g. cube within 5&nbsp;cm of
+                target) or after 200 steps. Success rate = successes / rollouts.
+              </p>
+            </div>
+          </div>
+          <div className="text-xs text-theme-muted pt-1">
+            <strong className="text-theme-secondary">Hover over any ⓘ icon</strong> on
+            this page to learn what a specific field or metric means.
+          </div>
+        </div>
+      )}
+    </Card>
+  );
 }
 
 // ============================================================================
@@ -113,7 +301,10 @@ function LaunchTab({
 
       {/* Model ID */}
       <div>
-        <label className="block text-sm font-medium text-theme-secondary mb-2">Model ID</label>
+        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-secondary mb-2">
+          Model ID
+          <InfoIcon content={GLOSSARY.modelId} />
+        </label>
         <input
           type="text"
           value={modelId}
@@ -122,11 +313,18 @@ function LaunchTab({
           className="w-full px-4 py-3 rounded-brand border border-glass-subtle bg-glass-bg text-theme-primary placeholder:text-theme-muted focus:outline-none focus:ring-2 focus:ring-cobalt-500/50 focus:border-cobalt-500/50 transition-all"
           required
         />
+        <p className="text-xs text-theme-muted mt-1.5">
+          A label to help you find this run later. The actual model loaded by the VLA server
+          is configured separately (via <code className="font-mono text-theme-secondary">VLA_MODEL_PATH</code>).
+        </p>
       </div>
 
       {/* Backend toggle */}
       <div>
-        <label className="block text-sm font-medium text-theme-secondary mb-2">Backend</label>
+        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-secondary mb-2">
+          Backend
+          <InfoIcon content={GLOSSARY.backend} />
+        </label>
         <div className="flex gap-2">
           {(['mujoco', 'isaac'] as const).map((b) => (
             <button
@@ -148,7 +346,10 @@ function LaunchTab({
 
       {/* Environment selection as cards */}
       <div>
-        <label className="block text-sm font-medium text-theme-secondary mb-2">Environment</label>
+        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-secondary mb-2">
+          Environment
+          <InfoIcon content={GLOSSARY.environment} />
+        </label>
         {filteredEnvs.length === 0 ? (
           <div className="text-theme-muted text-sm py-4">No environments available for {backend}.</div>
         ) : (
@@ -187,7 +388,10 @@ function LaunchTab({
       {/* Rollout count */}
       <div>
         <div className="flex justify-between mb-2">
-          <label className="text-sm font-medium text-theme-secondary">Rollout Count</label>
+          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-secondary">
+            Rollout Count
+            <InfoIcon content={GLOSSARY.rolloutCount} />
+          </label>
           <span className="text-sm font-mono text-cobalt-400">{rolloutCount}</span>
         </div>
         <input
@@ -202,6 +406,17 @@ function LaunchTab({
         <div className="flex justify-between text-xs text-theme-muted mt-1">
           <span>1</span>
           <span>100</span>
+        </div>
+        <div className="mt-2 flex items-center gap-2 text-xs text-theme-muted">
+          <Timer className="w-3.5 h-3.5" />
+          <span>
+            Estimated runtime:{' '}
+            <span className="text-theme-secondary font-medium">
+              ~{formatDuration(estimateJobDurationSec(rolloutCount))}
+            </span>{' '}
+            ({Math.round(estimateJobDurationSec(rolloutCount) / rolloutCount)}s per episode
+            at max 200 steps)
+          </span>
         </div>
       </div>
 
@@ -218,6 +433,9 @@ function LaunchTab({
       >
         Launch Simulation
       </Button>
+      <p className="text-xs text-theme-muted text-center">
+        The job runs asynchronously. You can close this tab — progress persists server-side.
+      </p>
     </form>
   );
 }
@@ -303,8 +521,16 @@ function JobCard({
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-glass-subtle">
-        <span className="text-xs text-theme-muted font-mono">{job.jobId.slice(0, 8)}</span>
-        <span className="text-xs text-theme-muted">{job.rolloutCount} rollouts</span>
+        <span className="text-xs text-theme-muted font-mono" title={job.jobId}>
+          {job.jobId.slice(0, 8)}
+        </span>
+        <div className="flex items-center gap-3 text-xs text-theme-muted">
+          <span>{job.rolloutCount} {job.rolloutCount === 1 ? 'rollout' : 'rollouts'}</span>
+          <span>•</span>
+          <span title={new Date(job.createdAt).toLocaleString()}>
+            {formatRelativeTime(job.createdAt)}
+          </span>
+        </div>
       </div>
     </Card>
   );
@@ -336,24 +562,76 @@ function JobsTab({
 
   if (jobs.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-theme-muted">
-        <Briefcase className="w-12 h-12 mb-4 opacity-30" />
-        <p className="text-sm">No simulation jobs yet.</p>
-        <p className="text-xs mt-1">Launch one from the Launch tab to get started.</p>
-      </div>
+      <Card variant="subtle" className="py-12">
+        <div className="flex flex-col items-center justify-center text-theme-muted">
+          <Briefcase className="w-12 h-12 mb-4 opacity-30" />
+          <p className="text-sm font-medium text-theme-secondary">No simulation jobs yet</p>
+          <p className="text-xs mt-1 max-w-sm text-center">
+            Go to the <strong>Launch</strong> tab, pick an environment, and hit{' '}
+            <em>Launch Simulation</em> to run your first evaluation.
+          </p>
+        </div>
+      </Card>
     );
   }
 
+  const counts = {
+    running: jobs.filter((j) => j.status === 'running').length,
+    completed: jobs.filter((j) => j.status === 'completed').length,
+    failed: jobs.filter((j) => j.status === 'failed').length,
+    queued: jobs.filter((j) => j.status === 'queued').length,
+  };
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {jobs.map((job) => (
-        <JobCard
-          key={job.jobId}
-          job={job}
-          selected={selectedJobId === job.jobId}
-          onSelect={() => onSelect(job)}
-        />
-      ))}
+    <div className="space-y-4">
+      {/* Summary bar */}
+      <Card variant="subtle">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
+          <div className="flex items-center gap-2">
+            <Hash className="w-4 h-4 text-theme-muted" />
+            <span className="text-theme-muted">Total:</span>
+            <span className="font-semibold text-theme-primary">{jobs.length}</span>
+          </div>
+          {counts.running > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-cobalt-400 animate-pulse" />
+              <span className="text-theme-secondary">{counts.running} running</span>
+            </div>
+          )}
+          {counts.completed > 0 && (
+            <div className="flex items-center gap-1.5 text-turquoise-400">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{counts.completed} completed</span>
+            </div>
+          )}
+          {counts.failed > 0 && (
+            <div className="flex items-center gap-1.5 text-red-400">
+              <XCircle className="w-3.5 h-3.5" />
+              <span>{counts.failed} failed</span>
+            </div>
+          )}
+          {counts.queued > 0 && (
+            <div className="flex items-center gap-1.5 text-yellow-400">
+              <Clock className="w-3.5 h-3.5" />
+              <span>{counts.queued} queued</span>
+            </div>
+          )}
+          <div className="ml-auto text-xs text-theme-muted">
+            Auto-refreshing every 3s
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {jobs.map((job) => (
+          <JobCard
+            key={job.jobId}
+            job={job}
+            selected={selectedJobId === job.jobId}
+            onSelect={() => onSelect(job)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -388,8 +666,16 @@ function FrameViewer({ job }: { job: SimJob }) {
   return (
     <Card>
       <Card.Header>
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-semibold text-theme-primary">Episode Replay</h3>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-theme-primary flex items-center gap-1.5">
+              Episode Replay
+              <InfoIcon content={GLOSSARY.frames} />
+            </h3>
+            <p className="text-xs text-theme-muted mt-0.5">
+              These are the exact frames sent to the VLA server — click a timestamp to jump.
+            </p>
+          </div>
           {episodes.length > 1 && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-theme-muted">Episode:</span>
@@ -466,37 +752,65 @@ function FrameViewer({ job }: { job: SimJob }) {
 function ResultsTab({ job }: { job: SimJob | null }) {
   if (!job) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-theme-muted">
-        <BarChart3 className="w-12 h-12 mb-4 opacity-30" />
-        <p className="text-sm">Select a completed job to view results.</p>
-      </div>
+      <Card variant="subtle" className="py-12">
+        <div className="flex flex-col items-center justify-center text-theme-muted">
+          <BarChart3 className="w-12 h-12 mb-4 opacity-30" />
+          <p className="text-sm font-medium text-theme-secondary">No job selected</p>
+          <p className="text-xs mt-1 max-w-sm text-center">
+            Open the <strong>Jobs</strong> tab and click a completed job to view its success
+            rate, metrics, and frame-by-frame replay here.
+          </p>
+        </div>
+      </Card>
     );
   }
 
   if (!job.metrics) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-theme-muted">
-        <Spinner size="lg" color="cobalt" />
-        <p className="mt-4 text-sm">
-          Job <span className="font-mono text-theme-secondary">{job.jobId.slice(0, 8)}</span> is still {job.status}...
-        </p>
-      </div>
+      <Card variant="subtle" className="py-12">
+        <div className="flex flex-col items-center justify-center text-theme-muted">
+          <Spinner size="lg" color="cobalt" />
+          <p className="mt-4 text-sm text-theme-secondary">
+            Job <span className="font-mono text-theme-primary">{job.jobId.slice(0, 8)}</span> is{' '}
+            {job.status}…
+          </p>
+          <p className="text-xs mt-1">
+            Results appear automatically once the evaluation finishes.
+          </p>
+        </div>
+      </Card>
     );
   }
 
   const { metrics } = job;
   const rate = metrics.successRate;
+  const interp = successInterpretation(rate);
+  const extended = metrics as typeof metrics & {
+    totalEpisodes?: number;
+    successfulEpisodes?: number;
+  };
+  const successfulCount = extended.successfulEpisodes;
+  const totalCount = extended.totalEpisodes ?? job.rolloutCount;
+  const atTimeoutCap = metrics.avgStepsToCompletion >= 200;
 
   return (
     <div className="space-y-6">
       {/* Hero success rate */}
       <Card className="text-center py-8">
-        <div className="text-sm text-theme-muted mb-2">Success Rate</div>
+        <div className="text-sm text-theme-muted mb-2 flex items-center justify-center gap-1.5">
+          Success Rate
+          <InfoIcon content={GLOSSARY.successRate} />
+        </div>
         <div className={`text-6xl font-bold tracking-tight ${
           rate >= 0.8 ? 'text-green-400' : rate >= 0.5 ? 'text-yellow-400' : 'text-red-400'
         }`}>
           {(rate * 100).toFixed(1)}%
         </div>
+        {successfulCount !== undefined && (
+          <div className="mt-1 text-sm text-theme-muted">
+            {successfulCount} of {totalCount} episodes solved
+          </div>
+        )}
         <ProgressBar
           value={rate * 100}
           variant={successVariant(rate)}
@@ -508,6 +822,52 @@ function ResultsTab({ job }: { job: SimJob | null }) {
         </div>
       </Card>
 
+      {/* Interpretation panel */}
+      <Card
+        variant="subtle"
+        className={`border ${
+          interp.variant === 'success'
+            ? 'border-green-500/20 !bg-green-500/5'
+            : interp.variant === 'warning'
+            ? 'border-yellow-500/20 !bg-yellow-500/5'
+            : 'border-red-500/20 !bg-red-500/5'
+        }`}
+      >
+        <div className="px-4 py-3">
+          <div className="flex items-start gap-3">
+            <div
+              className={`p-1.5 rounded-brand shrink-0 ${
+                interp.variant === 'success'
+                  ? 'bg-green-500/10'
+                  : interp.variant === 'warning'
+                  ? 'bg-yellow-500/10'
+                  : 'bg-red-500/10'
+              }`}
+            >
+              {interp.variant === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-green-400" />
+              ) : (
+                <AlertTriangle
+                  className={`w-4 h-4 ${
+                    interp.variant === 'warning' ? 'text-yellow-400' : 'text-red-400'
+                  }`}
+                />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-theme-primary">{interp.label}</div>
+              <p className="text-xs text-theme-secondary mt-1 leading-relaxed">{interp.detail}</p>
+              {atTimeoutCap && rate < 1 && (
+                <p className="text-xs text-theme-muted mt-2 leading-relaxed">
+                  ⚠ Average steps is at the 200-step cap — most episodes timed out rather
+                  than finishing. Watch the frame replay below to see where the policy got stuck.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       {/* Metric cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
@@ -515,10 +875,14 @@ function ResultsTab({ job }: { job: SimJob | null }) {
             <div className="p-2.5 rounded-brand bg-cobalt-500/10">
               <Footprints className="w-5 h-5 text-cobalt-400" />
             </div>
-            <div>
-              <div className="text-xs text-theme-muted">Avg Steps</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-theme-muted flex items-center gap-1.5">
+                Avg Steps
+                <InfoIcon content={GLOSSARY.avgSteps} />
+              </div>
               <div className="text-2xl font-bold text-theme-primary">
                 {metrics.avgStepsToCompletion.toFixed(0)}
+                <span className="text-xs text-theme-muted font-normal ml-1">/ 200</span>
               </div>
             </div>
           </div>
@@ -534,8 +898,11 @@ function ResultsTab({ job }: { job: SimJob | null }) {
                 : <Target className="w-5 h-5 text-turquoise-400" />
               }
             </div>
-            <div>
-              <div className="text-xs text-theme-muted">Collisions</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-theme-muted flex items-center gap-1.5">
+                Collisions
+                <InfoIcon content={GLOSSARY.collisions} />
+              </div>
               <div className={`text-2xl font-bold ${
                 metrics.collisionCount > 3 ? 'text-red-400' : 'text-theme-primary'
               }`}>
@@ -550,8 +917,11 @@ function ResultsTab({ job }: { job: SimJob | null }) {
             <div className="p-2.5 rounded-brand bg-turquoise-500/10">
               <Clock className="w-5 h-5 text-turquoise-400" />
             </div>
-            <div>
-              <div className="text-xs text-theme-muted">Avg Duration</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-theme-muted flex items-center gap-1.5">
+                Avg Duration
+                <InfoIcon content={GLOSSARY.avgDuration} />
+              </div>
               <div className="text-2xl font-bold text-theme-primary">
                 {formatDuration(metrics.avgEpisodeDuration)}
               </div>
@@ -823,6 +1193,9 @@ function SimulationPageInner() {
           </div>
         </div>
       </header>
+
+      {/* Educational banner (collapsed by default) */}
+      <EducationBanner />
 
       {/* Tabs */}
       <Tabs
