@@ -166,6 +166,15 @@ export function DashboardPage() {
             </svg>
             Manage Tasks
           </Link>
+          <Link
+            to="/pipeline"
+            className="inline-flex items-center px-4 py-2 bg-turquoise-500/10 text-turquoise-600 dark:text-turquoise-400 rounded-brand hover:bg-turquoise-500/20 transition-colors border border-turquoise-500/20"
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Train a Skill
+          </Link>
           {status.robotsNeedingAttention > 0 && (
             <button
               onClick={() => navigate('/robots?filter=attention')}

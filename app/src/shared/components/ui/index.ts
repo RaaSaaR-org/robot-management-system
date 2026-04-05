@@ -47,3 +47,11 @@ export type { ProgressBarProps, ProgressBarVariant } from './ProgressBar';
 // Tooltip
 export { Tooltip, InfoIcon } from './Tooltip';
 export type { TooltipProps, InfoIconProps } from './Tooltip';
+
+// NextStepBanner
+export { NextStepBanner } from './NextStepBanner';
+export type { NextStepBannerProps } from './NextStepBanner';
+
+// PipelineBreadcrumb
+export { PipelineBreadcrumb } from './PipelineBreadcrumb';
+export type { PipelineBreadcrumbProps, PipelineStage } from './PipelineBreadcrumb';

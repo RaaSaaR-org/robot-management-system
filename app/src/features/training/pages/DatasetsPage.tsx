@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { Database } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Modal } from '@/shared/components/ui';
+import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
@@ -96,7 +97,8 @@ export function DatasetsPage() {
             Manage training datasets for VLA models
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <PipelineBreadcrumb stage="dataset" />
           <Button variant="ghost" onClick={() => setIsHFBrowserOpen(true)}>
             Import from Hub
           </Button>

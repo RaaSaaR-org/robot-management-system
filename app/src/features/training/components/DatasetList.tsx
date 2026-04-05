@@ -97,12 +97,25 @@ export function DatasetList({
       )}
 
       {filteredDatasets.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-theme-secondary">
-            {datasets.length === 0
-              ? 'No datasets found. Upload a dataset to get started.'
-              : 'No datasets match your filters.'}
-          </p>
+        <div className="text-center py-12 px-4">
+          {datasets.length === 0 ? (
+            <div className="max-w-md mx-auto space-y-3">
+              <div className="w-12 h-12 mx-auto rounded-brand bg-cobalt-500/10 flex items-center justify-center">
+                <svg className="w-6 h-6 text-cobalt-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 12h6" />
+                </svg>
+              </div>
+              <div className="text-sm font-semibold text-theme-primary">No datasets yet</div>
+              <p className="text-xs text-theme-muted leading-relaxed">
+                Datasets are the fuel for training VLA models. Start by{' '}
+                <strong className="text-theme-secondary">uploading your own</strong>,{' '}
+                <strong className="text-theme-secondary">importing from HuggingFace</strong>, or{' '}
+                <strong className="text-theme-secondary">exporting a teleoperation session</strong>.
+              </p>
+            </div>
+          ) : (
+            <p className="text-theme-secondary">No datasets match your filters.</p>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

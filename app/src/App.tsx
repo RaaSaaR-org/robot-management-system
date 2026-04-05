@@ -52,6 +52,7 @@ import {
   LazyEvaluationDashboardPage,
   LazyUpdatesPage,
   LazySimulationPage,
+  LazyPipelinePage,
   LazyDataCollectionPage,
   LazyNewSessionPage,
   LazySessionDetailPage,
@@ -435,6 +436,16 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazySimulationPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Pipeline - unified training workflow overview (TASK-134) */}
+          <Route
+            path="/pipeline"
+            element={
+              <ProtectedAppRoute>
+                <LazyPipelinePage />
               </ProtectedAppRoute>
             }
           />
