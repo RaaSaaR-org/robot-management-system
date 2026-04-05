@@ -263,6 +263,30 @@ export class TrainingOrchestrator extends EventEmitter {
   // ============================================================================
 
   /**
+   * Claim the next pending/queued training job for a worker.
+   * Atomically picks the oldest job with status in ('pending','queued'),
+   * transitions it to 'running' via startJob(), and returns it.
+   * Returns null if no jobs are waiting.
+   */
+  async claimNextPendingJob(workerId: string): Promise<TrainingJob | null> {
+    // Pull pending/queued jobs; findAll returns newest-first so we pick
+    // the oldest entry (closest to head of FIFO queue).
+    const candidates = await trainingJobRepository.findAll({
+      status: ['pending', 'queued'],
+      page: 1,
+      pageSize: 50,
+    });
+    if (candidates.data.length === 0) return null;
+    const job = candidates.data[candidates.data.length - 1];
+    const started = await this.startJob(job.id);
+    if (!started) return null;
+    console.log(
+      `[TrainingOrchestrator] Job ${job.id} claimed by worker ${workerId}`
+    );
+    return started;
+  }
+
+  /**
    * Start a training job
    * - Marks job as 'running'
    * - Sets startedAt timestamp

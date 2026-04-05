@@ -1,0 +1,44 @@
+[project]
+name = "neodem-training-worker"
+version = "0.1.0"
+description = "NeoDEM training worker — polls the server for training jobs, runs SmolVLA LoRA fine-tuning, POSTs progress callbacks"
+requires-python = ">=3.11"
+dependencies = [
+    # HTTP + polling
+    "httpx>=0.27.0",
+    "pydantic>=2.6.0",
+    "pyyaml>=6.0",
+    # Storage (S3-compatible RustFS/minio)
+    "boto3>=1.34.0",
+    # ML stack (used by the real trainer in stage 1b)
+    "torch>=2.2.0",
+    "transformers>=4.44.0",
+    "peft>=0.11.0",
+    "accelerate>=0.30.0",
+    "safetensors>=0.4.0",
+    "datasets>=2.20.0",
+    "numpy>=1.26.0",
+    "huggingface-hub>=0.23.0",
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+neodem-worker = "worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trainers"]
+include = ["worker.py", "callbacks.py", "storage.py", "config.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

@@ -237,6 +237,34 @@ import type {
 } from '../types/training.types.js';
 
 // ============================================================================
+// POST /api/training/workers/claim - Worker claims the next pending job
+// ============================================================================
+// A remote worker (e.g. Python GPU host) POSTs here to atomically claim
+// the next waiting training job. Returns the full job with hyperparameters
+// + dataset reference so the worker can start training immediately.
+// Returns 204 No Content when no jobs are waiting.
+// ============================================================================
+
+trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
+  try {
+    const { workerId } = req.body as { workerId?: string };
+    if (!workerId) {
+      return res.status(400).json({ error: 'workerId is required' });
+    }
+    const job = await trainingOrchestrator.claimNextPendingJob(workerId);
+    if (!job) {
+      return res.status(204).send();
+    }
+    // Return the job plus its dataset reference so the worker has
+    // everything it needs in one round-trip.
+    res.json({ job });
+  } catch (error) {
+    console.error('[TrainingRoutes] Error claiming job:', error);
+    res.status(500).json({ error: 'Failed to claim job' });
+  }
+});
+
+// ============================================================================
 // POST /api/training/workers/heartbeat - Worker alive check
 // ============================================================================
 

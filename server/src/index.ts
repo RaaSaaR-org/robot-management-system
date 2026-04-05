@@ -63,7 +63,16 @@ async function main() {
       await datasetService.initialize();
       await datasetValidationWorker.start();
       await trainingOrchestrator.initialize();
-      await trainingWorker.start();
+      // Legacy NATS training-worker stub — disabled in favour of the HTTP
+      // polling worker at `training-worker/` (see TASK-136). The stub was
+      // prematurely transitioning pending jobs to 'running' which blocked
+      // the external worker from claiming them. Set TRAINING_NATS_STUB=true
+      // to re-enable (e.g. if no HTTP worker is available).
+      if (process.env.TRAINING_NATS_STUB === 'true') {
+        await trainingWorker.start();
+      } else {
+        console.log('[TrainingWorker] NATS stub disabled (TRAINING_NATS_STUB!=true) — HTTP claim endpoint is primary');
+      }
       await syntheticDataWorker.start();
       console.log('[NATS] JetStream initialized with streams and KV stores');
     }
