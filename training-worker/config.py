@@ -19,7 +19,13 @@ def _load_env_file(path: Path) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        # Strip inline comments (outside of quotes)
+        if value and value[0] not in ('"', "'"):
+            hash_idx = value.find("#")
+            if hash_idx != -1:
+                value = value[:hash_idx].rstrip()
+        value = value.strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = value
 

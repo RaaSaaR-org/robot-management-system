@@ -223,6 +223,7 @@ trainingRoutes.get('/active', async (req: Request, res: Response) => {
 // ============================================================================
 
 import { trainingOrchestrator } from '../services/TrainingOrchestrator.js';
+import { datasetRepository } from '../repositories/index.js';
 import type {
   WorkerHeartbeatRequest,
   WorkerHeartbeatResponse,
@@ -256,8 +257,20 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
       return res.status(204).send();
     }
     // Return the job plus its dataset reference so the worker has
-    // everything it needs in one round-trip.
-    res.json({ job });
+    // everything it needs in one round-trip. The `dataset.storagePath`
+    // is the RustFS prefix the worker should download from — it is a
+    // separate UUID from `job.datasetId` for HF-imported datasets.
+    const dataset = await datasetRepository.findById(job.datasetId);
+    res.json({
+      job,
+      dataset: dataset
+        ? {
+            id: dataset.id,
+            storagePath: dataset.storagePath,
+            lerobotVersion: dataset.lerobotVersion,
+          }
+        : null,
+    });
   } catch (error) {
     console.error('[TrainingRoutes] Error claiming job:', error);
     res.status(500).json({ error: 'Failed to claim job' });

@@ -111,10 +111,6 @@ export class TrainingJobService extends EventEmitter {
    * Submit a new training job
    */
   async submitJob(request: SubmitTrainingJobRequest): Promise<TrainingJob> {
-    if (!this.jobQueue) {
-      throw new Error('TrainingJobService not initialized');
-    }
-
     // Validate dataset exists and is ready
     const dataset = await datasetRepository.findById(request.datasetId);
     if (!dataset) {
@@ -147,18 +143,21 @@ export class TrainingJobService extends EventEmitter {
 
     const job = await trainingJobRepository.create(jobInput);
 
-    // Add to NATS queue
-    await this.jobQueue.addJob('finetune', {
-      jobId: job.id,
-      datasetId: job.datasetId,
-      baseModel: job.baseModel,
-      fineTuneMethod: job.fineTuneMethod,
-      hyperparameters: job.hyperparameters,
-      gpuRequirements: job.gpuRequirements,
-      priority: request.priority ?? 5,
-    }, {
-      msgID: job.id,
-    });
+    // Add to NATS queue if available. The HTTP claim worker reads jobs
+    // directly from the DB (status='pending'), so NATS is optional here.
+    if (this.jobQueue) {
+      await this.jobQueue.addJob('finetune', {
+        jobId: job.id,
+        datasetId: job.datasetId,
+        baseModel: job.baseModel,
+        fineTuneMethod: job.fineTuneMethod,
+        hyperparameters: job.hyperparameters,
+        gpuRequirements: job.gpuRequirements,
+        priority: request.priority ?? 5,
+      }, {
+        msgID: job.id,
+      });
+    }
 
     // Emit event
     this.emitJobEvent({

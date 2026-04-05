@@ -14,6 +14,8 @@ class TrainerContext:
 
     job_id: str
     dataset_id: str
+    dataset_storage_path: str  # RustFS prefix (UUID without trailing slash)
+    dataset_lerobot_version: str | None
     base_model: str
     fine_tune_method: str
     hyperparameters: dict[str, Any]

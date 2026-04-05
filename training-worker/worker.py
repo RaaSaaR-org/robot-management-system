@@ -114,6 +114,8 @@ def _run_one_job(cfg: Config, server: ServerClient, trainer: BaseTrainer, job: C
         ctx = TrainerContext(
             job_id=job.id,
             dataset_id=job.dataset_id,
+            dataset_storage_path=job.dataset_storage_path,
+            dataset_lerobot_version=job.dataset_lerobot_version,
             base_model=job.base_model,
             fine_tune_method=job.fine_tune_method,
             hyperparameters=job.hyperparameters,

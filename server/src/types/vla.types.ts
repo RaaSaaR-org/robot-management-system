@@ -17,7 +17,7 @@
 // ============================================================================
 
 // Base VLA models for training
-export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot'] as const;
+export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot', 'smolvla'] as const;
 export type BaseModel = (typeof BaseModels)[number];
 
 // Fine-tuning methods
@@ -98,6 +98,9 @@ export interface Hyperparameters {
   weight_decay?: number;
   gradient_accumulation_steps?: number;
   max_grad_norm?: number;
+  max_steps?: number;
+  lora_alpha?: number;
+  lora_dropout?: number;
 }
 
 /**

@@ -65,7 +65,7 @@ export function TrainingJobList({
     <div className="space-y-4">
       {showFilters && (
         <div className="flex flex-wrap gap-3">
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {statusOptions.map((option) => (
               <button
                 key={option.value}
@@ -81,8 +81,8 @@ export function TrainingJobList({
             ))}
           </div>
 
-          <div className="flex gap-1">
-            {(['all', 'pi0', 'pi0_6', 'openvla', 'groot'] as const).map((model) => (
+          <div className="flex flex-wrap gap-1">
+            {(['all', 'smolvla', 'pi0', 'pi0_6', 'openvla', 'groot'] as const).map((model) => (
               <button
                 key={model}
                 onClick={() => setModelFilter(model)}

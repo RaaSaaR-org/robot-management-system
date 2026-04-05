@@ -16,7 +16,10 @@ import type { Dataset, DatasetStatus, LeRobotInfo, LeRobotStats } from './vla.ty
 export interface LeRobotFeature {
   dtype: string;
   shape: number[];
+  /** v1/v2 legacy flag; v3 uses dtype='video' instead */
   video?: boolean;
+  names?: string[] | null;
+  info?: Record<string, unknown>;
 }
 
 /**
@@ -34,6 +37,7 @@ export interface LeRobotInfoV3 {
   total_chunks?: number;
   chunks_size?: number;
   data_path?: string;
+  video_path?: string;
   video?: boolean;
 }
 

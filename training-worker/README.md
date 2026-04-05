@@ -79,7 +79,59 @@ All config via env vars or a `.env` file — see `.env.example`.
 | `TRAINING_DEVICE` | `cpu` | `mps` on Mac, `cuda` on Linux GPU |
 | `TRAINER_STUB` | `false` | Set `true` during Phase 1a validation |
 
-## Adding a real trainer (Phase 1b)
+## Phase 1b — Real SmolVLA LoRA trainer
+
+To run actual fine-tuning (not the stub), you need the full ML stack **and** LeRobot.
+
+```bash
+# Inside the existing venv
+cd training-worker
+source .venv/bin/activate
+
+# Install the ML dependencies listed in pyproject.toml
+uv pip install -e .
+
+# LeRobot isn't on PyPI — install from source
+git clone https://github.com/huggingface/lerobot /tmp/lerobot
+uv pip install -e "/tmp/lerobot[smolvla]"
+
+# Switch off stub mode
+export TRAINER_STUB=false
+uv run python worker.py
+```
+
+The first run will download `lerobot/smolvla_base` (~4GB) from HuggingFace into `HF_CACHE_DIR` (default `~/.cache/neodem-worker`).
+
+### What the real trainer does
+
+1. Downloads the LeRobot-format dataset from RustFS (`datasets/<datasetId>/**`) into a temp dir.
+2. Loads it with `LeRobotDataset(root=...)` (bypassing HuggingFace Hub).
+3. Loads the base policy: `SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")`.
+4. Autodetects LoRA target modules on the model (`q_proj`, `v_proj`, etc.) and wraps with PEFT.
+5. Trains with AdamW, streams per-step loss back to the server via `/workers/progress`.
+6. Saves the LoRA adapter with `save_pretrained()`, packs it into `smolvla_lora.tar.gz`.
+7. Uploads the tarball to `s3://models/<jobId>/smolvla_lora.tar.gz`.
+
+### Expected performance
+
+- **Mac MPS (M1/M2/M3)**: OK for small rank-8 LoRA runs on short datasets. Single step ≈ 1-3s for batch 4.
+- **Linux CUDA**: target production environment. Single step ≈ 0.2-0.5s for batch 16.
+- **CPU**: not recommended — single step can take 30s+.
+
+### Hyperparameter knobs
+
+| Key | Default | Notes |
+|---|---|---|
+| `learning_rate` | 1e-4 | AdamW learning rate |
+| `batch_size` | 4 | per-device batch |
+| `epochs` | 2 | full passes through the dataset |
+| `lora_rank` | 16 | adapter rank (higher = more capacity) |
+| `lora_alpha` | 2×rank | PEFT scaling factor |
+| `lora_dropout` | 0.05 | PEFT dropout |
+| `weight_decay` | 0.01 | optimizer regularization |
+| `max_steps` | 0 | hard step cap (0 = no cap) — useful for quick sanity runs |
+
+## Adding new trainers
 
 Drop a new class into `trainers/` that subclasses `BaseTrainer` from `trainers/base.py`. Route to it in `worker._pick_trainer()`.
 
