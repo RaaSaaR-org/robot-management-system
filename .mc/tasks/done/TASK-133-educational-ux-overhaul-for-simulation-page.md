@@ -4,7 +4,7 @@ aliases:
 - TASK-133
 title: Educational UX overhaul for Simulation page
 slug: educational-ux-overhaul-for-simulation-page
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -17,6 +17,7 @@ due_date: ''
 created: 2026-04-05
 updated: 2026-04-05
 ---
+
 
 # Educational UX overhaul for Simulation page
 
