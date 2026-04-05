@@ -23,6 +23,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Real SmolVLA LoRA trainer (Phase 1b). Requires LeRobot which is not
+# on PyPI — install separately from a git clone:
+#   git clone https://github.com/huggingface/lerobot /tmp/lerobot
+#   uv pip install -e /tmp/lerobot
+real-trainer = [
+    # lerobot is installed from source (see README)
+]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.4.0",

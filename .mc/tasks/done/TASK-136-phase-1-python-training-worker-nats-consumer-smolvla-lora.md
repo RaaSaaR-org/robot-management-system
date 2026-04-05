@@ -4,7 +4,7 @@ aliases:
 - TASK-136
 title: 'Phase 1: Python training worker (NATS consumer + SmolVLA LoRA)'
 slug: phase-1-python-training-worker-nats-consumer-smolvla-lora
-status: backlog
+status: done
 priority: 1
 owner: ''
 projects: []
