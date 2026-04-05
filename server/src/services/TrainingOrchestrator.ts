@@ -139,8 +139,44 @@ export class TrainingOrchestrator extends EventEmitter {
       return;
     }
 
+    // One-shot cleanup: mark any jobs that were left in 'running' state
+    // from a previous server run as failed. External workers that are
+    // genuinely still running will reclaim or callback normally.
+    try {
+      const orphans = await this.reapStaleRunningJobs();
+      if (orphans > 0) {
+        console.log(
+          `[TrainingOrchestrator] Reaped ${orphans} orphaned running job(s) on boot`
+        );
+      }
+    } catch (err) {
+      console.error('[TrainingOrchestrator] Failed to reap orphaned jobs:', err);
+    }
+
     this.initialized = true;
     console.log('[TrainingOrchestrator] Initialized');
+  }
+
+  /**
+   * Mark stale running jobs (updatedAt older than the threshold) as failed.
+   * Called on service startup to clean up jobs whose workers died mid-run.
+   * Uses a generous 5-minute threshold so heartbeating workers are safe.
+   */
+  async reapStaleRunningJobs(thresholdMs = 5 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - thresholdMs);
+    const running = await trainingJobRepository.findByStatus('running');
+    let reaped = 0;
+    for (const job of running) {
+      if (job.updatedAt.getTime() < cutoff.getTime()) {
+        await trainingJobService.updateJobStatus(job.id, 'failed', {
+          errorMessage: 'worker timeout: no heartbeat/progress for >5m (reaped on boot)',
+          completedAt: new Date(),
+        });
+        this.etaStates.delete(job.id);
+        reaped++;
+      }
+    }
+    return reaped;
   }
 
   /**

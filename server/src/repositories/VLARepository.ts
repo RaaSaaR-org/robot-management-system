@@ -192,7 +192,12 @@ function dbDatasetToDomain(db: PrismaDataset): Dataset {
 // HELPER FUNCTIONS - TrainingJob
 // ============================================================================
 
-function dbTrainingJobToDomain(db: PrismaTrainingJob): TrainingJob {
+function dbTrainingJobToDomain(
+  db: PrismaTrainingJob & { modelVersions?: PrismaModelVersion[] }
+): TrainingJob {
+  // Use the latest ModelVersion (if the query included them) as a scalar
+  // ID so the UI can surface it without an extra round-trip.
+  const latestVersion = db.modelVersions?.[0];
   return {
     id: db.id,
     datasetId: db.datasetId,
@@ -213,6 +218,7 @@ function dbTrainingJobToDomain(db: PrismaTrainingJob): TrainingJob {
     errorMessage: db.errorMessage ?? undefined,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
+    modelVersionId: latestVersion?.id,
   };
 }
 
@@ -725,6 +731,7 @@ export class TrainingJobRepository {
   async findById(id: string): Promise<TrainingJob | null> {
     const job = await prisma.trainingJob.findUnique({
       where: { id },
+      include: { modelVersions: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     return job ? dbTrainingJobToDomain(job) : null;
   }
@@ -742,6 +749,7 @@ export class TrainingJobRepository {
         orderBy: { createdAt: 'desc' },
         skip,
         take: pageSize,
+        include: { modelVersions: { orderBy: { createdAt: 'desc' }, take: 1 } },
       }),
       prisma.trainingJob.count({ where }),
     ]);

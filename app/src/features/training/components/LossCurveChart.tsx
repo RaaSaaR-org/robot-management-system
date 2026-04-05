@@ -32,13 +32,20 @@ export function LossCurveChart({
   showLearningRate = false,
   bestEpoch,
 }: LossCurveChartProps) {
-  // Transform metrics into chart data
-  const data = metrics.training_loss?.map((loss, index) => ({
-    epoch: index + 1,
-    trainLoss: loss,
-    valLoss: metrics.validation_loss?.[index],
-    learningRate: metrics.learning_rate?.[index],
-  })) || [];
+  // Transform metrics into chart data. Precompute the best-epoch marker
+  // as a fixed field on the data row (avoids passing a function to dataKey,
+  // which recharts can't stringify → duplicate-key React warnings).
+  const data = metrics.training_loss?.map((loss, index) => {
+    const epoch = index + 1;
+    return {
+      epoch,
+      trainLoss: loss,
+      valLoss: metrics.validation_loss?.[index],
+      learningRate: metrics.learning_rate?.[index],
+      bestEpochMarker:
+        bestEpoch !== undefined && epoch === bestEpoch ? loss : null,
+    };
+  }) || [];
 
   if (data.length === 0) {
     return (
@@ -135,13 +142,12 @@ export function LossCurveChart({
             <Line
               yAxisId="loss"
               type="monotone"
-              dataKey={(entry: { epoch: number }) =>
-                entry.epoch === bestEpoch ? metrics.training_loss?.[bestEpoch - 1] : null
-              }
+              dataKey="bestEpochMarker"
               name="Best Epoch"
               stroke="#f59e0b"
               strokeWidth={0}
               dot={{ r: 6, fill: '#f59e0b', stroke: '#fff', strokeWidth: 2 }}
+              connectNulls={false}
             />
           )}
         </LineChart>
