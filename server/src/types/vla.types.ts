@@ -399,6 +399,10 @@ export interface TrainingJob {
 
   // Optional relations
   dataset?: Dataset;
+  // ID of the most-recent ModelVersion produced by this job (populated
+  // on job completion — worker POSTs /workers/complete, server creates
+  // a ModelVersion and links its ID back here for the UI)
+  modelVersionId?: string;
 }
 
 export interface CreateTrainingJobInput {
