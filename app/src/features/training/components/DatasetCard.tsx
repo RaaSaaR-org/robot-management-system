@@ -4,13 +4,16 @@
  * @feature training
  */
 
-import { Card, Badge } from '@/shared/components/ui';
+import { Play, Trash2 } from 'lucide-react';
+import { Card, Badge, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { Dataset, DatasetStatus } from '../types';
 
 export interface DatasetCardProps {
   dataset: Dataset;
   onClick?: () => void;
+  onViewEpisodes?: () => void;
+  onDelete?: () => void;
   selected?: boolean;
   className?: string;
 }
@@ -34,7 +37,7 @@ const statusLabels: Record<DatasetStatus, string> = {
 /**
  * Card component for displaying dataset summary
  */
-export function DatasetCard({ dataset, onClick, selected, className }: DatasetCardProps) {
+export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, selected, className }: DatasetCardProps) {
   const qualityPercent = dataset.qualityScore
     ? Math.round(dataset.qualityScore)
     : null;
@@ -120,9 +123,32 @@ export function DatasetCard({ dataset, onClick, selected, className }: DatasetCa
           </div>
         )}
 
-        <div className="mt-4 pt-3 border-t border-theme-secondary/20 text-xs text-theme-tertiary">
-          LeRobot {dataset.lerobotVersion} &bull; Created{' '}
-          {new Date(dataset.createdAt).toLocaleDateString()}
+        <div className="mt-4 pt-3 border-t border-theme-secondary/20 flex items-center justify-between">
+          <span className="text-xs text-theme-tertiary">
+            LeRobot {dataset.lerobotVersion} &bull; {new Date(dataset.createdAt).toLocaleDateString()}
+          </span>
+          <div className="flex items-center gap-1">
+            {dataset.status === 'ready' && onViewEpisodes && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); onViewEpisodes(); }}
+                className="text-xs gap-1 px-2 py-1 h-auto"
+              >
+                <Play className="w-3 h-3" />
+                Episodes
+              </Button>
+            )}
+            {onDelete && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                className="p-1 rounded text-theme-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                title="Delete dataset"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       </Card.Body>
     </Card>

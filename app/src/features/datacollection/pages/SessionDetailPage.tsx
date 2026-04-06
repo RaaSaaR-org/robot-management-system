@@ -4,7 +4,7 @@
  * @feature datacollection
  */
 
-import { useState, Suspense, lazy, useEffect } from 'react';
+import { useState, Suspense, lazy, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -20,6 +20,7 @@ import {
   Bot,
   Database,
   Folder,
+  Loader2,
 } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -84,6 +85,29 @@ export function SessionDetailPage() {
   const [exportName, setExportName] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Live elapsed timer during recording
+  useEffect(() => {
+    if (session?.status === 'recording' && session.startedAt) {
+      const startTime = new Date(session.startedAt).getTime();
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+      timerRef.current = setInterval(() => {
+        setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+      }, 1000);
+      return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setElapsedSeconds(0);
+    }
+  }, [session?.status, session?.startedAt]);
+
+  const formatElapsed = useCallback((secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }, []);
 
   const handleBack = () => navigate('/data-collection');
 
@@ -108,7 +132,11 @@ export function SessionDetailPage() {
   const handleEnd = async () => {
     if (!session) return;
     setActionLoading(true);
-    try { await storeEndSession(session.id); } finally { setActionLoading(false); }
+    try {
+      await storeEndSession(session.id);
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleAnnotate = async () => {
@@ -224,8 +252,17 @@ export function SessionDetailPage() {
               disabled={actionLoading}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-all disabled:opacity-50"
             >
-              <Square size={18} />
-              End
+              {actionLoading ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Square size={18} />
+                  End
+                </>
+              )}
             </button>
           )}
         </div>
@@ -249,7 +286,7 @@ export function SessionDetailPage() {
                 <InfoIcon content="Total recording time for this session, including pauses." size={12} />
               </div>
               <p className="text-xl font-bold text-theme-primary">
-                {formatDuration(session.duration)}
+                {isRecording ? formatElapsed(elapsedSeconds) : formatDuration(session.duration)}
               </p>
             </div>
           </div>
@@ -343,15 +380,17 @@ export function SessionDetailPage() {
               <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
             </Card>
 
-            {/* Keyboard Teleop */}
-            <Card>
-              <h3 className="text-sm font-medium text-theme-secondary mb-3">Keyboard Control</h3>
-              {robot ? (
-                <KeyboardTeleopSection robot={robot} />
-              ) : (
-                <p className="text-sm text-theme-muted">Robot not connected</p>
-              )}
-            </Card>
+            {/* Keyboard Teleop — only for keyboard/mouse and gamepad sessions */}
+            {(session.type === 'keyboard_mouse' || session.type === 'gamepad') && (
+              <Card>
+                <h3 className="text-sm font-medium text-theme-secondary mb-3">Keyboard Control</h3>
+                {robot ? (
+                  <KeyboardTeleopSection robot={robot} />
+                ) : (
+                  <p className="text-sm text-theme-muted">Robot not connected</p>
+                )}
+              </Card>
+            )}
           </div>
         </div>
       )}

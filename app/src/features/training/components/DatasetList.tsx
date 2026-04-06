@@ -14,6 +14,8 @@ export interface DatasetListProps {
   isLoading?: boolean;
   selectedId?: string;
   onSelect?: (dataset: Dataset) => void;
+  onViewEpisodes?: (dataset: Dataset) => void;
+  onDelete?: (dataset: Dataset) => void;
   showFilters?: boolean;
 }
 
@@ -33,6 +35,8 @@ export function DatasetList({
   isLoading,
   selectedId,
   onSelect,
+  onViewEpisodes,
+  onDelete,
   showFilters = true,
 }: DatasetListProps) {
   const [search, setSearch] = useState('');
@@ -125,6 +129,8 @@ export function DatasetList({
               dataset={dataset}
               selected={dataset.id === selectedId}
               onClick={() => onSelect?.(dataset)}
+              onViewEpisodes={onViewEpisodes ? () => onViewEpisodes(dataset) : undefined}
+              onDelete={onDelete ? () => onDelete(dataset) : undefined}
             />
           ))}
         </div>

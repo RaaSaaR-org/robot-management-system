@@ -406,6 +406,8 @@ class Handler(BaseHTTPRequestHandler):
                 episode_time_s=float(body.get("episode_time_s", 30)),
                 fps=int(body.get("fps", 30)),
                 cameras=body.get("cameras") or {
+                    "wrist": {"type": "opencv", "index_or_path": "/dev/video0",
+                              "width": 320, "height": 240, "fps": 10},
                     "top": {"type": "opencv", "index_or_path": "/dev/video2",
                             "width": 320, "height": 240, "fps": 10},
                 },

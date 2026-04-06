@@ -26,7 +26,7 @@ from typing import Any, Optional
 RUSTFS_ENDPOINT = os.environ.get("RUSTFS_ENDPOINT", "")
 RUSTFS_ACCESS_KEY = os.environ.get("RUSTFS_ACCESS_KEY", "")
 RUSTFS_SECRET_KEY = os.environ.get("RUSTFS_SECRET_KEY", "")
-RUSTFS_BUCKET = os.environ.get("RUSTFS_BUCKET", "datasets")
+RUSTFS_BUCKET = os.environ.get("RUSTFS_BUCKET", "training-datasets")
 
 
 def _get_s3_client():

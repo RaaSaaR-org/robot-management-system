@@ -156,6 +156,10 @@ class Recorder:
             self._current_episode = 0
             self._log_tail = []
             self._last_error = None
+            self._total_frames = 0
+            self._total_episodes = 0
+            self._uploader = None
+            self._s3_path = None
 
             try:
                 self._proc = subprocess.Popen(
@@ -268,6 +272,7 @@ class Recorder:
         """Kick off async upload of dataset to RustFS after recording."""
         from uploader import AsyncUploader
         s3_prefix = f"datasets/{self._repo_id}"
+        self._s3_path = s3_prefix
         self._uploader = AsyncUploader()
         self._uploader.start(
             local_path=self._dataset_path or "",

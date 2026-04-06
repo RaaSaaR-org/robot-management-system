@@ -33,6 +33,33 @@ import { fileURLToPath } from 'url';
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
 
+/**
+ * Read a parquet file from RustFS, trying both 'training-datasets' and legacy 'datasets' buckets.
+ * Returns a Buffer, or null if the file is not found or RustFS is unavailable.
+ */
+async function readParquetFromRustFS(storagePath: string, relativePath: string): Promise<Buffer | null> {
+  try {
+    const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
+    if (!isRustFSInitialized()) return null;
+
+    const rustfs = getRustFSClient();
+    const base = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
+    const key = `${base}${relativePath}`;
+
+    for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
+      try {
+        const exists = await rustfs.exists(bucket, key);
+        if (!exists) continue;
+        const stream = await rustfs.getStream(bucket, key);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+        return Buffer.concat(chunks);
+      } catch { /* try next bucket */ }
+    }
+  } catch { /* RustFS unavailable */ }
+  return null;
+}
+
 export const datasetRoutes = Router();
 
 // ============================================================================
@@ -514,29 +541,46 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    // Build episode list from dataset info
-    // LeRobot info.json contains total_episodes and total_frames
     const info = typeof dataset.infoJson === 'string'
       ? JSON.parse(dataset.infoJson as string)
       : dataset.infoJson;
-    const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
-    const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
     const fps = info?.fps ?? dataset.fps ?? 30;
 
-    // Generate episode metadata
-    // In a full implementation, this would read from stored episode metadata
+    // Try to read real episode metadata from parquet
     const episodes: EpisodeMeta[] = [];
-    if (totalEpisodes > 0) {
-      const avgFramesPerEpisode = totalEpisodes > 0
-        ? Math.floor(totalFrames / totalEpisodes)
-        : 0;
+    try {
+      const parquetBuf = await readParquetFromRustFS(dataset.storagePath, 'meta/episodes/chunk-000/file-000.parquet');
+      if (parquetBuf) {
+        const { ParquetReader } = await import('@dsnp/parquetjs');
+        const reader = await ParquetReader.openBuffer(parquetBuf);
+        const cursor = reader.getCursor();
+        let row: Record<string, unknown> | null;
+        while ((row = await cursor.next() as Record<string, unknown> | null)) {
+          const frameCount = Number(row['length'] ?? row['num_frames'] ?? 0);
+          const epIndex = Number(row['episode_index'] ?? episodes.length);
+          episodes.push({
+            index: epIndex,
+            frameCount,
+            durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
+            flagged: false,
+          });
+        }
+        await reader.close();
+      }
+    } catch (err) {
+      console.log('[DatasetRoutes] Could not read episodes parquet, using fallback:', (err as Error).message);
+    }
 
+    // Fallback: generate from info.json metadata
+    if (episodes.length === 0) {
+      const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
+      const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
+      const avgFrames = totalEpisodes > 0 ? Math.floor(totalFrames / totalEpisodes) : 0;
       for (let i = 0; i < totalEpisodes; i++) {
-        const frameCount = avgFramesPerEpisode;
         episodes.push({
           index: i,
-          frameCount,
-          durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
+          frameCount: avgFrames,
+          durationSeconds: fps > 0 ? parseFloat((avgFrames / fps).toFixed(2)) : 0,
           flagged: false,
         });
       }
@@ -571,39 +615,69 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     const offset = query.offset ? parseInt(query.offset, 10) : 0;
     const limit = query.limit ? parseInt(query.limit, 10) : 500;
 
-    // Build episode info to generate synthetic frame data
     const info = typeof dataset.infoJson === 'string'
       ? JSON.parse(dataset.infoJson as string)
       : dataset.infoJson;
-    const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
-    const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
     const fps = info?.fps ?? dataset.fps ?? 30;
-    const avgFramesPerEpisode = totalEpisodes > 0
-      ? Math.floor(totalFrames / totalEpisodes)
-      : 0;
-    const frameCount = Math.min(avgFramesPerEpisode, limit);
 
-    // Generate synthetic frame data from episode metadata
-    // In a full implementation, this would read Parquet data from RustFS
-    const frames: FrameData[] = [];
-    for (let i = offset; i < offset + frameCount; i++) {
-      const timestamp = fps > 0 ? i / fps : 0;
-      // Generate smooth sinusoidal patterns for each joint as placeholder
-      const observationState = [
-        Math.sin(timestamp * 0.5) * 30,
-        Math.cos(timestamp * 0.3) * 45 - 10,
-        Math.sin(timestamp * 0.7 + 1) * 60,
-        Math.cos(timestamp * 0.4 + 2) * 40,
-        Math.sin(timestamp * 0.6 + 3) * 20,
-        Math.sin(timestamp * 0.2) * 50 + 50,
-      ];
-      const action = observationState.map((v, j) =>
-        v + Math.sin(timestamp * 2 + j) * 5
-      );
-      frames.push({ frameIndex: i, timestamp, observationState, action });
+    // Read real frame data from parquet
+    let frames: FrameData[] = [];
+    try {
+      const chunkIndex = Math.floor(episodeIndex / (info?.chunks_size ?? 1000));
+      const chunkStr = String(chunkIndex).padStart(3, '0');
+      const parquetBuf = await readParquetFromRustFS(dataset.storagePath, `data/chunk-${chunkStr}/file-000.parquet`);
+      if (parquetBuf) {
+        const { ParquetReader } = await import('@dsnp/parquetjs');
+        const reader = await ParquetReader.openBuffer(parquetBuf);
+        const cursor = reader.getCursor();
+        let row: Record<string, unknown> | null;
+        const allFrames: FrameData[] = [];
+
+        while ((row = await cursor.next() as Record<string, unknown> | null)) {
+          const rowEpisode = Number(row['episode_index'] ?? 0);
+          if (rowEpisode !== episodeIndex) continue;
+
+          // Extract nested list values: {list: [{element: float}, ...]}
+          const obsRaw = row['observation.state'] as { list?: Array<{ element?: number }> } | undefined;
+          const actRaw = row['action'] as { list?: Array<{ element?: number }> } | undefined;
+          const observationState = obsRaw?.list?.map(item => item.element ?? 0) ?? [];
+          const action = actRaw?.list?.map(item => item.element ?? 0) ?? [];
+
+          allFrames.push({
+            frameIndex: Number(row['frame_index'] ?? allFrames.length),
+            timestamp: Number(row['timestamp'] ?? (allFrames.length / fps)),
+            observationState,
+            action,
+          });
+        }
+        await reader.close();
+
+        frames = allFrames.slice(offset, offset + limit);
+        console.log(`[DatasetRoutes] Read ${allFrames.length} frames from parquet for episode ${episodeIndex}, returning ${frames.length}`);
+      }
+    } catch (err) {
+      console.log('[DatasetRoutes] Could not read frames parquet, using fallback:', (err as Error).message);
     }
 
-    res.json({ frames, total: frameCount });
+    // Fallback: synthetic data
+    if (frames.length === 0) {
+      const totalEpisodes = info?.total_episodes ?? dataset.demonstrationCount ?? 0;
+      const totalFrames = info?.total_frames ?? dataset.totalFrames ?? 0;
+      const avgFrames = totalEpisodes > 0 ? Math.floor(totalFrames / totalEpisodes) : 0;
+      const frameCount = Math.min(avgFrames, limit);
+      for (let i = offset; i < offset + frameCount; i++) {
+        const timestamp = fps > 0 ? i / fps : 0;
+        const observationState = [
+          Math.sin(timestamp * 0.5) * 30, Math.cos(timestamp * 0.3) * 45 - 10,
+          Math.sin(timestamp * 0.7 + 1) * 60, Math.cos(timestamp * 0.4 + 2) * 40,
+          Math.sin(timestamp * 0.6 + 3) * 20, Math.sin(timestamp * 0.2) * 50 + 50,
+        ];
+        const action = observationState.map((v, j) => v + Math.sin(timestamp * 2 + j) * 5);
+        frames.push({ frameIndex: i, timestamp, observationState, action });
+      }
+    }
+
+    res.json({ frames, total: frames.length });
   } catch (error) {
     console.error('[DatasetRoutes] Error getting episode frames:', error);
     res.status(500).json({ error: 'Failed to get episode frames' });
@@ -635,29 +709,32 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     const videoPath = `videos/observation.images.${camera}/chunk-${String(chunkIndex).padStart(3, '0')}/file-000.mp4`;
 
     // Try to stream from RustFS if available
+    // Check both 'training-datasets' and legacy 'datasets' bucket
     try {
       const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
       if (isRustFSInitialized()) {
         const rustfs = getRustFSClient();
-        const bucket = BUCKETS.TRAINING_DATASETS;
-        const videoKey = `${dataset.storagePath}${videoPath}`;
+        const base = dataset.storagePath.endsWith('/') ? dataset.storagePath : `${dataset.storagePath}/`;
+        const videoKey = `${base}${videoPath}`;
 
-        const exists = await rustfs.exists(bucket, videoKey);
-        if (exists) {
-          const metadata = await rustfs.getMetadata(bucket, videoKey);
-          const fileSize = metadata.contentLength ?? 0;
+        for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
+          const exists = await rustfs.exists(bucket, videoKey);
+          if (exists) {
+            const metadata = await rustfs.getMetadata(bucket, videoKey);
+            const fileSize = metadata.contentLength ?? 0;
 
-          const range = req.headers.range;
-          if (range) {
-            const url = await rustfs.getPresignedDownloadUrl(bucket, videoKey, 3600);
-            return res.redirect(302, url);
+            const range = req.headers.range;
+            if (range) {
+              const url = await rustfs.getPresignedDownloadUrl(bucket, videoKey, 3600);
+              return res.redirect(302, url);
+            }
+
+            res.setHeader('Content-Type', 'video/mp4');
+            res.setHeader('Content-Length', fileSize);
+            res.setHeader('Accept-Ranges', 'bytes');
+            const stream = await rustfs.getStream(bucket, videoKey);
+            return stream.pipe(res);
           }
-
-          res.setHeader('Content-Type', 'video/mp4');
-          res.setHeader('Content-Length', fileSize);
-          res.setHeader('Accept-Ranges', 'bytes');
-          const stream = await rustfs.getStream(bucket, videoKey);
-          return stream.pipe(res);
         }
       }
     } catch {
