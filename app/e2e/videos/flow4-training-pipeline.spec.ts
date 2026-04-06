@@ -1,64 +1,58 @@
 import { test } from '@playwright/test';
-import { smoothGoto, smoothClick, scenePause } from '../helpers/videoHelpers';
+import { smoothGoto, smoothClick, scenePause, smoothScroll } from '../helpers/videoHelpers';
 import { mkdirSync } from 'fs';
 
 mkdirSync('e2e/results/videos', { recursive: true });
 
 test('Flow 4: Training Pipeline — Dataset → Train → Deploy', async ({ page }) => {
-  // Scene 1: Datasets Hub — browse imported datasets
+  // Scene 1: Datasets Hub
   await smoothGoto(page, '/#/datasets', 4000);
+  await smoothScroll(page, 200, 2000);
 
-  // Scene 2: Scroll through dataset cards
-  await page.evaluate(() => window.scrollBy(0, 200));
-  await scenePause(page, 2000);
+  // Scene 2: Training page
+  await smoothGoto(page, '/#/training', 3500);
 
-  // Scene 3: Navigate to Training page
-  await smoothGoto(page, '/#/training', 3000);
-
-  // Scene 4: Show History tab with completed jobs + loss values
-  await smoothClick(page, 'text=History', 2500);
-  await scenePause(page, 3000);
-
-  // Scene 5: Scroll through job cards
-  await page.evaluate(() => window.scrollBy(0, 300));
-  await scenePause(page, 2000);
-
-  // Scene 6: Open "New Training Job" wizard
-  await smoothClick(page, 'text=New Training Job', 2000);
-  await scenePause(page, 2000);
-
-  // Scene 7: Step 1 — Select dataset
-  await smoothClick(page, 'text=svla_so101_pickplace', 1500);
-  await smoothClick(page, 'text=Continue', 1500);
-
-  // Scene 8: Step 2 — Select SmolVLA model
-  await smoothClick(page, 'text=SmolVLA', 1500);
-  await smoothClick(page, 'text=Continue', 1500);
-
-  // Scene 9: Step 3 — Hyperparameters (Quick Train preset)
-  await smoothClick(page, 'text=Quick Train', 1500);
+  // Scene 3: History tab
+  await smoothClick(page, '[role="tab"]:has-text("History")');
   await scenePause(page, 2500);
-  await page.evaluate(() => window.scrollBy(0, 200));
-  await scenePause(page, 1500);
-  await smoothClick(page, 'text=Continue', 1500);
+  await smoothScroll(page, 300, 2000);
 
-  // Scene 10: Step 4 — Resources
+  // Scene 4: Open wizard
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await scenePause(page, 500);
+  await smoothClick(page, 'button:has-text("New Training Job")');
   await scenePause(page, 2000);
-  await smoothClick(page, 'text=Continue', 1500);
 
-  // Scene 11: Step 5 — Review & Submit
-  await scenePause(page, 3000);
-
-  // Scene 12: Close wizard (don't actually submit in demo)
-  await page.keyboard.press('Escape');
+  // Scene 5: Wizard — dataset
+  await smoothClick(page, 'button:has-text("Ready")');
+  await scenePause(page, 1000);
+  await smoothClick(page, 'button:has-text("Continue"):not([disabled])');
   await scenePause(page, 1000);
 
-  // Scene 13: Models page — where trained adapters land
-  await smoothGoto(page, '/#/models', 3000);
+  // Scene 6: Wizard — model
+  await smoothClick(page, 'button:has-text("SmolVLA")');
+  await scenePause(page, 1000);
+  await smoothClick(page, 'button:has-text("Continue"):not([disabled])');
+  await scenePause(page, 1000);
 
-  // Scene 14: Deployments page
+  // Scene 7: Wizard — hyperparams
+  await smoothClick(page, 'button:has-text("Quick Train")');
+  await scenePause(page, 1500);
+  await smoothScroll(page, 200, 1500);
+  await smoothClick(page, 'button:has-text("Continue"):not([disabled])');
+  await scenePause(page, 1000);
+
+  // Scene 8: Wizard — resources → review
+  await smoothClick(page, 'button:has-text("Continue"):not([disabled])');
+  await scenePause(page, 3000);
+
+  // Close wizard
+  await page.keyboard.press('Escape').catch(() => {});
+  await scenePause(page, 1000);
+
+  // Scene 9: Models + Deployments
+  await smoothGoto(page, '/#/models', 3000);
   await smoothGoto(page, '/#/deployments', 3000);
 
-  // Final pause
   await scenePause(page, 2000);
 });
