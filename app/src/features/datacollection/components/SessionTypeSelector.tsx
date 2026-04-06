@@ -1,6 +1,6 @@
 /**
  * @file SessionTypeSelector.tsx
- * @description Teleoperation type selection component
+ * @description Teleoperation type selection component with cobalt selection ring
  * @feature datacollection
  */
 
@@ -68,33 +68,33 @@ export function SessionTypeSelector({
             disabled={disabled}
             onClick={() => onChange(type)}
             className={cn(
-              'relative flex items-start gap-3 p-4 rounded-lg border-2 text-left transition-all',
+              'relative flex items-start gap-3 p-4 rounded-brand border-2 text-left transition-all',
               'disabled:opacity-50 disabled:cursor-not-allowed',
               isSelected
-                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-cobalt-500 bg-cobalt-500/10'
+                : 'border-glass-subtle hover:border-glass-highlight bg-transparent'
             )}
           >
             {isSelected && (
-              <div className="absolute top-2 right-2 w-5 h-5 bg-primary-500 rounded-full flex items-center justify-center">
+              <div className="absolute top-2 right-2 w-5 h-5 bg-cobalt-500 rounded-full flex items-center justify-center">
                 <Check size={12} className="text-white" />
               </div>
             )}
 
             <div
               className={cn(
-                'p-2 rounded-lg',
+                'p-2 rounded-brand',
                 isSelected
-                  ? 'bg-primary-100 dark:bg-primary-800'
-                  : 'bg-gray-100 dark:bg-gray-800'
+                  ? 'bg-cobalt-500/20'
+                  : 'bg-glass-subtle'
               )}
             >
               <Icon
                 size={24}
                 className={cn(
                   isSelected
-                    ? 'text-primary-600 dark:text-primary-400'
-                    : 'text-gray-500 dark:text-gray-400'
+                    ? 'text-cobalt-400'
+                    : 'text-theme-muted'
                 )}
               />
             </div>
@@ -104,13 +104,13 @@ export function SessionTypeSelector({
                 className={cn(
                   'font-medium',
                   isSelected
-                    ? 'text-primary-900 dark:text-primary-100'
-                    : 'text-gray-900 dark:text-gray-100'
+                    ? 'text-cobalt-400'
+                    : 'text-theme-primary'
                 )}
               >
                 {TELEOPERATION_TYPE_LABELS[type]}
               </h4>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-xs text-theme-muted mt-0.5">
                 {TELEOPERATION_TYPE_DESCRIPTIONS[type]}
               </p>
             </div>

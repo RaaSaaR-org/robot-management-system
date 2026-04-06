@@ -5,7 +5,9 @@
  */
 
 import { cn } from '@/shared/utils/cn';
-import { Filter, Plus, ChevronLeft, ChevronRight, Loader2, Video } from 'lucide-react';
+import { Filter, Plus, ChevronLeft, ChevronRight, Video } from 'lucide-react';
+import { Card } from '@/shared/components/ui/Card';
+import { Spinner } from '@/shared/components/ui/Spinner';
 import { SessionCard } from './SessionCard';
 import type {
   TeleoperationSession,
@@ -74,17 +76,17 @@ export function SessionList({
   const hasFilters = filters.status || filters.type;
 
   return (
-    <div className={cn('flex flex-col', className)}>
-      {/* Header with Filters */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-        <div className="flex items-center gap-3">
-          <Filter size={18} className="text-gray-400" />
+    <div className={cn('space-y-4', className)}>
+      {/* Filters Row */}
+      <Card variant="subtle">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3">
+          <Filter size={16} className="text-theme-muted shrink-0" />
           <select
             value={filters.status || ''}
             onChange={(e) =>
               onFilterChange({ status: e.target.value as TeleoperationStatus | undefined || undefined })
             }
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+            className="px-3 py-1.5 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
           >
             {STATUS_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -97,7 +99,7 @@ export function SessionList({
             onChange={(e) =>
               onFilterChange({ type: e.target.value as TeleoperationType | undefined || undefined })
             }
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+            className="px-3 py-1.5 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
           >
             {TYPE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -108,55 +110,51 @@ export function SessionList({
           {hasFilters && (
             <button
               onClick={onClearFilters}
-              className="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400"
+              className="text-sm text-cobalt-400 hover:text-cobalt-300 transition-colors"
             >
               Clear
             </button>
           )}
         </div>
-
-        {onNewSession && (
-          <button
-            onClick={onNewSession}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-          >
-            <Plus size={18} />
-            <span>New Session</span>
-          </button>
-        )}
-      </div>
+      </Card>
 
       {/* Loading State */}
       {isLoading && (
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+          <Spinner size="lg" color="cobalt" />
         </div>
       )}
 
       {/* Empty State */}
       {!isLoading && sessions.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
-          <Video className="w-12 h-12 mb-3 opacity-50" />
-          <p className="text-lg mb-2">No sessions found</p>
-          <p className="text-sm">
-            {hasFilters ? 'Try adjusting your filters' : 'Start by creating a new session'}
-          </p>
-          {!hasFilters && onNewSession && (
-            <button
-              onClick={onNewSession}
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-            >
-              <Plus size={18} />
-              <span>Create Session</span>
-            </button>
-          )}
-        </div>
+        <Card variant="subtle" className="py-12">
+          <div className="flex flex-col items-center justify-center text-theme-muted">
+            <Video className="w-12 h-12 mb-4 opacity-30" />
+            <p className="text-sm font-medium text-theme-secondary">
+              {hasFilters ? 'No sessions match your filters' : 'No sessions yet'}
+            </p>
+            <p className="text-xs mt-1 max-w-sm text-center">
+              {hasFilters
+                ? 'Try adjusting your filter criteria or clear all filters.'
+                : 'Start by creating a new teleoperation session. Each session records camera frames, joint states, and actions.'}
+            </p>
+            {!hasFilters && onNewSession && (
+              <button
+                onClick={onNewSession}
+                className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
+              >
+                <Plus size={16} />
+                Create Session
+              </button>
+            )}
+          </div>
+        </Card>
       )}
 
       {/* Sessions Grid */}
       {!isLoading && sessions.length > 0 && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {sessions.map((session) => (
               <SessionCard
                 key={session.id}
@@ -168,24 +166,24 @@ export function SessionList({
 
           {/* Pagination */}
           {pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between pt-4 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+            <div className="flex items-center justify-between pt-4 border-t border-glass-subtle">
+              <p className="text-sm text-theme-muted">
                 Page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
               </p>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => onPageChange(pagination.page - 1)}
                   disabled={pagination.page === 1}
-                  className="p-2 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="p-2 rounded-brand border border-theme disabled:opacity-30 disabled:cursor-not-allowed hover:bg-glass-subtle transition-colors"
                 >
-                  <ChevronLeft size={18} />
+                  <ChevronLeft size={18} className="text-theme-secondary" />
                 </button>
                 <button
                   onClick={() => onPageChange(pagination.page + 1)}
                   disabled={pagination.page === pagination.totalPages}
-                  className="p-2 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="p-2 rounded-brand border border-theme disabled:opacity-30 disabled:cursor-not-allowed hover:bg-glass-subtle transition-colors"
                 >
-                  <ChevronRight size={18} />
+                  <ChevronRight size={18} className="text-theme-secondary" />
                 </button>
               </div>
             </div>

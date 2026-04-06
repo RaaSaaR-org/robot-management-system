@@ -1,47 +1,115 @@
 /**
  * @file DataCollectionPage.tsx
- * @description Main data collection page with sessions and priorities tabs
+ * @description Main data collection page with sessions, priorities, and uncertainty tabs
  * @feature datacollection
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { cn } from '@/shared/utils/cn';
-import { Video, Target, BarChart3 } from 'lucide-react';
+import {
+  Video,
+  Target,
+  BarChart3,
+  Database,
+  Plus,
+  ChevronDown,
+  ChevronRight,
+  GraduationCap,
+  Gamepad2,
+} from 'lucide-react';
+import { Tabs } from '@/shared/components/ui/Tabs';
+import { Card } from '@/shared/components/ui/Card';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
+import { NextStepBanner } from '@/shared/components/ui/NextStepBanner';
 import { SessionList } from '../components/SessionList';
 import { PriorityDashboard } from '../components/PriorityDashboard';
 import { UncertaintyHeatmap } from '../components/UncertaintyHeatmap';
 import {
   useTeleoperationSessions,
   useCollectionPriorities,
-  useUncertaintyAnalysis,
 } from '../hooks/datacollection';
+import { trainingApi } from '@/features/training/api/trainingApi';
+import type { RegisteredModel } from '@/features/training/types';
 
 // ============================================================================
-// TYPES
+// EDUCATIONAL BANNER
 // ============================================================================
 
-type TabId = 'sessions' | 'priorities' | 'uncertainty';
+function EducationBanner() {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <Card variant="subtle" className="border border-cobalt-500/20">
+      <button
+        type="button"
+        onClick={() => setExpanded((x) => !x)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+      >
+        <div className="flex items-center gap-3">
+          <div className="p-1.5 rounded-brand bg-cobalt-500/10">
+            <GraduationCap className="w-4 h-4 text-cobalt-400" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-theme-primary">
+              How teleoperation data collection works
+            </div>
+            <div className="text-xs text-theme-muted">
+              {expanded ? 'Click to collapse' : 'New here? Click to learn the basics'}
+            </div>
+          </div>
+        </div>
+        {expanded ? (
+          <ChevronDown className="w-4 h-4 text-theme-muted" />
+        ) : (
+          <ChevronRight className="w-4 h-4 text-theme-muted" />
+        )}
+      </button>
 
-interface Tab {
-  id: TabId;
-  label: string;
-  icon: typeof Video;
+      {expanded && (
+        <div className="px-4 pb-4 pt-1 space-y-3 text-sm text-theme-secondary leading-relaxed border-t border-glass-subtle">
+          <p className="pt-3">
+            <strong className="text-theme-primary">What this page does:</strong>{' '}
+            Lets you record <strong>teleoperation demonstrations</strong> — a human
+            controls the robot while frames, joint states, and actions are captured in
+            LeRobot v3 format. These sessions become training datasets for VLA models.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <Gamepad2 className="w-3.5 h-3.5 text-cobalt-400" /> 1. Choose input
+              </div>
+              <p className="text-theme-muted">
+                Select your teleoperation method: VR headset, bilateral ALOHA,
+                kinesthetic teaching, keyboard, or gamepad.
+              </p>
+            </div>
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <Video className="w-3.5 h-3.5 text-turquoise-400" /> 2. Record
+              </div>
+              <p className="text-theme-muted">
+                Demonstrate the task while the system records camera frames, joint
+                positions, and actions at your chosen FPS.
+              </p>
+            </div>
+            <div className="p-3 rounded-brand bg-glass-bg border border-glass-subtle">
+              <div className="font-semibold text-theme-primary mb-1 flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5 text-cobalt-400" /> 3. Export
+              </div>
+              <p className="text-theme-muted">
+                Completed sessions can be exported as datasets and used to train or
+                fine-tune VLA models like SmolVLA or pi0.5.
+              </p>
+            </div>
+          </div>
+          <div className="text-xs text-theme-muted pt-1">
+            <strong className="text-theme-secondary">Hover over any &#9432; icon</strong> on
+            this page to learn what a specific field or metric means.
+          </div>
+        </div>
+      )}
+    </Card>
+  );
 }
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const TABS: Tab[] = [
-  { id: 'sessions', label: 'Sessions', icon: Video },
-  { id: 'priorities', label: 'Collection Priorities', icon: Target },
-  { id: 'uncertainty', label: 'Uncertainty Analysis', icon: BarChart3 },
-];
-
-// Default model ID for demo purposes
-const DEFAULT_MODEL_ID = 'default-model';
 
 // ============================================================================
 // COMPONENT
@@ -49,7 +117,37 @@ const DEFAULT_MODEL_ID = 'default-model';
 
 export function DataCollectionPage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabId>('sessions');
+  const [activeTab, setActiveTab] = useState('sessions');
+
+  // Model selector state for priorities + uncertainty
+  const [models, setModels] = useState<RegisteredModel[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  // Fetch registered models
+  useEffect(() => {
+    let cancelled = false;
+    setModelsLoading(true);
+    trainingApi
+      .listRegisteredModels()
+      .then((result) => {
+        if (!cancelled) {
+          setModels(result);
+          if (result.length > 0) {
+            setSelectedModelId(result[0].name);
+          }
+        }
+      })
+      .catch(() => {
+        // Models unavailable — leave empty, show empty state
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Hooks
   const {
@@ -65,92 +163,113 @@ export function DataCollectionPage() {
   const {
     priorities,
     isLoading: prioritiesLoading,
-  } = useCollectionPriorities(DEFAULT_MODEL_ID);
+  } = useCollectionPriorities(selectedModelId ?? undefined);
 
-  const {
-    analysis,
-    isLoading: analysisLoading,
-  } = useUncertaintyAnalysis(DEFAULT_MODEL_ID);
+  const handleSessionClick = useCallback(
+    (session: { id: string }) => {
+      navigate(`/data-collection/${session.id}`);
+    },
+    [navigate]
+  );
 
-  const handleSessionClick = (session: { id: string }) => {
-    navigate(`/data-collection/sessions/${session.id}`);
-  };
-
-  const handleNewSession = () => {
+  const handleNewSession = useCallback(() => {
     navigate('/data-collection/new');
-  };
+  }, [navigate]);
 
   return (
-    <div className="container mx-auto px-4 py-6 max-w-7xl">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-            Data Collection
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Collect teleoperation data and view collection priorities
-          </p>
+      <header>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="p-2 rounded-brand bg-cobalt-500/10">
+              <Database className="w-6 h-6 text-cobalt-400" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-theme-primary">Data Collection</h1>
+              <p className="text-sm text-theme-muted">
+                Record teleoperation demos and manage collection priorities
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={handleNewSession}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all whitespace-nowrap"
+            >
+              <Plus className="w-4 h-4" />
+              New Session
+            </button>
+            <PipelineBreadcrumb stage="collect" />
+          </div>
         </div>
-        <PipelineBreadcrumb stage="collect" />
-      </div>
+      </header>
+
+      {/* Educational banner (collapsed by default) */}
+      <EducationBanner />
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-        <nav className="flex space-x-8">
-          {TABS.map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
+      <Tabs
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        tabs={[
+          {
+            id: 'sessions',
+            label: 'Sessions',
+            icon: <Video className="w-4 h-4" />,
+            content: (
+              <SessionList
+                sessions={sessions}
+                filters={filters}
+                pagination={pagination}
+                isLoading={sessionsLoading}
+                onFilterChange={setFilters}
+                onClearFilters={clearFilters}
+                onPageChange={setPage}
+                onSessionClick={handleSessionClick}
+                onNewSession={handleNewSession}
+              />
+            ),
+          },
+          {
+            id: 'priorities',
+            label: 'Collection Priorities',
+            icon: <Target className="w-4 h-4" />,
+            content: (
+              <PriorityDashboard
+                priorities={priorities}
+                isLoading={prioritiesLoading}
+                models={models}
+                selectedModelId={selectedModelId}
+                onModelChange={setSelectedModelId}
+                modelsLoading={modelsLoading}
+              />
+            ),
+          },
+          {
+            id: 'uncertainty',
+            label: 'Uncertainty Analysis',
+            icon: <BarChart3 className="w-4 h-4" />,
+            content: (
+              <UncertaintyHeatmap
+                models={models}
+                selectedModelId={selectedModelId}
+                onModelChange={setSelectedModelId}
+                modelsLoading={modelsLoading}
+              />
+            ),
+          },
+        ]}
+      />
 
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  'flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors',
-                  isActive
-                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
-                )}
-              >
-                <Icon size={18} />
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
-      </div>
-
-      {/* Tab Content */}
-      <div className="min-h-[500px]">
-        {activeTab === 'sessions' && (
-          <SessionList
-            sessions={sessions}
-            filters={filters}
-            pagination={pagination}
-            isLoading={sessionsLoading}
-            onFilterChange={setFilters}
-            onClearFilters={clearFilters}
-            onPageChange={setPage}
-            onSessionClick={handleSessionClick}
-            onNewSession={handleNewSession}
-          />
-        )}
-
-        {activeTab === 'priorities' && (
-          <PriorityDashboard
-            priorities={priorities}
-            isLoading={prioritiesLoading}
-          />
-        )}
-
-        {activeTab === 'uncertainty' && (
-          <UncertaintyHeatmap
-            analysis={analysis}
-            isLoading={analysisLoading}
-          />
-        )}
-      </div>
+      {/* Next step banner */}
+      <NextStepBanner
+        title="Done collecting demos?"
+        description="Export sessions as datasets, then train a VLA model with your data."
+        ctaLabel="Go to Training"
+        ctaHref="/training"
+        icon={<Database className="w-5 h-5" />}
+      />
     </div>
   );
 }
