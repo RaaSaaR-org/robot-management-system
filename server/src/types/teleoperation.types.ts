@@ -80,6 +80,12 @@ export interface CreateSessionDto {
   type: TeleoperationType;
   fps?: number;
   languageInstr?: string;
+  /** Hardware recording: number of episodes to record */
+  numEpisodes?: number;
+  /** Hardware recording: max seconds per episode */
+  episodeTimeS?: number;
+  /** Hardware recording: HF-style repo_id for the dataset */
+  datasetRepoId?: string;
 }
 
 /**

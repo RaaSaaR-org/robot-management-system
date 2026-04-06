@@ -8,10 +8,10 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, AlertCircle, Bot, Play } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
-import { Input } from '@/shared/components/ui/Input';
 import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
 import { useDataCollectionStore } from '../store/datacollectionStore';
+import { useRobotsStore } from '../../robots/store/robotsStore';
 import type { TeleoperationType, CreateSessionRequest } from '../types/datacollection.types';
 
 // ============================================================================
@@ -33,10 +33,18 @@ export function NewSessionPage() {
     clearError();
   }, [clearError]);
 
+  // Robots
+  const robots = useRobotsStore((state) => state.robots);
+  const fetchRobots = useRobotsStore((state) => state.fetchRobots);
+
+  useEffect(() => {
+    fetchRobots();
+  }, [fetchRobots]);
+
   // Form state
   const [formData, setFormData] = useState<Partial<CreateSessionRequest>>({
     operatorId: 'current-user', // TODO: Get from auth
-    fps: 30,
+    fps: 10,
   });
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -125,20 +133,37 @@ export function NewSessionPage() {
               />
             </div>
 
-            {/* Robot Selection */}
-            <Input
-              label="Robot ID *"
-              value={formData.robotId || ''}
-              onChange={(e) => {
-                setFormData((prev) => ({ ...prev, robotId: e.target.value }));
-                setFormError(null);
-              }}
-              placeholder="Enter robot ID"
-              disabled={isLoading}
-              leftIcon={<Bot className="w-5 h-5" />}
-              helperText="The robot must be online and available for teleoperation"
-              fullWidth
-            />
+            {/* Robot Selection (dropdown) */}
+            <div>
+              <div className="flex items-center gap-2 mb-1.5">
+                <label className="text-sm font-medium text-theme-secondary">
+                  Robot *
+                </label>
+                <InfoIcon
+                  content="The robot must be online and available for teleoperation."
+                  side="right"
+                />
+              </div>
+              <div className="relative">
+                <Bot className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-theme-muted" />
+                <select
+                  value={formData.robotId || ''}
+                  onChange={(e) => {
+                    setFormData((prev) => ({ ...prev, robotId: e.target.value }));
+                    setFormError(null);
+                  }}
+                  disabled={isLoading}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-brand border border-theme bg-theme-card text-theme-primary disabled:opacity-50 disabled:cursor-not-allowed appearance-none focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
+                >
+                  <option value="">Select a robot...</option>
+                  {robots.map((robot) => (
+                    <option key={robot.id} value={robot.id}>
+                      {robot.name} ({robot.model}) — {robot.status}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             {/* FPS */}
             <div>
@@ -147,7 +172,7 @@ export function NewSessionPage() {
                   Recording FPS
                 </label>
                 <InfoIcon
-                  content="Frames per second for recording. Higher FPS captures smoother motion but generates larger datasets. 30 FPS is standard for most tasks."
+                  content="Frames per second for recording. Higher FPS captures smoother motion but generates larger datasets. 10 FPS is standard for most tasks."
                   side="right"
                 />
               </div>
@@ -155,15 +180,15 @@ export function NewSessionPage() {
                 type="number"
                 min="1"
                 max="120"
-                value={formData.fps || 30}
+                value={formData.fps || 10}
                 onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, fps: parseInt(e.target.value, 10) || 30 }))
+                  setFormData((prev) => ({ ...prev, fps: parseInt(e.target.value, 10) || 10 }))
                 }
                 disabled={isLoading}
                 className="w-32 rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <p className="mt-1.5 text-sm text-theme-tertiary">
-                Default: 30 FPS
+                Default: 10 FPS
               </p>
             </div>
 
@@ -171,7 +196,7 @@ export function NewSessionPage() {
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <label className="text-sm font-medium text-theme-secondary">
-                  Task Description (optional)
+                  Task Description *
                 </label>
                 <InfoIcon
                   content="Natural language description of the task being demonstrated. This becomes the language instruction for VLA training. Can be added or changed later."
@@ -183,11 +208,65 @@ export function NewSessionPage() {
                 onChange={(e) =>
                   setFormData((prev) => ({ ...prev, languageInstr: e.target.value }))
                 }
-                rows={3}
-                placeholder="Describe the task being demonstrated..."
+                rows={2}
+                placeholder="Pick up the red block and place it on the plate"
                 disabled={isLoading}
                 className="w-full rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               />
+            </div>
+
+            {/* Episode Settings */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <label className="text-sm font-medium text-theme-secondary">
+                    Episodes
+                  </label>
+                  <InfoIcon
+                    content="Number of demonstration episodes to record in this session."
+                    side="right"
+                  />
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={(formData as Record<string, unknown>).numEpisodes as number || 5}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, numEpisodes: parseInt(e.target.value, 10) || 5 }))
+                  }
+                  disabled={isLoading}
+                  className="w-full rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <p className="mt-1.5 text-sm text-theme-tertiary">
+                  Number of demonstration episodes
+                </p>
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <label className="text-sm font-medium text-theme-secondary">
+                    Episode Duration (s)
+                  </label>
+                  <InfoIcon
+                    content="Maximum seconds per episode. Recording stops automatically after this time."
+                    side="right"
+                  />
+                </div>
+                <input
+                  type="number"
+                  min="5"
+                  max="300"
+                  value={(formData as Record<string, unknown>).episodeTimeS as number || 30}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, episodeTimeS: parseInt(e.target.value, 10) || 30 }))
+                  }
+                  disabled={isLoading}
+                  className="w-full rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <p className="mt-1.5 text-sm text-theme-tertiary">
+                  Max seconds per episode
+                </p>
+              </div>
             </div>
           </div>
         </Card>

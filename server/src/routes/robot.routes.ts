@@ -166,6 +166,44 @@ robotRoutes.get('/:id/telemetry', async (req: Request, res: Response) => {
 // ============================================================================
 
 /**
+ * GET /:id/camera/:name — Proxy MJPEG camera stream from robot sidecar (port 8765)
+ */
+robotRoutes.get('/:id/camera/:name', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+
+    // Derive sidecar URL (port 8765) from agent URL
+    const agentUrl = new URL(registered.baseUrl);
+    const sidecarUrl = `http://${agentUrl.hostname}:8765`;
+    const camName = req.params.name;
+
+    // Pipe the MJPEG stream through to the browser
+    const http = await import('http');
+    const upstream = http.get(`${sidecarUrl}/camera/${camName}`, (stream) => {
+      res.writeHead(200, {
+        'Content-Type': 'multipart/x-mixed-replace; boundary=FRAME',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Connection': 'close',
+      });
+      stream.pipe(res);
+    });
+    upstream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(502).json({ error: 'Cannot reach robot camera' });
+      }
+    });
+    req.on('close', () => upstream.destroy());
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Camera proxy error' });
+    }
+  }
+});
+
+/**
  * GET /:id/proxy/vla — Proxy VLA status from robot agent
  */
 robotRoutes.get('/:id/proxy/vla', async (req: Request, res: Response) => {

@@ -145,7 +145,13 @@ export function SessionCard({
             </span>
           )}
           {session.exportedDatasetId && (
-            <span className="text-green-400 font-medium">Exported</span>
+            <a
+              href="/datasets"
+              onClick={(e) => e.stopPropagation()}
+              className="text-green-400 font-medium hover:underline"
+            >
+              Dataset
+            </a>
           )}
         </div>
       </div>

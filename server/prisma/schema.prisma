@@ -1394,6 +1394,11 @@ model TeleoperationSession {
   qualityScore    Float?    // Computed quality score (0-100)
   exportedDatasetId String? // If exported to a Dataset
   errorMessage    String?   // Error message if failed
+  // Hardware-backed recording (sidecar-orchestrated lerobot-record)
+  numEpisodes        Int?    // Target episode count passed to sidecar
+  episodeTimeS       Float?  // Per-episode max duration (seconds)
+  datasetRepoId      String? // HF-style repo_id (e.g. "robot0/pick-block-xyz")
+  sidecarDatasetPath String? // Path on the pi where lerobot-record wrote the dataset
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

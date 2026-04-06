@@ -1,10 +1,10 @@
 /**
  * @file SessionDetailPage.tsx
- * @description Page for viewing teleoperation session details
+ * @description Session detail page with live teleop dashboard during recording
  * @feature datacollection
  */
 
-import { useState } from 'react';
+import { useState, Suspense, lazy, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -13,20 +13,27 @@ import {
   Square,
   Clock,
   Video,
-  Bot,
-  User,
   FileVideo,
   Download,
   Edit2,
   AlertCircle,
+  Bot,
+  Database,
+  Folder,
 } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
+import { CameraStreamView } from '../components/CameraStreamView';
 import { useSessionDetail } from '../hooks/datacollection';
 import { useDataCollectionStore } from '../store/datacollectionStore';
+import { useRobotsStore } from '../../robots/store/robotsStore';
+import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
+import { JointStateGrid } from '../../robots/components/visualization';
+import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
+import type { RobotType } from '../../robots/types/robots.types';
 import {
   TELEOPERATION_TYPE_LABELS,
   formatDuration,
@@ -34,6 +41,10 @@ import {
   canPauseSession,
   canEndSession,
 } from '../types/datacollection.types';
+
+const Robot3DViewer = lazy(() =>
+  import('../../robots/components/visualization/Robot3DViewer').then((m) => ({ default: m.Robot3DViewer }))
+);
 
 // ============================================================================
 // COMPONENT
@@ -43,6 +54,7 @@ export function SessionDetailPage() {
   const { sessionId: id } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
 
+  // Session data
   const { session, isLoading, error, annotateSession, exportSession } = useSessionDetail(id!);
   const qualityFeedback = useDataCollectionStore((state) => state.qualityFeedback);
   const storeStartSession = useDataCollectionStore((state) => state.startSession);
@@ -50,6 +62,22 @@ export function SessionDetailPage() {
   const storeResumeSession = useDataCollectionStore((state) => state.resumeSession);
   const storeEndSession = useDataCollectionStore((state) => state.endSession);
 
+  // Robot data for live telemetry + keyboard teleop
+  const robots = useRobotsStore((state) => state.robots);
+  const fetchRobots = useRobotsStore((state) => state.fetchRobots);
+  const robot = robots.find((r) => r.id === session?.robotId) ?? null;
+
+  useEffect(() => {
+    if (robots.length === 0) fetchRobots();
+  }, [robots.length, fetchRobots]);
+
+  // Live telemetry
+  const { telemetry, isConnected: isTelemetryConnected } = useTelemetryStream(
+    session?.robotId ?? '',
+    { autoConnect: !!session && (session.status === 'recording' || session.status === 'paused' || session.status === 'created') }
+  );
+
+  // UI state
   const [showAnnotateModal, setShowAnnotateModal] = useState(false);
   const [annotationText, setAnnotationText] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
@@ -57,15 +85,15 @@ export function SessionDetailPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
 
-  const handleBack = () => {
-    navigate('/data-collection');
-  };
+  const handleBack = () => navigate('/data-collection');
 
   const handleStart = async () => {
     if (!session) return;
     setActionLoading(true);
     try {
-      await storeStartSession(session.id);
+      const isPaused = session.status === 'paused';
+      if (isPaused) await storeResumeSession(session.id);
+      else await storeStartSession(session.id);
     } finally {
       setActionLoading(false);
     }
@@ -74,31 +102,13 @@ export function SessionDetailPage() {
   const handlePause = async () => {
     if (!session) return;
     setActionLoading(true);
-    try {
-      await storePauseSession(session.id);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleResume = async () => {
-    if (!session) return;
-    setActionLoading(true);
-    try {
-      await storeResumeSession(session.id);
-    } finally {
-      setActionLoading(false);
-    }
+    try { await storePauseSession(session.id); } finally { setActionLoading(false); }
   };
 
   const handleEnd = async () => {
     if (!session) return;
     setActionLoading(true);
-    try {
-      await storeEndSession(session.id);
-    } finally {
-      setActionLoading(false);
-    }
+    try { await storeEndSession(session.id); } finally { setActionLoading(false); }
   };
 
   const handleAnnotate = async () => {
@@ -108,9 +118,7 @@ export function SessionDetailPage() {
       await annotateSession(annotationText);
       setShowAnnotateModal(false);
       setAnnotationText('');
-    } finally {
-      setActionLoading(false);
-    }
+    } finally { setActionLoading(false); }
   };
 
   const handleExport = async () => {
@@ -121,12 +129,10 @@ export function SessionDetailPage() {
       setExportName('');
       setExportSuccess(true);
       setTimeout(() => setExportSuccess(false), 5000);
-    } finally {
-      setActionLoading(false);
-    }
+    } finally { setActionLoading(false); }
   };
 
-  // Loading state
+  // Loading / error states
   if (isLoading && !session) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -135,7 +141,6 @@ export function SessionDetailPage() {
     );
   }
 
-  // Error state
   if (error && !session) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -159,9 +164,10 @@ export function SessionDetailPage() {
   const isRecording = session.status === 'recording';
   const isPaused = session.status === 'paused';
   const isCompleted = session.status === 'completed';
+  const isLive = isRecording || isPaused || session.status === 'created';
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6 max-w-7xl">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
@@ -174,12 +180,18 @@ export function SessionDetailPage() {
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold text-theme-primary">
-                {TELEOPERATION_TYPE_LABELS[session.type]}
+                {session.languageInstr || TELEOPERATION_TYPE_LABELS[session.type]}
               </h1>
               <SessionStatusBadge status={session.status} showPulse={isRecording} />
+              {isTelemetryConnected && (
+                <span className="flex items-center gap-1 text-xs text-green-500">
+                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  Live
+                </span>
+              )}
             </div>
-            <p className="text-theme-muted mt-0.5 font-mono text-sm">
-              Session {session.id.slice(0, 8)}
+            <p className="text-theme-muted mt-0.5 text-sm">
+              {TELEOPERATION_TYPE_LABELS[session.type]} — {robot?.name ?? session.robotId}
             </p>
           </div>
         </div>
@@ -188,11 +200,11 @@ export function SessionDetailPage() {
         <div className="flex items-center gap-2">
           {canStartSession(session) && !isRecording && (
             <button
-              onClick={isPaused ? handleResume : handleStart}
+              onClick={handleStart}
               disabled={actionLoading}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/20 transition-all disabled:opacity-50"
             >
-              <Play size={18} />
+              <Play size={16} />
               {isPaused ? 'Resume' : 'Start'}
             </button>
           )}
@@ -225,7 +237,7 @@ export function SessionDetailPage() {
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card className="!p-4">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-brand bg-cobalt-500/10">
@@ -292,97 +304,151 @@ export function SessionDetailPage() {
         </Card>
       </div>
 
-      {/* Details */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Info Card */}
-        <Card>
-          <h2 className="font-semibold text-theme-primary mb-4">Session Info</h2>
-          <dl className="space-y-3">
-            {session.robot && (
-              <div className="flex items-center gap-3">
-                <Bot className="w-5 h-5 text-theme-muted" />
-                <dt className="text-theme-muted">Robot:</dt>
-                <dd className="text-theme-primary">{session.robot.name}</dd>
+      {/* ================================================================ */}
+      {/* LIVE TELEOP VIEW (recording / paused / created) */}
+      {/* ================================================================ */}
+      {isLive && (
+        <div className="space-y-4">
+          {/* Row 1: 3D Model + Cameras */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* 3D Viewer */}
+            <Card className="overflow-hidden !p-0">
+              <div className="px-4 py-2 border-b border-glass-subtle flex items-center justify-between">
+                <h3 className="text-sm font-medium text-theme-secondary">3D Model</h3>
+                <span className="text-xs text-theme-muted">{(telemetry?.robotType as string)?.toUpperCase() ?? ''}</span>
               </div>
-            )}
-            {session.operator && (
-              <div className="flex items-center gap-3">
-                <User className="w-5 h-5 text-theme-muted" />
-                <dt className="text-theme-muted">Operator:</dt>
-                <dd className="text-theme-primary">{session.operator.name}</dd>
+              <div className="h-[300px]">
+                <Suspense fallback={<div className="flex items-center justify-center h-full"><Spinner size="md" color="cobalt" /></div>}>
+                  <Robot3DViewer
+                    robotType={(telemetry?.robotType as RobotType) ?? (robot?.metadata as Record<string, unknown>)?.robotType as RobotType ?? 'generic'}
+                    jointStates={telemetry?.jointStates}
+                    isAnimating={isTelemetryConnected}
+                  />
+                </Suspense>
               </div>
-            )}
-            <div className="flex items-center gap-3">
-              <Clock className="w-5 h-5 text-theme-muted" />
-              <dt className="text-theme-muted">Created:</dt>
-              <dd className="text-theme-primary">
-                {new Date(session.createdAt).toLocaleString()}
-              </dd>
+            </Card>
+
+            {/* Cameras */}
+            <div className="grid grid-rows-2 gap-2">
+              <CameraStreamView robotId={session.robotId} cameraName="top" label="Top Camera" className="h-[146px]" isRecording={isRecording} />
+              <CameraStreamView robotId={session.robotId} cameraName="wrist" label="Wrist Camera" className="h-[146px]" isRecording={isRecording} />
             </div>
-          </dl>
-        </Card>
-
-        {/* Language Instruction */}
-        <Card>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-theme-primary">Task Description</h2>
-            <button
-              onClick={() => {
-                setAnnotationText(session.languageInstr || '');
-                setShowAnnotateModal(true);
-              }}
-              className="p-2 hover:bg-glass-subtle rounded-brand transition-colors"
-            >
-              <Edit2 className="w-4 h-4 text-theme-muted" />
-            </button>
           </div>
-          {session.languageInstr ? (
-            <p className="text-theme-secondary italic">
-              &ldquo;{session.languageInstr}&rdquo;
-            </p>
-          ) : (
-            <p className="text-theme-muted">
-              No task description added yet
-            </p>
-          )}
-        </Card>
-      </div>
 
-      {/* Actions */}
-      {isCompleted && !session.exportedDatasetId && (
-        <div className="flex justify-end">
-          <button
-            onClick={() => setShowExportModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
-          >
-            <Download size={18} />
-            Export to Dataset
-          </button>
+          {/* Row 2: Joint States + Keyboard Controls */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Joint States */}
+            <Card>
+              <h3 className="text-sm font-medium text-theme-secondary mb-3">Joint States</h3>
+              <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
+            </Card>
+
+            {/* Keyboard Teleop */}
+            <Card>
+              <h3 className="text-sm font-medium text-theme-secondary mb-3">Keyboard Control</h3>
+              {robot ? (
+                <KeyboardTeleopSection robot={robot} />
+              ) : (
+                <p className="text-sm text-theme-muted">Robot not connected</p>
+              )}
+            </Card>
+          </div>
         </div>
       )}
 
-      {exportSuccess && (
-        <Card variant="subtle" className="!bg-green-500/10 border border-green-500/20">
-          <p className="text-green-400 font-medium text-sm px-4 py-3">
-            Dataset created successfully!
-          </p>
-        </Card>
-      )}
+      {/* ================================================================ */}
+      {/* COMPLETED VIEW — recording summary + dataset info */}
+      {/* ================================================================ */}
+      {isCompleted && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Recording Summary */}
+            <Card>
+              <h2 className="font-semibold text-theme-primary mb-4">Recording Summary</h2>
+              <dl className="space-y-3 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">Task</dt>
+                  <dd className="text-theme-primary font-medium italic">
+                    {session.languageInstr || 'No description'}
+                    <button onClick={() => { setAnnotationText(session.languageInstr || ''); setShowAnnotateModal(true); }}
+                      className="ml-2 text-theme-muted hover:text-theme-secondary"><Edit2 size={12} /></button>
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">Duration</dt>
+                  <dd className="text-theme-primary">{formatDuration(session.duration)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">Frames</dt>
+                  <dd className="text-theme-primary">{session.frameCount.toLocaleString()}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">FPS</dt>
+                  <dd className="text-theme-primary">{session.fps}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">Quality Score</dt>
+                  <dd className="text-theme-primary font-bold">
+                    {session.qualityScore ? `${session.qualityScore}%` : 'Not computed'}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">Robot</dt>
+                  <dd className="text-theme-primary">{robot?.name ?? session.robotId}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-theme-muted">Created</dt>
+                  <dd className="text-theme-primary">{new Date(session.createdAt).toLocaleString()}</dd>
+                </div>
+              </dl>
+            </Card>
 
-      {session.exportedDatasetId && (
-        <Card variant="subtle" className="!bg-green-500/10 border border-green-500/20">
-          <div className="flex items-center justify-between px-4 py-3">
-            <p className="text-green-400 text-sm">
-              Session exported to dataset: {session.exportedDatasetId}
-            </p>
-            <button
-              onClick={() => navigate('/datasets')}
-              className="text-xs px-3 py-1.5 rounded-brand bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/20 transition-all"
-            >
-              View Datasets
-            </button>
+            {/* Dataset Info */}
+            <Card>
+              <h2 className="font-semibold text-theme-primary mb-4">Dataset</h2>
+              {session.exportedDatasetId ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-green-400 mb-3">
+                    <Database size={18} />
+                    <span className="font-medium">Exported successfully</span>
+                  </div>
+                  <div className="text-sm space-y-2">
+                    <div className="flex items-center gap-2 text-theme-muted">
+                      <Folder size={14} />
+                      <span className="font-mono text-xs">{session.exportedDatasetId}</span>
+                    </div>
+                  </div>
+                  <button onClick={() => navigate('/datasets')}
+                    className="mt-4 w-full px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all">
+                    View in Datasets
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-theme-muted">Recording ready to be packed into a dataset.</p>
+                  {!!(session as unknown as Record<string, unknown>).sidecarDatasetPath && (
+                    <div className="flex items-center gap-2 text-xs text-theme-muted">
+                      <Folder size={14} />
+                      <span className="font-mono">{String((session as unknown as Record<string, unknown>).sidecarDatasetPath)}</span>
+                    </div>
+                  )}
+                  <button onClick={() => setShowExportModal(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all">
+                    <Download size={16} /> Pack into Dataset
+                  </button>
+                </div>
+              )}
+            </Card>
           </div>
-        </Card>
+
+          {exportSuccess && (
+            <Card variant="subtle" className="!bg-green-500/10 border border-green-500/20">
+              <p className="text-green-400 font-medium text-sm px-4 py-3">
+                Dataset created successfully!
+              </p>
+            </Card>
+          )}
+        </div>
       )}
 
       {/* Annotate Modal */}
@@ -458,3 +524,4 @@ export function SessionDetailPage() {
     </div>
   );
 }
+

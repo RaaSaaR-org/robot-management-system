@@ -17,6 +17,7 @@ import {
   TasksTab,
   InfoTab,
   Model3DTab,
+  TeleopTab,
 } from './tabs';
 import type { Robot, RobotTelemetry, RobotCommand } from '../types/robots.types';
 import type { Process } from '@/features/processes/types';
@@ -25,7 +26,7 @@ import type { Process } from '@/features/processes/types';
 // TYPES
 // ============================================================================
 
-type ViewId = 'telemetry' | 'commands' | 'tasks' | 'info' | '3d-model';
+type ViewId = 'telemetry' | 'commands' | 'tasks' | 'info' | '3d-model' | 'teleop';
 
 export interface RobotControlCenterProps {
   robot: Robot;
@@ -98,6 +99,15 @@ const VIEWS: ViewConfig[] = [
       </svg>
     ),
   },
+  {
+    id: 'teleop',
+    label: 'Teleop',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zM12 2.25V4.5m5.834.166l-1.591 1.591M20.25 10.5H18M7.757 14.743l-1.59 1.59M6 10.5H3.75m4.007-4.243l-1.59-1.59" />
+      </svg>
+    ),
+  },
 ];
 
 const ChatIcon = (
@@ -167,6 +177,13 @@ export const RobotControlCenter = memo(function RobotControlCenter({
             robotId={robotId}
             telemetry={telemetry}
             isTelemetryConnected={isTelemetryConnected}
+          />
+        );
+      case 'teleop':
+        return (
+          <TeleopTab
+            robot={robot}
+            robotId={robotId}
           />
         );
     }

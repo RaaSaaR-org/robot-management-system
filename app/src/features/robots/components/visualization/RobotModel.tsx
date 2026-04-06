@@ -34,18 +34,43 @@ export interface RobotModelProps {
  * offset_deg: add to LeRobot degrees before conversion (e.g. if URDF zero ≠ LeRobot zero).
  * These are determined empirically by moving one joint at a time and comparing.
  */
-const SO101_JOINT_CORRECTIONS: Record<string, { sign: number; offset_deg: number; range_deg: number }> = {
-  // range_deg: physical half-range in LeRobot degrees (from calibration: (range_max-range_min)/4095*180)
-  // shoulder_lift: sign=-1 because LeRobot+max=arm-up, URDF-min=arm-up
-  shoulder_pan:  { sign:  1, offset_deg:  0,     range_deg: 100.1 }, // (3323-1046)/4095*180
-  shoulder_lift: { sign: -1, offset_deg:  0,     range_deg: 180   },
-  elbow_flex:    { sign: -1, offset_deg:  0,     range_deg: 270   },
-  wrist_flex:    { sign: -1, offset_deg:  0,     range_deg:  45   },
-  wrist_roll:    { sign:  1, offset_deg: 90,     range_deg: 180   },
-  // Gripper: physical closed at LeRobot≈0° (confirmed by Sebastian at folded pose)
-  // URDF lower (-10°)=closed, upper (+100°)=open
-  // offset=-65 shifts so that LeRobot 0° → URDF lower (closed); opens toward +64.7°
-  gripper:       { sign:  1, offset_deg: -65,    range_deg: 64.7  },
+// ----------------------------------------------------------------------------
+// SO-101 LeRobot → URDF joint mapping.
+//
+// LeRobot (use_degrees=True) emits per-joint degrees where 0° = mid of the
+// *calibrated* raw-encoder range, and the sign/extent is determined by the
+// calibration file (~/.cache/huggingface/lerobot/calibration/...).
+//
+// Formula from lerobot/motors/motors_bus.py::_normalize:
+//     mid_raw  = (range_min + range_max) / 2
+//     degrees  = (raw - mid_raw) * 360 / 4095
+// So the signed half-range in LeRobot degrees for each joint is:
+//     half_range_deg = (range_max - range_min) / 2 * 360 / 4095
+//
+// We map that linearly onto the URDF joint limits:
+//     normalized = clamp(position_deg / half_range_deg, -1, 1)
+//     urdf_rad   = urdf_mid + sign * normalized * urdf_half_range
+//
+// `sign` flips direction per joint when motor polarity and URDF axis disagree.
+// These values are derived from the calibration of robot0 / my_so101 — if a
+// different arm is connected, update the half-ranges from its calibration file.
+// ----------------------------------------------------------------------------
+interface So101Joint {
+  /** LeRobot half-range in degrees, from calibration (range_max-range_min)/2 * 360/4095 */
+  halfRangeDeg: number;
+  /** +1 or -1 — flip when LeRobot rotation direction disagrees with URDF axis */
+  sign: 1 | -1;
+  /** Extra URDF-frame offset (degrees) added after sign/scaling, for visual alignment */
+  offsetDeg?: number;
+}
+
+const SO101_LEROBOT_CALIBRATION: Record<string, So101Joint> = {
+  shoulder_pan:  { halfRangeDeg: 107.81, sign: -1 },
+  shoulder_lift: { halfRangeDeg: 108.74, sign:  1 },
+  elbow_flex:    { halfRangeDeg:  88.02, sign:  1 },
+  wrist_flex:    { halfRangeDeg:  96.86, sign:  1 },
+  wrist_roll:    { halfRangeDeg: 180.00, sign: -1, offsetDeg: 90 },
+  gripper:       { halfRangeDeg:  59.84, sign: -1, offsetDeg: -25 },
 };
 
 // ============================================================================
@@ -148,22 +173,22 @@ function URDFModel({
     if (!robot || !jointStates) return;
 
     jointStates.forEach(({ name, position }) => {
-      // LeRobot reports degrees in range [-180, +180] based on motor encoder.
-      // The URDF defines physical limits [lower, upper] in radians.
-      // Mapping: LeRobot ±180° → URDF [lower, upper] with per-joint corrections.
       const joint = robot.joints[name];
       if (!joint) return;
 
-      const correction = SO101_JOINT_CORRECTIONS[name] ?? { sign: 1, offset_deg: 0, range_deg: 180 };
-      const corrected = correction.sign * (position + correction.offset_deg);
+      const calib = SO101_LEROBOT_CALIBRATION[name];
+      if (!calib) return;
 
+      // LeRobot 0° == mid of joint's calibrated range == URDF mid.
+      // Map LeRobot's [-halfRangeDeg, +halfRangeDeg] linearly onto URDF [lower, upper].
       const lower = joint.limit?.lower ?? -Math.PI;
       const upper = joint.limit?.upper ?? Math.PI;
-      const mid = (lower + upper) / 2;
-      const halfRange = (upper - lower) / 2;
-      // Normalize using the physical half-range from LeRobot calibration
-      const normalized = Math.max(-1, Math.min(1, corrected / correction.range_deg));
-      const radians = mid + normalized * halfRange;
+      const urdfMid = (lower + upper) / 2;
+      const urdfHalfRange = (upper - lower) / 2;
+
+      const normalized = Math.max(-1, Math.min(1, position / calib.halfRangeDeg));
+      const offsetRad = ((calib.offsetDeg ?? 0) * Math.PI) / 180;
+      const radians = urdfMid + calib.sign * normalized * urdfHalfRange + offsetRad;
 
       robot.setJointValue(name, radians);
     });
