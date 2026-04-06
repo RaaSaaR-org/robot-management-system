@@ -1,12 +1,12 @@
 /**
  * @file DatasetEpisodesPage.tsx
- * @description Full page for viewing dataset episodes with video playback and joint state charts
+ * @description Dataset episode viewer with synchronized video playback and joint trajectory charts
  * @feature training
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -17,18 +17,9 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
-import { Button, Spinner } from '@/shared/components/ui';
+import { Spinner } from '@/shared/components/ui';
 import { trainingApi } from '../api/trainingApi';
-import type { EpisodeMeta, FrameData } from '../types';
-
-const JOINT_NAMES = [
-  'shoulder_pan',
-  'shoulder_lift',
-  'elbow_flex',
-  'wrist_flex',
-  'wrist_roll',
-  'gripper',
-] as const;
+import type { Dataset, EpisodeMeta, FrameData } from '../types';
 
 const JOINT_COLORS: Record<string, string> = {
   shoulder_pan: '#3b82f6',
@@ -41,20 +32,11 @@ const JOINT_COLORS: Record<string, string> = {
 
 const SPEED_OPTIONS = [0.5, 1, 2] as const;
 
-/**
- * Dataset episodes page with synchronized video playback and joint state chart.
- * Replaces the former EpisodeViewerModal with a dedicated route-based page.
- *
- * @example
- * ```tsx
- * <Route path="/datasets/:datasetId/episodes" element={<DatasetEpisodesPage />} />
- * ```
- */
 export function DatasetEpisodesPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const navigate = useNavigate();
 
-  const [datasetName, setDatasetName] = useState<string>('');
+  const [dataset, setDataset] = useState<Dataset | null>(null);
   const [episodes, setEpisodes] = useState<EpisodeMeta[]>([]);
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
@@ -66,15 +48,35 @@ export function DatasetEpisodesPage() {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [flaggedMap, setFlaggedMap] = useState<Record<number, boolean>>({});
 
-  const videoUpRef = useRef<HTMLVideoElement>(null);
-  const videoSideRef = useRef<HTMLVideoElement>(null);
+  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
-  // Fetch dataset name
+  // Derive camera names from dataset features
+  const cameraNames = useMemo(() => {
+    if (!dataset?.infoJson?.features) return ['wrist', 'top'];
+    const names = Object.keys(dataset.infoJson.features as Record<string, unknown>)
+      .filter((k) => k.startsWith('observation.images.'))
+      .map((k) => k.replace('observation.images.', ''));
+    return names.length > 0 ? names : ['wrist', 'top'];
+  }, [dataset]);
+
+  // Derive joint names from dataset features
+  const jointNames = useMemo(() => {
+    if (!dataset?.infoJson?.features) return Object.keys(JOINT_COLORS);
+    const actionFeature = (dataset.infoJson.features as Record<string, { names?: string[] }>)?.['action'];
+    if (actionFeature?.names?.length) {
+      return actionFeature.names.map((n: string) => n.replace('.pos', ''));
+    }
+    return Object.keys(JOINT_COLORS);
+  }, [dataset]);
+
+  const primaryCamera = cameraNames[0];
+
+  // Fetch dataset
   useEffect(() => {
     if (!datasetId) return;
     trainingApi.getDataset(datasetId)
-      .then((ds) => setDatasetName(ds.name))
-      .catch(() => setDatasetName('Unknown Dataset'));
+      .then(setDataset)
+      .catch(() => setDataset(null));
   }, [datasetId]);
 
   // Load episodes
@@ -93,72 +95,69 @@ export function DatasetEpisodesPage() {
           if (ep.flagged) flagMap[ep.index] = true;
         }
         setFlaggedMap(flagMap);
+        // Auto-select first episode
+        if (eps.length > 0) setSelectedEpisode(eps[0].index);
       })
-      .catch((err) => {
-        console.error('Failed to load episodes:', err);
-        setEpisodes([]);
-      })
+      .catch(() => setEpisodes([]))
       .finally(() => setEpisodesLoading(false));
   }, [datasetId]);
 
-  // Load frames when episode selected + set duration from episode metadata
+  // Load frames when episode selected
   useEffect(() => {
     if (!datasetId || selectedEpisode === null) return;
-
     const ep = episodes.find((e) => e.index === selectedEpisode);
     if (ep) setDuration(ep.durationSeconds);
 
     setFramesLoading(true);
-    trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 500)
+    trainingApi.getEpisodeFrames(datasetId, selectedEpisode, 0, 2000)
       .then((result) => setFrames(result.frames))
-      .catch((err) => {
-        console.error('Failed to load frames:', err);
-        setFrames([]);
-      })
+      .catch(() => setFrames([]))
       .finally(() => setFramesLoading(false));
   }, [datasetId, selectedEpisode, episodes]);
 
-  // Sync video playback speed
+  // Sync playback speed
   useEffect(() => {
-    if (videoUpRef.current) videoUpRef.current.playbackRate = playbackSpeed;
-    if (videoSideRef.current) videoSideRef.current.playbackRate = playbackSpeed;
+    for (const ref of Object.values(videoRefs.current)) {
+      if (ref) ref.playbackRate = playbackSpeed;
+    }
   }, [playbackSpeed]);
 
-  // Video time update handler — sync both videos
   const handleTimeUpdate = useCallback(() => {
-    const video = videoUpRef.current;
-    if (video) {
-      setCurrentTime(video.currentTime);
-      if (videoSideRef.current && Math.abs(videoSideRef.current.currentTime - video.currentTime) > 0.1) {
-        videoSideRef.current.currentTime = video.currentTime;
+    const primary = videoRefs.current[primaryCamera];
+    if (!primary) return;
+    setCurrentTime(primary.currentTime);
+    for (const [name, ref] of Object.entries(videoRefs.current)) {
+      if (ref && name !== primaryCamera && Math.abs(ref.currentTime - primary.currentTime) > 0.1) {
+        ref.currentTime = primary.currentTime;
       }
     }
-  }, []);
+  }, [primaryCamera]);
 
   const handleLoadedMetadata = useCallback(() => {
-    if (videoUpRef.current && isFinite(videoUpRef.current.duration)) {
-      setDuration(videoUpRef.current.duration);
+    const primary = videoRefs.current[primaryCamera];
+    if (primary && isFinite(primary.duration)) {
+      setDuration(primary.duration);
     }
-  }, []);
+  }, [primaryCamera]);
 
   const handlePlayPause = useCallback(() => {
-    const videoUp = videoUpRef.current;
-    const videoSide = videoSideRef.current;
-    if (!videoUp) return;
-
-    if (videoUp.paused) {
-      videoUp.play();
-      videoSide?.play();
+    const refs = Object.values(videoRefs.current).filter(Boolean) as HTMLVideoElement[];
+    if (refs.length === 0) return;
+    if (refs[0].paused) {
+      refs.forEach((v) => v.play());
       setIsPlaying(true);
     } else {
-      videoUp.pause();
-      videoSide?.pause();
+      refs.forEach((v) => v.pause());
       setIsPlaying(false);
     }
   }, []);
 
-  const handleVideoEnded = useCallback(() => {
-    setIsPlaying(false);
+  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const time = parseFloat(e.target.value);
+    setCurrentTime(time);
+    for (const ref of Object.values(videoRefs.current)) {
+      if (ref) ref.currentTime = time;
+    }
   }, []);
 
   const handleFlagToggle = useCallback(async (episodeIndex: number) => {
@@ -167,16 +166,15 @@ export function DatasetEpisodesPage() {
     setFlaggedMap((prev) => ({ ...prev, [episodeIndex]: newFlagged }));
     try {
       await trainingApi.flagEpisode(datasetId, episodeIndex, newFlagged);
-    } catch (err) {
-      console.error('Failed to flag episode:', err);
+    } catch {
       setFlaggedMap((prev) => ({ ...prev, [episodeIndex]: !newFlagged }));
     }
   }, [datasetId, flaggedMap]);
 
-  // Prepare chart data from frames
+  // Chart data
   const chartData = frames.map((frame) => {
     const point: Record<string, number> = { timestamp: frame.timestamp };
-    JOINT_NAMES.forEach((name, i) => {
+    jointNames.forEach((name, i) => {
       point[`action_${name}`] = frame.action[i] ?? 0;
       point[`obs_${name}`] = frame.observationState[i] ?? 0;
     });
@@ -189,258 +187,304 @@ export function DatasetEpisodesPage() {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Guard: invalid ID — placed after all hooks to satisfy rules-of-hooks
   if (!datasetId) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold text-theme-primary">Invalid Dataset ID</h1>
-          <p className="mt-2 text-theme-secondary">No dataset ID was provided.</p>
-        </div>
+        <p className="text-theme-secondary">Invalid Dataset ID</p>
       </div>
     );
   }
 
-  const videoUpUrl = selectedEpisode !== null
-    ? trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, 'up')
-    : undefined;
-  const videoSideUrl = selectedEpisode !== null
-    ? trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, 'side')
-    : undefined;
+  const totalDatasetFrames = dataset?.totalFrames ?? 0;
+  const totalDuration = dataset ? formatTime(dataset.totalDuration) : '0:00';
 
   return (
     <div className="space-y-4">
-      {/* Header with back button */}
-      <header className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
+      {/* ── Header ── */}
+      <header className="flex items-center gap-4 px-4 py-3 rounded-xl bg-[#1E1F24]/60 backdrop-blur-sm border border-white/[0.04]">
+        <button
           onClick={() => navigate('/datasets')}
-          className="flex items-center gap-1"
+          className="p-2 rounded-lg hover:bg-white/[0.06] transition-colors"
+          title="Back to Datasets"
         >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Datasets
-        </Button>
-        <div className="h-5 w-px bg-theme-secondary/30" />
-        <h1 className="text-xl font-bold text-theme-primary">
-          Episodes {datasetName ? `\u2014 ${datasetName}` : ''}
-        </h1>
+          <ArrowLeft className="w-5 h-5 text-theme-tertiary" />
+        </button>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-semibold text-theme-primary truncate">
+            {dataset?.name ?? 'Loading...'}
+          </h1>
+          <div className="flex items-center gap-4 mt-0.5 text-xs text-theme-tertiary">
+            <span className="inline-flex items-center gap-1">
+              <Layers className="w-3 h-3" />
+              {episodes.length} episodes
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Film className="w-3 h-3" />
+              {totalDatasetFrames.toLocaleString()} frames
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Activity className="w-3 h-3" />
+              {dataset?.fps ?? 0} fps
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {totalDuration}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Film className="w-3 h-3" />
+              {cameraNames.length} cam{cameraNames.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
       </header>
 
-      {/* Main content: sidebar + viewer */}
-      <div className="flex flex-col lg:flex-row gap-4 min-h-[400px]">
-        {/* Left: Episode List */}
-        <div className="lg:w-[300px] shrink-0 flex flex-col">
-          {/* Mobile: dropdown, Desktop: scrollable list */}
+      {/* ── Main layout ── */}
+      <div className="flex flex-col lg:flex-row gap-3 min-h-[500px]">
+        {/* ── Episode Sidebar ── */}
+        <div className="lg:w-[220px] shrink-0 flex flex-col">
+          {/* Mobile dropdown */}
           <div className="block lg:hidden mb-3">
             <select
               value={selectedEpisode ?? ''}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedEpisode(val === '' ? null : parseInt(val, 10));
-              }}
-              className="w-full px-3 py-2 rounded-lg border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm"
+              onChange={(e) => setSelectedEpisode(e.target.value === '' ? null : parseInt(e.target.value, 10))}
+              className="w-full px-3 py-2 rounded-lg border border-white/[0.06] bg-[#1E1F24] text-theme-primary text-sm"
             >
-              <option value="">Select an episode...</option>
+              <option value="">Select episode...</option>
               {episodes.map((ep) => (
                 <option key={ep.index} value={ep.index}>
-                  Episode {ep.index} — {ep.frameCount} frames, {formatTime(ep.durationSeconds)}
-                  {flaggedMap[ep.index] ? ' (flagged)' : ''}
+                  Ep {ep.index} — {ep.frameCount} frames
                 </option>
               ))}
             </select>
           </div>
 
-          <div className="hidden lg:block overflow-y-auto flex-1 border border-theme-secondary/20 rounded-lg" style={{ maxHeight: 'calc(100vh - 12rem)' }}>
+          {/* Desktop list */}
+          <div
+            className="hidden lg:flex flex-col overflow-y-auto rounded-xl border border-white/[0.04] bg-[#1E1F24]/40"
+            style={{ maxHeight: 'calc(100vh - 10rem)' }}
+          >
+            <div className="px-3 py-2 border-b border-white/[0.04]">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-theme-tertiary">
+                Episodes
+              </span>
+            </div>
             {episodesLoading ? (
               <div className="flex items-center justify-center py-8">
-                <Spinner size="md" label="Loading episodes..." />
+                <Spinner size="sm" label="Loading..." />
               </div>
             ) : episodes.length === 0 ? (
-              <div className="text-center py-8 text-theme-secondary text-sm">
-                No episodes available
-              </div>
+              <div className="text-center py-8 text-theme-tertiary text-xs">No episodes</div>
             ) : (
-              <div className="divide-y divide-theme-secondary/10">
-                {episodes.map((ep) => (
-                  <div
-                    key={ep.index}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedEpisode(ep.index)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedEpisode(ep.index); }}
-                    className={`w-full text-left px-4 py-3 hover:bg-theme-secondary/10 transition-colors cursor-pointer ${
-                      selectedEpisode === ep.index ? 'bg-primary-500/10 border-l-2 border-primary-500' : ''
-                    } ${flaggedMap[ep.index] ? 'bg-red-500/5' : ''}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-sm text-theme-primary">
-                        Episode {ep.index}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleFlagToggle(ep.index);
-                        }}
-                        className={`text-sm p-1 rounded hover:bg-theme-secondary/20 ${
-                          flaggedMap[ep.index] ? 'text-red-500' : 'text-theme-tertiary'
-                        }`}
-                        title={flaggedMap[ep.index] ? 'Unflag episode' : 'Flag episode'}
-                      >
-                        {flaggedMap[ep.index] ? '\u{1F6A9}' : '\u{2691}'}
-                      </button>
+              <div>
+                {episodes.map((ep) => {
+                  const isActive = selectedEpisode === ep.index;
+                  const isFlagged = flaggedMap[ep.index];
+                  return (
+                    <div
+                      key={ep.index}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedEpisode(ep.index)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedEpisode(ep.index); }}
+                      className={`w-full text-left px-3 py-2 transition-all duration-150 border-l-2 cursor-pointer ${
+                        isActive
+                          ? 'border-cobalt-500 bg-cobalt-500/10'
+                          : 'border-transparent hover:bg-white/[0.03]'
+                      } ${isFlagged ? 'bg-red-500/5' : ''}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-sm font-medium ${isActive ? 'text-cobalt-400' : 'text-theme-primary'}`}>
+                          Episode {ep.index}
+                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleFlagToggle(ep.index); }}
+                          className={`p-0.5 rounded transition-colors ${
+                            isFlagged ? 'text-red-400' : 'text-theme-tertiary/40 hover:text-theme-tertiary'
+                          }`}
+                          title={isFlagged ? 'Unflag' : 'Flag'}
+                        >
+                          <Flag className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div className="text-[11px] text-theme-tertiary mt-0.5">
+                        {ep.frameCount} frames &middot; {formatTime(ep.durationSeconds)}
+                      </div>
                     </div>
-                    <div className="text-xs text-theme-tertiary mt-1">
-                      {ep.frameCount} frames &bull; {formatTime(ep.durationSeconds)}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
 
-        {/* Right: Viewer */}
-        <div className="flex-1 overflow-y-auto space-y-4">
+        {/* ── Viewer Panel ── */}
+        <div className="flex-1 space-y-3 overflow-y-auto">
           {selectedEpisode === null ? (
-            <div className="flex items-center justify-center h-full text-theme-secondary">
-              Select an episode to view
+            <div className="flex items-center justify-center h-full text-theme-tertiary text-sm">
+              Select an episode
             </div>
           ) : (
             <>
-              {/* Video Area */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-theme-tertiary mb-1">Camera: up</p>
-                  <video
-                    ref={videoUpRef}
-                    src={videoUpUrl}
-                    onTimeUpdate={handleTimeUpdate}
-                    onLoadedMetadata={handleLoadedMetadata}
-                    onEnded={handleVideoEnded}
-                    className="w-full rounded-lg bg-black"
-                    playsInline
-                  />
-                </div>
-                <div>
-                  <p className="text-xs text-theme-tertiary mb-1">Camera: side</p>
-                  <video
-                    ref={videoSideRef}
-                    src={videoSideUrl}
-                    className="w-full rounded-lg bg-black"
-                    playsInline
-                  />
-                </div>
-              </div>
-
-              {/* Controls */}
-              <div className="flex items-center gap-4 px-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handlePlayPause}
-                >
-                  {isPlaying ? 'Pause' : 'Play'}
-                </Button>
-                <span className="text-sm text-theme-secondary font-mono">
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </span>
-                <select
-                  value={playbackSpeed}
-                  onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-                  className="px-2 py-1 rounded border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm"
-                >
-                  {SPEED_OPTIONS.map((speed) => (
-                    <option key={speed} value={speed}>
-                      {speed}x
-                    </option>
+              {/* ── Video Player ── */}
+              <div className="rounded-xl overflow-hidden border border-white/[0.04] bg-[#0A0A0A]">
+                <div className={`grid gap-px bg-white/[0.02] ${cameraNames.length === 1 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
+                  {cameraNames.map((cam) => (
+                    <div key={cam} className="relative bg-black">
+                      <span className="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded text-[10px] font-medium tracking-wide uppercase text-white/70 bg-black/60 backdrop-blur-sm">
+                        {cam}
+                      </span>
+                      <video
+                        ref={(el) => { videoRefs.current[cam] = el; }}
+                        src={trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam)}
+                        onTimeUpdate={cam === primaryCamera ? handleTimeUpdate : undefined}
+                        onLoadedMetadata={cam === primaryCamera ? handleLoadedMetadata : undefined}
+                        onEnded={cam === primaryCamera ? () => setIsPlaying(false) : undefined}
+                        className="w-full aspect-video"
+                        playsInline
+                      />
+                    </div>
                   ))}
-                </select>
+                </div>
+
+                {/* Playback Controls */}
+                <div className="flex items-center gap-3 px-3 py-2 bg-[#1E1F24]/80 border-t border-white/[0.04]">
+                  <button
+                    onClick={handlePlayPause}
+                    className="w-8 h-8 flex items-center justify-center rounded-full bg-cobalt-500/15 hover:bg-cobalt-500/25 text-cobalt-400 transition-colors"
+                  >
+                    {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+                  </button>
+
+                  <span className="text-[11px] text-theme-tertiary font-mono tabular-nums w-[72px]">
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </span>
+
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 1}
+                    step={0.05}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="flex-1 h-1 rounded-full appearance-none cursor-pointer bg-white/10 accent-cobalt-500 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cobalt-500 [&::-webkit-slider-thumb]:appearance-none"
+                  />
+
+                  {/* Speed pills */}
+                  <div className="flex gap-0.5 rounded-full bg-white/[0.04] p-0.5">
+                    {SPEED_OPTIONS.map((speed) => (
+                      <button
+                        key={speed}
+                        onClick={() => setPlaybackSpeed(speed)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                          playbackSpeed === speed
+                            ? 'bg-cobalt-500/20 text-cobalt-400'
+                            : 'text-theme-tertiary hover:text-theme-secondary'
+                        }`}
+                      >
+                        {speed}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
-              {/* Joint State Chart */}
+              {/* ── Joint Trajectories ── */}
               {framesLoading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Spinner size="md" label="Loading frame data..." />
+                  <Spinner size="md" label="Loading trajectory data..." />
                 </div>
               ) : chartData.length > 0 ? (
-                <div>
-                  <h3 className="text-sm font-medium text-theme-primary mb-2">
-                    Joint States
-                  </h3>
-                  <ResponsiveContainer width="100%" height={300}>
+                <div className="rounded-xl border border-white/[0.04] bg-[#1E1F24]/40 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-theme-primary flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-cobalt-400" />
+                      Joint Trajectories
+                    </h3>
+                    <span className="text-[10px] text-theme-tertiary">
+                      {frames.length} samples &middot; solid = state, dashed = action
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={280}>
                     <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border, #e5e7eb)" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                       <XAxis
                         dataKey="timestamp"
                         type="number"
                         domain={['dataMin', 'dataMax']}
                         tickFormatter={(v: number) => v.toFixed(1)}
-                        label={{ value: 'Time (s)', position: 'insideBottom', offset: -5 }}
-                        fontSize={11}
+                        label={{ value: 'Time (s)', position: 'insideBottom', offset: -5, style: { fill: '#888', fontSize: 10 } }}
+                        fontSize={10}
+                        stroke="#555"
+                        tick={{ fill: '#888' }}
                       />
-                      <YAxis fontSize={11} />
+                      <YAxis
+                        fontSize={10}
+                        stroke="#555"
+                        tick={{ fill: '#888' }}
+                        label={{ value: 'degrees', angle: -90, position: 'insideLeft', offset: 10, style: { fill: '#888', fontSize: 10 } }}
+                      />
                       <Tooltip
-                        contentStyle={{ fontSize: 11, background: 'var(--color-bg-card, #fff)' }}
-                        labelFormatter={(v: number) => `t=${v.toFixed(2)}s`}
+                        contentStyle={{
+                          fontSize: 11,
+                          background: '#1E1F24',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 8,
+                          color: '#ccc',
+                        }}
+                        labelFormatter={(v: number) => `t = ${v.toFixed(2)}s`}
                       />
 
-                      {/* Observation state lines (solid) */}
-                      {JOINT_NAMES.map((name) => (
+                      {jointNames.map((name) => (
                         <Line
                           key={`obs_${name}`}
                           type="monotone"
                           dataKey={`obs_${name}`}
-                          stroke={JOINT_COLORS[name]}
+                          stroke={JOINT_COLORS[name] ?? '#888'}
                           dot={false}
                           strokeWidth={1.5}
-                          name={`obs:${name}`}
+                          name={`state:${name}`}
                         />
                       ))}
 
-                      {/* Action lines (dashed) */}
-                      {JOINT_NAMES.map((name) => (
+                      {jointNames.map((name) => (
                         <Line
                           key={`action_${name}`}
                           type="monotone"
                           dataKey={`action_${name}`}
-                          stroke={JOINT_COLORS[name]}
+                          stroke={JOINT_COLORS[name] ?? '#888'}
                           dot={false}
-                          strokeWidth={1.5}
-                          strokeDasharray="5 3"
-                          name={`act:${name}`}
+                          strokeWidth={1}
+                          strokeDasharray="4 2"
+                          name={`action:${name}`}
                         />
                       ))}
 
-                      {/* Current time indicator */}
                       {currentTime > 0 && (
                         <ReferenceLine
                           x={currentTime}
-                          stroke="#ef4444"
-                          strokeWidth={2}
-                          strokeDasharray="none"
+                          stroke="#2A5FFF"
+                          strokeWidth={1.5}
                         />
                       )}
                     </LineChart>
                   </ResponsiveContainer>
-                  <div className="flex flex-wrap gap-3 mt-2 text-xs text-theme-tertiary">
-                    {JOINT_NAMES.map((name) => (
-                      <span key={name} className="flex items-center gap-1">
+
+                  {/* Legend */}
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+                    {jointNames.map((name) => (
+                      <span key={name} className="flex items-center gap-1.5 text-[10px] text-theme-tertiary">
                         <span
-                          className="inline-block w-3 h-0.5 rounded"
-                          style={{ backgroundColor: JOINT_COLORS[name] }}
+                          className="inline-block w-3 h-[2px] rounded-full"
+                          style={{ backgroundColor: JOINT_COLORS[name] ?? '#888' }}
                         />
                         {name}
                       </span>
                     ))}
-                    <span className="text-theme-tertiary">
-                      (solid = observation, dashed = action)
-                    </span>
                   </div>
                 </div>
               ) : (
-                <div className="text-center py-6 text-theme-secondary text-sm">
-                  No frame data available for this episode
+                <div className="text-center py-8 text-theme-tertiary text-sm rounded-xl border border-white/[0.04] bg-[#1E1F24]/20">
+                  No trajectory data for this episode
                 </div>
               )}
             </>

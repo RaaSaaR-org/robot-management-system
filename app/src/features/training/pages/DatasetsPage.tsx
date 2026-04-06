@@ -43,7 +43,6 @@ export function DatasetsPage() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
   const [pushDataset, setPushDataset] = useState<Dataset | null>(null);
-  const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [filters, setFilters] = useState<DatasetQueryParams>({});
@@ -56,8 +55,7 @@ export function DatasetsPage() {
   };
 
   const handleSelectDataset = (dataset: Dataset) => {
-    setSelectedDataset(dataset);
-    // In a full implementation, this could open a detail view or drawer
+    navigate(`/datasets/${dataset.id}/episodes`);
   };
 
   const handleDeleteClick = (dataset: Dataset) => {
@@ -70,9 +68,6 @@ export function DatasetsPage() {
     try {
       await deleteDataset(datasetToDelete.id);
       setDatasetToDelete(null);
-      if (selectedDataset?.id === datasetToDelete.id) {
-        setSelectedDataset(null);
-      }
     } catch (err) {
       console.error('Failed to delete dataset:', err);
     } finally {
@@ -188,42 +183,10 @@ export function DatasetsPage() {
       <DatasetList
         datasets={datasets}
         isLoading={isLoading}
-        selectedId={selectedDataset?.id}
         onSelect={handleSelectDataset}
+        onViewEpisodes={(dataset) => navigate(`/datasets/${dataset.id}/episodes`)}
+        onDelete={handleDeleteClick}
       />
-
-      {/* Selected dataset actions */}
-      {selectedDataset && (
-        <div className="fixed bottom-6 right-6 flex gap-2">
-          {selectedDataset.status === 'ready' && !selectedDataset.huggingFaceRepoId && (
-            <Button
-              variant="ghost"
-              onClick={() => setPushDataset(selectedDataset)}
-            >
-              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              Push to HuggingFace
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            onClick={() => navigate(`/datasets/${selectedDataset.id}/episodes`)}
-          >
-            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            View Episodes
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => handleDeleteClick(selectedDataset)}
-          >
-            Delete Selected
-          </Button>
-        </div>
-      )}
 
       {/* Upload modal */}
       <DatasetUploadModal

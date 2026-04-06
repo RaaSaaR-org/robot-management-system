@@ -61,7 +61,7 @@ export function QualityIndicator({
         )}
       >
         <Gauge className="w-4 h-4" />
-        <span className="text-sm">Quality feedback unavailable</span>
+        <span className="text-sm">Quality score will be computed after recording</span>
       </div>
     );
   }

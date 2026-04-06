@@ -398,12 +398,16 @@ export class TeleoperationService extends EventEmitter {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });
-        const result = await resp.json() as { ok?: boolean; episodes_recorded?: number };
+        const result = await resp.json() as { ok?: boolean; episodes_recorded?: number; exit_code?: number };
         episodesRecorded = result.episodes_recorded ?? 0;
-        console.log(`[TeleoperationService] sidecar recording stopped, episodes=${episodesRecorded}`);
+        console.log(`[TeleoperationService] sidecar recording stopped, episodes=${episodesRecorded} exit=${result.exit_code}`);
 
-        // Poll sidecar until upload completes (max 60s)
-        s3Path = await this.waitForSidecarUpload(sidecarUrl, 60_000);
+        // Only poll for upload if recording actually produced data
+        if (episodesRecorded > 0 || result.exit_code === 0) {
+          s3Path = await this.waitForSidecarUpload(sidecarUrl, 60_000);
+        } else {
+          console.log('[TeleoperationService] Recording failed (0 episodes), skipping upload poll');
+        }
       } catch (err) {
         console.error('[TeleoperationService] sidecar stop/upload failed:', err);
       }
@@ -439,17 +443,45 @@ export class TeleoperationService extends EventEmitter {
           ?? session.languageInstr?.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 50)
           ?? `teleop-${sessionId.slice(0, 8)}`;
         const robotTypeId = await this.resolveRobotTypeIdFromSession(session.robotId);
+
+        // Normalize storagePath to always have trailing slash
+        const normalizedPath = s3Path.endsWith('/') ? s3Path : `${s3Path}/`;
+
+        // Try to read LeRobot info.json from RustFS for camera metadata
+        let infoJsonObj: Record<string, unknown> = {};
+        try {
+          const { isRustFSInitialized, getRustFSClient } = await import('../storage/rustfs-client.js');
+          if (isRustFSInitialized()) {
+            const infoKey = `${normalizedPath}meta/info.json`;
+            const rustfs = getRustFSClient();
+            // Try both buckets (new 'training-datasets' and legacy 'datasets')
+            for (const bucket of ['training-datasets', 'datasets']) {
+              try {
+                const stream = await rustfs.getStream(bucket, infoKey);
+                const chunks: Buffer[] = [];
+                for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+                infoJsonObj = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+                console.log(`[TeleoperationService] Read info.json from RustFS bucket=${bucket}: ${infoKey}`);
+                break;
+              } catch { /* try next bucket */ }
+            }
+          }
+        } catch {
+          console.log('[TeleoperationService] Could not read info.json from RustFS, using default');
+        }
+
         const dataset = await datasetRepository.create({
           name: datasetName,
           description: `Teleoperation: ${session.languageInstr ?? sessionId}`,
           robotTypeId,
-          storagePath: s3Path,
+          storagePath: normalizedPath,
           lerobotVersion: 'v3.0',
           fps: session.fps,
           totalFrames,
           totalDuration: duration,
           demonstrationCount: totalEpisodes || session.numEpisodes || 1,
           status: 'ready',
+          infoJson: infoJsonObj as import('../types/vla.types.js').LeRobotInfo,
         });
         exportedDatasetId = dataset.id;
         console.log(`[TeleoperationService] Auto-created Dataset: ${dataset.id} (${datasetName}) ${totalFrames} frames`);
@@ -1008,6 +1040,7 @@ export class TeleoperationService extends EventEmitter {
       try {
         const resp = await fetch(`${sidecarUrl}/record/status`);
         const status = await resp.json() as {
+          running?: boolean;
           upload_status?: string;
           s3_path?: string;
           upload_result?: { s3_path?: string; ok?: boolean };
@@ -1020,6 +1053,11 @@ export class TeleoperationService extends EventEmitter {
         if (uploadStatus === 'error') {
           console.error('[TeleoperationService] Upload failed on sidecar');
           return null;
+        }
+        // If recording stopped and upload never started, bail early
+        if (uploadStatus === 'idle' && !status.running) {
+          console.log('[TeleoperationService] Recording done but no upload started');
+          return status.s3_path ?? null;
         }
         // Still uploading — wait 2s
         await new Promise((r) => setTimeout(r, 2000));
