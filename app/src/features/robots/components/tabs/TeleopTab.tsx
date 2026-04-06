@@ -28,18 +28,18 @@ const JOINT_LABELS: Record<string, string> = {
 
 /** Key bindings: key → { joint, delta } */
 const KEY_BINDINGS: Record<string, { joint: string; delta: number }> = {
-  w: { joint: 'shoulder_lift', delta: 3 },
-  s: { joint: 'shoulder_lift', delta: -3 },
-  a: { joint: 'shoulder_pan', delta: -3 },
-  d: { joint: 'shoulder_pan', delta: 3 },
-  q: { joint: 'elbow_flex', delta: 3 },
-  e: { joint: 'elbow_flex', delta: -3 },
-  z: { joint: 'wrist_flex', delta: 3 },
-  x: { joint: 'wrist_flex', delta: -3 },
-  ArrowUp: { joint: 'wrist_roll', delta: 3 },
-  ArrowDown: { joint: 'wrist_roll', delta: -3 },
-  o: { joint: 'gripper', delta: 5 },
-  c: { joint: 'gripper', delta: -5 },
+  w: { joint: 'shoulder_lift', delta: 10 },
+  s: { joint: 'shoulder_lift', delta: -10 },
+  a: { joint: 'shoulder_pan', delta: -10 },
+  d: { joint: 'shoulder_pan', delta: 10 },
+  q: { joint: 'elbow_flex', delta: 10 },
+  e: { joint: 'elbow_flex', delta: -10 },
+  z: { joint: 'wrist_flex', delta: 10 },
+  x: { joint: 'wrist_flex', delta: -10 },
+  ArrowUp: { joint: 'wrist_roll', delta: 10 },
+  ArrowDown: { joint: 'wrist_roll', delta: -10 },
+  o: { joint: 'gripper', delta: 15 },
+  c: { joint: 'gripper', delta: -15 },
 };
 
 const KEY_DISPLAY: Array<{ keys: string; label: string }> = [
@@ -65,15 +65,21 @@ function getAgentBaseUrl(robot: TeleopTabProps['robot']): string {
 }
 
 function getWsBaseUrl(robot: TeleopTabProps['robot']): string {
+  // Keyboard teleop WebSocket runs on the sidecar (port 8766), not the agent
   const base = getAgentBaseUrl(robot);
-  return base.replace(/^http/, 'ws');
+  try {
+    const url = new URL(base);
+    return `ws://${url.hostname}:8766`;
+  } catch {
+    return base.replace(/^http/, 'ws');
+  }
 }
 
 // ============================================================================
 // KEYBOARD TELEOP SECTION
 // ============================================================================
 
-function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
+export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
   const [connected, setConnected] = useState(false);
   const [positions, setPositions] = useState<Record<string, number>>({});
   const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set());

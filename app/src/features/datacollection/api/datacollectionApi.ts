@@ -77,8 +77,8 @@ export const datacollectionApi = {
    * @returns Session details
    */
   async getSession(id: string): Promise<TeleoperationSession> {
-    const response = await apiClient.get<TeleoperationSession>(ENDPOINTS.session(id));
-    return response.data;
+    const response = await apiClient.get<{ session: TeleoperationSession }>(ENDPOINTS.session(id));
+    return response.data.session;
   },
 
   /**
@@ -100,8 +100,8 @@ export const datacollectionApi = {
    * @returns Updated session
    */
   async startSession(id: string): Promise<TeleoperationSession> {
-    const response = await apiClient.post<TeleoperationSession>(ENDPOINTS.sessionStart(id));
-    return response.data;
+    const response = await apiClient.post<{ session: TeleoperationSession }>(ENDPOINTS.sessionStart(id));
+    return response.data.session;
   },
 
   /**
@@ -110,8 +110,8 @@ export const datacollectionApi = {
    * @returns Updated session
    */
   async pauseSession(id: string): Promise<TeleoperationSession> {
-    const response = await apiClient.post<TeleoperationSession>(ENDPOINTS.sessionPause(id));
-    return response.data;
+    const response = await apiClient.post<{ session: TeleoperationSession }>(ENDPOINTS.sessionPause(id));
+    return response.data.session;
   },
 
   /**
@@ -120,8 +120,8 @@ export const datacollectionApi = {
    * @returns Updated session
    */
   async resumeSession(id: string): Promise<TeleoperationSession> {
-    const response = await apiClient.post<TeleoperationSession>(ENDPOINTS.sessionResume(id));
-    return response.data;
+    const response = await apiClient.post<{ session: TeleoperationSession }>(ENDPOINTS.sessionResume(id));
+    return response.data.session;
   },
 
   /**
@@ -130,8 +130,8 @@ export const datacollectionApi = {
    * @returns Updated session
    */
   async endSession(id: string): Promise<TeleoperationSession> {
-    const response = await apiClient.post<TeleoperationSession>(ENDPOINTS.sessionEnd(id));
-    return response.data;
+    const response = await apiClient.post<{ session: TeleoperationSession }>(ENDPOINTS.sessionEnd(id));
+    return response.data.session;
   },
 
   /**

@@ -207,6 +207,9 @@ export interface CreateSessionRequest {
   type: TeleoperationType;
   fps?: number;
   languageInstr?: string;
+  numEpisodes?: number;
+  episodeTimeS?: number;
+  datasetRepoId?: string;
 }
 
 /**

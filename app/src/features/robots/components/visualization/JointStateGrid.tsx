@@ -26,29 +26,30 @@ export interface JointStateGridProps {
 // ============================================================================
 
 /**
- * Convert radians to degrees
+ * Convert degrees to radians
  */
-function toDegrees(radians: number): number {
-  return radians * (180 / Math.PI);
+function toRadians(degrees: number): number {
+  return degrees * (Math.PI / 180);
 }
 
 /**
- * Normalize joint position to 0-100 percentage
- * Assumes typical joint range of -PI to PI
+ * Normalize joint position (degrees) to 0-100 percentage.
+ * Assumes typical joint range of -180° to +180°.
  */
-function normalizePosition(position: number): number {
-  const normalized = (position + Math.PI) / (2 * Math.PI);
+function normalizePosition(degrees: number): number {
+  const normalized = (degrees + 180) / 360;
   return Math.max(0, Math.min(100, normalized * 100));
 }
 
 /**
- * Get color class based on position (centered = green, extremes = orange/red)
+ * Get color class based on position in degrees
+ * (centered = green, extremes = orange/red)
  */
-function getPositionColor(position: number): string {
-  const absPos = Math.abs(position);
-  if (absPos < 0.5) return 'from-green-400 to-emerald-500';
-  if (absPos < 1.5) return 'from-cobalt-400 to-turquoise-400';
-  if (absPos < 2.5) return 'from-yellow-400 to-orange-400';
+function getPositionColor(degrees: number): string {
+  const absDeg = Math.abs(degrees);
+  if (absDeg < 30) return 'from-green-400 to-emerald-500';
+  if (absDeg < 90) return 'from-cobalt-400 to-turquoise-400';
+  if (absDeg < 150) return 'from-yellow-400 to-orange-400';
   return 'from-orange-400 to-red-400';
 }
 
@@ -74,9 +75,11 @@ interface JointItemProps {
 }
 
 const JointItem = memo(function JointItem({ joint }: JointItemProps) {
-  const percentage = normalizePosition(joint.position);
-  const degrees = toDegrees(joint.position);
-  const colorClass = getPositionColor(joint.position);
+  // LeRobot SO-101 reports joint.position in degrees.
+  const degrees = joint.position;
+  const radians = toRadians(degrees);
+  const percentage = normalizePosition(degrees);
+  const colorClass = getPositionColor(degrees);
 
   return (
     <div className="glass-subtle p-3 rounded-lg space-y-2">
@@ -87,7 +90,7 @@ const JointItem = memo(function JointItem({ joint }: JointItemProps) {
         </span>
         {joint.velocity !== undefined && Math.abs(joint.velocity) > 0.01 && (
           <span className="text-[10px] text-theme-tertiary">
-            {joint.velocity > 0 ? '+' : ''}{joint.velocity.toFixed(2)} rad/s
+            {joint.velocity > 0 ? '+' : ''}{joint.velocity.toFixed(2)} deg/s
           </span>
         )}
       </div>
@@ -110,7 +113,7 @@ const JointItem = memo(function JointItem({ joint }: JointItemProps) {
           {degrees.toFixed(1)}deg
         </span>
         <span className="font-mono text-theme-tertiary">
-          {joint.position.toFixed(3)} rad
+          {radians.toFixed(3)} rad
         </span>
       </div>
     </div>

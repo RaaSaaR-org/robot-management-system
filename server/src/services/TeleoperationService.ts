@@ -91,6 +91,9 @@ export class TeleoperationService extends EventEmitter {
         frameCount: 0,
         fps: dto.fps ?? DEFAULT_FPS,
         languageInstr: dto.languageInstr ?? null,
+        numEpisodes: dto.numEpisodes ?? null,
+        episodeTimeS: dto.episodeTimeS ?? null,
+        datasetRepoId: dto.datasetRepoId ?? null,
       },
     });
 
@@ -220,7 +223,9 @@ export class TeleoperationService extends EventEmitter {
   // ============================================================================
 
   /**
-   * Start recording a session
+   * Start recording a session.
+   * If the robot has a sidecar URL (real SO-101 hardware), triggers
+   * `POST /record/start` on the sidecar to spawn `lerobot-record`.
    */
   async startSession(sessionId: string): Promise<SessionResponse> {
     const session = await this.prisma.teleoperationSession.findUnique({
@@ -237,11 +242,48 @@ export class TeleoperationService extends EventEmitter {
       );
     }
 
+    // Check if the robot has a hardware sidecar (real SO-101)
+    const sidecarUrl = await this.resolveSidecarUrl(session.robotId);
+    let sidecarDatasetPath: string | null = null;
+
+    if (sidecarUrl) {
+      const repoId = session.datasetRepoId ?? `robot0/session-${sessionId.slice(0, 8)}`;
+      const numEpisodes = session.numEpisodes ?? 1;
+      const episodeTimeS = session.episodeTimeS ?? 60;
+
+      try {
+        const resp = await fetch(`${sidecarUrl}/record/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo_id: repoId,
+            task: session.languageInstr ?? 'manipulate object',
+            num_episodes: numEpisodes,
+            episode_time_s: episodeTimeS,
+            fps: session.fps,
+          }),
+        });
+        const result = await resp.json() as { ok?: boolean; dataset_path?: string; error?: string };
+        if (!result.ok) {
+          throw new Error(result.error ?? 'Sidecar /record/start failed');
+        }
+        sidecarDatasetPath = result.dataset_path ?? null;
+        console.log(`[TeleoperationService] sidecar recording started → ${sidecarDatasetPath}`);
+
+        // Start polling sidecar for progress
+        this.startSidecarProgressPoller(sessionId, sidecarUrl);
+      } catch (err) {
+        console.error(`[TeleoperationService] sidecar start failed:`, err);
+        // Don't block — start session anyway, just without hardware recording
+      }
+    }
+
     const updated = await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
       data: {
         status: 'recording',
         startedAt: session.startedAt ?? new Date(),
+        ...(sidecarDatasetPath ? { sidecarDatasetPath } : {}),
       },
     });
 
@@ -322,7 +364,9 @@ export class TeleoperationService extends EventEmitter {
   }
 
   /**
-   * End recording session
+   * End recording session.
+   * If a sidecar recording is running, sends SIGINT to lerobot-record
+   * via `POST /record/stop`.
    */
   async endSession(sessionId: string): Promise<SessionResponse> {
     const session = await this.prisma.teleoperationSession.findUnique({
@@ -339,12 +383,80 @@ export class TeleoperationService extends EventEmitter {
       );
     }
 
+    // Stop progress poller
+    this.stopSidecarProgressPoller(sessionId);
+
+    // Stop sidecar recording if it was started
+    const sidecarUrl = await this.resolveSidecarUrl(session.robotId);
+    let episodesRecorded = 0;
+    let s3Path: string | null = null;
+
+    if (sidecarUrl && session.sidecarDatasetPath) {
+      try {
+        // Stop recording → triggers auto-upload on the sidecar
+        const resp = await fetch(`${sidecarUrl}/record/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const result = await resp.json() as { ok?: boolean; episodes_recorded?: number };
+        episodesRecorded = result.episodes_recorded ?? 0;
+        console.log(`[TeleoperationService] sidecar recording stopped, episodes=${episodesRecorded}`);
+
+        // Poll sidecar until upload completes (max 60s)
+        s3Path = await this.waitForSidecarUpload(sidecarUrl, 60_000);
+      } catch (err) {
+        console.error('[TeleoperationService] sidecar stop/upload failed:', err);
+      }
+    }
+
     const endedAt = new Date();
     const duration = session.startedAt
       ? (endedAt.getTime() - session.startedAt.getTime()) / 1000
       : 0;
 
     const qualityScore = await this.computeSessionQuality(sessionId);
+
+    // Read actual frame count from sidecar (parsed from LeRobot's info.json)
+    let totalFrames = 0;
+    let totalEpisodes = episodesRecorded;
+    if (sidecarUrl) {
+      try {
+        const statusResp = await fetch(`${sidecarUrl}/record/status`);
+        const finalStatus = await statusResp.json() as {
+          total_frames?: number; total_episodes?: number; episodes_done?: number;
+        };
+        totalFrames = finalStatus.total_frames ?? 0;
+        totalEpisodes = finalStatus.total_episodes ?? finalStatus.episodes_done ?? episodesRecorded;
+      } catch { /* use defaults */ }
+    }
+
+    // Auto-create Dataset record if upload succeeded
+    let exportedDatasetId: string | null = null;
+    if (s3Path) {
+      try {
+        // Use task description as dataset name (slugified), not session ID
+        const datasetName = session.datasetRepoId
+          ?? session.languageInstr?.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 50)
+          ?? `teleop-${sessionId.slice(0, 8)}`;
+        const robotTypeId = await this.resolveRobotTypeIdFromSession(session.robotId);
+        const dataset = await datasetRepository.create({
+          name: datasetName,
+          description: `Teleoperation: ${session.languageInstr ?? sessionId}`,
+          robotTypeId,
+          storagePath: s3Path,
+          lerobotVersion: 'v3.0',
+          fps: session.fps,
+          totalFrames,
+          totalDuration: duration,
+          demonstrationCount: totalEpisodes || session.numEpisodes || 1,
+          status: 'ready',
+        });
+        exportedDatasetId = dataset.id;
+        console.log(`[TeleoperationService] Auto-created Dataset: ${dataset.id} (${datasetName}) ${totalFrames} frames`);
+      } catch (err) {
+        console.error('[TeleoperationService] auto-create Dataset failed:', err);
+      }
+    }
 
     const updated = await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
@@ -353,6 +465,9 @@ export class TeleoperationService extends EventEmitter {
         endedAt,
         duration,
         qualityScore,
+        frameCount: totalFrames || episodesRecorded,
+        ...(exportedDatasetId ? { exportedDatasetId } : {}),
+        ...(s3Path ? { sidecarDatasetPath: s3Path } : {}),
       },
     });
 
@@ -690,7 +805,44 @@ export class TeleoperationService extends EventEmitter {
       );
     }
 
-    // Load all frames ordered by index
+    // ---------------------------------------------------------------
+    // Sidecar-backed sessions: dataset already exists on the pi in
+    // LeRobot format. Just create a Dataset record pointing to it.
+    // ---------------------------------------------------------------
+    if (session.sidecarDatasetPath) {
+      const datasetName = dto.datasetName ?? session.datasetRepoId ?? `teleop_${sessionId.slice(0, 8)}`;
+      const robotTypeId = await this.resolveRobotTypeIdFromSession(session.robotId);
+      const datasetInput: CreateDatasetInput = {
+        name: datasetName,
+        description: dto.description ?? `Teleoperation: ${session.languageInstr ?? sessionId}`,
+        robotTypeId,
+        storagePath: session.sidecarDatasetPath,
+        lerobotVersion: 'v3.0',
+        fps: session.fps,
+        totalFrames: session.frameCount || 150, // fallback estimate
+        totalDuration: session.duration ?? 0,
+        demonstrationCount: session.numEpisodes ?? 1,
+        status: 'ready',
+      };
+      const dataset = await datasetRepository.create(datasetInput);
+      await this.prisma.teleoperationSession.update({
+        where: { id: sessionId },
+        data: { exportedDatasetId: dataset.id },
+      });
+      this.emitEvent({ type: 'session:exported', sessionId, timestamp: new Date() });
+      return {
+        sessionId,
+        datasetId: dataset.id,
+        datasetName,
+        trajectoryCount: session.numEpisodes ?? 1,
+        totalFrames: session.frameCount || 150,
+        storagePath: session.sidecarDatasetPath,
+      };
+    }
+
+    // ---------------------------------------------------------------
+    // Frame-based sessions: export from DB frames → LeRobot format
+    // ---------------------------------------------------------------
     const dbFrames = await this.prisma.teleoperationFrame.findMany({
       where: { sessionId },
       orderBy: { frameIndex: 'asc' },
@@ -770,6 +922,114 @@ export class TeleoperationService extends EventEmitter {
   // ============================================================================
   // HELPER METHODS
   // ============================================================================
+
+  // ============================================================================
+  // SIDECAR INTEGRATION HELPERS
+  // ============================================================================
+
+  /** Poller interval handles, keyed by sessionId. */
+  private sidecarPollers = new Map<string, ReturnType<typeof setInterval>>();
+
+  /**
+   * Derive the sidecar URL from a robot's A2A agent URL.
+   * Sidecar always runs on port 8765 on the same host as the agent.
+   * Returns null if the robot has no a2aAgentUrl.
+   */
+  private async resolveSidecarUrl(robotId: string): Promise<string | null> {
+    const robot = await this.prisma.robot.findUnique({ where: { id: robotId } });
+    if (!robot?.a2aAgentUrl) return null;
+    try {
+      const url = new URL(robot.a2aAgentUrl);
+      return `http://${url.hostname}:8765`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Poll sidecar /record/status every 2s and broadcast progress via events.
+   */
+  private startSidecarProgressPoller(sessionId: string, sidecarUrl: string): void {
+    if (this.sidecarPollers.has(sessionId)) return;
+
+    const poller = setInterval(async () => {
+      try {
+        const resp = await fetch(`${sidecarUrl}/record/status`);
+        const status = await resp.json() as {
+          running?: boolean;
+          episodes_done?: number;
+          current_episode?: number;
+          elapsed_s?: number;
+        };
+
+        this.emitEvent({
+          type: 'session:progress' as TeleoperationEvent['type'],
+          sessionId,
+          timestamp: new Date(),
+          recordingProgress: {
+            episodesDone: status.episodes_done ?? 0,
+            currentEpisode: status.current_episode ?? 0,
+            elapsedS: status.elapsed_s ?? 0,
+            running: status.running ?? false,
+          },
+        } as TeleoperationEvent);
+
+        // Auto-stop polling if recording finished
+        if (!status.running) {
+          this.stopSidecarProgressPoller(sessionId);
+        }
+      } catch {
+        // Sidecar unreachable — stop polling
+        this.stopSidecarProgressPoller(sessionId);
+      }
+    }, 2000);
+
+    this.sidecarPollers.set(sessionId, poller);
+  }
+
+  /**
+   * Stop the sidecar progress poller for a session.
+   */
+  private stopSidecarProgressPoller(sessionId: string): void {
+    const poller = this.sidecarPollers.get(sessionId);
+    if (poller) {
+      clearInterval(poller);
+      this.sidecarPollers.delete(sessionId);
+    }
+  }
+
+  /**
+   * Poll sidecar /record/status until upload_status is 'done' or 'error'.
+   * Returns the S3 path if successful, null otherwise.
+   */
+  private async waitForSidecarUpload(sidecarUrl: string, timeoutMs: number): Promise<string | null> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const resp = await fetch(`${sidecarUrl}/record/status`);
+        const status = await resp.json() as {
+          upload_status?: string;
+          s3_path?: string;
+          upload_result?: { s3_path?: string; ok?: boolean };
+        };
+        const uploadStatus = status.upload_status ?? 'idle';
+        if (uploadStatus === 'done' && status.upload_result?.s3_path) {
+          console.log(`[TeleoperationService] Upload complete: ${status.upload_result.s3_path}`);
+          return status.upload_result.s3_path;
+        }
+        if (uploadStatus === 'error') {
+          console.error('[TeleoperationService] Upload failed on sidecar');
+          return null;
+        }
+        // Still uploading — wait 2s
+        await new Promise((r) => setTimeout(r, 2000));
+      } catch {
+        return null;
+      }
+    }
+    console.warn('[TeleoperationService] Upload timed out');
+    return null;
+  }
 
   /**
    * Resolve a robotTypeId from a session's robotId.

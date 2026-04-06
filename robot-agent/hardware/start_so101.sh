@@ -4,14 +4,18 @@
 #
 # Environment:
 #   LEROBOT_DIR   — LeRobot checkout (default: ~/lerobot)
+#   SO101_VENV    — Pre-built Python venv with LeRobot installed (default: ~/so101-env)
+#                   If present, used instead of `uv run` (which rebuilds deps each start).
 #   NODE_ENV      — "production" uses npm run start:so101, else dev:so101
 #   SKIP_PLAYWRIGHT — set to "true" to skip Playwright MCP server
 
 set -e
 
-SIDECAR_PY="$(dirname "$0")/so101_sidecar.py"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SIDECAR_PY="$SCRIPT_DIR/so101_sidecar.py"
 LEROBOT_DIR="${LEROBOT_DIR:-$HOME/lerobot}"
-AGENT_DIR="$(dirname "$0")/.."
+SO101_VENV="${SO101_VENV:-$HOME/so101-env}"
+AGENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cleanup() {
   [ -n "$SIDECAR_PID" ] && kill $SIDECAR_PID 2>/dev/null && echo "Sidecar stopped."
@@ -28,8 +32,14 @@ if [ "$SKIP_PLAYWRIGHT" != "true" ] && command -v playwright-mcp &>/dev/null; th
 fi
 
 echo "🦾 Starting SO-101 hardware sidecar..."
-cd "$LEROBOT_DIR"
-uv run python "$SIDECAR_PY" &
+if [ -x "$SO101_VENV/bin/python" ]; then
+  echo "   Using venv: $SO101_VENV"
+  "$SO101_VENV/bin/python" "$SIDECAR_PY" &
+else
+  echo "   Venv not found at $SO101_VENV — falling back to 'uv run' in $LEROBOT_DIR"
+  cd "$LEROBOT_DIR"
+  uv run python "$SIDECAR_PY" &
+fi
 SIDECAR_PID=$!
 echo "   Sidecar PID: $SIDECAR_PID"
 
