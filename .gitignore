@@ -54,6 +54,8 @@ robot-agent/data/state*.json
 app/e2e/results/
 app/e2e/report/
 app/e2e/test-results/
+app/e2e/test-results-dev/
+app/e2e/screenshots/
 
 # Python
 __pycache__/
