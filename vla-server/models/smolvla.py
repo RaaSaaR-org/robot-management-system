@@ -4,6 +4,7 @@
 
 Loads a SmolVLA policy checkpoint and runs inference.
 Supports MPS (Apple Silicon), CUDA, and CPU devices.
+Optional LoRA adapter loading + dataset stats for normalization.
 
 Ported from smolvla-server/src/smolvla_server/inference.py and
 vla-inference/models/smolvla.py — consolidated into one implementation.
@@ -12,8 +13,14 @@ vla-inference/models/smolvla.py — consolidated into one implementation.
 import base64
 import gc
 import io
+import json
 import logging
+import shutil
+import tarfile
+import tempfile
 import time
+from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 import torch
@@ -30,11 +37,38 @@ STATE_DIM = 6
 
 
 class SmolVLAModel(VLAModel):
-    """SmolVLA via LeRobot policy API."""
+    """SmolVLA via LeRobot policy API.
 
-    def __init__(self, model_path: str = "lerobot/smolvla_base", device: str = "cpu"):
+    Supports optional LoRA adapter loading on top of the base model and
+    MEAN_STD normalization/un-normalization using saved dataset stats.
+    """
+
+    def __init__(
+        self,
+        model_path: str = "lerobot/smolvla_base",
+        device: str = "cpu",
+        adapter_path: str | None = None,
+        dataset_stats_path: str | None = None,
+        camera_names_override: list[str] | None = None,
+        empty_cameras_override: int | None = None,
+        rustfs_endpoint: str | None = None,
+        rustfs_access_key: str | None = None,
+        rustfs_secret_key: str | None = None,
+    ):
         self.model_path = model_path
         self.device = device
+        self.adapter_path = adapter_path
+        self._dataset_stats_path = dataset_stats_path
+        self._camera_names_override = camera_names_override
+        self._empty_cameras_override = empty_cameras_override
+        self._rustfs_endpoint = rustfs_endpoint
+        self._rustfs_access_key = rustfs_access_key
+        self._rustfs_secret_key = rustfs_secret_key
+        self._state_mean: np.ndarray | None = None
+        self._state_std: np.ndarray | None = None
+        self._action_mean: np.ndarray | None = None
+        self._action_std: np.ndarray | None = None
+        self._adapter_scratch_dir: Path | None = None
         self.policy = None
         self._action_dim = ACTION_DIM
         self._chunk_size = CHUNK_SIZE
@@ -64,12 +98,24 @@ class SmolVLAModel(VLAModel):
                     f"Check LeRobot installation. Error: {e}"
                 ) from e
 
+        # Optional: wrap with a LoRA adapter
+        if self.adapter_path:
+            self._wrap_with_adapter()
+
+        # Optional: override camera feature names
+        if self._camera_names_override is not None:
+            self._apply_camera_override()
+
+        # Optional: load dataset stats for normalization
+        if self._dataset_stats_path:
+            self._load_dataset_stats()
+
         self.policy.to(self.device)
         self.policy.eval()
 
         # Extract dimensions from config
         try:
-            cfg = self.policy.config
+            cfg = self._policy_config()
             self._action_dim = getattr(
                 cfg,
                 "action_dim",
@@ -120,6 +166,10 @@ class SmolVLAModel(VLAModel):
         if action_np.ndim == 1:
             action_np = action_np.reshape(1, -1)
 
+        # Un-normalize actions back to raw units (MEAN_STD inverse).
+        if self._action_mean is not None and self._action_std is not None:
+            action_np = action_np * self._action_std + self._action_mean
+
         inference_time_ms = (time.perf_counter() - t_start) * 1000
         return PredictResult(actions=action_np.tolist(), inference_time_ms=inference_time_ms)
 
@@ -127,13 +177,28 @@ class SmolVLAModel(VLAModel):
         if self.policy is not None and hasattr(self.policy, "reset"):
             self.policy.reset()
 
+    # ------------------------------------------------------------ config helpers
+    def _base_policy(self):
+        """Return the underlying SmolVLAPolicy, unwrapping PEFT if present."""
+        p = self.policy
+        if p is None:
+            return None
+        if hasattr(p, "base_model") and hasattr(p.base_model, "model"):
+            inner = p.base_model.model
+            if hasattr(inner, "config") and hasattr(inner.config, "image_features"):
+                return inner
+        return p
+
+    def _policy_config(self):
+        """Return the underlying SmolVLAConfig, unwrapping PEFT if present."""
+        inner = self._base_policy()
+        return getattr(inner, "config", None) if inner is not None else None
+
     def info(self) -> ModelConfig:
         cameras = ["front"]
         if self.policy is not None:
             try:
-                # LeRobot 0.4+: cfg.image_features is a dict keyed by
-                # "observation.images.<camera>" → PolicyFeature(...)
-                cfg = self.policy.config
+                cfg = self._policy_config()
                 if hasattr(cfg, "image_features") and cfg.image_features:
                     cameras = [
                         k.replace("observation.images.", "")
@@ -168,25 +233,134 @@ class SmolVLAModel(VLAModel):
         logger.info("Unloading SmolVLA")
         del self.policy
         self.policy = None
+        if self._adapter_scratch_dir and self._adapter_scratch_dir.exists():
+            shutil.rmtree(self._adapter_scratch_dir, ignore_errors=True)
+            self._adapter_scratch_dir = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
         gc.collect()
 
+    # ------------------------------------------------------------ adapter loading
+    def _wrap_with_adapter(self) -> None:
+        """Wrap the loaded base policy with a PEFT LoRA adapter."""
+        from peft import PeftModel
+
+        adapter_dir = self._resolve_adapter_dir(self.adapter_path)
+        logger.info(f"Applying LoRA adapter from {adapter_dir}")
+        self.policy = PeftModel.from_pretrained(self.policy, str(adapter_dir))
+        logger.info("LoRA adapter applied successfully")
+
+    def _resolve_adapter_dir(self, path: str) -> Path:
+        if path.startswith("s3://"):
+            return self._download_and_unpack_s3(path)
+        p = Path(path)
+        if p.is_dir():
+            return self._find_adapter_dir(p)
+        if p.is_file() and p.suffix in (".gz", ".tar", ".tgz"):
+            return self._unpack_tarball(p)
+        raise FileNotFoundError(f"Adapter path not found: {path}")
+
+    def _download_and_unpack_s3(self, s3_uri: str) -> Path:
+        import boto3
+        from botocore.client import Config as BotoConfig
+
+        parsed = urlparse(s3_uri)
+        bucket, key = parsed.netloc, parsed.path.lstrip("/")
+        if not self._rustfs_endpoint:
+            raise RuntimeError("adapter_path is s3:// but rustfs_endpoint not configured")
+        logger.info(f"Downloading adapter from {s3_uri}")
+        client = boto3.client(
+            "s3", endpoint_url=self._rustfs_endpoint,
+            aws_access_key_id=self._rustfs_access_key,
+            aws_secret_access_key=self._rustfs_secret_key,
+            config=BotoConfig(signature_version="s3v4"), region_name="us-east-1",
+        )
+        scratch = Path(tempfile.mkdtemp(prefix="smolvla-adapter-"))
+        self._adapter_scratch_dir = scratch
+        tar_path = scratch / "adapter.tar.gz"
+        client.download_file(bucket, key, str(tar_path))
+        logger.info(f"Downloaded {tar_path.stat().st_size} bytes")
+        return self._unpack_tarball(tar_path, dest=scratch / "unpacked")
+
+    def _unpack_tarball(self, tar_path: Path, dest: Path | None = None) -> Path:
+        if dest is None:
+            dest = Path(tempfile.mkdtemp(prefix="smolvla-adapter-"))
+            self._adapter_scratch_dir = dest
+        dest.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(tar_path, "r:*") as tf:
+            tf.extractall(dest)
+        return self._find_adapter_dir(dest)
+
+    def _find_adapter_dir(self, root: Path) -> Path:
+        if (root / "adapter_config.json").exists():
+            return root
+        for sub in root.iterdir():
+            if sub.is_dir() and (sub / "adapter_config.json").exists():
+                return sub
+        raise FileNotFoundError(f"No adapter_config.json under {root}")
+
+    # ------------------------------------------------------------ camera override
+    def _apply_camera_override(self) -> None:
+        """Rewrite cfg.image_features to use provided camera names."""
+        try:
+            from lerobot.configs.types import FeatureType, PolicyFeature
+        except ImportError:
+            logger.warning("Cannot import PolicyFeature — camera override skipped")
+            return
+
+        cfg = self._policy_config()
+        if cfg is None or not cfg.image_features:
+            return
+        sample_shape = next(iter(cfg.image_features.values())).shape
+        new_features = {
+            f"observation.images.{name}": PolicyFeature(type=FeatureType.VISUAL, shape=sample_shape)
+            for name in self._camera_names_override
+        }
+        cfg.input_features = {
+            k: v for k, v in cfg.input_features.items()
+            if not k.startswith("observation.images.")
+        }
+        cfg.input_features.update(new_features)
+        if self._empty_cameras_override is not None:
+            cfg.empty_cameras = self._empty_cameras_override
+        logger.info(f"Camera override: {self._camera_names_override} (empty={cfg.empty_cameras})")
+
+    # ------------------------------------------------------------ dataset stats
+    def _load_dataset_stats(self) -> None:
+        """Load MEAN_STD normalization stats for state + action."""
+        path = self._dataset_stats_path
+        if path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+            parsed = urlparse(path)
+            client = boto3.client(
+                "s3", endpoint_url=self._rustfs_endpoint,
+                aws_access_key_id=self._rustfs_access_key,
+                aws_secret_access_key=self._rustfs_secret_key,
+                config=BotoConfig(signature_version="s3v4"), region_name="us-east-1",
+            )
+            raw = client.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))["Body"].read()
+            stats = json.loads(raw)
+        else:
+            stats = json.loads(Path(path).read_text())
+
+        if "observation.state" in stats:
+            self._state_mean = np.array(stats["observation.state"]["mean"], dtype=np.float32)
+            self._state_std = np.array(stats["observation.state"]["std"], dtype=np.float32)
+        if "action" in stats:
+            self._action_mean = np.array(stats["action"]["mean"], dtype=np.float32)
+            self._action_std = np.array(stats["action"]["std"], dtype=np.float32)
+        logger.info(f"Dataset stats loaded (state_mean={self._state_mean is not None}, action_mean={self._action_mean is not None})")
+
+    # ------------------------------------------------------------ observation building
     def _build_observation(
         self, images: dict[str, str], state: list[float], task: str
     ) -> dict:
-        """Convert raw inputs to LeRobot observation dict.
-
-        If the model expects more cameras than provided (e.g. 3 cameras but only
-        1 available on the robot), the single image is duplicated into all slots.
-        """
-        # Auto-expand: if model needs specific camera keys, remap / duplicate
-        # LeRobot 0.4+: camera names live in policy.config.image_features
-        _img_features = (
-            getattr(getattr(self.policy, "config", None), "image_features", None) or {}
-        )
+        """Convert raw inputs to LeRobot observation dict."""
+        _cfg = self._policy_config()
+        _img_features = getattr(_cfg, "image_features", None) or {}
         if self.policy is not None and _img_features:
             expected = [
                 k.replace("observation.images.", "")
@@ -212,20 +386,18 @@ class SmolVLAModel(VLAModel):
         state_padded = list(state)
         if len(state_padded) < self._state_dim:
             state_padded += [0.0] * (self._state_dim - len(state_padded))
-        obs["observation.state"] = torch.tensor(
-            state_padded[: self._state_dim], dtype=torch.float32
-        ).unsqueeze(0).to(self.device)
+        state_arr = np.array(state_padded[: self._state_dim], dtype=np.float32)
+        if self._state_mean is not None and self._state_std is not None:
+            state_arr = (state_arr - self._state_mean) / (self._state_std + 1e-8)
+        obs["observation.state"] = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
 
-        # Tokenize task string → observation.language.tokens + attention_mask
-        # (SmolVLA expects pre-tokenized language input, not raw text)
-        tokenizer = self.policy.model.vlm_with_expert.processor.tokenizer
-        max_len = getattr(self.policy.config, "tokenizer_max_length", 48)
+        # Tokenize task string
+        base = self._base_policy()
+        tokenizer = base.model.vlm_with_expert.processor.tokenizer
+        max_len = getattr(base.config, "tokenizer_max_length", 48)
         tokenized = tokenizer(
-            task,
-            max_length=max_len,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt",
+            task, max_length=max_len, truncation=True,
+            padding="max_length", return_tensors="pt",
         )
         obs["observation.language.tokens"] = tokenized["input_ids"].to(self.device)
         obs["observation.language.attention_mask"] = tokenized["attention_mask"].bool().to(self.device)
