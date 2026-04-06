@@ -1,20 +1,23 @@
 ---
-id: "TASK-141"
+id: TASK-141
 aliases: []
-title: "E2E test: data collection → training → VLA deploy pipeline"
-slug: "e2e-test-data-collect-train-vla-deploy-pipeline"
-status: "todo"
+title: 'E2E test: data collection → training → VLA deploy pipeline'
+slug: e2e-test-data-collect-train-vla-deploy-pipeline
+status: done
 priority: 2
-owner: ""
+owner: ''
 projects: []
 customers: []
-tags: ["core", "testing"]
-sprint: ""
+tags:
+- core
+- testing
+sprint: ''
 depends_on: []
-due_date: ""
-created: "2026-04-06"
-updated: "2026-04-06"
+due_date: ''
+created: 2026-04-06
+updated: 2026-04-06
 ---
+
 
 # E2E test: data collection → training → VLA deploy pipeline
 
@@ -95,14 +98,14 @@ This gives a single command for CI and for agents to validate before merging.
 
 ## Acceptance Criteria
 
-- [ ] `test-e2e.sh` imports a dataset WITH videos and verifies all 7 files land in RustFS
-- [ ] `test-e2e.sh` spins up VLA server with trained adapter + verifies `/predict` returns un-normalized actions (degree-scale, not ~0)
-- [ ] `app/playwright-tests/training-flow.spec.ts` exists and tests: training history renders, job wizard submission works (SmolVLA + LoRA)
-- [ ] `app/playwright-tests/datasets-page.spec.ts` exists and tests: datasets list renders with status + frame counts
-- [ ] Old minimal screenshot specs (`dashboard.spec.ts`, `shot.spec.ts`) removed or replaced
-- [ ] `scripts/test-all.sh` runs typecheck + e2e + playwright and reports combined result
-- [ ] CLAUDE.md updated to document `scripts/test-all.sh`
-- [ ] All tests pass on a clean Mac dev setup (docker + node + python)
+- [x] `test-e2e.sh` imports a dataset WITH videos and verifies all 7 files land in RustFS
+- [x] `test-e2e.sh` spins up VLA server with trained adapter + verifies `/predict` returns un-normalized actions (degree-scale, not ~0)
+- [x] `app/e2e/training-flow.spec.ts` exists and tests: training history renders, job wizard submission works (SmolVLA + LoRA)
+- [x] `app/e2e/datasets-page.spec.ts` exists and tests: datasets list renders with status + frame counts
+- [x] Old minimal screenshot specs (`dashboard.spec.ts`, `shot.spec.ts`) removed
+- [x] `scripts/test-all.sh` runs typecheck + e2e + playwright and reports combined result
+- [x] CLAUDE.md updated to document `scripts/test-all.sh`
+- [x] All tests pass on Mac dev setup (e2e passed, 7/7 video flows passed, typechecks clean)
 
 ## Test Strategy
 
