@@ -5,6 +5,7 @@
 
 import { createServer } from 'http';
 import { createApp } from './app.js';
+import { logger } from './utils/logger.js';
 import { setupWebSocket } from './websocket/index.js';
 import { connectDatabase, disconnectDatabase } from './database/index.js';
 import { seedZones } from './database/seedZones.js';
@@ -29,7 +30,7 @@ import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 const PORT = process.env.PORT || 3001;
 
 async function main() {
-  console.log('Starting A2A Server...');
+  logger.info('Starting A2A Server...');
 
   // Connect to database
   await connectDatabase();
@@ -71,30 +72,30 @@ async function main() {
       if (process.env.TRAINING_NATS_STUB === 'true') {
         await trainingWorker.start();
       } else {
-        console.log('[TrainingWorker] NATS stub disabled (TRAINING_NATS_STUB!=true) — HTTP claim endpoint is primary');
+        logger.info('[TrainingWorker] NATS stub disabled (TRAINING_NATS_STUB!=true) — HTTP claim endpoint is primary');
       }
       await syntheticDataWorker.start();
-      console.log('[NATS] JetStream initialized with streams and KV stores');
+      logger.info('[NATS] JetStream initialized with streams and KV stores');
     }
   } catch (error) {
-    console.warn('[NATS] Failed to initialize (training features disabled):', error instanceof Error ? error.message : error);
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[NATS] Failed to initialize (training features disabled)');
   }
 
   // Initialize RustFS Object Storage (optional - graceful degradation if not available)
   try {
     await initializeRustFSClient();
     storageCleanupJob.startSchedule(24); // Daily at 3 AM
-    console.log('[RustFS] Object storage initialized');
+    logger.info('[RustFS] Object storage initialized');
   } catch (error) {
-    console.warn('[RustFS] Failed to initialize (storage features disabled):', error instanceof Error ? error.message : error);
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[RustFS] Failed to initialize (storage features disabled)');
   }
 
   // Initialize MLflow Model Registry (optional - graceful degradation if not available)
   try {
     await mlflowService.initialize();
-    console.log('[MLflow] Model registry initialized');
+    logger.info('[MLflow] Model registry initialized');
   } catch (error) {
-    console.warn('[MLflow] Failed to initialize (model registry features disabled):', error instanceof Error ? error.message : error);
+    logger.warn({ err: error instanceof Error ? error.message : error }, '[MLflow] Failed to initialize (model registry features disabled)');
   }
 
   // Create Express app
@@ -108,14 +109,14 @@ async function main() {
 
   // Start server
   server.listen(PORT, () => {
-    console.log(`A2A Server running on http://localhost:${PORT}`);
-    console.log(`WebSocket available at ws://localhost:${PORT}/api/a2a/ws`);
-    console.log(`Agent card at http://localhost:${PORT}/.well-known/a2a/agent_card.json`);
+    logger.info(`A2A Server running on http://localhost:${PORT}`);
+    logger.info(`WebSocket available at ws://localhost:${PORT}/api/a2a/ws`);
+    logger.info(`Agent card at http://localhost:${PORT}/.well-known/a2a/agent_card.json`);
   });
 
   // Graceful shutdown
   const shutdown = async () => {
-    console.log('Shutting down...');
+    logger.info('Shutting down...');
     retentionCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
     trainingJobService.stopAllWatchers();
@@ -125,7 +126,7 @@ async function main() {
     await natsClient.close();
     await disconnectDatabase();
     server.close(() => {
-      console.log('Server closed');
+      logger.info('Server closed');
       process.exit(0);
     });
   };
@@ -135,7 +136,7 @@ async function main() {
 }
 
 main().catch(async (err) => {
-  console.error('Failed to start server:', err);
+  logger.error({ err }, 'Failed to start server');
   await disconnectDatabase();
   process.exit(1);
 });
