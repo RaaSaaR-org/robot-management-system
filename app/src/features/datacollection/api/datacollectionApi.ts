@@ -87,8 +87,11 @@ export const datacollectionApi = {
    * @returns Created session
    */
   async createSession(data: CreateSessionRequest): Promise<TeleoperationSession> {
-    const response = await apiClient.post<TeleoperationSession>(ENDPOINTS.sessions, data);
-    return response.data;
+    const response = await apiClient.post<{ session: TeleoperationSession; message: string }>(
+      ENDPOINTS.sessions,
+      data
+    );
+    return response.data.session;
   },
 
   /**

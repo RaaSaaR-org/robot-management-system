@@ -18,9 +18,11 @@ import {
   FileVideo,
   Download,
   Edit2,
-  Loader2,
   AlertCircle,
 } from 'lucide-react';
+import { Card } from '@/shared/components/ui/Card';
+import { Spinner } from '@/shared/components/ui/Spinner';
+import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
 import { useSessionDetail } from '../hooks/datacollection';
@@ -38,7 +40,7 @@ import {
 // ============================================================================
 
 export function SessionDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { sessionId: id } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
 
   const { session, isLoading, error, annotateSession, exportSession } = useSessionDetail(id!);
@@ -127,10 +129,8 @@ export function SessionDetailPage() {
   // Loading state
   if (isLoading && !session) {
     return (
-      <div className="container mx-auto px-4 py-12 max-w-5xl">
-        <div className="flex items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
-        </div>
+      <div className="flex items-center justify-center py-12">
+        <Spinner size="lg" color="cobalt" />
       </div>
     );
   }
@@ -138,20 +138,18 @@ export function SessionDetailPage() {
   // Error state
   if (error && !session) {
     return (
-      <div className="container mx-auto px-4 py-12 max-w-5xl">
-        <div className="flex flex-col items-center justify-center text-center">
-          <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
-            Error Loading Session
-          </h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-4">{error}</p>
-          <button
-            onClick={handleBack}
-            className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-          >
-            Back to Sessions
-          </button>
-        </div>
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+        <h2 className="text-xl font-semibold text-theme-primary mb-2">
+          Error Loading Session
+        </h2>
+        <p className="text-theme-muted mb-4">{error}</p>
+        <button
+          onClick={handleBack}
+          className="px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
+        >
+          Back to Sessions
+        </button>
       </div>
     );
   }
@@ -163,24 +161,24 @@ export function SessionDetailPage() {
   const isCompleted = session.status === 'completed';
 
   return (
-    <div className="container mx-auto px-4 py-6 max-w-5xl">
+    <div className="space-y-6 max-w-5xl">
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
           <button
             onClick={handleBack}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+            className="p-2 hover:bg-glass-subtle rounded-brand transition-colors"
           >
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
+            <ArrowLeft className="w-5 h-5 text-theme-muted" />
           </button>
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              <h1 className="text-2xl font-bold text-theme-primary">
                 {TELEOPERATION_TYPE_LABELS[session.type]}
               </h1>
               <SessionStatusBadge status={session.status} showPulse={isRecording} />
             </div>
-            <p className="text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-theme-muted mt-0.5 font-mono text-sm">
               Session {session.id.slice(0, 8)}
             </p>
           </div>
@@ -192,7 +190,7 @@ export function SessionDetailPage() {
             <button
               onClick={isPaused ? handleResume : handleStart}
               disabled={actionLoading}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/20 transition-all disabled:opacity-50"
             >
               <Play size={18} />
               {isPaused ? 'Resume' : 'Start'}
@@ -202,7 +200,7 @@ export function SessionDetailPage() {
             <button
               onClick={handlePause}
               disabled={actionLoading}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25 border border-yellow-500/20 transition-all disabled:opacity-50"
             >
               <Pause size={18} />
               Pause
@@ -212,7 +210,7 @@ export function SessionDetailPage() {
             <button
               onClick={handleEnd}
               disabled={actionLoading}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-all disabled:opacity-50"
             >
               <Square size={18} />
               End
@@ -223,122 +221,131 @@ export function SessionDetailPage() {
 
       {/* Quality Feedback (during recording) */}
       {(isRecording || isPaused) && (
-        <QualityIndicator feedback={qualityFeedback} className="mb-6" />
+        <QualityIndicator feedback={qualityFeedback} className="mb-0" />
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="!p-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-              <Clock className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <div className="p-2 rounded-brand bg-cobalt-500/10">
+              <Clock className="w-5 h-5 text-cobalt-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Duration</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm text-theme-muted">Duration</p>
+                <InfoIcon content="Total recording time for this session, including pauses." size={12} />
+              </div>
+              <p className="text-xl font-bold text-theme-primary">
                 {formatDuration(session.duration)}
               </p>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <Card className="!p-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-              <FileVideo className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <div className="p-2 rounded-brand bg-turquoise-500/10">
+              <FileVideo className="w-5 h-5 text-turquoise-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Frames</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              <p className="text-sm text-theme-muted">Frames</p>
+              <p className="text-xl font-bold text-theme-primary">
                 {session.frameCount.toLocaleString()}
               </p>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <Card className="!p-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-              <Video className="w-5 h-5 text-green-600 dark:text-green-400" />
+            <div className="p-2 rounded-brand bg-green-500/10">
+              <Video className="w-5 h-5 text-green-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">FPS</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm text-theme-muted">FPS</p>
+                <InfoIcon content="Frames per second — the recording rate set when the session was created." size={12} />
+              </div>
+              <p className="text-xl font-bold text-theme-primary">
                 {session.fps}
               </p>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <Card className="!p-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-              <Bot className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+            <div className="p-2 rounded-brand bg-orange-500/10">
+              <Bot className="w-5 h-5 text-orange-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Quality</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm text-theme-muted">Quality</p>
+                <InfoIcon content="Overall quality score based on smoothness, jerkiness, and frame consistency. Higher is better." size={12} />
+              </div>
+              <p className="text-xl font-bold text-theme-primary">
                 {session.qualityScore ? `${session.qualityScore}%` : '-'}
               </p>
             </div>
           </div>
-        </div>
+        </Card>
       </div>
 
       {/* Details */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Info Card */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-          <h2 className="font-semibold text-gray-900 dark:text-gray-100 mb-4">Session Info</h2>
+        <Card>
+          <h2 className="font-semibold text-theme-primary mb-4">Session Info</h2>
           <dl className="space-y-3">
             {session.robot && (
               <div className="flex items-center gap-3">
-                <Bot className="w-5 h-5 text-gray-400" />
-                <dt className="text-gray-500 dark:text-gray-400">Robot:</dt>
-                <dd className="text-gray-900 dark:text-gray-100">{session.robot.name}</dd>
+                <Bot className="w-5 h-5 text-theme-muted" />
+                <dt className="text-theme-muted">Robot:</dt>
+                <dd className="text-theme-primary">{session.robot.name}</dd>
               </div>
             )}
             {session.operator && (
               <div className="flex items-center gap-3">
-                <User className="w-5 h-5 text-gray-400" />
-                <dt className="text-gray-500 dark:text-gray-400">Operator:</dt>
-                <dd className="text-gray-900 dark:text-gray-100">{session.operator.name}</dd>
+                <User className="w-5 h-5 text-theme-muted" />
+                <dt className="text-theme-muted">Operator:</dt>
+                <dd className="text-theme-primary">{session.operator.name}</dd>
               </div>
             )}
             <div className="flex items-center gap-3">
-              <Clock className="w-5 h-5 text-gray-400" />
-              <dt className="text-gray-500 dark:text-gray-400">Created:</dt>
-              <dd className="text-gray-900 dark:text-gray-100">
+              <Clock className="w-5 h-5 text-theme-muted" />
+              <dt className="text-theme-muted">Created:</dt>
+              <dd className="text-theme-primary">
                 {new Date(session.createdAt).toLocaleString()}
               </dd>
             </div>
           </dl>
-        </div>
+        </Card>
 
         {/* Language Instruction */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+        <Card>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-900 dark:text-gray-100">Task Description</h2>
+            <h2 className="font-semibold text-theme-primary">Task Description</h2>
             <button
               onClick={() => {
                 setAnnotationText(session.languageInstr || '');
                 setShowAnnotateModal(true);
               }}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              className="p-2 hover:bg-glass-subtle rounded-brand transition-colors"
             >
-              <Edit2 className="w-4 h-4 text-gray-500" />
+              <Edit2 className="w-4 h-4 text-theme-muted" />
             </button>
           </div>
           {session.languageInstr ? (
-            <p className="text-gray-700 dark:text-gray-300 italic">
-              "{session.languageInstr}"
+            <p className="text-theme-secondary italic">
+              &ldquo;{session.languageInstr}&rdquo;
             </p>
           ) : (
-            <p className="text-gray-500 dark:text-gray-400">
+            <p className="text-theme-muted">
               No task description added yet
             </p>
           )}
-        </div>
+        </Card>
       </div>
 
       {/* Actions */}
@@ -346,7 +353,7 @@ export function SessionDetailPage() {
         <div className="flex justify-end">
           <button
             onClick={() => setShowExportModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
           >
             <Download size={18} />
             Export to Dataset
@@ -355,32 +362,34 @@ export function SessionDetailPage() {
       )}
 
       {exportSuccess && (
-        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg animate-in fade-in">
-          <p className="text-green-700 dark:text-green-300 font-medium">
+        <Card variant="subtle" className="!bg-green-500/10 border border-green-500/20">
+          <p className="text-green-400 font-medium text-sm px-4 py-3">
             Dataset created successfully!
           </p>
-        </div>
+        </Card>
       )}
 
       {session.exportedDatasetId && (
-        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-center justify-between">
-          <p className="text-green-700 dark:text-green-300">
-            Session exported to dataset: {session.exportedDatasetId}
-          </p>
-          <button
-            onClick={() => navigate('/datasets')}
-            className="text-sm px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700"
-          >
-            View Datasets
-          </button>
-        </div>
+        <Card variant="subtle" className="!bg-green-500/10 border border-green-500/20">
+          <div className="flex items-center justify-between px-4 py-3">
+            <p className="text-green-400 text-sm">
+              Session exported to dataset: {session.exportedDatasetId}
+            </p>
+            <button
+              onClick={() => navigate('/datasets')}
+              className="text-xs px-3 py-1.5 rounded-brand bg-green-500/15 text-green-400 hover:bg-green-500/25 border border-green-500/20 transition-all"
+            >
+              View Datasets
+            </button>
+          </div>
+        </Card>
       )}
 
       {/* Annotate Modal */}
       {showAnnotateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <Card className="max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-theme-primary mb-4">
               Edit Task Description
             </h3>
             <textarea
@@ -388,36 +397,36 @@ export function SessionDetailPage() {
               onChange={(e) => setAnnotationText(e.target.value)}
               rows={4}
               placeholder="Describe the task..."
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 mb-4"
+              className="w-full rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent mb-4"
             />
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowAnnotateModal(false)}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800 dark:text-gray-400"
+                className="px-4 py-2 text-theme-secondary hover:text-theme-primary transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleAnnotate}
                 disabled={actionLoading}
-                className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                className="px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all disabled:opacity-50"
               >
                 {actionLoading ? 'Saving...' : 'Save'}
               </button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* Export Modal */}
       {showExportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <Card className="max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-theme-primary mb-4">
               Export Session
             </h3>
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-theme-secondary mb-1.5">
                 Dataset Name (optional)
               </label>
               <input
@@ -425,25 +434,25 @@ export function SessionDetailPage() {
                 value={exportName}
                 onChange={(e) => setExportName(e.target.value)}
                 placeholder="Leave empty for auto-generated name"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                className="w-full rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
               />
             </div>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowExportModal(false)}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800 dark:text-gray-400"
+                className="px-4 py-2 text-theme-secondary hover:text-theme-primary transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleExport}
                 disabled={actionLoading}
-                className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                className="px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all disabled:opacity-50"
               >
                 {actionLoading ? 'Exporting...' : 'Export'}
               </button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
     </div>
