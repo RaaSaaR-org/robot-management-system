@@ -440,7 +440,7 @@ datasetRoutes.get('/:id/stats', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
-// POST /api/datasets/:id/compute-stats - Trigger stats computation (stubbed)
+// POST /api/datasets/:id/compute-stats - Trigger stats computation via NATS
 // ============================================================================
 
 datasetRoutes.post('/:id/compute-stats', async (req: Request, res: Response) => {

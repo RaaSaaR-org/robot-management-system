@@ -230,25 +230,34 @@ export class TrainingOrchestrator extends EventEmitter {
   }
 
   // ============================================================================
-  // GPU AVAILABILITY (STUBBED)
+  // GPU AVAILABILITY
   // ============================================================================
 
   /**
-   * Get GPU availability (stubbed - returns mock data)
-   * In production, this would query cloud provider APIs
+   * Get GPU availability from env config + running job count from DB.
+   * Set GPU_TOTAL_COUNT, GPU_TYPE, GPU_MEMORY_GB in env.
    */
   async getGpuAvailability(): Promise<GpuAvailability> {
-    // Stubbed: Return mock 8x A100 40GB availability
+    const totalCount = parseInt(process.env.GPU_TOTAL_COUNT ?? '1', 10);
+    const gpuType = process.env.GPU_TYPE ?? 'unknown';
+    const gpuMemoryGb = parseFloat(process.env.GPU_MEMORY_GB ?? '0');
+
+    // availableCount = total - running jobs (from DB)
+    const runningJobs = await trainingJobRepository.findRunning();
+    const runningCount = runningJobs.length;
+    const availableCount = Math.max(0, totalCount - runningCount);
+
+    const totalMemoryGb = totalCount * gpuMemoryGb;
+    const availableMemoryGb = availableCount * gpuMemoryGb;
+
     return {
-      totalCount: 8,
-      availableCount: 6,
-      byType: {
-        A100_40GB: { total: 4, available: 3, memoryGb: 40 },
-        A100_80GB: { total: 2, available: 2, memoryGb: 80 },
-        H100: { total: 2, available: 1, memoryGb: 80 },
-      },
-      totalMemoryGb: 440,
-      availableMemoryGb: 340,
+      totalCount,
+      availableCount,
+      byType: gpuType !== 'unknown' ? {
+        [gpuType]: { total: totalCount, available: availableCount, memoryGb: gpuMemoryGb },
+      } : {},
+      totalMemoryGb,
+      availableMemoryGb,
     };
   }
 
