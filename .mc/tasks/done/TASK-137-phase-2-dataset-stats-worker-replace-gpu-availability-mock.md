@@ -4,7 +4,7 @@ aliases:
 - TASK-137
 title: 'Phase 2: Dataset stats worker + replace GPU availability mock'
 slug: phase-2-dataset-stats-worker-replace-gpu-availability-mock
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []

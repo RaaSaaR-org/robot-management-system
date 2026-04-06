@@ -51,6 +51,9 @@ class Config:
     hf_cache_dir: str
     checkpoint_interval_steps: int
 
+    # NATS (for stats worker)
+    nats_servers: str
+
     # Behaviour
     stub_mode: bool  # Phase 1a: fake trainer
     heartbeat_interval_sec: float
@@ -69,6 +72,7 @@ class Config:
             rustfs_secret_key=os.environ.get("RUSTFS_SECRET_KEY", "minioadmin"),
             rustfs_bucket_datasets=os.environ.get("RUSTFS_BUCKET_DATASETS", "datasets"),
             rustfs_bucket_models=os.environ.get("RUSTFS_BUCKET_MODELS", "models"),
+            nats_servers=os.environ.get("NATS_SERVERS", "nats://localhost:4222"),
             device=os.environ.get("TRAINING_DEVICE", "cpu"),
             hf_cache_dir=os.environ.get("HF_CACHE_DIR", str(Path.home() / ".cache" / "neodem-worker")),
             checkpoint_interval_steps=int(os.environ.get("CHECKPOINT_INTERVAL_STEPS", "100")),
