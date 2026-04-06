@@ -60,7 +60,7 @@ else
       (cd "$REPO_ROOT/app" && nohup npm run dev > /tmp/neodem-app.log 2>&1 &)
       for i in {1..15}; do sleep 2; curl -sf http://localhost:1420 >/dev/null 2>&1 && break; done
     fi
-    (cd "$REPO_ROOT/app" && npx playwright test --config playwright-tests/playwright.config.ts 2>/dev/null || npx playwright test playwright-tests/ 2>&1) || { echo "  playwright FAILED"; FAILURES=$((FAILURES + 1)); }
+    (cd "$REPO_ROOT/app" && npx playwright test) || { echo "  playwright FAILED"; FAILURES=$((FAILURES + 1)); }
   else
     echo "  Playwright not configured — skipping"
   fi

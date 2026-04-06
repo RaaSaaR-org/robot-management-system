@@ -4,11 +4,11 @@
  */
 import { test, expect } from '@playwright/test';
 
-const BASE = 'http://localhost:1420';
+// baseURL comes from playwright.config.ts (demo mode uses HashRouter)
 
 test.describe('Datasets page', () => {
   test('lists imported datasets with status badges and frame counts', async ({ page }) => {
-    await page.goto(`${BASE}/datasets`);
+    await page.goto(`/#/datasets`);
     await page.waitForSelector('text=Datasets', { timeout: 10_000 });
 
     // Stats bar should show totals
@@ -30,7 +30,7 @@ test.describe('Datasets page', () => {
   });
 
   test('search filters datasets', async ({ page }) => {
-    await page.goto(`${BASE}/datasets`);
+    await page.goto(`/#/datasets`);
     await page.waitForSelector('text=Datasets', { timeout: 10_000 });
 
     // Type in search

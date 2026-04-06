@@ -4,11 +4,11 @@
  */
 import { test, expect } from '@playwright/test';
 
-const BASE = 'http://localhost:1420';
+// baseURL comes from playwright.config.ts (demo mode uses HashRouter)
 
 test.describe('Training page', () => {
   test('history tab shows completed jobs with loss values', async ({ page }) => {
-    await page.goto(`${BASE}/training`);
+    await page.goto(`/#/training`);
     await page.waitForSelector('text=Training', { timeout: 10_000 });
 
     // Switch to History tab
@@ -25,7 +25,7 @@ test.describe('Training page', () => {
   });
 
   test('new job wizard: dataset → model → hyperparams → submit', async ({ page }) => {
-    await page.goto(`${BASE}/training`);
+    await page.goto(`/#/training`);
     await page.waitForSelector('text=Training', { timeout: 10_000 });
 
     // Open wizard
