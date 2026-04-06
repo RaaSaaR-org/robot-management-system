@@ -49,6 +49,17 @@ class ServerConfig:
     port: int = 8000
     default_task: str = "Pick up the object."
     stub: bool = False
+    # LoRA adapter (s3:// URI, local dir, or .tar.gz). Wraps base with PeftModel.
+    adapter_path: str | None = None
+    # Dataset stats.json for MEAN_STD un-normalization of actions.
+    dataset_stats_path: str | None = None
+    # Override camera feature names + empty camera padding.
+    camera_names: list[str] | None = None
+    empty_cameras: int | None = None
+    # S3/RustFS credentials for s3:// paths.
+    rustfs_endpoint: str | None = None
+    rustfs_access_key: str | None = None
+    rustfs_secret_key: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path = "config.yaml") -> "ServerConfig":
@@ -123,7 +134,17 @@ def create_model(config: ServerConfig) -> VLAModel:
 
     if config.model == "smolvla":
         from models.smolvla import SmolVLAModel
-        return SmolVLAModel(model_path=config.model_path, device=config.device)
+        return SmolVLAModel(
+            model_path=config.model_path,
+            device=config.device,
+            adapter_path=config.adapter_path,
+            dataset_stats_path=config.dataset_stats_path,
+            camera_names_override=config.camera_names,
+            empty_cameras_override=config.empty_cameras,
+            rustfs_endpoint=config.rustfs_endpoint,
+            rustfs_access_key=config.rustfs_access_key,
+            rustfs_secret_key=config.rustfs_secret_key,
+        )
 
     raise ValueError(f"Unknown model: {config.model}")
 

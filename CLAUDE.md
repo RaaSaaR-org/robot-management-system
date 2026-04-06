@@ -81,16 +81,19 @@ cd app && npm run dev
 cd vla-server && python server.py
 ```
 
-### Testing the training pipeline
+### Testing
 
 ```bash
-./training-worker/scripts/test-e2e.sh
+./scripts/test-all.sh              # typecheck + training e2e + playwright
+./scripts/test-all.sh --skip-e2e   # fast: typecheck + playwright only
+./scripts/test-all.sh --skip-pw    # no browser: typecheck + training e2e
+./training-worker/scripts/test-e2e.sh  # training pipeline only
 ```
 
-One-command end-to-end test — starts RustFS + server + worker, imports
-`lerobot/svla_so101_pickplace`, runs a 3-step SmolVLA+LoRA training job,
-uploads the adapter to RustFS. See `docs/training-pipeline-testing.md`
-for prerequisites + troubleshooting.
+`test-all.sh` runs typecheck (server + app), the training pipeline E2E
+(RustFS + server + worker + 3-step SmolVLA+LoRA + VLA adapter loading),
+and Playwright UI tests (training wizard + datasets page).
+See `docs/training-pipeline-testing.md` for prerequisites.
 
 ### Environment Setup
 
