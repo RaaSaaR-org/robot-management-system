@@ -450,21 +450,49 @@ TELEOP_WS_PORT = 8766
 # Home position (all joints centered)
 HOME_POSITION = {name: 0.0 for name in JOINT_NAMES}
 
+TELEOP_STEP_DEG = 5.0   # degrees per tick at 20Hz → 100°/s max speed
+TELEOP_RATE_HZ = 20
+
 async def _keyboard_teleop_handler(websocket):
-    """Handle a single keyboard teleop WebSocket connection."""
+    """Handle a single keyboard teleop WebSocket connection.
+
+    Uses velocity mode: frontend sends {joint, direction: -1/0/1}.
+    A 20Hz loop moves joints continuously while direction != 0.
+    """
     global _teleop_active
     import asyncio
     print("[Sidecar/Teleop] Client connected", flush=True)
     _teleop_active = True
 
-    # Get initial joint state
+    # Get initial joint state — these are the TARGET positions we track
     state = get_state()
-    positions = {j["name"]: j["position"] for j in state.get("joints", [])}
+    targets = {j["name"]: j["position"] for j in state.get("joints", [])}
+
+    # Per-joint velocity: -1, 0, or +1
+    velocity = {name: 0 for name in JOINT_NAMES}
 
     # Send initial state
-    await websocket.send(json.dumps({"type": "state", "positions": positions}))
+    await websocket.send(json.dumps({"type": "state", "positions": targets}))
+
+    loop_task = None
+
+    async def _teleop_loop():
+        """Increment targets at 20Hz for joints with non-zero velocity."""
+        while True:
+            moving = False
+            for name in JOINT_NAMES:
+                if velocity[name] != 0:
+                    targets[name] = targets[name] + velocity[name] * TELEOP_STEP_DEG
+                    moving = True
+            if moving:
+                send_action(targets)
+                await websocket.send(json.dumps({"type": "state", "positions": targets}))
+            await asyncio.sleep(1.0 / TELEOP_RATE_HZ)
 
     try:
+        # Start the continuous movement loop
+        loop_task = asyncio.ensure_future(_teleop_loop())
+
         async for raw in websocket:
             try:
                 msg = json.loads(raw)
@@ -473,28 +501,42 @@ async def _keyboard_teleop_handler(websocket):
 
             if "preset" in msg:
                 if msg["preset"] == "home":
-                    positions = dict(HOME_POSITION)
+                    # Stop all movement and go home
+                    for name in JOINT_NAMES:
+                        velocity[name] = 0
+                    targets.update(HOME_POSITION)
+                    send_action(targets)
+                    await websocket.send(json.dumps({"type": "state", "positions": targets}))
                 elif msg["preset"] == "stop":
-                    pass
+                    # Stop all movement, keep current targets
+                    for name in JOINT_NAMES:
+                        velocity[name] = 0
+            elif "joint" in msg and "direction" in msg:
+                joint = msg["joint"]
+                direction = int(msg["direction"])
+                if joint in velocity:
+                    velocity[joint] = max(-1, min(1, direction))
+                    # When starting to move, sync target from actual position
+                    # to avoid jumps after the arm was moved manually
+                    if direction != 0:
+                        state = get_state()
+                        for j in state.get("joints", []):
+                            if j["name"] == joint:
+                                targets[joint] = j["position"]
+                                break
+            # Legacy delta support (backwards compat with older frontends)
             elif "joint" in msg and "delta" in msg:
                 joint = msg["joint"]
                 delta = float(msg["delta"])
-                # Read actual position first, then apply delta from there
-                # (avoids target runaway when motor can't keep up)
-                state = get_state()
-                for j in state.get("joints", []):
-                    positions[j["name"]] = j["position"]
-                if joint in positions:
-                    positions[joint] = positions[joint] + delta
-
-            send_action(positions)
-
-            await asyncio.sleep(0.1)
-
-            await websocket.send(json.dumps({"type": "state", "positions": positions}))
+                if joint in targets:
+                    targets[joint] = targets[joint] + delta
+                    send_action(targets)
+                    await websocket.send(json.dumps({"type": "state", "positions": targets}))
     except Exception as e:
         print(f"[Sidecar/Teleop] Connection error: {e}", flush=True)
     finally:
+        if loop_task:
+            loop_task.cancel()
         _teleop_active = False
         # Disable torque when teleop ends so arm is free to move manually again
         with robot_lock:
