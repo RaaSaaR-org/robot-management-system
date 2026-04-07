@@ -1,0 +1,32 @@
+# NeoDEM Robot Agent — systemd unit template
+# Copy to /etc/systemd/system/neodem-agent.service and adjust paths.
+#
+# Install:
+#   sudo cp deploy/neodem-agent.service.template /etc/systemd/system/neodem-agent.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now neodem-agent
+
+[Unit]
+Description=NeoDEM Robot Agent
+After=network.target neodem-server.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__/robot-agent
+Environment=PATH=__NODE_BIN__:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+# For default SimBot profile:
+ExecStart=__NODE_BIN__/node node_modules/.bin/tsx --env-file=.env src/index.ts
+# For SO-101 profile:
+# ExecStart=__NODE_BIN__/node node_modules/.bin/tsx --env-file=.env.so101 src/index.ts
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=__INSTALL_DIR__/robot-agent
+
+[Install]
+WantedBy=multi-user.target

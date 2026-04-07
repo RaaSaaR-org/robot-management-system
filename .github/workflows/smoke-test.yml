@@ -1,0 +1,142 @@
+name: Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: neodem
+          POSTGRES_USER: neodem
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U neodem"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      nats:
+        image: nats:2.10-alpine
+        ports:
+          - 4222:4222
+          - 8222:8222
+        options: >-
+          --health-cmd "wget -q --spider http://localhost:8222/healthz || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      minio:
+        image: minio/minio:latest
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Push database schema
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://neodem:test-password@localhost:5432/neodem
+        run: npx prisma db push --skip-generate && npx prisma generate
+
+      - name: Start server
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://neodem:test-password@localhost:5432/neodem
+          JWT_SECRET: smoke-test-secret-at-least-32-characters-long
+          AUTH_DISABLED: 'true'
+          RATE_LIMIT_DISABLED: 'true'
+          NATS_SERVERS: nats://localhost:4222
+          RUSTFS_ENDPOINT: http://localhost:9000
+          RUSTFS_ACCESS_KEY: minioadmin
+          RUSTFS_SECRET_KEY: minioadmin
+          PORT: 3001
+          NODE_ENV: test
+        run: |
+          npx tsx src/index.ts &
+          echo $! > /tmp/server.pid
+          # Wait for server to be ready
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/health > /dev/null 2>&1; then
+              echo "Server is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Smoke test — health endpoint
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w '%{http_code}' http://localhost:3001/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check failed with status $STATUS"
+            exit 1
+          fi
+          echo "Health check passed"
+
+      - name: Smoke test — create dataset
+        run: |
+          RESPONSE=$(curl -sf -X POST http://localhost:3001/api/datasets \
+            -H "Content-Type: application/json" \
+            -d '{"name":"smoke-test-dataset","description":"Automated smoke test","dataType":"episode"}')
+          DATASET_ID=$(echo "$RESPONSE" | jq -r '.id // .dataset.id // empty')
+          if [ -z "$DATASET_ID" ]; then
+            echo "Failed to create dataset. Response: $RESPONSE"
+            exit 1
+          fi
+          echo "Created dataset: $DATASET_ID"
+          echo "DATASET_ID=$DATASET_ID" >> $GITHUB_ENV
+
+      - name: Smoke test — list datasets
+        run: |
+          RESPONSE=$(curl -sf http://localhost:3001/api/datasets)
+          COUNT=$(echo "$RESPONSE" | jq 'if type == "array" then length elif .datasets then (.datasets | length) else 0 end')
+          if [ "$COUNT" -lt 1 ]; then
+            echo "Expected at least 1 dataset, got $COUNT"
+            exit 1
+          fi
+          echo "Listed $COUNT dataset(s)"
+
+      - name: Smoke test — delete dataset
+        if: env.DATASET_ID != ''
+        run: |
+          curl -sf -X DELETE "http://localhost:3001/api/datasets/$DATASET_ID"
+          echo "Deleted dataset: $DATASET_ID"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f /tmp/server.pid ]; then
+            kill $(cat /tmp/server.pid) 2>/dev/null || true
+          fi

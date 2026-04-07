@@ -1,0 +1,32 @@
+# NeoDEM Server — systemd unit template
+# Copy to /etc/systemd/system/neodem-server.service and adjust paths.
+#
+# Install:
+#   sudo cp deploy/neodem-server.service.template /etc/systemd/system/neodem-server.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now neodem-server
+
+[Unit]
+Description=NeoDEM Server (Node.js API)
+After=network.target
+# If running PostgreSQL locally:
+# After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__/server
+EnvironmentFile=__INSTALL_DIR__/server/.env
+Environment=PATH=__NODE_BIN__:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+ExecStart=__NODE_BIN__/node node_modules/.bin/tsx src/index.ts
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=__INSTALL_DIR__/server
+
+[Install]
+WantedBy=multi-user.target
