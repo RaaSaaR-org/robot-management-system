@@ -14,8 +14,10 @@ tags:
 - core
 depends_on: []
 due_date: ''
-created: '2026-04-06'
+created: 2026-04-06
+updated: 2026-04-07
 ---
+
 
 ## Description
 Keyboard Teleop via WebSocket works end-to-end (WS connects, messages arrive, `send_action()` executes, arm moves) but the arm moves too slowly — only ~3-4° per keypress instead of the configured delta (10°).
