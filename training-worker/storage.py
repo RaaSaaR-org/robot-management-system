@@ -1,4 +1,4 @@
-"""S3-compatible (RustFS / MinIO) storage client for datasets and artifacts."""
+"""S3-compatible (RustFS) storage client for datasets and artifacts."""
 
 from __future__ import annotations
 

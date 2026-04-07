@@ -64,3 +64,9 @@ Make NeoDEM easy to deploy to production by validating the existing Helm chart, 
 2. TLS ingress resolves, auth flow works
 3. Runbook walks through each incident scenario with verified commands
 4. GitHub Actions workflow green against a PR
+
+## Completion Notes (PR #112)
+
+**Delivered:** deployment.md rewrite, operations.md, runbook.md (7 incidents), .env.example refresh, docker-compose update, systemd templates, GitHub Actions smoke test.
+
+**Not delivered — moved to TASK-154:** Helm chart validation against real k8s, Kustomize overlays, cert-manager Certificate resource in Helm templates.

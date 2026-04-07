@@ -2,7 +2,7 @@
 """
 HuggingFace dataset push script — called via Node.js child_process.
 
-Reads JSON config from stdin, downloads dataset files from MinIO/RustFS,
+Reads JSON config from stdin, downloads dataset files from RustFS,
 uploads them to HuggingFace Hub, and reports progress/result to stdout.
 """
 
@@ -43,7 +43,7 @@ def main() -> None:
         emit({"success": False, "error": "repoId and token are required"})
         sys.exit(1)
 
-    # RustFS/MinIO connection
+    # RustFS connection
     endpoint = os.environ.get("RUSTFS_ENDPOINT", "http://localhost:9000")
     access_key = os.environ.get("RUSTFS_ACCESS_KEY", "rustfsadmin")
     secret_key = os.environ.get("RUSTFS_SECRET_KEY", "rustfsadmin")
@@ -51,7 +51,7 @@ def main() -> None:
 
     tmp_dir = None
     try:
-        # Step 1: Connect to MinIO and list objects
+        # Step 1: Connect to RustFS and list objects
         progress("connecting", "Connecting to storage...")
         s3 = boto3.client(
             "s3",

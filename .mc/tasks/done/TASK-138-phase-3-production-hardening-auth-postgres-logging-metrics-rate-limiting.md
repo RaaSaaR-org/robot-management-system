@@ -85,3 +85,9 @@ Convert the dev-mode server into something that can safely run in a real environ
 5. `GET /metrics` returns valid Prometheus format
 6. Rate limiter blocks 6th login attempt within a minute
 7. Deployment to robot fails without correct HMAC signature
+
+## Completion Notes (PR #111)
+
+**Delivered:** Rate limiting, structured logging (pino), Prometheus metrics, CSP/CORS headers, worker auth middleware.
+
+**Not delivered — moved to TASK-153:** PostgreSQL migration, robot endpoint HMAC auth, auth-enabled testing, pino-pretty dependency fix.

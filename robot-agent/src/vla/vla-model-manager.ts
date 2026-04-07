@@ -62,7 +62,7 @@ type ModelSwitchEventCallback = (event: ModelSwitchEvent) => void;
  * Manages VLA model versions and switching for fleet deployments
  *
  * In a real implementation, this would:
- * 1. Download model artifacts from storage (RustFS/MinIO)
+ * 1. Download model artifacts from storage (RustFS)
  * 2. Signal the VLA inference server to load the new model
  * 3. Track model version history for rollback support
  *
@@ -146,7 +146,7 @@ export class VLAModelManager extends EventEmitter {
       console.log(`[VLAModelManager] Switching model from ${previousVersion} to ${request.modelVersionId}`);
 
       // In production, this would:
-      // 1. Download model from artifactUri (RustFS/MinIO)
+      // 1. Download model from artifactUri (RustFS)
       // 2. Validate model checksum
       // 3. Signal VLA inference server to load new model
       // 4. Wait for confirmation

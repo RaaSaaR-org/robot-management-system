@@ -196,7 +196,7 @@ The server will log warnings but remain functional. To suppress NATS-dependent f
 
 ---
 
-## INC-4: RustFS (MinIO) Outage
+## INC-4: RustFS Outage
 
 **Symptoms:** Dataset uploads failing, model downloads failing, "S3 connection refused" errors.
 

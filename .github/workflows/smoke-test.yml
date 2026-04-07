@@ -39,15 +39,15 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      minio:
-        image: minio/minio:latest
+      rustfs:
+        image: rustfs/rustfs:latest
         ports:
           - 9000:9000
         env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
+          RUSTFS_ROOT_USER: rustfsadmin
+          RUSTFS_ROOT_PASSWORD: rustfsadmin
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-cmd "curl -sf http://localhost:9000/ || exit 1"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -80,8 +80,8 @@ jobs:
           RATE_LIMIT_DISABLED: 'true'
           NATS_SERVERS: nats://localhost:4222
           RUSTFS_ENDPOINT: http://localhost:9000
-          RUSTFS_ACCESS_KEY: minioadmin
-          RUSTFS_SECRET_KEY: minioadmin
+          RUSTFS_ACCESS_KEY: rustfsadmin
+          RUSTFS_SECRET_KEY: rustfsadmin
           PORT: 3001
           NODE_ENV: test
         run: |

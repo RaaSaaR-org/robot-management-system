@@ -285,8 +285,8 @@ helm install neodem helm/neodem \
   -f helm/neodem/values-local.yaml \
   --set postgres.auth.password=mypassword \
   --set secrets.jwtSecret=my-jwt-secret-32-chars-min \
-  --set rustfs.auth.accessKey=minio-key \
-  --set rustfs.auth.secretKey=minio-secret
+  --set rustfs.auth.accessKey=your-access-key \
+  --set rustfs.auth.secretKey=your-secret-key
 ```
 
 ### Building Container Images

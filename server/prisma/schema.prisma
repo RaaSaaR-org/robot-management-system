@@ -1833,7 +1833,7 @@ model Dataset {
   description        String?
   robotTypeId        String
   skillId            String?
-  storagePath        String   // MinIO location
+  storagePath        String   // RustFS storage location
   lerobotVersion     String   // LeRobot v3 format version
   fps                Int
   totalFrames        Int
@@ -1895,7 +1895,7 @@ model ModelVersion {
   skillId            String?  // Optional — models can be linked to a skill later
   trainingJobId      String
   version            String   // Semantic version string
-  artifactUri        String   // MinIO model location
+  artifactUri        String   // RustFS model location
   checkpointUri      String?  // Intermediate checkpoints location
   trainingMetrics    String   @default("{}") // JSON: training metrics
   validationMetrics  String   @default("{}") // JSON: validation metrics
