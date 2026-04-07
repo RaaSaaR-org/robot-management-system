@@ -1,98 +1,202 @@
 # NeoDEM — Deployment Guide
 
-> *"Free your mind."* — Morpheus
-
-This guide covers deploying NeoDEM to Docker and Kubernetes environments.
+This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (single-node dev/test), **Docker Compose** (local full-stack), and **Kubernetes** (production via Helm).
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Docker Compose (Local Development)](#docker-compose-local-development)
-- [Services Overview](#services-overview)
-- [Kubernetes Deployment](#kubernetes-deployment)
-  - [Local (minikube/kind)](#local-minikubekind)
-  - [Production (Self-hosted Cluster)](#production-self-hosted-cluster)
-- [Configuration Reference](#configuration-reference)
+- [Architecture Overview](#architecture-overview)
+- [Raspberry Pi Setup (systemd)](#raspberry-pi-setup-systemd)
+- [Docker Compose](#docker-compose)
+- [Kubernetes (Helm)](#kubernetes-helm)
+- [Environment Variables Reference](#environment-variables-reference)
+- [PostgreSQL Migration (SQLite → PostgreSQL)](#postgresql-migration)
+- [TLS / HTTPS](#tls--https)
 - [Troubleshooting](#troubleshooting)
 
 ---
 
-## Prerequisites
+## Architecture Overview
 
-### For Docker Compose
-- Docker 20.10+
-- Docker Compose v2.0+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Ingress / Reverse Proxy                     │
+└────────────────┬──────────────────────┬─────────────────────────────┘
+                 │                      │
+         ┌───────▼───────┐      ┌───────▼───────┐
+         │     App       │      │    Server     │◄──────────┐
+         │  (React/Vite) │      │  (Node.js)    │           │
+         │  Port 1420/80 │      │  Port 3001    │           │
+         └───────────────┘      └───────┬───────┘           │
+                                        │                   │
+          ┌──────────┬──────────────────┼───────────────────┤
+          │          │                  │                    │
+          ▼          ▼                  ▼                    ▼
+   ┌──────────┐ ┌──────────┐   ┌──────────────┐   ┌──────────────┐
+   │   NATS   │ │ Postgres │   │ Robot Agent   │   │  VLA Server  │
+   │ JetStream│ │ / SQLite │   │ A2A Protocol  │   │   FastAPI    │
+   │ 4222     │ │   5432   │   │   41245       │   │    8000      │
+   └──────────┘ └──────────┘   └───────┬───────┘   └──────────────┘
+        │                              │
+        ▼                              ▼
+   ┌──────────┐                ┌──────────────┐
+   │  RustFS  │                │ HW Sidecar   │
+   │ S3 Store │                │ (SO-101)     │
+   │ 9000     │                │  8765        │
+   └──────────┘                └──────────────┘
+```
 
-### For Kubernetes
-- kubectl configured for your cluster
-- Helm 3.0+
-- Kubernetes 1.24+
-- Ingress controller (nginx-ingress recommended)
-
-### Required API Keys (Optional but Recommended)
-- `GOOGLE_API_KEY` - For server AI features
-- `GEMINI_API_KEY` - For robot agent AI
+| Component | Port | Description |
+|-----------|------|-------------|
+| **App** | 1420 (dev) / 80 (prod) | React + Tauri frontend |
+| **Server** | 3001 | Node.js API, WebSocket, Prisma ORM |
+| **Robot Agent** | 41245 | AI-powered robot agent (A2A protocol) |
+| **VLA Server** | 8000 | FastAPI VLA inference (SmolVLA, Pi0.5, GR00T) |
+| **Hardware Sidecar** | 8765 | HTTP → LeRobot SO-101 (servos, camera) |
+| **NATS** | 4222 / 8222 | JetStream message queue (optional) |
+| **PostgreSQL** | 5432 | Production database (SQLite for dev) |
+| **RustFS** | 9000 / 9001 | S3-compatible object storage (optional) |
+| **MLflow** | 5000 | Model registry (optional) |
 
 ---
 
-## Quick Start
+## Raspberry Pi Setup (systemd)
 
-### Docker Compose (Fastest)
+This is the setup used on the NeoDEM reference platform (Raspberry Pi 5, Debian 12 aarch64).
+
+### Prerequisites
+
+- Raspberry Pi 5 (4GB+ RAM recommended)
+- Node.js 22+ (`nvm install 22`)
+- Python 3.12+ (for VLA server / hardware sidecar)
+- Git, build-essential
+
+### 1. Clone and Install
 
 ```bash
-# Clone and navigate to project
+cd ~/develop
+git clone https://github.com/RaaSaaR-org/robot-management-system.git
 cd robot-management-system
 
-# Start all services
-docker-compose up -d --build
-
-# Check status
-docker-compose ps
-
-# View logs
-docker-compose logs -f
-
-# Access the app
-open http://localhost
+# Install dependencies
+cd server && npm install && cd ..
+cd robot-agent && npm install && cd ..
+cd app && npm install && cd ..
 ```
 
-### Kubernetes (Helm)
+### 2. Configure Environment
 
 ```bash
-# Install with Helm
-helm install neodem helm/neodem \
-  -f helm/neodem/values-local.yaml \
-  --set postgres.auth.password=mypassword \
-  --set secrets.jwtSecret=my-jwt-secret \
-  --set rustfs.auth.accessKey=minio-key \
-  --set rustfs.auth.secretKey=minio-secret
+# Server — SQLite for local dev
+cp server/.env.example server/.env
+# Edit server/.env:
+#   DATABASE_URL="file:./dev.db"
+#   AUTH_DISABLED=true
+#   RATE_LIMIT_DISABLED=true
 
-# Check pods
-kubectl get pods -n neodem
+# Robot Agent
+cp robot-agent/.env.example robot-agent/.env
+# Edit robot-agent/.env:
+#   GEMINI_API_KEY=your-key
+#   SERVER_URL=http://localhost:3001
 ```
 
+### 3. Initialize Database
+
+```bash
+cd server
+npx prisma db push
+cd ..
+```
+
+### 4. Create systemd Services
+
+Create these unit files in `/etc/systemd/system/`:
+
+**neodem-server.service:**
+```ini
+[Unit]
+Description=NeoDEM Server
+After=network.target
+
+[Service]
+Type=simple
+User=mindcube
+WorkingDirectory=/home/mindcube/develop/robot-management-system/server
+EnvironmentFile=/home/mindcube/develop/robot-management-system/server/.env
+Environment=PATH=/home/mindcube/.nvm/versions/node/v22.17.1/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=development
+ExecStart=/home/mindcube/.nvm/versions/node/v22.17.1/bin/node node_modules/.bin/tsx src/index.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**neodem-agent.service:**
+```ini
+[Unit]
+Description=NeoDEM Robot Agent (SO-101)
+After=network.target neodem-server.service
+
+[Service]
+Type=simple
+User=mindcube
+WorkingDirectory=/home/mindcube/develop/robot-management-system/robot-agent
+Environment=PATH=/home/mindcube/.nvm/versions/node/v22.17.1/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=development
+ExecStart=/home/mindcube/.nvm/versions/node/v22.17.1/bin/node node_modules/.bin/tsx --env-file=.env.so101 src/index.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**neodem-app.service:**
+```ini
+[Unit]
+Description=NeoDEM App (Vite dev server)
+After=network.target
+
+[Service]
+Type=simple
+User=mindcube
+WorkingDirectory=/home/mindcube/develop/robot-management-system/app
+Environment=PATH=/home/mindcube/.nvm/versions/node/v22.17.1/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/mindcube/.nvm/versions/node/v22.17.1/bin/node node_modules/.bin/vite --host 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 5. Enable and Start
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable neodem-server neodem-agent neodem-app
+sudo systemctl start neodem-server
+sudo systemctl start neodem-agent
+sudo systemctl start neodem-app
+
+# Verify
+sudo systemctl status neodem-server neodem-agent neodem-app
+```
+
+### 6. Access
+
+| Service | URL |
+|---------|-----|
+| App | `http://<pi-ip>:1420` |
+| Server API | `http://<pi-ip>:3001` |
+| Server Health | `http://<pi-ip>:3001/health` |
+| Robot Agent | `http://<pi-ip>:41245` |
+
 ---
 
-## Services Overview
-
-NeoDEM consists of 9 services in Docker Compose:
-
-| Service | Port(s) | Description |
-|---------|---------|-------------|
-| **App** | 80 | React frontend (nginx) |
-| **Server** | 3001 | Node.js API server |
-| **Robot Agent** | 41243 | Simulated robot with AI |
-| **PostgreSQL** | 5432 | Primary database |
-| **NATS** | 4222, 8222 | Message queue (JetStream) |
-| **RustFS** | 9000, 9001 | S3-compatible object storage |
-| **MLflow** | 5000 | Model registry & tracking |
-| **VLA Server** | 8000 | Vision-Language-Action model server |
-| **RustFS-Init** | - | Bucket initialization (one-shot) |
-
----
-
-## Docker Compose (Local Development)
+## Docker Compose
 
 ### 1. Environment Setup
 
@@ -103,15 +207,15 @@ Create a `.env` file in the project root:
 POSTGRES_PASSWORD=your-secure-password
 JWT_SECRET=your-jwt-secret-min-32-chars
 
-# Optional - AI Features
+# Optional — AI Features
 GOOGLE_API_KEY=your-google-api-key
 GEMINI_API_KEY=your-gemini-api-key
 
-# Optional - Object Storage
+# Optional — Object Storage
 RUSTFS_ACCESS_KEY=rustfsadmin
 RUSTFS_SECRET_KEY=rustfsadmin
 
-# Optional - Customization
+# Optional — Dev overrides
 AUTH_DISABLED=true
 ROBOT_ID=sim-robot-001
 ROBOT_NAME=SimBot-01
@@ -127,184 +231,87 @@ docker-compose up -d --build
 docker-compose up -d nats postgres rustfs
 docker-compose up -d mlflow
 docker-compose up -d server
-docker-compose up -d app robot-agent vla-inference
+docker-compose up -d app robot-agent vla-server
 ```
 
-### 3. Verify Deployment
+### 3. Verify
 
 ```bash
-# Check all services are running
 docker-compose ps
-
-# Check health endpoints
 curl http://localhost:3001/health      # Server
-curl http://localhost/                 # App
+curl http://localhost/                 # App (nginx, port 80)
 curl http://localhost:41243/health     # Robot Agent
 curl http://localhost:8222/healthz     # NATS
-curl http://localhost:5000/health      # MLflow
-
-# View logs
-docker-compose logs -f server
-docker-compose logs -f nats
 ```
 
-### 4. Access Services
+### 4. Service URLs
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| **App (Frontend)** | http://localhost | Main web application |
-| **Server (API)** | http://localhost:3001 | REST API + WebSocket |
-| **Server Health** | http://localhost:3001/health | Health check endpoint |
-| **Robot Agent** | http://localhost:41243 | Robot A2A endpoint |
-| **NATS Monitoring** | http://localhost:8222 | NATS server monitoring |
-| **RustFS Console** | http://localhost:9001 | S3 storage web console |
-| **RustFS S3 API** | http://localhost:9000 | S3-compatible API |
-| **MLflow UI** | http://localhost:5000 | Model tracking dashboard |
-| **VLA Server** | http://localhost:8000 | VLA inference HTTP |
-| **PostgreSQL** | localhost:5432 | Database (user: neodem) |
+| Service | URL |
+|---------|-----|
+| App (Frontend) | http://localhost |
+| Server API | http://localhost:3001 |
+| Robot Agent | http://localhost:41243 |
+| NATS Monitoring | http://localhost:8222 |
+| RustFS Console | http://localhost:9001 |
+| RustFS S3 API | http://localhost:9000 |
+| MLflow UI | http://localhost:5000 |
+| VLA Server | http://localhost:8000 |
+| PostgreSQL | localhost:5432 (user: neodem) |
 
-### 5. Test Service Connectivity
-
-```bash
-# Test NATS
-curl http://localhost:8222/varz
-
-# Test RustFS (list buckets)
-AWS_ACCESS_KEY_ID=rustfsadmin \
-AWS_SECRET_ACCESS_KEY=rustfsadmin \
-aws --endpoint-url http://localhost:9000 s3 ls
-
-# Test MLflow
-curl http://localhost:5000/api/2.0/mlflow/experiments/list
-
-# Test VLA Server
-curl http://localhost:8000/health
-```
-
-### 6. Stop Services
+### 5. Stop
 
 ```bash
-# Stop all services
-docker-compose down
-
-# Stop and remove volumes (fresh start)
-docker-compose down -v
+docker-compose down        # Stop services
+docker-compose down -v     # Stop + remove volumes (fresh start)
 ```
 
 ---
 
-## Kubernetes Deployment
+## Kubernetes (Helm)
+
+The Helm chart is in `helm/neodem/` with 30 resource templates.
+
+### Prerequisites
+
+- kubectl configured for your cluster
+- Helm 3.0+
+- Kubernetes 1.24+
+- Ingress controller (nginx-ingress recommended)
+
+### Quick Start
+
+```bash
+helm install neodem helm/neodem \
+  -f helm/neodem/values-local.yaml \
+  --set postgres.auth.password=mypassword \
+  --set secrets.jwtSecret=my-jwt-secret-32-chars-min \
+  --set rustfs.auth.accessKey=minio-key \
+  --set rustfs.auth.secretKey=minio-secret
+```
 
 ### Building Container Images
 
-Before deploying to Kubernetes, build and push your images:
-
 ```bash
-# Build images
 docker-compose build
 
-# Tag for your registry
+# Tag and push
 docker tag neodem/server:latest your-registry/neodem/server:v1.0.0
 docker tag neodem/app:latest your-registry/neodem/app:v1.0.0
 docker tag neodem/robot-agent:latest your-registry/neodem/robot-agent:v1.0.0
 
-# Push to registry
 docker push your-registry/neodem/server:v1.0.0
 docker push your-registry/neodem/app:v1.0.0
 docker push your-registry/neodem/robot-agent:v1.0.0
 ```
 
-### Local (minikube/kind)
+### Production Deployment
 
-#### 1. Start Local Cluster
-
-```bash
-# Using minikube
-minikube start
-minikube addons enable ingress
-
-# Or using kind
-kind create cluster
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-```
-
-#### 2. Load Images (for local images)
-
-```bash
-# For minikube
-eval $(minikube docker-env)
-docker-compose build
-
-# For kind
-kind load docker-image neodem/server:latest
-kind load docker-image neodem/app:latest
-kind load docker-image neodem/robot-agent:latest
-```
-
-#### 3. Install with Helm
-
-```bash
-helm install neodem helm/neodem \
-  -f helm/neodem/values-local.yaml \
-  --set postgres.auth.password=localpassword \
-  --set secrets.jwtSecret=local-dev-secret-32-chars-min
-```
-
-#### 4. Setup Local DNS
-
-Add to `/etc/hosts`:
-```
-127.0.0.1 neodem.local
-```
-
-For minikube, use minikube IP:
-```bash
-echo "$(minikube ip) neodem.local" | sudo tee -a /etc/hosts
-```
-
-#### 5. Access the Application
-
-```bash
-# With ingress
-open http://neodem.local
-
-# Or via port-forward
-kubectl port-forward -n neodem svc/neodem-app 8080:80
-open http://localhost:8080
-```
-
-### Production (Self-hosted Cluster)
-
-#### 1. Update Values
-
-Edit `helm/neodem/values-production.yaml`:
-
-```yaml
-ingress:
-  host: neodem.yourdomain.com  # Your actual domain
-  tls: true
-  tlsSecretName: neodem-tls
-
-server:
-  image:
-    repository: your-registry/neodem/server
-    tag: v1.0.0
-
-app:
-  image:
-    repository: your-registry/neodem/app
-    tag: v1.0.0
-```
-
-#### 2. Create Namespace
+#### 1. Create Namespace and Secrets
 
 ```bash
 kubectl create namespace neodem
-```
 
-#### 3. Setup Image Pull Secrets (if using private registry)
-
-```bash
+# Private registry (if needed)
 kubectl create secret docker-registry regcred \
   --namespace neodem \
   --docker-server=your-registry.com \
@@ -312,14 +319,32 @@ kubectl create secret docker-registry regcred \
   --docker-password=your-password
 ```
 
-Then add to `values-production.yaml`:
+#### 2. Configure Values
+
+Edit `helm/neodem/values-production.yaml`:
+
 ```yaml
-global:
-  imagePullSecrets:
-    - name: regcred
+ingress:
+  host: neodem.yourdomain.com
+  tls: true
+  tlsSecretName: neodem-tls
+
+server:
+  image:
+    repository: your-registry/neodem/server
+    tag: v1.0.0
+  env:
+    CORS_ORIGINS: "https://neodem.yourdomain.com"
+    RATE_LIMIT_DISABLED: "false"
+    NODE_ENV: "production"
+
+app:
+  image:
+    repository: your-registry/neodem/app
+    tag: v1.0.0
 ```
 
-#### 4. Install with Helm
+#### 3. Install
 
 ```bash
 helm install neodem helm/neodem \
@@ -330,15 +355,144 @@ helm install neodem helm/neodem \
   --set secrets.geminiApiKey=$GEMINI_API_KEY
 ```
 
-#### 5. Setup TLS (with cert-manager)
+#### 4. Verify
 
-If using cert-manager for automatic TLS:
+```bash
+kubectl get pods -n neodem
+kubectl get svc -n neodem
+kubectl get ingress -n neodem
+kubectl logs -f deployment/neodem-server -n neodem
+```
+
+### Helm Values Reference
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `global.namespace` | Kubernetes namespace | `neodem` |
+| `postgres.enabled` | Deploy PostgreSQL | `true` |
+| `postgres.storage` | PVC storage size | `10Gi` |
+| `postgres.auth.password` | Database password | `""` (required) |
+| `server.replicaCount` | Server replicas | `2` |
+| `server.env.AUTH_DISABLED` | Disable auth | `"false"` |
+| `server.env.RATE_LIMIT_DISABLED` | Disable rate limits | `"false"` |
+| `app.replicaCount` | App replicas | `2` |
+| `robotAgent.enabled` | Deploy robot agent | `true` |
+| `ingress.enabled` | Enable ingress | `true` |
+| `ingress.host` | Ingress hostname | `neodem.local` |
+| `ingress.tls` | Enable TLS | `false` |
+| `secrets.jwtSecret` | JWT signing secret | `""` (required) |
+| `secrets.googleApiKey` | Google API key | `""` |
+| `secrets.geminiApiKey` | Gemini API key | `""` |
+
+---
+
+## Environment Variables Reference
+
+### Server (`server/.env`)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | Yes | `file:./dev.db` | Database connection string |
+| `JWT_SECRET` | Prod | `dev-secret-...` | JWT signing secret (32+ chars) |
+| `JWT_ACCESS_EXPIRES` | No | `15m` | Access token TTL |
+| `JWT_REFRESH_EXPIRES` | No | `7d` | Refresh token TTL |
+| `AUTH_DISABLED` | No | `false` | Disable authentication (dev only) |
+| `CORS_ORIGINS` | No | localhost ports | Comma-separated allowed origins |
+| `RATE_LIMIT_DISABLED` | No | `false` | Disable rate limiting (dev only) |
+| `GOOGLE_API_KEY` | No | — | Google/Gemini API key for NL commands |
+| `WORKER_API_TOKEN` | Prod | — | Shared token for GPU worker auth |
+| `NATS_SERVERS` | No | `nats://localhost:4222` | NATS connection URL |
+| `NATS_USER` | No | — | NATS auth user |
+| `NATS_PASS` | No | — | NATS auth password |
+| `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint |
+| `RUSTFS_ACCESS_KEY` | No | `rustfsadmin` | S3 access key |
+| `RUSTFS_SECRET_KEY` | No | `rustfsadmin` | S3 secret key |
+| `GPU_TOTAL_COUNT` | No | `1` | GPU count for training orchestrator |
+| `GPU_TYPE` | No | `unknown` | GPU type identifier |
+| `GPU_MEMORY_GB` | No | `0` | GPU memory in GB |
+| `MLFLOW_TRACKING_URI` | No | `http://localhost:5000` | MLflow endpoint |
+| `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
+| `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
+| `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |
+| `PUBLIC_URL` | No | — | Server's public URL for agent discovery |
+
+### Robot Agent (`robot-agent/.env`)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GEMINI_API_KEY` | Yes | — | Gemini API key for AI reasoning |
+| `PORT` | No | `41243` | Agent HTTP port |
+| `SERVER_URL` | No | `http://localhost:3001` | Server URL for registration |
+| `PUBLIC_URL` | No | `http://localhost:41243` | Agent's public URL |
+| `ROBOT_ID` | No | `sim-robot-001` | Unique robot identifier |
+| `ROBOT_NAME` | No | `SimBot-01` | Display name |
+| `ROBOT_MODEL` | No | `SimBot H1` | Robot model name |
+| `ROBOT_CLASS` | No | `standard` | `lightweight`, `standard`, `heavy-duty` |
+| `MAX_PAYLOAD_KG` | No | `10` | Max payload in kg |
+| `LLM_PROVIDER` | No | `gemini` | `gemini` or `openrouter` |
+| `OPENROUTER_API_KEY` | No | — | OpenRouter API key (alternative) |
+| `LLM_MODEL` | No | — | Override default LLM model |
+
+### App (`app/.env`)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `VITE_API_BASE_URL` | No | `http://localhost:3001/api` | Server API URL |
+| `VITE_WS_URL` | No | — | WebSocket URL override |
+| `VITE_A2A_SERVER_URL` | No | — | A2A server URL override |
+
+---
+
+## PostgreSQL Migration
+
+To migrate from SQLite (dev) to PostgreSQL (production):
+
+### 1. Set Up PostgreSQL
+
+```bash
+# Docker (quickest)
+docker run -d --name neodem-postgres \
+  -e POSTGRES_DB=neodem \
+  -e POSTGRES_USER=neodem \
+  -e POSTGRES_PASSWORD=your-secure-password \
+  -p 5432:5432 \
+  postgres:16-alpine
+```
+
+### 2. Update Server Config
+
+```bash
+# server/.env
+DATABASE_URL="postgresql://neodem:your-secure-password@localhost:5432/neodem"
+```
+
+### 3. Push Schema
+
+```bash
+cd server
+npx prisma db push
+```
+
+The Prisma schema already uses `provider = "postgresql"`. For SQLite dev, this provider can be overridden, but the canonical schema targets PostgreSQL.
+
+### 4. Seed Data (Optional)
+
+```bash
+cd server
+npx prisma db seed
+```
+
+---
+
+## TLS / HTTPS
+
+### With cert-manager (Kubernetes)
 
 ```bash
 # Install cert-manager
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
 
-# Create ClusterIssuer for Let's Encrypt
+# Create ClusterIssuer
 kubectl apply -f - <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -357,203 +511,86 @@ spec:
 EOF
 ```
 
-#### 6. Verify Deployment
-
-```bash
-# Check pods
-kubectl get pods -n neodem
-
-# Check services
-kubectl get svc -n neodem
-
-# Check ingress
-kubectl get ingress -n neodem
-
-# Check logs
-kubectl logs -f deployment/neodem-server -n neodem
+Then set in `values-production.yaml`:
+```yaml
+ingress:
+  tls: true
+  tlsSecretName: neodem-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 ```
 
----
+### With Caddy (Raspberry Pi / bare-metal)
 
-## Configuration Reference
+```bash
+# Install Caddy
+sudo apt install caddy
 
-### Helm Values
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `global.namespace` | Kubernetes namespace | `neodem` |
-| `global.imageRegistry` | Image registry prefix | `""` |
-| `postgres.enabled` | Deploy PostgreSQL | `true` |
-| `postgres.storage` | PVC storage size | `10Gi` |
-| `postgres.auth.password` | Database password | `""` (required) |
-| `server.replicaCount` | Server replicas | `2` |
-| `server.env.AUTH_DISABLED` | Disable auth | `"false"` |
-| `app.replicaCount` | App replicas | `2` |
-| `robotAgent.enabled` | Deploy robot agent | `true` |
-| `ingress.enabled` | Enable ingress | `true` |
-| `ingress.host` | Ingress hostname | `neodem.local` |
-| `ingress.tls` | Enable TLS | `false` |
-| `secrets.jwtSecret` | JWT signing secret | `""` (required) |
-| `secrets.googleApiKey` | Google API key | `""` |
-| `secrets.geminiApiKey` | Gemini API key | `""` |
-
-### Environment Variables
-
-| Variable | Component | Description |
-|----------|-----------|-------------|
-| `DATABASE_URL` | Server | PostgreSQL connection string |
-| `JWT_SECRET` | Server | JWT signing secret |
-| `AUTH_DISABLED` | Server | Disable authentication |
-| `GOOGLE_API_KEY` | Server | Google AI API key |
-| `PUBLIC_URL` | Server, Robot | Public URL for agent discovery |
-| `GEMINI_API_KEY` | Robot | Gemini API key |
-| `SERVER_URL` | Robot | Server URL for registration |
-| `ROBOT_ID` | Robot | Unique robot identifier |
-| `ROBOT_NAME` | Robot | Display name |
+# /etc/caddy/Caddyfile
+neodem.yourdomain.com {
+    handle /api/* {
+        reverse_proxy localhost:3001
+    }
+    handle /ws/* {
+        reverse_proxy localhost:3001
+    }
+    handle {
+        reverse_proxy localhost:1420
+    }
+}
+```
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-#### Pods not starting
+### systemd Services Not Starting
 
 ```bash
-# Check pod status
+sudo journalctl -u neodem-server -f     # Live logs
+sudo systemctl status neodem-server      # Status + last error
+```
+
+Common causes:
+- Wrong Node.js path — check `which node` and update the `ExecStart` path
+- Missing `.env` file — ensure `EnvironmentFile` path is correct
+- Port conflict — check `ss -tlnp | grep 3001`
+
+### Docker: Container Restarting
+
+```bash
+docker-compose logs -f server    # Check crash logs
+docker-compose ps                # Check health status
+```
+
+### Kubernetes: Pods Not Starting
+
+```bash
 kubectl describe pod <pod-name> -n neodem
-
-# Check events
 kubectl get events -n neodem --sort-by='.lastTimestamp'
+kubectl logs -f deployment/neodem-server -n neodem
 ```
 
-#### Database connection errors
+### Database Connection Issues
 
 ```bash
-# Check PostgreSQL is running
-kubectl get pods -n neodem | grep postgres
+# SQLite — check file exists
+ls -la server/prisma/dev.db
 
-# Check PostgreSQL logs
-kubectl logs deployment/neodem-postgres -n neodem
+# PostgreSQL — test connection
+psql postgresql://neodem:pass@localhost:5432/neodem -c "SELECT 1"
 
-# Verify secret exists
-kubectl get secret neodem-secrets -n neodem -o yaml
+# Re-push schema
+cd server && npx prisma db push
 ```
 
-#### Ingress not working
+### Health Endpoints
+
+All services expose health checks:
 
 ```bash
-# Check ingress controller
-kubectl get pods -n ingress-nginx
-
-# Check ingress resource
-kubectl describe ingress neodem-ingress -n neodem
-
-# Check if services are accessible
-kubectl port-forward -n neodem svc/neodem-app 8080:80
+curl http://localhost:3001/health     # Server
+curl http://localhost:41245/health    # Robot Agent
+curl http://localhost:8000/health     # VLA Server
+curl http://localhost:8222/healthz    # NATS
 ```
-
-#### Image pull errors
-
-```bash
-# Check image pull secrets
-kubectl get secret -n neodem
-
-# Verify image exists
-docker pull your-registry/neodem/server:v1.0.0
-```
-
-### Useful Commands
-
-```bash
-# View all resources
-kubectl get all -n neodem
-
-# Watch pod status
-kubectl get pods -n neodem -w
-
-# Execute into pod
-kubectl exec -it deployment/neodem-server -n neodem -- sh
-
-# Port forward for debugging
-kubectl port-forward -n neodem svc/neodem-server 3001:3001
-
-# View Helm release
-helm list
-helm status neodem
-
-# Upgrade deployment
-helm upgrade neodem helm/neodem -f helm/neodem/values-production.yaml
-
-# Rollback
-helm rollback neodem 1
-
-# Uninstall
-helm uninstall neodem
-```
-
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              Ingress                                     │
-│                          (nginx-ingress)                                 │
-└─────────────────────────────┬───────────────────────────────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              │                               │
-              ▼                               ▼
-      ┌───────────────┐               ┌───────────────┐
-      │     App       │               │    Server     │◄────────┐
-      │   (nginx)     │               │  (Node.js)    │         │
-      │   Port: 80    │               │  Port: 3001   │         │
-      └───────────────┘               └───────┬───────┘         │
-                                              │                 │
-          ┌───────────────┬───────────────────┼─────────────────┤
-          │               │                   │                 │
-          ▼               ▼                   ▼                 ▼
-  ┌───────────────┐ ┌───────────┐   ┌───────────────┐  ┌───────────────┐
-  │     NATS      │ │ PostgreSQL│   │  Robot Agent  │  │  VLA Server   │
-  │  JetStream    │ │   + MLflow│   │  A2A Protocol │  │   FastAPI     │
-  │ 4222 / 8222   │ │    5432   │   │    41243      │  │    8000       │
-  └───────────────┘ └───────────┘   └───────────────┘  └───────────────┘
-          │                                 │
-          │         ┌───────────────────────┘
-          │         │
-          ▼         ▼
-  ┌─────────────────────┐     ┌───────────────┐
-  │      RustFS         │     │    MLflow     │
-  │  S3-Compatible      │◄────│   Tracking    │
-  │   9000 / 9001       │     │     5000      │
-  └─────────────────────┘     └───────────────┘
-```
-
-**Service Dependencies:**
-- Server → PostgreSQL, NATS, RustFS, MLflow
-- MLflow → PostgreSQL, RustFS
-- Robot Agent → Server (for registration)
-- VLA Inference → Standalone (can connect to Server)
-
----
-
-## Next Steps
-
-1. **Production Checklist**
-   - [ ] Set strong passwords and secrets
-   - [ ] Configure TLS/HTTPS
-   - [ ] Set up monitoring (Prometheus/Grafana)
-   - [ ] Configure backup for PostgreSQL
-   - [ ] Set up logging (ELK/Loki)
-   - [ ] Configure resource limits appropriately
-
-2. **Scaling**
-   - Increase replica counts for high availability
-   - Consider external PostgreSQL (RDS, Cloud SQL)
-   - Add Redis for session management
-
-3. **Monitoring**
-   - Deploy Prometheus for metrics
-   - Deploy Grafana for dashboards
-   - Set up alerting
