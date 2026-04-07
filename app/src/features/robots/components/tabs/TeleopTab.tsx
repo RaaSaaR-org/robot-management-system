@@ -26,20 +26,20 @@ const JOINT_LABELS: Record<string, string> = {
   gripper: 'Gripper',
 };
 
-/** Key bindings: key → { joint, delta } */
-const KEY_BINDINGS: Record<string, { joint: string; delta: number }> = {
-  w: { joint: 'shoulder_lift', delta: 10 },
-  s: { joint: 'shoulder_lift', delta: -10 },
-  a: { joint: 'shoulder_pan', delta: -10 },
-  d: { joint: 'shoulder_pan', delta: 10 },
-  q: { joint: 'elbow_flex', delta: 10 },
-  e: { joint: 'elbow_flex', delta: -10 },
-  z: { joint: 'wrist_flex', delta: 10 },
-  x: { joint: 'wrist_flex', delta: -10 },
-  ArrowUp: { joint: 'wrist_roll', delta: 10 },
-  ArrowDown: { joint: 'wrist_roll', delta: -10 },
-  o: { joint: 'gripper', delta: 15 },
-  c: { joint: 'gripper', delta: -15 },
+/** Key bindings: key → { joint, direction (+1 or -1) } */
+const KEY_BINDINGS: Record<string, { joint: string; direction: 1 | -1 }> = {
+  w: { joint: 'shoulder_lift', direction: 1 },
+  s: { joint: 'shoulder_lift', direction: -1 },
+  a: { joint: 'shoulder_pan', direction: -1 },
+  d: { joint: 'shoulder_pan', direction: 1 },
+  q: { joint: 'elbow_flex', direction: 1 },
+  e: { joint: 'elbow_flex', direction: -1 },
+  z: { joint: 'wrist_flex', direction: 1 },
+  x: { joint: 'wrist_flex', direction: -1 },
+  ArrowUp: { joint: 'wrist_roll', direction: 1 },
+  ArrowDown: { joint: 'wrist_roll', direction: -1 },
+  o: { joint: 'gripper', direction: 1 },
+  c: { joint: 'gripper', direction: -1 },
 };
 
 const KEY_DISPLAY: Array<{ keys: string; label: string }> = [
@@ -124,6 +124,8 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore if typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      // Ignore key repeat — we only need the initial press
+      if (e.repeat) return;
 
       const key = e.key;
       setActiveKeys(prev => new Set(prev).add(key.toLowerCase()));
@@ -141,17 +143,27 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 
       const binding = KEY_BINDINGS[key] || KEY_BINDINGS[key.toLowerCase()];
       if (binding) {
-        wsRef.current?.send(JSON.stringify({ joint: binding.joint, delta: binding.delta }));
+        wsRef.current?.send(JSON.stringify({ joint: binding.joint, direction: binding.direction }));
         e.preventDefault();
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      // Ignore if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
       setActiveKeys(prev => {
         const next = new Set(prev);
         next.delete(e.key.toLowerCase());
         return next;
       });
+
+      // Send direction=0 to stop the joint
+      const binding = KEY_BINDINGS[e.key] || KEY_BINDINGS[e.key.toLowerCase()];
+      if (binding) {
+        wsRef.current?.send(JSON.stringify({ joint: binding.joint, direction: 0 }));
+        e.preventDefault();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);

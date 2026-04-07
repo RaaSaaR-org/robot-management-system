@@ -4,7 +4,7 @@ aliases:
 - TASK-140
 title: 'Keyboard Teleop: arm moves but too slowly'
 slug: keyboard-teleop-ws-connects-but-arm-doesnt-move
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
