@@ -8,7 +8,14 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+
+// Structured logging & metrics
+import { logger, requestIdMiddleware, httpLogger } from './utils/logger.js';
+import { metricsMiddleware } from './middleware/metricsMiddleware.js';
+import { metricsRoutes } from './routes/metrics.routes.js';
+import { workerAuthMiddleware } from './middleware/workerAuth.middleware.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
@@ -86,26 +93,28 @@ function getCorsOrigins(): string[] {
   return DEFAULT_CORS_ORIGINS;
 }
 
-// Rate limiting configuration
-// In development: high limit (robot agent + UI generate many compliance logs)
-// In production: 100 req/min
+// Rate limiting can be fully disabled for dev/testing via RATE_LIMIT_DISABLED=true
+const rateLimitDisabled = process.env.RATE_LIMIT_DISABLED === 'true';
+
+// General API rate limit: 100 req/min (prod), 5000 (dev)
 const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 100 : 5000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
-  // Skip health checks + compliance logs (robot agent sends these constantly)
-  skip: (req) => req.path === '/health' || req.path.startsWith('/api/compliance'),
+  skip: (req) =>
+    rateLimitDisabled || req.path === '/health' || req.path.startsWith('/api/compliance'),
 });
 
-// Stricter rate limit for auth endpoints
+// Strict rate limit for auth endpoints: 5 req/min per IP
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // limit each IP to 20 auth requests per 15 minutes
+  windowMs: 60 * 1000,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts, please try again later.' },
+  skip: () => rateLimitDisabled,
 });
 
 /**
@@ -117,11 +126,33 @@ export function createApp(): Express {
   // Trust proxy for rate limiting behind reverse proxy
   app.set('trust proxy', 1);
 
+  // Security headers (CSP, X-Frame-Options, HSTS, etc.)
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'", ...getCorsOrigins()],
+      },
+    },
+    // Allow cross-origin requests from the Tauri/React frontend
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  }));
+
   // CORS - use environment variable or defaults
   app.use(cors({
     origin: getCorsOrigins(),
     credentials: true,
   }));
+
+  // Request ID + structured logging
+  app.use(requestIdMiddleware);
+  app.use(httpLogger);
+
+  // Prometheus metrics collection
+  app.use(metricsMiddleware);
 
   // Rate limiting - apply to all API routes
   app.use('/api/', apiLimiter);
@@ -129,12 +160,6 @@ export function createApp(): Express {
   // Body parsing
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
-
-  // Request logging (development)
-  app.use((req: Request, _res: Response, next: NextFunction) => {
-    console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
-    next();
-  });
 
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
@@ -205,6 +230,8 @@ export function createApp(): Express {
   app.use('/api/approvals', authMiddleware, approvalRoutes);
 
   // Training job routes (protected) - VLA model training management
+  // Worker callback sub-routes get additional token-based auth
+  app.use('/api/training/workers', authMiddleware, workerAuthMiddleware, trainingRoutes);
   app.use('/api/training', authMiddleware, trainingRoutes);
 
   // Storage routes (protected) - RustFS object storage
@@ -277,6 +304,9 @@ export function createApp(): Express {
   // VLA session routes (protected) - TASK-077 VLA session compliance logging
   app.use('/api/robots', authMiddleware, vlaSessionRoutes);
 
+  // Prometheus metrics (no auth — scraped by monitoring infra)
+  app.use('/metrics', metricsRoutes);
+
   // Well-known routes (for A2A agent discovery)
   app.use('/.well-known/a2a', wellKnownRoutes);
 
@@ -289,7 +319,7 @@ export function createApp(): Express {
   // Initialize incident reporting services
   incidentService.initialize();
   notificationWorkflowService.initialize().catch((err) => {
-    console.error('[App] Failed to initialize notification workflow service:', err);
+    logger.error({ err }, '[App] Failed to initialize notification workflow service');
   });
 
   // Initialize approval workflow service (SLA monitoring, escalations)
@@ -301,8 +331,8 @@ export function createApp(): Express {
   });
 
   // Error handler
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('Server error:', err);
+  app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+    logger.error({ err, reqId: (req as Record<string, unknown>).id }, 'Unhandled server error');
     res.status(500).json({
       error: 'Internal server error',
       message: process.env.NODE_ENV === 'development' ? err.message : undefined,
