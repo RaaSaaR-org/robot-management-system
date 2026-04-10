@@ -10,6 +10,8 @@
 
 export type ProcessDefinitionStatus = 'draft' | 'ready' | 'archived';
 
+export type ProcessTriggerType = 'manual' | 'scheduled' | 'event';
+
 export type StepActionType =
   | 'move_to_location'
   | 'pickup_object'
@@ -18,7 +20,15 @@ export type StepActionType =
   | 'inspect'
   | 'charge'
   | 'return_home'
+  | 'execute_skill' // TASK-143: run a SkillDefinition via skillExecutionService
   | 'custom';
+
+/**
+ * actionConfig shape for actionType='execute_skill':
+ *   { skillId: string, parameters?: Record<string, unknown>, robotId?: string }
+ * If robotId is omitted, the step is dispatched to one of the process's
+ * preferred/assigned robots.
+ */
 
 export interface StepTemplate {
   id: string;
@@ -44,6 +54,12 @@ export interface ProcessDefinition {
   estimatedDurationMinutes?: number;
   maxConcurrentInstances?: number;
   tags?: string[];
+  // Scheduling (TASK-143)
+  triggerType: ProcessTriggerType;
+  cronExpression?: string;
+  enabled: boolean;
+  nextRunAt?: string;
+  lastScheduledRunAt?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -140,6 +156,9 @@ export interface CreateProcessDefinitionRequest {
   estimatedDurationMinutes?: number;
   maxConcurrentInstances?: number;
   tags?: string[];
+  triggerType?: ProcessTriggerType;
+  cronExpression?: string;
+  enabled?: boolean;
 }
 
 export interface UpdateProcessDefinitionRequest {
@@ -151,6 +170,15 @@ export interface UpdateProcessDefinitionRequest {
   estimatedDurationMinutes?: number;
   maxConcurrentInstances?: number;
   tags?: string[];
+  triggerType?: ProcessTriggerType;
+  cronExpression?: string;
+  enabled?: boolean;
+}
+
+export interface UpdateProcessScheduleRequest {
+  triggerType?: ProcessTriggerType;
+  cronExpression?: string | null;
+  enabled?: boolean;
 }
 
 export interface StartProcessRequest {

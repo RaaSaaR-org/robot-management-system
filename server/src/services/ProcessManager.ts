@@ -7,6 +7,7 @@
 import { EventEmitter } from 'events';
 import { processRepository } from '../repositories/ProcessRepository.js';
 import { robotTaskRepository } from '../repositories/RobotTaskRepository.js';
+import { skillExecutionService } from './SkillExecutionService.js';
 import type {
   ProcessDefinition,
   ProcessInstance,
@@ -327,6 +328,14 @@ export class ProcessManager extends EventEmitter {
       stepInstance: { ...nextStep, status: 'queued' },
     });
 
+    // TASK-143: execute_skill steps go directly through SkillExecutionService
+    // (which already does the robot HTTP call, precondition checks, etc.)
+    // instead of being routed via the generic TaskDistributor pipeline.
+    if (nextStep.actionType === 'execute_skill') {
+      await this.executeSkillStep(instance, nextStep);
+      return;
+    }
+
     // Get failed robot IDs for this step (for reassignment scenarios)
     const failedRobotIds = await processRepository.getStepFailedRobotIds(nextStep.id);
 
@@ -351,6 +360,67 @@ export class ProcessManager extends EventEmitter {
 
     // Emit event for TaskDistributor to pick up
     this.emit('task:created', task);
+  }
+
+  /**
+   * Execute an `execute_skill` step by invoking SkillExecutionService directly.
+   *
+   * The actionConfig shape is:
+   *   { skillId: string, parameters?: Record<string, unknown>, robotId?: string }
+   *
+   * Robot resolution priority:
+   *   1. actionConfig.robotId (explicit per-step pin)
+   *   2. instance.preferredRobotIds[0]
+   *   3. instance.assignedRobotIds[0]
+   */
+  private async executeSkillStep(instance: ProcessInstance, step: StepInstance): Promise<void> {
+    const cfg = step.actionConfig as {
+      skillId?: string;
+      parameters?: Record<string, unknown>;
+      robotId?: string;
+    };
+
+    if (!cfg?.skillId) {
+      await this.onStepCompleted(step.id, {
+        success: false,
+        message: 'execute_skill step is missing actionConfig.skillId',
+      });
+      return;
+    }
+
+    const robotId =
+      cfg.robotId ??
+      instance.preferredRobotIds?.[0] ??
+      instance.assignedRobotIds?.[0];
+
+    if (!robotId) {
+      await this.onStepCompleted(step.id, {
+        success: false,
+        message: 'execute_skill step has no robot assigned (set preferredRobotIds on the process or robotId on the step)',
+      });
+      return;
+    }
+
+    await processRepository.updateStepStatus(step.id, 'in_progress');
+    logger.info(`Executing skill ${cfg.skillId} on robot ${robotId} for step ${step.name}`);
+
+    try {
+      const result = await skillExecutionService.executeSkill({
+        skillId: cfg.skillId,
+        robotId,
+        parameters: cfg.parameters,
+      });
+
+      await this.onStepCompleted(step.id, {
+        success: result.status === 'completed',
+        data: result.output,
+        message: result.error ?? (result.status === 'completed' ? 'Skill executed' : `Skill ${result.status}`),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown skill execution error';
+      logger.error(`Skill execution threw for step ${step.name}: ${message}`);
+      await this.onStepCompleted(step.id, { success: false, message });
+    }
   }
 
   /**

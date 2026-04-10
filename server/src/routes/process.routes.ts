@@ -8,9 +8,12 @@ import { Router, type Request, type Response } from 'express';
 import { processManager } from '../services/ProcessManager.js';
 import { taskDistributor } from '../services/TaskDistributor.js';
 import { robotTaskRepository } from '../repositories/RobotTaskRepository.js';
+import { processRepository } from '../repositories/ProcessRepository.js';
+import { ProcessSchedulerService } from '../services/ProcessSchedulerService.js';
 import type {
   CreateProcessDefinitionRequest,
   UpdateProcessDefinitionRequest,
+  UpdateProcessScheduleRequest,
   StartProcessRequest,
   ProcessListFilters,
   ProcessInstanceListFilters,
@@ -105,6 +108,57 @@ processRoutes.put('/:id', async (req: Request, res: Response) => {
     console.error('Error updating process:', error);
     res.status(500).json({ error: 'Failed to update process' });
   }
+});
+
+/**
+ * PUT /processes/:id/schedule - Update schedule fields (TASK-143)
+ *
+ * Body: { triggerType?, cronExpression?, enabled? }
+ * Reset cronExpression by passing null. When cronExpression changes, nextRunAt
+ * is reset so the scheduler recomputes it on the next tick.
+ */
+processRoutes.put('/:id/schedule', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as UpdateProcessScheduleRequest;
+
+    // Validate cron up-front so users get a clear error before persisting
+    if (body.cronExpression) {
+      const v = ProcessSchedulerService.validateCron(body.cronExpression);
+      if (!v.valid) {
+        return res.status(400).json({ error: `Invalid cron expression: ${v.error}` });
+      }
+    }
+
+    const updated = await processRepository.updateSchedule(
+      req.params.id,
+      body.triggerType,
+      body.cronExpression === null ? null : body.cronExpression,
+      body.enabled,
+      // Reset nextRunAt whenever cron changes so the scheduler recomputes it
+      body.cronExpression !== undefined ? null : undefined
+    );
+
+    if (!updated) {
+      return res.status(404).json({ error: 'Process not found' });
+    }
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating process schedule:', error);
+    res.status(500).json({ error: 'Failed to update process schedule' });
+  }
+});
+
+/**
+ * POST /processes/cron/validate - Validate a cron expression and preview the next run.
+ * Body: { cronExpression: string }
+ */
+processRoutes.post('/cron/validate', (req: Request, res: Response) => {
+  const cron = (req.body as { cronExpression?: string })?.cronExpression;
+  if (!cron) {
+    return res.status(400).json({ valid: false, error: 'cronExpression is required' });
+  }
+  const result = ProcessSchedulerService.validateCron(cron);
+  res.status(result.valid ? 200 : 400).json(result);
 });
 
 /**

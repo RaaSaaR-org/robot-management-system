@@ -377,6 +377,15 @@ export function domainEventToDb(event: A2AEvent): {
  * Convert Prisma ProcessDefinition to domain ProcessDefinition
  */
 export function dbProcessDefinitionToDomain(db: DbProcessDefinition): ProcessDefinition {
+  // The Prisma row may include scheduling fields added by TASK-143 even if older
+  // codepaths read it via a narrower DbProcessDefinition type.
+  const dbAny = db as DbProcessDefinition & {
+    triggerType?: string | null;
+    cronExpression?: string | null;
+    enabled?: boolean | null;
+    nextRunAt?: Date | null;
+    lastScheduledRunAt?: Date | null;
+  };
   return {
     id: db.id,
     name: db.name,
@@ -388,6 +397,11 @@ export function dbProcessDefinitionToDomain(db: DbProcessDefinition): ProcessDef
     estimatedDurationMinutes: db.estimatedDurationMinutes ?? undefined,
     maxConcurrentInstances: db.maxConcurrentInstances ?? undefined,
     tags: safeParseJsonUntyped<string[]>(db.tags, [], `process ${db.id} tags`),
+    triggerType: (dbAny.triggerType as 'manual' | 'scheduled' | 'event') ?? 'manual',
+    cronExpression: dbAny.cronExpression ?? undefined,
+    enabled: dbAny.enabled ?? true,
+    nextRunAt: dbAny.nextRunAt ? dbAny.nextRunAt.toISOString() : undefined,
+    lastScheduledRunAt: dbAny.lastScheduledRunAt ? dbAny.lastScheduledRunAt.toISOString() : undefined,
     createdBy: db.createdBy,
     createdAt: db.createdAt.toISOString(),
     updatedAt: db.updatedAt.toISOString(),
