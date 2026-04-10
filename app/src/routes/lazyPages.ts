@@ -253,6 +253,27 @@ export const LazyContributionDetailPage = lazy(() =>
 );
 
 /**
+ * Marketplace browse page
+ */
+export const LazyMarketplacePage = lazy(() =>
+  import('@/features/contributions').then((m) => ({ default: m.MarketplacePage }))
+);
+
+/**
+ * Marketplace listing detail page
+ */
+export const LazyMarketplaceDetailPage = lazy(() =>
+  import('@/features/contributions').then((m) => ({ default: m.MarketplaceDetailPage }))
+);
+
+/**
+ * My marketplace page - purchases and listings
+ */
+export const LazyMyMarketplacePage = lazy(() =>
+  import('@/features/contributions').then((m) => ({ default: m.MyMarketplacePage }))
+);
+
+/**
  * Evaluation dashboard page - VLA model evaluation metrics
  */
 export const LazyEvaluationDashboardPage = lazy(() =>

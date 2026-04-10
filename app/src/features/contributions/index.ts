@@ -6,6 +6,7 @@
 
 // Types
 export * from './types/contributions.types';
+export * from './types/marketplace.types';
 
 // Store
 export { useContributionsStore } from './store/contributionsStore';
@@ -93,4 +94,7 @@ export {
   ContributionsPage,
   NewContributionPage,
   ContributionDetailPage,
+  MarketplacePage,
+  MarketplaceDetailPage,
+  MyMarketplacePage,
 } from './pages';

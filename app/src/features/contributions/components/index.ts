@@ -46,3 +46,16 @@ export type { CreditBalanceProps } from './CreditBalance';
 
 export { LeaderboardTable } from './LeaderboardTable';
 export type { LeaderboardTableProps, LeaderboardRow } from './LeaderboardTable';
+
+// Marketplace components
+export { MarketplaceListingCard } from './MarketplaceListingCard';
+export type { MarketplaceListingCardProps } from './MarketplaceListingCard';
+
+export { MarketplaceLicenseTierSelector } from './MarketplaceLicenseTierSelector';
+export type { MarketplaceLicenseTierSelectorProps } from './MarketplaceLicenseTierSelector';
+
+export { MarketplaceStarRating } from './MarketplaceStarRating';
+export type { MarketplaceStarRatingProps } from './MarketplaceStarRating';
+
+export { MarketplaceDownloadModal } from './MarketplaceDownloadModal';
+export type { MarketplaceDownloadModalProps } from './MarketplaceDownloadModal';

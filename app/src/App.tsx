@@ -49,6 +49,9 @@ import {
   LazyContributionsPage,
   LazyNewContributionPage,
   LazyContributionDetailPage,
+  LazyMarketplacePage,
+  LazyMarketplaceDetailPage,
+  LazyMyMarketplacePage,
   LazyEvaluationDashboardPage,
   LazyUpdatesPage,
   LazySimulationPage,
@@ -426,6 +429,32 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyContributionDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Marketplace - Skill & Data Marketplace */}
+          <Route
+            path="/marketplace"
+            element={
+              <ProtectedAppRoute>
+                <LazyMarketplacePage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/marketplace/mine"
+            element={
+              <ProtectedAppRoute>
+                <LazyMyMarketplacePage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/marketplace/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyMarketplaceDetailPage />
               </ProtectedAppRoute>
             }
           />
