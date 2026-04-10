@@ -29,15 +29,50 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
   const [startedAt] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState(0);
   const [aborting, setAborting] = useState(false);
-  const [status, setStatus] = useState<'running' | 'aborted' | 'error'>('running');
+  const [status, setStatus] = useState<'running' | 'completed' | 'aborted' | 'error'>('running');
   const [error, setError] = useState<string | null>(null);
+  const [steps, setSteps] = useState<number | null>(null);
 
-  // Tick the elapsed counter every 200ms while the panel is mounted.
+  // Tick the elapsed counter every 200ms while the run is active.
   useEffect(() => {
-    if (!skillId) return;
+    if (!skillId || status !== 'running') return;
     const t = setInterval(() => setElapsed(Date.now() - startedAt), 200);
     return () => clearInterval(t);
-  }, [skillId, startedAt]);
+  }, [skillId, startedAt, status]);
+
+  // Listen for the modal's broadcast when the executeSkill promise resolves.
+  // The modal unmounts before its fetch completes, so this is the only way
+  // the panel hears about the final status.
+  useEffect(() => {
+    if (!skillId) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        skillId: string;
+        robotId: string;
+        result?: { status: string; output?: { steps?: number }; error?: string };
+        error?: string;
+      }>).detail;
+      if (detail.skillId !== skillId || detail.robotId !== robotId) return;
+      if (detail.error) {
+        setStatus('error');
+        setError(detail.error);
+        return;
+      }
+      const r = detail.result;
+      if (!r) return;
+      if (r.status === 'completed') {
+        setStatus('completed');
+        if (r.output?.steps != null) setSteps(r.output.steps);
+      } else if (r.status === 'cancelled' || r.status === 'aborted') {
+        setStatus('aborted');
+      } else {
+        setStatus('error');
+        setError(r.error ?? r.status);
+      }
+    };
+    window.addEventListener('skill:execution:result', handler);
+    return () => window.removeEventListener('skill:execution:result', handler);
+  }, [skillId, robotId]);
 
   if (!skillId) return null;
 
@@ -95,7 +130,7 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
               {aborting ? 'Aborting…' : 'Abort'}
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" onClick={handleClose}>
+            <Button variant="primary" size="sm" onClick={handleClose}>
               Close
             </Button>
           )}
@@ -128,14 +163,28 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
                 className={`text-sm font-medium ${
                   status === 'running'
                     ? 'text-orange-500'
-                    : status === 'aborted'
-                      ? 'text-yellow-500'
-                      : 'text-red-500'
+                    : status === 'completed'
+                      ? 'text-green-500'
+                      : status === 'aborted'
+                        ? 'text-yellow-500'
+                        : 'text-red-500'
                 }`}
               >
-                {status === 'running' ? 'Running' : status === 'aborted' ? 'Aborted' : 'Error'}
+                {status === 'running'
+                  ? 'Running'
+                  : status === 'completed'
+                    ? 'Completed'
+                    : status === 'aborted'
+                      ? 'Aborted'
+                      : 'Error'}
               </div>
             </div>
+            {steps != null && (
+              <div>
+                <div className="text-xs text-theme-secondary uppercase tracking-wide">Steps</div>
+                <div className="text-sm font-mono text-theme-primary">{steps}</div>
+              </div>
+            )}
             {error && (
               <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
             )}

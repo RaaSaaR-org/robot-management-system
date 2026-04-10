@@ -88,17 +88,29 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
     navigate(`/robots/${robotId}?executing=${encodeURIComponent(skill.id)}`);
     onClose();
 
-    // Fire-and-forget the execute call. The robot detail page subscribes to
-    // skill events via the WebSocket and will reflect status updates there.
+    // Fire-and-forget the execute call. The modal unmounts immediately after
+    // navigation, but the promise keeps running. When it resolves, broadcast
+    // the result on a window-level event so the AutonomousExecutionPanel on
+    // the robot detail page can flip its status.
     setRunning(true);
     try {
       const r = await deploymentApi.executeSkill(skill.id, { robotId, parameters });
+      window.dispatchEvent(
+        new CustomEvent('skill:execution:result', {
+          detail: { skillId: skill.id, robotId, result: r },
+        })
+      );
       setResult(r);
       if (r.status !== 'completed') {
         setError(r.error ?? `Execution ${r.status}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to execute skill';
+      window.dispatchEvent(
+        new CustomEvent('skill:execution:result', {
+          detail: { skillId: skill.id, robotId, error: message },
+        })
+      );
       setError(message);
     } finally {
       setRunning(false);
