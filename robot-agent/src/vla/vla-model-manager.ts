@@ -59,14 +59,12 @@ type ModelSwitchEventCallback = (event: ModelSwitchEvent) => void;
 // ============================================================================
 
 /**
- * Manages VLA model versions and switching for fleet deployments
+ * Manages VLA model versions and switching for fleet deployments.
  *
- * In a real implementation, this would:
- * 1. Download model artifacts from storage (RustFS)
- * 2. Signal the VLA inference server to load the new model
- * 3. Track model version history for rollback support
- *
- * For simulation, we track model versions without actual model loading.
+ * Talks to vla-server `/load-adapter` to actually hot-swap LoRA weights.
+ * The vla-server URL comes from `process.env.VLA_SERVER_URL`
+ * (default `http://localhost:8000`). vla-server resolves s3:// URIs
+ * itself via its boto3 client, so this manager only forwards them.
  */
 export class VLAModelManager extends EventEmitter {
   private currentModelVersion: string | null = null;
@@ -75,8 +73,20 @@ export class VLAModelManager extends EventEmitter {
   private modelHistory: Array<{ version: string; loadedAt: Date; unloadedAt?: Date }> = [];
   private isSwitching = false;
 
-  constructor() {
+  // Allow tests to inject a fake fetch implementation.
+  private fetchImpl: typeof fetch;
+
+  constructor(opts: { fetchImpl?: typeof fetch } = {}) {
     super();
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  /**
+   * Resolve the vla-server base URL at call time (so env changes during
+   * tests are picked up).
+   */
+  private getVlaServerUrl(): string {
+    return process.env.VLA_SERVER_URL ?? 'http://localhost:8000';
   }
 
   /**
@@ -145,14 +155,8 @@ export class VLAModelManager extends EventEmitter {
     try {
       console.log(`[VLAModelManager] Switching model from ${previousVersion} to ${request.modelVersionId}`);
 
-      // In production, this would:
-      // 1. Download model from artifactUri (RustFS)
-      // 2. Validate model checksum
-      // 3. Signal VLA inference server to load new model
-      // 4. Wait for confirmation
-
-      // Simulate model switch delay (in production: actual download/load time)
-      await this.simulateModelSwitch(request);
+      // Real swap: vla-server downloads the artifact and hot-loads the LoRA adapter.
+      await this.realModelSwitch(request);
 
       // Update current model tracking
       if (this.currentModelVersion) {
@@ -229,20 +233,85 @@ export class VLAModelManager extends EventEmitter {
   }
 
   /**
-   * Simulate model switch (in production: actual download and load)
+   * Real model switch: ask vla-server to download + hot-swap the LoRA adapter.
+   *
+   * Throws on any failure (the caller will translate it into a
+   * `model:switch_failed` event + `success: false` result).
    */
-  private async simulateModelSwitch(request: ModelSwitchRequest): Promise<void> {
-    // Simulate download time (200-500ms)
-    const downloadTime = 200 + Math.random() * 300;
-    await this.sleep(downloadTime);
+  private async realModelSwitch(request: ModelSwitchRequest): Promise<void> {
+    const baseUrl = this.getVlaServerUrl();
 
-    // Simulate model load time (100-300ms)
-    const loadTime = 100 + Math.random() * 200;
-    await this.sleep(loadTime);
+    // 1. Health-check first so we fail fast (and with a clear message) if
+    //    vla-server is down. Without this we'd wait the full load timeout
+    //    on a connection refused.
+    try {
+      const healthResp = await this.fetchWithTimeout(`${baseUrl}/health`, { method: 'GET' }, 5_000);
+      if (!healthResp.ok) {
+        throw new Error(`vla-server /health returned ${healthResp.status}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`vla-server unreachable at ${baseUrl}: ${msg}`);
+    }
 
-    // Small chance of simulated failure for testing (5%)
-    if (Math.random() < 0.05 && !request.rollback) {
-      throw new Error('Simulated model switch failure');
+    // 2. POST /load-adapter. First load can be slow (S3 download +
+    //    PEFT wrap), so allow a generous 60s timeout.
+    const body = JSON.stringify({
+      adapter_path: request.artifactUri,
+      adapter_id: request.modelVersionId,
+    });
+
+    let resp: Response;
+    try {
+      resp = await this.fetchWithTimeout(
+        `${baseUrl}/load-adapter`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        },
+        60_000,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`vla-server /load-adapter request failed: ${msg}`);
+    }
+
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const errBody = (await resp.json()) as { detail?: string };
+        if (errBody.detail) detail = errBody.detail;
+      } catch {
+        // ignore parse errors
+      }
+      throw new Error(`vla-server /load-adapter rejected: ${detail}`);
+    }
+
+    const data = (await resp.json()) as {
+      adapter_id: string;
+      load_time_ms: number;
+      info?: Record<string, unknown>;
+    };
+    console.log(
+      `[VLAModelManager] vla-server loaded adapter '${data.adapter_id}' in ${data.load_time_ms.toFixed(0)}ms`,
+    );
+  }
+
+  /**
+   * fetch wrapper with a per-call timeout (AbortController).
+   */
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      return await this.fetchImpl(url, { ...init, signal: ctrl.signal });
+    } finally {
+      clearTimeout(t);
     }
   }
 
