@@ -53,6 +53,7 @@ const ENDPOINTS = {
   skillCompatibleRobots: (id: string) => `/skills/${id}/compatible-robots`,
   skillCheckRobot: (id: string, robotId: string) => `/skills/${id}/check-robot/${robotId}`,
   skillExecute: (id: string) => `/skills/${id}/execute`,
+  skillAbort: (id: string) => `/skills/${id}/abort`,
   publishedSkills: '/skills/published',
   skillsForRobot: (robotId: string) => `/skills/for-robot/${robotId}`,
 
@@ -357,6 +358,14 @@ export const deploymentApi = {
       request
     );
     return response.data.result;
+  },
+
+  /**
+   * Abort a running skill execution on a robot. Used by the
+   * AutonomousExecutionPanel to stop a closed-loop run mid-flight. (TASK-146)
+   */
+  async abortSkill(id: string, robotId: string): Promise<void> {
+    await apiClient.post(ENDPOINTS.skillAbort(id), { robotId });
   },
 
   // ============================================================================

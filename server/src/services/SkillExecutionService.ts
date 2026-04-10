@@ -6,7 +6,11 @@
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { skillDefinitionRepository, skillChainRepository } from '../repositories/index.js';
+import {
+  skillDefinitionRepository,
+  skillChainRepository,
+  modelVersionRepository,
+} from '../repositories/index.js';
 import { robotManager } from './RobotManager.js';
 import { skillLibraryService } from './SkillLibraryService.js';
 import { HttpClient } from './HttpClient.js';
@@ -517,6 +521,27 @@ export class SkillExecutionService extends EventEmitter {
     return false;
   }
 
+  /**
+   * Forward an abort to the robot agent. Used by TASK-146's "Abort" button.
+   * Returns true if the robot acknowledged the abort (204) or false on 404.
+   */
+  async abortSkillOnRobot(skillId: string, robotId: string): Promise<boolean> {
+    const registeredRobot = await robotManager.getRegisteredRobot(robotId);
+    if (!registeredRobot) {
+      return false;
+    }
+    const httpClient = new HttpClient(registeredRobot.baseUrl, 5000);
+    try {
+      await httpClient.post(`/api/v1/robots/${robotId}/skills/abort`, { skillId });
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // 404 from robot agent means there was nothing to abort.
+      if (message.includes('404')) return false;
+      throw err;
+    }
+  }
+
   // ============================================================================
   // INTERNAL HELPERS
   // ============================================================================
@@ -538,6 +563,26 @@ export class SkillExecutionService extends EventEmitter {
       const timeout = (skill.timeout ?? DEFAULT_SKILL_TIMEOUT_S) * 1000;
       const httpClient = new HttpClient(registeredRobot.baseUrl, Math.min(timeout, ROBOT_EXECUTION_TIMEOUT_MS));
 
+      // TASK-146: pass the model artifact URI through so the robot agent can
+      // load the right LoRA adapter on vla-server before running the loop.
+      let artifactUri: string | undefined;
+      if (skill.linkedModelVersionId) {
+        try {
+          const modelVersion = await modelVersionRepository.findById(skill.linkedModelVersionId);
+          artifactUri = modelVersion?.artifactUri;
+          if (!artifactUri) {
+            console.warn(
+              `[SkillExecutionService] Skill ${skill.id} linked to ModelVersion ${skill.linkedModelVersionId} but no artifactUri found`
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[SkillExecutionService] Failed to load ModelVersion ${skill.linkedModelVersionId}:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+
       const response = await httpClient.post<{
         status: string;
         output?: Record<string, unknown>;
@@ -549,6 +594,7 @@ export class SkillExecutionService extends EventEmitter {
         parameters,
         timeout: skill.timeout,
         linkedModelVersionId: skill.linkedModelVersionId,
+        artifactUri,
       });
 
       if (response.status === 'completed' || response.status === 'success') {

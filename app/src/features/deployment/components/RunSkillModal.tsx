@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Modal, Button, Badge, Card } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { deploymentApi } from '../api/deploymentApi';
@@ -19,6 +20,7 @@ export interface RunSkillModalProps {
 }
 
 export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
+  const navigate = useNavigate();
   const { robots, fetchRobots } = useRobots();
   const [robotId, setRobotId] = useState<string>('');
   const [parametersJson, setParametersJson] = useState<string>('{}');
@@ -80,6 +82,14 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
       }
     }
 
+    // TASK-146: navigate to the robot detail page in "executing" mode BEFORE
+    // dispatching the call. The closed-loop request can take 30+ seconds and
+    // the live execution panel is the place users want to be while it runs.
+    navigate(`/robots/${robotId}?executing=${encodeURIComponent(skill.id)}`);
+    onClose();
+
+    // Fire-and-forget the execute call. The robot detail page subscribes to
+    // skill events via the WebSocket and will reflect status updates there.
     setRunning(true);
     try {
       const r = await deploymentApi.executeSkill(skill.id, { robotId, parameters });

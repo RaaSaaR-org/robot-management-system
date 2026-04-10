@@ -11,6 +11,7 @@ import { RobotLoadingScreen } from './RobotLoadingScreen';
 import { RobotIdentityBar } from './RobotIdentityBar';
 import { RobotQuickStats } from './RobotQuickStats';
 import { RobotControlCenter } from './RobotControlCenter';
+import { AutonomousExecutionPanel } from './AutonomousExecutionPanel';
 import { useRobot } from '../hooks/useRobots';
 import { useTelemetryStream } from '../hooks/useTelemetryStream';
 import { useTasksByRobotId } from '@/features/processes/hooks/useTasks';
@@ -135,6 +136,9 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
             taskCount={robotTasks.length}
             isTelemetryConnected={isTelemetryConnected}
           />
+
+          {/* Autonomous execution panel — only visible when ?executing=<skillId> */}
+          <AutonomousExecutionPanel robotId={robotId} />
 
           {/* Control center — view switcher + chat sidebar */}
           <RobotControlCenter
