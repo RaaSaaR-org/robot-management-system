@@ -4,7 +4,7 @@ aliases:
 - TASK-146
 title: 'Wire real robot testing: model deploy + autonomous task execution from UI'
 slug: real-robot-testing-after-training
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -14,8 +14,11 @@ tags:
 - core
 depends_on: []
 due_date: ''
-created: '2026-04-06'
+created: 2026-04-06
+updated: 2026-04-11
 ---
+
+
 
 ## Description
 
