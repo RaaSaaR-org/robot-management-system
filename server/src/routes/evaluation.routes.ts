@@ -6,6 +6,9 @@
 
 import { Router, type Request, type Response } from 'express';
 import { evaluationService, type EvaluationPeriod } from '../services/EvaluationService.js';
+import { robotManager } from '../services/RobotManager.js';
+import { modelVersionRepository, skillDefinitionRepository } from '../repositories/index.js';
+import { HttpClient } from '../services/HttpClient.js';
 
 export const evaluationRoutes = Router();
 
@@ -130,6 +133,57 @@ evaluationRoutes.get('/compare', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[EvaluationRoutes] Error comparing models:', error);
     res.status(500).json({ error: 'Failed to compare models' });
+  }
+});
+
+// ============================================================================
+// POST /api/evaluation/run-hardware - Trigger an N-episode hardware evaluation
+// run on the robot agent. (TASK-146 Phase C). Per-episode results stream into
+// /api/evaluation/episodes from the agent itself.
+// ============================================================================
+
+evaluationRoutes.post('/run-hardware', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as {
+      robotId?: string;
+      skillId?: string;
+      episodes?: number;
+      maxStepsPerEpisode?: number;
+      taskPrompt?: string;
+    };
+    if (!body.robotId || !body.skillId) {
+      return res.status(400).json({ error: 'robotId and skillId are required' });
+    }
+
+    const skill = await skillDefinitionRepository.findById(body.skillId);
+    if (!skill) return res.status(404).json({ error: 'Skill not found' });
+
+    const registeredRobot = await robotManager.getRegisteredRobot(body.robotId);
+    if (!registeredRobot) {
+      return res.status(404).json({ error: 'Robot not registered' });
+    }
+
+    let artifactUri: string | undefined;
+    if (skill.linkedModelVersionId) {
+      const mv = await modelVersionRepository.findById(skill.linkedModelVersionId);
+      artifactUri = mv?.artifactUri;
+    }
+
+    const httpClient = new HttpClient(registeredRobot.baseUrl, 5 * 60 * 1000); // 5min cap
+    const summary = await httpClient.post(`/api/v1/robots/${body.robotId}/evaluation/run`, {
+      skillId: body.skillId,
+      modelVersionId: skill.linkedModelVersionId,
+      artifactUri,
+      taskPrompt: body.taskPrompt ?? `Execute skill ${skill.name}`,
+      episodes: body.episodes ?? 5,
+      maxStepsPerEpisode: body.maxStepsPerEpisode ?? 200,
+    });
+
+    res.json({ summary });
+  } catch (error) {
+    console.error('[EvaluationRoutes] Error running hardware evaluation:', error);
+    const message = error instanceof Error ? error.message : 'Failed to run hardware evaluation';
+    res.status(500).json({ error: message });
   }
 });
 

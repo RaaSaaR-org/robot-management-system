@@ -14,6 +14,7 @@ import { SuccessRateChart } from '../components/SuccessRateChart';
 import { ErrorAnalysisPanel } from '../components/ErrorAnalysisPanel';
 import { ModelComparisonTable } from '../components/ModelComparisonTable';
 import { RolloutTimeline } from '../components/RolloutTimeline';
+import { HardwareTestPanel } from '../components/HardwareTestPanel';
 
 // ============================================================================
 // STAT CARD
@@ -180,6 +181,9 @@ export function EvaluationDashboardPage() {
             <h2 className="text-lg font-semibold text-theme-primary mb-4">Recent Rollouts</h2>
             <RolloutTimeline episodes={episodes} maxItems={10} />
           </div>
+
+          {/* Row 5: Hardware Test (TASK-146) */}
+          <HardwareTestPanel onComplete={() => fetchData(period)} />
         </>
       )}
     </div>
