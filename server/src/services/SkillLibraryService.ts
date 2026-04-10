@@ -389,7 +389,9 @@ export class SkillLibraryService extends EventEmitter {
 
     // Get robot type
     const robotType = (robot.metadata?.robotType as string) ?? robot.model;
-    const robotCapabilities = (robot.metadata?.capabilities as string[]) ?? [];
+    // TASK-143: capabilities live on the Robot itself, not in metadata.
+    // Fall back to metadata for legacy/test fixtures.
+    const robotCapabilities = robot.capabilities ?? (robot.metadata?.capabilities as string[]) ?? [];
 
     // Check robot type compatibility
     const compatibleTypes = skill.compatibleRobotTypes ?? [];

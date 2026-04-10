@@ -26,6 +26,231 @@ import type {
 export const skillsRoutes = Router();
 
 // ============================================================================
+// SKILL CHAIN ROUTES (mounted first to avoid `/:id` shadowing `/chains`)
+// ============================================================================
+
+const chainsRoutes = Router();
+
+/**
+ * POST /api/skills/chains - Create new skill chain
+ */
+chainsRoutes.post('/', async (req: Request, res: Response) => {
+  try {
+    const input = req.body as CreateSkillChainInput;
+
+    if (!input.name) {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    if (!input.steps || input.steps.length === 0) {
+      return res.status(400).json({ error: 'steps is required and must not be empty' });
+    }
+
+    const chain = await skillLibraryService.createChain(input);
+
+    res.status(201).json({
+      chain,
+      message: 'Skill chain created successfully',
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error creating skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to create skill chain';
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/skills/chains - List skill chains
+ */
+chainsRoutes.get('/', async (req: Request, res: Response) => {
+  try {
+    const query = req.query as Record<string, string | undefined>;
+
+    const params: SkillChainQueryParams = {
+      name: query.name,
+      page: query.page ? parseInt(query.page, 10) : undefined,
+      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
+    };
+
+    if (query.status) {
+      params.status = query.status.includes(',')
+        ? (query.status.split(',') as SkillChainStatus[])
+        : (query.status as SkillChainStatus);
+    }
+
+    const result = await skillLibraryService.listChains(params);
+
+    res.json({
+      chains: result.data,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error listing skill chains:', error);
+    const message = error instanceof Error ? error.message : 'Failed to list skill chains';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/skills/chains/active - List active skill chains
+ */
+chainsRoutes.get('/active', async (_req: Request, res: Response) => {
+  try {
+    const chains = await skillLibraryService.listActiveChains();
+
+    res.json({
+      chains,
+      count: chains.length,
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error listing active chains:', error);
+    const message = error instanceof Error ? error.message : 'Failed to list active chains';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/skills/chains/:id - Get skill chain details
+ */
+chainsRoutes.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const chain = await skillLibraryService.getChain(id);
+
+    if (!chain) {
+      return res.status(404).json({ error: 'Skill chain not found' });
+    }
+
+    res.json({ chain });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error getting skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to get skill chain';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PUT /api/skills/chains/:id - Update skill chain
+ */
+chainsRoutes.put('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const input = req.body as UpdateSkillChainInput;
+
+    const chain = await skillLibraryService.updateChain(id, input);
+
+    if (!chain) {
+      return res.status(404).json({ error: 'Skill chain not found' });
+    }
+
+    res.json({
+      chain,
+      message: 'Skill chain updated successfully',
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error updating skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to update skill chain';
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /api/skills/chains/:id - Delete skill chain
+ */
+chainsRoutes.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const deleted = await skillLibraryService.deleteChain(id);
+
+    if (!deleted) {
+      return res.status(404).json({ error: 'Skill chain not found' });
+    }
+
+    res.json({ message: 'Skill chain deleted successfully' });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error deleting skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to delete skill chain';
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/skills/chains/:id/activate - Activate skill chain
+ */
+chainsRoutes.post('/:id/activate', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const chain = await skillLibraryService.activateChain(id);
+
+    res.json({
+      chain,
+      message: 'Skill chain activated successfully',
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error activating skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to activate skill chain';
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/skills/chains/:id/archive - Archive skill chain
+ */
+chainsRoutes.post('/:id/archive', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const chain = await skillLibraryService.archiveChain(id);
+
+    res.json({
+      chain,
+      message: 'Skill chain archived successfully',
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error archiving skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to archive skill chain';
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/skills/chains/:id/execute - Execute skill chain on a robot
+ */
+chainsRoutes.post('/:id/execute', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const body = req.body as Omit<ExecuteChainRequest, 'chainId'>;
+
+    if (!body.robotId) {
+      return res.status(400).json({ error: 'robotId is required' });
+    }
+
+    const request: ExecuteChainRequest = {
+      chainId: id,
+      robotId: body.robotId,
+      initialParameters: body.initialParameters,
+      startFromStep: body.startFromStep,
+    };
+
+    const result = await skillExecutionService.executeChain(request);
+
+    const statusCode = result.status === 'completed' ? 200 : 400;
+
+    res.status(statusCode).json({
+      result,
+      message: result.status === 'completed' ? 'Chain executed successfully' : 'Chain execution failed',
+    });
+  } catch (error) {
+    console.error('[SkillsRoutes] Error executing skill chain:', error);
+    const message = error instanceof Error ? error.message : 'Failed to execute skill chain';
+    res.status(500).json({ error: message });
+  }
+});
+
+skillsRoutes.use('/chains', chainsRoutes);
+
+// ============================================================================
 // SKILL DEFINITION ROUTES
 // ============================================================================
 
@@ -368,223 +593,5 @@ skillsRoutes.post('/:id/execute', async (req: Request, res: Response) => {
   }
 });
 
-// ============================================================================
-// SKILL CHAIN ROUTES
-// ============================================================================
-
-/**
- * POST /api/skill-chains - Create new skill chain
- */
-skillsRoutes.post('/chains', async (req: Request, res: Response) => {
-  try {
-    const input = req.body as CreateSkillChainInput;
-
-    if (!input.name) {
-      return res.status(400).json({ error: 'name is required' });
-    }
-    if (!input.steps || input.steps.length === 0) {
-      return res.status(400).json({ error: 'steps is required and must not be empty' });
-    }
-
-    const chain = await skillLibraryService.createChain(input);
-
-    res.status(201).json({
-      chain,
-      message: 'Skill chain created successfully',
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error creating skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to create skill chain';
-    res.status(400).json({ error: message });
-  }
-});
-
-/**
- * GET /api/skill-chains - List skill chains
- */
-skillsRoutes.get('/chains', async (req: Request, res: Response) => {
-  try {
-    const query = req.query as Record<string, string | undefined>;
-
-    const params: SkillChainQueryParams = {
-      name: query.name,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      pageSize: query.pageSize ? parseInt(query.pageSize, 10) : undefined,
-    };
-
-    if (query.status) {
-      params.status = query.status.includes(',')
-        ? (query.status.split(',') as SkillChainStatus[])
-        : (query.status as SkillChainStatus);
-    }
-
-    const result = await skillLibraryService.listChains(params);
-
-    res.json({
-      chains: result.data,
-      pagination: result.pagination,
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error listing skill chains:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list skill chains';
-    res.status(500).json({ error: message });
-  }
-});
-
-/**
- * GET /api/skill-chains/active - List active skill chains
- */
-skillsRoutes.get('/chains/active', async (_req: Request, res: Response) => {
-  try {
-    const chains = await skillLibraryService.listActiveChains();
-
-    res.json({
-      chains,
-      count: chains.length,
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error listing active chains:', error);
-    const message = error instanceof Error ? error.message : 'Failed to list active chains';
-    res.status(500).json({ error: message });
-  }
-});
-
-/**
- * GET /api/skill-chains/:id - Get skill chain details
- */
-skillsRoutes.get('/chains/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const chain = await skillLibraryService.getChain(id);
-
-    if (!chain) {
-      return res.status(404).json({ error: 'Skill chain not found' });
-    }
-
-    res.json({ chain });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error getting skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to get skill chain';
-    res.status(500).json({ error: message });
-  }
-});
-
-/**
- * PUT /api/skill-chains/:id - Update skill chain
- */
-skillsRoutes.put('/chains/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const input = req.body as UpdateSkillChainInput;
-
-    const chain = await skillLibraryService.updateChain(id, input);
-
-    if (!chain) {
-      return res.status(404).json({ error: 'Skill chain not found' });
-    }
-
-    res.json({
-      chain,
-      message: 'Skill chain updated successfully',
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error updating skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to update skill chain';
-    res.status(400).json({ error: message });
-  }
-});
-
-/**
- * DELETE /api/skill-chains/:id - Delete skill chain
- */
-skillsRoutes.delete('/chains/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const deleted = await skillLibraryService.deleteChain(id);
-
-    if (!deleted) {
-      return res.status(404).json({ error: 'Skill chain not found' });
-    }
-
-    res.json({ message: 'Skill chain deleted successfully' });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error deleting skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to delete skill chain';
-    res.status(400).json({ error: message });
-  }
-});
-
-/**
- * POST /api/skill-chains/:id/activate - Activate skill chain
- */
-skillsRoutes.post('/chains/:id/activate', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const chain = await skillLibraryService.activateChain(id);
-
-    res.json({
-      chain,
-      message: 'Skill chain activated successfully',
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error activating skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to activate skill chain';
-    res.status(400).json({ error: message });
-  }
-});
-
-/**
- * POST /api/skill-chains/:id/archive - Archive skill chain
- */
-skillsRoutes.post('/chains/:id/archive', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-
-    const chain = await skillLibraryService.archiveChain(id);
-
-    res.json({
-      chain,
-      message: 'Skill chain archived successfully',
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error archiving skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to archive skill chain';
-    res.status(400).json({ error: message });
-  }
-});
-
-/**
- * POST /api/skill-chains/:id/execute - Execute skill chain on a robot
- */
-skillsRoutes.post('/chains/:id/execute', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const body = req.body as Omit<ExecuteChainRequest, 'chainId'>;
-
-    if (!body.robotId) {
-      return res.status(400).json({ error: 'robotId is required' });
-    }
-
-    const request: ExecuteChainRequest = {
-      chainId: id,
-      robotId: body.robotId,
-      initialParameters: body.initialParameters,
-      startFromStep: body.startFromStep,
-    };
-
-    const result = await skillExecutionService.executeChain(request);
-
-    const statusCode = result.status === 'completed' ? 200 : 400;
-
-    res.status(statusCode).json({
-      result,
-      message: result.status === 'completed' ? 'Chain executed successfully' : 'Chain execution failed',
-    });
-  } catch (error) {
-    console.error('[SkillsRoutes] Error executing skill chain:', error);
-    const message = error instanceof Error ? error.message : 'Failed to execute skill chain';
-    res.status(500).json({ error: message });
-  }
-});
+// (Skill chain routes are mounted at the top of this file via `chainsRoutes`
+// to avoid being shadowed by the `/:id` route.)

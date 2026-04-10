@@ -120,11 +120,66 @@ export class ProcessRepository {
         estimatedDurationMinutes: data.estimatedDurationMinutes,
         maxConcurrentInstances: data.maxConcurrentInstances,
         tags: JSON.stringify(data.tags ?? []),
+        triggerType: data.triggerType ?? 'manual',
+        cronExpression: data.cronExpression ?? null,
+        enabled: data.enabled ?? true,
         createdBy,
       },
     });
 
     return dbProcessDefinitionToDomain(process);
+  }
+
+  /**
+   * Update only the schedule fields of a definition (TASK-143)
+   */
+  async updateSchedule(
+    id: string,
+    triggerType: 'manual' | 'scheduled' | 'event' | undefined,
+    cronExpression: string | null | undefined,
+    enabled: boolean | undefined,
+    nextRunAt: Date | null | undefined
+  ): Promise<ProcessDefinition | null> {
+    try {
+      const updateData: Record<string, unknown> = {};
+      if (triggerType !== undefined) updateData.triggerType = triggerType;
+      if (cronExpression !== undefined) updateData.cronExpression = cronExpression;
+      if (enabled !== undefined) updateData.enabled = enabled;
+      if (nextRunAt !== undefined) updateData.nextRunAt = nextRunAt;
+
+      const updated = await prisma.processDefinition.update({
+        where: { id },
+        data: updateData,
+      });
+      return dbProcessDefinitionToDomain(updated);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * List all scheduled definitions that are enabled (used by ProcessSchedulerService)
+   */
+  async findSchedulableDefinitions(): Promise<ProcessDefinition[]> {
+    const rows = await prisma.processDefinition.findMany({
+      where: {
+        triggerType: 'scheduled',
+        enabled: true,
+        status: 'ready',
+        cronExpression: { not: null },
+      },
+    });
+    return rows.map(dbProcessDefinitionToDomain);
+  }
+
+  /**
+   * Mark a scheduled run as having executed (updates lastScheduledRunAt + nextRunAt)
+   */
+  async recordScheduledRun(id: string, lastRunAt: Date, nextRunAt: Date | null): Promise<void> {
+    await prisma.processDefinition.update({
+      where: { id },
+      data: { lastScheduledRunAt: lastRunAt, nextRunAt },
+    });
   }
 
   /**
@@ -149,6 +204,9 @@ export class ProcessRepository {
       if (data.requiredCapabilities !== undefined)
         updateData.requiredCapabilities = JSON.stringify(data.requiredCapabilities);
       if (data.tags !== undefined) updateData.tags = JSON.stringify(data.tags);
+      if (data.triggerType !== undefined) updateData.triggerType = data.triggerType;
+      if (data.cronExpression !== undefined) updateData.cronExpression = data.cronExpression;
+      if (data.enabled !== undefined) updateData.enabled = data.enabled;
       if (data.stepTemplates !== undefined) {
         const stepTemplates: StepTemplate[] = data.stepTemplates.map((st, index) => ({
           ...st,

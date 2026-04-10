@@ -39,5 +39,3 @@ export function ProcessDetailPage() {
   return <ProcessDetailPanel taskId={id} onBack={() => navigate('/processes')} />;
 }
 
-// Legacy alias for backwards compatibility
-export { ProcessDetailPage as TaskDetailPage };

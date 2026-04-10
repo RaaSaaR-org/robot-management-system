@@ -59,7 +59,7 @@ claude --agent test-frontend         # Just test frontend via Playwright
 - `~/.local/bin/gh-igor` — GitHub CLI wrapper with auto-injected token (all PR operations)
 - `~/.local/bin/github-token-igor` — generates GitHub App installation token
 - `~/.local/bin/git-push-igor` — git push with auto token
-- `mc` (MissionControl) — task management CLI (`source ~/.cargo/env` first)
+- `mc` (MissionControl) — task management CLI (already on PATH)
 
 **GitHub repo:** `RaaSaaR-org/robot-management-system`
 
@@ -348,7 +348,6 @@ When building features across the stack:
 Project tasks are tracked in `.mc/tasks/` using MissionControl (mc CLI). Tasks are markdown files with YAML frontmatter, organized in `todo/` and `done/` folders.
 
 ```bash
-source ~/.cargo/env          # make mc available
 mc task board                 # Show kanban board
 mc task next                  # Get next actionable task
 mc list tasks                 # List all tasks

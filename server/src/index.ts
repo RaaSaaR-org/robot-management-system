@@ -26,6 +26,7 @@ import { initializeRustFSClient } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { mlflowService } from './services/MLflowService.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
+import { processSchedulerService } from './services/ProcessSchedulerService.js';
 
 const PORT = process.env.PORT || 3001;
 
@@ -50,6 +51,9 @@ async function main() {
 
   // Start retention cleanup job (daily at 2 AM)
   retentionCleanupJob.startSchedule(24);
+
+  // Start process scheduler (TASK-143) — fires scheduled ProcessDefinitions
+  processSchedulerService.start();
 
   // Initialize NATS JetStream (optional - graceful degradation if not available)
   try {
@@ -117,6 +121,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down...');
+    processSchedulerService.stop();
     retentionCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
     trainingJobService.stopAllWatchers();

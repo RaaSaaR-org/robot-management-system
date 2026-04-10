@@ -45,10 +45,6 @@ export const LazyProcessDetailPage = lazy(() =>
   import('@/features/processes').then((m) => ({ default: m.ProcessDetailPage }))
 );
 
-// Legacy aliases for backwards compatibility
-export const LazyTasksPage = LazyProcessesPage;
-export const LazyTaskDetailPage = LazyProcessDetailPage;
-
 /**
  * Fleet page - Fleet management with map and zones
  */

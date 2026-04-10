@@ -140,7 +140,7 @@ const NAV_CATEGORIES: NavCategory[] = [
         ),
       },
       {
-        label: "Processes",
+        label: "Automations",
         path: "/processes",
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -159,9 +159,9 @@ const NAV_CATEGORIES: NavCategory[] = [
       </svg>
     ),
     items: [
-      // Pipeline overview (entry point)
+      // Pipeline overview (entry point) — TASK-143: now framed as the training workflow
       {
-        label: "Train a Skill",
+        label: "Skill Training",
         path: "/pipeline",
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -236,7 +236,7 @@ const NAV_CATEGORIES: NavCategory[] = [
       },
       // Related tools
       {
-        label: "Skills",
+        label: "Skill Library",
         path: "/skills",
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

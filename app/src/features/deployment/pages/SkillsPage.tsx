@@ -1,6 +1,6 @@
 /**
  * @file SkillsPage.tsx
- * @description Skills and skill chains management page
+ * @description Skill Library — catalog of trained skills + skill chains (TASK-143)
  * @feature deployment
  */
 
@@ -10,6 +10,7 @@ import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder
 import { Card, Button, Badge } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import { SkillBrowser, SkillEditor, SkillStatusBadge } from '../components';
+import { RunSkillModal } from '../components/RunSkillModal';
 import type { SkillDefinition, CreateSkillInput, UpdateSkillInput } from '../types';
 
 type TabValue = 'skills' | 'chains';
@@ -36,6 +37,7 @@ export function SkillsPage() {
   const [showSkillEditor, setShowSkillEditor] = useState(false);
   const [editingSkill, setEditingSkill] = useState<SkillDefinition | undefined>();
   const [selectedSkillId, setSelectedSkillId] = useState<string | undefined>();
+  const [runningSkill, setRunningSkill] = useState<SkillDefinition | null>(null);
 
   // Direct store access
   const skills = useDeploymentStore((s) => s.skills);
@@ -107,9 +109,12 @@ export function SkillsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Skills</h1>
+          <h1 className="text-2xl font-bold text-theme-primary">Skill Library</h1>
           <p className="text-sm text-theme-secondary mt-1">
-            Define and manage robot skills and skill chains
+            Trained capabilities your robots can execute. Create new skills via{' '}
+            <a href="/pipeline" className="text-cobalt-400 hover:underline">Skill Training</a>,
+            or run them via{' '}
+            <a href="/processes" className="text-cobalt-400 hover:underline">Automations</a>.
           </p>
         </div>
         <Button variant="primary" onClick={handleCreateSkill}>
@@ -242,7 +247,6 @@ export function SkillsPage() {
               selectedSkillId={selectedSkillId}
               onSelectSkill={(skill) => setSelectedSkillId(skill.id)}
               onCreateSkill={handleCreateSkill}
-              onEditSkill={handleEditSkill}
             />
           </div>
 
@@ -314,7 +318,17 @@ export function SkillsPage() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-2 pt-4 border-t border-theme">
+                <div className="flex flex-col gap-2 pt-4 border-t border-theme">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setRunningSkill(selectedSkill)}
+                  >
+                    ▶ Run on robot
+                  </Button>
+                </div>
+                <div className="flex gap-2 pt-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -476,6 +490,13 @@ export function SkillsPage() {
           setEditingSkill(undefined);
         }}
         onSubmit={handleSaveSkill}
+      />
+
+      {/* Run skill on robot modal (TASK-143) */}
+      <RunSkillModal
+        skill={runningSkill}
+        isOpen={runningSkill !== null}
+        onClose={() => setRunningSkill(null)}
       />
     </div>
   );

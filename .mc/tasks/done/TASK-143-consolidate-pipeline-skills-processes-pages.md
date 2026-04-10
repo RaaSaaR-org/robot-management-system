@@ -2,9 +2,9 @@
 id: TASK-143
 aliases:
 - TASK-143
-title: 'Consolidate /pipeline, /skills, and /processes — overlapping concepts'
+title: Consolidate /pipeline, /skills, and /processes — overlapping concepts
 slug: consolidate-pipeline-skills-processes-pages
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -14,8 +14,11 @@ tags:
 - extended
 depends_on: []
 due_date: ''
-created: '2026-04-06'
+created: 2026-04-06
+updated: 2026-04-11
 ---
+
+
 
 ## Description
 

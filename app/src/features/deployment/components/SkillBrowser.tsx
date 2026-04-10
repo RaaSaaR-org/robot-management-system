@@ -15,6 +15,7 @@ export interface SkillBrowserProps {
   selectedSkillId?: string;
   onSelectSkill?: (skill: SkillDefinition) => void;
   onCreateSkill?: () => void;
+  /** @deprecated Edit happens via the detail panel's Edit button, not card click. */
   onEditSkill?: (skill: SkillDefinition) => void;
   isLoading?: boolean;
   className?: string;
@@ -27,7 +28,6 @@ export function SkillBrowser({
   selectedSkillId,
   onSelectSkill,
   onCreateSkill,
-  onEditSkill,
   isLoading = false,
   className,
 }: SkillBrowserProps) {
@@ -183,8 +183,10 @@ export function SkillBrowser({
               skill={skill}
               selected={selectedSkillId === skill.id}
               onClick={() => {
+                // Single click selects (shows detail panel with Run/Edit actions).
+                // Edit happens only via the explicit Edit button to avoid the
+                // modal stealing the click (TASK-143 UX fix).
                 onSelectSkill?.(skill);
-                onEditSkill?.(skill);
               }}
             />
           ))}

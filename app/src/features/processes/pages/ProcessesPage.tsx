@@ -1,6 +1,6 @@
 /**
  * @file ProcessesPage.tsx
- * @description Page displaying the list of all processes (workflow definitions)
+ * @description Automations page — orchestrate skills on robots, manually or on a schedule (TASK-143)
  * @feature processes
  * @dependencies @/features/processes/components
  */
@@ -65,8 +65,11 @@ function ProcessesPageInner() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-bold text-theme-primary">Processes</h1>
-        <p className="text-theme-secondary mt-1">View and manage workflow processes</p>
+        <h1 className="text-2xl font-bold text-theme-primary">Automations</h1>
+        <p className="text-theme-secondary mt-1">
+          Run skills on your robots — once, on a schedule, or chained together. Pick from the{' '}
+          <a href="/skills" className="text-cobalt-400 hover:underline">Skill Library</a>.
+        </p>
       </header>
 
       <ProcessList
@@ -87,5 +90,3 @@ function ProcessesPageInner() {
   );
 }
 
-// Legacy alias for backwards compatibility
-export { ProcessesPage as TasksPage };

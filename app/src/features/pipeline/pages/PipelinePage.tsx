@@ -1,6 +1,6 @@
 /**
  * @file PipelinePage.tsx
- * @description Unified "Train a Skill" pipeline — 5-stage overview with next-step CTAs
+ * @description "Skill Training" overview page — 5-stage pipeline with next-step CTAs
  * @feature pipeline
  */
 
@@ -257,9 +257,10 @@ export function PipelinePage() {
             <Workflow className="w-6 h-6 text-cobalt-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-theme-primary">Train a Skill</h1>
+            <h1 className="text-2xl font-bold text-theme-primary">Skill Training</h1>
             <p className="text-sm text-theme-muted">
-              Walk through the 5 stages to take a robot skill from demos to production
+              End-to-end workflow to teach your robots a new skill — from demos to production.{' '}
+              <a href="/skills" className="text-cobalt-400 hover:underline">View existing skills →</a>
             </p>
           </div>
         </div>

@@ -153,6 +153,56 @@ export function createRestRoutes(
   // ============================================================================
 
   // POST /robots/:id/tasks - Receive a pushed task from server
+  // POST /robots/:id/skills/execute - Execute a Skill on this robot.
+  //
+  // TASK-143 wires this from the server's SkillExecutionService. For now this
+  // is a stub that returns success after a short delay so the end-to-end Run
+  // on robot flow is testable. TASK-146 will replace the body with real
+  // closed-loop VLA inference (load adapter → observe → predict → execute).
+  router.post('/robots/:id/skills/execute', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const body = req.body as {
+      skillId?: string;
+      skillName?: string;
+      skillVersion?: string;
+      parameters?: Record<string, unknown>;
+      timeout?: number;
+      linkedModelVersionId?: string;
+    };
+
+    if (!body.skillId) {
+      res.status(400).json({ status: 'failed', error: 'skillId is required' });
+      return;
+    }
+
+    console.log(
+      `[Skill] (TASK-146 stub) Executing skill ${body.skillName ?? body.skillId} v${body.skillVersion ?? '?'} on robot ${robot.id}`
+    );
+
+    // Pretend to do something brief — ample time for the UI to show progress.
+    await new Promise((r) => setTimeout(r, 600));
+
+    res.json({
+      status: 'completed',
+      output: {
+        stub: true,
+        skillId: body.skillId,
+        skillName: body.skillName,
+        linkedModelVersionId: body.linkedModelVersionId ?? null,
+        message:
+          'Skill execution stub — TASK-146 replaces this with real VLA inference (vla-server /load-adapter + closed loop).',
+      },
+    });
+  });
+
   router.post('/robots/:id/tasks', async (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
     if (req.params.id !== robot.id) {

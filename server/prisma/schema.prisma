@@ -439,6 +439,12 @@ model ProcessDefinition {
   estimatedDurationMinutes Int?
   maxConcurrentInstances   Int?
   tags                     String   @default("[]") // JSON: string[]
+  // Scheduling (TASK-143)
+  triggerType              String   @default("manual") // 'manual' | 'scheduled' | 'event'
+  cronExpression           String?  // 5-field cron, only when triggerType='scheduled'
+  enabled                  Boolean  @default(true) // schedule active?
+  nextRunAt                DateTime? // computed by ProcessSchedulerService
+  lastScheduledRunAt       DateTime? // last time scheduler created an instance
   createdBy                String
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
@@ -449,6 +455,8 @@ model ProcessDefinition {
   @@index([name])
   @@index([status])
   @@index([createdBy])
+  @@index([triggerType, enabled])
+  @@index([nextRunAt])
 }
 
 model ProcessInstance {
