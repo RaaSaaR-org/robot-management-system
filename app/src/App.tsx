@@ -19,7 +19,6 @@ import {
   LazyResetPasswordPage,
   LazyAccountPage,
   LazyDashboardPage,
-  LazyRobotsPage,
   LazyRobotDetailPage,
   LazyFleetPage,
   LazyAlertsPage,
@@ -114,14 +113,8 @@ function App() {
           />
           {/* Orchestrator - merged into Dashboard chat drawer (TASK-147) */}
           <Route path="/orchestrator" element={<Navigate to="/dashboard?drawer=chat" replace />} />
-          <Route
-            path="/robots"
-            element={
-              <ProtectedAppRoute>
-                <LazyRobotsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Robots - merged into Fleet tabs (TASK-147). Detail route stays. */}
+          <Route path="/robots" element={<Navigate to="/fleet?tab=list" replace />} />
           <Route
             path="/robots/:id"
             element={
