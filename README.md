@@ -24,6 +24,7 @@ The Open Physical AI Platform — the complete lifecycle from first demonstratio
 
 > **[Open Live Demo](https://raasaar-org.github.io/robot-management-system/)** — Fully interactive demo with simulated H1 humanoid fleet (no backend required)
 
+[![Check](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/check.yml/badge.svg)](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/check.yml)
 [![Deploy Demo to GitHub Pages](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/deploy-demo.yml/badge.svg)](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/deploy-demo.yml)
 
 ---
