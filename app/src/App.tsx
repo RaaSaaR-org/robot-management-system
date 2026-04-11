@@ -44,7 +44,6 @@ import {
   LazyTrainingPage,
   LazyDeploymentsPage,
   LazyDeploymentDetailPage,
-  LazySkillsPage,
   LazyContributionsPage,
   LazyNewContributionPage,
   LazyContributionDetailPage,
@@ -379,14 +378,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          <Route
-            path="/skills"
-            element={
-              <ProtectedAppRoute>
-                <LazySkillsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Skill Library - merged into Deployments tabs (TASK-147) */}
+          <Route path="/skills" element={<Navigate to="/deployments?tab=skills" replace />} />
 
           {/* Evaluation - merged into Training tabs (TASK-147) */}
           <Route path="/evaluation" element={<Navigate to="/training?tab=evaluation" replace />} />
