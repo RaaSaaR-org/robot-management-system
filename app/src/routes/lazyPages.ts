@@ -200,13 +200,6 @@ export const LazyTrainingPage = lazy(() =>
 );
 
 /**
- * Models page - Model registry and version management
- */
-export const LazyModelsPage = lazy(() =>
-  import('@/features/training').then((m) => ({ default: m.ModelsPage }))
-);
-
-/**
  * Deployments page - VLA fleet deployment management
  */
 export const LazyDeploymentsPage = lazy(() =>

@@ -46,7 +46,7 @@ const features = [
       </svg>
     ),
     title: 'Training Studio',
-    description: 'Fine-tune VLA models with one click. Support for Pi0, ACT, Diffusion Policy, OpenVLA. Track experiments with built-in MLflow.',
+    description: 'Fine-tune VLA models with one click. Support for Pi0, ACT, Diffusion Policy, OpenVLA. Track experiments and artifacts in the built-in model registry.',
     badge: 'Training',
   },
   {

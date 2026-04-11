@@ -19,9 +19,6 @@ import type {
   GpuAvailability,
   TrainingDurationEstimate,
   UploadInitiateResponse,
-  RegisteredModel,
-  ModelVersion,
-  RunComparison,
   HFDataset,
   EpisodeMeta,
   FrameData,
@@ -45,12 +42,6 @@ const ENDPOINTS = {
   // GPU & Queue
   gpuAvailability: '/training/gpu/availability',
   queueStats: '/training/queue/stats',
-
-  // Models (MLflow)
-  modelsRegistry: '/models/registry',
-  modelVersions: (name: string) => `/models/registry/${encodeURIComponent(name)}/versions`,
-  modelVersionStage: (name: string, version: string) => `/models/registry/${encodeURIComponent(name)}/versions/${version}/stage`,
-  modelsCompare: '/models/compare',
 
   // Episodes
   datasetEpisodes: (id: string) => `/datasets/${id}/episodes`,
@@ -314,49 +305,6 @@ export const trainingApi = {
   async getQueueStats(): Promise<QueueStats> {
     const response = await apiClient.get<QueueStats>(ENDPOINTS.queueStats);
     return response.data;
-  },
-
-  // ============================================================================
-  // MODELS (MLflow)
-  // ============================================================================
-
-  /**
-   * List registered models from MLflow
-   */
-  async listRegisteredModels(): Promise<RegisteredModel[]> {
-    const response = await apiClient.get<{ registeredModels: RegisteredModel[] }>(
-      ENDPOINTS.modelsRegistry
-    );
-    return response.data.registeredModels;
-  },
-
-  /**
-   * Get versions for a registered model
-   */
-  async getModelVersions(modelName: string): Promise<ModelVersion[]> {
-    const response = await apiClient.get<{ versions: ModelVersion[] }>(
-      ENDPOINTS.modelVersions(modelName)
-    );
-    return response.data.versions;
-  },
-
-  /**
-   * Compare runs by metrics
-   */
-  async compareRuns(runIds: string[]): Promise<RunComparison> {
-    const response = await apiClient.get<RunComparison>(ENDPOINTS.modelsCompare, {
-      params: {
-        runIds: runIds.join(','),
-      },
-    });
-    return response.data;
-  },
-
-  /**
-   * Promote a model version to a new stage
-   */
-  async promoteModelVersion(modelName: string, version: string, stage: string): Promise<void> {
-    await apiClient.post(ENDPOINTS.modelVersionStage(modelName, version), { stage });
   },
 
   // ============================================================================

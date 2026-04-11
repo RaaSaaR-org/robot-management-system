@@ -42,7 +42,6 @@ import {
   LazyDatasetsPage,
   LazyDatasetEpisodesPage,
   LazyTrainingPage,
-  LazyModelsPage,
   LazyDeploymentsPage,
   LazyDeploymentDetailPage,
   LazySkillsPage,
@@ -336,14 +335,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          <Route
-            path="/models"
-            element={
-              <ProtectedAppRoute>
-                <LazyModelsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* /models removed (TASK-142): MLflow registry deleted */}
+          <Route path="/models" element={<Navigate to="/training" replace />} />
 
           {/* DataCollection - Robot data collection sessions */}
           <Route

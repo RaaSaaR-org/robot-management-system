@@ -190,8 +190,6 @@ export interface TrainingJob {
   totalEpochs?: number;
   currentStep?: string;
   metrics: TrainingMetrics;
-  mlflowRunId?: string;
-  mlflowExperimentId?: string;
   modelVersionId?: string;
   startedAt?: string;
   completedAt?: string;
@@ -234,8 +232,6 @@ export interface StoredModelVersion {
   trainingMetrics: TrainingMetrics;
   validationMetrics: TrainingMetrics;
   deploymentStatus: ModelDeploymentStatus;
-  mlflowModelName?: string;
-  mlflowModelVersion?: string;
   createdAt: string;
   updatedAt: string;
   trainingJob?: TrainingJob;
@@ -321,74 +317,31 @@ export interface UploadInitiateResponse {
 }
 
 // ============================================================================
-// MLflow TYPES
+// MODEL REGISTRY STUBS
 // ============================================================================
+//
+// TASK-142: MLflow was deleted. These minimal types are kept so the
+// active-learning UI (PriorityDashboard, UncertaintyHeatmap, ModelSelector)
+// continues to compile. They render with an empty list — model selection is
+// effectively a no-op until a Prisma `ModelVersion`-backed registry replaces
+// them.
 
-export interface MLflowExperiment {
-  experimentId: string;
-  name: string;
-  artifactLocation?: string;
-  lifecycleStage: string;
-  tags?: Record<string, string>;
-}
-
-export interface MLflowRun {
-  info: {
-    runId: string;
-    experimentId: string;
-    runName?: string;
-    status: string;
-    startTime: number;
-    endTime?: number;
-    artifactUri?: string;
-    lifecycleStage: string;
-  };
-  data: {
-    params?: Record<string, string>;
-    metrics?: Record<string, number>;
-    tags?: Record<string, string>;
-  };
-}
-
-export interface MLflowRegisteredModel {
+export interface RegisteredModel {
   name: string;
   description?: string;
-  latest_versions?: MLflowModelVersion[];
-  tags?: Record<string, string>;
+  latest_versions?: ModelVersion[];
   creation_timestamp?: number;
   last_updated_timestamp?: number;
 }
 
-export interface MLflowModelVersion {
+export interface ModelVersion {
   name: string;
   version: string;
-  source?: string;
-  run_id?: string;
-  status?: string;
   current_stage: string;
   description?: string;
-  tags?: Record<string, string>;
   metrics?: Record<string, number>;
   creation_timestamp: number;
   last_updated_timestamp?: number;
-}
-
-/** Type aliases for frontend components */
-export type RegisteredModel = MLflowRegisteredModel;
-export type ModelVersion = MLflowModelVersion;
-
-/** Comparison response from comparing MLflow runs */
-export interface RunComparison {
-  run_ids: string[];
-  metrics: Array<{
-    run_id: string;
-    run_name?: string;
-    metrics: Record<string, number>;
-  }>;
-  params: Array<{
-    run_id: string;
-    params: Record<string, string>;
-  }>;
 }
 
 // ============================================================================
@@ -484,13 +437,6 @@ export interface TrainingState {
   uploadProgress: number;
   uploadError: string | null;
 
-  // Models
-  registeredModels: RegisteredModel[];
-  modelsLoading: boolean;
-  selectedModel: RegisteredModel | null;
-  modelVersions: ModelVersion[];
-  modelComparison: RunComparison | null;
-
   // Filters
   datasetFilters: DatasetQueryParams;
   jobFilters: TrainingJobQueryParams;
@@ -520,13 +466,6 @@ export interface TrainingActions {
   // GPU & Queue
   fetchGpuAvailability: () => Promise<void>;
   fetchQueueStats: () => Promise<void>;
-
-  // Models
-  fetchRegisteredModels: () => Promise<void>;
-  fetchModelVersions: (modelName: string) => Promise<void>;
-  selectModel: (model: RegisteredModel | null) => void;
-  compareRuns: (runIds: string[]) => Promise<void>;
-  promoteModelVersion: (modelName: string, version: string, stage: string) => Promise<void>;
 
   // Reset
   reset: () => void;
