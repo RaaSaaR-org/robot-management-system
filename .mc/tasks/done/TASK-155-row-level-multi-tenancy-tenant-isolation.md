@@ -4,7 +4,7 @@ aliases:
 - TASK-155
 title: 'Row-Level Multi-Tenancy (Tenant Isolation)'
 slug: row-level-multi-tenancy-tenant-isolation
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,7 +17,26 @@ due_date: ''
 created: '2026-04-09'
 ---
 
-## Description
+## Status: Done (2026-04-12)
+
+Shipped in two PRs merged to `main`:
+
+- **Wave 1** — #122 (commit `07e0747`): server-side foundation. `MULTI_TENANCY_ENABLED` feature flag, `Tenant` Prisma model, `$extends` client extension, AsyncLocalStorage tenant context, JWT `tenantId` claim, DEFAULT tenant seeder + backfill, `/api/config/features` public endpoint, frontend `useFeatures()` hook.
+- **Wave 2** — #124 (commit `027747a`): demo-quality UI + operator escape hatch. `features/organizations/` feature module (list/create/delete cards + modal + empty state), TopBar `TenantBadge`, sidebar `requiresFeature` gating (first feature-gated nav group), `/api/tenants` CRUD, `TenantService`, `runAsPlatform` escape hatch for cross-tenant queries, `/api/tenants/current`, error-message pass-through fix, full docs at `docs/multi-tenancy.md`, README + CLAUDE mentions.
+
+**Pilot-wave model coverage**: `User`, `Robot`, `Dataset`, `TrainingJob` are in `TENANT_SCOPED_MODELS` and filter correctly end-to-end (verified via Playwright — a newly created "Acme Robotics" tenant shows `0/0/0/0` counts alongside DEFAULT's real data).
+
+**Follow-up work intentionally deferred to separate tasks**:
+1. Wave 3 model expansion — extend `TENANT_SCOPED_MODELS` to Alert, Incident, Process, ApprovalRequest, ModelVersion, Deployment, etc. (each model = one PR)
+2. Tenant isolation test suite — Prisma extension unit tests + cross-tenant integration tests (security-critical)
+3. Super-admin role + tenant switcher + onboarding wizard
+4. Per-tenant branding — logo upload, colours, `settings` JSON editor
+
+See `docs/multi-tenancy.md` for architecture, configuration, developer guide, and `runAsPlatform` usage.
+
+---
+
+## Description (original)
 
 Add **optional** row-level multi-tenancy so the platform can serve multiple customers from a single deployment. The feature is controlled by `MULTI_TENANCY_ENABLED` (default `false`). When off, the system behaves exactly like today — zero overhead, no tenant filtering. When on, each customer (tenant) gets isolated data — robots, datasets, training jobs, models, users — while sharing the same database and infrastructure.
 
