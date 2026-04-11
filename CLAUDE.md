@@ -385,6 +385,7 @@ Guidelines:
 | `docs/brand.md`                  | Colors, typography, design tokens |
 | `docs/deployment.md`             | Deployment guide (Helm/K8s)       |
 | `docs/dev-workflow.md`           | Development workflow              |
+| `docs/multi-tenancy.md`          | Row-level multi-tenancy — flag, Prisma `$extends` isolation, `runAsPlatform`, Organizations UI (TASK-155) |
 | `docs/vla-integration-guide.md`  | VLA integration (SmolVLA, pi0.5, GR00T) |
 | `docs/regulatory-compliance.md`  | EU AI Act, GDPR compliance        |
 

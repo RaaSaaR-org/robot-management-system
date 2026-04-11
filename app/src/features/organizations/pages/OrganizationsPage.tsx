@@ -65,9 +65,16 @@ export function OrganizationsPage() {
       await remove(id);
       setToast('Organization deleted');
     } catch (err) {
-      setToast(
-        err instanceof Error ? err.message : 'Failed to delete organization'
-      );
+      // ApiError is a plain object, not an Error instance — extract .message
+      // defensively so the toast shows e.g. "Tenant is not empty" instead
+      // of a generic fallback.
+      const message =
+        err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+          ? (err as { message: string }).message
+          : err instanceof Error
+          ? err.message
+          : 'Failed to delete organization';
+      setToast(message);
     }
   };
 
