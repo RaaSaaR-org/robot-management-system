@@ -48,7 +48,6 @@ import { approvalRoutes } from './routes/approval.routes.js';
 import { complianceTrackerRoutes } from './routes/compliance-tracker.routes.js';
 import { trainingRoutes } from './routes/training.routes.js';
 import { storageRoutes } from './routes/storage.routes.js';
-import { modelsRoutes } from './routes/models.routes.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
 import { skillsRoutes } from './routes/skills.routes.js';
@@ -236,9 +235,6 @@ export function createApp(): Express {
 
   // Storage routes (protected) - RustFS object storage
   app.use('/api/storage', authMiddleware, storageRoutes);
-
-  // Models routes (protected) - MLflow model registry
-  app.use('/api/models', authMiddleware, modelsRoutes);
 
   // Dataset routes (protected) - VLA training dataset management
   app.use('/api/datasets', authMiddleware, datasetRoutes);

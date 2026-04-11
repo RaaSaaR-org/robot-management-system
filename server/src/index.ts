@@ -24,7 +24,6 @@ import { trainingWorker } from './workers/training.worker.js';
 import { syntheticDataWorker } from './workers/SyntheticDataWorker.js';
 import { initializeRustFSClient } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
-import { mlflowService } from './services/MLflowService.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { processSchedulerService } from './services/ProcessSchedulerService.js';
 
@@ -92,14 +91,6 @@ async function main() {
     logger.info('[RustFS] Object storage initialized');
   } catch (error) {
     logger.warn({ err: error instanceof Error ? error.message : error }, '[RustFS] Failed to initialize (storage features disabled)');
-  }
-
-  // Initialize MLflow Model Registry (optional - graceful degradation if not available)
-  try {
-    await mlflowService.initialize();
-    logger.info('[MLflow] Model registry initialized');
-  } catch (error) {
-    logger.warn({ err: error instanceof Error ? error.message : error }, '[MLflow] Failed to initialize (model registry features disabled)');
   }
 
   // Create Express app

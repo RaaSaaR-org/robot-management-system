@@ -210,8 +210,6 @@ function dbTrainingJobToDomain(
     currentEpoch: db.currentEpoch ?? undefined,
     totalEpochs: db.totalEpochs ?? undefined,
     metrics: JSON.parse(db.metrics) as TrainingMetrics,
-    mlflowRunId: db.mlflowRunId ?? undefined,
-    mlflowExperimentId: db.mlflowExperimentId ?? undefined,
     bullmqJobId: db.bullmqJobId ?? undefined,
     startedAt: db.startedAt ?? undefined,
     completedAt: db.completedAt ?? undefined,
@@ -237,8 +235,6 @@ function dbModelVersionToDomain(db: PrismaModelVersion): ModelVersion {
     trainingMetrics: JSON.parse(db.trainingMetrics) as TrainingMetrics,
     validationMetrics: JSON.parse(db.validationMetrics) as TrainingMetrics,
     deploymentStatus: db.deploymentStatus as ModelDeploymentStatus,
-    mlflowModelName: db.mlflowModelName ?? undefined,
-    mlflowModelVersion: db.mlflowModelVersion ?? undefined,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
@@ -793,8 +789,6 @@ export class TrainingJobRepository {
       if (input.progress !== undefined) updateData.progress = input.progress;
       if (input.currentEpoch !== undefined) updateData.currentEpoch = input.currentEpoch;
       if (input.metrics !== undefined) updateData.metrics = JSON.stringify(input.metrics);
-      if (input.mlflowRunId !== undefined) updateData.mlflowRunId = input.mlflowRunId;
-      if (input.mlflowExperimentId !== undefined) updateData.mlflowExperimentId = input.mlflowExperimentId;
       if (input.bullmqJobId !== undefined) updateData.bullmqJobId = input.bullmqJobId;
       if (input.startedAt !== undefined) updateData.startedAt = input.startedAt;
       if (input.completedAt !== undefined) updateData.completedAt = input.completedAt;
@@ -866,8 +860,6 @@ export class ModelVersionRepository {
         trainingMetrics: JSON.stringify(input.trainingMetrics ?? {}),
         validationMetrics: JSON.stringify(input.validationMetrics ?? {}),
         deploymentStatus: input.deploymentStatus ?? 'staging',
-        mlflowModelName: input.mlflowModelName,
-        mlflowModelVersion: input.mlflowModelVersion,
       },
     });
     return dbModelVersionToDomain(modelVersion);
@@ -944,8 +936,6 @@ export class ModelVersionRepository {
       if (input.trainingMetrics !== undefined) updateData.trainingMetrics = JSON.stringify(input.trainingMetrics);
       if (input.validationMetrics !== undefined) updateData.validationMetrics = JSON.stringify(input.validationMetrics);
       if (input.deploymentStatus !== undefined) updateData.deploymentStatus = input.deploymentStatus;
-      if (input.mlflowModelName !== undefined) updateData.mlflowModelName = input.mlflowModelName;
-      if (input.mlflowModelVersion !== undefined) updateData.mlflowModelVersion = input.mlflowModelVersion;
 
       const modelVersion = await prisma.modelVersion.update({
         where: { id },

@@ -19,7 +19,6 @@ import {
   datasetRepository,
 } from '../repositories/index.js';
 import { getJobQueue, natsClient } from '../messaging/index.js';
-import { mlflowService } from './MLflowService.js';
 import { trainingJobService } from './TrainingJobService.js';
 import type {
   TrainingJob,
@@ -362,47 +361,6 @@ export class TrainingOrchestrator extends EventEmitter {
       startedAt: new Date(),
     });
 
-    // Create MLflow run if available
-    if (mlflowService.isInitialized()) {
-      try {
-        const experimentName = `vla-training-${job.baseModel}`;
-        let experiment = await mlflowService.getExperimentByName(experimentName);
-        if (!experiment) {
-          experiment = await mlflowService.createExperiment(experimentName);
-        }
-
-        const run = await mlflowService.createRun(experiment.experimentId, `job-${jobId}`, {
-          job_id: jobId,
-          dataset_id: job.datasetId,
-          base_model: job.baseModel,
-          fine_tune_method: job.fineTuneMethod,
-        });
-
-        // Update job with MLflow info
-        await trainingJobRepository.update(jobId, {
-          mlflowRunId: run.info.runId,
-          mlflowExperimentId: experiment.experimentId,
-        });
-
-        // Log hyperparameters
-        const hyperparamRecord: Record<string, string | number> = {};
-        const hp = job.hyperparameters;
-        if (hp.learning_rate !== undefined) hyperparamRecord['learning_rate'] = hp.learning_rate;
-        if (hp.batch_size !== undefined) hyperparamRecord['batch_size'] = hp.batch_size;
-        if (hp.epochs !== undefined) hyperparamRecord['epochs'] = hp.epochs;
-        if (hp.lora_rank !== undefined) hyperparamRecord['lora_rank'] = hp.lora_rank;
-        if (hp.warmup_steps !== undefined) hyperparamRecord['warmup_steps'] = hp.warmup_steps;
-        if (hp.weight_decay !== undefined) hyperparamRecord['weight_decay'] = hp.weight_decay;
-        if (hp.gradient_accumulation_steps !== undefined) hyperparamRecord['gradient_accumulation_steps'] = hp.gradient_accumulation_steps;
-        if (hp.max_grad_norm !== undefined) hyperparamRecord['max_grad_norm'] = hp.max_grad_norm;
-        await mlflowService.logParams(run.info.runId, hyperparamRecord);
-
-        console.log(`[TrainingOrchestrator] Created MLflow run: ${run.info.runId}`);
-      } catch (error) {
-        console.error('[TrainingOrchestrator] Failed to create MLflow run:', error);
-      }
-    }
-
     console.log(`[TrainingOrchestrator] Job started: ${jobId}`);
     return updatedJob;
   }
@@ -506,19 +464,6 @@ export class TrainingOrchestrator extends EventEmitter {
       }
     }
 
-    // Log metrics to MLflow
-    if (mlflowService.isInitialized() && currentJob.mlflowRunId) {
-      try {
-        await mlflowService.logMetrics(currentJob.mlflowRunId, [
-          { key: 'train_loss', value: trainLoss, step },
-          { key: 'learning_rate', value: learningRate, step },
-          ...(valLoss !== undefined ? [{ key: 'val_loss', value: valLoss, step }] : []),
-        ]);
-      } catch (error) {
-        console.error('[TrainingOrchestrator] Failed to log MLflow metrics:', error);
-      }
-    }
-
     // Emit progress event
     if (updatedJob) {
       trainingJobService.emitProgressEvent(jobId, {
@@ -610,41 +555,6 @@ export class TrainingOrchestrator extends EventEmitter {
       console.error('[TrainingOrchestrator] Failed to create ModelVersion:', error);
     }
 
-    // Register model in MLflow
-    if (mlflowService.isInitialized() && job.mlflowRunId) {
-      try {
-        // End the run
-        await mlflowService.endRun(job.mlflowRunId, 'FINISHED');
-
-        // Register model
-        const modelName = `vla-${job.baseModel}-${job.fineTuneMethod}`;
-        try {
-          await mlflowService.createRegisteredModel(modelName, `VLA model trained with ${job.fineTuneMethod}`);
-        } catch {
-          // Model might already exist
-        }
-
-        const mlflowModelVersion = await mlflowService.createModelVersion(
-          modelName,
-          artifactUri,
-          job.mlflowRunId,
-          `Trained from job ${jobId}`
-        );
-
-        // Update model version with MLflow info
-        if (modelVersionId) {
-          await modelVersionRepository.update(modelVersionId, {
-            mlflowModelName: modelName,
-            mlflowModelVersion: mlflowModelVersion.version,
-          });
-        }
-
-        console.log(`[TrainingOrchestrator] Registered MLflow model: ${modelName} v${mlflowModelVersion.version}`);
-      } catch (error) {
-        console.error('[TrainingOrchestrator] Failed to register MLflow model:', error);
-      }
-    }
-
     console.log(`[TrainingOrchestrator] Job completed: ${jobId}`);
     return { job: updatedJob, modelVersionId };
   }
@@ -672,16 +582,6 @@ export class TrainingOrchestrator extends EventEmitter {
           uri: lastCheckpoint,
         });
         this.checkpoints.set(jobId, checkpointList);
-      }
-    }
-
-    // End MLflow run if available
-    const job = await trainingJobRepository.findById(jobId);
-    if (job?.mlflowRunId && mlflowService.isInitialized()) {
-      try {
-        await mlflowService.endRun(job.mlflowRunId, 'FAILED');
-      } catch (err) {
-        console.error('[TrainingOrchestrator] Failed to end MLflow run:', err);
       }
     }
 
