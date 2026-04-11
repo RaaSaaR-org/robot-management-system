@@ -103,7 +103,6 @@ BrowserRouter > ThemeProvider > AuthProvider > App
 | ------------------- | --------------------- | ---------------------------- |
 | `/datasets`         | `DatasetsPage`        | VLA dataset management       |
 | `/training`         | `TrainingPage`        | Training job management      |
-| `/models`           | `ModelsPage`          | Model registry               |
 | `/deployments`      | `DeploymentsPage`     | Fleet deployment management  |
 | `/deployments/:id`  | `DeploymentDetailPage`| Deployment detail            |
 | `/skills`           | `SkillsPage`          | Skill library                |

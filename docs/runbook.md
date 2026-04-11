@@ -205,7 +205,6 @@ The server will log warnings but remain functional. To suppress NATS-dependent f
 RustFS is **optional** — the server continues to work without it. Affected features:
 - Dataset upload/download (parquet, video)
 - Model checkpoint storage
-- MLflow artifact storage
 
 ### Diagnose
 

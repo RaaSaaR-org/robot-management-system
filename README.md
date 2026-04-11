@@ -39,7 +39,7 @@ NeoDEM is the first open-source platform covering the complete Physical AI pipel
 | Stage | What you get |
 |-------|-------------|
 | 🎮 **Collect** | Record demonstrations via teleoperation, kinesthetic teaching, or VR. LeRobotDataset format, HuggingFace Hub sync. |
-| 🧠 **Train** | Fine-tune VLA models (Pi0, ACT, Diffusion Policy, OpenVLA) with one click. Local or cloud GPU. MLflow tracking. |
+| 🧠 **Train** | Fine-tune VLA models (Pi0, ACT, Diffusion Policy, OpenVLA) with one click. Local or cloud GPU. |
 | 🚀 **Deploy** | Model Registry, canary rollouts, A/B testing, auto-rollback. Know exactly what runs on which robot. |
 | 📊 **Evaluate** | Real-world success rate tracking, episode replay, error analysis, model comparison. |
 | 🤖 **Operate** | Fleet dashboard, natural language control via A2A Protocol, real-time telemetry, safety controls. |
@@ -66,7 +66,7 @@ Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM g
     │                                 ▼                      ▼               │
     │                          ┌─────────────┐        ┌─────────────┐        │
     │                          │ PostgreSQL  │        │     VLA     │        │
-    │                          │  + MLflow   │        │   Server    │        │
+    │                          │             │        │   Server    │        │
     │                          │             │        │   FastAPI   │        │
     │                          └─────────────┘        └─────────────┘        │
     │                               :5432                  :8000             │
@@ -94,8 +94,8 @@ NeoDEM covers the complete **Collect → Train → Deploy → Evaluate → Opera
         │  Collect        Train         Deploy        Evaluate                 │
         │  ───────        ─────         ──────        ────────                 │
         │  Teleoperation  Training UI   Model         Success Rate             │
-        │  Kinesthetic    MLflow        Registry      Episode Replay           │
-        │  VR Control     Orchestration Canary        Error Analysis           │
+        │  Kinesthetic    Orchestration Registry      Episode Replay           │
+        │  VR Control     Fine-Tune     Canary        Error Analysis           │
         │  Dataset Hub    Fine-Tune     Rollout       A/B Testing              │
         │                                                                      │
         │  Operate                          Comply                             │
@@ -177,7 +177,7 @@ make run
 | Feature            | Description                                          |
 | ------------------ | ---------------------------------------------------- |
 | Dataset Management | Upload and curate training demonstrations            |
-| Training Jobs      | Fine-tune VLA models with MLflow experiment tracking |
+| Training Jobs      | Fine-tune VLA models, track jobs in Prisma |
 | Skill Library      | Reusable skills learned from demonstrations          |
 | Active Learning    | Intelligent sample selection for efficient training  |
 
@@ -277,7 +277,7 @@ neodem/
 │   ├── src/features/       # Feature modules (robots, training, compliance...)
 │   └── AGENTS.md           # Frontend development guide
 ├── server/                 # Node.js A2A server
-│   ├── src/services/       # Business logic (Training, Deployment, MLflow...)
+│   ├── src/services/       # Business logic (Training, Deployment...)
 │   ├── prisma/             # Database schema
 │   └── AGENTS.md           # Server development guide
 ├── robot-agent/            # Robot control software

@@ -16,7 +16,6 @@ This guide is designed for AI assistants working with the NeoDEM codebase. It pr
 | **NATS Monitor** | 8222 | HTTP | - | NATS monitoring UI |
 | **RustFS S3** | 9000 | HTTP (S3) | - | Object storage API |
 | **RustFS Console** | 9001 | HTTP | `GET /rustfs/console/index.html` | Storage UI |
-| **MLflow** | 5000 | HTTP | `GET /health` | Model registry |
 | **VLA Server** | 8000 | HTTP | `GET /health` | VLA model server |
 
 ---
@@ -273,45 +272,7 @@ aws --endpoint-url http://localhost:9000 s3 mb s3://new-bucket
 
 ---
 
-### 7. MLflow
-
-**URL:** http://localhost:5000
-
-**Key Endpoints:**
-```bash
-# Health check
-curl http://localhost:5000/health
-
-# List experiments
-curl http://localhost:5000/api/2.0/mlflow/experiments/list
-
-# Search runs
-curl "http://localhost:5000/api/2.0/mlflow/runs/search" \
-  -H "Content-Type: application/json" \
-  -d '{"experiment_ids": ["0"]}'
-
-# Get model versions
-curl http://localhost:5000/api/2.0/mlflow/registered-models/list
-```
-
-**Python SDK:**
-```python
-import mlflow
-
-mlflow.set_tracking_uri("http://localhost:5000")
-
-# List experiments
-experiments = mlflow.search_experiments()
-
-# Log a run
-with mlflow.start_run():
-    mlflow.log_param("learning_rate", 0.01)
-    mlflow.log_metric("accuracy", 0.95)
-```
-
----
-
-### 8. VLA Server
+### 7. VLA Server
 
 **Technology:** Python + FastAPI
 
@@ -390,9 +351,6 @@ curl -sf http://localhost:41243/health > /dev/null && echo "✓ Robot Agent" || 
 
 # NATS
 curl -sf http://localhost:8222/healthz > /dev/null && echo "✓ NATS" || echo "✗ NATS"
-
-# MLflow
-curl -sf http://localhost:5000/health > /dev/null && echo "✓ MLflow" || echo "✗ MLflow"
 
 # RustFS
 curl -sf http://localhost:9001/rustfs/console/index.html > /dev/null && echo "✓ RustFS" || echo "✗ RustFS"
@@ -564,7 +522,6 @@ docker-compose logs rustfs
 | GET | `/api/compliance/logs` | Get compliance logs |
 | GET | `/api/training/jobs` | List training jobs |
 | POST | `/api/training/jobs` | Create training job |
-| GET | `/api/models` | List ML models |
 | GET | `/api/deployments` | List deployments |
 
 ### WebSocket Events
@@ -601,7 +558,6 @@ ws.onmessage = (event) => {
 | `RUSTFS_ENDPOINT` | `http://rustfs:9000` | RustFS/S3 endpoint |
 | `RUSTFS_ACCESS_KEY` | `rustfsadmin` | S3 access key |
 | `RUSTFS_SECRET_KEY` | `rustfsadmin` | S3 secret key |
-| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` | MLflow tracking URI |
 
 ### Robot Agent
 

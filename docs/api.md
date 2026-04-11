@@ -173,7 +173,6 @@ Rate limited: 20 requests per 15 minutes.
 | `/api/contributions` | Data contribution portal |
 | `/api/evaluation` | Model evaluation |
 | `/api/storage` | Object storage (RustFS/S3) |
-| `/api/models` | MLflow model registry |
 | `/api/settings` | User preferences |
 | `/api/security` | Device identity, certificates |
 | `/api/updates` | OTA update management |

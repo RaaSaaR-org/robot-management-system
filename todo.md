@@ -204,7 +204,6 @@ All VLA-related services have been migrated from in-memory Maps to Prisma databa
 - [ ] Add asynchronous federated learning support
 - [ ] Add model personalization per robot
 - [ ] Add visualization of fleet learning progress
-- [ ] Add integration with MLflow for experiment tracking
 
 ---
 
@@ -271,7 +270,6 @@ All VLA-related services have been migrated from in-memory Maps to Prisma databa
 ### Medium Priority
 
 - [ ] Add scheduled job for update-due alerts (6-month intervals)
-- [ ] Add MLflow lineage integration for training run tracking
 - [ ] Add automated bias detection from dataset statistics
 - [ ] Add compliance report generation for regulatory submissions
 - [ ] Add notification system for overdue updates

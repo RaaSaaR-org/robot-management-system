@@ -337,7 +337,6 @@ export class TrainingOrchestrator extends EventEmitter {
    * Start a training job
    * - Marks job as 'running'
    * - Sets startedAt timestamp
-   * - Creates MLflow run if available
    */
   async startJob(jobId: string): Promise<TrainingJob | null> {
     const job = await trainingJobRepository.findById(jobId);
@@ -493,7 +492,6 @@ export class TrainingOrchestrator extends EventEmitter {
    * - Marks job as 'completed'
    * - Sets completedAt timestamp
    * - Creates ModelVersion
-   * - Registers model in MLflow
    */
   async completeJob(request: WorkerCompleteRequest): Promise<{
     job: TrainingJob | null;
