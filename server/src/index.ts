@@ -26,11 +26,20 @@ import { initializeRustFSClient } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { processSchedulerService } from './services/ProcessSchedulerService.js';
+import { MULTI_TENANCY_ENABLED } from './config/features.js';
 
 const PORT = process.env.PORT || 3001;
 
 async function main() {
   logger.info('Starting A2A Server...');
+
+  // Multi-tenancy flag (TASK-155) — mirrors NATS/RustFS pattern so
+  // single-tenant deployments see a clear "disabled" line at boot.
+  if (MULTI_TENANCY_ENABLED) {
+    logger.info('[MULTI_TENANCY] enabled (row-level isolation active)');
+  } else {
+    logger.info('[MULTI_TENANCY] disabled (single-tenant mode)');
+  }
 
   // Connect to database
   await connectDatabase();
