@@ -219,7 +219,7 @@ def main() -> None:
     log.info("NeoDEM training worker starting — %s", cfg.summary())
 
     trainer = _pick_trainer(cfg)
-    server = ServerClient(cfg.server_url, cfg.worker_id)
+    server = ServerClient(cfg.server_url, cfg.worker_id, device=cfg.device)
 
     idle_prints = 0
     try:
