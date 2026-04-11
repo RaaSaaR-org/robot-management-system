@@ -3,7 +3,15 @@
  * @description Ring buffer for recording teleoperation frames (leader + follower joints).
  *              Tracks frame rate and supports configurable max buffer size.
  * @feature teleop
- * @status live
+ * @deprecated TASK-117 (2026-04-12): in-memory buffer with no flush path —
+ *             frames recorded here never reach the server. The production
+ *             recording path is `lerobot-record` running inside the sidecar
+ *             (`robot-agent/hardware/so101_sidecar.py`), which writes
+ *             LeRobot v3 parquet directly to disk and auto-uploads to
+ *             RustFS. This file's only consumer is the deprecated
+ *             `bilateral-teleop.ts` WebSocket. Scheduled for removal in a
+ *             follow-up cleanup task — find with
+ *             `git grep "@deprecated TASK-117"`. Do not extend.
  */
 
 /** Joint positions keyed by joint name */

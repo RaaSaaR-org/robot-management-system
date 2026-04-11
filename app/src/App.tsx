@@ -312,6 +312,20 @@ function App() {
               </ProtectedAppRoute>
             }
           />
+          {/*
+            TASK-117: alias path explicitly named in the task body. The
+            recording-focused dashboard lives on the same SessionDetailPage
+            because the page already covers the full record workflow
+            (start/pause/end + cameras + joints + auto-export).
+          */}
+          <Route
+            path="/data-collection/record/:sessionId"
+            element={
+              <ProtectedAppRoute>
+                <LazySessionDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
 
           {/* Deployment - VLA fleet deployment management */}
           <Route

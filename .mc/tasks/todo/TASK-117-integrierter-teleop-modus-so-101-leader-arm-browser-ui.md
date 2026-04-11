@@ -4,7 +4,7 @@ aliases:
 - TASK-117
 title: 'Integrierter Teleop-Modus: SO-101 Leader Arm + Browser-UI'
 slug: integrierter-teleop-modus-so-101-leader-arm-browser-ui
-status: todo
+status: in-progress
 priority: 3
 owner: ''
 projects: []
@@ -18,8 +18,9 @@ depends_on:
 - TASK-116
 due_date: ''
 created: 2026-03-31
-updated: 2026-03-31
+updated: 2026-04-12
 ---
+
 
 
 # Integrierter Teleop-Modus: SO-101 Leader Arm + Browser-UI
@@ -75,3 +76,20 @@ Vollständig integrierter Aufnahme-Modus direkt im RMS — kein Terminal, kein L
 @Devin: Browser-UI, WebSocket-Integration, Record-Endpoints
 
 Referenz: LeRobot `record` CLI, ACT-Teleop, ALOHA bilateral setup
+
+## Implementation status (2026-04-12)
+
+Most of the stack already exists end-to-end:
+
+- **Sidecar `lerobot-record`** wrapper: `robot-agent/hardware/so101_sidecar.py:499` `POST /record/start` → spawns `lerobot-record` with leader on `SO101_LEADER_PORT` and follower on `SO101_FOLLOWER_PORT`, writes LeRobot v3 to disk, auto-uploads to RustFS via `recorder.py` `AsyncUploader`.
+- **Server bridge**: `server/src/services/TeleoperationService.ts` `startSession()` resolves `Robot.a2aAgentUrl` → port 8765, posts to sidecar `/record/start`, persists `sidecarDatasetPath` on the session, polls `/record/status`. `endSession()` posts `/record/stop`, polls upload to `done`, reads `info.json` from RustFS, auto-creates `Dataset` row.
+- **Frontend**: `app/src/features/datacollection/pages/SessionDetailPage.tsx` already mounts dual cameras (top + wrist), follower `JointStateGrid`, Start/Pause/End buttons calling the server endpoints, `KeyboardTeleopSection`, completed view with auto-link to the new dataset.
+
+What's left to close TASK-117 is small UX polish:
+- Add `/data-collection/record/:sessionId` route alias (task body asks for it explicitly)
+- Allow `KeyboardTeleopSection` fallback for `bilateral_aloha` sessions (today gated to `keyboard_mouse`/`gamepad`)
+- Add keyboard shortcuts (Space=start/pause, E=end)
+- Add Browser Gamepad API hook as second fallback
+- Tag deprecated Architecture B files (`robot-agent/src/api/bilateral-teleop.ts`, `robot-agent/src/teleop/FrameRecorder.ts`, `TeleopTab.tsx` `LeaderArmSection`+`RecordingSection`) with `@deprecated TASK-117` for a follow-up cleanup PR.
+
+Out of scope: per-episode discard/save bridging into `lerobot-record` stdin, live leader joint streaming during recording (serial port is exclusive while `lerobot-record` runs).
