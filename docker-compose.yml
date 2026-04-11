@@ -92,7 +92,6 @@ services:
       POSTGRES_DB: neodem
       POSTGRES_USER: neodem
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-neodem-dev}
-      POSTGRES_MULTIPLE_DATABASES: mlflow
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./config/postgres-init:/docker-entrypoint-initdb.d
@@ -105,39 +104,6 @@ services:
       retries: 5
     networks:
       - neodem-network
-
-  # --------------------------------------------------------------------------
-  # MLflow Model Registry
-  # --------------------------------------------------------------------------
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.10.0
-    container_name: neodem-mlflow
-    command: >
-      bash -c "pip install psycopg2-binary boto3 && mlflow server
-      --host 0.0.0.0
-      --port 5000
-      --backend-store-uri postgresql://neodem:${POSTGRES_PASSWORD:-neodem-dev}@postgres:5432/mlflow
-      --default-artifact-root s3://model-checkpoints/mlflow"
-    environment:
-      MLFLOW_S3_ENDPOINT_URL: http://rustfs:9000
-      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
-      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
-    ports:
-      - "5000:5000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rustfs:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
-    networks:
-      - neodem-network
-    restart: unless-stopped
 
   # --------------------------------------------------------------------------
   # Server (Node.js API)
@@ -166,7 +132,6 @@ services:
       RUSTFS_ENDPOINT: http://rustfs:9000
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
-      MLFLOW_TRACKING_URI: http://mlflow:5000
       GPU_TOTAL_COUNT: ${GPU_TOTAL_COUNT:-1}
       GPU_TYPE: ${GPU_TYPE:-unknown}
       GPU_MEMORY_GB: ${GPU_MEMORY_GB:-0}
@@ -177,8 +142,6 @@ services:
       nats:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      mlflow:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]

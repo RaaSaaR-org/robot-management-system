@@ -48,8 +48,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "neodem.fullname" . }}-secrets
                   key: POSTGRES_PASSWORD
-            - name: POSTGRES_MULTIPLE_DATABASES
-              value: "mlflow"
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           livenessProbe:

@@ -6,7 +6,7 @@ Restricts pod-to-pod communication to minimize lateral movement risk.
 
 {{- if .Values.networkPolicy.enabled }}
 
-{{/* PostgreSQL Network Policy - Only allow connections from server and mlflow */}}
+{{/* PostgreSQL Network Policy - Only allow connections from server */}}
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -29,15 +29,6 @@ spec:
             matchLabels:
               {{- include "neodem.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: server
-      ports:
-        - protocol: TCP
-          port: 5432
-    # Allow from mlflow
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "neodem.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: mlflow
       ports:
         - protocol: TCP
           port: 5432
@@ -82,7 +73,7 @@ spec:
 ---
 {{- end }}
 
-{{/* RustFS Network Policy - Allow from server and mlflow */}}
+{{/* RustFS Network Policy - Allow from server */}}
 {{- if and .Values.rustfs.enabled (not .Values.rustfs.external.enabled) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -108,15 +99,6 @@ spec:
       ports:
         - protocol: TCP
           port: 9000
-    # Allow from mlflow
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "neodem.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: mlflow
-      ports:
-        - protocol: TCP
-          port: 9000
     # Allow from rustfs-init job (for bucket creation)
     - from:
         - podSelector:
@@ -125,64 +107,6 @@ spec:
       ports:
         - protocol: TCP
           port: 9000
----
-{{- end }}
-
-{{/* MLflow Network Policy - Allow from server */}}
-{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "neodem.mlflow.fullname" . }}
-  labels:
-    {{- include "neodem.labels" . | nindent 4 }}
-    app.kubernetes.io/component: mlflow
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "neodem.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: mlflow
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # Allow from server
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "neodem.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: server
-      ports:
-        - protocol: TCP
-          port: 5000
-  egress:
-    # Allow to PostgreSQL
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "neodem.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: postgres
-      ports:
-        - protocol: TCP
-          port: 5432
-    # Allow to RustFS
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "neodem.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: rustfs
-      ports:
-        - protocol: TCP
-          port: 9000
-    # Allow DNS
-    - to:
-        - namespaceSelector: {}
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
 ---
 {{- end }}
 
@@ -263,17 +187,6 @@ spec:
       ports:
         - protocol: TCP
           port: 9000
-    {{- end }}
-    # Allow to MLflow
-    {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "neodem.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: mlflow
-      ports:
-        - protocol: TCP
-          port: 5000
     {{- end }}
     # Allow DNS
     - to:

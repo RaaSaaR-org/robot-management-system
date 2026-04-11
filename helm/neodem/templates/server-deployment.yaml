@@ -94,14 +94,6 @@ spec:
                   name: {{ include "neodem.fullname" . }}-secrets
                   key: RUSTFS_SECRET_KEY
             {{- end }}
-            # MLflow
-            {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
-            - name: MLFLOW_TRACKING_URI
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "neodem.fullname" . }}-config
-                  key: MLFLOW_TRACKING_URI
-            {{- end }}
             # Optional: Public URL
             {{- if .Values.server.env.publicUrl }}
             - name: PUBLIC_URL

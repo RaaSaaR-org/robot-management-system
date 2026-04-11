@@ -24,12 +24,7 @@ data:
   RUSTFS_REGION: {{ .Values.rustfs.external.region | quote }}
   {{- end }}
   {{- end }}
-  
-  # MLflow configuration
-  {{- if or .Values.mlflow.enabled .Values.mlflow.external.enabled }}
-  MLFLOW_TRACKING_URI: {{ include "neodem.mlflow.trackingUri" . | quote }}
-  {{- end }}
-  
+
   # Server configuration
   NODE_ENV: {{ .Values.server.env.nodeEnv | quote }}
   AUTH_DISABLED: {{ .Values.server.env.authDisabled | quote }}

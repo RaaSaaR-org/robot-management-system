@@ -93,20 +93,3 @@ spec:
       app.kubernetes.io/component: rustfs
 ---
 {{- end }}
-
-{{/* MLflow PDB */}}
-{{- if and .Values.mlflow.enabled (not .Values.mlflow.external.enabled) }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "neodem.mlflow.fullname" . }}
-  labels:
-    {{- include "neodem.labels" . | nindent 4 }}
-    app.kubernetes.io/component: mlflow
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      {{- include "neodem.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: mlflow
-{{- end }}
