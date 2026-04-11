@@ -2,7 +2,10 @@
  * @file HardwareClient.ts
  * @description HTTP client for the SO-101 hardware sidecar (so101_sidecar.py).
  *              Polls real joint states and forwards actions to the real arm.
+ *              TASK-146 extended this with snapshot/getStateNow/sendActionVector
+ *              for the TS-owned closed loop.
  * @feature hardware
+ * @status live
  */
 
 import type { JointState } from '../robot/types.js';
@@ -109,6 +112,96 @@ export class HardwareClient {
       body: JSON.stringify(joints),
       signal: AbortSignal.timeout(1000),
     });
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // TASK-146: helpers used by SkillExecutor's closed loop.
+  // Unlike the 2s polling path above, these are synchronous per-call
+  // fetches the closed loop makes at ~5 Hz.
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * List of camera names the sidecar exposes. Called once at connect time
+   * by SkillExecutor so it can map vla-server's expected camera names onto
+   * the physical cameras.
+   */
+  async getCameras(): Promise<string[]> {
+    const res = await fetch(`${SIDECAR_URL}/cameras`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar /cameras returned ${res.status}`);
+    }
+    const data = (await res.json()) as { cameras?: string[] };
+    return data.cameras ?? [];
+  }
+
+  /**
+   * One-shot camera snapshot as a base64 JPEG. Used per-tick by the
+   * closed loop when it needs fresh frames for `/predict`.
+   */
+  async snapshot(name: string): Promise<string> {
+    const res = await fetch(`${SIDECAR_URL}/cameras/${encodeURIComponent(name)}/snapshot`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar snapshot ${name} failed: HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as { image_b64?: string };
+    if (!data.image_b64) {
+      throw new Error(`Sidecar snapshot ${name}: empty response`);
+    }
+    return data.image_b64;
+  }
+
+  /**
+   * Synchronous joint read (unlike the 2s `jointStates` poll). Uses the
+   * sidecar's /state/fast endpoint, which skips the between-read torque
+   * disable so the arm holds position during a closed-loop run.
+   *
+   * Returns a 6-element vector in the canonical SO-101 joint order:
+   * [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
+   */
+  async getStateNow(): Promise<number[]> {
+    const res = await fetch(`${SIDECAR_URL}/state/fast`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar /state/fast returned ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      joints: Array<{ name: string; position: number }>;
+    };
+    const order = [
+      'shoulder_pan',
+      'shoulder_lift',
+      'elbow_flex',
+      'wrist_flex',
+      'wrist_roll',
+      'gripper',
+    ];
+    const byName = new Map(data.joints.map((j) => [j.name, j.position]));
+    return order.map((n) => byName.get(n) ?? 0);
+  }
+
+  /**
+   * Send an action vector in the canonical SO-101 joint order
+   * (see `getStateNow`). Wraps `sendAction` with the naming.
+   */
+  async sendActionVector(action: number[]): Promise<void> {
+    const order = [
+      'shoulder_pan',
+      'shoulder_lift',
+      'elbow_flex',
+      'wrist_flex',
+      'wrist_roll',
+      'gripper',
+    ];
+    const joints: Record<string, number> = {};
+    for (let i = 0; i < order.length && i < action.length; i++) {
+      joints[order[i]] = action[i];
+    }
+    await this.sendAction(joints);
   }
 }
 

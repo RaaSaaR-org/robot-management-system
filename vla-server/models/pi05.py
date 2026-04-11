@@ -37,6 +37,7 @@ class Pi05Model(VLAModel):
         self.device = device
         self._loaded = False
         self._step = 0
+        self._active_adapter_id: str | None = None
 
     def load(self) -> None:
         self._loaded = True
@@ -83,3 +84,22 @@ class Pi05Model(VLAModel):
     @property
     def is_loaded(self) -> bool:
         return self._loaded
+
+    @property
+    def active_adapter_id(self) -> str | None:
+        return self._active_adapter_id
+
+    def load_adapter(self, adapter_path: str, adapter_id: str | None = None) -> dict:
+        """Stub adapter loader — records the id without loading any weights.
+
+        Useful for end-to-end testing of the /load-adapter wiring without ML deps.
+        """
+        if not self._loaded:
+            raise RuntimeError("Model not loaded; cannot apply adapter")
+        name = adapter_id or f"adapter-{int(time.time() * 1000)}"
+        self._active_adapter_id = name
+        logger.info(f"Pi05Model: stub-loaded adapter '{name}' from {adapter_path}")
+        return {
+            "adapter_id": name,
+            "info": {"strategy": "stub", "path": adapter_path},
+        }

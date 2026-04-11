@@ -14,6 +14,7 @@ import { SuccessRateChart } from '../components/SuccessRateChart';
 import { ErrorAnalysisPanel } from '../components/ErrorAnalysisPanel';
 import { ModelComparisonTable } from '../components/ModelComparisonTable';
 import { RolloutTimeline } from '../components/RolloutTimeline';
+import { HardwareTestPanel } from '../components/HardwareTestPanel';
 
 // ============================================================================
 // STAT CARD
@@ -61,8 +62,8 @@ export function EvaluationDashboardPage() {
   const [comparison, setComparison] = useState<ModelComparisonResult | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
 
-  const fetchData = useCallback(async (p: EvaluationPeriod) => {
-    setLoading(true);
+  const fetchData = useCallback(async (p: EvaluationPeriod, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [episodesRes, successRateRes, errorsRes] = await Promise.all([
         evaluationApi.listEpisodes({ period: p, limit: 50 }),
@@ -97,7 +98,7 @@ export function EvaluationDashboardPage() {
     } catch (err) {
       console.error('[EvaluationDashboard] Failed to fetch data:', err);
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -180,6 +181,9 @@ export function EvaluationDashboardPage() {
             <h2 className="text-lg font-semibold text-theme-primary mb-4">Recent Rollouts</h2>
             <RolloutTimeline episodes={episodes} maxItems={10} />
           </div>
+
+          {/* Row 5: Hardware Test (TASK-146) */}
+          <HardwareTestPanel onComplete={() => fetchData(period, true)} />
         </>
       )}
     </div>

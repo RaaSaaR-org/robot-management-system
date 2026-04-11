@@ -15,6 +15,7 @@ import type {
 import { config } from '../config/config.js';
 import type { DeviceIdentityManager } from '../security/device-identity.js';
 import type { SecureBootVerifier } from '../security/secure-boot.js';
+import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 
 export function createRestRoutes(
   robotStateManager: RobotStateManager,
@@ -152,13 +153,17 @@ export function createRestRoutes(
   // TASK ENDPOINTS (for server push model)
   // ============================================================================
 
-  // POST /robots/:id/tasks - Receive a pushed task from server
   // POST /robots/:id/skills/execute - Execute a Skill on this robot.
   //
-  // TASK-143 wires this from the server's SkillExecutionService. For now this
-  // is a stub that returns success after a short delay so the end-to-end Run
-  // on robot flow is testable. TASK-146 will replace the body with real
-  // closed-loop VLA inference (load adapter → observe → predict → execute).
+  // TASK-146 closes the loop:
+  //   1. If a `linkedModelVersionId` + `artifactUri` are provided and the
+  //      robot's currently-loaded model differs, switch the VLA adapter via
+  //      vla-server `/load-adapter` (real, not simulated).
+  //   2. Run the closed-loop SkillExecutor: observe → /predict → execute →
+  //      repeat. On hardware this delegates to VLARunner via the existing
+  //      sidecar. In sim it runs a TS-only loop with synthetic frames.
+  //
+  // The companion `POST /robots/:id/skills/abort` route below stops it.
   router.post('/robots/:id/skills/execute', async (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
     if (req.params.id !== robot.id) {
@@ -176,6 +181,9 @@ export function createRestRoutes(
       parameters?: Record<string, unknown>;
       timeout?: number;
       linkedModelVersionId?: string;
+      artifactUri?: string;
+      taskPrompt?: string;
+      maxSteps?: number;
     };
 
     if (!body.skillId) {
@@ -183,23 +191,229 @@ export function createRestRoutes(
       return;
     }
 
+    // 1. Adapter swap (best-effort: only if a model version + artifact are
+    //    provided AND it differs from the currently-loaded model).
+    if (body.linkedModelVersionId && body.artifactUri) {
+      const current = robotStateManager.getVLAModelVersion();
+      if (current !== body.linkedModelVersionId) {
+        console.log(
+          `[Skill] Loading adapter for skill ${body.skillName ?? body.skillId}: ${body.linkedModelVersionId}`
+        );
+        const switchResult = await robotStateManager.switchVLAModel({
+          modelVersionId: body.linkedModelVersionId,
+          artifactUri: body.artifactUri,
+        });
+        if (!switchResult.success) {
+          res.status(502).json({
+            status: 'failed',
+            error: `Adapter load failed: ${switchResult.error ?? 'unknown'}`,
+          });
+          return;
+        }
+      }
+    }
+
+    // 2. Closed loop.
+    const taskPrompt =
+      body.taskPrompt ??
+      (typeof body.parameters?.taskPrompt === 'string' ? body.parameters.taskPrompt : '') ??
+      `Execute skill ${body.skillName ?? body.skillId}`;
+    const maxSteps =
+      body.maxSteps ??
+      (typeof body.parameters?.maxSteps === 'number' ? body.parameters.maxSteps : 200);
+    // The server's `timeout` field is the skill timeout in **seconds** (from
+    // SkillDefinition). Convert to milliseconds. Default 60s.
+    const timeoutMs = body.timeout != null ? body.timeout * 1000 : 60_000;
+
+    const executor = new SkillExecutor(robotStateManager);
+    skillExecutorRegistry.register(body.skillId, executor);
     console.log(
-      `[Skill] (TASK-146 stub) Executing skill ${body.skillName ?? body.skillId} v${body.skillVersion ?? '?'} on robot ${robot.id}`
+      `[Skill] Running ${body.skillName ?? body.skillId} on robot ${robot.id} (maxSteps=${maxSteps}, timeoutMs=${timeoutMs})`
     );
 
-    // Pretend to do something brief — ample time for the UI to show progress.
-    await new Promise((r) => setTimeout(r, 600));
+    let result;
+    try {
+      result = await executor.run({
+        skillId: body.skillId,
+        taskPrompt: taskPrompt as string,
+        maxSteps,
+        timeoutMs,
+      });
+    } finally {
+      skillExecutorRegistry.unregister(body.skillId);
+    }
+
+    console.log(
+      `[Skill] ${body.skillName ?? body.skillId}: ${result.status} after ${result.steps} steps in ${result.durationMs}ms`
+    );
+
+    if (result.status === 'failed' || result.status === 'timeout') {
+      res.status(result.status === 'timeout' ? 504 : 500).json({
+        status: 'failed',
+        error: result.error ?? result.message ?? result.status,
+        output: { steps: result.steps, durationMs: result.durationMs },
+      });
+      return;
+    }
 
     res.json({
-      status: 'completed',
+      status: result.status, // 'completed' | 'aborted'
       output: {
-        stub: true,
         skillId: body.skillId,
         skillName: body.skillName,
         linkedModelVersionId: body.linkedModelVersionId ?? null,
-        message:
-          'Skill execution stub — TASK-146 replaces this with real VLA inference (vla-server /load-adapter + closed loop).',
+        steps: result.steps,
+        durationMs: result.durationMs,
+        lastAction: result.lastAction,
+        message: result.message,
       },
+    });
+  });
+
+  // POST /robots/:id/skills/abort - Abort a running skill execution.
+  router.post('/robots/:id/skills/abort', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+    const { skillId } = req.body as { skillId?: string };
+    if (!skillId) {
+      res.status(400).json({ error: 'skillId is required' });
+      return;
+    }
+    const aborted = skillExecutorRegistry.abort(skillId);
+    if (!aborted) {
+      res.status(404).json({ error: `No active execution for skill ${skillId}` });
+      return;
+    }
+    res.status(204).send();
+  });
+
+  // POST /robots/:id/evaluation/run - Run N closed-loop episodes for a skill
+  // and report each one to the server's /api/evaluation/episodes endpoint.
+  // (TASK-146 / Phase C). Returns a summary; per-episode rows live on the server.
+  router.post('/robots/:id/evaluation/run', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const body = req.body as {
+      skillId?: string;
+      modelVersionId?: string;
+      artifactUri?: string;
+      taskPrompt?: string;
+      episodes?: number;
+      maxStepsPerEpisode?: number;
+      timeoutMsPerEpisode?: number;
+      serverBaseUrl?: string; // override for tests
+    };
+
+    if (!body.skillId || !body.taskPrompt) {
+      res.status(400).json({ error: 'skillId and taskPrompt are required' });
+      return;
+    }
+
+    // Optional adapter swap before evaluation
+    if (body.modelVersionId && body.artifactUri) {
+      const current = robotStateManager.getVLAModelVersion();
+      if (current !== body.modelVersionId) {
+        const sw = await robotStateManager.switchVLAModel({
+          modelVersionId: body.modelVersionId,
+          artifactUri: body.artifactUri,
+        });
+        if (!sw.success) {
+          res.status(502).json({ error: `Adapter load failed: ${sw.error}` });
+          return;
+        }
+      }
+    }
+
+    const episodes = Math.max(1, Math.min(body.episodes ?? 5, 50));
+    const maxSteps = body.maxStepsPerEpisode ?? 200;
+    const timeoutMs = body.timeoutMsPerEpisode ?? 60_000;
+    const serverBaseUrl = body.serverBaseUrl ?? process.env.NEODEM_SERVER_URL ?? 'http://localhost:3001';
+
+    const results: Array<{
+      index: number;
+      status: string;
+      steps: number;
+      durationMs: number;
+      error?: string;
+    }> = [];
+    const overallStartedAt = new Date();
+
+    for (let i = 0; i < episodes; i++) {
+      const startedAt = new Date();
+      const executor = new SkillExecutor(robotStateManager);
+      // Track on the same registry so an abort on the skill aborts the eval too.
+      skillExecutorRegistry.register(body.skillId, executor);
+      let result;
+      try {
+        result = await executor.run({
+          skillId: body.skillId,
+          taskPrompt: body.taskPrompt,
+          maxSteps,
+          timeoutMs,
+        });
+      } finally {
+        skillExecutorRegistry.unregister(body.skillId);
+      }
+      const endedAt = new Date();
+
+      results.push({
+        index: i,
+        status: result.status,
+        steps: result.steps,
+        durationMs: result.durationMs,
+        error: result.error,
+      });
+
+      // Best-effort: POST the episode to the server. Don't let a failed POST
+      // abort the evaluation run.
+      try {
+        await fetch(`${serverBaseUrl}/api/evaluation/episodes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            robotId: robot.id,
+            modelVersion: body.modelVersionId ?? 'unknown',
+            taskPrompt: body.taskPrompt,
+            startedAt: startedAt.toISOString(),
+            endedAt: endedAt.toISOString(),
+            durationMs: result.durationMs,
+            success: result.status === 'completed',
+            errorType: result.status === 'completed' ? null : (result.error ?? result.status),
+            metadata: { steps: result.steps, episodeIndex: i, skillId: body.skillId },
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[Evaluation] Failed to record episode ${i}: ${msg}`);
+      }
+
+      // Stop the run early on abort.
+      if (result.status === 'aborted') break;
+    }
+
+    const successCount = results.filter((r) => r.status === 'completed').length;
+    res.json({
+      robotId: robot.id,
+      skillId: body.skillId,
+      episodes: results.length,
+      successCount,
+      successRate: results.length > 0 ? successCount / results.length : 0,
+      startedAt: overallStartedAt.toISOString(),
+      results,
     });
   });
 

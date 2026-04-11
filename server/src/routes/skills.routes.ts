@@ -559,6 +559,29 @@ skillsRoutes.get('/:id/check-robot/:robotId', async (req: Request, res: Response
 // ============================================================================
 
 /**
+ * POST /api/skills/:id/abort - Abort a running skill execution on a robot.
+ * Forwards to the robot agent's /skills/abort endpoint. (TASK-146)
+ */
+skillsRoutes.post('/:id/abort', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const body = req.body as { robotId?: string };
+    if (!body.robotId) {
+      return res.status(400).json({ error: 'robotId is required' });
+    }
+    const aborted = await skillExecutionService.abortSkillOnRobot(id, body.robotId);
+    if (!aborted) {
+      return res.status(404).json({ error: 'No active execution to abort' });
+    }
+    res.status(204).send();
+  } catch (error) {
+    console.error('[SkillsRoutes] Error aborting skill:', error);
+    const message = error instanceof Error ? error.message : 'Failed to abort skill';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /api/skills/:id/execute - Execute a skill on a robot
  */
 skillsRoutes.post('/:id/execute', async (req: Request, res: Response) => {

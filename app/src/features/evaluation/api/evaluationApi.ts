@@ -21,7 +21,32 @@ const ENDPOINTS = {
   successRate: '/evaluation/success-rate',
   errorBreakdown: '/evaluation/error-breakdown',
   compare: '/evaluation/compare',
+  runHardware: '/evaluation/run-hardware',
 } as const;
+
+export interface RunHardwareEvaluationRequest {
+  robotId: string;
+  skillId: string;
+  episodes?: number;
+  maxStepsPerEpisode?: number;
+  taskPrompt?: string;
+}
+
+export interface HardwareEvaluationSummary {
+  robotId: string;
+  skillId: string;
+  episodes: number;
+  successCount: number;
+  successRate: number;
+  startedAt: string;
+  results: Array<{
+    index: number;
+    status: string;
+    steps: number;
+    durationMs: number;
+    error?: string;
+  }>;
+}
 
 export const evaluationApi = {
   async listEpisodes(params?: EpisodeQueryParams): Promise<EpisodesListResponse> {
@@ -61,5 +86,20 @@ export const evaluationApi = {
       params: { versionA, versionB, period },
     });
     return response.data;
+  },
+
+  /**
+   * Trigger a hardware evaluation run on the robot agent. Per-episode results
+   * are persisted by the agent itself via /evaluation/episodes — the response
+   * here is just the summary returned by the agent. (TASK-146)
+   */
+  async runHardwareEvaluation(
+    request: RunHardwareEvaluationRequest
+  ): Promise<HardwareEvaluationSummary> {
+    const response = await apiClient.post<{ summary: HardwareEvaluationSummary }>(
+      ENDPOINTS.runHardware,
+      request
+    );
+    return response.data.summary;
   },
 };

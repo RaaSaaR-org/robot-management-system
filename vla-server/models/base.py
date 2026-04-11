@@ -8,6 +8,7 @@ load / predict / reset / info.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -65,3 +66,25 @@ class VLAModel(ABC):
     @abstractmethod
     def is_loaded(self) -> bool:
         """Whether the model is loaded and ready."""
+
+    def load_adapter(self, adapter_path: str, adapter_id: str | None = None) -> dict[str, Any]:
+        """Hot-swap a LoRA adapter on top of the loaded base model.
+
+        Backends that don't support hot-swap must raise NotImplementedError.
+
+        Args:
+            adapter_path: s3:// URI, local directory, or .tar.gz path
+            adapter_id: caller-supplied identifier (e.g. modelVersionId);
+                backends use it as the PEFT adapter name when registering.
+
+        Returns:
+            Dict with at minimum: {adapter_id, info}
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support adapter hot-swap"
+        )
+
+    @property
+    def active_adapter_id(self) -> str | None:
+        """Currently loaded adapter identifier (None if no adapter)."""
+        return None

@@ -14,6 +14,13 @@ Exposes a lightweight HTTP API on port 8765:
 
 Run via:
   uv run python ~/develop/robot-management-system/robot-agent/hardware/so101_sidecar.py
+
+TASK-146 additions:
+  GET /state/fast              Joint read that keeps torque enabled (closed loop)
+  GET /cameras                 List available camera names
+  GET /cameras/<name>/snapshot One-shot base64 JPEG for the TS closed loop
+
+@status live
 """
 
 import json
@@ -166,6 +173,46 @@ def get_state():
     return {"joints": joints, "timestamp": time.time(), "simulated": True}
 
 
+def get_state_fast():
+    """Fast-path joint read for closed-loop control (TASK-146).
+
+    Like get_state() but DOES NOT disable torque after reading. Used by the
+    TS SkillExecutor which reads state at ~5 Hz and needs the arm to hold
+    position between reads. Safe to call concurrently with /action calls
+    (same robot_lock).
+    """
+    global last_state, last_request_time
+    if vla_runner is not None and vla_runner.is_running:
+        return {"joints": last_state or [], "timestamp": time.time(), "simulated": True, "vla_active": True}
+    if recorder.is_running:
+        return {"joints": last_state or [], "timestamp": time.time(), "simulated": True, "recording_active": True}
+    with robot_lock:
+        last_request_time = time.time()
+        if not connected:
+            _connect_unlocked()
+        if robot and connected:
+            try:
+                obs = robot.get_observation()
+                # Deliberately NO disable_torque() — closed loop needs torque held.
+                joints = []
+                for name in JOINT_NAMES:
+                    pos = obs.get(f"{name}.pos", 0.0)
+                    joints.append({
+                        "name": name,
+                        "position": round(pos, 4),
+                        "velocity": 0.0,
+                        "effort": 0.0,
+                        "simulated": False,
+                    })
+                last_state = joints
+                return {"joints": joints, "timestamp": time.time(), "simulated": False}
+            except Exception as e:
+                print(f"[Sidecar] fast read error: {e}", flush=True)
+                _disconnect_unlocked()
+    # Fall back to the simulated state from get_state()
+    return get_state()
+
+
 def send_action(joint_positions: dict):
     global last_request_time
     with robot_lock:
@@ -205,10 +252,18 @@ def _vla_status() -> dict:
 
 # --- Camera MJPEG streaming ---
 # Maps camera name → device path. Shared OpenCV captures with idle auto-release.
-CAMERA_MAP = {
+# TASK-146: filter out cameras whose device nodes don't exist at startup so
+# /cameras never advertises a camera that can't actually be captured. This is
+# needed because USB webcams can re-enumerate between boots (e.g. /dev/video0
+# disappears when only one of two cameras is plugged in).
+_CAMERA_MAP_RAW = {
     "wrist": os.environ.get("SO101_WRIST_CAM", "/dev/video0"),
     "top": os.environ.get("SO101_TOP_CAM", "/dev/video2"),
 }
+CAMERA_MAP = {name: dev for name, dev in _CAMERA_MAP_RAW.items() if os.path.exists(dev)}
+for name, dev in _CAMERA_MAP_RAW.items():
+    if name not in CAMERA_MAP:
+        print(f"[Sidecar/Cam] Dropping {name!r} — device {dev} does not exist", flush=True)
 CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 10
@@ -257,6 +312,34 @@ def _camera_idle_watchdog():
                     print(f"[Sidecar/Cam] Released idle camera: {name}", flush=True)
 
 
+def capture_snapshot_b64(name: str) -> dict | None:
+    """One-shot camera frame as base64 JPEG (TASK-146).
+
+    Reuses the thread-safe camera pool (_get_camera) shared with the MJPEG
+    streamer. Returns a dict suitable for JSON encoding, or None if the
+    camera is unavailable or capture fails.
+    """
+    import base64
+    import cv2
+    entry = _get_camera(name)
+    if not entry:
+        return None
+    with entry["lock"]:
+        entry["last_read"] = time.time()
+        ret, frame = entry["cap"].read()
+    if not ret:
+        return None
+    ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, CAMERA_JPEG_QUALITY])
+    if not ok:
+        return None
+    return {
+        "image_b64": base64.b64encode(jpeg.tobytes()).decode("ascii"),
+        "width": int(frame.shape[1]),
+        "height": int(frame.shape[0]),
+        "camera": name,
+    }
+
+
 def stream_camera_mjpeg(wfile, name: str):
     """Write MJPEG frames to wfile until client disconnects."""
     import cv2
@@ -291,6 +374,37 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"status": "ok", "connected": connected, "port": ROBOT_PORT})
         elif self.path == "/state":
             self._json(get_state())
+        elif self.path == "/state/fast":
+            # TASK-146: fast-path joint read that keeps torque enabled.
+            # Used by the TS SkillExecutor closed loop at 5 Hz.
+            self._json(get_state_fast())
+        elif self.path == "/cameras":
+            # TASK-146: list the cameras this sidecar knows about, so TS can
+            # discover them at connect time.
+            self._json({
+                "cameras": list(CAMERA_MAP.keys()),
+                "width": CAMERA_WIDTH,
+                "height": CAMERA_HEIGHT,
+            })
+        elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
+            # TASK-146: one-shot frame capture for the TS closed loop.
+            # Path: /cameras/<name>/snapshot
+            parts = self.path.split("/")
+            if len(parts) != 4:
+                self.send_error(404, "Bad snapshot path")
+                return
+            cam_name = parts[2]
+            if cam_name not in CAMERA_MAP:
+                self.send_error(404, f"Unknown camera: {cam_name}")
+                return
+            if recorder.is_running:
+                self.send_error(503, "Camera in use by recorder")
+                return
+            result = capture_snapshot_b64(cam_name)
+            if result is None:
+                self.send_error(500, f"Failed to capture {cam_name}")
+                return
+            self._json(result)
         elif self.path == "/disconnect":
             # Convenience: release the serial port so other tools can use the arm
             with robot_lock:

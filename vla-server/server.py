@@ -18,6 +18,7 @@ HTTP API:
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import time
@@ -107,6 +108,23 @@ class HealthResponse(BaseModel):
     model: str = ""
     model_loaded: bool = False
     device: str = ""
+    active_adapter_id: str | None = None
+
+
+class LoadAdapterRequest(BaseModel):
+    adapter_path: str = Field(
+        ..., description="s3:// URI, absolute local path, or .tar.gz path"
+    )
+    adapter_id: str | None = Field(
+        None, description="Caller-supplied identifier (e.g. modelVersionId)"
+    )
+
+
+class LoadAdapterResponse(BaseModel):
+    adapter_id: str
+    loaded_at: float
+    load_time_ms: float
+    info: dict
 
 
 class ConfigResponse(BaseModel):
@@ -153,6 +171,9 @@ def create_model(config: ServerConfig) -> VLAModel:
 
 engine: VLAModel | None = None
 config: ServerConfig | None = None
+# Serializes /predict and /load-adapter so an in-flight inference cannot read
+# a partially-mutated model during a hot-swap.
+model_lock: asyncio.Lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -195,6 +216,7 @@ async def health():
         model=config.model if config else "",
         model_loaded=engine is not None and engine.is_loaded,
         device=config.device if config else "",
+        active_adapter_id=engine.active_adapter_id if engine else None,
     )
 
 
@@ -231,11 +253,14 @@ async def predict(request: PredictRequest):
 
     task = request.task or (config.default_task if config else "")
 
-    try:
-        result = engine.predict(images=images, state=request.state, task=task)
-    except Exception as e:
-        logger.error(f"Inference error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
+    async with model_lock:
+        try:
+            result = await asyncio.to_thread(
+                engine.predict, images, request.state, task
+            )
+        except Exception as e:
+            logger.error(f"Inference error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
 
     return PredictResponse(
         actions=result.actions,
@@ -249,6 +274,43 @@ async def reset_policy():
     if engine:
         engine.reset()
     return {"ok": True}
+
+
+@app.post("/load-adapter", response_model=LoadAdapterResponse)
+async def load_adapter(request: LoadAdapterRequest):
+    """Hot-swap a LoRA adapter onto the loaded base model.
+
+    Body:
+        adapter_path: s3:// URI, absolute local path, or .tar.gz path
+        adapter_id: optional caller-supplied identifier (e.g. modelVersionId)
+
+    Returns:
+        adapter_id, loaded_at, load_time_ms, info dict
+    """
+    if not engine or not engine.is_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    async with model_lock:
+        t_start = time.perf_counter()
+        try:
+            result = await asyncio.to_thread(
+                engine.load_adapter, request.adapter_path, request.adapter_id
+            )
+        except NotImplementedError as e:
+            raise HTTPException(status_code=501, detail=str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=f"Adapter not found: {e}")
+        except Exception as e:
+            logger.error(f"Adapter load failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Adapter load failed: {e}")
+        load_time_ms = (time.perf_counter() - t_start) * 1000
+
+    return LoadAdapterResponse(
+        adapter_id=result["adapter_id"],
+        loaded_at=time.time(),
+        load_time_ms=load_time_ms,
+        info=result.get("info", {}),
+    )
 
 
 # ── CLI ──────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Modal, Button, Badge, Card } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { deploymentApi } from '../api/deploymentApi';
@@ -19,6 +20,7 @@ export interface RunSkillModalProps {
 }
 
 export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
+  const navigate = useNavigate();
   const { robots, fetchRobots } = useRobots();
   const [robotId, setRobotId] = useState<string>('');
   const [parametersJson, setParametersJson] = useState<string>('{}');
@@ -80,15 +82,35 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
       }
     }
 
+    // TASK-146: navigate to the robot detail page in "executing" mode BEFORE
+    // dispatching the call. The closed-loop request can take 30+ seconds and
+    // the live execution panel is the place users want to be while it runs.
+    navigate(`/robots/${robotId}?executing=${encodeURIComponent(skill.id)}`);
+    onClose();
+
+    // Fire-and-forget the execute call. The modal unmounts immediately after
+    // navigation, but the promise keeps running. When it resolves, broadcast
+    // the result on a window-level event so the AutonomousExecutionPanel on
+    // the robot detail page can flip its status.
     setRunning(true);
     try {
       const r = await deploymentApi.executeSkill(skill.id, { robotId, parameters });
+      window.dispatchEvent(
+        new CustomEvent('skill:execution:result', {
+          detail: { skillId: skill.id, robotId, result: r },
+        })
+      );
       setResult(r);
       if (r.status !== 'completed') {
         setError(r.error ?? `Execution ${r.status}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to execute skill';
+      window.dispatchEvent(
+        new CustomEvent('skill:execution:result', {
+          detail: { skillId: skill.id, robotId, error: message },
+        })
+      );
       setError(message);
     } finally {
       setRunning(false);

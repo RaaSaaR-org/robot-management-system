@@ -69,6 +69,9 @@ class SmolVLAModel(VLAModel):
         self._action_mean: np.ndarray | None = None
         self._action_std: np.ndarray | None = None
         self._adapter_scratch_dir: Path | None = None
+        self._active_adapter_id: str | None = None
+        # Track adapters loaded via hot-swap so we can set_adapter() between them.
+        self._loaded_adapter_names: set[str] = set()
         self.policy = None
         self._action_dim = ACTION_DIM
         self._chunk_size = CHUNK_SIZE
@@ -101,6 +104,9 @@ class SmolVLAModel(VLAModel):
         # Optional: wrap with a LoRA adapter
         if self.adapter_path:
             self._wrap_with_adapter()
+            # Treat the startup adapter as id "default" so hot-swaps can replace it.
+            self._loaded_adapter_names.add("default")
+            self._active_adapter_id = "default"
 
         # Optional: override camera feature names
         if self._camera_names_override is not None:
@@ -225,6 +231,62 @@ class SmolVLAModel(VLAModel):
     @property
     def is_loaded(self) -> bool:
         return self.policy is not None
+
+    @property
+    def active_adapter_id(self) -> str | None:
+        return self._active_adapter_id
+
+    def load_adapter(self, adapter_path: str, adapter_id: str | None = None) -> dict:
+        """Hot-swap a LoRA adapter.
+
+        If `self.policy` is already a `PeftModel`, register the new adapter via
+        `load_adapter(name=...)` + `set_adapter(name)`. Otherwise, fall back to
+        the slower path of wrapping the base policy fresh.
+
+        Returns:
+            {adapter_id, info: {strategy, path, total_loaded}}
+        """
+        if self.policy is None:
+            raise RuntimeError("Base model not loaded; cannot apply adapter")
+
+        from peft import PeftModel
+
+        adapter_dir = self._resolve_adapter_dir(adapter_path)
+        name = adapter_id or f"adapter-{int(time.time() * 1000)}"
+
+        if isinstance(self.policy, PeftModel):
+            # Fast path: hot-swap via PEFT's adapter registry.
+            if name in self._loaded_adapter_names:
+                # Already registered — just activate it.
+                logger.info(f"Activating already-loaded adapter '{name}'")
+                self.policy.set_adapter(name)
+            else:
+                logger.info(f"Loading adapter '{name}' from {adapter_dir}")
+                self.policy.load_adapter(str(adapter_dir), adapter_name=name)
+                self.policy.set_adapter(name)
+                self._loaded_adapter_names.add(name)
+            strategy = "peft_set_adapter"
+        else:
+            # Slow path: base policy is unwrapped — wrap it fresh with this adapter.
+            logger.info(f"Wrapping base policy with adapter '{name}' from {adapter_dir}")
+            self.policy = PeftModel.from_pretrained(
+                self.policy, str(adapter_dir), adapter_name=name
+            )
+            self.policy.to(self.device)
+            self.policy.eval()
+            self._loaded_adapter_names.add(name)
+            strategy = "peft_from_pretrained"
+
+        self._active_adapter_id = name
+        logger.info(f"Adapter '{name}' active (strategy={strategy})")
+        return {
+            "adapter_id": name,
+            "info": {
+                "strategy": strategy,
+                "path": adapter_path,
+                "total_loaded": len(self._loaded_adapter_names),
+            },
+        }
 
     def unload(self) -> None:
         """Release model and clear GPU/MPS memory."""
