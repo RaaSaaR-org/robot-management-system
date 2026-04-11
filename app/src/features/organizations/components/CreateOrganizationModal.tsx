@@ -88,11 +88,18 @@ export function CreateOrganizationModal({
       onCreated?.(trimmedName);
       onClose();
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to create organization. Try a different slug.'
-      );
+      // The API client throws a plain `ApiError` object ({ message, code,
+      // statusCode }), not a native Error instance. Extract .message
+      // defensively from whichever shape we got so the user sees the
+      // server's actual "Slug already in use" text instead of a generic
+      // fallback.
+      const message =
+        (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+          ? (err as { message: string }).message
+          : null) ||
+        (err instanceof Error ? err.message : null) ||
+        'Failed to create organization. Try a different slug.';
+      setError(message);
       setSubmitting(false);
     }
   };
