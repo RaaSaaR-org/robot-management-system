@@ -30,6 +30,7 @@ import {
   LazyA2ATaskListPage,
   LazyA2AEventsPage,
   LazySettingsPage,
+  LazyOrganizationsPage,
   LazyCompliancePage,
   LazyIncidentDetailPage,
   LazyDatasetsPage,
@@ -170,6 +171,14 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazySettingsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/organizations"
+            element={
+              <ProtectedAppRoute>
+                <LazyOrganizationsPage />
               </ProtectedAppRoute>
             }
           />

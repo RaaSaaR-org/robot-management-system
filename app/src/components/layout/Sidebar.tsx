@@ -8,6 +8,7 @@ import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/shared/utils/cn";
 import { useUIStore } from "@/features/settings/store/uiStore";
+import { useFeatures } from "@/shared/hooks";
 
 // ============================================================================
 // TYPES
@@ -24,6 +25,12 @@ interface NavCategory {
   label: string;
   icon: ReactNode;
   items: NavItem[];
+  /**
+   * Feature flag this category requires. When the flag is false, the
+   * category is filtered out of the rendered sidebar. Omit for
+   * always-visible groups.
+   */
+  requiresFeature?: 'multiTenancyEnabled';
 }
 
 // ============================================================================
@@ -261,6 +268,29 @@ const NAV_CATEGORIES: NavCategory[] = [
       },
     ],
   },
+  // Admin group — only visible when multi-tenancy is enabled (TASK-155 Wave 2).
+  // First feature-gated nav group; future flags can use the same pattern.
+  {
+    id: "admin",
+    label: "Admin",
+    requiresFeature: "multiTenancyEnabled",
+    icon: (
+      <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+      </svg>
+    ),
+    items: [
+      {
+        label: "Organizations",
+        path: "/organizations",
+        icon: (
+          <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+          </svg>
+        ),
+      },
+    ],
+  },
 ];
 
 // ============================================================================
@@ -278,6 +308,12 @@ export interface SidebarProps {
 export function Sidebar({ className }: SidebarProps) {
   const collapsed = useUIStore((state) => state.sidebarCollapsed);
   const location = useLocation();
+  const features = useFeatures();
+
+  // Filter out categories gated behind features that are currently off.
+  const visibleCategories = NAV_CATEGORIES.filter((c) =>
+    c.requiresFeature ? features[c.requiresFeature] === true : true
+  );
 
   // Track expanded categories - all expanded by default
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
@@ -313,7 +349,7 @@ export function Sidebar({ className }: SidebarProps) {
       )}
     >
       <nav className={cn("py-3", collapsed ? "px-2" : "px-3")}>
-        {NAV_CATEGORIES.map((category) => {
+        {visibleCategories.map((category) => {
           const isExpanded = expandedCategories.has(category.id);
           const hasActiveItem = isCategoryActive(category);
 

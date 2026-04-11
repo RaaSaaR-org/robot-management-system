@@ -10,6 +10,7 @@ import { useAuth, LogoutButton } from '@/features/auth';
 import { useThemeStore } from '@/features/settings';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { MenuButton } from '@/shared/components/ui/MenuButton';
+import { TenantBadge } from './TenantBadge';
 
 // ============================================================================
 // ICONS
@@ -121,6 +122,9 @@ export function TopBar() {
               {user?.name || 'User'}
             </span>
           </div>
+
+          {/* Tenant badge — only rendered when multi-tenancy is enabled */}
+          <TenantBadge />
 
           <LogoutButton
             variant="ghost"

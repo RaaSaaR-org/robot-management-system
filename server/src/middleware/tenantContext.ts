@@ -18,6 +18,17 @@ interface TenantContext {
 }
 
 /**
+ * Sentinel value used to escape tenant scoping for platform-admin
+ * operations that need to query across tenants (e.g. the Tenant list
+ * itself, counting rows per tenant for the Organizations UI).
+ *
+ * The Prisma extension treats this as "no tenant" and bypasses the
+ * usual where-injection, letting the caller pass any explicit
+ * `tenantId` filter without it being overridden.
+ */
+export const PLATFORM_TENANT = '__platform__';
+
+/**
  * Minimal shape the tenant middleware needs — just enough to read the
  * authenticated user's tenantId without importing the full
  * `AuthenticatedRequest` type (avoids a circular dep with auth.middleware).
@@ -39,7 +50,22 @@ export const tenantStore = new AsyncLocalStorage<TenantContext>();
  */
 export function getTenantId(): string | undefined {
   if (!MULTI_TENANCY_ENABLED) return undefined;
-  return tenantStore.getStore()?.tenantId;
+  const tid = tenantStore.getStore()?.tenantId;
+  if (tid === PLATFORM_TENANT) return undefined;
+  return tid;
+}
+
+/**
+ * Run a callback as the platform admin — any Prisma queries inside the
+ * callback bypass tenant scoping. Use for operator-level code paths
+ * (list all tenants, compute per-tenant counts, cross-tenant reports).
+ *
+ * Only use when you have a legitimate platform-admin reason. Never call
+ * this from a handler that a regular tenant user can reach without
+ * additional authorisation.
+ */
+export function runAsPlatform<T>(fn: () => Promise<T> | T): Promise<T> | T {
+  return tenantStore.run({ tenantId: PLATFORM_TENANT }, fn);
 }
 
 /**

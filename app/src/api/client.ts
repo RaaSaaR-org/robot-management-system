@@ -144,10 +144,21 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
  */
 function createApiError(error: AxiosError<ApiError>): ApiError {
   if (error.response?.data) {
+    // Server routes across the codebase use mixed error shapes:
+    //   - { message: "..." }                  (most routes)
+    //   - { error: "classification", message: "details" }   (auth routes)
+    //   - { error: "human-readable message" } (simpler routes — tenants, settings)
+    // Accept both so one convention doesn't swallow the other's error text.
+    const data = error.response.data as ApiError & { error?: string };
+    const message =
+      data.message ||
+      (typeof data.error === 'string' ? data.error : undefined) ||
+      error.message ||
+      'An unknown error occurred';
     return {
-      code: error.response.data.code || 'UNKNOWN_ERROR',
-      message: error.response.data.message || 'An unknown error occurred',
-      details: error.response.data.details,
+      code: data.code || 'UNKNOWN_ERROR',
+      message,
+      details: data.details,
       statusCode: error.response.status,
     };
   }

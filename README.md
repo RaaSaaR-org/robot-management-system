@@ -200,6 +200,31 @@ make run
 | RoPA Management    | Records of Processing Activities (GDPR Art. 30) |
 | Technical Docs     | Per AI Act Annex IV, MR Annex IV, CRA Annex V   |
 
+### Multi-Tenancy (Optional)
+
+Serve multiple customer organizations from a single NeoDEM deployment with row-level
+data isolation — each organization sees only its own robots, datasets, and training
+jobs while sharing the same server and UI. **Off by default** (zero overhead for
+single-customer pilots); flip a feature flag to turn it on:
+
+```bash
+# server/.env
+MULTI_TENANCY_ENABLED=true
+```
+
+| Feature            | Description                                     |
+| ------------------ | ----------------------------------------------- |
+| Organizations UI   | Dedicated admin page to create + manage customer tenants |
+| Tenant Badge       | TopBar pill always shows the current organization |
+| One-Click Sample   | "Load sample (Acme Robotics)" button for live demos |
+| Isolation Boundary | Per-tenant stat tiles (Users / Robots / Datasets / Jobs) show the data boundary visually |
+| Seamless Fallback  | When the flag is off, no UI changes — identical to single-tenant mode |
+
+Same pattern as NATS + RustFS: opt-in, gracefully disabled when the flag is off, zero
+migration headache if you decide not to use it. Full technical details — architecture,
+how to add more tenant-scoped models, the `runAsPlatform` escape hatch, troubleshooting
+— in [`docs/multi-tenancy.md`](docs/multi-tenancy.md).
+
 ---
 
 ## Screenshots
@@ -321,6 +346,7 @@ neodem/
 | ---------------------------------------------------------------- | ----------------------------- |
 | [`docs/architecture.md`](docs/architecture.md)                   | System architecture deep-dive |
 | [`docs/VLA-integration-guide.md`](docs/VLA-integration-guide.md) | VLA model integration         |
+| [`docs/multi-tenancy.md`](docs/multi-tenancy.md)                 | Row-level multi-tenancy (flag, isolation, Organizations UI) |
 | [`docs/deployment.md`](docs/deployment.md)                       | Kubernetes deployment guide   |
 | [`docs/brand.md`](docs/brand.md)                                 | Design system and theming     |
 | [`CLAUDE.md`](CLAUDE.md)                                         | AI assistant guidance         |
