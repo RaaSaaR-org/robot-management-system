@@ -15,7 +15,6 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Activity, Square } from 'lucide-react';
 import { Button, Card } from '@/shared/components/ui';
-import { CameraStreamView } from '@/features/datacollection/components/CameraStreamView';
 import { deploymentApi } from '@/features/deployment/api/deploymentApi';
 
 export interface AutonomousExecutionPanelProps {
@@ -136,20 +135,11 @@ export function AutonomousExecutionPanel({ robotId }: AutonomousExecutionPanelPr
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {/* Live camera tiles — reuse the existing MJPEG component */}
-          <CameraStreamView
-            robotId={robotId}
-            cameraName="top"
-            label="Top"
-            className="aspect-video"
-          />
-          <CameraStreamView
-            robotId={robotId}
-            cameraName="wrist"
-            label="Wrist"
-            className="aspect-video"
-          />
+        <div className="grid grid-cols-1 gap-3">
+          {/* No live camera tiles: VLARunner needs exclusive access to the
+              cameras on real hardware (V4L2 / picamera2 single-reader), and
+              an open MJPEG stream blocks it with EBUSY. Live execution video
+              streaming via shared frames in the sidecar is a follow-up. */}
 
           {/* Stats column */}
           <div className="flex flex-col justify-center gap-2 px-2">

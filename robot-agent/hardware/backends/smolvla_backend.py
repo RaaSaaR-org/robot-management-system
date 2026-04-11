@@ -14,14 +14,33 @@ Usage:
     backend.disconnect()
 """
 
+import base64
+import io
 import logging
 import time
 
 import numpy as np
+from PIL import Image
 
 from .base import VLABackend
 
 logger = logging.getLogger(__name__)
+
+
+def _ndarray_to_jpeg_b64(arr: np.ndarray) -> str:
+    """Encode an HxWx3 RGB uint8 numpy array as base64 JPEG (TASK-146 fix).
+
+    vla-server expects base64-encoded JPEGs in the images dict, not raw
+    numpy arrays. Sending raw arrays as nested JSON lists made requests
+    massive (~1MB per 480x640 frame) and triggered server-side validation
+    failures, surfacing here as 'predict failed: timed out'.
+    """
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    img = Image.fromarray(arr, mode="RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 class SmolVLABackend(VLABackend):
@@ -93,12 +112,16 @@ class SmolVLABackend(VLABackend):
             raise RuntimeError("SmolVLABackend is not connected")
 
         # Convert numpy arrays to lists for JSON serialization
+        # Encode camera frames as base64 JPEGs (TASK-146 fix). vla-server
+        # expects images: dict[str, str], not nested JSON lists. The previous
+        # code sent ~1MB per 480x640 frame as JSON, which exceeded the
+        # client's 10s timeout when piped over the LAN.
         images_payload = {}
         for cam_name, img in images.items():
             if isinstance(img, np.ndarray):
-                images_payload[cam_name] = img.tolist()
+                images_payload[cam_name] = _ndarray_to_jpeg_b64(img)
             else:
-                # Already a base64 string or list
+                # Already a base64 string
                 images_payload[cam_name] = img
 
         state_list = state.tolist() if isinstance(state, np.ndarray) else list(state)
