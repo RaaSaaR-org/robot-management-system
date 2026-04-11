@@ -247,6 +247,7 @@ authRoutes.get(
           email: req.user.email,
           name: req.user.name,
           role: req.user.role,
+          tenantId: req.user.tenantId ?? undefined,
           isActive: true,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
