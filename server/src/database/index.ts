@@ -24,7 +24,10 @@ export async function connectDatabase(): Promise<void> {
           email: 'dev@neodem.local',
           passwordHash: 'disabled',
           name: 'Dev User',
-          role: 'admin',
+          // TASK-162: unified role model — dev user is super-admin so
+          // the AUTH_DISABLED=true flow retains full access (matches
+          // MOCK_USER in auth.middleware.ts).
+          role: 'super-admin',
           forcePasswordChange: false,
         },
         update: {},
