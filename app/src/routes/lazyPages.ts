@@ -328,3 +328,10 @@ export const LazyResetPasswordPage = lazy(() =>
 export const LazyAccountPage = lazy(() =>
   import('@/features/auth').then((m) => ({ default: m.AccountPage }))
 );
+
+/**
+ * Organizations page - Customer tenant management (TASK-155 Wave 2)
+ */
+export const LazyOrganizationsPage = lazy(() =>
+  import('@/features/organizations').then((m) => ({ default: m.OrganizationsPage }))
+);
