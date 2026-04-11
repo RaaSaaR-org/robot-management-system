@@ -61,7 +61,7 @@ export const logger = pino({
  */
 export function requestIdMiddleware(req: Request, res: Response, next: NextFunction): void {
   const id = (req.headers['x-request-id'] as string) || randomUUID();
-  (req as Record<string, unknown>).id = id;
+  (req as unknown as Record<string, unknown>).id = id;
   res.setHeader('x-request-id', id);
   next();
 }
@@ -73,7 +73,7 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
  */
 export const httpLogger = pinoHttp({
   logger,
-  genReqId: (req) => (req as Record<string, unknown>).id as string || randomUUID(),
+  genReqId: (req) => (req as unknown as Record<string, unknown>).id as string || randomUUID(),
   autoLogging: {
     // Skip noisy health-check logs
     ignore: (req) => req.url === '/health' || req.url === '/metrics',

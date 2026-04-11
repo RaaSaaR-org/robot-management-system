@@ -328,7 +328,7 @@ export function createApp(): Express {
 
   // Error handler
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-    logger.error({ err, reqId: (req as Record<string, unknown>).id }, 'Unhandled server error');
+    logger.error({ err, reqId: (req as unknown as Record<string, unknown>).id }, 'Unhandled server error');
     res.status(500).json({
       error: 'Internal server error',
       message: process.env.NODE_ENV === 'development' ? err.message : undefined,
