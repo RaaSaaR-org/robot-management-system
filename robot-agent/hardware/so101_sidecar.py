@@ -513,18 +513,31 @@ class Handler(BaseHTTPRequestHandler):
                 vla_runner.stop()
                 vla_runner = None
                 vla_start_time = 0.0
+            # Camera defaults are env-overridable so the same sidecar
+            # binary works on Pis with one or two USB cameras. Set
+            # SO101_WRIST_CAMERA / SO101_TOP_CAMERA to a /dev/video*
+            # path, or to "none" / "" to skip that camera entirely.
+            # The request body's `cameras` still wins if set.
+            def _build_camera(env_var: str, default_path: str):
+                path = os.environ.get(env_var, default_path)
+                if not path or path.lower() == "none":
+                    return None
+                return {"type": "opencv", "index_or_path": path,
+                        "width": 320, "height": 240, "fps": 10}
+            default_cameras = {}
+            wrist_cam = _build_camera("SO101_WRIST_CAMERA", "/dev/video0")
+            if wrist_cam is not None:
+                default_cameras["wrist"] = wrist_cam
+            top_cam = _build_camera("SO101_TOP_CAMERA", "/dev/video2")
+            if top_cam is not None:
+                default_cameras["top"] = top_cam
             result = recorder.start(
                 repo_id=body.get("repo_id", f"robot0/session-{int(time.time())}"),
                 task=body.get("task", "manipulate object"),
                 num_episodes=int(body.get("num_episodes", 1)),
                 episode_time_s=float(body.get("episode_time_s", 30)),
                 fps=int(body.get("fps", 30)),
-                cameras=body.get("cameras") or {
-                    "wrist": {"type": "opencv", "index_or_path": "/dev/video0",
-                              "width": 320, "height": 240, "fps": 10},
-                    "top": {"type": "opencv", "index_or_path": "/dev/video2",
-                            "width": 320, "height": 240, "fps": 10},
-                },
+                cameras=body.get("cameras") or default_cameras,
                 dataset_root=body.get("dataset_root"),
                 reset_time_s=float(body.get("reset_time_s", 5)),
             )
