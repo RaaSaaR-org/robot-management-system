@@ -34,6 +34,12 @@ RTC env vars:
     VLA_RTC_ENABLED=true        Enable async inference + chunk blending
     VLA_RTC_BLEND_STEPS=5       Steps to blend at chunk boundaries
     VLA_RTC_CHUNK_OVERLAP=3     Steps of overlap between consecutive chunks
+
+@status orphaned
+    TASK-146 final 20% moved the closed loop into the TS SkillExecutor.
+    This file and its deps (vla_safety.py, backends/smolvla_backend.py,
+    backends/base.py) are no longer reached from any caller. Kept in
+    place for reference; scheduled for deletion in a follow-up.
 """
 
 import base64

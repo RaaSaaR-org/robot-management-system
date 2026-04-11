@@ -4,21 +4,22 @@
  * against vla-server. Replaces the TASK-143 stub on
  * `POST /robots/:id/skills/execute`.
  *
- * Two execution paths:
+ * ONE loop for sim and hardware (TASK-146 final 20%). The only difference
+ * between modes is where frames and joint state come from, and whether
+ * actions actually move anything:
  *
- * 1. **Hardware delegated**: when the SO-101 sidecar at localhost:8765 is
- *    reachable (`hardwareClient.isAvailable()`), the robot has real cameras
- *    and motors. We delegate to the existing `RobotStateManager.startVLAControl`
- *    path which boots VLARunner — the same loop teleop already uses, with
- *    real cameras and safety. We poll for completion or abort.
+ *   mode=sim       — synthetic gray frames + sim telemetry, actions discarded
+ *   mode=hardware  — real frames via sidecar `/cameras/:n/snapshot`, real
+ *                    joint state via sidecar `/state/fast`, real actions
+ *                    via sidecar `/action`, delta-clipped for motor safety
  *
- * 2. **Simulated**: in pure sim (no hardware sidecar), we run a TS-only loop
- *    that POSTs synthetic gray frames + the simulated joint state to
- *    vla-server `/predict`. This validates the whole pipeline end-to-end
- *    (server → robot-agent → vla-server → robot-agent) without moving
- *    anything. Sim actions are not applied to any robot.
+ * The previous design delegated hardware mode to a Python thread
+ * (VLARunner) which owned its own camera stack. That was fragile and
+ * architecturally redundant — everything VLARunner did is now a small
+ * set of sidecar HTTP endpoints driven by TS.
  *
  * @feature vla
+ * @status live
  */
 
 import { EventEmitter } from 'events';
@@ -27,17 +28,34 @@ import { hardwareClient } from '../hardware/HardwareClient.js';
 
 const VLA_SERVER_URL_DEFAULT = 'http://localhost:8000';
 
-// 32×32 gray JPEG (Pillow-generated, quality=70). Used by the simulated loop
-// only — real hardware sends real cameras via VLARunner. The model produces
-// nonsense actions on this input but the loop still exercises the full
-// vla-server round-trip end-to-end.
+/**
+ * Per-joint delta clip for real-arm safety. At 5 Hz this is a 25°/s max
+ * slew rate — matches VLARunner's `max_delta = 5` default and prevents
+ * servo stall from a sudden VLA action spike.
+ */
+const MAX_DELTA_DEGREES = 5;
+
+/** Control loop frequency — 5 Hz matches VLARunner/teleop conventions. */
+const LOOP_PERIOD_MS = 200;
+
+/** Per-step vla-server /predict timeout. */
+const PREDICT_TIMEOUT_MS = 3_000;
+
+/** Max consecutive /predict failures before we bail with 'vla-server unreachable'. */
+const MAX_PREDICT_FAILURES = 3;
+
+// 32×32 gray JPEG (Pillow-generated, quality=70). Used only when a camera
+// source isn't available (pure sim). The real hardware path replaces this
+// with snapshots from the sidecar.
 const SYNTHETIC_GRAY_JPEG_B64 =
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAAgACADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwAooooAKKKKACiiigAooooA/9k=';
 
+export type SkillExecutionMode = 'sim' | 'hardware';
 export type SkillExecutionStatus = 'completed' | 'failed' | 'aborted' | 'timeout';
 
 export interface SkillExecutionResult {
   status: SkillExecutionStatus;
+  mode: SkillExecutionMode;
   steps: number;
   durationMs: number;
   message?: string;
@@ -54,9 +72,15 @@ export interface SkillExecutorOptions {
   emitter?: EventEmitter;
 }
 
+interface VlaConfig {
+  cameras: string[];
+  stateDim: number;
+  chunkSize: number;
+}
+
 /**
- * One closed-loop skill execution. Use the static `start` method to launch
- * an executor; the returned instance lets the abort handler stop it.
+ * One closed-loop skill execution. The route handler creates one per
+ * call and registers it with `skillExecutorRegistry` so abort can find it.
  */
 export class SkillExecutor {
   private aborted = false;
@@ -78,135 +102,133 @@ export class SkillExecutor {
   }
 
   async run(opts: SkillExecutorOptions): Promise<SkillExecutionResult> {
-    const t0 = Date.now();
-    const deadline = t0 + opts.timeoutMs;
-
-    if (hardwareClient.isAvailable()) {
-      return this.runHardware(opts, t0, deadline);
-    }
-    return this.runSimulated(opts, t0, deadline);
-  }
-
-  // ── Simulated path ──────────────────────────────────────────────
-
-  /**
-   * Pure-TS closed loop against vla-server. No hardware required.
-   * Sends a synthetic gray frame + the simulated joint state, calls /predict,
-   * and pretends to apply the resulting actions. Used in dev / CI / sim mode.
-   */
-  private async runSimulated(
-    opts: SkillExecutorOptions,
-    startedAt: number,
-    deadline: number,
-  ): Promise<SkillExecutionResult> {
+    const startedAt = Date.now();
+    const deadline = startedAt + opts.timeoutMs;
+    const mode: SkillExecutionMode = hardwareClient.isAvailable() ? 'hardware' : 'sim';
     const baseUrl = process.env.VLA_SERVER_URL ?? VLA_SERVER_URL_DEFAULT;
 
-    // Discover which cameras vla-server expects so we can build a payload it
-    // will accept (otherwise it returns 422 "Missing camera(s)").
-    let cameras: string[] = ['front'];
-    let stateDim = 6;
-    let chunkSize = 50;
+    // ── Discover vla-server capabilities (cameras + dims) ───────────
+    let vlaConfig: VlaConfig;
     try {
-      const cfgResp = await this.fetchImpl(`${baseUrl}/config`, { method: 'GET' });
-      if (cfgResp.ok) {
-        const cfg = (await cfgResp.json()) as {
-          cameras: string[];
-          state_dim: number;
-          chunk_size: number;
-        };
-        cameras = cfg.cameras ?? cameras;
-        stateDim = cfg.state_dim ?? stateDim;
-        chunkSize = cfg.chunk_size ?? chunkSize;
-      }
+      vlaConfig = await this.fetchVlaConfig(baseUrl);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       return {
         status: 'failed',
+        mode,
         steps: 0,
         durationMs: Date.now() - startedAt,
-        error: `vla-server /config unreachable at ${baseUrl}: ${msg}`,
+        error: `vla-server /config unreachable at ${baseUrl}: ${this.errMsg(err)}`,
       };
     }
 
-    // Reset policy state once per run.
+    // Reset policy state once per run (best-effort).
     try {
       await this.fetchImpl(`${baseUrl}/reset`, { method: 'POST' });
     } catch {
-      // best-effort
+      // ignore
     }
 
+    // ── Seed delta clipping with the current joint state ───────────
+    // The first VLA action should be rate-limited relative to where the
+    // arm actually IS, not relative to zero (which would let it jump).
+    let lastActionForClip: number[] | null = null;
+    if (mode === 'hardware') {
+      try {
+        lastActionForClip = await hardwareClient.getStateNow();
+      } catch (err) {
+        return {
+          status: 'failed',
+          mode,
+          steps: 0,
+          durationMs: Date.now() - startedAt,
+          error: `Failed to seed initial state: ${this.errMsg(err)}`,
+        };
+      }
+      console.log(
+        `[SkillExecutor] Seeded delta clip from arm pose: [${lastActionForClip.map((v) => v.toFixed(1)).join(', ')}]`,
+      );
+    }
+
+    // ── Main loop ──────────────────────────────────────────────────
     let actionsQueue: number[][] = [];
-    let lastAction: number[] | undefined;
+    let lastApplied: number[] | undefined;
     let step = 0;
+    let predictFailures = 0;
+
+    console.log(
+      `[SkillExecutor] Running skill=${opts.skillId} mode=${mode} maxSteps=${opts.maxSteps} timeoutMs=${opts.timeoutMs}`,
+    );
 
     while (step < opts.maxSteps) {
       if (this.aborted) {
-        return {
-          status: 'aborted',
-          steps: step,
-          durationMs: Date.now() - startedAt,
-          lastAction,
-          message: 'Aborted by user',
-        };
+        return this.abortedResult(mode, step, startedAt, lastApplied);
       }
       if (Date.now() > deadline) {
         return {
           status: 'timeout',
+          mode,
           steps: step,
           durationMs: Date.now() - startedAt,
-          lastAction,
+          lastAction: lastApplied,
           message: `Timeout after ${opts.timeoutMs}ms`,
         };
       }
 
+      // ── Refill action queue if empty ─────────────────────────────
       if (actionsQueue.length === 0) {
-        // Build observation: synthetic gray frame for each expected camera +
-        // current simulated joint positions padded to state_dim.
-        const images: Record<string, string> = {};
-        for (const cam of cameras) {
-          images[cam] = SYNTHETIC_GRAY_JPEG_B64;
-        }
-        const telemetry = this.robotStateManager.getTelemetry();
-        const joints = (telemetry.jointStates ?? []).map((j) => j.position);
-        while (joints.length < stateDim) joints.push(0);
-        const state = joints.slice(0, stateDim);
+        let images: Record<string, string>;
+        let state: number[];
 
-        let predictResp: Response;
         try {
-          predictResp = await this.fetchImpl(`${baseUrl}/predict`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ images, state, task: opts.taskPrompt }),
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return {
-            status: 'failed',
-            steps: step,
-            durationMs: Date.now() - startedAt,
-            error: `vla-server /predict failed: ${msg}`,
-          };
-        }
-        if (!predictResp.ok) {
-          let detail = `HTTP ${predictResp.status}`;
-          try {
-            const body = (await predictResp.json()) as { detail?: string };
-            if (body.detail) detail = body.detail;
-          } catch {
-            /* ignore */
+          if (mode === 'hardware') {
+            [images, state] = await this.captureHardware(vlaConfig);
+          } else {
+            images = this.buildSyntheticFrames(vlaConfig.cameras);
+            state = this.buildSimState(vlaConfig.stateDim);
           }
+        } catch (err) {
           return {
             status: 'failed',
+            mode,
             steps: step,
             durationMs: Date.now() - startedAt,
-            error: `vla-server /predict rejected: ${detail}`,
+            error: `Capture failed: ${this.errMsg(err)}`,
           };
         }
-        const predictBody = (await predictResp.json()) as { actions: number[][] };
-        actionsQueue = predictBody.actions ?? [];
+
+        // Call vla-server /predict with a hard timeout.
+        const predictResult = await this.predict(baseUrl, images, state, opts.taskPrompt);
+        if (!predictResult.ok) {
+          // Client errors (4xx) are deterministic — fail immediately.
+          if (!predictResult.retryable) {
+            return {
+              status: 'failed',
+              mode,
+              steps: step,
+              durationMs: Date.now() - startedAt,
+              error: predictResult.error,
+            };
+          }
+          // Transient failure: retry up to MAX_PREDICT_FAILURES times.
+          predictFailures += 1;
+          if (predictFailures >= MAX_PREDICT_FAILURES) {
+            return {
+              status: 'failed',
+              mode,
+              steps: step,
+              durationMs: Date.now() - startedAt,
+              error: `vla-server /predict failed ${predictFailures}x: ${predictResult.error}`,
+            };
+          }
+          await sleep(LOOP_PERIOD_MS);
+          continue;
+        }
+        predictFailures = 0;
+        actionsQueue = predictResult.actions;
         if (actionsQueue.length === 0) {
           return {
             status: 'failed',
+            mode,
             steps: step,
             durationMs: Date.now() - startedAt,
             error: 'vla-server returned empty action chunk',
@@ -214,94 +236,223 @@ export class SkillExecutor {
         }
       }
 
-      const action = actionsQueue.shift()!;
-      lastAction = action;
+      // ── Pop next action, clip, apply ─────────────────────────────
+      const raw = actionsQueue.shift()!;
+      const safe =
+        mode === 'hardware'
+          ? this.clipAction(raw, lastActionForClip!)
+          : raw;
+
+      if (mode === 'hardware') {
+        try {
+          await hardwareClient.sendActionVector(safe);
+        } catch (err) {
+          return {
+            status: 'failed',
+            mode,
+            steps: step,
+            durationMs: Date.now() - startedAt,
+            error: `Send action failed: ${this.errMsg(err)}`,
+          };
+        }
+        lastActionForClip = safe;
+      }
+
+      lastApplied = safe;
       step += 1;
 
       opts.emitter?.emit('skill:step', {
         skillId: opts.skillId,
         step,
-        action,
+        mode,
+        action: safe,
         ts: Date.now(),
       });
 
-      // Tiny pacing delay so the UI sees progress over the websocket and so
-      // we don't burn CPU calling /predict in a tight loop.
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Cap simulated runs at 2 chunks (chunkSize * 2) to avoid 50-step
-      // pointless loops in dev. The skill is "complete" once the model has
-      // produced one full chunk twice.
-      if (step >= Math.min(opts.maxSteps, chunkSize * 2)) {
+      // In sim mode we cap at 2 chunks to keep dev runs bounded; hardware
+      // mode runs the full maxSteps so real-arm executions aren't cut short.
+      if (mode === 'sim' && step >= Math.min(opts.maxSteps, vlaConfig.chunkSize * 2)) {
         break;
       }
+
+      await sleep(LOOP_PERIOD_MS);
     }
 
     return {
       status: 'completed',
+      mode,
+      steps: step,
+      durationMs: Date.now() - startedAt,
+      lastAction: lastApplied,
+      message: mode === 'hardware' ? 'Hardware execution completed' : 'Simulated execution completed',
+    };
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────
+
+  private async fetchVlaConfig(baseUrl: string): Promise<VlaConfig> {
+    const resp = await this.fetchImpl(`${baseUrl}/config`, { method: 'GET' });
+    if (!resp.ok) {
+      throw new Error(`/config returned HTTP ${resp.status}`);
+    }
+    const data = (await resp.json()) as {
+      cameras?: string[];
+      state_dim?: number;
+      chunk_size?: number;
+    };
+    return {
+      cameras: data.cameras ?? ['front'],
+      stateDim: data.state_dim ?? 6,
+      chunkSize: data.chunk_size ?? 50,
+    };
+  }
+
+  /**
+   * Hardware capture: fetch joint state + one snapshot per expected camera,
+   * map the sidecar's physical cameras onto the names vla-server expects.
+   *
+   * vla-server's /config returns the camera names the model was trained
+   * on (e.g. ['up', 'side'] for SmolVLA). The sidecar exposes physical
+   * cameras by their local names (e.g. ['wrist', 'top']). We map by
+   * position: the k-th vla-server camera gets filled with the k-th
+   * sidecar camera's snapshot. Matches the sim path's behavior.
+   */
+  private async captureHardware(
+    vlaConfig: VlaConfig,
+  ): Promise<[Record<string, string>, number[]]> {
+    const sidecarCameras = await hardwareClient.getCameras();
+    const physicalCount = sidecarCameras.length;
+
+    // Parallel fetch all snapshots + joint state.
+    const needed = vlaConfig.cameras.length;
+    const physicalToUse = sidecarCameras.slice(0, Math.max(needed, 1));
+
+    const [snapshots, state] = await Promise.all([
+      Promise.all(
+        physicalToUse.map((name) =>
+          hardwareClient.snapshot(name).then((b64) => ({ name, b64 })),
+        ),
+      ),
+      hardwareClient.getStateNow(),
+    ]);
+
+    // Map snapshots onto the vla-server camera names by position. If there
+    // are more expected cameras than physical cameras, reuse the last
+    // physical frame so the model still gets a valid JPEG for every name.
+    const images: Record<string, string> = {};
+    for (let i = 0; i < vlaConfig.cameras.length; i++) {
+      const vlaName = vlaConfig.cameras[i];
+      const snap = snapshots[Math.min(i, snapshots.length - 1)];
+      images[vlaName] = snap ? snap.b64 : SYNTHETIC_GRAY_JPEG_B64;
+    }
+
+    // Pad/truncate state to vla-server's expected dim.
+    const padded = state.slice(0, vlaConfig.stateDim);
+    while (padded.length < vlaConfig.stateDim) padded.push(0);
+
+    void physicalCount;
+    return [images, padded];
+  }
+
+  private buildSyntheticFrames(cameras: string[]): Record<string, string> {
+    const images: Record<string, string> = {};
+    for (const cam of cameras) {
+      images[cam] = SYNTHETIC_GRAY_JPEG_B64;
+    }
+    return images;
+  }
+
+  private buildSimState(stateDim: number): number[] {
+    const telemetry = this.robotStateManager.getTelemetry();
+    const joints = (telemetry.jointStates ?? []).map((j) => j.position);
+    while (joints.length < stateDim) joints.push(0);
+    return joints.slice(0, stateDim);
+  }
+
+  private async predict(
+    baseUrl: string,
+    images: Record<string, string>,
+    state: number[],
+    task: string,
+  ): Promise<
+    | { ok: true; actions: number[][] }
+    | { ok: false; error: string; retryable: boolean }
+  > {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), PREDICT_TIMEOUT_MS);
+    try {
+      const resp = await this.fetchImpl(`${baseUrl}/predict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images, state, task }),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`;
+        try {
+          const body = (await resp.json()) as { detail?: string };
+          if (body.detail) detail = body.detail;
+        } catch {
+          /* ignore */
+        }
+        // 4xx are client-side / deterministic — don't retry.
+        // 5xx / other are likely transient — allow retry.
+        const retryable = resp.status >= 500;
+        return { ok: false, error: `vla-server /predict rejected: ${detail}`, retryable };
+      }
+      const body = (await resp.json()) as { actions?: number[][] };
+      return { ok: true, actions: body.actions ?? [] };
+    } catch (err) {
+      // Network errors and AbortController timeouts are transient.
+      return {
+        ok: false,
+        error: `vla-server /predict failed: ${this.errMsg(err)}`,
+        retryable: true,
+      };
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  /**
+   * Delta-clip an action so no joint moves more than MAX_DELTA_DEGREES
+   * from its last applied value. Prevents servo stalls from bad VLA
+   * predictions.
+   */
+  private clipAction(action: number[], last: number[]): number[] {
+    const clipped = new Array(action.length);
+    for (let i = 0; i < action.length; i++) {
+      const lastVal = last[i] ?? 0;
+      const delta = action[i] - lastVal;
+      const limited = Math.max(-MAX_DELTA_DEGREES, Math.min(MAX_DELTA_DEGREES, delta));
+      clipped[i] = lastVal + limited;
+    }
+    return clipped;
+  }
+
+  private abortedResult(
+    mode: SkillExecutionMode,
+    step: number,
+    startedAt: number,
+    lastAction?: number[],
+  ): SkillExecutionResult {
+    return {
+      status: 'aborted',
+      mode,
       steps: step,
       durationMs: Date.now() - startedAt,
       lastAction,
-      message: 'Simulated execution completed',
+      message: 'Aborted by user',
     };
   }
 
-  // ── Hardware-delegated path ─────────────────────────────────────
-
-  /**
-   * On real hardware we delegate to VLARunner via the existing
-   * `startVLAControl` path. VLARunner runs in the Python sidecar where
-   * cameras and motor I/O live. We poll until it stops or until aborted.
-   */
-  private async runHardware(
-    opts: SkillExecutorOptions,
-    startedAt: number,
-    deadline: number,
-  ): Promise<SkillExecutionResult> {
-    try {
-      await this.robotStateManager.startVLAControl(opts.taskPrompt);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return {
-        status: 'failed',
-        steps: 0,
-        durationMs: Date.now() - startedAt,
-        error: `Failed to start VLA control: ${msg}`,
-      };
-    }
-
-    let step = 0;
-    while (this.robotStateManager.isVLAActive()) {
-      if (this.aborted) {
-        await this.robotStateManager.stopVLAControl().catch(() => {});
-        return {
-          status: 'aborted',
-          steps: step,
-          durationMs: Date.now() - startedAt,
-          message: 'Aborted by user',
-        };
-      }
-      if (Date.now() > deadline) {
-        await this.robotStateManager.stopVLAControl().catch(() => {});
-        return {
-          status: 'timeout',
-          steps: step,
-          durationMs: Date.now() - startedAt,
-          message: `Timeout after ${opts.timeoutMs}ms`,
-        };
-      }
-      step += 1;
-      opts.emitter?.emit('skill:step', { skillId: opts.skillId, step, ts: Date.now() });
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    return {
-      status: 'completed',
-      steps: step,
-      durationMs: Date.now() - startedAt,
-      message: 'VLARunner finished',
-    };
+  private errMsg(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // ── Registry ────────────────────────────────────────────────────

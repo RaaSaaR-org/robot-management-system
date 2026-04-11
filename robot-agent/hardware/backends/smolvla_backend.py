@@ -12,6 +12,11 @@ Usage:
     backend.connect("http://192.168.178.40:8000")
     actions = backend.predict(images, state, "pick up the green object")
     backend.disconnect()
+
+@status orphaned
+    Only consumed by vla_runner.py, which TASK-146 final 20% orphaned.
+    The TS SkillExecutor now POSTs to vla-server /predict directly with
+    base64 JPEGs from the sidecar snapshot endpoint.
 """
 
 import base64

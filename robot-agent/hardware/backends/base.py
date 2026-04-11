@@ -7,6 +7,9 @@ All concrete backends must implement connect(), predict(), disconnect(),
 and the is_connected property. This allows vla_runner.py to delegate
 HTTP/gRPC/other transport to a swappable backend without changing
 the control loop logic.
+
+@status orphaned
+    Only consumed by vla_runner.py, which TASK-146 final 20% orphaned.
 """
 
 from abc import ABC, abstractmethod

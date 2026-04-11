@@ -9,6 +9,11 @@ Provides four safety components that wrap the VLA control loop:
   4. GracefulDegradation — Safe stop / hold-position on failures
 
 Safety pipeline order:  validate → rate_limit → apply
+
+@status orphaned
+    Embedded in vla_runner.py, which TASK-146 final 20% orphaned.
+    The TS SkillExecutor now does its own delta clipping. Scheduled for
+    deletion in a follow-up.
 """
 
 import logging
