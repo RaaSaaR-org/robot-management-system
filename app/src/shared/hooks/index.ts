@@ -17,3 +17,4 @@ export {
   useBreakpoint,
   BREAKPOINTS,
 } from './useMediaQuery';
+export { useFeatures, useFeaturesStore, type FeatureFlags } from './useFeatures';

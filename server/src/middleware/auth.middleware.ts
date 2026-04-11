@@ -5,6 +5,8 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { authService, type TokenPayload } from '../services/AuthService.js';
+import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js';
+import { tenantStore } from './tenantContext.js';
 
 /**
  * User info attached to authenticated requests
@@ -14,6 +16,11 @@ export interface AuthUser {
   email: string;
   name: string;
   role: 'admin' | 'operator' | 'viewer';
+  /**
+   * Multi-tenancy (TASK-155): tenant this user belongs to. Null for
+   * legacy/unscoped users. Read by `withTenantContext` middleware.
+   */
+  tenantId: string | null;
 }
 
 /**
@@ -24,13 +31,15 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
- * Mock user for development mode
+ * Mock user for development mode — carries the DEFAULT tenantId so
+ * multi-tenancy flows work end-to-end under AUTH_DISABLED=true.
  */
 const MOCK_USER: AuthUser = {
   id: 'dev-user-id',
   email: 'dev@neodem.local',
   name: 'Dev User',
   role: 'admin',
+  tenantId: DEFAULT_TENANT_ID,
 };
 
 /**
@@ -38,6 +47,20 @@ const MOCK_USER: AuthUser = {
  */
 function isAuthDisabled(): boolean {
   return process.env.AUTH_DISABLED === 'true';
+}
+
+/**
+ * Continue the request chain inside a tenant-scoped AsyncLocalStorage
+ * if multi-tenancy is enabled. Pulls tenantId from `req.user` (set by
+ * the caller), falling back to DEFAULT for dev/AUTH_DISABLED and for
+ * users whose token predates the multi-tenancy upgrade.
+ */
+function continueWithTenant(user: AuthUser | undefined, next: NextFunction): void {
+  if (!MULTI_TENANCY_ENABLED) {
+    return next();
+  }
+  const tenantId = user?.tenantId ?? DEFAULT_TENANT_ID;
+  tenantStore.run({ tenantId }, () => next());
 }
 
 /**
@@ -65,7 +88,7 @@ export function authMiddleware(
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
-    return next();
+    return continueWithTenant(req.user, next);
   }
 
   // Extract token
@@ -94,9 +117,10 @@ export function authMiddleware(
     email: payload.email,
     name: payload.name,
     role: payload.role as AuthUser['role'],
+    tenantId: payload.tenantId ?? null,
   };
 
-  next();
+  continueWithTenant(req.user, next);
 }
 
 /**
@@ -113,13 +137,13 @@ export function optionalAuthMiddleware(
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
-    return next();
+    return continueWithTenant(req.user, next);
   }
 
   // Extract token
   const token = extractBearerToken(req);
   if (!token) {
-    return next();
+    return continueWithTenant(undefined, next);
   }
 
   // Verify token
@@ -130,10 +154,11 @@ export function optionalAuthMiddleware(
       email: payload.email,
       name: payload.name,
       role: payload.role as AuthUser['role'],
+      tenantId: payload.tenantId ?? null,
     };
   }
 
-  next();
+  continueWithTenant(req.user, next);
 }
 
 /**

@@ -69,6 +69,7 @@ import { uncertaintyRoutes } from './routes/uncertainty.routes.js';
 import { isaacLabRoutes } from './routes/isaac-lab.routes.js';
 import { simulationRoutes } from './routes/simulation.routes.js';
 import { vlaSessionRoutes } from './routes/vla-session.routes.js';
+import { configRoutes } from './routes/config.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -164,6 +165,10 @@ export function createApp(): Express {
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString(), version: pkg.version, startedAt, uptimeSeconds: Math.floor((Date.now() - startedAtMs) / 1000), nodeVersion: process.version, environment: process.env.NODE_ENV || 'development' });
   });
+
+  // Feature flags (public) — frontend fetches this before login to
+  // decide which UI to render (TASK-155 multi-tenancy gate).
+  app.use('/api/config', configRoutes);
 
   // Auth Routes (public) - with stricter rate limiting
   app.use('/api/auth', authLimiter, authRoutes);

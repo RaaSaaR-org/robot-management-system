@@ -20,6 +20,12 @@ export interface TokenPayload {
   email: string;
   name: string;
   role: string;
+  /**
+   * Multi-tenancy (TASK-155): tenant this user belongs to. Optional for
+   * backward compatibility with tokens issued before the upgrade and for
+   * single-tenant deployments where MULTI_TENANCY_ENABLED=false.
+   */
+  tenantId?: string | null;
 }
 
 /**
@@ -334,6 +340,7 @@ export class AuthService {
       email: user.email,
       name: user.name,
       role: user.role,
+      tenantId: user.tenantId ?? null,
     };
 
     // Convert duration string to seconds for jwt

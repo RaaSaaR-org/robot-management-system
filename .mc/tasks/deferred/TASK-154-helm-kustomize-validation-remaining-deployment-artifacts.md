@@ -12,6 +12,7 @@ customers: []
 sprint: ''
 tags:
 - core
+- deferred
 depends_on:
 - TASK-153
 due_date: ''

@@ -12,8 +12,7 @@ customers: []
 sprint: ''
 tags:
 - core
-depends_on:
-- TASK-153
+depends_on: []
 due_date: ''
 created: '2026-04-09'
 ---

@@ -4,7 +4,7 @@ aliases:
 - TASK-145
 title: Replace fake GPU availability panel with real training worker status
 slug: replace-fake-gpu-panel-with-real-worker-status
-status: in-progress
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -17,6 +17,7 @@ due_date: ''
 created: 2026-04-06
 updated: 2026-04-11
 ---
+
 
 
 ## Description

@@ -45,6 +45,10 @@ model Robot {
   lastHealthCheck DateTime?
   baseUrl         String?
 
+  // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   // Relations
   conversations Conversation[]
   telemetryLogs RobotTelemetry[]
@@ -60,6 +64,7 @@ model Robot {
 
   @@index([status])
   @@index([a2aEnabled])
+  @@index([tenantId, updatedAt])
 }
 
 // ============================================================================
@@ -302,7 +307,9 @@ model User {
   name                 String
   role                 String    @default("viewer") // UserRole: 'admin' | 'operator' | 'viewer'
   avatar               String?
+  // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
   tenantId             String?
+  tenant               Tenant?   @relation(fields: [tenantId], references: [id])
   isActive             Boolean   @default(true)
   passwordResetToken   String?
   passwordResetExpires DateTime?
@@ -330,6 +337,7 @@ model User {
 
   @@index([email])
   @@index([role])
+  @@index([tenantId])
 }
 
 // ============================================================================
@@ -1855,6 +1863,10 @@ model Dataset {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
+  // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
+  tenantId     String?
+  tenant       Tenant?          @relation(fields: [tenantId], references: [id])
+
   // Relations
   robotType    RobotType        @relation(fields: [robotTypeId], references: [id])
   skill        SkillDefinition? @relation(fields: [skillId], references: [id])
@@ -1864,6 +1876,7 @@ model Dataset {
   @@index([skillId])
   @@index([status])
   @@index([huggingFaceRepoId])
+  @@index([tenantId, updatedAt])
 }
 
 // TrainingJob - Training job queue entries
@@ -1888,6 +1901,10 @@ model TrainingJob {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
+  tenantId           String?
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id])
+
   // Relations
   dataset       Dataset        @relation(fields: [datasetId], references: [id])
   modelVersions ModelVersion[]
@@ -1895,6 +1912,7 @@ model TrainingJob {
   @@index([datasetId])
   @@index([status])
   @@index([baseModel])
+  @@index([tenantId, updatedAt])
 }
 
 // ModelVersion - Trained model artifacts
@@ -2067,4 +2085,34 @@ model VlaSession {
 
   @@index([robotId])
   @@index([startedAt])
+}
+
+// ============================================================================
+// MULTI-TENANCY (TASK-155)
+// ============================================================================
+//
+// Row-level multi-tenancy. Gated behind MULTI_TENANCY_ENABLED feature flag.
+// When disabled, all tenantId columns stay NULL and the Prisma client
+// extension is a no-op — behaviour is identical to single-tenant mode.
+// When enabled, a DEFAULT tenant is seeded and existing rows backfill to it.
+// Wave 1 scope: User, Robot, Dataset, TrainingJob. Follow-up waves extend
+// the allowlist to the remaining top-level entities.
+
+model Tenant {
+  id        String   @id @default(uuid())
+  slug      String   @unique // e.g. "default", "acme", "contoso"
+  name      String
+  logoUrl   String?
+  plan      String?  // optional: "free" | "pro" | ...
+  settings  String   @default("{}") // JSON: per-tenant feature overrides, branding
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations (Wave 1 pilot models)
+  users        User[]
+  robots       Robot[]
+  datasets     Dataset[]
+  trainingJobs TrainingJob[]
+
+  @@index([slug])
 }
