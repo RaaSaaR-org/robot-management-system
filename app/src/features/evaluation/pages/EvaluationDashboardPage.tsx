@@ -4,9 +4,10 @@
  * @feature evaluation
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { BarChart3 } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { BarChart3, Play } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
+import { Button } from '@/shared/components/ui';
 import type { EvaluationPeriod, EvaluationEpisode, SuccessRateResult, ErrorBreakdownItem, ModelComparisonResult } from '../types';
 import { evaluationApi } from '../api';
 import { PeriodSelector } from '../components/PeriodSelector';
@@ -26,6 +27,39 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
       <p className="text-sm text-theme-secondary">{label}</p>
       <p className="text-2xl font-bold text-theme-primary mt-1">{value}</p>
       {sub && <p className="text-xs text-theme-tertiary mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+// ============================================================================
+// EMPTY STATE
+// ============================================================================
+
+/**
+ * Shown when there are zero evaluation episodes for the selected period.
+ * Explains the loop and CTAs to the HardwareTestPanel further down the page.
+ * (TASK-144)
+ */
+function EmptyState({ onScrollToTest }: { onScrollToTest: () => void }) {
+  return (
+    <div className="rounded-lg border border-theme section-primary p-8 text-center">
+      <BarChart3 className="w-12 h-12 mx-auto text-theme-tertiary mb-3" />
+      <h2 className="text-lg font-semibold text-theme-primary">
+        No evaluation data yet
+      </h2>
+      <p className="text-sm text-theme-secondary mt-2 max-w-md mx-auto">
+        This dashboard fills up as you run real-robot evaluations. Each test
+        runs N closed-loop episodes through the deployed VLA model and records
+        per-episode results — success rate, error breakdown, model comparison,
+        and recent rollouts.
+      </p>
+      <Button onClick={onScrollToTest} className="mt-4">
+        <Play className="w-4 h-4 mr-2" />
+        Run a hardware test
+      </Button>
+      <p className="text-xs text-theme-tertiary mt-3">
+        Need a robot online first? Check the Fleet page.
+      </p>
     </div>
   );
 }
@@ -61,6 +95,12 @@ export function EvaluationDashboardPage() {
   const [errors, setErrors] = useState<ErrorBreakdownItem[]>([]);
   const [comparison, setComparison] = useState<ModelComparisonResult | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
+
+  // Used by the empty-state CTA to scroll to the HardwareTestPanel below.
+  const hardwareTestRef = useRef<HTMLDivElement | null>(null);
+  const scrollToHardwareTest = useCallback(() => {
+    hardwareTestRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
 
   const fetchData = useCallback(async (p: EvaluationPeriod, silent = false) => {
     if (!silent) setLoading(true);
@@ -139,51 +179,61 @@ export function EvaluationDashboardPage() {
         </div>
       ) : (
         <>
-          {/* Row 1: Stats Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <StatCard
-              label="Success Rate"
-              value={`${successRate?.successRate.toFixed(1) ?? '0'}%`}
-              sub={`${successRate?.successfulEpisodes ?? 0} of ${successRate?.totalEpisodes ?? 0} episodes`}
-            />
-            <StatCard
-              label="Total Episodes"
-              value={String(successRate?.totalEpisodes ?? 0)}
-              sub={`Last ${period}`}
-            />
-            <StatCard
-              label="Avg Duration"
-              value={formatDuration(avgDurationMs)}
-              sub={episodes.length > 0 ? `Across ${episodes.length} episodes` : 'No data'}
-            />
-          </div>
+          {episodes.length === 0 ? (
+            // First-time / no-data state. The HardwareTestPanel below is
+            // still rendered so the CTA can scroll to it.
+            <EmptyState onScrollToTest={scrollToHardwareTest} />
+          ) : (
+            <>
+              {/* Row 1: Stats Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <StatCard
+                  label="Success Rate"
+                  value={`${successRate?.successRate.toFixed(1) ?? '0'}%`}
+                  sub={`${successRate?.successfulEpisodes ?? 0} of ${successRate?.totalEpisodes ?? 0} episodes`}
+                />
+                <StatCard
+                  label="Total Episodes"
+                  value={String(successRate?.totalEpisodes ?? 0)}
+                  sub={`Last ${period}`}
+                />
+                <StatCard
+                  label="Avg Duration"
+                  value={formatDuration(avgDurationMs)}
+                  sub={`Across ${episodes.length} episodes`}
+                />
+              </div>
 
-          {/* Row 2: Success Rate Chart */}
-          <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-            <h2 className="text-lg font-semibold text-theme-primary mb-4">Success Rate Over Time</h2>
-            <SuccessRateChart episodes={episodes} height={300} />
-          </div>
+              {/* Row 2: Success Rate Chart */}
+              <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
+                <h2 className="text-lg font-semibold text-theme-primary mb-4">Success Rate Over Time</h2>
+                <SuccessRateChart episodes={episodes} height={300} />
+              </div>
 
-          {/* Row 3: Error Analysis + Model Comparison */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-              <h2 className="text-lg font-semibold text-theme-primary mb-4">Error Analysis</h2>
-              <ErrorAnalysisPanel errors={errors} height={300} />
-            </div>
-            <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-              <h2 className="text-lg font-semibold text-theme-primary mb-4">Model Comparison</h2>
-              <ModelComparisonTable comparison={comparison} loading={comparisonLoading} />
-            </div>
-          </div>
+              {/* Row 3: Error Analysis + Model Comparison */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
+                  <h2 className="text-lg font-semibold text-theme-primary mb-4">Error Analysis</h2>
+                  <ErrorAnalysisPanel errors={errors} height={300} />
+                </div>
+                <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
+                  <h2 className="text-lg font-semibold text-theme-primary mb-4">Model Comparison</h2>
+                  <ModelComparisonTable comparison={comparison} loading={comparisonLoading} />
+                </div>
+              </div>
 
-          {/* Row 4: Rollout Timeline */}
-          <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
-            <h2 className="text-lg font-semibold text-theme-primary mb-4">Recent Rollouts</h2>
-            <RolloutTimeline episodes={episodes} maxItems={10} />
-          </div>
+              {/* Row 4: Rollout Timeline */}
+              <div className="rounded-lg border border-theme section-primary p-5 min-w-0 overflow-hidden">
+                <h2 className="text-lg font-semibold text-theme-primary mb-4">Recent Rollouts</h2>
+                <RolloutTimeline episodes={episodes} maxItems={10} />
+              </div>
+            </>
+          )}
 
-          {/* Row 5: Hardware Test (TASK-146) */}
-          <HardwareTestPanel onComplete={() => fetchData(period, true)} />
+          {/* Hardware Test (TASK-146) — always mounted; empty-state CTA scrolls here */}
+          <div ref={hardwareTestRef}>
+            <HardwareTestPanel onComplete={() => fetchData(period, true)} />
+          </div>
         </>
       )}
     </div>
