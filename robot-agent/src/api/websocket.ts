@@ -1,6 +1,7 @@
 /**
  * @file websocket.ts
  * @description WebSocket server for real-time telemetry streaming
+ * @status live
  */
 
 import { WebSocketServer, WebSocket } from 'ws';

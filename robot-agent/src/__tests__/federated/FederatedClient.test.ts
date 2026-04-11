@@ -2,6 +2,7 @@
  * @file FederatedClient.test.ts
  * @description Unit tests for the FederatedClient HTTP client
  * @feature Federated Learning
+ * @status test
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

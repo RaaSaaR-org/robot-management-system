@@ -1,6 +1,7 @@
 /**
  * @file types.ts
  * @description Robot type definitions aligned with NeoDEM
+ * @status live
  */
 
 // ============================================================================

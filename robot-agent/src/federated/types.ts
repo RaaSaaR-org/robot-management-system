@@ -2,6 +2,7 @@
  * @file types.ts
  * @description Type definitions for the federated learning module
  * @feature Federated Learning
+ * @status live-conditional
  */
 
 /** LoRA fine-tuning configuration */

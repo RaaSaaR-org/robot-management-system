@@ -1,6 +1,7 @@
 /**
  * @file index.ts
  * @description Main entry point for the Simulated Robot A2A Agent
+ * @status live
  */
 
 import 'dotenv/config';

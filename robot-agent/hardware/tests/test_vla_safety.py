@@ -2,6 +2,7 @@
 Tests for vla_safety.py — ActionValidator, MovementRateLimiter, NetworkWatchdog, GracefulDegradation.
 
 These tests don't require real hardware or network.
+@status test
 """
 
 import time

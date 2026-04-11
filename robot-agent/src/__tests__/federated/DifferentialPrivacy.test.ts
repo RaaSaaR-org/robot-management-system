@@ -2,6 +2,7 @@
  * @file DifferentialPrivacy.test.ts
  * @description Unit tests for gradient clipping and Gaussian noise injection
  * @feature Federated Learning
+ * @status test
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

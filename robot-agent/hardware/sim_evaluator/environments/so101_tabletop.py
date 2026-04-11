@@ -3,6 +3,7 @@ SO-101 Tabletop environment configuration.
 
 Defines the simulation environment for tabletop manipulation tasks
 with the SO-101 robot arm.
+@status live
 """
 
 import os

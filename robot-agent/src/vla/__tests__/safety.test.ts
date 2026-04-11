@@ -2,6 +2,7 @@
  * @file safety.test.ts
  * @description Tests for VLASafetyStatus type shape and API response mapping.
  * @feature vla
+ * @status test
  */
 
 import { describe, it, expect } from 'vitest';

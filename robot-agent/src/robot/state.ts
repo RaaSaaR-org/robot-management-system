@@ -2,6 +2,7 @@
  * @file state.ts
  * @description Robot state management facade - coordinates state, commands, simulation, tasks, and safety
  * @feature robot
+ * @status live
  */
 
 import type {

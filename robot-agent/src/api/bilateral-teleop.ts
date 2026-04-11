@@ -4,6 +4,7 @@
  *              Receives leader-arm joint positions, maps them to the follower arm,
  *              sends actions to the hardware sidecar, and streams follower state back.
  * @feature teleop
+ * @status live
  */
 
 import { WebSocketServer, WebSocket } from 'ws';

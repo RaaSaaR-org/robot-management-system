@@ -10,6 +10,7 @@ Env vars (same credentials as the Mac server):
   RUSTFS_ACCESS_KEY — e.g. rustfsadmin
   RUSTFS_SECRET_KEY — e.g. rustfsadmin
   RUSTFS_BUCKET     — e.g. datasets (default)
+@status live
 """
 
 from __future__ import annotations

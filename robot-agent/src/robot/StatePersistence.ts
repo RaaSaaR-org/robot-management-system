@@ -2,6 +2,7 @@
  * @file StatePersistence.ts
  * @description Debounced JSON state persistence for robot agent
  * @feature robot
+ * @status live
  */
 
 import fs from 'node:fs';

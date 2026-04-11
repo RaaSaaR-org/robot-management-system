@@ -2,6 +2,7 @@
  * @file joint-mapper.ts
  * @description Joint mapping between VLA actions and robot joint commands
  * @feature vla
+ * @status live
  */
 
 import type { Action } from '../vla/types.js';

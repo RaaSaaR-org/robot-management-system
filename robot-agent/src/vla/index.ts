@@ -6,6 +6,7 @@
  * The VLA inference server is now a separate Python service (vla-server/).
  * The sidecar talks to it via HTTP. This module retains only the
  * VLAModelManager for UI-facing model version tracking.
+ * @status live
  */
 
 export {

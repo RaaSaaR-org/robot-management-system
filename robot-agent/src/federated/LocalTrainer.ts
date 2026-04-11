@@ -2,6 +2,7 @@
  * @file LocalTrainer.ts
  * @description Local LoRA training bridge that delegates to the Python training sidecar
  * @feature Federated Learning
+ * @status live-conditional
  */
 
 import type { LoRAConfig, TrainingEpisode, TrainingResult } from './types.js';

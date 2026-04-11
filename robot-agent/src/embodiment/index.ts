@@ -2,6 +2,7 @@
  * @file index.ts
  * @description Embodiment configuration system exports
  * @feature vla
+ * @status live
  */
 
 // Types and schemas

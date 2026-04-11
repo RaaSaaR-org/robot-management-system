@@ -1,6 +1,7 @@
 /**
  * @file agent-card.ts
  * @description A2A AgentCard definition for the simulated robot
+ * @status live
  */
 
 import type { AgentCard } from '@a2a-js/sdk';

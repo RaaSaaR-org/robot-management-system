@@ -2,6 +2,7 @@
  * @file camera-config.ts
  * @description Camera configuration management for VLA observations
  * @feature vla
+ * @status live
  */
 
 import type { EmbodimentConfig, CameraSpec, Resolution } from './types.js';

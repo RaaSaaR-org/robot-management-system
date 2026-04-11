@@ -4,6 +4,7 @@
 
 Loads the SO-101 MJCF model on a table with a graspable cube and a target zone.
 Provides offscreen rendering for VLA inference and standard gym step/reset API.
+@status live
 """
 
 import logging

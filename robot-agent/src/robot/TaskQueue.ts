@@ -2,6 +2,7 @@
  * @file TaskQueue.ts
  * @description Manages robot task queue for server-pushed tasks
  * @feature robot
+ * @status live
  */
 
 import type {

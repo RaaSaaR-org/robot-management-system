@@ -1,6 +1,7 @@
 /**
  * @file telemetry.test.ts
  * @description Tests for telemetry generation
+ * @status test
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

@@ -2,6 +2,7 @@
  * @file zoneUtils.ts
  * @description Zone boundary utilities for real-time robot position tracking
  * @feature robot
+ * @status live
  */
 
 import type { ZoneBounds } from './types.js';

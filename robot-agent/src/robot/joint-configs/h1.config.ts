@@ -2,6 +2,7 @@
  * @file h1.config.ts
  * @description Joint configuration for Unitree H1 humanoid robot
  * @feature robot-types
+ * @status live
  */
 
 import type { JointConfig } from '../types.js';

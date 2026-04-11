@@ -2,6 +2,7 @@
  * @file types.ts
  * @description Safety system type definitions per ISO 10218-1, ISO/TS 15066, and MR Annex III
  * @feature safety
+ * @status live
  */
 
 // ============================================================================

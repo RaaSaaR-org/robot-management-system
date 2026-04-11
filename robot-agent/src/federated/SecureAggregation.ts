@@ -4,6 +4,7 @@
  * Each client generates pairwise masks with other clients so that the sum of all
  * masks cancels to zero. The server sees only masked updates, never raw gradients.
  * @feature Secure Aggregation
+ * @status live-conditional
  */
 
 /** Metadata for a single aggregation round */

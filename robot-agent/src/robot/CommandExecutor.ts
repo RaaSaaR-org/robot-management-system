@@ -2,6 +2,7 @@
  * @file CommandExecutor.ts
  * @description Handles robot command execution
  * @feature robot
+ * @status live
  */
 
 import { v4 as uuidv4 } from 'uuid';

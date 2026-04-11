@@ -2,6 +2,7 @@
  * @file embodiment-loader.ts
  * @description Singleton loader for YAML embodiment configurations with hot-reload support
  * @feature vla
+ * @status live
  */
 
 import { EventEmitter } from 'events';

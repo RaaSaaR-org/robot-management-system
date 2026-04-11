@@ -2,6 +2,7 @@
  * @file joint-mapper.test.ts
  * @description Unit tests for JointMapper
  * @feature vla
+ * @status test
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

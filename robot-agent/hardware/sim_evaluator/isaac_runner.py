@@ -3,6 +3,7 @@ Isaac Lab simulation runner.
 
 Calls the IsaacLabClient HTTP endpoint (localhost:3001/api/isaac-lab).
 Falls back to mock metrics if the endpoint is not reachable.
+@status live
 """
 
 import random

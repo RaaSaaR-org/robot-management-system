@@ -4,6 +4,7 @@ MuJoCo simulation runner with automatic mock fallback.
 If MuJoCo or the gym environment is unavailable, the runner falls back to
 MOCK mode and generates realistic fake metrics. When available, it runs
 real physics episodes using the SO101TabletopEnv.
+@status live
 """
 
 import logging

@@ -3,6 +3,7 @@
  * @description Secure OTA update client with Ed25519 signature verification
  * @feature updates
  * @regulatory CRA Art. 13, MR Art. 10, Annex I
+ * @status live
  */
 
 import crypto from 'node:crypto';

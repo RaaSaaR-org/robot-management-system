@@ -2,6 +2,7 @@
  * @file secure-boot.test.ts
  * @description Tests for secure boot verification and anti-rollback
  * @feature security
+ * @status test
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

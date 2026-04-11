@@ -2,6 +2,7 @@
  * @file embodiment-loader.test.ts
  * @description Unit tests for EmbodimentLoader
  * @feature vla
+ * @status test
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

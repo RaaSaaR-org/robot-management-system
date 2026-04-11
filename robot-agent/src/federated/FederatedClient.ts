@@ -2,6 +2,7 @@
  * @file FederatedClient.ts
  * @description HTTP client for communicating with the server's Federated Learning API
  * @feature Federated Learning
+ * @status live-conditional
  */
 
 import type { FederatedRound } from './types.js';

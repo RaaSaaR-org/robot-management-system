@@ -2,6 +2,7 @@
  * @file g1.config.ts
  * @description Joint configuration for Unitree G1 humanoid robot (29 DOF)
  * @feature robot-types
+ * @status live
  */
 
 import type { JointConfig } from '../types.js';

@@ -136,6 +136,43 @@ robot-agent/src/
     └── robot_agent.prompt # AI system prompt template (Dotprompt)
 ```
 
+### File Header Convention
+
+Every source file has a top-of-file header block. TypeScript uses a JSDoc
+block, Python uses a module docstring. Both should include an `@status`
+tag so future readers can tell live code from orphaned/dead code at a
+glance:
+
+```ts
+/**
+ * @file skill-executor.ts
+ * @description Closed-loop skill executor — observe → predict → execute
+ * @feature vla
+ * @status live
+ */
+```
+
+```python
+"""
+vla_runner.py — Thread-based VLA control loop at 5 Hz.
+@status live
+"""
+```
+
+**`@status` values:**
+
+| Tag | Meaning |
+|---|---|
+| `live` | Reachable from a real entry point and runs in normal use |
+| `live-conditional` | Live only when an env var / feature flag is on (e.g. `FEDERATED_ENABLED`, hardware sidecar present) |
+| `test` | Test file (`*.test.ts`, `hardware/tests/test_*.py`) — CI only |
+| `orphaned` | Imported/referenced by live code but no caller or launcher exercises it — broken wire |
+| `dead` | No importer, no caller anywhere. Safe to delete. |
+
+When adding a new file, tag it. When moving code from live to orphaned
+(or vice versa), update the tag. `scripts/annotate-status.mjs` handled
+the initial bulk pass; subsequent maintenance is manual.
+
 ## AI Tools (Genkit)
 
 All 8 tools are registered with Genkit and available to the AI agent:
