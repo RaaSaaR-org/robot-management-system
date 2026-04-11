@@ -32,13 +32,9 @@ import {
   LazyA2ATaskListPage,
   LazyA2AEventsPage,
   LazySettingsPage,
-  LazyExplainabilityPage,
   LazyCompliancePage,
-  LazyGDPRPortalPage,
   LazyIncidentsPage,
   LazyIncidentDetailPage,
-  LazyOversightPage,
-  LazyApprovalsPage,
   LazyDatasetsPage,
   LazyDatasetEpisodesPage,
   LazyTrainingPage,
@@ -244,15 +240,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* Explainability - AI transparency (EU AI Act) */}
-          <Route
-            path="/explainability"
-            element={
-              <ProtectedAppRoute>
-                <LazyExplainabilityPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Explainability - merged into Compliance tabs (TASK-147) */}
+          <Route path="/explainability" element={<Navigate to="/compliance?tab=explainability" replace />} />
           {/* Compliance - Audit logging (EU AI Act Art. 12, GDPR Art. 30) */}
           <Route
             path="/compliance"
@@ -262,15 +251,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* GDPR - Data subject rights self-service (GDPR Articles 15-22) */}
-          <Route
-            path="/gdpr"
-            element={
-              <ProtectedAppRoute>
-                <LazyGDPRPortalPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* GDPR - merged into Compliance tabs (TASK-147) */}
+          <Route path="/gdpr" element={<Navigate to="/compliance?tab=gdpr" replace />} />
           {/* Incidents - Incident management and regulatory reporting */}
           <Route
             path="/incidents"
@@ -288,24 +270,10 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* Oversight - Human oversight dashboard (EU AI Act Art. 14) */}
-          <Route
-            path="/oversight"
-            element={
-              <ProtectedAppRoute>
-                <LazyOversightPage />
-              </ProtectedAppRoute>
-            }
-          />
-          {/* Approvals - Human approval workflows (GDPR Art. 22, AI Act Art. 14) */}
-          <Route
-            path="/approvals"
-            element={
-              <ProtectedAppRoute>
-                <LazyApprovalsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Oversight - merged into Compliance tabs (TASK-147) */}
+          <Route path="/oversight" element={<Navigate to="/compliance?tab=oversight" replace />} />
+          {/* Approvals - merged into Compliance tabs (TASK-147) */}
+          <Route path="/approvals" element={<Navigate to="/compliance?tab=approvals" replace />} />
 
           {/* Training - VLA model fine-tuning */}
           <Route
