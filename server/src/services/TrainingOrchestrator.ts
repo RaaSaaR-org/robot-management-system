@@ -31,7 +31,10 @@ import type {
   WorkerCompleteRequest,
   WorkerFailedRequest,
   WorkerCheckpointRequest,
-  GpuAvailability,
+  WorkerHeartbeatRequest,
+  WorkerStatus,
+  WorkerStatusView,
+  WorkerStatusListResponse,
   TrainingDurationEstimate,
   EtaState,
   JobProgress,
@@ -109,6 +112,16 @@ export const hyperparametersSchema = z.object({
 const ETA_WINDOW_SIZE = 20; // Number of step times to track for ETA calculation
 const DEFAULT_STEP_TIME_MS = 5000; // Default step time estimate (5 seconds)
 
+// Worker registry: a worker is "stale" if no heartbeat in 2x the worker's
+// configured interval (default 30s → 60s window). Stale workers are still
+// kept in the map briefly so a brief network blip doesn't drop them, but
+// `listWorkers()` filters them out of the response.
+const WORKER_STALE_AFTER_MS = 60 * 1000;
+// Workers older than this are evicted from the map entirely (prevents
+// unbounded growth on long-lived servers when workers come and go).
+const WORKER_EVICT_AFTER_MS = 60 * 60 * 1000; // 1 hour
+const WORKER_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 // ============================================================================
 // TRAINING ORCHESTRATOR SERVICE
 // ============================================================================
@@ -121,6 +134,8 @@ export class TrainingOrchestrator extends EventEmitter {
   private static instance: TrainingOrchestrator;
   private etaStates: Map<string, EtaState> = new Map();
   private checkpoints: Map<string, { epoch: number; uri: string }[]> = new Map();
+  private workers: Map<string, WorkerStatus> = new Map();
+  private workerCleanupTimer: NodeJS.Timeout | null = null;
   private initialized = false;
 
   private constructor() {
@@ -159,8 +174,34 @@ export class TrainingOrchestrator extends EventEmitter {
       console.error('[TrainingOrchestrator] Failed to reap orphaned jobs:', err);
     }
 
+    // Periodic cleanup of stale worker entries (1h+ since last heartbeat).
+    // unref() so the timer doesn't keep the event loop alive at shutdown.
+    this.workerCleanupTimer = setInterval(
+      () => this.evictStaleWorkers(),
+      WORKER_CLEANUP_INTERVAL_MS
+    );
+    this.workerCleanupTimer.unref?.();
+
     this.initialized = true;
     console.log('[TrainingOrchestrator] Initialized');
+  }
+
+  /**
+   * Drop worker entries that haven't sent a heartbeat in over an hour.
+   * Called periodically and on demand.
+   */
+  private evictStaleWorkers(): void {
+    const cutoff = Date.now() - WORKER_EVICT_AFTER_MS;
+    let evicted = 0;
+    for (const [workerId, status] of this.workers) {
+      if (status.lastHeartbeatAt.getTime() < cutoff) {
+        this.workers.delete(workerId);
+        evicted++;
+      }
+    }
+    if (evicted > 0) {
+      console.log(`[TrainingOrchestrator] Evicted ${evicted} stale worker(s)`);
+    }
   }
 
   /**
@@ -229,38 +270,6 @@ export class TrainingOrchestrator extends EventEmitter {
   }
 
   // ============================================================================
-  // GPU AVAILABILITY
-  // ============================================================================
-
-  /**
-   * Get GPU availability from env config + running job count from DB.
-   * Set GPU_TOTAL_COUNT, GPU_TYPE, GPU_MEMORY_GB in env.
-   */
-  async getGpuAvailability(): Promise<GpuAvailability> {
-    const totalCount = parseInt(process.env.GPU_TOTAL_COUNT ?? '1', 10);
-    const gpuType = process.env.GPU_TYPE ?? 'unknown';
-    const gpuMemoryGb = parseFloat(process.env.GPU_MEMORY_GB ?? '0');
-
-    // availableCount = total - running jobs (from DB)
-    const runningJobs = await trainingJobRepository.findRunning();
-    const runningCount = runningJobs.length;
-    const availableCount = Math.max(0, totalCount - runningCount);
-
-    const totalMemoryGb = totalCount * gpuMemoryGb;
-    const availableMemoryGb = availableCount * gpuMemoryGb;
-
-    return {
-      totalCount,
-      availableCount,
-      byType: gpuType !== 'unknown' ? {
-        [gpuType]: { total: totalCount, available: availableCount, memoryGb: gpuMemoryGb },
-      } : {},
-      totalMemoryGb,
-      availableMemoryGb,
-    };
-  }
-
-  // ============================================================================
   // TRAINING DURATION ESTIMATION
   // ============================================================================
 
@@ -315,7 +324,10 @@ export class TrainingOrchestrator extends EventEmitter {
    * transitions it to 'running' via startJob(), and returns it.
    * Returns null if no jobs are waiting.
    */
-  async claimNextPendingJob(workerId: string): Promise<TrainingJob | null> {
+  async claimNextPendingJob(
+    workerId: string,
+    device?: string
+  ): Promise<TrainingJob | null> {
     // Pull pending/queued jobs; findAll returns newest-first so we pick
     // the oldest entry (closest to head of FIFO queue).
     const candidates = await trainingJobRepository.findAll({
@@ -323,14 +335,50 @@ export class TrainingOrchestrator extends EventEmitter {
       page: 1,
       pageSize: 50,
     });
-    if (candidates.data.length === 0) return null;
+
+    // Touch the worker registry on every claim poll so idle workers
+    // also show up in `listWorkers()`. The currentJobId is set below
+    // once we know whether we actually picked up a job.
+    if (candidates.data.length === 0) {
+      this.touchWorker(workerId, device, null);
+      return null;
+    }
     const job = candidates.data[candidates.data.length - 1];
     const started = await this.startJob(job.id);
-    if (!started) return null;
+    if (!started) {
+      this.touchWorker(workerId, device, null);
+      return null;
+    }
+    this.touchWorker(workerId, device, started.id);
     console.log(
       `[TrainingOrchestrator] Job ${job.id} claimed by worker ${workerId}`
     );
     return started;
+  }
+
+  /**
+   * Upsert a worker into the in-memory registry. Called from both the
+   * heartbeat path (during a job) and the claim path (every poll, even
+   * when idle), so idle workers also appear in `listWorkers()`.
+   */
+  private touchWorker(
+    workerId: string,
+    device: string | undefined,
+    currentJobId: string | null,
+    gpuUtil = 0,
+    memoryUtil = 0
+  ): void {
+    const now = new Date();
+    const existing = this.workers.get(workerId);
+    this.workers.set(workerId, {
+      workerId,
+      device: device ?? existing?.device ?? 'unknown',
+      currentJobId,
+      gpuUtil,
+      memoryUtil,
+      lastHeartbeatAt: now,
+      firstSeenAt: existing?.firstSeenAt ?? now,
+    });
   }
 
   /**
@@ -617,24 +665,111 @@ export class TrainingOrchestrator extends EventEmitter {
   }
 
   // ============================================================================
-  // HEARTBEAT CHECK
+  // HEARTBEAT + WORKER REGISTRY
   // ============================================================================
 
   /**
-   * Check if a job should continue running
-   * Returns 'stop' if job is cancelled, 'ok' otherwise
+   * Record a worker heartbeat. Upserts the worker into the in-memory
+   * registry and returns the cancel-check status for the current job.
+   *
+   * `workerId` and `device` are optional for backward compat with old
+   * workers. If `workerId` is missing the worker is not tracked in the
+   * registry — only the cancel check runs.
    */
-  async checkHeartbeat(jobId: string): Promise<'ok' | 'stop'> {
+  async recordHeartbeat(req: WorkerHeartbeatRequest): Promise<'ok' | 'stop'> {
+    const { jobId, gpuUtil, memoryUtil, workerId, device } = req;
+
+    if (workerId) {
+      this.touchWorker(
+        workerId,
+        device,
+        jobId ?? null,
+        typeof gpuUtil === 'number' ? gpuUtil : 0,
+        typeof memoryUtil === 'number' ? memoryUtil : 0
+      );
+    }
+
+    // Cancel check (preserves the old checkHeartbeat semantics).
     const job = await trainingJobRepository.findById(jobId);
     if (!job) {
       return 'stop';
     }
-
     if (job.status === 'cancelled') {
       return 'stop';
     }
-
     return 'ok';
+  }
+
+  /**
+   * List active workers (last heartbeat within WORKER_STALE_AFTER_MS),
+   * with derived status, current job info, and queue counts.
+   */
+  async listWorkers(): Promise<WorkerStatusListResponse> {
+    const now = Date.now();
+    const cutoff = now - WORKER_STALE_AFTER_MS;
+    const fresh: WorkerStatus[] = [];
+    for (const status of this.workers.values()) {
+      if (status.lastHeartbeatAt.getTime() >= cutoff) {
+        fresh.push(status);
+      }
+    }
+
+    // Enrich each worker with current-job info (one DB call per worker
+    // with a current job; in practice the worker count is small — single
+    // digits — so this is fine without batching).
+    const views: WorkerStatusView[] = await Promise.all(
+      fresh.map(async (w) => {
+        let currentJob: WorkerStatusView['currentJob'] = null;
+        let derivedStatus: 'idle' | 'busy' | 'stale' = 'idle';
+
+        if (w.currentJobId) {
+          const job = await trainingJobRepository.findById(w.currentJobId);
+          if (job && job.status === 'running') {
+            const startedAt = job.startedAt ?? job.updatedAt;
+            currentJob = {
+              id: job.id,
+              status: job.status,
+              baseModel: job.baseModel ?? null,
+              datasetId: job.datasetId ?? null,
+              ageSeconds: Math.max(
+                0,
+                Math.round((now - new Date(startedAt).getTime()) / 1000)
+              ),
+            };
+            derivedStatus = 'busy';
+          }
+        }
+
+        const lastHeartbeatAgeSeconds = Math.round(
+          (now - w.lastHeartbeatAt.getTime()) / 1000
+        );
+
+        return {
+          workerId: w.workerId,
+          device: w.device,
+          status: derivedStatus,
+          currentJob,
+          gpuUtil: w.gpuUtil,
+          memoryUtil: w.memoryUtil,
+          lastHeartbeatAt: w.lastHeartbeatAt.toISOString(),
+          lastHeartbeatAgeSeconds,
+          firstSeenAt: w.firstSeenAt.toISOString(),
+        };
+      })
+    );
+
+    // Queue/run counts come from the DB so the panel reflects truth even
+    // when no workers are connected.
+    const [queued, running] = await Promise.all([
+      trainingJobRepository.findByStatus('queued'),
+      trainingJobRepository.findRunning(),
+    ]);
+
+    return {
+      workers: views,
+      queuedJobs: queued.length,
+      runningJobs: running.length,
+    };
   }
 
   // ============================================================================

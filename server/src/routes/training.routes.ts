@@ -248,11 +248,11 @@ import type {
 
 trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
   try {
-    const { workerId } = req.body as { workerId?: string };
+    const { workerId, device } = req.body as { workerId?: string; device?: string };
     if (!workerId) {
       return res.status(400).json({ error: 'workerId is required' });
     }
-    const job = await trainingOrchestrator.claimNextPendingJob(workerId);
+    const job = await trainingOrchestrator.claimNextPendingJob(workerId, device);
     if (!job) {
       return res.status(204).send();
     }
@@ -283,16 +283,23 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
 
 trainingRoutes.post('/workers/heartbeat', async (req: Request, res: Response) => {
   try {
-    const { jobId, gpuUtil, memoryUtil } = req.body as WorkerHeartbeatRequest;
+    const body = req.body as WorkerHeartbeatRequest;
+    const { jobId, gpuUtil, memoryUtil, workerId, device } = body;
 
     if (!jobId) {
       return res.status(400).json({ error: 'jobId is required' });
     }
 
-    const status = await trainingOrchestrator.checkHeartbeat(jobId);
+    const status = await trainingOrchestrator.recordHeartbeat({
+      jobId,
+      gpuUtil,
+      memoryUtil,
+      workerId,
+      device,
+    });
 
     console.log(
-      `[TrainingRoutes] Heartbeat: job=${jobId}, gpu=${gpuUtil}%, mem=${memoryUtil}%, status=${status}`
+      `[TrainingRoutes] Heartbeat: worker=${workerId ?? '?'} device=${device ?? '?'} job=${jobId} gpu=${gpuUtil}% mem=${memoryUtil}% status=${status}`
     );
 
     const response: WorkerHeartbeatResponse = {
@@ -425,16 +432,16 @@ trainingRoutes.post('/workers/checkpoint', async (req: Request, res: Response) =
 });
 
 // ============================================================================
-// GET /api/training/gpu/availability - GPU availability (stubbed)
+// GET /api/training/workers - Active training workers + queue summary
 // ============================================================================
 
-trainingRoutes.get('/gpu/availability', async (req: Request, res: Response) => {
+trainingRoutes.get('/workers', async (_req: Request, res: Response) => {
   try {
-    const availability = await trainingOrchestrator.getGpuAvailability();
-    res.json(availability);
+    const workers = await trainingOrchestrator.listWorkers();
+    res.json(workers);
   } catch (error) {
-    console.error('[TrainingRoutes] Error getting GPU availability:', error);
-    res.status(500).json({ error: 'Failed to get GPU availability' });
+    console.error('[TrainingRoutes] Error listing workers:', error);
+    res.status(500).json({ error: 'Failed to list workers' });
   }
 });
 

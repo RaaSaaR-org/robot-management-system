@@ -404,9 +404,6 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `RUSTFS_ENDPOINT` | No | `http://localhost:9000` | S3-compatible storage endpoint |
 | `RUSTFS_ACCESS_KEY` | No | `rustfsadmin` | S3 access key |
 | `RUSTFS_SECRET_KEY` | No | `rustfsadmin` | S3 secret key |
-| `GPU_TOTAL_COUNT` | No | `1` | GPU count for training orchestrator |
-| `GPU_TYPE` | No | `unknown` | GPU type identifier |
-| `GPU_MEMORY_GB` | No | `0` | GPU memory in GB |
 | `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
 | `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |

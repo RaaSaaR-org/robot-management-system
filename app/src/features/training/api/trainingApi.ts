@@ -16,7 +16,7 @@ import type {
   TrainingJobsListResponse,
   TrainingJobResponse,
   QueueStats,
-  GpuAvailability,
+  WorkerStatusListResponse,
   TrainingDurationEstimate,
   UploadInitiateResponse,
   HFDataset,
@@ -39,9 +39,9 @@ const ENDPOINTS = {
   trainingJobEstimate: (id: string) => `/training/jobs/${id}/estimate`,
   activeJobs: '/training/active',
 
-  // GPU & Queue
-  gpuAvailability: '/training/gpu/availability',
+  // Queue & Workers
   queueStats: '/training/queue/stats',
+  workers: '/training/workers',
 
   // Episodes
   datasetEpisodes: (id: string) => `/datasets/${id}/episodes`,
@@ -269,41 +269,23 @@ export const trainingApi = {
   },
 
   // ============================================================================
-  // GPU & QUEUE
+  // QUEUE & WORKERS
   // ============================================================================
-
-  /**
-   * Get GPU availability status
-   */
-  async getGpuAvailability(): Promise<GpuAvailability> {
-    // Server returns { totalCount, availableCount, byType, ... } — transform to frontend shape
-    const response = await apiClient.get<Record<string, unknown>>(ENDPOINTS.gpuAvailability);
-    const raw = response.data;
-    return {
-      total_gpus: typeof raw.total_gpus === 'number' ? raw.total_gpus
-        : typeof raw.totalCount === 'number' ? raw.totalCount : 0,
-      available_gpus: typeof raw.available_gpus === 'number' ? raw.available_gpus
-        : typeof raw.availableCount === 'number' ? raw.availableCount : 0,
-      gpu_types: raw.gpu_types
-        ? (raw.gpu_types as Record<string, number>)
-        : raw.byType
-          ? Object.fromEntries(
-              Object.entries(raw.byType as Record<string, { total: number; available: number; memoryGb?: number }>)
-                .map(([type, info]) => [type, typeof info === 'number' ? info : info.available])
-            )
-          : undefined,
-      queued_jobs: typeof raw.queued_jobs === 'number' ? raw.queued_jobs
-        : typeof raw.queuedJobs === 'number' ? raw.queuedJobs : 0,
-      estimated_wait_time: typeof raw.estimated_wait_time === 'number' ? raw.estimated_wait_time
-        : typeof raw.estimatedWaitTime === 'number' ? raw.estimatedWaitTime : undefined,
-    };
-  },
 
   /**
    * Get training queue statistics
    */
   async getQueueStats(): Promise<QueueStats> {
     const response = await apiClient.get<QueueStats>(ENDPOINTS.queueStats);
+    return response.data;
+  },
+
+  /**
+   * Get active training workers + queue summary.
+   * Backed by the in-memory worker registry on the server (TASK-145).
+   */
+  async getWorkers(): Promise<WorkerStatusListResponse> {
+    const response = await apiClient.get<WorkerStatusListResponse>(ENDPOINTS.workers);
     return response.data;
   },
 

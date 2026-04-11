@@ -169,12 +169,20 @@ export interface TrainingJobDetailsResponse {
 // ============================================================================
 
 /**
- * Worker heartbeat request - alive check with GPU utilization
+ * Worker heartbeat request - alive check with GPU utilization.
+ *
+ * `workerId` and `device` were added so the server can track *which*
+ * workers are connected and what hardware they're using. They are
+ * optional for backward compatibility with workers that haven't been
+ * redeployed yet — those workers will still get the cancel-check
+ * semantics, but won't appear in the worker list.
  */
 export interface WorkerHeartbeatRequest {
   jobId: string;
   gpuUtil: number; // 0-100
   memoryUtil: number; // 0-100
+  workerId?: string;
+  device?: string; // 'cuda' | 'mps' | 'cpu'
 }
 
 /**
@@ -277,18 +285,54 @@ export interface EtaState {
 }
 
 // ============================================================================
-// GPU AVAILABILITY
+// WORKER STATUS REGISTRY
 // ============================================================================
 
 /**
- * GPU availability information
+ * In-memory worker registry entry. Updated on every heartbeat.
+ * Not persisted — workers re-announce on their next heartbeat after
+ * a server restart.
  */
-export interface GpuAvailability {
-  totalCount: number;
-  availableCount: number;
-  byType: Record<string, { total: number; available: number; memoryGb: number }>;
-  totalMemoryGb: number;
-  availableMemoryGb: number;
+export interface WorkerStatus {
+  workerId: string;
+  device: string; // 'cuda' | 'mps' | 'cpu' (free-form string)
+  currentJobId: string | null;
+  gpuUtil: number; // 0-100, last heartbeat value
+  memoryUtil: number; // 0-100, last heartbeat value
+  lastHeartbeatAt: Date;
+  firstSeenAt: Date;
+}
+
+/**
+ * Worker status as exposed by GET /api/training/workers, with derived
+ * fields and the current job's basic info embedded.
+ */
+export interface WorkerStatusView {
+  workerId: string;
+  device: string;
+  status: 'idle' | 'busy' | 'stale';
+  currentJob: {
+    id: string;
+    status: string;
+    baseModel: string | null;
+    datasetId: string | null;
+    ageSeconds: number; // seconds since the job started running
+  } | null;
+  gpuUtil: number;
+  memoryUtil: number;
+  lastHeartbeatAt: string; // ISO timestamp
+  lastHeartbeatAgeSeconds: number;
+  firstSeenAt: string; // ISO timestamp
+}
+
+/**
+ * Response shape for GET /api/training/workers.
+ * Includes queue/run summary so the panel doesn't need a second call.
+ */
+export interface WorkerStatusListResponse {
+  workers: WorkerStatusView[];
+  queuedJobs: number;
+  runningJobs: number;
 }
 
 /**

@@ -294,12 +294,32 @@ export interface QueueStats {
   };
 }
 
-export interface GpuAvailability {
-  total_gpus: number;
-  available_gpus: number;
-  gpu_types?: Record<string, number>;
-  queued_jobs: number;
-  estimated_wait_time?: number;
+/**
+ * Worker as exposed by GET /api/training/workers.
+ * Mirrors the server's WorkerStatusView shape.
+ */
+export interface WorkerStatusView {
+  workerId: string;
+  device: string;
+  status: 'idle' | 'busy' | 'stale';
+  currentJob: {
+    id: string;
+    status: string;
+    baseModel: string | null;
+    datasetId: string | null;
+    ageSeconds: number;
+  } | null;
+  gpuUtil: number;
+  memoryUtil: number;
+  lastHeartbeatAt: string;
+  lastHeartbeatAgeSeconds: number;
+  firstSeenAt: string;
+}
+
+export interface WorkerStatusListResponse {
+  workers: WorkerStatusView[];
+  queuedJobs: number;
+  runningJobs: number;
 }
 
 export interface TrainingDurationEstimate {
@@ -427,11 +447,13 @@ export interface TrainingState {
   activeJobProgress: JobProgress | null;
   activeJobLoading: boolean;
 
-  // GPU & Queue
-  gpuAvailability: GpuAvailability | null;
-  gpuLoading: boolean;
+  // Queue
   queueStats: QueueStats | null;
   queueLoading: boolean;
+
+  // Workers
+  workers: WorkerStatusListResponse | null;
+  workersLoading: boolean;
 
   // Upload progress
   uploadProgress: number;
@@ -463,9 +485,11 @@ export interface TrainingActions {
   updateJobProgress: (jobId: string, progress: JobProgress) => void;
   handleTrainingEvent: (event: TrainingJobEvent) => void;
 
-  // GPU & Queue
-  fetchGpuAvailability: () => Promise<void>;
+  // Queue
   fetchQueueStats: () => Promise<void>;
+
+  // Workers
+  fetchWorkers: () => Promise<void>;
 
   // Reset
   reset: () => void;

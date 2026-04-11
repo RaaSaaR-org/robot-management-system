@@ -57,15 +57,29 @@ class ClaimedJob:
 class ServerClient:
     """Thin client around the worker HTTP callback API."""
 
-    def __init__(self, base_url: str, worker_id: str, timeout_sec: float = 15.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        worker_id: str,
+        device: str = "cpu",
+        timeout_sec: float = 15.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.worker_id = worker_id
+        self.device = device
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout_sec)
 
     # ------------------------------------------------------------------ claim
     def claim_next_job(self) -> ClaimedJob | None:
-        """POST /api/training/workers/claim — returns a job or None (204)."""
-        resp = self._post("/api/training/workers/claim", {"workerId": self.worker_id})
+        """POST /api/training/workers/claim — returns a job or None (204).
+
+        Sends `device` alongside `workerId` so the server can register
+        idle workers in its in-memory registry (TASK-145).
+        """
+        resp = self._post(
+            "/api/training/workers/claim",
+            {"workerId": self.worker_id, "device": self.device},
+        )
         if resp.status_code == 204:
             return None
         resp.raise_for_status()
@@ -73,10 +87,21 @@ class ServerClient:
 
     # -------------------------------------------------------------- heartbeat
     def heartbeat(self, job_id: str, gpu_util: float = 0.0, memory_util: float = 0.0) -> str:
-        """POST /api/training/workers/heartbeat — returns status ('continue'|'stop')."""
+        """POST /api/training/workers/heartbeat — returns status ('continue'|'stop').
+
+        Includes worker_id + device so the server can track which workers
+        are connected (TASK-145). gpu_util/memory_util are still 0.0 by
+        default; real telemetry is a separate follow-up.
+        """
         data = self._post_json(
             "/api/training/workers/heartbeat",
-            {"jobId": job_id, "gpuUtil": gpu_util, "memoryUtil": memory_util},
+            {
+                "jobId": job_id,
+                "workerId": self.worker_id,
+                "device": self.device,
+                "gpuUtil": gpu_util,
+                "memoryUtil": memory_util,
+            },
         )
         return data.get("status", "continue")
 

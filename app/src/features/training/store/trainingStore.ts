@@ -42,11 +42,13 @@ const initialState: TrainingState = {
   activeJobProgress: null,
   activeJobLoading: false,
 
-  // GPU & Queue
-  gpuAvailability: null,
-  gpuLoading: false,
+  // Queue
   queueStats: null,
   queueLoading: false,
+
+  // Workers
+  workers: null,
+  workersLoading: false,
 
   // Upload
   uploadProgress: 0,
@@ -326,28 +328,8 @@ export const useTrainingStore = create<TrainingStore>()(
       },
 
       // ========================================================================
-      // GPU & QUEUE
+      // QUEUE
       // ========================================================================
-
-      fetchGpuAvailability: async () => {
-        set((state) => {
-          state.gpuLoading = true;
-        });
-
-        try {
-          const availability = await trainingApi.getGpuAvailability();
-
-          set((state) => {
-            state.gpuAvailability = availability;
-            state.gpuLoading = false;
-          });
-        } catch (error) {
-          console.error('Failed to fetch GPU availability:', error);
-          set((state) => {
-            state.gpuLoading = false;
-          });
-        }
-      },
 
       fetchQueueStats: async () => {
         set((state) => {
@@ -365,6 +347,26 @@ export const useTrainingStore = create<TrainingStore>()(
           console.error('Failed to fetch queue stats:', error);
           set((state) => {
             state.queueLoading = false;
+          });
+        }
+      },
+
+      fetchWorkers: async () => {
+        set((state) => {
+          state.workersLoading = true;
+        });
+
+        try {
+          const workers = await trainingApi.getWorkers();
+
+          set((state) => {
+            state.workers = workers;
+            state.workersLoading = false;
+          });
+        } catch (error) {
+          console.error('Failed to fetch workers:', error);
+          set((state) => {
+            state.workersLoading = false;
           });
         }
       },
@@ -410,11 +412,13 @@ export const selectActiveJob = (state: TrainingStore) => state.activeJob;
 export const selectActiveJobProgress = (state: TrainingStore) => state.activeJobProgress;
 export const selectActiveJobLoading = (state: TrainingStore) => state.activeJobLoading;
 
-// GPU & Queue
-export const selectGpuAvailability = (state: TrainingStore) => state.gpuAvailability;
-export const selectGpuLoading = (state: TrainingStore) => state.gpuLoading;
+// Queue
 export const selectQueueStats = (state: TrainingStore) => state.queueStats;
 export const selectQueueLoading = (state: TrainingStore) => state.queueLoading;
+
+// Workers
+export const selectWorkers = (state: TrainingStore) => state.workers;
+export const selectWorkersLoading = (state: TrainingStore) => state.workersLoading;
 
 // Upload
 export const selectUploadProgress = (state: TrainingStore) => state.uploadProgress;

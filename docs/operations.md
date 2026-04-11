@@ -291,11 +291,14 @@ psql -c "SELECT pg_size_pretty(pg_database_size('neodem'));"
 
 ### Check Worker Status
 
-Training jobs are managed via NATS JetStream. The server's `TrainingOrchestrator` handles GPU allocation.
+Training workers are tracked via heartbeats: each worker POSTs to
+`/api/training/workers/heartbeat` every 30s with its `workerId` and
+`device`. The server keeps the live registry in memory and exposes it
+via `GET /api/training/workers`.
 
 ```bash
-# Check GPU allocation config
-echo "GPU_TOTAL_COUNT=$GPU_TOTAL_COUNT GPU_TYPE=$GPU_TYPE GPU_MEMORY_GB=$GPU_MEMORY_GB"
+# Live worker registry + queue summary
+curl http://localhost:3001/api/training/workers | python3 -m json.tool
 
 # List active training jobs via API
 curl http://localhost:3001/api/training/jobs | python3 -m json.tool
@@ -307,16 +310,18 @@ nats consumer ls TRAINING_JOBS
 
 ### Scaling Workers
 
-Adjust `GPU_TOTAL_COUNT` in the server's environment:
+Start additional `training-worker` processes — each one announces itself
+on its first heartbeat. Set `WORKER_ID` and `TRAINING_DEVICE` per worker:
 
 ```bash
-# server/.env
-GPU_TOTAL_COUNT=4
-GPU_TYPE=nvidia-a100
-GPU_MEMORY_GB=80
+# training-worker/.env
+WORKER_ID=worker-gpu-01
+TRAINING_DEVICE=cuda
 ```
 
-Restart the server to pick up changes. The orchestrator will schedule jobs across the available GPU pool.
+The orchestrator picks up new workers automatically; no server restart
+needed. Stale workers (no heartbeat for 60s) drop out of the worker list
+on the next poll.
 
 ---
 

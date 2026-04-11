@@ -14,7 +14,6 @@ import type {
   FineTuneMethod,
   HyperparametersInput,
   SubmitTrainingJobInput,
-  GpuAvailability,
 } from '../types';
 
 export interface TrainingJobWizardProps {
@@ -22,7 +21,6 @@ export interface TrainingJobWizardProps {
   onClose: () => void;
   onSubmit: (input: SubmitTrainingJobInput) => Promise<void>;
   datasets: Dataset[];
-  gpuAvailability?: GpuAvailability;
   isSubmitting?: boolean;
 }
 
@@ -85,7 +83,6 @@ export function TrainingJobWizard({
   onClose,
   onSubmit,
   datasets,
-  gpuAvailability,
   isSubmitting,
 }: TrainingJobWizardProps) {
   const [currentStep, setCurrentStep] = useState<Step>('dataset');
@@ -355,9 +352,9 @@ export function TrainingJobWizard({
                 </p>
                 <div className="grid grid-cols-3 gap-3">
                   {[
-                    { value: 'any' as const, label: 'Any Available', available: gpuAvailability?.available_gpus ?? 0 },
-                    { value: 'a100' as const, label: 'A100', available: gpuAvailability?.gpu_types?.a100 ?? 0 },
-                    { value: 'h100' as const, label: 'H100', available: gpuAvailability?.gpu_types?.h100 ?? 0 },
+                    { value: 'any' as const, label: 'Any Available' },
+                    { value: 'a100' as const, label: 'A100' },
+                    { value: 'h100' as const, label: 'H100' },
                   ].map((option) => (
                     <button
                       key={option.value}
@@ -370,9 +367,6 @@ export function TrainingJobWizard({
                       )}
                     >
                       <span className="font-medium text-theme-primary">{option.label}</span>
-                      <p className="text-xs text-theme-secondary mt-1">
-                        {option.available} available
-                      </p>
                     </button>
                   ))}
                 </div>
@@ -405,25 +399,6 @@ export function TrainingJobWizard({
                 </div>
               </div>
 
-              {gpuAvailability && (
-                <div className="p-4 bg-theme-secondary/10 rounded-lg">
-                  <h4 className="font-medium text-theme-primary mb-2">Queue Status</h4>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="text-theme-secondary">Available GPUs:</span>
-                      <span className="ml-2 font-medium text-theme-primary">
-                        {gpuAvailability.available_gpus} / {gpuAvailability.total_gpus}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-theme-secondary">Jobs in Queue:</span>
-                      <span className="ml-2 font-medium text-theme-primary">
-                        {gpuAvailability.queued_jobs}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
