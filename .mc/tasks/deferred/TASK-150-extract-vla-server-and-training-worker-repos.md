@@ -12,6 +12,7 @@ customers: []
 sprint: ''
 tags:
 - core
+- deferred
 depends_on: []
 due_date: ''
 created: '2026-04-07'

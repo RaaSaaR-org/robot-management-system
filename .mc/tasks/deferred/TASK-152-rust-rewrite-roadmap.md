@@ -12,6 +12,7 @@ customers: []
 sprint: ''
 tags:
 - extended
+- deferred
 depends_on:
 - '[[TASK-151]]'
 due_date: ''

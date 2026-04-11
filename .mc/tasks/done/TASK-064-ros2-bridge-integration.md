@@ -4,7 +4,7 @@ aliases:
 - TASK-064
 title: ROS 2 Bridge Integration
 slug: ros2-bridge-integration
-status: backlog
+status: done
 priority: 4
 owner: ''
 projects: []
@@ -24,6 +24,15 @@ updated: 2026-02-19
 
 
 # ROS 2 Bridge Integration
+
+---
+## ❌ WONTFIX — We don't need this (2026-04-11)
+
+NeoDEM deliberately bypasses ROS2: SO-101 runs directly via LeRobot on the Pi
+(`robot-agent/smolvla/`), and if ROS2 interop is ever needed, dora-rs already
+provides a ROS2 bridge out of the box. Rolling our own rclpy backend plugin in
+the VLA server adds maintenance burden for zero current users. Closing as
+not-needed.
 
 ---
 ## 🚨 BLOCKED — Muss TASK-082 zuerst abgeschlossen sein
