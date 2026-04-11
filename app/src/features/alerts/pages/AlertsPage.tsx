@@ -5,13 +5,15 @@
  * @dependencies @/features/alerts/components, @/features/alerts/hooks
  */
 
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
+import { Tabs } from '@/shared/components/ui/Tabs';
 import { useAlertHistory, useAlertCounts, useAlerts } from '../hooks/useAlerts';
-import { AlertFilters } from '../components/AlertFilters';
-import { AlertHistoryPanel } from '../components/AlertHistoryPanel';
 import { AlertList } from '../components/AlertList';
+import { AlertHistoryPanel } from '../components/AlertHistoryPanel';
+import { IncidentsPage } from '@/features/incidents/pages/IncidentsPage';
 import type { AlertSeverity } from '../types/alerts.types';
 
 // ============================================================================
@@ -23,41 +25,11 @@ export interface AlertsPageProps {
   className?: string;
 }
 
-type TabType = 'active' | 'history';
+type TabType = 'active' | 'history' | 'incidents';
 
 // ============================================================================
 // SUB-COMPONENTS
 // ============================================================================
-
-interface CountBadgeProps {
-  count: number;
-  severity?: AlertSeverity;
-}
-
-function CountBadge({ count, severity }: CountBadgeProps) {
-  if (count === 0) return null;
-
-  const colorClass =
-    severity === 'critical'
-      ? 'bg-red-500'
-      : severity === 'error'
-        ? 'bg-red-400'
-        : severity === 'warning'
-          ? 'bg-yellow-500'
-          : 'bg-blue-500';
-
-  return (
-    <span
-      className={cn(
-        'ml-2 px-2 py-0.5 text-xs font-medium rounded-full',
-        colorClass,
-        severity === 'warning' ? 'text-gray-900' : 'text-white'
-      )}
-    >
-      {count}
-    </span>
-  );
-}
 
 interface StatsCardProps {
   label: string;
@@ -120,11 +92,21 @@ function StatsCard({ label, count, severity }: StatsCardProps) {
  * ```
  */
 export function AlertsPage({ className }: AlertsPageProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('active');
-  const [showFilters, setShowFilters] = useState(false);
+  // Tab state synced via ?tab= so /incidents → /alerts?tab=incidents
+  // redirect lands on the right tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const activeTab: TabType =
+    tabParam === 'history' || tabParam === 'incidents' ? tabParam : 'active';
+  const setActiveTab = (id: TabType) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'active') next.delete('tab');
+    else next.set('tab', id);
+    setSearchParams(next, { replace: true });
+  };
 
   const { unacknowledgedCount, fetchAlerts } = useAlerts();
-  const { filters, setFilters, pagination } = useAlertHistory(false);
+  const { pagination } = useAlertHistory(false);
   const { counts, total: totalActive } = useAlertCounts();
 
   const handleRefresh = useCallback(async () => {
@@ -166,69 +148,35 @@ export function AlertsPage({ className }: AlertsPageProps) {
           <StatsCard label="Info" count={counts.info} severity="info" />
         </div>
 
-        {/* Tabs */}
-        <div className="border-b border-theme-border mb-6">
-          <nav className="flex gap-4">
-            <button
-              onClick={() => setActiveTab('active')}
-              className={cn(
-                'pb-3 text-sm font-medium border-b-2 transition-colors',
-                activeTab === 'active'
-                  ? 'border-primary-500 text-primary-500'
-                  : 'border-transparent text-theme-secondary hover:text-theme-primary'
-              )}
-            >
-              Active Alerts
-              <CountBadge count={totalActive} severity="critical" />
-            </button>
-            <button
-              onClick={() => setActiveTab('history')}
-              className={cn(
-                'pb-3 text-sm font-medium border-b-2 transition-colors',
-                activeTab === 'history'
-                  ? 'border-primary-500 text-primary-500'
-                  : 'border-transparent text-theme-secondary hover:text-theme-primary'
-              )}
-            >
-              History
-              {pagination.total > 0 && (
-                <span className="ml-2 text-theme-tertiary">({pagination.total})</span>
-              )}
-            </button>
-          </nav>
-        </div>
-
-        {/* Tab Content */}
-        {activeTab === 'active' ? (
-          <div className="bg-theme-surface rounded-lg border border-theme-border p-6">
-            <AlertList maxHeight="600px" showAcknowledged={false} />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Filter Toggle */}
-            <div className="flex items-center justify-between">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setShowFilters(!showFilters)}
-              >
-                {showFilters ? 'Hide Filters' : 'Show Filters'}
-              </Button>
-            </div>
-
-            {/* Filters */}
-            {showFilters && (
-              <div className="bg-theme-surface rounded-lg border border-theme-border p-6">
-                <AlertFilters filters={filters} onFiltersChange={setFilters} />
-              </div>
-            )}
-
-            {/* History Panel */}
-            <div className="bg-theme-surface rounded-lg border border-theme-border p-6 relative">
-              <AlertHistoryPanel maxHeight="600px" autoFetch={activeTab === 'history'} />
-            </div>
-          </div>
-        )}
+        <Tabs
+          activeTab={activeTab}
+          onTabChange={(id) => setActiveTab(id as TabType)}
+          tabs={[
+            {
+              id: 'active',
+              label: totalActive > 0 ? `Active Alerts (${totalActive})` : 'Active Alerts',
+              content: (
+                <div className="bg-theme-surface rounded-lg border border-theme-border p-6">
+                  <AlertList maxHeight="600px" showAcknowledged={false} />
+                </div>
+              ),
+            },
+            {
+              id: 'history',
+              label: pagination.total > 0 ? `History (${pagination.total})` : 'History',
+              content: (
+                <div className="bg-theme-surface rounded-lg border border-theme-border p-6 relative">
+                  <AlertHistoryPanel maxHeight="600px" autoFetch={activeTab === 'history'} />
+                </div>
+              ),
+            },
+            {
+              id: 'incidents',
+              label: 'Incidents',
+              content: <IncidentsPage />,
+            },
+          ]}
+        />
       </div>
     </div>
   );

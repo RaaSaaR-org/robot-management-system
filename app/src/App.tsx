@@ -19,8 +19,6 @@ import {
   LazyResetPasswordPage,
   LazyAccountPage,
   LazyDashboardPage,
-  LazyOrchestratorChatPage,
-  LazyRobotsPage,
   LazyRobotDetailPage,
   LazyFleetPage,
   LazyAlertsPage,
@@ -32,29 +30,17 @@ import {
   LazyA2ATaskListPage,
   LazyA2AEventsPage,
   LazySettingsPage,
-  LazyExplainabilityPage,
   LazyCompliancePage,
-  LazyGDPRPortalPage,
-  LazyIncidentsPage,
   LazyIncidentDetailPage,
-  LazyOversightPage,
-  LazyApprovalsPage,
   LazyDatasetsPage,
   LazyDatasetEpisodesPage,
   LazyTrainingPage,
-  LazyModelsPage,
   LazyDeploymentsPage,
   LazyDeploymentDetailPage,
-  LazySkillsPage,
-  LazyContributionsPage,
-  LazyNewContributionPage,
-  LazyContributionDetailPage,
   LazyMarketplacePage,
   LazyMarketplaceDetailPage,
   LazyMyMarketplacePage,
-  LazyEvaluationDashboardPage,
   LazyUpdatesPage,
-  LazySimulationPage,
   LazyPipelinePage,
   LazyDataCollectionPage,
   LazyNewSessionPage,
@@ -122,22 +108,10 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          <Route
-            path="/orchestrator"
-            element={
-              <ProtectedAppRoute>
-                <LazyOrchestratorChatPage />
-              </ProtectedAppRoute>
-            }
-          />
-          <Route
-            path="/robots"
-            element={
-              <ProtectedAppRoute>
-                <LazyRobotsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Orchestrator - merged into Dashboard chat drawer (TASK-147) */}
+          <Route path="/orchestrator" element={<Navigate to="/dashboard?drawer=chat" replace />} />
+          {/* Robots - merged into Fleet tabs (TASK-147). Detail route stays. */}
+          <Route path="/robots" element={<Navigate to="/fleet?tab=list" replace />} />
           <Route
             path="/robots/:id"
             element={
@@ -248,15 +222,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* Explainability - AI transparency (EU AI Act) */}
-          <Route
-            path="/explainability"
-            element={
-              <ProtectedAppRoute>
-                <LazyExplainabilityPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Explainability - merged into Compliance tabs (TASK-147) */}
+          <Route path="/explainability" element={<Navigate to="/compliance?tab=explainability" replace />} />
           {/* Compliance - Audit logging (EU AI Act Art. 12, GDPR Art. 30) */}
           <Route
             path="/compliance"
@@ -266,24 +233,10 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* GDPR - Data subject rights self-service (GDPR Articles 15-22) */}
-          <Route
-            path="/gdpr"
-            element={
-              <ProtectedAppRoute>
-                <LazyGDPRPortalPage />
-              </ProtectedAppRoute>
-            }
-          />
-          {/* Incidents - Incident management and regulatory reporting */}
-          <Route
-            path="/incidents"
-            element={
-              <ProtectedAppRoute>
-                <LazyIncidentsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* GDPR - merged into Compliance tabs (TASK-147) */}
+          <Route path="/gdpr" element={<Navigate to="/compliance?tab=gdpr" replace />} />
+          {/* Incidents - merged into Alerts tabs (TASK-147). Detail route stays. */}
+          <Route path="/incidents" element={<Navigate to="/alerts?tab=incidents" replace />} />
           <Route
             path="/incidents/:id"
             element={
@@ -292,24 +245,10 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          {/* Oversight - Human oversight dashboard (EU AI Act Art. 14) */}
-          <Route
-            path="/oversight"
-            element={
-              <ProtectedAppRoute>
-                <LazyOversightPage />
-              </ProtectedAppRoute>
-            }
-          />
-          {/* Approvals - Human approval workflows (GDPR Art. 22, AI Act Art. 14) */}
-          <Route
-            path="/approvals"
-            element={
-              <ProtectedAppRoute>
-                <LazyApprovalsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Oversight - merged into Compliance tabs (TASK-147) */}
+          <Route path="/oversight" element={<Navigate to="/compliance?tab=oversight" replace />} />
+          {/* Approvals - merged into Compliance tabs (TASK-147) */}
+          <Route path="/approvals" element={<Navigate to="/compliance?tab=approvals" replace />} />
 
           {/* Training - VLA model fine-tuning */}
           <Route
@@ -336,14 +275,8 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          <Route
-            path="/models"
-            element={
-              <ProtectedAppRoute>
-                <LazyModelsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* /models removed (TASK-142): MLflow registry deleted */}
+          <Route path="/models" element={<Navigate to="/training" replace />} />
 
           {/* DataCollection - Robot data collection sessions */}
           <Route
@@ -388,50 +321,16 @@ function App() {
               </ProtectedAppRoute>
             }
           />
-          <Route
-            path="/skills"
-            element={
-              <ProtectedAppRoute>
-                <LazySkillsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Skill Library - merged into Deployments tabs (TASK-147) */}
+          <Route path="/skills" element={<Navigate to="/deployments?tab=skills" replace />} />
 
-          {/* Evaluation - VLA model evaluation dashboard */}
-          <Route
-            path="/evaluation"
-            element={
-              <ProtectedAppRoute>
-                <LazyEvaluationDashboardPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Evaluation - merged into Training tabs (TASK-147) */}
+          <Route path="/evaluation" element={<Navigate to="/training?tab=evaluation" replace />} />
 
-          {/* Contributions - Data contribution portal */}
-          <Route
-            path="/contributions"
-            element={
-              <ProtectedAppRoute>
-                <LazyContributionsPage />
-              </ProtectedAppRoute>
-            }
-          />
-          <Route
-            path="/contributions/new"
-            element={
-              <ProtectedAppRoute>
-                <LazyNewContributionPage />
-              </ProtectedAppRoute>
-            }
-          />
-          <Route
-            path="/contributions/:id"
-            element={
-              <ProtectedAppRoute>
-                <LazyContributionDetailPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Contributions - orphan route (TASK-147), redirected to Marketplace */}
+          <Route path="/contributions" element={<Navigate to="/marketplace" replace />} />
+          <Route path="/contributions/new" element={<Navigate to="/marketplace" replace />} />
+          <Route path="/contributions/:id" element={<Navigate to="/marketplace" replace />} />
 
           {/* Marketplace - Skill & Data Marketplace */}
           <Route
@@ -459,15 +358,8 @@ function App() {
             }
           />
 
-          {/* Simulation - MuJoCo/Isaac Lab policy testing (TASK-081) */}
-          <Route
-            path="/simulation"
-            element={
-              <ProtectedAppRoute>
-                <LazySimulationPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Simulation - merged into Training tabs (TASK-147) */}
+          <Route path="/simulation" element={<Navigate to="/training?tab=simulation" replace />} />
 
           {/* Pipeline - unified training workflow overview (TASK-134) */}
           <Route

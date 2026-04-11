@@ -5,15 +5,18 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Rocket } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Rocket, BookOpen } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Card, Button } from '@/shared/components/ui';
+import { Card, Button, Tabs } from '@/shared/components/ui';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { useDeploymentStore } from '../store';
 import { DeploymentCard, CanaryConfig, RollbackConfirmation } from '../components';
 import type { Deployment, CreateDeploymentInput } from '../types';
+import { SkillsPage } from './SkillsPage';
 
-type TabValue = 'active' | 'history';
+type OuterTab = 'deployments' | 'skills';
+type InnerTab = 'active' | 'history';
 
 export function DeploymentsPage() {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
@@ -33,9 +36,20 @@ export function DeploymentsPage() {
     );
   }
 
-  const [activeTab, setActiveTab] = useState<TabValue>('active');
+  const [activeTab, setActiveTab] = useState<InnerTab>('active');
   const [showCanaryConfig, setShowCanaryConfig] = useState(false);
   const [rollbackDeployment, setRollbackDeployment] = useState<Deployment | null>(null);
+
+  // Outer tab state — Deployments / Skill Library. Persist via ?tab=
+  // so /skills → /deployments?tab=skills redirect lands on the right tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const outerTab: OuterTab = searchParams.get('tab') === 'skills' ? 'skills' : 'deployments';
+  const setOuterTab = (id: OuterTab) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'deployments') next.delete('tab');
+    else next.set('tab', id);
+    setSearchParams(next, { replace: true });
+  };
 
   // Direct store access - simpler pattern
   const deployments = useDeploymentStore((s) => s.deployments);
@@ -104,20 +118,67 @@ export function DeploymentsPage() {
         <div>
           <h1 className="text-2xl font-bold text-theme-primary">Deployments</h1>
           <p className="text-sm text-theme-secondary mt-1">
-            Manage model deployments across your robot fleet
+            {outerTab === 'deployments'
+              ? 'Manage model deployments across your robot fleet'
+              : 'Browse and run skills on the fleet'}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <PipelineBreadcrumb stage="deploy" />
-          <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
-            <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            New Deployment
-          </Button>
+          {outerTab === 'deployments' && (
+            <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Deployment
+            </Button>
+          )}
         </div>
       </div>
 
+      <Tabs
+        activeTab={outerTab}
+        onTabChange={(id) => setOuterTab(id as OuterTab)}
+        tabs={[
+          {
+            id: 'deployments',
+            label: 'Deployments',
+            icon: <Rocket className="w-4 h-4" />,
+            content: renderDeploymentsTab(),
+          },
+          {
+            id: 'skills',
+            label: 'Skill Library',
+            icon: <BookOpen className="w-4 h-4" />,
+            content: <SkillsPage />,
+          },
+        ]}
+      />
+
+      {/* Canary Config Modal */}
+      <CanaryConfig
+        isOpen={showCanaryConfig}
+        onClose={() => setShowCanaryConfig(false)}
+        onSubmit={handleCreateDeployment}
+        modelVersions={modelVersions.filter((v: { deploymentStatus: string }) => v.deploymentStatus === 'staging')}
+        isLoading={modelsLoading}
+      />
+
+      {/* Rollback Confirmation Modal */}
+      {rollbackDeployment && (
+        <RollbackConfirmation
+          deployment={rollbackDeployment}
+          isOpen={!!rollbackDeployment}
+          onClose={() => setRollbackDeployment(null)}
+          onConfirm={handleRollback}
+        />
+      )}
+    </div>
+  );
+
+  function renderDeploymentsTab() {
+    return (
+      <div className="space-y-6">
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         <Card className="p-4">
@@ -272,24 +333,7 @@ export function DeploymentsPage() {
         </Card>
       )}
 
-      {/* Canary Config Modal */}
-      <CanaryConfig
-        isOpen={showCanaryConfig}
-        onClose={() => setShowCanaryConfig(false)}
-        onSubmit={handleCreateDeployment}
-        modelVersions={modelVersions.filter((v: { deploymentStatus: string }) => v.deploymentStatus === 'staging')}
-        isLoading={modelsLoading}
-      />
-
-      {/* Rollback Confirmation Modal */}
-      {rollbackDeployment && (
-        <RollbackConfirmation
-          deployment={rollbackDeployment}
-          isOpen={!!rollbackDeployment}
-          onClose={() => setRollbackDeployment(null)}
-          onConfirm={handleRollback}
-        />
-      )}
-    </div>
-  );
+      </div>
+    );
+  }
 }

@@ -391,8 +391,6 @@ export interface TrainingJob {
   currentEpoch?: number;
   totalEpochs?: number;
   metrics: TrainingMetrics;
-  mlflowRunId?: string;
-  mlflowExperimentId?: string;
   bullmqJobId?: string;
   startedAt?: Date;
   completedAt?: Date;
@@ -422,8 +420,6 @@ export interface UpdateTrainingJobInput {
   progress?: number;
   currentEpoch?: number;
   metrics?: TrainingMetrics;
-  mlflowRunId?: string;
-  mlflowExperimentId?: string;
   bullmqJobId?: string;
   startedAt?: Date;
   completedAt?: Date;
@@ -456,8 +452,6 @@ export interface ModelVersion {
   trainingMetrics: TrainingMetrics;
   validationMetrics: TrainingMetrics;
   deploymentStatus: ModelDeploymentStatus;
-  mlflowModelName?: string;
-  mlflowModelVersion?: string;
   createdAt: Date;
   updatedAt: Date;
 
@@ -475,8 +469,6 @@ export interface CreateModelVersionInput {
   trainingMetrics?: TrainingMetrics;
   validationMetrics?: TrainingMetrics;
   deploymentStatus?: ModelDeploymentStatus;
-  mlflowModelName?: string;
-  mlflowModelVersion?: string;
 }
 
 export interface UpdateModelVersionInput {
@@ -485,8 +477,6 @@ export interface UpdateModelVersionInput {
   trainingMetrics?: TrainingMetrics;
   validationMetrics?: TrainingMetrics;
   deploymentStatus?: ModelDeploymentStatus;
-  mlflowModelName?: string;
-  mlflowModelVersion?: string;
 }
 
 export interface ModelVersionQueryParams {

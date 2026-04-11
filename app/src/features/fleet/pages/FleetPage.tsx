@@ -6,15 +6,19 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
+import { Tabs } from '@/shared/components/ui/Tabs';
 import { FleetMap } from '../components/FleetMap';
 import { ZoneConfigPanel } from '../components/ZoneConfigPanel';
 import { ZoneFormModal } from '../components/ZoneFormModal';
 import { useZones, useZoneEditor } from '../hooks';
 import { useRobots } from '@/features/robots/hooks/useRobots';
+import { RobotsPage } from '@/features/robots/pages/RobotsPage';
 import type { Zone, ZoneBounds, RobotMapMarker } from '../types/fleet.types';
+
+type FleetTab = 'list' | 'map';
 
 // ============================================================================
 // TYPES
@@ -51,6 +55,18 @@ export interface FleetPageProps {
  */
 export function FleetPage({ className }: FleetPageProps) {
   const navigate = useNavigate();
+
+  // Tab state synced via ?tab= so /robots → /fleet?tab=list redirect
+  // lands on the right tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab: FleetTab = searchParams.get('tab') === 'list' ? 'list' : 'map';
+  const setActiveTab = (id: FleetTab) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'map') next.delete('tab');
+    else next.set('tab', id);
+    setSearchParams(next, { replace: true });
+  };
+
   const [selectedFloor, setSelectedFloor] = useState('1');
   const [showZonePanel, setShowZonePanel] = useState(false);
   const [showZoneModal, setShowZoneModal] = useState(false);
@@ -152,50 +168,65 @@ export function FleetPage({ className }: FleetPageProps) {
                 Monitor robots and manage facility zones
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant={showZonePanel ? 'primary' : 'secondary'}
-                size="sm"
-                onClick={() => setShowZonePanel(!showZonePanel)}
-              >
-                {showZonePanel ? 'Hide Zones' : 'Manage Zones'}
-              </Button>
-              <Button
-                variant={editorMode === 'draw' ? 'primary' : 'secondary'}
-                size="sm"
-                onClick={handleToggleDrawMode}
-              >
-                {editorMode === 'draw' ? 'Exit Draw Mode' : 'Draw Zone'}
-              </Button>
-            </div>
+            {activeTab === 'map' && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={showZonePanel ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => setShowZonePanel(!showZonePanel)}
+                >
+                  {showZonePanel ? 'Hide Zones' : 'Manage Zones'}
+                </Button>
+                <Button
+                  variant={editorMode === 'draw' ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={handleToggleDrawMode}
+                >
+                  {editorMode === 'draw' ? 'Exit Draw Mode' : 'Draw Zone'}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Main Content */}
-        <div className="flex gap-6">
-          {/* Map */}
-          <div className={cn('flex-1', showZonePanel && 'max-w-[calc(100%-320px)]')}>
-            <FleetMap
-              robots={robotMarkers}
-              zones={zones}
-              selectedFloor={selectedFloor}
-              onFloorChange={setSelectedFloor}
-              onRobotClick={handleRobotClick}
-              editorMode={editorMode}
-              selectedZoneId={selectedZone?.id || null}
-              onSelectZone={selectZone}
-              onEditZone={handleEditZone}
-              onZoneDrawn={handleZoneDrawn}
-            />
-          </div>
-
-          {/* Zone Panel - manages its own state internally via hooks */}
-          {showZonePanel && (
-            <div className="w-80 shrink-0">
-              <ZoneConfigPanel />
-            </div>
-          )}
-        </div>
+        <Tabs
+          activeTab={activeTab}
+          onTabChange={(id) => setActiveTab(id as FleetTab)}
+          tabs={[
+            {
+              id: 'map',
+              label: 'Map',
+              content: (
+                <div className="flex gap-6">
+                  <div className={cn('flex-1', showZonePanel && 'max-w-[calc(100%-320px)]')}>
+                    <FleetMap
+                      robots={robotMarkers}
+                      zones={zones}
+                      selectedFloor={selectedFloor}
+                      onFloorChange={setSelectedFloor}
+                      onRobotClick={handleRobotClick}
+                      editorMode={editorMode}
+                      selectedZoneId={selectedZone?.id || null}
+                      onSelectZone={selectZone}
+                      onEditZone={handleEditZone}
+                      onZoneDrawn={handleZoneDrawn}
+                    />
+                  </div>
+                  {showZonePanel && (
+                    <div className="w-80 shrink-0">
+                      <ZoneConfigPanel />
+                    </div>
+                  )}
+                </div>
+              ),
+            },
+            {
+              id: 'list',
+              label: 'List',
+              content: <RobotsPage />,
+            },
+          ]}
+        />
 
         {/* Zone Form Modal */}
         <ZoneFormModal

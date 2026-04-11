@@ -4,7 +4,7 @@ aliases:
 - TASK-147
 title: 'Simplify sidebar navigation: 22 items → 11'
 slug: simplify-sidebar-navigation
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,8 +15,11 @@ tags:
 depends_on: []
 due_date: ''
 created: 2026-04-07
-updated: 2026-04-07
+updated: 2026-04-11
 ---
+
+
+
 
 
 ## Description

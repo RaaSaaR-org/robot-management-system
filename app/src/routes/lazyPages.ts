@@ -200,13 +200,6 @@ export const LazyTrainingPage = lazy(() =>
 );
 
 /**
- * Models page - Model registry and version management
- */
-export const LazyModelsPage = lazy(() =>
-  import('@/features/training').then((m) => ({ default: m.ModelsPage }))
-);
-
-/**
  * Deployments page - VLA fleet deployment management
  */
 export const LazyDeploymentsPage = lazy(() =>
@@ -225,27 +218,6 @@ export const LazyDeploymentDetailPage = lazy(() =>
  */
 export const LazySkillsPage = lazy(() =>
   import('@/features/deployment').then((m) => ({ default: m.SkillsPage }))
-);
-
-/**
- * Contributions page - Data contribution portal
- */
-export const LazyContributionsPage = lazy(() =>
-  import('@/features/contributions').then((m) => ({ default: m.ContributionsPage }))
-);
-
-/**
- * New contribution page - Contribution wizard
- */
-export const LazyNewContributionPage = lazy(() =>
-  import('@/features/contributions').then((m) => ({ default: m.NewContributionPage }))
-);
-
-/**
- * Contribution detail page - Single contribution view
- */
-export const LazyContributionDetailPage = lazy(() =>
-  import('@/features/contributions').then((m) => ({ default: m.ContributionDetailPage }))
 );
 
 /**

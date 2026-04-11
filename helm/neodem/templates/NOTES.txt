@@ -18,9 +18,6 @@ DEPLOYED COMPONENTS:
 {{- if .Values.rustfs.enabled }}
   - RustFS Object Storage (S3-compatible)
 {{- end }}
-{{- if .Values.mlflow.enabled }}
-  - MLflow Model Registry
-{{- end }}
 {{- if .Values.server.enabled }}
   - NeoDEM Server (API)
 {{- end }}
@@ -66,16 +63,6 @@ NATS MONITORING:
   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "neodem.nats.fullname" . }} 8222:8222
   
   # Then open http://localhost:8222 for monitoring
-{{- end }}
-
-{{- if .Values.mlflow.enabled }}
-
-MLFLOW UI:
-
-  # Port-forward to MLflow UI
-  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "neodem.mlflow.fullname" . }} 5000:5000
-  
-  # Then open http://localhost:5000 for MLflow tracking UI
 {{- end }}
 
 {{- if .Values.rustfs.enabled }}

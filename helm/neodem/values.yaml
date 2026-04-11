@@ -133,28 +133,6 @@ rustfs:
       cpu: "500m"
 
 # -----------------------------------------------------------------------------
-# MLflow Model Registry
-# -----------------------------------------------------------------------------
-mlflow:
-  enabled: true
-  external:
-    # Use external MLflow (Databricks, managed MLflow, etc.)
-    enabled: false
-    # MLflow tracking URI
-    trackingUri: ""
-  image:
-    repository: ghcr.io/mlflow/mlflow
-    tag: "v2.10.0"
-    pullPolicy: IfNotPresent
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "1Gi"
-      cpu: "500m"
-
-# -----------------------------------------------------------------------------
 # Server (Node.js API)
 # -----------------------------------------------------------------------------
 server:

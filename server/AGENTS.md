@@ -144,7 +144,6 @@ server/src/
 │   ├── ActiveLearningService.ts
 │   ├── SyntheticDataService.ts
 │   ├── FederatedLearningService.ts
-│   ├── MLflowService.ts            # MLflow integration
 │   ├── A2AClient.ts, HttpClient.ts, LogExportService.ts
 │   └── ...
 ├── repositories/         # 18 repositories (Prisma data access)
@@ -344,7 +343,7 @@ Additional service groups (45 total):
 - **GDPR**: `GDPRRequestService`, `ConsentService`, `DataRestrictionService`
 - **Incidents**: `IncidentService`, `NotificationWorkflowService`, `BreachAssessmentService`
 - **Oversight**: `OversightService`, `ApprovalWorkflowService`, `ExplainabilityService`
-- **ML/Training**: `DatasetService`, `TrainingJobService`, `TrainingOrchestrator`, `DeploymentService`, `SkillLibraryService`, `EmbodimentService`, `MLflowService`
+- **ML/Training**: `DatasetService`, `TrainingJobService`, `TrainingOrchestrator`, `DeploymentService`, `SkillLibraryService`, `EmbodimentService`
 - **Data Pipeline**: `DataQualityService`, `DataCurationService`, `DataAugmentationService`, `ActiveLearningService`, `SyntheticDataService`, `FederatedLearningService`, `DataContributionService`
 
 ### Repository Pattern

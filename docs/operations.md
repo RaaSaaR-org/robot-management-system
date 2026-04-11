@@ -109,8 +109,7 @@ Used by GPU training workers to authenticate callbacks to the server.
 
 1. Generate new access/secret keys
 2. Update `RUSTFS_ACCESS_KEY` and `RUSTFS_SECRET_KEY` in server config
-3. Update the same credentials in MLflow config (if using RustFS as artifact store)
-4. Restart all affected services
+3. Restart all affected services
 
 ### Compliance Log Encryption Key
 

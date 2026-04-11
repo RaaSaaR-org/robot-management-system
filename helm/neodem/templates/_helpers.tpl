@@ -92,13 +92,6 @@ RustFS fullname
 {{- end }}
 
 {{/*
-MLflow fullname
-*/}}
-{{- define "neodem.mlflow.fullname" -}}
-{{- printf "%s-mlflow" (include "neodem.fullname" .) }}
-{{- end }}
-
-{{/*
 Server fullname
 */}}
 {{- define "neodem.server.fullname" -}}
@@ -167,20 +160,6 @@ Returns the RUSTFS_ENDPOINT for S3-compatible storage
 {{- .Values.rustfs.external.endpoint }}
 {{- else if .Values.rustfs.enabled }}
 {{- printf "http://%s:9000" (include "neodem.rustfs.fullname" .) }}
-{{- else }}
-{{- "" }}
-{{- end }}
-{{- end }}
-
-{{/*
-MLflow tracking URI
-Returns the MLFLOW_TRACKING_URI
-*/}}
-{{- define "neodem.mlflow.trackingUri" -}}
-{{- if .Values.mlflow.external.enabled }}
-{{- .Values.mlflow.external.trackingUri }}
-{{- else if .Values.mlflow.enabled }}
-{{- printf "http://%s:5000" (include "neodem.mlflow.fullname" .) }}
 {{- else }}
 {{- "" }}
 {{- end }}

@@ -11,7 +11,6 @@ import {
   modelVersionRepository,
 } from '../repositories/index.js';
 import { robotManager } from './RobotManager.js';
-import { mlflowService } from './MLflowService.js';
 import { HttpClient, HTTP_TIMEOUTS } from './HttpClient.js';
 import type {
   Deployment,
@@ -282,20 +281,6 @@ export class DeploymentService extends EventEmitter {
     await modelVersionRepository.update(modelVersion.id, {
       deploymentStatus: 'production',
     });
-
-    // Update MLflow stage if configured
-    if (modelVersion.mlflowModelName && modelVersion.mlflowModelVersion) {
-      try {
-        await mlflowService.transitionModelVersionStage(
-          modelVersion.mlflowModelName,
-          modelVersion.mlflowModelVersion,
-          'Production',
-          true // archive existing
-        );
-      } catch (error) {
-        console.error('[DeploymentService] Failed to update MLflow stage:', error);
-      }
-    }
 
     // Clean up
     this.activeDeployments.delete(deploymentId);

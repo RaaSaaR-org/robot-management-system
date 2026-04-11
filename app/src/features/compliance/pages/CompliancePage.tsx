@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Shield } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
@@ -27,6 +27,10 @@ import { InspectionSchedulePanel } from '../components/InspectionSchedulePanel';
 import { RiskAssessmentTracker } from '../components/RiskAssessmentTracker';
 import { useComplianceStore } from '../store';
 import type { ComplianceLog, ComplianceEventType } from '../types';
+import { ExplainabilityPage } from '@/features/explainability/pages/ExplainabilityPage';
+import { OversightPage } from '@/features/oversight/pages/OversightPage';
+import { ApprovalsPage } from '@/features/approvals/pages/ApprovalsPage';
+import { GDPRPortalPage } from '@/features/gdpr/pages/GDPRPortalPage';
 
 /**
  * Main page for Compliance Logging (EU AI Act Art. 12, GDPR Art. 30)
@@ -53,8 +57,16 @@ export function CompliancePage() {
 }
 
 function CompliancePageInner() {
-  const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // Outer tab state synced via ?tab= so legacy /explainability /oversight
+  // /approvals /gdpr redirects (App.tsx) land on the right tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') ?? 'dashboard';
+  const setActiveTab = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'dashboard') next.delete('tab');
+    else next.set('tab', id);
+    setSearchParams(next, { replace: true });
+  };
   const [selectedLog, setSelectedLog] = useState<ComplianceLog | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
 
@@ -97,7 +109,10 @@ function CompliancePageInner() {
   };
 
   const handleViewDecision = (decisionId: string) => {
-    navigate(`/explainability?decisionId=${decisionId}`);
+    // Switch to the embedded Explainability tab. The decisionId is no
+    // longer threaded through — the tab handles its own selection.
+    void decisionId;
+    setActiveTab('explainability');
   };
 
   const handlePageChange = (newPage: number) => {
@@ -418,6 +433,26 @@ function CompliancePageInner() {
       id: 'settings',
       label: 'Settings',
       content: settingsContent,
+    },
+    {
+      id: 'explainability',
+      label: 'Explainability',
+      content: <ExplainabilityPage />,
+    },
+    {
+      id: 'oversight',
+      label: 'Oversight',
+      content: <OversightPage />,
+    },
+    {
+      id: 'approvals',
+      label: 'Approvals',
+      content: <ApprovalsPage />,
+    },
+    {
+      id: 'gdpr',
+      label: 'Data Privacy',
+      content: <GDPRPortalPage />,
     },
   ];
 

@@ -34,13 +34,3 @@ export { GpuAvailabilityPanel } from './GpuAvailabilityPanel';
 export type { GpuAvailabilityPanelProps } from './GpuAvailabilityPanel';
 export { QueueStatsDisplay } from './QueueStatsDisplay';
 export type { QueueStatsDisplayProps } from './QueueStatsDisplay';
-
-// Model registry components
-export { ModelRegistryList } from './ModelRegistryList';
-export type { ModelRegistryListProps } from './ModelRegistryList';
-export { ModelVersionList } from './ModelVersionList';
-export type { ModelVersionListProps } from './ModelVersionList';
-export { ModelComparisonDashboard } from './ModelComparisonDashboard';
-export type { ModelComparisonDashboardProps } from './ModelComparisonDashboard';
-export { MetricsComparisonChart, MultiMetricComparisonChart } from './MetricsComparisonChart';
-export type { MetricsComparisonChartProps, MultiMetricComparisonChartProps, MetricData } from './MetricsComparisonChart';

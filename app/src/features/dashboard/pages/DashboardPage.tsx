@@ -6,14 +6,16 @@
  * @stateAccess useFleetStatus (read)
  */
 
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { MessageSquare, X } from 'lucide-react';
 import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
 import { FleetEmergencyStopButton } from '@/features/safety';
 import { CommandBar } from '@/features/command/components/CommandBar';
 import { Button } from '@/shared/components/ui/Button';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { useCountUp } from '@/shared/hooks';
+import { OrchestratorChatPage } from '@/features/a2a/pages/OrchestratorChatPage';
 
 // ============================================================================
 // COMPONENT
@@ -31,6 +33,24 @@ export function DashboardPage() {
 
   // Floor selector state
   const [selectedFloor, setSelectedFloor] = useState(floors[0] || '1');
+
+  // Orchestrator chat drawer — opened from header button or via
+  // ?drawer=chat (the redirect from the legacy /orchestrator route).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [chatOpen, setChatOpen] = useState(searchParams.get('drawer') === 'chat');
+  useEffect(() => {
+    setChatOpen(searchParams.get('drawer') === 'chat');
+  }, [searchParams]);
+  const openChat = () => {
+    const next = new URLSearchParams(searchParams);
+    next.set('drawer', 'chat');
+    setSearchParams(next, { replace: true });
+  };
+  const closeChat = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('drawer');
+    setSearchParams(next, { replace: true });
+  };
 
   // Animated counters for hero header
   const animatedTotal = useCountUp(status.totalRobots, 800, 200);
@@ -79,6 +99,14 @@ export function DashboardPage() {
             <div className="flex items-center gap-3 flex-wrap">
               {/* E-Stop always visible — safety-critical, must be accessible on all viewports */}
               <FleetEmergencyStopButton size="md" />
+              <Button
+                variant="outline"
+                onClick={openChat}
+                className="!border-white/30 !text-white hover:!bg-white/10"
+              >
+                <MessageSquare className="w-4 h-4 mr-2" />
+                Chat
+              </Button>
               <Button variant="outline" onClick={refresh} disabled={isLoading} className="!border-white/30 !text-white hover:!bg-white/10">
                 {isLoading ? (
                   <>
@@ -188,6 +216,37 @@ export function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Orchestrator chat drawer (TASK-147 — folded from /orchestrator) */}
+      {chatOpen && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/40 z-40"
+            onClick={closeChat}
+            aria-hidden="true"
+          />
+          <aside
+            className="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] bg-theme-surface border-l border-theme shadow-2xl flex flex-col"
+            role="dialog"
+            aria-label="Orchestrator chat"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-theme">
+              <h2 className="text-base font-semibold text-theme-primary">Orchestrator</h2>
+              <button
+                type="button"
+                onClick={closeChat}
+                className="p-1 rounded hover:bg-theme-secondary/20 text-theme-secondary"
+                aria-label="Close chat"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <OrchestratorChatPage />
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   );
 }

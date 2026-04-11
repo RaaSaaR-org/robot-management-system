@@ -55,7 +55,6 @@ This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (
 | **NATS** | 4222 / 8222 | JetStream message queue (optional) |
 | **PostgreSQL** | 5432 | Production database (SQLite for dev) |
 | **RustFS** | 9000 / 9001 | S3-compatible object storage (optional) |
-| **MLflow** | 5000 | Model registry (optional) |
 
 ---
 
@@ -229,7 +228,6 @@ docker-compose up -d --build
 
 # Or start infrastructure first, then applications
 docker-compose up -d nats postgres rustfs
-docker-compose up -d mlflow
 docker-compose up -d server
 docker-compose up -d app robot-agent vla-server
 ```
@@ -254,7 +252,6 @@ curl http://localhost:8222/healthz     # NATS
 | NATS Monitoring | http://localhost:8222 |
 | RustFS Console | http://localhost:9001 |
 | RustFS S3 API | http://localhost:9000 |
-| MLflow UI | http://localhost:5000 |
 | VLA Server | http://localhost:8000 |
 | PostgreSQL | localhost:5432 (user: neodem) |
 
@@ -410,7 +407,6 @@ kubectl logs -f deployment/neodem-server -n neodem
 | `GPU_TOTAL_COUNT` | No | `1` | GPU count for training orchestrator |
 | `GPU_TYPE` | No | `unknown` | GPU type identifier |
 | `GPU_MEMORY_GB` | No | `0` | GPU memory in GB |
-| `MLFLOW_TRACKING_URI` | No | `http://localhost:5000` | MLflow endpoint |
 | `COMPLIANCE_LOG_ENCRYPTION_KEY` | Prod | — | 64-char hex key for compliance logs |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key for orchestrator LLM |
 | `ORCHESTRATOR_MODEL` | No | `stepfun/step-3.5-flash:free` | LLM model for agent routing |

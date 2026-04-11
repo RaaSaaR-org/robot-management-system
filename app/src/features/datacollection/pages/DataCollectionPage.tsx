@@ -4,7 +4,7 @@
  * @feature datacollection
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Video,
@@ -28,7 +28,6 @@ import {
   useTeleoperationSessions,
   useCollectionPriorities,
 } from '../hooks/datacollection';
-import { trainingApi } from '@/features/training/api/trainingApi';
 import type { RegisteredModel } from '@/features/training/types';
 
 // ============================================================================
@@ -119,35 +118,12 @@ export function DataCollectionPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('sessions');
 
-  // Model selector state for priorities + uncertainty
-  const [models, setModels] = useState<RegisteredModel[]>([]);
+  // Model selector state for priorities + uncertainty.
+  // TASK-142: MLflow registry deleted; selection is no longer available.
+  // Active-learning panels still render with an empty model list.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  const [modelsLoading, setModelsLoading] = useState(false);
-
-  // Fetch registered models
-  useEffect(() => {
-    let cancelled = false;
-    setModelsLoading(true);
-    trainingApi
-      .listRegisteredModels()
-      .then((result) => {
-        if (!cancelled) {
-          setModels(result);
-          if (result.length > 0) {
-            setSelectedModelId(result[0].name);
-          }
-        }
-      })
-      .catch(() => {
-        // Models unavailable — leave empty, show empty state
-      })
-      .finally(() => {
-        if (!cancelled) setModelsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const models: RegisteredModel[] = [];
+  const modelsLoading = false;
 
   // Hooks
   const {

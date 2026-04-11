@@ -176,7 +176,6 @@ npm run db:studio     # Open Prisma Studio GUI
 - **AI**: Gemini 2.5 Flash for NL command interpretation (server) and robot agent reasoning
 - **Storage**: RustFS/S3-compatible for model artifacts and datasets (optional, `server/src/storage/`)
 - **Messaging**: NATS for async job queues and KV stores (optional, `server/src/messaging/`)
-- **ML Pipeline**: MLflow integration for model registry (optional)
 
 See `docs/architecture.md` for comprehensive system architecture.
 
@@ -394,4 +393,4 @@ Guidelines:
 - **Simulation only**: Robot agent runs in simulation mode for development
 - **SQLite locally**: Prisma schema targets PostgreSQL but local dev uses SQLite with JSON-encoded arrays
 - **Auth disabled in dev**: JWT auth exists but bypassed via `AUTH_DISABLED=true`
-- **Optional infra**: NATS, RustFS, and MLflow are optional — services log warnings and disable features when unavailable
+- **Optional infra**: NATS and RustFS are optional — services log warnings and disable features when unavailable

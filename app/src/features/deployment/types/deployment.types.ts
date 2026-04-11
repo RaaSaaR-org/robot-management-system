@@ -223,10 +223,6 @@ export interface ModelVersion {
   trainingMetrics: TrainingMetrics;
   validationMetrics: TrainingMetrics;
   deploymentStatus: 'staging' | 'canary' | 'production' | 'archived';
-  mlflowModelName?: string;
-  mlflowModelVersion?: string;
-  mlflowRunId?: string;
-  mlflowModelUri?: string;
   metrics?: ModelVersionMetrics;
   createdAt: string;
   updatedAt: string;

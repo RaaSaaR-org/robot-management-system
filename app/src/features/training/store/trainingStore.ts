@@ -20,7 +20,6 @@ import type {
   JobProgress,
   TrainingJobEvent,
   UploadInitiateResponse,
-  RegisteredModel,
 } from '../types';
 
 type TrainingStore = TrainingState & TrainingActions;
@@ -52,13 +51,6 @@ const initialState: TrainingState = {
   // Upload
   uploadProgress: 0,
   uploadError: null,
-
-  // Models
-  registeredModels: [],
-  modelsLoading: false,
-  selectedModel: null,
-  modelVersions: [],
-  modelComparison: null,
 
   // Filters
   datasetFilters: {},
@@ -378,73 +370,6 @@ export const useTrainingStore = create<TrainingStore>()(
       },
 
       // ========================================================================
-      // MODELS
-      // ========================================================================
-
-      fetchRegisteredModels: async () => {
-        set((state) => {
-          state.modelsLoading = true;
-        });
-
-        try {
-          const models = await trainingApi.listRegisteredModels();
-
-          set((state) => {
-            state.registeredModels = models;
-            state.modelsLoading = false;
-          });
-        } catch (error) {
-          console.error('Failed to fetch registered models:', error);
-          set((state) => {
-            state.modelsLoading = false;
-          });
-        }
-      },
-
-      fetchModelVersions: async (modelName: string) => {
-        try {
-          const versions = await trainingApi.getModelVersions(modelName);
-
-          set((state) => {
-            state.modelVersions = versions;
-          });
-        } catch (error) {
-          console.error('Failed to fetch model versions:', error);
-        }
-      },
-
-      selectModel: (model: RegisteredModel | null) => {
-        set((state) => {
-          state.selectedModel = model;
-          if (!model) {
-            state.modelVersions = [];
-          }
-        });
-      },
-
-      compareRuns: async (runIds: string[]) => {
-        try {
-          const comparison = await trainingApi.compareRuns(runIds);
-
-          set((state) => {
-            state.modelComparison = comparison;
-          });
-        } catch (error) {
-          console.error('Failed to compare runs:', error);
-        }
-      },
-
-      promoteModelVersion: async (modelName: string, version: string, stage: string) => {
-        await trainingApi.promoteModelVersion(modelName, version, stage);
-
-        // Refresh versions after promotion
-        const versions = await trainingApi.getModelVersions(modelName);
-        set((state) => {
-          state.modelVersions = versions;
-        });
-      },
-
-      // ========================================================================
       // RESET
       // ========================================================================
 
@@ -494,10 +419,3 @@ export const selectQueueLoading = (state: TrainingStore) => state.queueLoading;
 // Upload
 export const selectUploadProgress = (state: TrainingStore) => state.uploadProgress;
 export const selectUploadError = (state: TrainingStore) => state.uploadError;
-
-// Models
-export const selectRegisteredModels = (state: TrainingStore) => state.registeredModels;
-export const selectModelsLoading = (state: TrainingStore) => state.modelsLoading;
-export const selectSelectedModel = (state: TrainingStore) => state.selectedModel;
-export const selectModelVersions = (state: TrainingStore) => state.modelVersions;
-export const selectModelComparison = (state: TrainingStore) => state.modelComparison;

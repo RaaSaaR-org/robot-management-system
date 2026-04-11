@@ -15,7 +15,6 @@ This Helm chart deploys NeoDEM, a distributed fleet management platform for huma
 | **PostgreSQL** | Primary database | Enabled |
 | **NATS** | JetStream message queue | Enabled |
 | **RustFS** | S3-compatible object storage | Enabled |
-| **MLflow** | Model registry and tracking | Enabled |
 | **Server** | Node.js API server | Enabled |
 | **App** | React frontend | Enabled |
 | **Robot Agent** | Simulated robot agent | Enabled |
@@ -101,14 +100,6 @@ helm install neodem ./helm/neodem \
 | `rustfs.storage.size` | PVC size | `50Gi` |
 | `rustfs.buckets` | Buckets to create | See values.yaml |
 
-### MLflow
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `mlflow.enabled` | Deploy MLflow | `true` |
-| `mlflow.external.enabled` | Use external MLflow | `false` |
-| `mlflow.external.trackingUri` | External MLflow URI | `""` |
-
 ### Server
 
 | Parameter | Description | Default |
@@ -182,16 +173,6 @@ rustfs:
   auth:
     accessKey: "AKIAIOSFODNN7EXAMPLE"
     secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-```
-
-### External MLflow (Databricks)
-
-```yaml
-mlflow:
-  enabled: false
-  external:
-    enabled: true
-    trackingUri: "databricks://my-workspace"
 ```
 
 ## Upgrading

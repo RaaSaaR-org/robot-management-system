@@ -181,4 +181,5 @@ These are configured but not required for local development:
 |---------|---------|--------|
 | NATS (4222) | Async job queues, KV stores | Optional, logs warning if unavailable |
 | RustFS/S3 (9000) | Object storage for models/datasets | Optional |
-| MLflow (5000) | Experiment tracking, model registry | Optional |
+
+**Model registry**: Prisma `ModelVersion` table (one row per trained adapter, linked to `TrainingJob` + holding `artifactUri` pointing at RustFS). No MLflow — see TASK-142.
