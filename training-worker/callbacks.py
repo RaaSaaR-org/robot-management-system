@@ -71,8 +71,15 @@ class ServerClient:
 
     # ------------------------------------------------------------------ claim
     def claim_next_job(self) -> ClaimedJob | None:
-        """POST /api/training/workers/claim — returns a job or None (204)."""
-        resp = self._post("/api/training/workers/claim", {"workerId": self.worker_id})
+        """POST /api/training/workers/claim — returns a job or None (204).
+
+        Sends `device` alongside `workerId` so the server can register
+        idle workers in its in-memory registry (TASK-145).
+        """
+        resp = self._post(
+            "/api/training/workers/claim",
+            {"workerId": self.worker_id, "device": self.device},
+        )
         if resp.status_code == 204:
             return None
         resp.raise_for_status()

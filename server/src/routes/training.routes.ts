@@ -248,11 +248,11 @@ import type {
 
 trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
   try {
-    const { workerId } = req.body as { workerId?: string };
+    const { workerId, device } = req.body as { workerId?: string; device?: string };
     if (!workerId) {
       return res.status(400).json({ error: 'workerId is required' });
     }
-    const job = await trainingOrchestrator.claimNextPendingJob(workerId);
+    const job = await trainingOrchestrator.claimNextPendingJob(workerId, device);
     if (!job) {
       return res.status(204).send();
     }

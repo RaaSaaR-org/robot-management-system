@@ -324,7 +324,10 @@ export class TrainingOrchestrator extends EventEmitter {
    * transitions it to 'running' via startJob(), and returns it.
    * Returns null if no jobs are waiting.
    */
-  async claimNextPendingJob(workerId: string): Promise<TrainingJob | null> {
+  async claimNextPendingJob(
+    workerId: string,
+    device?: string
+  ): Promise<TrainingJob | null> {
     // Pull pending/queued jobs; findAll returns newest-first so we pick
     // the oldest entry (closest to head of FIFO queue).
     const candidates = await trainingJobRepository.findAll({
@@ -332,14 +335,50 @@ export class TrainingOrchestrator extends EventEmitter {
       page: 1,
       pageSize: 50,
     });
-    if (candidates.data.length === 0) return null;
+
+    // Touch the worker registry on every claim poll so idle workers
+    // also show up in `listWorkers()`. The currentJobId is set below
+    // once we know whether we actually picked up a job.
+    if (candidates.data.length === 0) {
+      this.touchWorker(workerId, device, null);
+      return null;
+    }
     const job = candidates.data[candidates.data.length - 1];
     const started = await this.startJob(job.id);
-    if (!started) return null;
+    if (!started) {
+      this.touchWorker(workerId, device, null);
+      return null;
+    }
+    this.touchWorker(workerId, device, started.id);
     console.log(
       `[TrainingOrchestrator] Job ${job.id} claimed by worker ${workerId}`
     );
     return started;
+  }
+
+  /**
+   * Upsert a worker into the in-memory registry. Called from both the
+   * heartbeat path (during a job) and the claim path (every poll, even
+   * when idle), so idle workers also appear in `listWorkers()`.
+   */
+  private touchWorker(
+    workerId: string,
+    device: string | undefined,
+    currentJobId: string | null,
+    gpuUtil = 0,
+    memoryUtil = 0
+  ): void {
+    const now = new Date();
+    const existing = this.workers.get(workerId);
+    this.workers.set(workerId, {
+      workerId,
+      device: device ?? existing?.device ?? 'unknown',
+      currentJobId,
+      gpuUtil,
+      memoryUtil,
+      lastHeartbeatAt: now,
+      firstSeenAt: existing?.firstSeenAt ?? now,
+    });
   }
 
   /**
@@ -641,17 +680,13 @@ export class TrainingOrchestrator extends EventEmitter {
     const { jobId, gpuUtil, memoryUtil, workerId, device } = req;
 
     if (workerId) {
-      const now = new Date();
-      const existing = this.workers.get(workerId);
-      this.workers.set(workerId, {
+      this.touchWorker(
         workerId,
-        device: device ?? existing?.device ?? 'unknown',
-        currentJobId: jobId ?? null,
-        gpuUtil: typeof gpuUtil === 'number' ? gpuUtil : 0,
-        memoryUtil: typeof memoryUtil === 'number' ? memoryUtil : 0,
-        lastHeartbeatAt: now,
-        firstSeenAt: existing?.firstSeenAt ?? now,
-      });
+        device,
+        jobId ?? null,
+        typeof gpuUtil === 'number' ? gpuUtil : 0,
+        typeof memoryUtil === 'number' ? memoryUtil : 0
+      );
     }
 
     // Cancel check (preserves the old checkHeartbeat semantics).
