@@ -32,7 +32,6 @@ import {
   LazyA2AEventsPage,
   LazySettingsPage,
   LazyCompliancePage,
-  LazyIncidentsPage,
   LazyIncidentDetailPage,
   LazyDatasetsPage,
   LazyDatasetEpisodesPage,
@@ -246,15 +245,8 @@ function App() {
           />
           {/* GDPR - merged into Compliance tabs (TASK-147) */}
           <Route path="/gdpr" element={<Navigate to="/compliance?tab=gdpr" replace />} />
-          {/* Incidents - Incident management and regulatory reporting */}
-          <Route
-            path="/incidents"
-            element={
-              <ProtectedAppRoute>
-                <LazyIncidentsPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Incidents - merged into Alerts tabs (TASK-147). Detail route stays. */}
+          <Route path="/incidents" element={<Navigate to="/alerts?tab=incidents" replace />} />
           <Route
             path="/incidents/:id"
             element={
