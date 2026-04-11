@@ -5,7 +5,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Brain } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Brain, BarChart3, FlaskConical, Wrench } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Tabs } from '@/shared/components/ui';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
@@ -22,8 +23,11 @@ import {
   useQueueStatsAutoFetch,
 } from '../hooks';
 import type { TrainingJob } from '../types';
+import { SimulationPage } from '@/features/simulation/pages/SimulationPage';
+import { EvaluationDashboardPage } from '@/features/evaluation/pages/EvaluationDashboardPage';
 
-type TabValue = 'active' | 'history';
+type OuterTab = 'jobs' | 'simulation' | 'evaluation';
+type InnerTab = 'active' | 'history';
 
 /**
  * Main training management page
@@ -48,7 +52,21 @@ export function TrainingPage() {
 
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<TrainingJob | null>(null);
-  const [activeTab, setActiveTab] = useState<TabValue>('active');
+  const [activeTab, setActiveTab] = useState<InnerTab>('active');
+
+  // Outer tab state — Jobs / Simulation / Evaluation. Persist via ?tab=
+  // so deep links and the legacy /simulation /evaluation redirects in
+  // App.tsx land users on the right tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const outerTab: OuterTab =
+    tabParam === 'simulation' || tabParam === 'evaluation' ? tabParam : 'jobs';
+  const setOuterTab = (id: OuterTab) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'jobs') next.delete('tab');
+    else next.set('tab', id);
+    setSearchParams(next, { replace: true });
+  };
 
   const { jobs, isLoading: jobsLoading, submitJob, cancelJob, retryJob } = useTrainingJobsAutoFetch();
   const { datasets } = useDatasetsAutoFetch();
@@ -112,32 +130,65 @@ export function TrainingPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <PipelineBreadcrumb stage="train" />
-          <Button onClick={() => setIsWizardOpen(true)}>
-            <svg
-              className="w-4 h-4 mr-2"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
-            New Training Job
-          </Button>
+          {outerTab === 'jobs' && (
+            <Button onClick={() => setIsWizardOpen(true)}>
+              <svg
+                className="w-4 h-4 mr-2"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 4v16m8-8H4"
+                />
+              </svg>
+              New Training Job
+            </Button>
+          )}
         </div>
       </header>
 
-      {/* Main content grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <Tabs
+        activeTab={outerTab}
+        onTabChange={(id) => setOuterTab(id as OuterTab)}
+        tabs={[
+          {
+            id: 'jobs',
+            label: 'Jobs',
+            icon: <Wrench className="w-4 h-4" />,
+            content: renderJobsTab(),
+          },
+          {
+            id: 'simulation',
+            label: 'Simulation',
+            icon: <FlaskConical className="w-4 h-4" />,
+            content: <SimulationPage />,
+          },
+          {
+            id: 'evaluation',
+            label: 'Evaluation',
+            icon: <BarChart3 className="w-4 h-4" />,
+            content: <EvaluationDashboardPage />,
+          },
+        ]}
+      />
+    </div>
+  );
+
+  // Jobs tab body — extracted so the outer Tabs config above stays
+  // short. Holds the original 2-column grid + Active/History sub-tabs.
+  function renderJobsTab() {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left column: Job list and tabs */}
         <div className="lg:col-span-2 space-y-4">
           <Tabs
             activeTab={activeTab}
-            onTabChange={(id) => setActiveTab(id as TabValue)}
+            onTabChange={(id) => setActiveTab(id as InnerTab)}
             tabs={[
               {
                 id: 'active',
@@ -225,15 +276,16 @@ export function TrainingPage() {
         </div>
       )}
 
-      {/* Training job wizard */}
-      <TrainingJobWizard
-        isOpen={isWizardOpen}
-        onClose={() => setIsWizardOpen(false)}
-        onSubmit={handleSubmitJob}
-        datasets={datasets}
-        gpuAvailability={gpuAvailability ?? undefined}
-        isSubmitting={false}
-      />
-    </div>
-  );
+        {/* Training job wizard */}
+        <TrainingJobWizard
+          isOpen={isWizardOpen}
+          onClose={() => setIsWizardOpen(false)}
+          onSubmit={handleSubmitJob}
+          datasets={datasets}
+          gpuAvailability={gpuAvailability ?? undefined}
+          isSubmitting={false}
+        />
+      </div>
+    );
+  }
 }

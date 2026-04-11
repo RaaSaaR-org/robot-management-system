@@ -51,9 +51,7 @@ import {
   LazyMarketplacePage,
   LazyMarketplaceDetailPage,
   LazyMyMarketplacePage,
-  LazyEvaluationDashboardPage,
   LazyUpdatesPage,
-  LazySimulationPage,
   LazyPipelinePage,
   LazyDataCollectionPage,
   LazyNewSessionPage,
@@ -390,15 +388,8 @@ function App() {
             }
           />
 
-          {/* Evaluation - VLA model evaluation dashboard */}
-          <Route
-            path="/evaluation"
-            element={
-              <ProtectedAppRoute>
-                <LazyEvaluationDashboardPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Evaluation - merged into Training tabs (TASK-147) */}
+          <Route path="/evaluation" element={<Navigate to="/training?tab=evaluation" replace />} />
 
           {/* Contributions - Data contribution portal */}
           <Route
@@ -452,15 +443,8 @@ function App() {
             }
           />
 
-          {/* Simulation - MuJoCo/Isaac Lab policy testing (TASK-081) */}
-          <Route
-            path="/simulation"
-            element={
-              <ProtectedAppRoute>
-                <LazySimulationPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Simulation - merged into Training tabs (TASK-147) */}
+          <Route path="/simulation" element={<Navigate to="/training?tab=simulation" replace />} />
 
           {/* Pipeline - unified training workflow overview (TASK-134) */}
           <Route
