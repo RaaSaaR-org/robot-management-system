@@ -432,20 +432,6 @@ trainingRoutes.post('/workers/checkpoint', async (req: Request, res: Response) =
 });
 
 // ============================================================================
-// GET /api/training/gpu/availability - GPU availability (stubbed)
-// ============================================================================
-
-trainingRoutes.get('/gpu/availability', async (req: Request, res: Response) => {
-  try {
-    const availability = await trainingOrchestrator.getGpuAvailability();
-    res.json(availability);
-  } catch (error) {
-    console.error('[TrainingRoutes] Error getting GPU availability:', error);
-    res.status(500).json({ error: 'Failed to get GPU availability' });
-  }
-});
-
-// ============================================================================
 // GET /api/training/workers - Active training workers + queue summary
 // ============================================================================
 

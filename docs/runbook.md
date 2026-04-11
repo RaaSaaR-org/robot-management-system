@@ -63,7 +63,8 @@ nats stream purge TRAINING_JOBS --force
 
 ### Prevent
 
-- Set `GPU_TOTAL_COUNT` accurately — over-provisioning causes OOM
+- Run only as many `training-worker` processes as the host has GPU/RAM
+  headroom for — over-provisioning causes OOM
 - Monitor GPU memory usage in production
 - Set up alerts on training job duration exceeding 2x expected time
 

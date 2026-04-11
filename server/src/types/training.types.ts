@@ -285,22 +285,6 @@ export interface EtaState {
 }
 
 // ============================================================================
-// GPU AVAILABILITY (deprecated — see WorkerStatus below; deleted in cleanup)
-// ============================================================================
-
-/**
- * @deprecated Replaced by WorkerStatus / GET /api/training/workers.
- * Kept temporarily during the rollout so the legacy endpoint compiles.
- */
-export interface GpuAvailability {
-  totalCount: number;
-  availableCount: number;
-  byType: Record<string, { total: number; available: number; memoryGb: number }>;
-  totalMemoryGb: number;
-  availableMemoryGb: number;
-}
-
-// ============================================================================
 // WORKER STATUS REGISTRY
 // ============================================================================
 

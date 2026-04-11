@@ -35,7 +35,6 @@ import type {
   WorkerStatus,
   WorkerStatusView,
   WorkerStatusListResponse,
-  GpuAvailability,
   TrainingDurationEstimate,
   EtaState,
   JobProgress,
@@ -268,38 +267,6 @@ export class TrainingOrchestrator extends EventEmitter {
     }
 
     return result as Hyperparameters;
-  }
-
-  // ============================================================================
-  // GPU AVAILABILITY
-  // ============================================================================
-
-  /**
-   * Get GPU availability from env config + running job count from DB.
-   * Set GPU_TOTAL_COUNT, GPU_TYPE, GPU_MEMORY_GB in env.
-   */
-  async getGpuAvailability(): Promise<GpuAvailability> {
-    const totalCount = parseInt(process.env.GPU_TOTAL_COUNT ?? '1', 10);
-    const gpuType = process.env.GPU_TYPE ?? 'unknown';
-    const gpuMemoryGb = parseFloat(process.env.GPU_MEMORY_GB ?? '0');
-
-    // availableCount = total - running jobs (from DB)
-    const runningJobs = await trainingJobRepository.findRunning();
-    const runningCount = runningJobs.length;
-    const availableCount = Math.max(0, totalCount - runningCount);
-
-    const totalMemoryGb = totalCount * gpuMemoryGb;
-    const availableMemoryGb = availableCount * gpuMemoryGb;
-
-    return {
-      totalCount,
-      availableCount,
-      byType: gpuType !== 'unknown' ? {
-        [gpuType]: { total: totalCount, available: availableCount, memoryGb: gpuMemoryGb },
-      } : {},
-      totalMemoryGb,
-      availableMemoryGb,
-    };
   }
 
   // ============================================================================
@@ -696,17 +663,6 @@ export class TrainingOrchestrator extends EventEmitter {
       return 'stop';
     }
     return 'ok';
-  }
-
-  /**
-   * Legacy alias retained so existing call sites that import
-   * `checkHeartbeat` keep compiling during the rollout. Forwards to
-   * `recordHeartbeat`. Will be removed in the cleanup commit.
-   *
-   * @deprecated use recordHeartbeat
-   */
-  async checkHeartbeat(jobId: string): Promise<'ok' | 'stop'> {
-    return this.recordHeartbeat({ jobId, gpuUtil: 0, memoryUtil: 0 });
   }
 
   /**

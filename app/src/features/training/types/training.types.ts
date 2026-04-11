@@ -295,18 +295,6 @@ export interface QueueStats {
 }
 
 /**
- * @deprecated Replaced by WorkerStatusListResponse / GET /api/training/workers.
- * Kept temporarily so the legacy API method compiles during the rollout.
- */
-export interface GpuAvailability {
-  total_gpus: number;
-  available_gpus: number;
-  gpu_types?: Record<string, number>;
-  queued_jobs: number;
-  estimated_wait_time?: number;
-}
-
-/**
  * Worker as exposed by GET /api/training/workers.
  * Mirrors the server's WorkerStatusView shape.
  */
@@ -459,9 +447,7 @@ export interface TrainingState {
   activeJobProgress: JobProgress | null;
   activeJobLoading: boolean;
 
-  // GPU & Queue
-  gpuAvailability: GpuAvailability | null;
-  gpuLoading: boolean;
+  // Queue
   queueStats: QueueStats | null;
   queueLoading: boolean;
 
@@ -499,8 +485,7 @@ export interface TrainingActions {
   updateJobProgress: (jobId: string, progress: JobProgress) => void;
   handleTrainingEvent: (event: TrainingJobEvent) => void;
 
-  // GPU & Queue
-  fetchGpuAvailability: () => Promise<void>;
+  // Queue
   fetchQueueStats: () => Promise<void>;
 
   // Workers

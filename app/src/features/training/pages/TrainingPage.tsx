@@ -282,7 +282,6 @@ export function TrainingPage() {
           onClose={() => setIsWizardOpen(false)}
           onSubmit={handleSubmitJob}
           datasets={datasets}
-          gpuAvailability={undefined}
           isSubmitting={false}
         />
       </div>

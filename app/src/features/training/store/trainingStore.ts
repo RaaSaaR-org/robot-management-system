@@ -42,9 +42,7 @@ const initialState: TrainingState = {
   activeJobProgress: null,
   activeJobLoading: false,
 
-  // GPU & Queue
-  gpuAvailability: null,
-  gpuLoading: false,
+  // Queue
   queueStats: null,
   queueLoading: false,
 
@@ -330,28 +328,8 @@ export const useTrainingStore = create<TrainingStore>()(
       },
 
       // ========================================================================
-      // GPU & QUEUE
+      // QUEUE
       // ========================================================================
-
-      fetchGpuAvailability: async () => {
-        set((state) => {
-          state.gpuLoading = true;
-        });
-
-        try {
-          const availability = await trainingApi.getGpuAvailability();
-
-          set((state) => {
-            state.gpuAvailability = availability;
-            state.gpuLoading = false;
-          });
-        } catch (error) {
-          console.error('Failed to fetch GPU availability:', error);
-          set((state) => {
-            state.gpuLoading = false;
-          });
-        }
-      },
 
       fetchQueueStats: async () => {
         set((state) => {
@@ -434,9 +412,7 @@ export const selectActiveJob = (state: TrainingStore) => state.activeJob;
 export const selectActiveJobProgress = (state: TrainingStore) => state.activeJobProgress;
 export const selectActiveJobLoading = (state: TrainingStore) => state.activeJobLoading;
 
-// GPU & Queue
-export const selectGpuAvailability = (state: TrainingStore) => state.gpuAvailability;
-export const selectGpuLoading = (state: TrainingStore) => state.gpuLoading;
+// Queue
 export const selectQueueStats = (state: TrainingStore) => state.queueStats;
 export const selectQueueLoading = (state: TrainingStore) => state.queueLoading;
 

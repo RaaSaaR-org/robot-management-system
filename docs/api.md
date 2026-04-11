@@ -106,7 +106,7 @@ Rate limited: 20 requests per 15 minutes.
 | GET | `/jobs/:id/estimate` | Estimate duration |
 | GET | `/jobs/active` | Active jobs |
 | GET | `/queue/stats` | Queue statistics |
-| GET | `/gpu/availability` | GPU availability |
+| GET | `/workers` | Active training workers + queue summary |
 
 ### Datasets (`/api/datasets`)
 
