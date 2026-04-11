@@ -305,7 +305,7 @@ model User {
   email                String    @unique
   passwordHash         String
   name                 String
-  role                 String    @default("viewer") // UserRole: 'admin' | 'operator' | 'viewer'
+  role                 String    @default("member") // UserRole: 'super-admin' | 'owner' | 'member' | 'viewer'
   avatar               String?
   // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
   tenantId             String?

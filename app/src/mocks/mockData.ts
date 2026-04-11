@@ -23,7 +23,7 @@ export const MOCK_USER: User = {
   id: 'dev-user-001',
   email: 'dev@neodem.local',
   name: 'Dev Admin',
-  role: 'admin',
+  role: 'super-admin',
   avatar: undefined,
   tenantId: 'dev-tenant',
   createdAt: '2024-01-01T00:00:00.000Z',

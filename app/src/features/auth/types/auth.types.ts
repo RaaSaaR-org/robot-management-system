@@ -9,8 +9,16 @@
 // ROLE TYPES
 // ============================================================================
 
-/** User roles for RBAC */
-export type UserRole = 'admin' | 'operator' | 'viewer';
+/**
+ * User roles for RBAC (TASK-162, unified model).
+ *
+ * - `super-admin` — platform role, `tenantId = null`, cross-tenant access via
+ *   impersonation (TASK-160).
+ * - `owner` — tenant admin: team + billing + everything below.
+ * - `member` — operates robots, training, datasets.
+ * - `viewer` — read-only.
+ */
+export type UserRole = 'super-admin' | 'owner' | 'member' | 'viewer';
 
 /** Permission levels for different actions */
 export type Permission =
@@ -222,38 +230,45 @@ export interface AuthError {
 // ROLE PERMISSION MAPPING
 // ============================================================================
 
-/** Default permissions for each role */
+/** Default permissions for each role (TASK-162 unified model) */
+const OWNER_PERMISSIONS: Permission[] = [
+  'robots:read',
+  'robots:write',
+  'robots:command',
+  'tasks:read',
+  'tasks:write',
+  'tasks:cancel',
+  'alerts:read',
+  'alerts:acknowledge',
+  'fleet:read',
+  'fleet:manage',
+  'users:read',
+  'users:manage',
+];
+
+const MEMBER_PERMISSIONS: Permission[] = [
+  'robots:read',
+  'robots:command',
+  'tasks:read',
+  'tasks:write',
+  'tasks:cancel',
+  'alerts:read',
+  'alerts:acknowledge',
+  'fleet:read',
+];
+
+const VIEWER_PERMISSIONS: Permission[] = [
+  'robots:read',
+  'tasks:read',
+  'alerts:read',
+  'fleet:read',
+];
+
 export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
-  admin: [
-    'robots:read',
-    'robots:write',
-    'robots:command',
-    'tasks:read',
-    'tasks:write',
-    'tasks:cancel',
-    'alerts:read',
-    'alerts:acknowledge',
-    'fleet:read',
-    'fleet:manage',
-    'users:read',
-    'users:manage',
-  ],
-  operator: [
-    'robots:read',
-    'robots:command',
-    'tasks:read',
-    'tasks:write',
-    'tasks:cancel',
-    'alerts:read',
-    'alerts:acknowledge',
-    'fleet:read',
-  ],
-  viewer: [
-    'robots:read',
-    'tasks:read',
-    'alerts:read',
-    'fleet:read',
-  ],
+  'super-admin': OWNER_PERMISSIONS,
+  owner: OWNER_PERMISSIONS,
+  member: MEMBER_PERMISSIONS,
+  viewer: VIEWER_PERMISSIONS,
 };
 
 // ============================================================================

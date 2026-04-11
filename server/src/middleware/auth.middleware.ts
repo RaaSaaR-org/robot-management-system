@@ -9,16 +9,28 @@ import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js'
 import { tenantStore } from './tenantContext.js';
 
 /**
+ * Unified role model (TASK-162).
+ *
+ * - `super-admin` is a platform-level role (`tenantId = null`); grants
+ *   cross-tenant access via impersonation (TASK-160).
+ * - `owner` / `member` / `viewer` are tenant-scoped roles. Owners manage
+ *   their own tenant (billing, team). Members operate robots. Viewers
+ *   have read-only access.
+ */
+export type UserRole = 'super-admin' | 'owner' | 'member' | 'viewer';
+
+/**
  * User info attached to authenticated requests
  */
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: UserRole;
   /**
    * Multi-tenancy (TASK-155): tenant this user belongs to. Null for
-   * legacy/unscoped users. Read by `withTenantContext` middleware.
+   * legacy/unscoped users and for platform `super-admin` accounts.
+   * Read by `withTenantContext` middleware.
    */
   tenantId: string | null;
 }
@@ -38,7 +50,7 @@ const MOCK_USER: AuthUser = {
   id: 'dev-user-id',
   email: 'dev@neodem.local',
   name: 'Dev User',
-  role: 'admin',
+  role: 'super-admin',
   tenantId: DEFAULT_TENANT_ID,
 };
 
@@ -153,7 +165,7 @@ export function optionalAuthMiddleware(
       id: payload.userId,
       email: payload.email,
       name: payload.name,
-      role: payload.role as AuthUser['role'],
+      role: payload.role as UserRole,
       tenantId: payload.tenantId ?? null,
     };
   }
@@ -168,9 +180,7 @@ export function optionalAuthMiddleware(
  *
  * @param roles - Allowed roles for this endpoint
  */
-export function roleMiddleware(
-  ...roles: Array<'admin' | 'operator' | 'viewer'>
-): RequestHandler {
+export function roleMiddleware(...roles: UserRole[]): RequestHandler {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     // Skip in development mode
     if (isAuthDisabled()) {
@@ -200,11 +210,30 @@ export function roleMiddleware(
 }
 
 /**
- * Admin-only middleware
+ * Platform super-admin only (TASK-162). `super-admin` users have
+ * `tenantId = null` and access every tenant via impersonation (TASK-160).
  */
-export const adminOnly = roleMiddleware('admin');
+export const superAdminOnly = roleMiddleware('super-admin');
 
 /**
- * Operator or admin middleware
+ * Tenant owner or platform super-admin (TASK-162). Use for
+ * tenant-admin operations like team management.
  */
-export const operatorOrAdmin = roleMiddleware('admin', 'operator');
+export const ownerOnly = roleMiddleware('super-admin', 'owner');
+
+/**
+ * Member or above (TASK-162). Use for write/operate endpoints
+ * that read-only viewers should not reach.
+ */
+export const memberOrAbove = roleMiddleware('super-admin', 'owner', 'member');
+
+/**
+ * Viewer or above (TASK-162). Equivalent to "any authenticated user"
+ * but explicit about the intent.
+ */
+export const viewerOrAbove = roleMiddleware(
+  'super-admin',
+  'owner',
+  'member',
+  'viewer'
+);
