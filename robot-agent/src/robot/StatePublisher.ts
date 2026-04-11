@@ -2,6 +2,7 @@
  * @file StatePublisher.ts
  * @description Observer pattern implementation for robot state changes
  * @feature robot
+ * @status live
  */
 
 import type { SimulatedRobotState } from './types.js';

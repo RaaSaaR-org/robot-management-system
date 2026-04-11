@@ -2,6 +2,7 @@
  * @file RoundLifecycle.ts
  * @description Orchestrates the full federated learning round lifecycle on the robot
  * @feature Federated Learning
+ * @status live-conditional
  */
 
 import { FederatedClient } from './FederatedClient.js';

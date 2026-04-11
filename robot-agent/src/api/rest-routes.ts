@@ -1,6 +1,7 @@
 /**
  * @file rest-routes.ts
  * @description REST API routes compatible with NeoDEM robot interface
+ * @status live
  */
 
 import { Router } from 'express';

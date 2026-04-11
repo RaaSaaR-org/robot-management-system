@@ -8,6 +8,7 @@
  *   NOTE: Without TPM/Secure Boot firmware, this is a software-only check.
  *   A hardware root of trust (TPM 2.0) would strengthen this significantly.
  * @feature security
+ * @status live
  */
 
 import crypto from 'node:crypto';

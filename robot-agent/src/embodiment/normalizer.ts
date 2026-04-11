@@ -2,6 +2,7 @@
  * @file normalizer.ts
  * @description Action normalization/denormalization for VLA pipeline
  * @feature vla
+ * @status live
  */
 
 import type { EmbodimentConfig, ValidationResult } from './types.js';

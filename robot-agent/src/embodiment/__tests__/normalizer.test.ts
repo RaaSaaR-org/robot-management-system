@@ -2,6 +2,7 @@
  * @file normalizer.test.ts
  * @description Unit tests for ActionNormalizer
  * @feature vla
+ * @status test
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

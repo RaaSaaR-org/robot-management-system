@@ -2,6 +2,7 @@
  * @file SecureUpdateClient.test.ts
  * @description Unit tests for SecureUpdateClient — Ed25519 verification, backup, rollback
  * @feature updates
+ * @status test
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

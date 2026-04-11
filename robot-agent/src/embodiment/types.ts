@@ -2,6 +2,7 @@
  * @file types.ts
  * @description Zod schemas and TypeScript interfaces for embodiment configuration
  * @feature vla
+ * @status live
  */
 
 import { z } from 'zod';

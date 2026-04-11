@@ -8,6 +8,7 @@ thumbnails for the simulation UI.
 
 Usage:
     python render_preview.py --output /tmp/preview_so101_tabletop.jpg
+@status live
 """
 
 import argparse

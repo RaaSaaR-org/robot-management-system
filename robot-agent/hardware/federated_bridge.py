@@ -12,6 +12,7 @@ Stub mode:
 
 Run via:
   python ~/develop/robot-management-system/robot-agent/hardware/federated_bridge.py
+@status orphaned
 """
 
 import json

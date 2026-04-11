@@ -2,6 +2,7 @@
  * @file SecureAggregation.test.ts
  * @description Tests for the additive masking protocol in secure aggregation.
  * @feature Secure Aggregation
+ * @status test
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

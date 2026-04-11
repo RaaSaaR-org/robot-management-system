@@ -10,6 +10,7 @@ Datasets land at <dataset_root>/<repo_id>/ in LeRobot v3 format
 (data/*.parquet + videos/*.mp4 + meta/info.json + meta/episodes.jsonl).
 After recording stops, the dataset is auto-uploaded to RustFS (S3) and
 the local copy is deleted to keep the pi's storage clean.
+@status live
 """
 
 from __future__ import annotations

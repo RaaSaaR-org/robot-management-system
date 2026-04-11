@@ -7,6 +7,7 @@
  * - EU AI Act Article 12 (Record-keeping)
  * - GDPR Article 30 (Records of processing activities)
  * - Machinery Regulation Annex III
+ * @status live
  */
 
 import { config } from '../config/config.js';

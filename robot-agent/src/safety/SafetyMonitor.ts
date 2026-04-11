@@ -2,6 +2,7 @@
  * @file SafetyMonitor.ts
  * @description Core safety monitoring system per ISO 10218-1, ISO/TS 15066, and MR Annex III
  * @feature safety
+ * @status live
  */
 
 import { v4 as uuidv4 } from 'uuid';

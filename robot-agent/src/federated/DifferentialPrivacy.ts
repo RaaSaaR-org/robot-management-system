@@ -2,6 +2,7 @@
  * @file DifferentialPrivacy.ts
  * @description Differential privacy mechanisms for federated learning gradient protection
  * @feature Federated Learning
+ * @status live-conditional
  */
 
 /**

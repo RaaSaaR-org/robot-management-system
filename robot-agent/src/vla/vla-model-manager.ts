@@ -2,6 +2,7 @@
  * @file vla-model-manager.ts
  * @description Manages VLA model switching and versioning for fleet deployments
  * @feature vla
+ * @status live
  */
 
 import { EventEmitter } from 'events';

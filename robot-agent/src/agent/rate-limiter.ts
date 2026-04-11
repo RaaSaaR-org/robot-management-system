@@ -1,6 +1,7 @@
 /**
  * @file rate-limiter.ts
  * @description Token-bucket rate limiter for free-tier LLM providers (e.g., OpenRouter ~20 req/min)
+ * @status live
  */
 
 export interface RateLimiterConfig {

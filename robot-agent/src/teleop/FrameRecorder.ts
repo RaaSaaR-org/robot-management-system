@@ -3,6 +3,7 @@
  * @description Ring buffer for recording teleoperation frames (leader + follower joints).
  *              Tracks frame rate and supports configurable max buffer size.
  * @feature teleop
+ * @status live
  */
 
 /** Joint positions keyed by joint name */

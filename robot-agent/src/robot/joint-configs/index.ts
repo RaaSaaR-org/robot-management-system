@@ -2,6 +2,7 @@
  * @file index.ts
  * @description Joint configuration exports
  * @feature robot-types
+ * @status live
  */
 
 export { H1_JOINTS } from './h1.config.js';

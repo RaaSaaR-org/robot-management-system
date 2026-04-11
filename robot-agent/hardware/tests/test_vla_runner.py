@@ -3,6 +3,7 @@ Tests for VLARunner — mock server, action queue, start/stop.
 
 These tests don't require real hardware or ML dependencies.
 They mock the HTTP server and verify the runner's logic.
+@status test
 """
 
 import base64

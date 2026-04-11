@@ -1,6 +1,7 @@
 /**
  * @file agent-executor.ts
  * @description A2A AgentExecutor implementation for processing natural language commands
+ * @status live
  */
 
 import { v4 as uuidv4 } from 'uuid';

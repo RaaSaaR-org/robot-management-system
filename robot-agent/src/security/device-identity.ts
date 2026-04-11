@@ -8,6 +8,7 @@
  *   In a production environment with TPM 2.0, the private key would be bound
  *   to the TPM slot for tamper-resistant storage.
  * @feature security
+ * @status live
  */
 
 import crypto from 'node:crypto';

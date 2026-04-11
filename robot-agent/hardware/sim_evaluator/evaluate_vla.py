@@ -16,6 +16,7 @@ Usage:
 Progress is printed to stdout as JSON lines:
     {"type": "progress", "episode": 3, "total": 10, "percent": 30}
     {"type": "episode_result", "episode": 3, "success": true, "steps": 42}
+@status live
 """
 
 import argparse

@@ -3,6 +3,7 @@ SO-101 Sorting environment configuration.
 
 Defines the simulation environment for object sorting tasks
 with the SO-101 robot arm and color-coded bins.
+@status live
 """
 
 SO101_SORTING_CONFIG = {

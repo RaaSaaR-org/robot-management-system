@@ -2,6 +2,7 @@
  * @file SimulationEngine.ts
  * @description Handles robot simulation - position updates, battery drain, movement
  * @feature robot
+ * @status live
  */
 
 import type { SimulatedRobotState, RobotLocation, Zone } from './types.js';

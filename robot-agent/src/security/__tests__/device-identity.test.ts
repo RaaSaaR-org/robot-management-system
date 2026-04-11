@@ -2,6 +2,7 @@
  * @file device-identity.test.ts
  * @description Tests for X.509 device identity management
  * @feature security
+ * @status test
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

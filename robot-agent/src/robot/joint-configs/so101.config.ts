@@ -2,6 +2,7 @@
  * @file so101.config.ts
  * @description Joint configuration for SO-ARM100 SO101 robotic arm
  * @feature robot-types
+ * @status live
  */
 
 import type { JointConfig } from '../types.js';

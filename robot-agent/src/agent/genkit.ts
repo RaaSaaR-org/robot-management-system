@@ -1,6 +1,7 @@
 /**
  * @file genkit.ts
  * @description Genkit AI setup with configurable LLM provider (Gemini or OpenRouter)
+ * @status live
  */
 
 import { googleAI } from "@genkit-ai/googleai";

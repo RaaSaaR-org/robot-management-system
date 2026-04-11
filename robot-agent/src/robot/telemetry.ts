@@ -1,6 +1,7 @@
 /**
  * @file telemetry.ts
  * @description Telemetry and alert generation utilities
+ * @status live
  */
 
 import os from 'os';

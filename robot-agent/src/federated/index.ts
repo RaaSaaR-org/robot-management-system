@@ -2,6 +2,7 @@
  * @file index.ts
  * @description Barrel exports for the federated learning module
  * @feature Federated Learning
+ * @status live-conditional
  */
 
 export { DifferentialPrivacy } from './DifferentialPrivacy.js';

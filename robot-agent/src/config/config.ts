@@ -1,6 +1,7 @@
 /**
  * @file config.ts
  * @description Environment configuration and validation
+ * @status live
  */
 
 import type { RobotType } from '../robot/types.js';

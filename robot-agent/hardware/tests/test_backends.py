@@ -3,6 +3,7 @@ Tests for hardware/backends/ plugin system.
 
 Tests the VLABackend ABC, SmolVLABackend HTTP backend, and integration
 with VLARunner's backend parameter.
+@status test
 """
 
 import json

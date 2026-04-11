@@ -2,6 +2,7 @@
  * @file camera-config.test.ts
  * @description Unit tests for CameraConfigManager
  * @feature vla
+ * @status test
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

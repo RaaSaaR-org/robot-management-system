@@ -5,6 +5,7 @@
  *
  * The VLA inference server is now a separate Python service (vla-server/).
  * Only types still referenced by robot-agent TypeScript code are kept here.
+ * @status live
  */
 
 /**

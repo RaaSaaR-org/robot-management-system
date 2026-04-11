@@ -3,6 +3,7 @@
  * @description WebSocket endpoint for keyboard-based teleoperation of the SO-101 arm.
  *              Accepts joint delta commands and presets, forwards to the hardware sidecar.
  * @feature teleop
+ * @status orphaned
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
