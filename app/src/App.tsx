@@ -37,9 +37,6 @@ import {
   LazyTrainingPage,
   LazyDeploymentsPage,
   LazyDeploymentDetailPage,
-  LazyContributionsPage,
-  LazyNewContributionPage,
-  LazyContributionDetailPage,
   LazyMarketplacePage,
   LazyMarketplaceDetailPage,
   LazyMyMarketplacePage,
@@ -330,31 +327,10 @@ function App() {
           {/* Evaluation - merged into Training tabs (TASK-147) */}
           <Route path="/evaluation" element={<Navigate to="/training?tab=evaluation" replace />} />
 
-          {/* Contributions - Data contribution portal */}
-          <Route
-            path="/contributions"
-            element={
-              <ProtectedAppRoute>
-                <LazyContributionsPage />
-              </ProtectedAppRoute>
-            }
-          />
-          <Route
-            path="/contributions/new"
-            element={
-              <ProtectedAppRoute>
-                <LazyNewContributionPage />
-              </ProtectedAppRoute>
-            }
-          />
-          <Route
-            path="/contributions/:id"
-            element={
-              <ProtectedAppRoute>
-                <LazyContributionDetailPage />
-              </ProtectedAppRoute>
-            }
-          />
+          {/* Contributions - orphan route (TASK-147), redirected to Marketplace */}
+          <Route path="/contributions" element={<Navigate to="/marketplace" replace />} />
+          <Route path="/contributions/new" element={<Navigate to="/marketplace" replace />} />
+          <Route path="/contributions/:id" element={<Navigate to="/marketplace" replace />} />
 
           {/* Marketplace - Skill & Data Marketplace */}
           <Route

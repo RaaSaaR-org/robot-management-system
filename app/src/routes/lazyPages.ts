@@ -221,27 +221,6 @@ export const LazySkillsPage = lazy(() =>
 );
 
 /**
- * Contributions page - Data contribution portal
- */
-export const LazyContributionsPage = lazy(() =>
-  import('@/features/contributions').then((m) => ({ default: m.ContributionsPage }))
-);
-
-/**
- * New contribution page - Contribution wizard
- */
-export const LazyNewContributionPage = lazy(() =>
-  import('@/features/contributions').then((m) => ({ default: m.NewContributionPage }))
-);
-
-/**
- * Contribution detail page - Single contribution view
- */
-export const LazyContributionDetailPage = lazy(() =>
-  import('@/features/contributions').then((m) => ({ default: m.ContributionDetailPage }))
-);
-
-/**
  * Marketplace browse page
  */
 export const LazyMarketplacePage = lazy(() =>
