@@ -252,10 +252,18 @@ def _vla_status() -> dict:
 
 # --- Camera MJPEG streaming ---
 # Maps camera name → device path. Shared OpenCV captures with idle auto-release.
-CAMERA_MAP = {
+# TASK-146: filter out cameras whose device nodes don't exist at startup so
+# /cameras never advertises a camera that can't actually be captured. This is
+# needed because USB webcams can re-enumerate between boots (e.g. /dev/video0
+# disappears when only one of two cameras is plugged in).
+_CAMERA_MAP_RAW = {
     "wrist": os.environ.get("SO101_WRIST_CAM", "/dev/video0"),
     "top": os.environ.get("SO101_TOP_CAM", "/dev/video2"),
 }
+CAMERA_MAP = {name: dev for name, dev in _CAMERA_MAP_RAW.items() if os.path.exists(dev)}
+for name, dev in _CAMERA_MAP_RAW.items():
+    if name not in CAMERA_MAP:
+        print(f"[Sidecar/Cam] Dropping {name!r} — device {dev} does not exist", flush=True)
 CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 10
