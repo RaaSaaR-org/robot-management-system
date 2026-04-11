@@ -13,13 +13,13 @@ import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { TrainingJobList } from '../components/TrainingJobList';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
 import { TrainingProgressMonitor } from '../components/TrainingProgressMonitor';
-import { GpuAvailabilityPanel } from '../components/GpuAvailabilityPanel';
+import { WorkerStatusPanel } from '../components/WorkerStatusPanel';
 import { QueueStatsDisplay } from '../components/QueueStatsDisplay';
 import {
   useTrainingJobsAutoFetch,
   useDatasetsAutoFetch,
   useTrainingProgress,
-  useGpuAvailabilityAutoFetch,
+  useWorkersAutoFetch,
   useQueueStatsAutoFetch,
 } from '../hooks';
 import type { TrainingJob } from '../types';
@@ -70,7 +70,7 @@ export function TrainingPage() {
 
   const { jobs, isLoading: jobsLoading, submitJob, cancelJob, retryJob } = useTrainingJobsAutoFetch();
   const { datasets } = useDatasetsAutoFetch();
-  const { gpuAvailability, isLoading: gpuLoading, refresh: refreshGpu } = useGpuAvailabilityAutoFetch(30000);
+  const { workers, isLoading: workersLoading, refresh: refreshWorkers } = useWorkersAutoFetch(10000);
   const { queueStats, isLoading: queueLoading } = useQueueStatsAutoFetch(30000);
 
   // Connect to WebSocket for real-time progress
@@ -249,12 +249,12 @@ export function TrainingPage() {
           )}
         </div>
 
-        {/* Right column: GPU status and selected job */}
+        {/* Right column: worker status and queue stats */}
         <div className="space-y-4">
-          <GpuAvailabilityPanel
-            availability={gpuAvailability}
-            isLoading={gpuLoading}
-            onRefresh={refreshGpu}
+          <WorkerStatusPanel
+            workers={workers}
+            isLoading={workersLoading}
+            onRefresh={refreshWorkers}
           />
 
           <QueueStatsDisplay stats={queueStats} isLoading={queueLoading} />
@@ -282,7 +282,7 @@ export function TrainingPage() {
           onClose={() => setIsWizardOpen(false)}
           onSubmit={handleSubmitJob}
           datasets={datasets}
-          gpuAvailability={gpuAvailability ?? undefined}
+          gpuAvailability={undefined}
           isSubmitting={false}
         />
       </div>

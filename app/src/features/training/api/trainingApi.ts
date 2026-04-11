@@ -17,6 +17,7 @@ import type {
   TrainingJobResponse,
   QueueStats,
   GpuAvailability,
+  WorkerStatusListResponse,
   TrainingDurationEstimate,
   UploadInitiateResponse,
   HFDataset,
@@ -42,6 +43,7 @@ const ENDPOINTS = {
   // GPU & Queue
   gpuAvailability: '/training/gpu/availability',
   queueStats: '/training/queue/stats',
+  workers: '/training/workers',
 
   // Episodes
   datasetEpisodes: (id: string) => `/datasets/${id}/episodes`,
@@ -304,6 +306,15 @@ export const trainingApi = {
    */
   async getQueueStats(): Promise<QueueStats> {
     const response = await apiClient.get<QueueStats>(ENDPOINTS.queueStats);
+    return response.data;
+  },
+
+  /**
+   * Get active training workers + queue summary.
+   * Backed by the in-memory worker registry on the server (TASK-145).
+   */
+  async getWorkers(): Promise<WorkerStatusListResponse> {
+    const response = await apiClient.get<WorkerStatusListResponse>(ENDPOINTS.workers);
     return response.data;
   },
 

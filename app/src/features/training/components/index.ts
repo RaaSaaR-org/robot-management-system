@@ -32,5 +32,7 @@ export { LossCurveChart } from './LossCurveChart';
 export type { LossCurveChartProps } from './LossCurveChart';
 export { GpuAvailabilityPanel } from './GpuAvailabilityPanel';
 export type { GpuAvailabilityPanelProps } from './GpuAvailabilityPanel';
+export { WorkerStatusPanel } from './WorkerStatusPanel';
+export type { WorkerStatusPanelProps } from './WorkerStatusPanel';
 export { QueueStatsDisplay } from './QueueStatsDisplay';
 export type { QueueStatsDisplayProps } from './QueueStatsDisplay';

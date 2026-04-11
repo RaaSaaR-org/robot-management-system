@@ -294,12 +294,44 @@ export interface QueueStats {
   };
 }
 
+/**
+ * @deprecated Replaced by WorkerStatusListResponse / GET /api/training/workers.
+ * Kept temporarily so the legacy API method compiles during the rollout.
+ */
 export interface GpuAvailability {
   total_gpus: number;
   available_gpus: number;
   gpu_types?: Record<string, number>;
   queued_jobs: number;
   estimated_wait_time?: number;
+}
+
+/**
+ * Worker as exposed by GET /api/training/workers.
+ * Mirrors the server's WorkerStatusView shape.
+ */
+export interface WorkerStatusView {
+  workerId: string;
+  device: string;
+  status: 'idle' | 'busy' | 'stale';
+  currentJob: {
+    id: string;
+    status: string;
+    baseModel: string | null;
+    datasetId: string | null;
+    ageSeconds: number;
+  } | null;
+  gpuUtil: number;
+  memoryUtil: number;
+  lastHeartbeatAt: string;
+  lastHeartbeatAgeSeconds: number;
+  firstSeenAt: string;
+}
+
+export interface WorkerStatusListResponse {
+  workers: WorkerStatusView[];
+  queuedJobs: number;
+  runningJobs: number;
 }
 
 export interface TrainingDurationEstimate {
@@ -433,6 +465,10 @@ export interface TrainingState {
   queueStats: QueueStats | null;
   queueLoading: boolean;
 
+  // Workers
+  workers: WorkerStatusListResponse | null;
+  workersLoading: boolean;
+
   // Upload progress
   uploadProgress: number;
   uploadError: string | null;
@@ -466,6 +502,9 @@ export interface TrainingActions {
   // GPU & Queue
   fetchGpuAvailability: () => Promise<void>;
   fetchQueueStats: () => Promise<void>;
+
+  // Workers
+  fetchWorkers: () => Promise<void>;
 
   // Reset
   reset: () => void;

@@ -8,3 +8,4 @@ export * from './useDatasets';
 export * from './useTrainingJobs';
 export * from './useTrainingProgress';
 export * from './useGpuAvailability';
+export * from './useWorkers';

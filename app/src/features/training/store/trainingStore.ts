@@ -48,6 +48,10 @@ const initialState: TrainingState = {
   queueStats: null,
   queueLoading: false,
 
+  // Workers
+  workers: null,
+  workersLoading: false,
+
   // Upload
   uploadProgress: 0,
   uploadError: null,
@@ -369,6 +373,26 @@ export const useTrainingStore = create<TrainingStore>()(
         }
       },
 
+      fetchWorkers: async () => {
+        set((state) => {
+          state.workersLoading = true;
+        });
+
+        try {
+          const workers = await trainingApi.getWorkers();
+
+          set((state) => {
+            state.workers = workers;
+            state.workersLoading = false;
+          });
+        } catch (error) {
+          console.error('Failed to fetch workers:', error);
+          set((state) => {
+            state.workersLoading = false;
+          });
+        }
+      },
+
       // ========================================================================
       // RESET
       // ========================================================================
@@ -415,6 +439,10 @@ export const selectGpuAvailability = (state: TrainingStore) => state.gpuAvailabi
 export const selectGpuLoading = (state: TrainingStore) => state.gpuLoading;
 export const selectQueueStats = (state: TrainingStore) => state.queueStats;
 export const selectQueueLoading = (state: TrainingStore) => state.queueLoading;
+
+// Workers
+export const selectWorkers = (state: TrainingStore) => state.workers;
+export const selectWorkersLoading = (state: TrainingStore) => state.workersLoading;
 
 // Upload
 export const selectUploadProgress = (state: TrainingStore) => state.uploadProgress;
