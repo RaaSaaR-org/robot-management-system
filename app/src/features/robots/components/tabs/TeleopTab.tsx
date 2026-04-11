@@ -241,6 +241,17 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 // LEADER ARM SECTION
 // ============================================================================
 
+/**
+ * @deprecated TASK-117 (2026-04-12): this section calls
+ * `${agent}/api/v1/teleop/start` and `/api/v1/teleop/status`, but those
+ * endpoints don't exist on the robot-agent — the live record flow now
+ * runs through the server (`POST /api/teleoperation/sessions/:id/start`)
+ * which talks to the sidecar's `lerobot-record` directly. The canonical
+ * record surface is the data-collection page at
+ * `/data-collection/record/:sessionId` (alias for SessionDetailPage).
+ * Left in place to keep the tab functional; remove in the follow-up
+ * cleanup task that consumes `git grep "@deprecated TASK-117"`.
+ */
 function LeaderArmSection({ robot }: { robot: TeleopTabProps['robot'] }) {
   const [leaderPort, setLeaderPort] = useState('/dev/ttyACM1');
   const [active, setActive] = useState(false);
@@ -336,6 +347,15 @@ function LeaderArmSection({ robot }: { robot: TeleopTabProps['robot'] }) {
 // RECORDING SECTION
 // ============================================================================
 
+/**
+ * @deprecated TASK-117 (2026-04-12): same reason as `LeaderArmSection` —
+ * the `/api/v1/teleop/*` endpoints this calls don't exist on the
+ * robot-agent. The canonical record surface is the data-collection page
+ * (`/data-collection/record/:sessionId`), which goes through the server's
+ * `TeleoperationService.startSession` → sidecar `lerobot-record` →
+ * auto-create `Dataset` row. Left in place to keep the tab functional;
+ * remove in the follow-up cleanup task.
+ */
 function RecordingSection({ robot }: { robot: TeleopTabProps['robot'] }) {
   const [datasetRepoId, setDatasetRepoId] = useState('RaaSaaR-org/so101-demo');
   const [task, setTask] = useState('pick up the cup');

@@ -34,6 +34,7 @@ import { useRobotsStore } from '../../robots/store/robotsStore';
 import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
+import { useGamepadJoints } from '../hooks/useGamepadJoints';
 import type { RobotType } from '../../robots/types/robots.types';
 import {
   TELEOPERATION_TYPE_LABELS,
@@ -138,6 +139,57 @@ export function SessionDetailPage() {
       setActionLoading(false);
     }
   };
+
+  // TASK-117: keyboard shortcuts on the record page.
+  // Space  → Start (or Pause if already recording)
+  // E      → End the session
+  // Shortcuts ignore key events that originate inside text inputs so they
+  // don't fight the modal forms (annotate / export).
+  useEffect(() => {
+    if (!session) return;
+    const onKey = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (showAnnotateModal || showExportModal) return;
+
+      if (ev.code === 'Space') {
+        ev.preventDefault();
+        if (canPauseSession(session)) {
+          handlePause();
+        } else if (canStartSession(session)) {
+          handleStart();
+        }
+      } else if (ev.key === 'e' || ev.key === 'E') {
+        if (canEndSession(session)) {
+          ev.preventDefault();
+          handleEnd();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // We intentionally re-bind whenever the session status changes so the
+    // canStart/canPause/canEnd predicates pick up the new state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.status, showAnnotateModal, showExportModal]);
+
+  // TASK-117: gamepad fallback. Forwards left/right stick to the same
+  // /ws/keyboard-teleop sidecar WebSocket the keyboard fallback uses, so
+  // operators without a leader arm or keyboard can still drive the
+  // follower with a controller while recording.
+  const gamepadEligible = !!robot && !!session && (
+    session.type === 'gamepad'
+    || session.type === 'keyboard_mouse'
+    || session.type === 'bilateral_aloha'
+  );
+  const gamepadActive = gamepadEligible
+    && (session?.status === 'recording' || session?.status === 'paused');
+  useGamepadJoints({
+    robot: gamepadEligible ? robot : null,
+    enabled: gamepadActive,
+  });
 
   const handleAnnotate = async () => {
     if (!annotationText.trim()) return;
@@ -380,10 +432,18 @@ export function SessionDetailPage() {
               <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
             </Card>
 
-            {/* Keyboard Teleop — only for keyboard/mouse and gamepad sessions */}
-            {(session.type === 'keyboard_mouse' || session.type === 'gamepad') && (
+            {/*
+              Keyboard / gamepad fallback for sessions where the operator
+              has no leader-arm hardware. Always rendered for the keyboard
+              and gamepad session types, and additionally surfaced for
+              bilateral_aloha as a fallback if the leader USB is missing
+              (TASK-117 — "Keyboard-Fallback ohne Leader Arm").
+            */}
+            {(session.type === 'keyboard_mouse'
+              || session.type === 'gamepad'
+              || session.type === 'bilateral_aloha') && (
               <Card>
-                <h3 className="text-sm font-medium text-theme-secondary mb-3">Keyboard Control</h3>
+                <h3 className="text-sm font-medium text-theme-secondary mb-3">Manual Control (Fallback)</h3>
                 {robot ? (
                   <KeyboardTeleopSection robot={robot} />
                 ) : (

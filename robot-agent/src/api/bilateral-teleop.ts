@@ -4,7 +4,16 @@
  *              Receives leader-arm joint positions, maps them to the follower arm,
  *              sends actions to the hardware sidecar, and streams follower state back.
  * @feature teleop
- * @status live
+ * @deprecated TASK-117 (2026-04-12): superseded by the sidecar
+ *             `lerobot-record` path. The leader/follower bridge now lives
+ *             in `robot-agent/hardware/so101_sidecar.py` (`POST /record/start`)
+ *             and is driven server-side by
+ *             `server/src/services/TeleoperationService.ts` `startSession`/`endSession`.
+ *             This file is unused as of TASK-117 (the WebSocket server is
+ *             still wired up in `index.ts` so any in-flight clients keep
+ *             working, but no UI in the app connects to it). Scheduled for
+ *             removal in a follow-up cleanup task — find with
+ *             `git grep "@deprecated TASK-117"`. Do not extend.
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
