@@ -169,6 +169,11 @@ evaluationRoutes.post('/run-hardware', async (req: Request, res: Response) => {
       artifactUri = mv?.artifactUri;
     }
 
+    // Tell the agent how to reach this server for episode POSTs. Without this,
+    // a Pi-side agent would default to `localhost:3001` which has no listener.
+    // We compute from the incoming request so we don't need a hardcoded IP.
+    const serverBaseUrl = `${req.protocol}://${req.get('host')}`;
+
     const httpClient = new HttpClient(registeredRobot.baseUrl, 5 * 60 * 1000); // 5min cap
     const summary = await httpClient.post(`/api/v1/robots/${body.robotId}/evaluation/run`, {
       skillId: body.skillId,
@@ -177,6 +182,7 @@ evaluationRoutes.post('/run-hardware', async (req: Request, res: Response) => {
       taskPrompt: body.taskPrompt ?? `Execute skill ${skill.name}`,
       episodes: body.episodes ?? 5,
       maxStepsPerEpisode: body.maxStepsPerEpisode ?? 200,
+      serverBaseUrl,
     });
 
     res.json({ summary });
