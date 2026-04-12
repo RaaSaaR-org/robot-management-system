@@ -4,7 +4,7 @@ aliases:
 - TASK-150
 title: 'Repo split: extract vla-server and training-worker into separate repositories'
 slug: extract-vla-server-and-training-worker-repos
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []

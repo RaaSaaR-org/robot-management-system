@@ -216,30 +216,8 @@ services:
       - neodem-network
     restart: unless-stopped
 
-  # --------------------------------------------------------------------------
-  # VLA Server (FastAPI HTTP)
-  # Vision-Language-Action model inference (SmolVLA, Pi0.5, GR00T)
-  # Optional: only needed for local dev with VLA; runs on Mac for production
-  # --------------------------------------------------------------------------
-  vla-server:
-    build:
-      context: ./vla-server
-    container_name: neodem-vla-server
-    environment:
-      VLA_DEVICE: ${VLA_DEVICE:-cpu}
-      VLA_MODEL: ${VLA_MODEL:-smolvla}
-      VLA_STUB: ${VLA_STUB:-true}
-    ports:
-      - "8000:8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - neodem-network
-    restart: unless-stopped
+  # VLA Server — extracted to separate repo (see ../vla-server/)
+  # Run independently: cd ../vla-server && docker build -t neodem-vla-server . && docker run -p 8000:8000 neodem-vla-server
 
 # ============================================================================
 # Volumes

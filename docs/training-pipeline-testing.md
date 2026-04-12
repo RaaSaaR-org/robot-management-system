@@ -5,7 +5,8 @@ End-to-end test for the training worker (HTTP polling worker, claim endpoint, Ru
 ## TL;DR
 
 ```bash
-./training-worker/scripts/test-e2e.sh
+# Training worker is now a separate repo — run from there:
+cd ../training-worker && ./scripts/test-e2e.sh
 ```
 
 One script. Starts everything it needs. Runs a 3-step training job. Passes/fails with a clear report.
@@ -25,7 +26,7 @@ Takes ~40 seconds end-to-end once the SmolVLA base model is HF-cached (first run
 ## Prerequisites
 
 - Docker Desktop running
-- Python 3.12+ venv at `training-worker/.venv` with `lerobot[smolvla]` installed (see [setup](#setup) below)
+- Python 3.12+ venv in the separate `training-worker` repo with `lerobot[smolvla]` installed (see [setup](#setup) below)
 - Node 22+ with `server/node_modules` (run `npm install` in `server/` once)
 - `jq` (`brew install jq`)
 - SQLite DB initialized: `cd server && npm run db:push` (one-time)
@@ -36,7 +37,7 @@ Takes ~40 seconds end-to-end once the SmolVLA base model is HF-cached (first run
 |---------|-----|-------------|------|
 | RustFS | http://localhost:9000 | `docker compose up -d rustfs rustfs-init` | script auto-starts |
 | Server | http://localhost:3001 | `cd server && npm run dev` | script auto-starts |
-| Worker | (no port) | `cd training-worker && python worker.py` | script starts + stops |
+| Worker | (no port) | `cd ../training-worker && python worker.py` | script starts + stops |
 
 Logs at `/tmp/neodem-server.log` and `/tmp/neodem-worker.log`.
 
@@ -49,7 +50,8 @@ Logs at `/tmp/neodem-server.log` and `/tmp/neodem-worker.log`.
 If the worker's venv doesn't exist yet:
 
 ```bash
-cd training-worker
+# In the separate training-worker repo:
+cd ../training-worker
 uv venv --python 3.13
 source .venv/bin/activate
 uv pip install -e .
@@ -99,8 +101,8 @@ docker compose up -d rustfs rustfs-init
 # Server
 cd server && npm run dev
 
-# Worker
-cd training-worker && source .venv/bin/activate
+# Worker (separate repo)
+cd ../training-worker && source .venv/bin/activate
 TRAINER_STUB=false python worker.py
 ```
 

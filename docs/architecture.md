@@ -100,11 +100,11 @@ Key endpoints:
 - `GET /vla/status` — VLA runner status
 - `GET /safety/status` — safety metrics
 
-### VLA Server (Inference)
+### VLA Server (Inference) — Separate Repository
 
 | | |
 |---|---|
-| Location | `vla-server/` |
+| Location | Extracted to separate `vla-server` repo (see `../vla-server/`) |
 | Stack | Python, FastAPI, Uvicorn |
 | Port | 8000 |
 | Models | SmolVLA (active), GR00T N1 (ZMQ), pi0.5 (stub) |

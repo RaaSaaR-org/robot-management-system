@@ -229,7 +229,7 @@ docker-compose up -d --build
 # Or start infrastructure first, then applications
 docker-compose up -d nats postgres rustfs
 docker-compose up -d server
-docker-compose up -d app robot-agent vla-server
+docker-compose up -d app robot-agent
 ```
 
 ### 3. Verify

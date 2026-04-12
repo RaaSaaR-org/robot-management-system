@@ -6,7 +6,7 @@ This guide covers the Vision-Language-Action inference pipeline: how the SO-101 
 
 The VLA pipeline has three components:
 
-1. **VLA Server** (`vla-server/`) — FastAPI inference server, runs on a machine with GPU/MPS
+1. **VLA Server** (separate repo, see `../vla-server/`) — FastAPI inference server, runs on a machine with GPU/MPS
 2. **VLA Runner** (`robot-agent/hardware/vla_runner.py`) — Python control loop on the Pi, captures cameras, sends to VLA server, applies actions
 3. **Safety Layer** (`robot-agent/hardware/vla_safety.py`) — rate limiter, joint validator, watchdog
 
@@ -24,16 +24,16 @@ The VLA pipeline has three components:
 
 | Model | Backend | Device | Status |
 |-------|---------|--------|--------|
-| SmolVLA | `vla-server/models/smolvla.py` | MPS (Mac), CUDA, CPU | Active |
-| GR00T N1 | `vla-server/models/groot.py` | NVIDIA GPU (ZMQ to PolicyServer) | Ready |
-| pi0.5 | `vla-server/models/pi05.py` | — | Stub only (TASK-078) |
+| SmolVLA | `models/smolvla.py` (in vla-server repo) | MPS (Mac), CUDA, CPU | Active |
+| GR00T N1 | `models/groot.py` (in vla-server repo) | NVIDIA GPU (ZMQ to PolicyServer) | Ready |
+| pi0.5 | `models/pi05.py` (in vla-server repo) | — | Stub only (TASK-078) |
 
 ## Running the VLA Server
 
 ### SmolVLA on Mac (Apple Silicon)
 
 ```bash
-cd vla-server
+# In the separate vla-server repo (see ../vla-server/)
 uv sync
 uv run python server.py
 # Listens on http://0.0.0.0:8000
@@ -61,8 +61,7 @@ GR00T uses ZMQ to communicate with an Isaac-GR00T PolicyServer running on a mach
 pip install "gr00t @ git+https://github.com/NVIDIA/Isaac-GR00T.git"
 python run_gr00t_server.py --model nvidia/GR00T-N1.6-3B
 
-# On the Pi (or Mac):
-cd vla-server
+# On the Pi (or Mac) — in the separate vla-server repo:
 uv pip install -e ".[groot]"
 VLA_MODEL=groot VLA_HOST=<gpu-server-ip> uv run python server.py
 ```
