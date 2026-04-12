@@ -330,6 +330,13 @@ export const LazyAccountPage = lazy(() =>
 );
 
 /**
+ * Force-password-change page - TASK-164 first-login gate
+ */
+export const LazyForcePasswordChangePage = lazy(() =>
+  import('@/features/auth').then((m) => ({ default: m.ForcePasswordChangePage }))
+);
+
+/**
  * Organizations page - Customer tenant management (TASK-155 Wave 2)
  */
 export const LazyOrganizationsPage = lazy(() =>

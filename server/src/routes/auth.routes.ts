@@ -167,10 +167,21 @@ authRoutes.post('/login', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     console.error('Login error:', error);
-    const message = error instanceof Error ? error.message : 'Login failed';
+    const rawMessage = error instanceof Error ? error.message : 'Login failed';
 
-    if (message.includes('Invalid') || message.includes('deactivated')) {
-      return res.status(401).json({ error: 'Unauthorized', message });
+    // TASK-164: never leak whether the email is registered or why the
+    // login failed — return a single generic message for any 4xx cause.
+    // Internal-only states (unreachable DB, crashed process) still surface
+    // as 500 so ops can see them.
+    if (
+      rawMessage.includes('Invalid') ||
+      rawMessage.includes('deactivated') ||
+      rawMessage.includes('not found')
+    ) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Incorrect email or password.',
+      });
     }
 
     res.status(500).json({ error: 'Internal error', message: 'Login failed' });
@@ -261,6 +272,9 @@ authRoutes.get(
           role: req.user.role,
           tenantId: req.user.tenantId ?? undefined,
           isActive: true,
+          // TASK-164: MOCK_USER never has the force-password-change gate
+          // — dev sessions must not get trapped on /set-password.
+          forcePasswordChange: false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         });

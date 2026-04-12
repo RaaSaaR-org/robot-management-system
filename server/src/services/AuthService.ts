@@ -41,6 +41,12 @@ export interface AuthResponse {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  /**
+   * TASK-164: true when the user must set a new password before they
+   * can reach any other page. The frontend redirects to /set-password
+   * and blocks navigation until the flag clears.
+   */
+  mustChangePassword: boolean;
 }
 
 /**
@@ -143,6 +149,7 @@ export class AuthService {
       accessToken,
       refreshToken,
       expiresIn: parseDuration(JWT_ACCESS_EXPIRES),
+      mustChangePassword: user.forcePasswordChange,
     };
   }
 
@@ -182,6 +189,7 @@ export class AuthService {
       accessToken,
       refreshToken,
       expiresIn: parseDuration(JWT_ACCESS_EXPIRES),
+      mustChangePassword: user.forcePasswordChange,
     };
   }
 

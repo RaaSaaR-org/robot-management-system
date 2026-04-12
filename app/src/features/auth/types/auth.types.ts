@@ -48,6 +48,12 @@ export interface User {
   avatar?: string;
   tenantId?: string;
   permissions?: Permission[];
+  /**
+   * TASK-164: when true, the user must set a new password before
+   * reaching any other page. The server emits this from `/me` and
+   * `/login`; the authStore mirrors it as `mustChangePassword`.
+   */
+  forcePasswordChange?: boolean;
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string;
@@ -70,6 +76,8 @@ export interface LoginResponse {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  /** TASK-164: force-password-change gate. */
+  mustChangePassword?: boolean;
 }
 
 /** Token refresh request */
@@ -170,6 +178,12 @@ export interface AuthState {
   isInitialized: boolean;
   /** Error message from last auth operation */
   error: string | null;
+  /**
+   * TASK-164: true when the signed-in user must set a new password
+   * before reaching any other page. ProtectedAppRoute reads this and
+   * redirects to /set-password until the flag clears.
+   */
+  mustChangePassword: boolean;
 }
 
 /** Authentication actions */
@@ -198,6 +212,8 @@ export interface AuthActions {
   resetPassword: (token: string, password: string) => Promise<void>;
   /** Change password for authenticated user */
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  /** TASK-164: clear the force-password-change gate after success. */
+  clearMustChangePassword: () => void;
 }
 
 /** Combined auth store type */
