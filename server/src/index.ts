@@ -84,7 +84,7 @@ async function main() {
       await datasetValidationWorker.start();
       await trainingOrchestrator.initialize();
       // Legacy NATS training-worker stub — disabled in favour of the HTTP
-      // polling worker at `training-worker/` (see TASK-136). The stub was
+      // polling worker (separate training-worker repo, see TASK-136). The stub was
       // prematurely transitioning pending jobs to 'running' which blocked
       // the external worker from claiming them. Set TRAINING_NATS_STUB=true
       // to re-enable (e.g. if no HTTP worker is available).

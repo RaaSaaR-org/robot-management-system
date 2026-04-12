@@ -3,7 +3,7 @@
  * @description Minimal VLA type definitions retained for TypeScript consumers.
  * @feature vla
  *
- * The VLA inference server is now a separate Python service (vla-server/).
+ * The VLA inference server is a separate Python repo (see ../vla-server/).
  * Only types still referenced by robot-agent TypeScript code are kept here.
  * @status live
  */

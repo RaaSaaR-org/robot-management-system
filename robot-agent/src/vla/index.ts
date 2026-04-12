@@ -3,7 +3,7 @@
  * @description Public exports for VLA module — model management only.
  * @feature vla
  *
- * The VLA inference server is now a separate Python service (vla-server/).
+ * The VLA inference server is a separate Python repo (see ../vla-server/).
  * The sidecar talks to it via HTTP. This module retains only the
  * VLAModelManager for UI-facing model version tracking.
  * @status live
