@@ -310,11 +310,10 @@ nats consumer ls TRAINING_JOBS
 
 ### Scaling Workers
 
-Start additional `training-worker` processes — each one announces itself
-on its first heartbeat. Set `WORKER_ID` and `TRAINING_DEVICE` per worker:
+Start additional `training-worker` processes (from the separate training-worker repo) — each one announces itself on its first heartbeat. Set `WORKER_ID` and `TRAINING_DEVICE` per worker:
 
 ```bash
-# training-worker/.env
+# In the training-worker repo's .env
 WORKER_ID=worker-gpu-01
 TRAINING_DEVICE=cuda
 ```

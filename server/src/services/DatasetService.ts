@@ -697,7 +697,7 @@ export class DatasetService extends EventEmitter {
 
   /**
    * Queue stats computation job via NATS JetStream.
-   * Consumed by the Python stats worker (training-worker/stats_worker.py).
+   * Consumed by the Python stats worker (stats_worker.py in the training-worker repo).
    */
   async computeStats(id: string, force = false): Promise<void> {
     const dataset = await datasetRepository.findById(id);

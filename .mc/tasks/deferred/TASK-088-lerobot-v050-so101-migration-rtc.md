@@ -52,30 +52,30 @@ reactive SO-101 motion — no more micro-stalls at chunk edges.
     a 3.12 base (`conda create -n lerobot python=3.12` + reinstall deps)
 - Smoke test on real hardware: calibrate → home → teleop via leader arm
 
-### 2. training-worker upgrade — Mac
+### 2. training-worker upgrade — Mac (separate repo: `../training-worker/`)
 
-`training-worker/pyproject.toml`
+`pyproject.toml` (in the training-worker repo)
 - Bump `lerobot` to `==0.5.0`
 - Verify `trainers/smolvla_lora.py` still loads `lerobot/smolvla_base` against the
   v0.5.0 model registry (API may have renamed loader helpers)
 - Re-run the E2E training test (`scripts/test-e2e.sh` — shipped in TASK-141)
   against a known LeRobot v3 dataset to confirm no regression in the LoRA pipeline
 
-### 3. vla-server upgrade
+### 3. vla-server upgrade (separate repo: `../vla-server/`)
 
-`vla-server/pyproject.toml`
+`pyproject.toml` (in the vla-server repo)
 - Bump `lerobot` to `==0.5.0`
-- `vla-server/models/smolvla.py` — re-validate policy loading and action-chunk
+- `models/smolvla.py` — re-validate policy loading and action-chunk
   schema; v0.5.0 may have changed dict keys
-- `vla-server/models/pi05.py` — same
-- Re-run `vla-server/tests/` to confirm all backends still load
+- `models/pi05.py` — same
+- Re-run `tests/` to confirm all backends still load
 
-### 4. Real-Time Chunking
+### 4. Real-Time Chunking (in the vla-server repo)
 
-`vla-server/server.py`
+`server.py`
 - Thread `rtc_config.enabled` + `blend_interval` + `chunk_overlap` through the
   policy loading path for SmolVLA and Pi0.5
-- Expose via `config.yaml` (see `vla-server/config.yaml.example`)
+- Expose via `config.yaml` (see `config.yaml.example`)
 
 `robot-agent/src/vla/` (TypeScript inference client)
 - Current behaviour: request chunk N → execute → request chunk N+1
@@ -87,8 +87,8 @@ reactive SO-101 motion — no more micro-stalls at chunk edges.
 ## Done when
 
 - [ ] SO-101 sidecar runs on v0.5.0 on the Pi, calibrates, homes, accepts teleop
-- [ ] `training-worker` e2e test green against v0.5.0
-- [ ] `vla-server` tests green against v0.5.0, SmolVLA + Pi0.5 still load
+- [ ] `training-worker` (separate repo) e2e test green against v0.5.0
+- [ ] `vla-server` (separate repo) tests green against v0.5.0, SmolVLA + Pi0.5 still load
 - [ ] `VLA_RTC_ENABLED=true` produces visibly smoother SO-101 motion in a scripted
       pick-and-place (recorded comparison video in `docs/` or as a PR artifact)
 - [ ] `robot-agent/.env.so101.example` documents the three RTC env vars

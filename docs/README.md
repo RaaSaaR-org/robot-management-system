@@ -53,8 +53,8 @@ cd robot-agent && npm run dev:so101
 # Terminal 4: Frontend
 cd app && npm run dev
 
-# Terminal 5: VLA Server (on Mac)
-cd vla-server && uv run python server.py
+# Terminal 5: VLA Server (separate repo — see ../vla-server/)
+# cd ../vla-server && uv run python server.py
 ```
 
 ## Environment Files

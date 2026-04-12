@@ -11,7 +11,6 @@ NeoDEM is a distributed fleet management platform for autonomous robots. It cons
 | **App**            | `app/`           | React + Tauri frontend               | 1420  |
 | **Server**         | `server/`        | Node.js A2A protocol server          | 3001  |
 | **Robot Agent**    | `robot-agent/`   | AI-powered robot software            | 41243 |
-| **VLA Server**     | `vla-server/`    | FastAPI VLA inference (SmolVLA, Pi0.5, GR00T) | 8000  |
 
 ## Component-Specific Guidance
 
@@ -20,7 +19,6 @@ Each component has its own `AGENTS.md` file with detailed guidance:
 - `app/AGENTS.md` — Frontend development patterns, Zustand stores, Tailwind, routes
 - `server/AGENTS.md` — Server routes, services, A2A protocol, database
 - `robot-agent/AGENTS.md` — Genkit tools, robot state, telemetry, simulation
-- `vla-server/README.md` — VLA model inference (SmolVLA, Pi0.5, GR00T)
 
 **Always check the relevant AGENTS.md file when working in a specific component.**
 
@@ -77,23 +75,18 @@ cd robot-agent && npm run dev
 # Terminal 3: Frontend
 cd app && npm run dev
 
-# Optional: VLA Server (requires Python + GPU)
-cd vla-server && python server.py
+# VLA Server and Training Worker are now separate repos — see ../vla-server/ and ../training-worker/
 ```
 
 ### Testing
 
 ```bash
-./scripts/test-all.sh              # typecheck + training e2e + playwright
-./scripts/test-all.sh --skip-e2e   # fast: typecheck + playwright only
-./scripts/test-all.sh --skip-pw    # no browser: typecheck + training e2e
-./training-worker/scripts/test-e2e.sh  # training pipeline only
+./scripts/test-all.sh              # typecheck + playwright
+./scripts/test-all.sh --skip-pw    # typecheck only
 ```
 
-`test-all.sh` runs typecheck (server + app), the training pipeline E2E
-(RustFS + server + worker + 3-step SmolVLA+LoRA + VLA adapter loading),
-and Playwright UI tests (training wizard + datasets page).
-See `docs/training-pipeline-testing.md` for prerequisites.
+`test-all.sh` runs typecheck (server + app) and Playwright UI tests
+(training wizard + datasets page).
 
 ### Environment Setup
 
@@ -165,9 +158,10 @@ npm run db:studio     # Open Prisma Studio GUI
 - App ↔ Server: REST API + WebSocket (`ws://localhost:3001/api/a2a/ws`)
 - Server ↔ Robot: A2A (Agent-to-Agent) protocol + REST API
 - Server → Robot: Push-model task distribution
-- Robot Agent ↔ VLA Server: HTTP (FastAPI)
+- Robot Agent ↔ VLA Server: HTTP (FastAPI) — VLA Server is now a separate repo
 - Server ↔ NATS: Async messaging for training jobs (optional)
 - Server ↔ RustFS: S3-compatible object storage for models/datasets (optional)
+- Server ↔ Training Worker: HTTP polling — Training Worker is now a separate repo
 
 **Key Infrastructure:**
 
@@ -255,11 +249,8 @@ robot-management-system/
 │   ├── smolvla/            # Python client for real SO-101 hardware via LeRobot
 │   └── AGENTS.md
 │
-├── vla-server/             # Consolidated VLA Inference Server (Python)
-│   ├── server.py           # Server entry point
-│   ├── models/             # Model backends (SmolVLA, pi0.5, GR00T, etc.)
-│   ├── pyproject.toml
-│   └── README.md
+├── vla-server/             # EXTRACTED — pointer README only (see ../vla-server/)
+├── training-worker/        # EXTRACTED — pointer README only (see ../training-worker/)
 │
 ├── helm/                   # Kubernetes Helm Chart
 │   └── neodem/             # Chart with 30 resource templates
@@ -340,7 +331,7 @@ When building features across the stack:
 | `genkit`                | Robot         | AI framework               |
 | `@a2a-js/sdk`           | Robot         | A2A protocol               |
 | `@grpc/grpc-js`         | Robot         | VLA inference gRPC client  |
-| `lerobot`               | VLA Server    | VLA model loading + robot hardware |
+| `lerobot`               | VLA Server (separate repo) | VLA model loading + robot hardware |
 
 ## Task Management
 

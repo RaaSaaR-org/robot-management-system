@@ -21,7 +21,7 @@ updated: 2026-04-11
 
 Pi0-FAST is an autoregressive VLA (PaliGemma VLM backbone + Gemma 300M action
 expert + FAST action tokenization), a sibling to the flow-matching Pi0 we already
-serve via `vla-server/models/pi05.py`. Exposing it as a third selectable backend
+serve via `models/pi05.py (in the vla-server repo)`. Exposing it as a third selectable backend
 lets us:
 
 - Benchmark autoregressive vs flow-matching VLA on the same SO-101 task
@@ -40,16 +40,16 @@ per target:
 | **Cloud burst** (Modal / Runpod A10/L4) | ✅ Production path | Sub-100 ms per chunk, rent by the minute — the right target when we actually want to drive the robot with Pi0-FAST |
 
 So: the backend module is hardware-agnostic. Deployment decisions happen per
-environment via `vla-server/config.yaml` and `VLA_SERVER_URL` on the robot-agent.
+environment via `config.yaml (in the vla-server repo)` and `VLA_SERVER_URL` on the robot-agent.
 
 ## Scope
 
 ### 1. Pi0-FAST backend module
 
-`vla-server/models/pi0_fast.py` (new — sits alongside `smolvla.py`, `pi05.py`,
+`models/pi0_fast.py (in the vla-server repo)` (new — sits alongside `smolvla.py`, `pi05.py`,
 `groot.py`)
 - Subclass the same base interface used by the existing models
-  (`vla-server/models/base.py`)
+  (`models/base.py (in the vla-server repo)`)
 - Load `lerobot/pi0_fast` policy via LeRobot v0.5.0 API
 - Load FAST action tokenizer (`lerobot/fast-action-tokenizer`)
 - Config fields: `temperature`, `max_decoding_steps`
@@ -60,12 +60,12 @@ environment via `vla-server/config.yaml` and `VLA_SERVER_URL` on the robot-agent
 
 ### 2. Backend registry + config
 
-`vla-server/server.py`
+`server.py (in the vla-server repo)`
 - Register `pi0_fast` in the backend lookup
 - Surface latency / device info via `/health` so the RMS worker panel (shipped
   in TASK-145) can display it
 
-`vla-server/config.yaml.example`
+`config.yaml (in the vla-server repo).example`
 - Add a commented `backend: pi0_fast` example block with the new config fields
 
 ### 3. RMS UI — backend selector (only if >1 backend configured)
@@ -79,7 +79,7 @@ after the TASK-147 sidebar consolidation — check `app/src/features/` first)
 
 ### 4. Tests + benchmarks
 
-- `vla-server/tests/test_pi0_fast_backend.py` — unit test with a tiny stub policy
+- `tests/test_pi0_fast_backend.py (in the vla-server repo)` — unit test with a tiny stub policy
   (mirrors the existing SmolVLA/Pi05 test patterns)
 - Manual benchmark doc: `docs/vla-backends-benchmark.md` with per-device median
   chunk latency for SmolVLA, Pi0.5, Pi0-FAST on Mac MPS (recorded once, updated
@@ -88,9 +88,9 @@ after the TASK-147 sidebar consolidation — check `app/src/features/` first)
 
 ## Done when
 
-- [ ] `vla-server/models/pi0_fast.py` loads `lerobot/pi0_fast` and serves
+- [ ] `models/pi0_fast.py (in the vla-server repo)` loads `lerobot/pi0_fast` and serves
       inference requests locally on Mac (MPS)
-- [ ] `VLA_BACKEND=pi0_fast` in `vla-server/config.yaml` selects the new backend
+- [ ] `VLA_BACKEND=pi0_fast` in `config.yaml (in the vla-server repo)` selects the new backend
 - [ ] Backend dropdown appears in RMS when multiple backends are configured
 - [ ] Unit test for the Pi0-FAST backend
 - [ ] Latency benchmark doc committed with numbers for at least Mac MPS
@@ -108,5 +108,6 @@ after the TASK-147 sidebar consolidation — check `app/src/features/` first)
 - Pi0-FAST docs: https://huggingface.co/docs/lerobot/pi0fast
 - FAST tokenizer: https://huggingface.co/lerobot/fast-action-tokenizer
 - Base model: https://huggingface.co/lerobot/pi0_fast
-- Existing backends: `vla-server/models/smolvla.py`, `vla-server/models/pi05.py`
-- Depends on TASK-088 (needs LeRobot v0.5.0 installed in vla-server)
+- Existing backends: `models/smolvla.py (in the vla-server repo)`, `models/pi05.py (in the vla-server repo)`
+- Depends on TASK-088 (needs LeRobot v0.5.0 installed in vla-server repo)
+- **Note:** vla-server was extracted to a separate repo in TASK-150 — all paths above are relative to that repo

@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-# test-all.sh — Run all project tests: typecheck + training e2e + playwright UI.
+# test-all.sh — Run all project tests: typecheck + playwright UI.
 #
 # Usage:
 #   ./scripts/test-all.sh            # run everything
-#   ./scripts/test-all.sh --skip-e2e # skip training pipeline (fast mode)
 #   ./scripts/test-all.sh --skip-pw  # skip playwright tests
+#
+# Training E2E is now in the separate training-worker repo.
 #
 # Exits 0 if all tests pass, non-zero on first failure.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SKIP_E2E=false
 SKIP_PW=false
 
 for arg in "$@"; do
   case "$arg" in
-    --skip-e2e) SKIP_E2E=true ;;
     --skip-pw)  SKIP_PW=true ;;
   esac
 done
@@ -35,15 +34,9 @@ step "Server typecheck"
 step "App typecheck"
 (cd "$REPO_ROOT/app" && npx tsc --noEmit) || { echo "  app typecheck FAILED"; FAILURES=$((FAILURES + 1)); }
 
-# ---------------------------------------------------------------- 2. Training E2E
-if $SKIP_E2E; then
-  step "Training E2E (SKIPPED)"
-else
-  step "Training E2E pipeline"
-  "$REPO_ROOT/training-worker/scripts/test-e2e.sh" || { echo "  training e2e FAILED"; FAILURES=$((FAILURES + 1)); }
-fi
+# Training E2E — now in separate training-worker repo (run ../training-worker/scripts/test-e2e.sh)
 
-# ---------------------------------------------------------------- 3. Playwright
+# ---------------------------------------------------------------- 2. Playwright
 if $SKIP_PW; then
   step "Playwright UI tests (SKIPPED)"
 else

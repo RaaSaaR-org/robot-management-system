@@ -130,7 +130,7 @@ Steps:
 7. Output JSON-line progress to stdout for server to parse
 
 ### `neodem-data stats`
-**Replaces:** `training-worker/stats_worker.py` (the compute-heavy part)
+**Replaces:** `stats_worker.py (in the training-worker repo)` (the compute-heavy part)
 
 Input: S3 path to dataset directory
 Output: `meta/stats.json`
@@ -169,7 +169,7 @@ Quick metadata summary — useful for debugging and CLI workflows.
 - Dependencies: `@dsnp/parquetjs` in `server/package.json`
 
 ### Stats computation (Python → Rust)
-- `training-worker/stats_worker.py` — current Python implementation
+- `stats_worker.py (in the training-worker repo)` — current Python implementation
 - Uses: `pyarrow.parquet.read_table()`, `numpy` for mean/std
 - Consumes NATS messages from `jobs.dataset.compute-stats`
 - Server integration: `server/src/services/TrainingOrchestrator.ts` triggers stats jobs

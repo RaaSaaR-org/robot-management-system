@@ -26,9 +26,9 @@ with a dedicated `FineTuningPage.tsx` and a REST endpoint that `nohup`-spawned
 `lerobot-train` on a remote box. **All of that is obsolete:**
 
 - We already have a real LoRA training pipeline end-to-end (TASK-136 Phase 1a +
-  1b, shipped). It uses **HTTP-polling** from `training-worker/worker.py` against
+  1b, shipped). It uses **HTTP-polling** from `worker.py (in the training-worker repo)` against
   a server claim endpoint — no NATS, no SSH, clean cancellation, live progress.
-- `training-worker/trainers/smolvla_lora.py` is a real HF Transformers + PEFT
+- `trainers/smolvla_lora.py (in the training-worker repo)` is a real HF Transformers + PEFT
   LoRA trainer, wired into `TrainingOrchestrator`, with E2E test coverage
   (TASK-141, `scripts/test-e2e.sh`).
 - The "Train a Skill" workflow already exists in the RMS training wizard
@@ -68,7 +68,7 @@ where it lives.
 
 ## Scope
 
-### 1. `training-worker/trainers/pi0_lora.py` (new)
+### 1. `trainers/pi0_lora.py (in the training-worker repo)` (new)
 
 Mirrors the `smolvla_lora.py` structure:
 
@@ -91,16 +91,16 @@ Mirrors the `smolvla_lora.py` structure:
 - On success: tar the output directory (PEFT adapter safetensors + config) and
   hand back a `TrainerResult` — same shape as SmolVLA so `storage.py` can
   upload to RustFS unchanged
-- Dataset staging: reuse `training-worker/storage.py` to download the LeRobot v3
+- Dataset staging: reuse `storage.py (in the training-worker repo)` to download the LeRobot v3
   dataset from RustFS and point `--dataset.repo_id` at the local path
 
 ### 2. Trainer registry
 
-`training-worker/trainers/__init__.py`
+`trainers/__init__.py (in the training-worker repo)`
 - Register `pi0_lora` alongside `smolvla_lora` and `stub`
 - Keyed by `trainer_type` field in the job payload
 
-`training-worker/config.py`
+`config.py (in the training-worker repo)`
 - Expose `TRAINER_TYPES` env or config so a given worker can opt out of Pi0
   (e.g. a laptop worker with limited disk won't claim Pi0 jobs)
 
@@ -123,7 +123,7 @@ a unified "Train a Skill" flow)
 
 ### 5. Tests
 
-- `training-worker/tests/test_pi0_lora.py` — subprocess-mocked unit test
+- `tests/test_pi0_lora.py (in the training-worker repo)` — subprocess-mocked unit test
   (assert correct CLI args, progress parsing, cancellation)
 - Extend `scripts/test-e2e.sh` with a Pi0 LoRA path, gated on a
   `TEST_PI0=1` flag so it stays opt-in (Pi0 checkpoint download is heavy — CI
@@ -131,7 +131,7 @@ a unified "Train a Skill" flow)
 
 ## Done when
 
-- [ ] `training-worker/trainers/pi0_lora.py` implemented against LeRobot v0.5.0
+- [ ] `trainers/pi0_lora.py (in the training-worker repo)` implemented against LeRobot v0.5.0
       PEFT
 - [ ] Training job with `baseModel: 'pi0'` runs end-to-end on Mac: claim →
       train (few steps) → artifact uploaded to RustFS → visible in RMS
@@ -152,8 +152,8 @@ a unified "Train a Skill" flow)
 
 - LeRobot PEFT docs: https://huggingface.co/docs/lerobot/peft_training
 - LeRobot v0.5.0 blog: https://huggingface.co/blog/lerobot-release-v050
-- Existing SmolVLA LoRA trainer: `training-worker/trainers/smolvla_lora.py`
-- Training worker base: `training-worker/trainers/base.py`
-- HTTP-polling claim flow (TASK-136 Phase 1a): `training-worker/worker.py`
-- E2E test harness (TASK-141): `training-worker/scripts/test-e2e.sh`
+- Existing SmolVLA LoRA trainer: `trainers/smolvla_lora.py (in the training-worker repo)`
+- Training worker base: `trainers/base.py (in the training-worker repo)`
+- HTTP-polling claim flow (TASK-136 Phase 1a): `worker.py (in the training-worker repo)`
+- E2E test harness (TASK-141): `scripts/test-e2e.sh (in the training-worker repo)`
 - Training wizard entry: `app/src/features/training/`
