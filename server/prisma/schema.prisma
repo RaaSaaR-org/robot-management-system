@@ -319,6 +319,12 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  // Service account fields (TASK-165)
+  kind        String  @default("human") // 'human' | 'service'
+  createdById String?
+  createdBy   User?   @relation("CreatedServiceAccounts", fields: [createdById], references: [id], onDelete: SetNull)
+  servicedBy  User[]  @relation("CreatedServiceAccounts")
+
   // MFA fields (TASK-022)
   mfaEnabled        Boolean   @default(false)
   loginAttempts     Int       @default(0)
@@ -334,10 +340,52 @@ model User {
   dataRestrictions DataRestriction[]
   accountLockout   AccountLockout?
   settings         UserSettings?
+  apiTokens        ApiToken[]
+  createdTokens    ApiToken[] @relation("CreatedTokens")
 
   @@index([email])
   @@index([role])
   @@index([tenantId])
+  @@index([kind])
+}
+
+// ============================================================================
+// API TOKENS (TASK-165)
+// ============================================================================
+
+model ApiToken {
+  id          String    @id @default(cuid())
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Human label, e.g. "github-actions deploy" or "kira agent prod".
+  name        String
+
+  /// First 12 chars of the token for index lookup + truncated display.
+  prefix      String
+
+  /// SHA-256 hash of the full token. Constant-time-compared on auth.
+  hash        String
+
+  /// Expiry. Default now() + 90 days, max 1 year.
+  expiresAt   DateTime?
+
+  /// Best-effort fire-and-forget stamp from the auth middleware.
+  lastUsedAt  DateTime?
+
+  /// When set, the token is rejected regardless of expiry.
+  revokedAt   DateTime?
+
+  createdAt   DateTime  @default(now())
+
+  /// Human user who minted this token. Required for audit.
+  createdById String
+  createdBy   User      @relation("CreatedTokens", fields: [createdById], references: [id], onDelete: NoAction)
+
+  @@unique([userId, name])
+  @@index([prefix])
+  @@index([userId])
 }
 
 // ============================================================================
