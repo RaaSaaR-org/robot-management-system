@@ -4,7 +4,7 @@ aliases:
 - TASK-158
 title: 'Multi-tenancy Wave 3: expand TENANT_SCOPED_MODELS allowlist'
 slug: multi-tenancy-wave-3-expand-tenant-scoped-models-allowlist
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
