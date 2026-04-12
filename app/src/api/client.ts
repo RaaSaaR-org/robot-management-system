@@ -55,6 +55,33 @@ export const tokenStorage: TokenStorage = {
 };
 
 // ============================================================================
+// IMPERSONATION (super-admin only, client-side preference)
+// ============================================================================
+
+const IMPERSONATE_KEY = 'impersonate_tenant_id';
+
+/**
+ * Read/write the currently impersonated tenant id. When set, apiClient
+ * attaches `X-Impersonate-Tenant` on every request. Server honors it
+ * only for super-admin callers; any other role silently falls back to
+ * its own tenant, so this storage key is safe to persist.
+ */
+export const impersonationStorage = {
+  get(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(IMPERSONATE_KEY);
+  },
+  set(tenantId: string): void {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(IMPERSONATE_KEY, tenantId);
+  },
+  clear(): void {
+    if (typeof window === 'undefined') return;
+    localStorage.removeItem(IMPERSONATE_KEY);
+  },
+};
+
+// ============================================================================
 // CLIENT INSTANCE
 // ============================================================================
 
@@ -79,6 +106,10 @@ function createApiClient(config: ApiClientConfig = DEFAULT_CONFIG): AxiosInstanc
       const token = tokenStorage.getAccessToken();
       if (token && requestConfig.headers) {
         requestConfig.headers.Authorization = `Bearer ${token}`;
+      }
+      const impersonate = impersonationStorage.get();
+      if (impersonate && requestConfig.headers) {
+        requestConfig.headers['X-Impersonate-Tenant'] = impersonate;
       }
       return requestConfig;
     },

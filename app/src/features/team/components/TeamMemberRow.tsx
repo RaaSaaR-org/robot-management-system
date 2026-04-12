@@ -1,17 +1,24 @@
 /**
  * @file TeamMemberRow.tsx
- * @description Single row in the team list — avatar, name, email, inline
- * role editor, last-login, and active/deactivated toggle.
+ * @description Single row in the team table. Renders as a `<tr>` with
+ * aligned columns (avatar+name, email, role, last login, actions).
+ * Errors from mutations are lifted to the page via `onError`.
  * @feature team
  */
 
 import { useState } from 'react';
+
 import type { TeamMember, AssignableRole } from '../types/team.types';
 
 interface TeamMemberRowProps {
   member: TeamMember;
   onChangeRole: (id: string, role: AssignableRole) => Promise<void>;
   onSetActive: (id: string, isActive: boolean) => Promise<void>;
+  /**
+   * Called when a mutation fails (e.g. last-owner guard, network error).
+   * The page surfaces the message as a toast.
+   */
+  onError?: (message: string) => void;
 }
 
 const ASSIGNABLE_ROLES: AssignableRole[] = ['owner', 'member', 'viewer'];
@@ -28,52 +35,46 @@ function formatLastLogin(iso: string | null): string {
   return date.toLocaleDateString();
 }
 
+function extractMessage(err: unknown, fallback: string): string {
+  if (
+    err &&
+    typeof err === 'object' &&
+    'message' in err &&
+    typeof (err as { message: unknown }).message === 'string' &&
+    (err as { message: string }).message
+  ) {
+    return (err as { message: string }).message;
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 export function TeamMemberRow({
   member,
   onChangeRole,
   onSetActive,
+  onError,
 }: TeamMemberRowProps) {
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const handleRoleChange = async (value: string) => {
     if (value === member.role) return;
-    setError(null);
     setBusy(true);
     try {
       await onChangeRole(member.id, value as AssignableRole);
     } catch (err) {
-      const message =
-        (err &&
-        typeof err === 'object' &&
-        'message' in err &&
-        typeof (err as { message: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : null) ||
-        (err instanceof Error ? err.message : null) ||
-        'Failed to change role';
-      setError(message);
+      onError?.(extractMessage(err, 'Failed to change role'));
     } finally {
       setBusy(false);
     }
   };
 
   const handleToggleActive = async () => {
-    setError(null);
     setBusy(true);
     try {
       await onSetActive(member.id, !member.isActive);
     } catch (err) {
-      const message =
-        (err &&
-        typeof err === 'object' &&
-        'message' in err &&
-        typeof (err as { message: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : null) ||
-        (err instanceof Error ? err.message : null) ||
-        'Failed to update member';
-      setError(message);
+      onError?.(extractMessage(err, 'Failed to update member'));
     } finally {
       setBusy(false);
     }
@@ -83,75 +84,79 @@ export function TeamMemberRow({
   const isSuperAdmin = member.role === 'super-admin';
 
   return (
-    <div
-      className={`rounded-brand border border-theme bg-theme-card px-4 py-3 flex items-center gap-4 transition-opacity ${
-        member.isActive ? '' : 'opacity-50'
+    <tr
+      className={`border-b border-theme last:border-b-0 transition-colors hover:bg-theme-hover ${
+        member.isActive ? '' : 'opacity-60'
       }`}
     >
-      {/* Avatar */}
-      <div className="w-10 h-10 rounded-full bg-brand/20 border border-brand/30 flex items-center justify-center text-brand font-semibold shrink-0">
-        {initial}
-      </div>
-
-      {/* Identity */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="text-sm font-semibold text-theme-primary truncate">
-            {member.name}
+      {/* Name + avatar */}
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-full bg-brand/20 border border-brand/30 flex items-center justify-center text-brand font-semibold shrink-0">
+            {initial}
           </div>
-          {!member.isActive && (
-            <span className="text-xs uppercase tracking-wider text-theme-tertiary border border-theme rounded px-1.5 py-0.5">
-              Deactivated
-            </span>
-          )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="text-sm font-semibold text-theme-primary truncate">
+                {member.name}
+              </div>
+              {!member.isActive && (
+                <span className="text-[10px] uppercase tracking-wider text-theme-tertiary border border-theme rounded px-1.5 py-0.5">
+                  Deactivated
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-        <div className="text-xs text-theme-tertiary truncate">{member.email}</div>
-      </div>
+      </td>
+
+      {/* Email */}
+      <td className="px-4 py-3">
+        <span className="text-sm text-theme-secondary truncate block max-w-[18rem]">
+          {member.email}
+        </span>
+      </td>
 
       {/* Role */}
-      <div className="shrink-0">
+      <td className="px-4 py-3">
         {isSuperAdmin ? (
-          <div className="text-xs font-semibold text-brand uppercase tracking-wider">
-            super-admin
-          </div>
+          <span className="text-xs font-semibold text-brand uppercase tracking-wider">
+            Super-admin
+          </span>
         ) : (
           <select
             value={member.role}
             onChange={(e) => handleRoleChange(e.target.value)}
             disabled={busy || !member.isActive}
-            className="bg-theme-card border border-theme rounded-brand px-2 py-1 text-sm text-theme-primary focus:outline-none focus:border-brand disabled:opacity-50"
+            className="bg-theme-card border border-theme rounded-brand px-2 py-1 text-sm text-theme-primary focus:outline-none focus:border-brand disabled:opacity-50 min-w-[6rem]"
           >
             {ASSIGNABLE_ROLES.map((r) => (
               <option key={r} value={r}>
-                {r}
+                {r.charAt(0).toUpperCase() + r.slice(1)}
               </option>
             ))}
           </select>
         )}
-      </div>
+      </td>
 
       {/* Last login */}
-      <div className="shrink-0 text-xs text-theme-tertiary tabular-nums w-24 text-right">
+      <td className="px-4 py-3 text-sm text-theme-tertiary tabular-nums whitespace-nowrap">
         {formatLastLogin(member.lastLoginAt)}
-      </div>
+      </td>
 
       {/* Action */}
-      {!isSuperAdmin && (
-        <button
-          type="button"
-          onClick={handleToggleActive}
-          disabled={busy}
-          className="shrink-0 text-xs text-theme-tertiary hover:text-theme-primary border border-theme hover:border-brand rounded-brand px-2 py-1 transition-colors disabled:opacity-50"
-        >
-          {member.isActive ? 'Deactivate' : 'Reactivate'}
-        </button>
-      )}
-
-      {error && (
-        <div className="absolute right-4 top-full mt-1 text-xs text-red-400">
-          {error}
-        </div>
-      )}
-    </div>
+      <td className="px-4 py-3 text-right whitespace-nowrap">
+        {!isSuperAdmin && (
+          <button
+            type="button"
+            onClick={handleToggleActive}
+            disabled={busy}
+            className="text-xs text-theme-tertiary hover:text-theme-primary border border-theme hover:border-brand rounded-brand px-2 py-1 transition-colors disabled:opacity-50"
+          >
+            {member.isActive ? 'Deactivate' : 'Reactivate'}
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }

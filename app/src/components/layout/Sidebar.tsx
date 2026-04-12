@@ -361,6 +361,36 @@ export function Sidebar({ className }: SidebarProps) {
         {visibleCategories.map((category) => {
           const isExpanded = expandedCategories.has(category.id);
           const hasActiveItem = isCategoryActive(category);
+          const isSingleton = category.items.length === 1;
+
+          // Single-item categories render as a flat nav link — no
+          // collapsible header. Prevents "Robot Management > Fleet"
+          // style redundancy when there's only one child.
+          if (isSingleton) {
+            const item = category.items[0];
+            return (
+              <div key={category.id} className="mb-1">
+                <NavLink
+                  to={item.path}
+                  title={collapsed ? item.label : undefined}
+                  className={({ isActive }) =>
+                    cn(
+                      collapsed
+                        ? "flex items-center justify-center p-2.5 rounded-brand"
+                        : "flex items-center gap-3 px-3 py-2 rounded-brand text-sm",
+                      "transition-colors",
+                      isActive
+                        ? "bg-cobalt text-white"
+                        : "text-theme-secondary hover:text-theme-primary hover:bg-theme-hover"
+                    )
+                  }
+                >
+                  {item.icon}
+                  {!collapsed && <span>{item.label}</span>}
+                </NavLink>
+              </div>
+            );
+          }
 
           return (
             <div key={category.id} className="mb-1">
