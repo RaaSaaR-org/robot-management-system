@@ -4,6 +4,7 @@
  */
 
 import { prisma } from '../database/index.js';
+import { runAsPlatform } from '../middleware/tenantContext.js';
 import type { User as PrismaUser } from '@prisma/client';
 
 /**
@@ -99,41 +100,56 @@ function dbUserToUserWithPassword(user: PrismaUser): UserWithPassword {
 
 export class UserRepository {
   /**
-   * Find a user by ID
+   * Find a user by ID.
+   *
+   * User-by-id lookups are always tenant-agnostic: the caller is
+   * asking for their OWN identity (from a JWT) or for a specific row
+   * during admin operations. Wrap in `runAsPlatform` so impersonation
+   * (super-admin viewing another tenant) doesn't make the caller's
+   * own /me lookup return null.
    */
   async findById(id: string): Promise<User | null> {
-    const user = await prisma.user.findUnique({
-      where: { id },
+    // IMPORTANT: use `async`/`await` inside the runAsPlatform callback
+    // (not a bare `() => prisma.user.findUnique(...)`). With a plain
+    // arrow-returning-thenable, `ALS.run` only holds the store for
+    // the synchronous body, and the extension's $allOperations then
+    // runs OUTSIDE the platform scope — so it sees the outer
+    // request's tenantId and post-filters our own row away.
+    const user = await runAsPlatform(async () => {
+      return prisma.user.findUnique({ where: { id } });
     });
     return user ? dbUserToDomain(user) : null;
   }
 
   /**
-   * Find a user by ID with password hash (for auth)
+   * Find a user by ID with password hash (for auth). See findById
+   * comment — same tenant-agnostic rationale.
    */
   async findByIdWithPassword(id: string): Promise<UserWithPassword | null> {
-    const user = await prisma.user.findUnique({
-      where: { id },
+    const user = await runAsPlatform(async () => {
+      return prisma.user.findUnique({ where: { id } });
     });
     return user ? dbUserToUserWithPassword(user) : null;
   }
 
   /**
-   * Find a user by email
+   * Find a user by email. Email is globally unique — lookup is
+   * tenant-agnostic (used by the login endpoint to find the caller
+   * before their tenantId is even known).
    */
   async findByEmail(email: string): Promise<User | null> {
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+    const user = await runAsPlatform(async () => {
+      return prisma.user.findUnique({ where: { email: email.toLowerCase() } });
     });
     return user ? dbUserToDomain(user) : null;
   }
 
   /**
-   * Find a user by email with password hash (for auth)
+   * Find a user by email with password hash (for auth).
    */
   async findByEmailWithPassword(email: string): Promise<UserWithPassword | null> {
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+    const user = await runAsPlatform(async () => {
+      return prisma.user.findUnique({ where: { email: email.toLowerCase() } });
     });
     return user ? dbUserToUserWithPassword(user) : null;
   }
