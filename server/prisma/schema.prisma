@@ -406,9 +406,13 @@ model ApiToken {
   createdById String
   createdBy   User      @relation("CreatedTokens", fields: [createdById], references: [id], onDelete: NoAction)
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@unique([userId, name])
   @@index([prefix])
   @@index([userId])
+  @@index([tenantId, createdAt])
 }
 
 // ============================================================================
@@ -2242,6 +2246,9 @@ model Tenant {
   // Relations (Wave 3d — conversations / misc)
   zones         Zone[]
   conversations Conversation[]
+
+  // Relations (Wave 3e — service accounts)
+  apiTokens ApiToken[]
 
   @@index([slug])
 }

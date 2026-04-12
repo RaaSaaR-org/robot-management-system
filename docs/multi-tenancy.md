@@ -109,6 +109,7 @@ one shot is a large blast-radius migration. Instead, multi-tenancy rolls out in 
 - **Wave 3b** (shipped): `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`.
 - **Wave 3c** (shipped): `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`.
 - **Wave 3d** (shipped): `Zone`, `Conversation`.
+- **Wave 3e** (shipped): `ApiToken`.
 - **Not scoped** (by design): `Fleet` (no DB model), `Message` (implicit via `Conversation` FK).
 
 The allowlist is the single source of truth for "which models are tenant-scoped". Adding
@@ -355,11 +356,14 @@ and `getTenantId()` treats the sentinel as "no tenant".
 
 ## 8. Current limitations
 
-- **18 models are tenant-scoped** (Waves 1 + 3a–3d): `User`, `Robot`, `Dataset`,
+- **19 models are tenant-scoped** (Waves 1 + 3a–3e): `User`, `Robot`, `Dataset`,
   `TrainingJob`, `Alert`, `Incident`, `RobotTask`, `RobotCommand`,
   `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`,
-  `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`, `Zone`, `Conversation`.
-  Models not in this list (e.g. `ComplianceLog`, `ApiToken`) still show global counts.
+  `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`, `Zone`,
+  `Conversation`, `ApiToken`.
+  Models not in this list (e.g. `ComplianceLog`) still show global counts.
+  Note: `ApiToken` auth lookup (`authenticateServiceToken`) runs before tenant
+  context is set, so the extension passes through — this is by design.
 - **No tenant switcher.** The current user is pinned to one tenant for the session. A
   super-admin impersonation flow is a future wave, not in scope today.
 - **No edit flow.** You can create and delete tenants but not rename or re-brand them.

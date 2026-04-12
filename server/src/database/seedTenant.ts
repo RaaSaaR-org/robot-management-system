@@ -14,6 +14,7 @@
  * Wave 3b scope: ProcessDefinition, ProcessInstance, ApprovalRequest, Event.
  * Wave 3c scope: ModelVersion, Deployment, SimulationJob, SyntheticJob.
  * Wave 3d scope: Zone, Conversation.
+ * Wave 3e scope: ApiToken.
  *
  * @feature multi-tenancy
  */
@@ -69,6 +70,8 @@ export async function seedDefaultTenant(): Promise<void> {
     // Wave 3d
     backfill(prisma.zone),
     backfill(prisma.conversation),
+    // Wave 3e
+    backfill(prisma.apiToken),
   ]);
 
   const labels = [
@@ -77,6 +80,7 @@ export async function seedDefaultTenant(): Promise<void> {
     'processDefinitions', 'processInstances', 'approvalRequests', 'events',
     'modelVersions', 'deployments', 'simulationJobs', 'syntheticJobs',
     'zones', 'conversations',
+    'apiTokens',
   ];
 
   const total = results.reduce((sum, r) => sum + r.count, 0);

@@ -68,6 +68,7 @@ function buildTestPrisma(): PrismaClient {
     'SyntheticJob',
     'Zone',
     'Conversation',
+    'ApiToken',
   ]);
 
   const base = new PrismaClient({
@@ -243,6 +244,8 @@ beforeEach(async () => {
     datasources: { db: { url: `file:${dbPath}` } },
     log: [],
   });
+  // Wave 3e
+  await raw.apiToken.deleteMany();
   // Wave 3d
   await raw.conversation.deleteMany();
   await raw.zone.deleteMany();
@@ -922,6 +925,63 @@ describe('tenant-isolation extension — Conversation (Wave 3d)', () => {
     await seedConversationRaw('c-b1', 'Chat B', TENANT_B);
     const found = await prisma.conversation.findUnique({ where: { id: 'c-b1' } });
     expect(found).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3e model tests (ApiToken)
+// ---------------------------------------------------------------------------
+
+async function seedUserRawForToken(id: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.user.upsert({
+    where: { id },
+    create: { id, email: `${id}@test.com`, name: id, passwordHash: 'x', tenantId },
+    update: {},
+  });
+  await raw.$disconnect();
+}
+
+async function seedApiTokenRaw(id: string, userId: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.apiToken.create({
+    data: { id, userId, name: `token-${id}`, prefix: id.slice(0, 12).padEnd(12, '0'), hash: 'h'.repeat(64), createdById: userId, tenantId },
+  });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — ApiToken (Wave 3e)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedUserRawForToken('u-tok-a', TENANT_A);
+    await seedUserRawForToken('u-tok-b', TENANT_B);
+    await seedApiTokenRaw('tok-a1', 'u-tok-a', TENANT_A);
+    await seedApiTokenRaw('tok-b1', 'u-tok-b', TENANT_B);
+
+    const tokens = await prisma.apiToken.findMany();
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0].id).toBe('tok-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    await seedUserRawForToken('u-tok-a', TENANT_A);
+    const token = await prisma.apiToken.create({
+      data: { userId: 'u-tok-a', name: 'new-token', prefix: 'ndsa_newtest0', hash: 'a'.repeat(64), createdById: 'u-tok-a' },
+    });
+    expect(token.tenantId).toBe(TENANT_A);
+  });
+
+  it('auth lookup works without tenant context (passthrough)', async () => {
+    await seedUserRawForToken('u-tok-a', TENANT_A);
+    await seedUserRawForToken('u-tok-b', TENANT_B);
+    await seedApiTokenRaw('tok-a1', 'u-tok-a', TENANT_A);
+    await seedApiTokenRaw('tok-b1', 'u-tok-b', TENANT_B);
+
+    // Simulate auth middleware: no tenant context set
+    currentTenantId = undefined;
+    const allTokens = await prisma.apiToken.findMany({ where: { prefix: 'tok-b1000000' } });
+    // Should find the token regardless of tenant (passthrough when no context)
+    expect(allTokens).toHaveLength(1);
+    expect(allTokens[0].id).toBe('tok-b1');
   });
 });
 

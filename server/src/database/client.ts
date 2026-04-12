@@ -53,6 +53,8 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   // Wave 3d
   'Zone',
   'Conversation',
+  // Wave 3e (TASK-165 service accounts)
+  'ApiToken',
 ]);
 
 const globalForPrisma = globalThis as unknown as {
