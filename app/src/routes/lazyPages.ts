@@ -335,3 +335,10 @@ export const LazyAccountPage = lazy(() =>
 export const LazyOrganizationsPage = lazy(() =>
   import('@/features/organizations').then((m) => ({ default: m.OrganizationsPage }))
 );
+
+/**
+ * Team page - Tenant-scoped team management (TASK-163)
+ */
+export const LazyTeamPage = lazy(() =>
+  import('@/features/team').then((m) => ({ default: m.TeamPage }))
+);

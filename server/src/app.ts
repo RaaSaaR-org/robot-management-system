@@ -71,6 +71,7 @@ import { simulationRoutes } from './routes/simulation.routes.js';
 import { vlaSessionRoutes } from './routes/vla-session.routes.js';
 import { configRoutes } from './routes/config.routes.js';
 import { tenantsRoutes } from './routes/tenants.routes.js';
+import { teamRoutes } from './routes/team.routes.js';
 
 // Import middleware
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -296,6 +297,7 @@ export function createApp(): Express {
 
   // Tenant (Organization) management routes (protected) - TASK-155 Wave 2
   app.use('/api/tenants', authMiddleware, tenantsRoutes);
+  app.use('/api/team', authMiddleware, teamRoutes);
 
   // Uncertainty routes (protected) - TASK-073 Ensemble uncertainty for active learning
   app.use('/api/uncertainty', authMiddleware, uncertaintyRoutes);
