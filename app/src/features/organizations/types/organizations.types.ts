@@ -26,10 +26,22 @@ export interface Organization {
   counts: OrganizationCounts;
 }
 
+export interface TenantSettings {
+  brandColor?: string;
+  compactMode?: boolean;
+}
+
 export interface CreateOrganizationInput {
   name: string;
   /** Optional — server will slugify `name` if omitted. */
   slug?: string;
   logoUrl?: string | null;
   plan?: string | null;
+}
+
+export interface UpdateOrganizationInput {
+  name?: string;
+  logoUrl?: string | null;
+  plan?: string | null;
+  settings?: TenantSettings;
 }

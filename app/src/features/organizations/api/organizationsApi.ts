@@ -8,6 +8,7 @@ import { apiClient } from '@/api/client';
 import type {
   Organization,
   CreateOrganizationInput,
+  UpdateOrganizationInput,
 } from '../types/organizations.types';
 
 // Note: apiClient already has /api prefix in baseURL
@@ -16,6 +17,7 @@ const ENDPOINTS = {
   current: '/tenants/current',
   create: '/tenants',
   onboard: '/tenants/onboard',
+  update: (id: string) => `/tenants/${id}`,
   delete: (id: string) => `/tenants/${id}`,
 } as const;
 
@@ -47,6 +49,11 @@ export const organizationsApi = {
 
   async create(input: CreateOrganizationInput): Promise<Organization> {
     const response = await apiClient.post<Organization>(ENDPOINTS.create, input);
+    return response.data;
+  },
+
+  async update(id: string, input: UpdateOrganizationInput): Promise<Organization> {
+    const response = await apiClient.patch<Organization>(ENDPOINTS.update(id), input);
     return response.data;
   },
 
