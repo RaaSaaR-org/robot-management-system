@@ -5,6 +5,7 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { authService, type TokenPayload } from '../services/AuthService.js';
+import { authenticateServiceToken } from '../services/ServiceAccountService.js';
 import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js';
 import { tenantStore } from './tenantContext.js';
 
@@ -33,6 +34,10 @@ export interface AuthUser {
    * Read by `withTenantContext` middleware.
    */
   tenantId: string | null;
+  /** TASK-165: 'human' for JWT auth, 'service' for API token auth. */
+  authType?: 'human' | 'service';
+  /** TASK-165: set only for service-account token auth. */
+  tokenId?: string;
 }
 
 /**
@@ -122,11 +127,11 @@ function extractBearerToken(req: Request): string | null {
  * When AUTH_DISABLED=true, injects mock user and allows all requests.
  * Otherwise, validates JWT from Authorization header.
  */
-export function authMiddleware(
+export async function authMiddleware(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
-): void {
+): Promise<void> {
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
@@ -143,7 +148,29 @@ export function authMiddleware(
     return;
   }
 
-  // Verify token
+  // Service-account token path (TASK-165)
+  if (token.startsWith('ndsa_')) {
+    const result = await authenticateServiceToken(token);
+    if (!result) {
+      res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired API token',
+      });
+      return;
+    }
+    req.user = {
+      id: result.userId,
+      email: result.email,
+      name: result.name,
+      role: result.role as UserRole,
+      tenantId: result.tenantId,
+      authType: 'service',
+      tokenId: result.tokenId,
+    };
+    return continueWithTenant(req, req.user, next);
+  }
+
+  // JWT path
   const payload = authService.verifyAccessToken(token);
   if (!payload) {
     res.status(401).json({
@@ -160,6 +187,7 @@ export function authMiddleware(
     name: payload.name,
     role: payload.role as AuthUser['role'],
     tenantId: payload.tenantId ?? null,
+    authType: 'human',
   };
 
   continueWithTenant(req, req.user, next);
@@ -171,11 +199,11 @@ export function authMiddleware(
  * Attaches user if valid token is present, but allows request without token.
  * Useful for endpoints that behave differently for authenticated users.
  */
-export function optionalAuthMiddleware(
+export async function optionalAuthMiddleware(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
-): void {
+): Promise<void> {
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
@@ -188,7 +216,24 @@ export function optionalAuthMiddleware(
     return continueWithTenant(req, undefined, next);
   }
 
-  // Verify token
+  // Service-account token path (TASK-165)
+  if (token.startsWith('ndsa_')) {
+    const result = await authenticateServiceToken(token);
+    if (result) {
+      req.user = {
+        id: result.userId,
+        email: result.email,
+        name: result.name,
+        role: result.role as UserRole,
+        tenantId: result.tenantId,
+        authType: 'service',
+        tokenId: result.tokenId,
+      };
+    }
+    return continueWithTenant(req, req.user, next);
+  }
+
+  // JWT path
   const payload = authService.verifyAccessToken(token);
   if (payload) {
     req.user = {
@@ -197,6 +242,7 @@ export function optionalAuthMiddleware(
       name: payload.name,
       role: payload.role as UserRole,
       tenantId: payload.tenantId ?? null,
+      authType: 'human',
     };
   }
 

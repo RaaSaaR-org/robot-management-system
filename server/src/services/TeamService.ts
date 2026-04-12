@@ -200,7 +200,7 @@ export class TeamService {
    */
   async list(tenantId: string): Promise<TeamMember[]> {
     const rows = await prisma.user.findMany({
-      where: { tenantId },
+      where: { tenantId, kind: 'human' },
       orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
     });
     return rows.map(toDto);

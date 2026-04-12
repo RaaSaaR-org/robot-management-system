@@ -17,6 +17,10 @@ interface CredentialsHandoffModalProps {
   member: TeamMember | null;
   tempPassword: string | null;
   onClose: () => void;
+  /** Override the credential label (default: "Temporary password"). */
+  credentialLabel?: string;
+  /** Override the copy button text (default: "Copy email + password"). */
+  copyLabel?: string;
 }
 
 export function CredentialsHandoffModal({
@@ -24,6 +28,8 @@ export function CredentialsHandoffModal({
   member,
   tempPassword,
   onClose,
+  credentialLabel = 'Temporary password',
+  copyLabel = 'Copy email + password',
 }: CredentialsHandoffModalProps) {
   const [copied, setCopied] = useState(false);
 
@@ -50,7 +56,7 @@ export function CredentialsHandoffModal({
       footer={
         <div className="flex items-center justify-between gap-2 w-full">
           <Button variant="ghost" size="sm" onClick={handleCopyAll}>
-            {copied ? 'Copied!' : 'Copy email + password'}
+            {copied ? 'Copied!' : copyLabel}
           </Button>
           <Button variant="primary" size="sm" onClick={onClose}>
             Done
@@ -75,7 +81,7 @@ export function CredentialsHandoffModal({
           </div>
           <div>
             <div className="text-xs uppercase tracking-wider text-theme-tertiary mb-1">
-              Temporary password
+              {credentialLabel}
             </div>
             <div className="font-mono text-sm text-theme-primary select-all break-all">
               {tempPassword}

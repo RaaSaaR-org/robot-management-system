@@ -51,6 +51,8 @@ export const logger = pino({
       'body.tempPassword',
       'body.token',
       'body.refreshToken',
+      'body.plaintext',
+      'plaintext',
     ],
     censor: '[REDACTED]',
   },
