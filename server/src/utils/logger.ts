@@ -37,12 +37,18 @@ export const logger = pino({
   redact: {
     paths: [
       'password',
+      'newPassword',
+      'currentPassword',
+      'tempPassword',
       'token',
       'authorization',
       'jwt',
       'req.headers.authorization',
       'req.headers.cookie',
       'body.password',
+      'body.newPassword',
+      'body.currentPassword',
+      'body.tempPassword',
       'body.token',
       'body.refreshToken',
     ],
