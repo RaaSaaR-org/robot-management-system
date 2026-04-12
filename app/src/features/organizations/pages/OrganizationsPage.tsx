@@ -15,6 +15,8 @@ import { OrganizationCard } from '../components/OrganizationCard';
 import { OrganizationsEmptyState } from '../components/OrganizationsEmptyState';
 import { CreateOrganizationModal } from '../components/CreateOrganizationModal';
 import { OnboardingWizard } from '../components/OnboardingWizard';
+import { EditOrganizationModal } from '../components/EditOrganizationModal';
+import type { Organization } from '../types/organizations.types';
 
 const PlusIcon = () => (
   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -36,6 +38,7 @@ export function OrganizationsPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [editOrg, setEditOrg] = useState<Organization | null>(null);
   const [modalPrefill, setModalPrefill] = useState<{ name: string; slug: string } | undefined>();
   const [toast, setToast] = useState<string | null>(null);
 
@@ -159,6 +162,7 @@ export function OrganizationsPage() {
               key={org.id}
               organization={org}
               onDelete={handleDelete}
+              onEdit={setEditOrg}
             />
           ))}
           <OrganizationsEmptyState
@@ -173,6 +177,7 @@ export function OrganizationsPage() {
               key={org.id}
               organization={org}
               onDelete={handleDelete}
+              onEdit={setEditOrg}
             />
           ))}
         </div>
@@ -198,6 +203,14 @@ export function OrganizationsPage() {
         onClose={() => setModalOpen(false)}
         prefill={modalPrefill}
         onCreated={handleCreated}
+      />
+
+      {/* Edit modal (branding) */}
+      <EditOrganizationModal
+        organization={editOrg}
+        isOpen={!!editOrg}
+        onClose={() => setEditOrg(null)}
+        onSaved={(name) => setToast(`${name} updated`)}
       />
     </div>
   );
