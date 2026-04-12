@@ -9,8 +9,8 @@
  * `getTenantId()` returns undefined and queries pass through untouched —
  * which is exactly what we need for seeding and backfilling.
  *
- * Wave 1 scope: User, Robot, Dataset, TrainingJob. Follow-up waves add
- * more models to the backfill loop.
+ * Wave 1 scope: User, Robot, Dataset, TrainingJob.
+ * Wave 3a scope: Alert, Incident, RobotTask, RobotCommand.
  *
  * @feature multi-tenancy
  */
@@ -37,9 +37,9 @@ export async function seedDefaultTenant(): Promise<void> {
     update: {},
   });
 
-  // Backfill each pilot model. `updateMany` with `where: { tenantId: null }`
+  // Backfill each scoped model. `updateMany` with `where: { tenantId: null }`
   // is idempotent — subsequent boots see zero rows to update.
-  const [users, robots, datasets, trainingJobs] = await Promise.all([
+  const [users, robots, datasets, trainingJobs, alerts, incidents, robotTasks, robotCommands] = await Promise.all([
     prisma.user.updateMany({
       where: { tenantId: null },
       data: { tenantId: DEFAULT_TENANT_ID },
@@ -56,10 +56,27 @@ export async function seedDefaultTenant(): Promise<void> {
       where: { tenantId: null },
       data: { tenantId: DEFAULT_TENANT_ID },
     }),
+    prisma.alert.updateMany({
+      where: { tenantId: null },
+      data: { tenantId: DEFAULT_TENANT_ID },
+    }),
+    prisma.incident.updateMany({
+      where: { tenantId: null },
+      data: { tenantId: DEFAULT_TENANT_ID },
+    }),
+    prisma.robotTask.updateMany({
+      where: { tenantId: null },
+      data: { tenantId: DEFAULT_TENANT_ID },
+    }),
+    prisma.robotCommand.updateMany({
+      where: { tenantId: null },
+      data: { tenantId: DEFAULT_TENANT_ID },
+    }),
   ]);
 
   const total =
-    users.count + robots.count + datasets.count + trainingJobs.count;
+    users.count + robots.count + datasets.count + trainingJobs.count +
+    alerts.count + incidents.count + robotTasks.count + robotCommands.count;
 
   if (total > 0) {
     logger.info(
@@ -68,6 +85,10 @@ export async function seedDefaultTenant(): Promise<void> {
         robots: robots.count,
         datasets: datasets.count,
         trainingJobs: trainingJobs.count,
+        alerts: alerts.count,
+        incidents: incidents.count,
+        robotTasks: robotTasks.count,
+        robotCommands: robotCommands.count,
       },
       `[MULTI_TENANCY] backfilled ${total} row(s) to DEFAULT tenant`
     );

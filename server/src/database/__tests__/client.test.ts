@@ -54,6 +54,10 @@ function buildTestPrisma(): PrismaClient {
     'Robot',
     'Dataset',
     'TrainingJob',
+    'Alert',
+    'Incident',
+    'RobotTask',
+    'RobotCommand',
   ]);
 
   const base = new PrismaClient({
@@ -229,6 +233,10 @@ beforeEach(async () => {
     datasources: { db: { url: `file:${dbPath}` } },
     log: [],
   });
+  await raw.robotCommand.deleteMany();
+  await raw.robotTask.deleteMany();
+  await raw.incident.deleteMany();
+  await raw.alert.deleteMany();
   await raw.trainingJob.deleteMany();
   await raw.dataset.deleteMany();
   await raw.robot.deleteMany();
@@ -512,26 +520,177 @@ describe('tenant-isolation extension — User', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Non-scoped model (Alert) — passthrough
+// Wave 3a model tests (Alert, Incident, RobotTask, RobotCommand)
 // ---------------------------------------------------------------------------
 
-describe('tenant-isolation extension — non-scoped model (Alert)', () => {
-  it('passes through without tenantId injection', async () => {
-    // Alert is not in TENANT_SCOPED_MODELS, so the extension should be a no-op.
+async function seedAlertRaw(
+  id: string,
+  title: string,
+  tenantId: string
+): Promise<void> {
+  const raw = new PrismaClient({
+    datasources: { db: { url: `file:${dbPath}` } },
+    log: [],
+  });
+  await raw.alert.create({
+    data: { id, title, severity: 'warning', source: 'system', message: 'test', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+async function seedIncidentRaw(
+  id: string,
+  title: string,
+  tenantId: string
+): Promise<void> {
+  const raw = new PrismaClient({
+    datasources: { db: { url: `file:${dbPath}` } },
+    log: [],
+  });
+  await raw.incident.create({
+    data: {
+      id,
+      incidentNumber: `INC-${id}`,
+      type: 'safety',
+      severity: 'medium',
+      title,
+      description: 'test incident',
+      detectedAt: new Date(),
+      tenantId,
+    },
+  });
+  await raw.$disconnect();
+}
+
+async function seedRobotTaskRaw(
+  id: string,
+  instruction: string,
+  tenantId: string
+): Promise<void> {
+  const raw = new PrismaClient({
+    datasources: { db: { url: `file:${dbPath}` } },
+    log: [],
+  });
+  await raw.robotTask.create({
+    data: { id, instruction, actionType: 'navigate', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+async function seedRobotCommandRaw(
+  id: string,
+  tenantId: string
+): Promise<void> {
+  const raw = new PrismaClient({
+    datasources: { db: { url: `file:${dbPath}` } },
+    log: [],
+  });
+  // RobotCommand requires a robot FK — seed a robot first
+  await raw.robot.upsert({
+    where: { id: `robot-for-${tenantId}` },
+    create: { id: `robot-for-${tenantId}`, name: 'CmdBot', model: 'X', tenantId },
+    update: {},
+  });
+  await raw.robotCommand.create({
+    data: { id, robotId: `robot-for-${tenantId}`, type: 'stop', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — Alert (Wave 3a)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedAlertRaw('al-a1', 'Alert A', TENANT_A);
+    await seedAlertRaw('al-b1', 'Alert B', TENANT_B);
+
+    const alerts = await prisma.alert.findMany();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].id).toBe('al-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
     const alert = await prisma.alert.create({
+      data: { title: 'New', severity: 'info', source: 'system', message: 'hi' },
+    });
+    expect(alert.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedAlertRaw('al-b1', 'Alert B', TENANT_B);
+    const found = await prisma.alert.findUnique({ where: { id: 'al-b1' } });
+    expect(found).toBeNull();
+  });
+});
+
+describe('tenant-isolation extension — Incident (Wave 3a)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedIncidentRaw('inc-a1', 'Inc A', TENANT_A);
+    await seedIncidentRaw('inc-b1', 'Inc B', TENANT_B);
+
+    const incidents = await prisma.incident.findMany();
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0].id).toBe('inc-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const incident = await prisma.incident.create({
       data: {
-        title: 'Test',
-        severity: 'warning',
-        source: 'system',
-        message: 'Test alert',
+        incidentNumber: 'INC-NEW-1',
+        type: 'security',
+        severity: 'low',
+        title: 'New',
+        description: 'test',
+        detectedAt: new Date(),
       },
     });
-    expect(alert.id).toBeDefined();
+    expect(incident.tenantId).toBe(TENANT_A);
+  });
+});
 
-    // Switching tenant should NOT filter alerts
-    currentTenantId = TENANT_B;
-    const alerts = await prisma.alert.findMany();
-    expect(alerts.length).toBeGreaterThanOrEqual(1);
+describe('tenant-isolation extension — RobotTask (Wave 3a)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedRobotTaskRaw('rt-a1', 'Task A', TENANT_A);
+    await seedRobotTaskRaw('rt-b1', 'Task B', TENANT_B);
+
+    const tasks = await prisma.robotTask.findMany();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].id).toBe('rt-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const task = await prisma.robotTask.create({
+      data: { instruction: 'Go', actionType: 'navigate' },
+    });
+    expect(task.tenantId).toBe(TENANT_A);
+  });
+});
+
+describe('tenant-isolation extension — RobotCommand (Wave 3a)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedRobotCommandRaw('rc-a1', TENANT_A);
+    await seedRobotCommandRaw('rc-b1', TENANT_B);
+
+    const commands = await prisma.robotCommand.findMany();
+    expect(commands).toHaveLength(1);
+    expect(commands[0].id).toBe('rc-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    // Need a robot in tenant A for the FK
+    const raw = new PrismaClient({
+      datasources: { db: { url: `file:${dbPath}` } },
+      log: [],
+    });
+    await raw.robot.upsert({
+      where: { id: 'robot-cmd-test' },
+      create: { id: 'robot-cmd-test', name: 'CmdBot', model: 'X', tenantId: TENANT_A },
+      update: {},
+    });
+    await raw.$disconnect();
+
+    const cmd = await prisma.robotCommand.create({
+      data: { robotId: 'robot-cmd-test', type: 'stop' },
+    });
+    expect(cmd.tenantId).toBe(TENANT_A);
   });
 });
 

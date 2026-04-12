@@ -126,8 +126,12 @@ model RobotCommand {
 
   robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([robotId, status])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model RobotEndpoints {
@@ -254,11 +258,15 @@ model Alert {
   // Optional relation to robot if source is robot
   robot Robot? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([severity])
   @@index([source])
   @@index([sourceId])
   @@index([acknowledged])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 // ============================================================================
@@ -564,12 +572,16 @@ model RobotTask {
   processInstance ProcessInstance? @relation(fields: [processInstanceId], references: [id], onDelete: SetNull)
   stepInstance    StepInstance?    @relation(fields: [stepInstanceId], references: [id], onDelete: SetNull)
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([robotId])
   @@index([processInstanceId])
   @@index([status])
   @@index([priority])
   @@index([source])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 // ============================================================================
@@ -923,11 +935,15 @@ model Incident {
   robot         Robot?                 @relation(fields: [robotId], references: [id], onDelete: SetNull)
   notifications IncidentNotification[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([type])
   @@index([severity])
   @@index([status])
   @@index([detectedAt])
   @@index([robotId])
+  @@index([tenantId, createdAt])
 }
 
 model IncidentNotification {
@@ -2113,6 +2129,12 @@ model Tenant {
   robots       Robot[]
   datasets     Dataset[]
   trainingJobs TrainingJob[]
+
+  // Relations (Wave 3a — operations visibility)
+  alerts        Alert[]
+  incidents     Incident[]
+  robotTasks    RobotTask[]
+  robotCommands RobotCommand[]
 
   @@index([slug])
 }

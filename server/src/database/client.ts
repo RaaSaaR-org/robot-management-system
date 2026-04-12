@@ -14,6 +14,7 @@
  * zero cost.
  *
  * Wave 1 allowlist: User, Robot, Dataset, TrainingJob (TASK-155).
+ * Wave 3a: Alert, Incident, RobotTask, RobotCommand (TASK-158).
  * Follow-up waves extend `TENANT_SCOPED_MODELS` and add the FKs + column.
  */
 
@@ -31,6 +32,10 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   'Robot',
   'Dataset',
   'TrainingJob',
+  'Alert',
+  'Incident',
+  'RobotTask',
+  'RobotCommand',
 ]);
 
 const globalForPrisma = globalThis as unknown as {
