@@ -15,6 +15,7 @@
  * @feature team
  */
 
+import { randomInt } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../database/index.js';
@@ -119,13 +120,48 @@ function toDto(row: {
 }
 
 // ============================================================================
+// LAST-OWNER GUARD (transaction-aware)
+// ============================================================================
+
+/**
+ * Refuse to leave a tenant with zero active owners. Runs inside the
+ * caller's Prisma transaction so that the `count` and the subsequent
+ * `update` are atomic — otherwise two concurrent requests could each
+ * see `count > 0` (the target + the other caller's target) and both
+ * demote/deactivate, ending up with zero owners.
+ */
+async function assertNotLastOwnerTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  targetUserId: string
+): Promise<void> {
+  const activeOwners = await tx.user.count({
+    where: {
+      tenantId,
+      role: 'owner',
+      isActive: true,
+      NOT: { id: targetUserId },
+    },
+  });
+  if (activeOwners === 0) {
+    throw new LastOwnerError(
+      'Cannot leave this tenant without an active owner. Promote another member to owner first.'
+    );
+  }
+}
+
+// ============================================================================
 // PASSWORD GENERATION
 // ============================================================================
 
 /**
- * Generate a 12-character, reasonably-readable temp password.
- * Excludes ambiguous glyphs (0/O, 1/l/I) and guarantees at least one
- * lowercase, uppercase, digit, and symbol.
+ * Generate a 12-character, reasonably-readable temp password using a
+ * CSPRNG (`crypto.randomInt`). Excludes ambiguous glyphs (0/O, 1/l/I)
+ * and guarantees at least one lowercase, uppercase, digit, and symbol.
+ *
+ * `Math.random` is NOT cryptographically secure — a compromised client
+ * could brute-force the seeded sequence. `crypto.randomInt` is uniform
+ * and seeded from the OS entropy pool.
  */
 export function generateTempPassword(): string {
   const lower = 'abcdefghjkmnpqrstuvwxyz'; // no i, l, o
@@ -135,16 +171,15 @@ export function generateTempPassword(): string {
   const all = lower + upper + digits + symbols;
 
   function pick(set: string): string {
-    const idx = Math.floor(Math.random() * set.length);
-    return set[idx];
+    return set[randomInt(0, set.length)];
   }
 
   const chars = [pick(lower), pick(upper), pick(digits), pick(symbols)];
   while (chars.length < 12) chars.push(pick(all));
 
-  // Fisher-Yates shuffle
+  // Fisher-Yates shuffle with crypto RNG
   for (let i = chars.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randomInt(0, i + 1);
     [chars[i], chars[j]] = [chars[j], chars[i]];
   }
   return chars.join('');
@@ -232,20 +267,24 @@ export class TeamService {
       throw new InvalidRoleError(params.newRole);
     }
 
-    const existing = await prisma.user.findFirst({
-      where: { id: params.userId, tenantId: params.tenantId },
-    });
-    if (!existing) throw new TeamMemberNotFoundError();
+    // Wrap lookup + last-owner guard + update in a single transaction
+    // so two concurrent requests can't both see a valid count of
+    // active owners and both demote the last one.
+    const { before, updated } = await prisma.$transaction(async (tx) => {
+      const existing = await tx.user.findFirst({
+        where: { id: params.userId, tenantId: params.tenantId },
+      });
+      if (!existing) throw new TeamMemberNotFoundError();
 
-    // Last-owner guard: if the target is currently the sole active owner
-    // and the new role is not 'owner', refuse.
-    if (existing.role === 'owner' && params.newRole !== 'owner') {
-      await this.assertNotLastOwner(params.tenantId, params.userId);
-    }
+      if (existing.role === 'owner' && params.newRole !== 'owner') {
+        await assertNotLastOwnerTx(tx, params.tenantId, params.userId);
+      }
 
-    const updated = await prisma.user.update({
-      where: { id: params.userId },
-      data: { role: params.newRole },
+      const updated = await tx.user.update({
+        where: { id: params.userId },
+        data: { role: params.newRole },
+      });
+      return { before: existing.role, updated };
     });
 
     await this.auditLog({
@@ -255,7 +294,7 @@ export class TeamService {
       result: 'allowed',
       payload: {
         tenantId: params.tenantId,
-        before: existing.role,
+        before,
         after: params.newRole,
       },
     });
@@ -268,18 +307,21 @@ export class TeamService {
     userId: string;
     actorId: string;
   }): Promise<TeamMember> {
-    const existing = await prisma.user.findFirst({
-      where: { id: params.userId, tenantId: params.tenantId },
-    });
-    if (!existing) throw new TeamMemberNotFoundError();
+    const { existing, updated } = await prisma.$transaction(async (tx) => {
+      const existing = await tx.user.findFirst({
+        where: { id: params.userId, tenantId: params.tenantId },
+      });
+      if (!existing) throw new TeamMemberNotFoundError();
 
-    if (existing.role === 'owner') {
-      await this.assertNotLastOwner(params.tenantId, params.userId);
-    }
+      if (existing.role === 'owner') {
+        await assertNotLastOwnerTx(tx, params.tenantId, params.userId);
+      }
 
-    const updated = await prisma.user.update({
-      where: { id: params.userId },
-      data: { isActive: false },
+      const updated = await tx.user.update({
+        where: { id: params.userId },
+        data: { isActive: false },
+      });
+      return { existing, updated };
     });
 
     await this.auditLog({
@@ -322,25 +364,6 @@ export class TeamService {
   // ==========================================================================
   // INTERNAL
   // ==========================================================================
-
-  private async assertNotLastOwner(
-    tenantId: string,
-    targetUserId: string
-  ): Promise<void> {
-    const activeOwners = await prisma.user.count({
-      where: {
-        tenantId,
-        role: 'owner',
-        isActive: true,
-        NOT: { id: targetUserId },
-      },
-    });
-    if (activeOwners === 0) {
-      throw new LastOwnerError(
-        'Cannot leave this tenant without an active owner. Promote another member to owner first.'
-      );
-    }
-  }
 
   private async auditLog(params: {
     actorId: string;

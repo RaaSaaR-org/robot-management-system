@@ -8,7 +8,7 @@
 import { useEffect, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
-import { NAV_ITEMS } from './Sidebar';
+import { useVisibleNavItems } from './Sidebar';
 
 // ============================================================================
 // TYPES
@@ -36,6 +36,7 @@ export interface MobileNavProps {
  */
 export function MobileNav({ isOpen, onClose }: MobileNavProps) {
   const location = useLocation();
+  const navItems = useVisibleNavItems();
 
   // Close on escape key
   const handleKeyDown = useCallback(
@@ -117,7 +118,7 @@ export function MobileNav({ isOpen, onClose }: MobileNavProps) {
 
         {/* Navigation items */}
         <nav className="p-4 space-y-1">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}

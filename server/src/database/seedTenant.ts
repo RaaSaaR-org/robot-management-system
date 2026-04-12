@@ -31,7 +31,7 @@ export async function seedDefaultTenant(): Promise<void> {
     create: {
       id: DEFAULT_TENANT_ID,
       slug: DEFAULT_TENANT_ID,
-      name: 'Default Tenant',
+      name: 'Default Organization',
       settings: '{}',
     },
     update: {},

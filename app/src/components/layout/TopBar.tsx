@@ -6,11 +6,11 @@
  */
 
 import { Logo } from '@/components/common/Logo';
-import { useAuth, LogoutButton } from '@/features/auth';
 import { useThemeStore } from '@/features/settings';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { MenuButton } from '@/shared/components/ui/MenuButton';
-import { TenantBadge } from './TenantBadge';
+import { OrganizationSwitcher } from './OrganizationSwitcher';
+import { UserMenu } from './UserMenu';
 
 // ============================================================================
 // ICONS
@@ -25,12 +25,6 @@ const SunIcon = () => (
 const MoonIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-  </svg>
-);
-
-const LogoutIcon = () => (
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
   </svg>
 );
 
@@ -50,7 +44,6 @@ const CollapseIcon = ({ collapsed }: { collapsed: boolean }) => (
 // ============================================================================
 
 export function TopBar() {
-  const { user } = useAuth();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
 
@@ -96,8 +89,11 @@ export function TopBar() {
           <Logo size="sm" linkTo="/dashboard" />
         </div>
 
-        {/* Right section: Theme toggle + User menu */}
-        <div className="flex items-center gap-1">
+        {/* Right section: Organization switcher + theme + user menu */}
+        <div className="flex items-center gap-2">
+          {/* Organization switcher — only rendered when multi-tenancy is on */}
+          <OrganizationSwitcher />
+
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
@@ -108,38 +104,8 @@ export function TopBar() {
             {isDark ? <SunIcon /> : <MoonIcon />}
           </button>
 
-          <div className="flex items-center gap-3 ml-1">
-            {/* Avatar */}
-            <div className="min-w-[44px] min-h-[44px] flex items-center justify-center">
-              <div className="w-8 h-8 rounded-full bg-cobalt/20 flex items-center justify-center">
-                <span className="text-cobalt font-medium text-sm">
-                  {user?.name?.charAt(0).toUpperCase() || 'U'}
-                </span>
-              </div>
-            </div>
-            {/* Name - hidden on small screens */}
-            <span className="text-theme-primary font-medium hidden sm:block">
-              {user?.name || 'User'}
-            </span>
-          </div>
-
-          {/* Tenant badge — only rendered when multi-tenancy is enabled */}
-          <TenantBadge />
-
-          <LogoutButton
-            variant="ghost"
-            size="sm"
-            onLogout={() => {
-              if (import.meta.env.VITE_DEMO_MODE === 'true') {
-                window.location.href = import.meta.env.BASE_URL || '/';
-              } else {
-                window.location.href = '/';
-              }
-            }}
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center"
-          >
-            <LogoutIcon />
-          </LogoutButton>
+          {/* User menu — avatar, account link, sign out */}
+          <UserMenu />
         </div>
       </div>
     </header>
