@@ -58,6 +58,16 @@ function buildTestPrisma(): PrismaClient {
     'Incident',
     'RobotTask',
     'RobotCommand',
+    'ProcessDefinition',
+    'ProcessInstance',
+    'ApprovalRequest',
+    'Event',
+    'ModelVersion',
+    'Deployment',
+    'SimulationJob',
+    'SyntheticJob',
+    'Zone',
+    'Conversation',
   ]);
 
   const base = new PrismaClient({
@@ -233,10 +243,25 @@ beforeEach(async () => {
     datasources: { db: { url: `file:${dbPath}` } },
     log: [],
   });
+  // Wave 3d
+  await raw.conversation.deleteMany();
+  await raw.zone.deleteMany();
+  // Wave 3c
+  await raw.deployment.deleteMany();
+  await raw.modelVersion.deleteMany();
+  await raw.simulationJob.deleteMany();
+  await raw.syntheticJob.deleteMany();
+  // Wave 3b
+  await raw.approvalRequest.deleteMany();
+  await raw.processInstance.deleteMany();
+  await raw.processDefinition.deleteMany();
+  await raw.event.deleteMany();
+  // Wave 3a
   await raw.robotCommand.deleteMany();
   await raw.robotTask.deleteMany();
   await raw.incident.deleteMany();
   await raw.alert.deleteMany();
+  // Wave 1
   await raw.trainingJob.deleteMany();
   await raw.dataset.deleteMany();
   await raw.robot.deleteMany();
@@ -691,6 +716,212 @@ describe('tenant-isolation extension — RobotCommand (Wave 3a)', () => {
       data: { robotId: 'robot-cmd-test', type: 'stop' },
     });
     expect(cmd.tenantId).toBe(TENANT_A);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3b model tests (ProcessDefinition, ProcessInstance, ApprovalRequest, Event)
+// ---------------------------------------------------------------------------
+
+async function seedProcessDefRaw(id: string, name: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.processDefinition.create({ data: { id, name, createdBy: 'test', tenantId } });
+  await raw.$disconnect();
+}
+
+async function seedEventRaw(id: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.event.create({ data: { id, actor: 'system', content: '{}', tenantId } });
+  await raw.$disconnect();
+}
+
+async function seedApprovalRequestRaw(id: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.approvalRequest.create({
+    data: {
+      id,
+      requestNumber: `APR-${id}`,
+      entityType: 'software_update',
+      entityId: 'e1',
+      approvalType: 'single_approval',
+      status: 'pending',
+      slaHours: 24,
+      slaDeadline: new Date(Date.now() + 86400000),
+      requestedBy: 'test',
+      requestReason: 'test',
+      tenantId,
+    },
+  });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — ProcessDefinition (Wave 3b)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedProcessDefRaw('pd-a1', 'Proc A', TENANT_A);
+    await seedProcessDefRaw('pd-b1', 'Proc B', TENANT_B);
+    const results = await prisma.processDefinition.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('pd-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const pd = await prisma.processDefinition.create({ data: { name: 'New', createdBy: 'test' } });
+    expect(pd.tenantId).toBe(TENANT_A);
+  });
+});
+
+describe('tenant-isolation extension — ApprovalRequest (Wave 3b)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedApprovalRequestRaw('ar-a1', TENANT_A);
+    await seedApprovalRequestRaw('ar-b1', TENANT_B);
+    const results = await prisma.approvalRequest.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('ar-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const ar = await prisma.approvalRequest.create({
+      data: {
+        requestNumber: 'APR-NEW-1',
+        entityType: 'software_update',
+        entityId: 'e1',
+        approvalType: 'single_approval',
+        slaHours: 24,
+        slaDeadline: new Date(Date.now() + 86400000),
+        requestedBy: 'test',
+        requestReason: 'test',
+      },
+    });
+    expect(ar.tenantId).toBe(TENANT_A);
+  });
+});
+
+describe('tenant-isolation extension — Event (Wave 3b)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedEventRaw('ev-a1', TENANT_A);
+    await seedEventRaw('ev-b1', TENANT_B);
+    const results = await prisma.event.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('ev-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const ev = await prisma.event.create({ data: { actor: 'system', content: '{}' } });
+    expect(ev.tenantId).toBe(TENANT_A);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3c model tests (ModelVersion, Deployment, SimulationJob, SyntheticJob)
+// ---------------------------------------------------------------------------
+
+async function seedSimulationJobRaw(id: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.simulationJob.create({
+    data: { id, modelId: 'm1', environment: 'test', backend: 'mujoco', rolloutCount: 10, status: 'queued', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+async function seedSyntheticJobRaw(id: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.syntheticJob.create({
+    data: { id, task: 'pick', embodiment: 'so101', trajectoryCount: 100, config: {}, tenantId },
+  });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — SimulationJob (Wave 3c)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedSimulationJobRaw('sj-a1', TENANT_A);
+    await seedSimulationJobRaw('sj-b1', TENANT_B);
+    const results = await prisma.simulationJob.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('sj-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const sj = await prisma.simulationJob.create({
+      data: { modelId: 'm1', environment: 'test', backend: 'mujoco', rolloutCount: 5, status: 'queued' },
+    });
+    expect(sj.tenantId).toBe(TENANT_A);
+  });
+});
+
+describe('tenant-isolation extension — SyntheticJob (Wave 3c)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedSyntheticJobRaw('syj-a1', TENANT_A);
+    await seedSyntheticJobRaw('syj-b1', TENANT_B);
+    const results = await prisma.syntheticJob.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('syj-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const sj = await prisma.syntheticJob.create({
+      data: { task: 'pick', embodiment: 'so101', trajectoryCount: 50, config: {} },
+    });
+    expect(sj.tenantId).toBe(TENANT_A);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3d model tests (Zone, Conversation)
+// ---------------------------------------------------------------------------
+
+async function seedZoneRaw(id: string, name: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.zone.create({
+    data: { id, name, floor: '1', type: 'operational', bounds: '{}', tenantId },
+  });
+  await raw.$disconnect();
+}
+
+async function seedConversationRaw(id: string, name: string, tenantId: string): Promise<void> {
+  const raw = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } }, log: [] });
+  await raw.conversation.create({ data: { id, name, tenantId } });
+  await raw.$disconnect();
+}
+
+describe('tenant-isolation extension — Zone (Wave 3d)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedZoneRaw('z-a1', 'Zone A', TENANT_A);
+    await seedZoneRaw('z-b1', 'Zone B', TENANT_B);
+    const results = await prisma.zone.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('z-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const z = await prisma.zone.create({ data: { name: 'New Zone', floor: '2', type: 'charging', bounds: '{}' } });
+    expect(z.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedZoneRaw('z-b1', 'Zone B', TENANT_B);
+    const found = await prisma.zone.findUnique({ where: { id: 'z-b1' } });
+    expect(found).toBeNull();
+  });
+});
+
+describe('tenant-isolation extension — Conversation (Wave 3d)', () => {
+  it('scopes findMany by tenant', async () => {
+    await seedConversationRaw('c-a1', 'Chat A', TENANT_A);
+    await seedConversationRaw('c-b1', 'Chat B', TENANT_B);
+    const results = await prisma.conversation.findMany();
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('c-a1');
+  });
+
+  it('stamps tenantId on create', async () => {
+    const c = await prisma.conversation.create({ data: { name: 'New Chat' } });
+    expect(c.tenantId).toBe(TENANT_A);
+  });
+
+  it('blocks cross-tenant findUnique', async () => {
+    await seedConversationRaw('c-b1', 'Chat B', TENANT_B);
+    const found = await prisma.conversation.findUnique({ where: { id: 'c-b1' } });
+    expect(found).toBeNull();
   });
 });
 

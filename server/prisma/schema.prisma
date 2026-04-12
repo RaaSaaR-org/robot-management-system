@@ -170,9 +170,13 @@ model Conversation {
   messages Message[]
   tasks    Task[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([robotId])
   @@index([isActive])
   @@index([updatedAt])
+  @@index([tenantId, createdAt])
 }
 
 model Message {
@@ -288,9 +292,13 @@ model Zone {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@unique([name, floor])
   @@index([floor])
   @@index([type])
+  @@index([tenantId, createdAt])
 }
 
 // ============================================================================
@@ -303,8 +311,12 @@ model Event {
   content   String // JSON: A2AMessage
   timestamp DateTime @default(now())
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([timestamp])
   @@index([actor])
+  @@index([tenantId, timestamp])
 }
 
 // ============================================================================
@@ -471,11 +483,15 @@ model ProcessDefinition {
   // Relations
   instances ProcessInstance[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([name])
   @@index([status])
   @@index([createdBy])
   @@index([triggerType, enabled])
   @@index([nextRunAt])
+  @@index([tenantId, createdAt])
 }
 
 model ProcessInstance {
@@ -505,11 +521,15 @@ model ProcessInstance {
   steps             StepInstance[]
   robotTasks        RobotTask[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([processDefinitionId])
   @@index([status])
   @@index([priority])
   @@index([createdBy])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model StepInstance {
@@ -1135,6 +1155,9 @@ model ApprovalRequest {
   decisionContest DecisionContest?
   statusHistory   ApprovalStatusHistory[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([status])
   @@index([priority])
   @@index([entityType])
@@ -1142,6 +1165,7 @@ model ApprovalRequest {
   @@index([slaDeadline])
   @@index([requestedBy])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 // Approval Chain - defines multi-step approval sequence
@@ -1566,12 +1590,16 @@ model SyntheticJob {
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   validations SimToRealValidation[]
 
   @@index([status])
   @@index([task])
   @@index([embodiment])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model SimToRealValidation {
@@ -1616,8 +1644,12 @@ model SimulationJob {
 
   frames SimulationFrame[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([modelId, status])
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model SimulationFrame {
@@ -1955,9 +1987,13 @@ model ModelVersion {
   trainingJob TrainingJob      @relation(fields: [trainingJobId], references: [id])
   deployments Deployment[]
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@unique([skillId, version])
   @@index([deploymentStatus])
   @@index([trainingJobId])
+  @@index([tenantId, createdAt])
 }
 
 // Deployment - Fleet deployment tracking
@@ -1981,8 +2017,12 @@ model Deployment {
   // Relations
   modelVersion ModelVersion @relation(fields: [modelVersionId], references: [id])
 
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
   @@index([modelVersionId])
   @@index([status])
+  @@index([tenantId, createdAt])
 }
 
 // EvaluationEpisode - Track VLA model evaluation rollouts
@@ -2138,6 +2178,22 @@ model Tenant {
   incidents     Incident[]
   robotTasks    RobotTask[]
   robotCommands RobotCommand[]
+
+  // Relations (Wave 3b — automations & workflows)
+  processDefinitions ProcessDefinition[]
+  processInstances   ProcessInstance[]
+  approvalRequests   ApprovalRequest[]
+  events             Event[]
+
+  // Relations (Wave 3c — VLA lifecycle)
+  modelVersions  ModelVersion[]
+  deployments    Deployment[]
+  simulationJobs SimulationJob[]
+  syntheticJobs  SyntheticJob[]
+
+  // Relations (Wave 3d — conversations / misc)
+  zones         Zone[]
+  conversations Conversation[]
 
   @@index([slug])
 }

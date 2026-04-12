@@ -106,9 +106,10 @@ one shot is a large blast-radius migration. Instead, multi-tenancy rolls out in 
 
 - **Wave 1** (shipped): `User`, `Robot`, `Dataset`, `TrainingJob`.
 - **Wave 3a** (shipped): `Alert`, `Incident`, `RobotTask`, `RobotCommand`.
-- **Wave 3b+** (future): `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`,
-  `Event`, `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`,
-  `Fleet`, `Zone`, `Conversation`, `Message`.
+- **Wave 3b** (shipped): `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`.
+- **Wave 3c** (shipped): `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`.
+- **Wave 3d** (shipped): `Zone`, `Conversation`.
+- **Not scoped** (by design): `Fleet` (no DB model), `Message` (implicit via `Conversation` FK).
 
 The allowlist is the single source of truth for "which models are tenant-scoped". Adding
 a model to it without also adding the FK column is a runtime error — that's intentional,
@@ -354,11 +355,11 @@ and `getTenantId()` treats the sentinel as "no tenant".
 
 ## 8. Current limitations
 
-- **8 models are tenant-scoped** (Wave 1 + 3a): `User`, `Robot`, `Dataset`, `TrainingJob`,
-  `Alert`, `Incident`, `RobotTask`, `RobotCommand`.
-  Processes, deployments, conversations, etc. still ignore `tenantId`. If a card's
-  stat tile shows a count for a not-yet-scoped model, that number reflects the whole
-  database — don't trust it as isolation evidence until the model lands in the allowlist.
+- **18 models are tenant-scoped** (Waves 1 + 3a–3d): `User`, `Robot`, `Dataset`,
+  `TrainingJob`, `Alert`, `Incident`, `RobotTask`, `RobotCommand`,
+  `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`,
+  `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`, `Zone`, `Conversation`.
+  Models not in this list (e.g. `ComplianceLog`, `ApiToken`) still show global counts.
 - **No tenant switcher.** The current user is pinned to one tenant for the session. A
   super-admin impersonation flow is a future wave, not in scope today.
 - **No edit flow.** You can create and delete tenants but not rename or re-brand them.
