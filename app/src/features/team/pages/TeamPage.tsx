@@ -52,6 +52,8 @@ export function TeamPage() {
   const [credsPassword, setCredsPassword] = useState<string | null>(null);
   const [credsLabel, setCredsLabel] = useState<string | undefined>(undefined);
   const [credsCopyLabel, setCredsCopyLabel] = useState<string | undefined>(undefined);
+  const [credsWarning, setCredsWarning] = useState<string | undefined>(undefined);
+  const [credsHelper, setCredsHelper] = useState<string | undefined>(undefined);
 
   const [addSaOpen, setAddSaOpen] = useState(false);
   const [tokensAccount, setTokensAccount] = useState<ServiceAccount | null>(null);
@@ -77,6 +79,8 @@ export function TeamPage() {
   const handleMemberAdded = (result: AddTeamMemberResult) => {
     setCredsLabel(undefined);
     setCredsCopyLabel(undefined);
+    setCredsWarning(undefined);
+    setCredsHelper(undefined);
     setCredsMember(result.member);
     setCredsPassword(result.tempPassword);
   };
@@ -91,6 +95,8 @@ export function TeamPage() {
   const handleTokenCreated = (plaintext: string, accountName: string) => {
     setCredsLabel('API Token');
     setCredsCopyLabel('Copy token');
+    setCredsWarning('This token will not be shown again.');
+    setCredsHelper('Use this token in the Authorization header: Bearer ndsa_...');
     setCredsMember({ id: '', email: accountName, name: accountName, role: 'member', isActive: true, lastLoginAt: null, createdAt: '' });
     setCredsPassword(plaintext);
   };
@@ -285,6 +291,8 @@ export function TeamPage() {
         onClose={handleCloseCreds}
         credentialLabel={credsLabel}
         copyLabel={credsCopyLabel}
+        warningText={credsWarning}
+        helperText={credsHelper}
       />
 
       <CreateServiceAccountModal
