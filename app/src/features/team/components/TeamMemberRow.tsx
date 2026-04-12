@@ -6,12 +6,19 @@
  */
 
 import { useState } from 'react';
+
 import type { TeamMember, AssignableRole } from '../types/team.types';
 
 interface TeamMemberRowProps {
   member: TeamMember;
   onChangeRole: (id: string, role: AssignableRole) => Promise<void>;
   onSetActive: (id: string, isActive: boolean) => Promise<void>;
+  /**
+   * Called when a mutation fails (e.g. last-owner guard, network error).
+   * The page surfaces the message as a toast — the row itself has no
+   * room to render a readable error inline.
+   */
+  onError?: (message: string) => void;
 }
 
 const ASSIGNABLE_ROLES: AssignableRole[] = ['owner', 'member', 'viewer'];
@@ -28,52 +35,46 @@ function formatLastLogin(iso: string | null): string {
   return date.toLocaleDateString();
 }
 
+function extractMessage(err: unknown, fallback: string): string {
+  if (
+    err &&
+    typeof err === 'object' &&
+    'message' in err &&
+    typeof (err as { message: unknown }).message === 'string' &&
+    (err as { message: string }).message
+  ) {
+    return (err as { message: string }).message;
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 export function TeamMemberRow({
   member,
   onChangeRole,
   onSetActive,
+  onError,
 }: TeamMemberRowProps) {
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const handleRoleChange = async (value: string) => {
     if (value === member.role) return;
-    setError(null);
     setBusy(true);
     try {
       await onChangeRole(member.id, value as AssignableRole);
     } catch (err) {
-      const message =
-        (err &&
-        typeof err === 'object' &&
-        'message' in err &&
-        typeof (err as { message: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : null) ||
-        (err instanceof Error ? err.message : null) ||
-        'Failed to change role';
-      setError(message);
+      onError?.(extractMessage(err, 'Failed to change role'));
     } finally {
       setBusy(false);
     }
   };
 
   const handleToggleActive = async () => {
-    setError(null);
     setBusy(true);
     try {
       await onSetActive(member.id, !member.isActive);
     } catch (err) {
-      const message =
-        (err &&
-        typeof err === 'object' &&
-        'message' in err &&
-        typeof (err as { message: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : null) ||
-        (err instanceof Error ? err.message : null) ||
-        'Failed to update member';
-      setError(message);
+      onError?.(extractMessage(err, 'Failed to update member'));
     } finally {
       setBusy(false);
     }
@@ -145,12 +146,6 @@ export function TeamMemberRow({
         >
           {member.isActive ? 'Deactivate' : 'Reactivate'}
         </button>
-      )}
-
-      {error && (
-        <div className="absolute right-4 top-full mt-1 text-xs text-red-400">
-          {error}
-        </div>
       )}
     </div>
   );

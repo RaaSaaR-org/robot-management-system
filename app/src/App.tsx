@@ -8,7 +8,8 @@
 import { Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ProtectedRoute } from './features/auth';
-import { useAuthStore, selectMustChangePassword } from './features/auth/store/authStore';
+import { useAuthStore, selectMustChangePassword, selectUserRole } from './features/auth/store/authStore';
+import type { UserRole } from './features/auth/types/auth.types';
 import { AppLayout } from './components/layout';
 import { AlertProvider } from './features/alerts';
 import { PageLoader } from './shared/components/ui/PageLoader';
@@ -63,10 +64,26 @@ import {
  * (from login or /me), redirect to /set-password and block every
  * other page. The /set-password route bypasses this guard so the
  * user can actually complete the set.
+ *
+ * TASK-163 (hardened): `requiresRole` gates a specific route to users
+ * with a qualifying role. Users hitting a role-gated route without
+ * the right role get bounced to /dashboard so they can't even see
+ * the feature's shell (the server also enforces 403 on every mutation,
+ * this is defense in depth + UX hygiene).
  */
-function ProtectedAppRoute({ children }: { children: React.ReactNode }) {
+function ProtectedAppRoute({
+  children,
+  requiresRole,
+}: {
+  children: React.ReactNode;
+  requiresRole?: UserRole[];
+}) {
   const mustChangePassword = useAuthStore(selectMustChangePassword);
+  const role = useAuthStore(selectUserRole);
   const location = useLocation();
+
+  const roleAllowed =
+    !requiresRole || (role !== null && requiresRole.includes(role));
 
   return (
     <ProtectedRoute onUnauthenticated={() => {
@@ -78,6 +95,8 @@ function ProtectedAppRoute({ children }: { children: React.ReactNode }) {
       }}>
       {mustChangePassword && location.pathname !== '/set-password' ? (
         <Navigate to="/set-password" replace />
+      ) : !roleAllowed ? (
+        <Navigate to="/dashboard" replace />
       ) : (
         <AppLayout>{children}</AppLayout>
       )}
@@ -192,7 +211,7 @@ function App() {
           <Route
             path="/organizations"
             element={
-              <ProtectedAppRoute>
+              <ProtectedAppRoute requiresRole={['super-admin']}>
                 <LazyOrganizationsPage />
               </ProtectedAppRoute>
             }
@@ -200,7 +219,7 @@ function App() {
           <Route
             path="/team"
             element={
-              <ProtectedAppRoute>
+              <ProtectedAppRoute requiresRole={['super-admin', 'owner']}>
                 <LazyTeamPage />
               </ProtectedAppRoute>
             }

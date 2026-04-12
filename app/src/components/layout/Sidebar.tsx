@@ -9,6 +9,8 @@ import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/shared/utils/cn";
 import { useUIStore } from "@/features/settings/store/uiStore";
 import { useFeatures } from "@/shared/hooks";
+import { useAuthStore, selectUserRole } from "@/features/auth/store/authStore";
+import type { UserRole } from "@/features/auth/types/auth.types";
 
 // ============================================================================
 // TYPES
@@ -18,6 +20,11 @@ interface NavItem {
   label: string;
   path: string;
   icon: ReactNode;
+  /**
+   * Minimum role required to see this entry. Omit for "any
+   * authenticated user" (subject to the category-level gate).
+   */
+  requiresRole?: UserRole[];
 }
 
 interface NavCategory {
@@ -31,6 +38,12 @@ interface NavCategory {
    * always-visible groups.
    */
   requiresFeature?: 'multiTenancyEnabled';
+  /**
+   * Minimum role required to see this category. If set, the whole
+   * group (and all its items) is hidden from users whose role is not
+   * in the list. Independent from `requiresFeature` — both must pass.
+   */
+  requiresRole?: UserRole[];
 }
 
 // ============================================================================
@@ -268,12 +281,14 @@ const NAV_CATEGORIES: NavCategory[] = [
       },
     ],
   },
-  // Admin group — only visible when multi-tenancy is enabled (TASK-155 Wave 2).
-  // First feature-gated nav group; future flags can use the same pattern.
+  // Admin group — only visible when multi-tenancy is enabled (TASK-155 Wave 2)
+  // AND the user is an owner or platform super-admin (TASK-162).
+  // Regular members + viewers don't see this group at all.
   {
     id: "admin",
     label: "Admin",
     requiresFeature: "multiTenancyEnabled",
+    requiresRole: ["super-admin", "owner"],
     icon: (
       <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
@@ -283,6 +298,8 @@ const NAV_CATEGORIES: NavCategory[] = [
       {
         label: "Organizations",
         path: "/organizations",
+        // Platform-level cross-tenant view — super-admin only.
+        requiresRole: ["super-admin"],
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
@@ -292,6 +309,9 @@ const NAV_CATEGORIES: NavCategory[] = [
       {
         label: "Team",
         path: "/team",
+        // Tenant-level team management — owners manage their own tenant;
+        // super-admins can reach any team via impersonation (TASK-160).
+        requiresRole: ["super-admin", "owner"],
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -318,11 +338,22 @@ export function Sidebar({ className }: SidebarProps) {
   const collapsed = useUIStore((state) => state.sidebarCollapsed);
   const location = useLocation();
   const features = useFeatures();
+  const role = useAuthStore(selectUserRole);
 
   // Filter out categories gated behind features that are currently off.
+  // Then drop categories + per-item entries the user doesn't have the
+  // role for. A category with no visible items is dropped entirely.
   const visibleCategories = NAV_CATEGORIES.filter((c) =>
     c.requiresFeature ? features[c.requiresFeature] === true : true
-  );
+  )
+    .filter((c) => !c.requiresRole || (role !== null && c.requiresRole.includes(role)))
+    .map((c) => ({
+      ...c,
+      items: c.items.filter(
+        (i) => !i.requiresRole || (role !== null && i.requiresRole.includes(role))
+      ),
+    }))
+    .filter((c) => c.items.length > 0);
 
   // Track expanded categories - all expanded by default
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
@@ -458,3 +489,24 @@ export function Sidebar({ className }: SidebarProps) {
 
 // Export for backwards compatibility
 export const NAV_ITEMS = NAV_CATEGORIES.flatMap((c) => c.items);
+
+/**
+ * Return the flattened list of nav items visible to the current user.
+ * Same filter rules as the desktop sidebar — feature flags first, then
+ * category-level role, then per-item role. Used by MobileNav so mobile
+ * and desktop can't drift out of sync. TASK-163/164.
+ */
+export function useVisibleNavItems(): NavItem[] {
+  const features = useFeatures();
+  const role = useAuthStore(selectUserRole);
+
+  return NAV_CATEGORIES.filter((c) =>
+    c.requiresFeature ? features[c.requiresFeature] === true : true
+  )
+    .filter((c) => !c.requiresRole || (role !== null && c.requiresRole.includes(role)))
+    .flatMap((c) =>
+      c.items.filter(
+        (i) => !i.requiresRole || (role !== null && i.requiresRole.includes(role))
+      )
+    );
+}

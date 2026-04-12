@@ -30,18 +30,22 @@ const initialState = {
 // ERROR MESSAGES
 // ============================================================================
 
-// TASK-164: keep the failure messages generic so we don't leak whether
-// an email is registered or which tenant it belongs to.
+// TASK-164 note: login error hygiene is enforced server-side —
+// /api/auth/login always returns `message: "Incorrect email or password."`
+// for any 4xx. These fallbacks below are used ONLY when the server
+// didn't provide a message (network down, unknown code, etc.) so they
+// need to stay generic enough to not lie about the context.
 const ERROR_MESSAGES: Record<AuthErrorCode, string> = {
   INVALID_CREDENTIALS: 'Incorrect email or password.',
   TOKEN_EXPIRED: 'Your session has expired. Please sign in again.',
-  TOKEN_INVALID: 'Incorrect email or password.',
+  TOKEN_INVALID: 'Your session is invalid. Please sign in again.',
   SESSION_EXPIRED: 'Your session has expired. Please sign in again.',
-  ACCOUNT_LOCKED: 'Incorrect email or password.',
-  ACCOUNT_DISABLED: 'Incorrect email or password.',
+  ACCOUNT_LOCKED:
+    'Too many failed attempts. Please try again in a few minutes.',
+  ACCOUNT_DISABLED: 'This account is not active.',
   PERMISSION_DENIED: 'You do not have permission to perform this action.',
   NETWORK_ERROR: "Can't reach the server. Try again in a moment.",
-  UNKNOWN_ERROR: 'Incorrect email or password.',
+  UNKNOWN_ERROR: 'An unexpected error occurred. Please try again.',
 };
 
 // ============================================================================
@@ -424,28 +428,36 @@ export const selectMustChangePassword = (state: AuthStore) =>
 // ============================================================================
 
 /**
- * Extract error message from API error
+ * Extract error message from API error. The server is authoritative —
+ * prefer `error.message` (set by the axios interceptor in client.ts)
+ * over the local code→message map. The local map is only used as a
+ * fallback when we have no server text (offline, 500 with no body).
  */
 function getErrorMessage(error: unknown): string {
   if (error && typeof error === 'object') {
-    // Check for API error format
-    if ('code' in error && typeof error.code === 'string') {
-      const code = error.code as AuthErrorCode;
-      if (code in ERROR_MESSAGES) {
-        return ERROR_MESSAGES[code];
+    // 1. Server text wins
+    if (
+      'message' in error &&
+      typeof (error as { message: unknown }).message === 'string' &&
+      (error as { message: string }).message
+    ) {
+      return (error as { message: string }).message;
+    }
+
+    // 2. Axios-style nested shape as last-resort (shouldn't hit after interceptor)
+    if ('response' in error) {
+      const response = (error as { response?: { data?: { message?: string } } })
+        .response;
+      if (response?.data?.message) {
+        return response.data.message;
       }
     }
 
-    // Check for message property
-    if ('message' in error && typeof error.message === 'string') {
-      return error.message;
-    }
-
-    // Check for response.data.message (Axios error format)
-    if ('response' in error) {
-      const response = error.response as { data?: { message?: string } };
-      if (response?.data?.message) {
-        return response.data.message;
+    // 3. Local code→message fallback for known auth codes
+    if ('code' in error && typeof (error as { code: unknown }).code === 'string') {
+      const code = (error as { code: string }).code as AuthErrorCode;
+      if (code in ERROR_MESSAGES) {
+        return ERROR_MESSAGES[code];
       }
     }
   }

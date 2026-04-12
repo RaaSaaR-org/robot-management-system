@@ -38,7 +38,7 @@ export function TeamPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [credsMember, setCredsMember] = useState<TeamMember | null>(null);
   const [credsPassword, setCredsPassword] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     if (!loaded && !loading) {
@@ -48,7 +48,9 @@ export function TeamPage() {
 
   useEffect(() => {
     if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 2500);
+    // Keep error toasts up longer — users need time to read them.
+    const ms = toast.kind === 'error' ? 5000 : 2500;
+    const t = window.setTimeout(() => setToast(null), ms);
     return () => window.clearTimeout(t);
   }, [toast]);
 
@@ -62,7 +64,7 @@ export function TeamPage() {
     // matches the "not shown again" contract from the task spec.
     setCredsMember(null);
     setCredsPassword(null);
-    setToast('Teammate added');
+    setToast({ kind: 'success', message: 'Teammate added' });
   };
 
   const activeCount = members.filter((m) => m.isActive).length;
@@ -136,14 +138,22 @@ export function TeamPage() {
               member={m}
               onChangeRole={changeRole}
               onSetActive={setActive}
+              onError={(message) => setToast({ kind: 'error', message })}
             />
           ))}
         </div>
       )}
 
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 rounded-brand border border-theme bg-theme-card px-4 py-3 text-sm text-theme-primary shadow-xl animate-in fade-in slide-in-from-bottom-2">
-          {toast}
+        <div
+          className={`fixed bottom-6 right-6 z-50 max-w-sm rounded-brand px-4 py-3 text-sm shadow-xl animate-in fade-in slide-in-from-bottom-2 ${
+            toast.kind === 'error'
+              ? 'border border-red-500/40 bg-red-500/10 text-red-200'
+              : 'border border-theme bg-theme-card text-theme-primary'
+          }`}
+          role={toast.kind === 'error' ? 'alert' : 'status'}
+        >
+          {toast.message}
         </div>
       )}
 
