@@ -13,6 +13,7 @@ import { useRobotWebSocket } from '@/features/robots/hooks/useRobotWebSocket';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { MobileNav } from './MobileNav';
+import { ImpersonationBanner } from './ImpersonationBanner';
 
 // ============================================================================
 // TYPES
@@ -52,6 +53,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   return (
     <div className="min-h-screen section-primary">
       <TopBar />
+      <ImpersonationBanner />
       <Sidebar />
 
       {/* Mobile navigation drawer */}

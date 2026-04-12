@@ -85,6 +85,52 @@ tenantsRoutes.post('/', superAdminOnly, async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// POST /api/tenants/onboard — multi-step tenant + admin user creation
+// ============================================================================
+
+tenantsRoutes.post('/onboard', superAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const { tenant, adminUser, starterResources } = req.body ?? {};
+
+    if (!tenant?.name || typeof tenant.name !== 'string') {
+      return res.status(400).json({ error: 'tenant.name is required' });
+    }
+    if (!adminUser?.email || typeof adminUser.email !== 'string') {
+      return res.status(400).json({ error: 'adminUser.email is required' });
+    }
+    if (!adminUser?.name || typeof adminUser.name !== 'string') {
+      return res.status(400).json({ error: 'adminUser.name is required' });
+    }
+    if (!adminUser?.password || typeof adminUser.password !== 'string' || adminUser.password.length < 8) {
+      return res.status(400).json({ error: 'adminUser.password is required (min 8 chars)' });
+    }
+
+    const result = await tenantService.onboard({
+      tenant: {
+        name: tenant.name,
+        slug: typeof tenant.slug === 'string' ? tenant.slug : undefined,
+        logoUrl: typeof tenant.logoUrl === 'string' ? tenant.logoUrl : null,
+        plan: typeof tenant.plan === 'string' ? tenant.plan : null,
+      },
+      adminUser: {
+        email: adminUser.email,
+        name: adminUser.name,
+        password: adminUser.password,
+      },
+      starterResources: starterResources ?? undefined,
+    });
+
+    res.status(201).json(result);
+  } catch (error) {
+    if (error instanceof TenantSlugTakenError) {
+      return res.status(409).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    res.status(400).json({ error: message });
+  }
+});
+
+// ============================================================================
 // DELETE /api/tenants/:id — delete a tenant (rejects DEFAULT + non-empty)
 // ============================================================================
 

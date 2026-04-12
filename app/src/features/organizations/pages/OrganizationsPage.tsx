@@ -14,6 +14,7 @@ import { useOrganizationsStore } from '../store/organizationsStore';
 import { OrganizationCard } from '../components/OrganizationCard';
 import { OrganizationsEmptyState } from '../components/OrganizationsEmptyState';
 import { CreateOrganizationModal } from '../components/CreateOrganizationModal';
+import { OnboardingWizard } from '../components/OnboardingWizard';
 
 const PlusIcon = () => (
   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -34,6 +35,7 @@ export function OrganizationsPage() {
   const remove = useOrganizationsStore((s) => s.remove);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [modalPrefill, setModalPrefill] = useState<{ name: string; slug: string } | undefined>();
   const [toast, setToast] = useState<string | null>(null);
 
@@ -51,13 +53,12 @@ export function OrganizationsPage() {
   }, [toast]);
 
   const handleCreate = () => {
-    setModalPrefill(undefined);
-    setModalOpen(true);
+    setWizardOpen(true);
   };
 
   const handleLoadSample = () => {
     setModalPrefill(SAMPLE_ORG);
-    setModalOpen(true);
+    setModalOpen(true); // Quick-create path
   };
 
   const handleDelete = async (id: string) => {
@@ -184,7 +185,14 @@ export function OrganizationsPage() {
         </div>
       )}
 
-      {/* Create modal */}
+      {/* Onboarding wizard (full flow) */}
+      <OnboardingWizard
+        isOpen={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreated={handleCreated}
+      />
+
+      {/* Quick-create modal (simple 2-field form) */}
       <CreateOrganizationModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}

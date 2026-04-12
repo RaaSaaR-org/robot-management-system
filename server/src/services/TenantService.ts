@@ -10,9 +10,11 @@
  * @feature multi-tenancy
  */
 
+import bcrypt from 'bcryptjs';
 import { prisma } from '../database/index.js';
 import { DEFAULT_TENANT_ID } from '../config/features.js';
 import { runAsPlatform } from '../middleware/tenantContext.js';
+import { logger } from '../utils/logger.js';
 
 export interface TenantCounts {
   users: number;
@@ -188,6 +190,87 @@ export class TenantService {
     }
 
     await prisma.tenant.delete({ where: { id } });
+  }
+
+  /**
+   * Atomic onboarding: create tenant + first admin user + optional starter
+   * resources in a single transaction. Rolls back everything if any step fails.
+   */
+  async onboard(input: {
+    tenant: CreateTenantInput;
+    adminUser: { email: string; name: string; password: string };
+    starterResources?: { cloneRobots?: boolean };
+  }): Promise<{
+    tenant: TenantWithCounts;
+    adminUser: { id: string; email: string };
+  }> {
+    const slug = (input.tenant.slug?.trim() || slugify(input.tenant.name)).toLowerCase();
+    if (!isValidSlug(slug)) {
+      throw new Error('slug must be lowercase alphanumerics + hyphens');
+    }
+
+    const existing = await prisma.tenant.findUnique({ where: { slug } });
+    if (existing) {
+      throw new TenantSlugTakenError(slug);
+    }
+
+    const passwordHash = await bcrypt.hash(input.adminUser.password, 12);
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Step 1: Create tenant
+      const tenantRow = await tx.tenant.create({
+        data: {
+          slug,
+          name: input.tenant.name.trim(),
+          logoUrl: input.tenant.logoUrl ?? null,
+          plan: input.tenant.plan ?? null,
+        },
+      });
+
+      // Step 2: Create first admin user (owner role, force password change)
+      const userRow = await tx.user.create({
+        data: {
+          email: input.adminUser.email.trim().toLowerCase(),
+          name: input.adminUser.name.trim(),
+          passwordHash,
+          role: 'owner',
+          tenantId: tenantRow.id,
+          forcePasswordChange: true,
+        },
+      });
+
+      // Step 3: Optionally clone robots from DEFAULT tenant
+      if (input.starterResources?.cloneRobots) {
+        const defaultRobots = await tx.robot.findMany({
+          where: { tenantId: DEFAULT_TENANT_ID },
+          select: { name: true, model: true, serialNumber: true },
+        });
+        if (defaultRobots.length > 0) {
+          await tx.robot.createMany({
+            data: defaultRobots.map((r) => ({
+              name: r.name,
+              model: r.model,
+              tenantId: tenantRow.id,
+            })),
+          });
+          logger.info(
+            { tenantId: tenantRow.id, count: defaultRobots.length },
+            '[ONBOARD] Cloned robots from DEFAULT'
+          );
+        }
+      }
+
+      return { tenantRow, userRow };
+    });
+
+    const counts = await countsFor(result.tenantRow.id);
+    return {
+      tenant: toDto(result.tenantRow, counts),
+      adminUser: {
+        id: result.userRow.id,
+        email: result.userRow.email,
+      },
+    };
   }
 }
 
