@@ -9,7 +9,11 @@
 import { useState } from 'react';
 import { Button } from '@/shared/components/ui/Button';
 import { cn } from '@/shared/utils/cn';
-import type { Organization } from '../types/organizations.types';
+import type { Organization, TenantSettings } from '../types/organizations.types';
+
+function parseSettings(raw: string): TenantSettings {
+  try { return JSON.parse(raw) as TenantSettings; } catch { return {}; }
+}
 
 interface OrganizationCardProps {
   organization: Organization;
@@ -64,6 +68,8 @@ const PencilIcon = () => (
 export function OrganizationCard({ organization, onDelete, onEdit }: OrganizationCardProps) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const settings = parseSettings(organization.settings);
+  const brandColor = settings.brandColor;
 
   const handleDelete = async () => {
     if (!confirming) {
@@ -89,7 +95,13 @@ export function OrganizationCard({ organization, onDelete, onEdit }: Organizatio
     >
       {/* Header: icon + name + slug + badges */}
       <div className="flex items-start gap-4 mb-4">
-        <div className="w-12 h-12 rounded-brand bg-cobalt/10 text-cobalt flex items-center justify-center shrink-0 overflow-hidden">
+        <div
+          className={cn(
+            'w-12 h-12 rounded-brand flex items-center justify-center shrink-0 overflow-hidden',
+            !brandColor && 'bg-cobalt/10 text-cobalt'
+          )}
+          style={brandColor ? { backgroundColor: `${brandColor}20`, color: brandColor } : undefined}
+        >
           {organization.logoUrl ? (
             <img src={organization.logoUrl} alt={organization.name} className="w-full h-full object-contain" />
           ) : (

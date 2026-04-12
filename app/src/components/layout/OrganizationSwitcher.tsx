@@ -12,11 +12,12 @@
  * @feature layout
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useFeatures } from '@/shared/hooks';
 import { useOrganizationsStore } from '@/features/organizations';
 import { useAuthStore, selectUserRole } from '@/features/auth/store/authStore';
 import { impersonationStorage } from '@/api/client';
+import type { TenantSettings } from '@/features/organizations/types/organizations.types';
 
 const BuildingIcon = () => (
   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -77,6 +78,11 @@ export function OrganizationSwitcher() {
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [open]);
 
+  const brandColor = useMemo(() => {
+    if (!current?.settings) return undefined;
+    try { return (JSON.parse(current.settings) as TenantSettings).brandColor; } catch { return undefined; }
+  }, [current?.settings]);
+
   if (!multiTenancyEnabled || !current) return null;
 
   const handleSwitch = (tenantId: string) => {
@@ -85,9 +91,6 @@ export function OrganizationSwitcher() {
       return;
     }
     impersonationStorage.set(tenantId);
-    // Force a full reload so every Zustand store rehydrates under the
-    // new tenant context — simpler and safer than trying to reset each
-    // one manually.
     window.location.reload();
   };
 
@@ -102,7 +105,8 @@ export function OrganizationSwitcher() {
   if (!isSuperAdmin) {
     return (
       <span
-        className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-theme-elevated border border-theme text-xs text-theme-secondary"
+        className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-theme-elevated border text-xs text-theme-secondary"
+        style={brandColor ? { borderColor: `${brandColor}60` } : undefined}
         title={`Current organization: ${label}`}
       >
         {current.logoUrl ? (
@@ -125,6 +129,7 @@ export function OrganizationSwitcher() {
             ? 'bg-amber-500/10 border-amber-500/40 text-amber-200'
             : 'bg-theme-elevated border-theme text-theme-secondary hover:text-theme-primary'
         }`}
+        style={!impersonating && brandColor ? { borderColor: `${brandColor}60`, backgroundColor: `${brandColor}10` } : undefined}
         title={impersonating ? `Impersonating ${label}` : `Current organization: ${label}`}
         aria-haspopup="menu"
         aria-expanded={open}
