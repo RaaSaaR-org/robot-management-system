@@ -354,7 +354,45 @@ and `getTenantId()` treats the sentinel as "no tenant".
 
 ---
 
-## 8. Current limitations
+## 8. Super-admin & Impersonation (TASK-160)
+
+### Super-admin role
+
+The `super-admin` role is platform-wide (not tied to a specific tenant). It grants:
+- Access to the Organizations page (`/organizations`)
+- Ability to create, delete, and onboard new tenants
+- Tenant impersonation (see below)
+
+The sidebar gates the Organizations entry to `super-admin` via `requiresRole`. The
+`superAdminOnly` middleware protects all `/api/tenants/*` endpoints except
+`GET /api/tenants/current`.
+
+### Impersonation
+
+Super-admins can view another tenant's data by selecting it from the `OrganizationSwitcher`
+dropdown in the TopBar. This works via the `X-Impersonate-Tenant` header:
+
+1. Frontend: `impersonationStorage.set(tenantId)` → page reload
+2. API client: every request carries the header automatically
+3. Server: `continueWithTenant()` in `auth.middleware.ts` overrides the ALS tenant context
+4. Prisma extension: all queries scope to the impersonated tenant
+
+Every impersonation is logged to `ComplianceLog` as a `system_event` with
+`eventName: 'tenant_impersonation'` (EU AI Act Art. 12). The log captures
+actor ID/email, original tenant, and impersonated tenant.
+
+A prominent amber banner appears below the TopBar during impersonation, showing the
+current tenant name and a "Stop impersonating" button.
+
+### Onboarding wizard
+
+`POST /api/tenants/onboard` creates a new tenant + first admin user + optional starter
+resources in a single `prisma.$transaction()`. The admin user gets `role: 'owner'` and
+`forcePasswordChange: true`. The frontend wizard has 4 steps: Basics → Admin → Resources → Review.
+
+---
+
+## 9. Current limitations
 
 - **19 models are tenant-scoped** (Waves 1 + 3a–3e): `User`, `Robot`, `Dataset`,
   `TrainingJob`, `Alert`, `Incident`, `RobotTask`, `RobotCommand`,
@@ -364,8 +402,6 @@ and `getTenantId()` treats the sentinel as "no tenant".
   Models not in this list (e.g. `ComplianceLog`) still show global counts.
   Note: `ApiToken` auth lookup (`authenticateServiceToken`) runs before tenant
   context is set, so the extension passes through — this is by design.
-- **No tenant switcher.** The current user is pinned to one tenant for the session. A
-  super-admin impersonation flow is a future wave, not in scope today.
 - **No edit flow.** You can create and delete tenants but not rename or re-brand them.
 - **Single-tenant user model.** A given `User` row belongs to exactly one tenant. No
   "user in multiple tenants" support.

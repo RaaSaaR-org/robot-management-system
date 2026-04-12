@@ -4,7 +4,7 @@ aliases:
 - TASK-160
 title: 'Multi-tenancy: super-admin role + tenant switcher + onboarding wizard'
 slug: multi-tenancy-super-admin-role-tenant-switcher-onboarding-wizard
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []
