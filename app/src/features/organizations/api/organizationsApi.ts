@@ -15,8 +15,20 @@ const ENDPOINTS = {
   list: '/tenants',
   current: '/tenants/current',
   create: '/tenants',
+  onboard: '/tenants/onboard',
   delete: (id: string) => `/tenants/${id}`,
 } as const;
+
+export interface OnboardInput {
+  tenant: { name: string; slug?: string; logoUrl?: string; plan?: string };
+  adminUser: { email: string; name: string; password: string };
+  starterResources?: { cloneRobots?: boolean };
+}
+
+export interface OnboardResult {
+  tenant: Organization;
+  adminUser: { id: string; email: string };
+}
 
 interface ListResponse {
   tenants: Organization[];
@@ -35,6 +47,11 @@ export const organizationsApi = {
 
   async create(input: CreateOrganizationInput): Promise<Organization> {
     const response = await apiClient.post<Organization>(ENDPOINTS.create, input);
+    return response.data;
+  },
+
+  async onboard(input: OnboardInput): Promise<OnboardResult> {
+    const response = await apiClient.post<OnboardResult>(ENDPOINTS.onboard, input);
     return response.data;
   },
 
