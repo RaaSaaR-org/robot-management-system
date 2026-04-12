@@ -9,3 +9,4 @@ export * from './RegisterPage';
 export * from './ForgotPasswordPage';
 export * from './ResetPasswordPage';
 export * from './AccountPage';
+export * from './ForcePasswordChangePage';

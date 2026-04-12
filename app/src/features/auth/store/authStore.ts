@@ -23,22 +23,25 @@ const initialState = {
   isLoading: false,
   isInitialized: false,
   error: null as string | null,
+  mustChangePassword: false,
 };
 
 // ============================================================================
 // ERROR MESSAGES
 // ============================================================================
 
+// TASK-164: keep the failure messages generic so we don't leak whether
+// an email is registered or which tenant it belongs to.
 const ERROR_MESSAGES: Record<AuthErrorCode, string> = {
-  INVALID_CREDENTIALS: 'Invalid email or password',
-  TOKEN_EXPIRED: 'Your session has expired. Please login again.',
-  TOKEN_INVALID: 'Invalid authentication token',
-  SESSION_EXPIRED: 'Your session has expired. Please login again.',
-  ACCOUNT_LOCKED: 'Your account has been locked. Please contact support.',
-  ACCOUNT_DISABLED: 'Your account has been disabled. Please contact support.',
+  INVALID_CREDENTIALS: 'Incorrect email or password.',
+  TOKEN_EXPIRED: 'Your session has expired. Please sign in again.',
+  TOKEN_INVALID: 'Incorrect email or password.',
+  SESSION_EXPIRED: 'Your session has expired. Please sign in again.',
+  ACCOUNT_LOCKED: 'Incorrect email or password.',
+  ACCOUNT_DISABLED: 'Incorrect email or password.',
   PERMISSION_DENIED: 'You do not have permission to perform this action.',
-  NETWORK_ERROR: 'Unable to connect to the server. Please check your connection.',
-  UNKNOWN_ERROR: 'An unexpected error occurred. Please try again.',
+  NETWORK_ERROR: "Can't reach the server. Try again in a moment.",
+  UNKNOWN_ERROR: 'Incorrect email or password.',
 };
 
 // ============================================================================
@@ -82,6 +85,11 @@ export const useAuthStore = createStore<AuthStore>(
           state.isLoading = false;
           state.isInitialized = true;
           state.error = null;
+          // TASK-164: server emits the gate on the login response; mirror
+          // it into the store so ProtectedAppRoute can redirect.
+          state.mustChangePassword =
+            response.mustChangePassword === true ||
+            response.user.forcePasswordChange === true;
         });
       } catch (error) {
         // Re-throw MFA_REQUIRED errors without mapping to error message
@@ -100,7 +108,7 @@ export const useAuthStore = createStore<AuthStore>(
     // --------------------------------------------------------------------------
     // Complete MFA Login (after TOTP/recovery code verified)
     // --------------------------------------------------------------------------
-    completeMFALogin: (response: { user: User; accessToken: string; refreshToken: string }) => {
+    completeMFALogin: (response: { user: User; accessToken: string; refreshToken: string; mustChangePassword?: boolean }) => {
       tokenStorage.setTokens(response.accessToken, response.refreshToken);
       set((state) => {
         state.user = response.user;
@@ -108,6 +116,9 @@ export const useAuthStore = createStore<AuthStore>(
         state.isLoading = false;
         state.isInitialized = true;
         state.error = null;
+        state.mustChangePassword =
+          response.mustChangePassword === true ||
+          response.user.forcePasswordChange === true;
       });
     },
 
@@ -128,6 +139,7 @@ export const useAuthStore = createStore<AuthStore>(
         state.user = null;
         state.isAuthenticated = false;
         state.error = null;
+        state.mustChangePassword = false;
       });
     },
 
@@ -177,6 +189,9 @@ export const useAuthStore = createStore<AuthStore>(
           state.isAuthenticated = true;
           state.isLoading = false;
           state.isInitialized = true;
+          // TASK-164: hydrate the force-password-change gate from /me
+          // so a page refresh during the "required" state still works.
+          state.mustChangePassword = user.forcePasswordChange === true;
         });
       } catch {
         // Token invalid - try to refresh
@@ -189,6 +204,7 @@ export const useAuthStore = createStore<AuthStore>(
             state.isAuthenticated = true;
             state.isLoading = false;
             state.isInitialized = true;
+            state.mustChangePassword = user.forcePasswordChange === true;
           });
         } catch {
           // Refresh failed - clear state
@@ -337,6 +353,13 @@ export const useAuthStore = createStore<AuthStore>(
 
         set((state) => {
           state.isLoading = false;
+          // TASK-164: server clears forcePasswordChange inside
+          // updatePassword; mirror that here so ProtectedAppRoute stops
+          // redirecting to /set-password.
+          state.mustChangePassword = false;
+          if (state.user) {
+            state.user = { ...state.user, forcePasswordChange: false };
+          }
         });
       } catch (error) {
         const errorMessage = getErrorMessage(error);
@@ -346,6 +369,18 @@ export const useAuthStore = createStore<AuthStore>(
         });
         throw new Error(errorMessage);
       }
+    },
+
+    // --------------------------------------------------------------------------
+    // Clear force-password-change gate (TASK-164)
+    // --------------------------------------------------------------------------
+    clearMustChangePassword: () => {
+      set((state) => {
+        state.mustChangePassword = false;
+        if (state.user) {
+          state.user = { ...state.user, forcePasswordChange: false };
+        }
+      });
     },
   }),
   {
@@ -379,6 +414,10 @@ export const selectError = (state: AuthStore) => state.error;
 
 /** Select user role */
 export const selectUserRole = (state: AuthStore) => state.user?.role ?? null;
+
+/** Select force-password-change gate (TASK-164) */
+export const selectMustChangePassword = (state: AuthStore) =>
+  state.mustChangePassword;
 
 // ============================================================================
 // HELPER FUNCTIONS

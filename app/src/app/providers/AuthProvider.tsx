@@ -92,14 +92,23 @@ export function AuthProvider({
   // Initialize auth state on mount
   useEffect(() => {
     if (!isInitialized) {
-      // In development mode, auto-login with mock user
-      if (import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true') {
+      // In development mode, auto-login with mock user — but only if
+      // we don't already have a real session (login may have set one
+      // via tokenStorage + persisted Zustand state). Otherwise the
+      // force-password-change gate (TASK-164) and any other real-auth
+      // flow gets silently overwritten by MOCK_USER on every refresh.
+      const hasRealSession =
+        isAuthenticated || Boolean(localStorage.getItem('access_token'));
+      if (
+        !hasRealSession &&
+        (import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true')
+      ) {
         devLogin(MOCK_USER);
       } else {
         initialize();
       }
     }
-  }, [initialize, devLogin, isInitialized]);
+  }, [initialize, devLogin, isInitialized, isAuthenticated]);
 
   // Permission check functions
   const can = (permission: Permission) => hasPermission(user, permission);

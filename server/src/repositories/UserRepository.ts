@@ -7,16 +7,26 @@ import { prisma } from '../database/index.js';
 import type { User as PrismaUser } from '@prisma/client';
 
 /**
- * Domain User type (matches frontend auth.types.ts)
+ * Domain User type (matches frontend auth.types.ts).
+ * Role is typed as string here to avoid a circular import with
+ * auth.middleware — the unified role union is
+ * `super-admin | owner | member | viewer` (TASK-162).
  */
 export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: string;
   avatar?: string;
   tenantId?: string;
   isActive: boolean;
+  /**
+   * TASK-164: when true, the user must set a new password before they
+   * can reach any other page. Cleared by `AuthService.changePassword`
+   * and exposed on the login / `/me` responses so the frontend can
+   * route accordingly.
+   */
+  forcePasswordChange: boolean;
   lastLoginAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -38,7 +48,7 @@ export interface CreateUserInput {
   email: string;
   passwordHash: string;
   name: string;
-  role?: 'admin' | 'operator' | 'viewer';
+  role?: string;
   avatar?: string;
   tenantId?: string;
 }
@@ -49,10 +59,11 @@ export interface CreateUserInput {
 export interface UpdateUserInput {
   email?: string;
   name?: string;
-  role?: 'admin' | 'operator' | 'viewer';
+  role?: string;
   avatar?: string;
   tenantId?: string;
   isActive?: boolean;
+  forcePasswordChange?: boolean;
 }
 
 /**
@@ -63,10 +74,11 @@ function dbUserToDomain(user: PrismaUser): User {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role as 'admin' | 'operator' | 'viewer',
+    role: user.role,
     avatar: user.avatar ?? undefined,
     tenantId: user.tenantId ?? undefined,
     isActive: user.isActive,
+    forcePasswordChange: user.forcePasswordChange,
     lastLoginAt: user.lastLoginAt?.toISOString(),
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
@@ -166,6 +178,8 @@ export class UserRepository {
       if (data.avatar !== undefined) updateData.avatar = data.avatar;
       if (data.tenantId !== undefined) updateData.tenantId = data.tenantId;
       if (data.isActive !== undefined) updateData.isActive = data.isActive;
+      if (data.forcePasswordChange !== undefined)
+        updateData.forcePasswordChange = data.forcePasswordChange;
 
       const user = await prisma.user.update({
         where: { id },
@@ -178,7 +192,9 @@ export class UserRepository {
   }
 
   /**
-   * Update user password
+   * Update user password. Also clears the `forcePasswordChange` flag
+   * (TASK-164) — any successful password change means the user has
+   * satisfied the one-time set-password gate.
    */
   async updatePassword(id: string, passwordHash: string): Promise<boolean> {
     try {
@@ -188,6 +204,8 @@ export class UserRepository {
           passwordHash,
           passwordResetToken: null,
           passwordResetExpires: null,
+          forcePasswordChange: false,
+          lastPasswordChange: new Date(),
         },
       });
       return true;

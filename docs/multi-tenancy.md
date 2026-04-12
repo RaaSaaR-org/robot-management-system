@@ -207,7 +207,47 @@ you enabled multi-tenancy — that's the whole isolation story in one screenshot
 
 ---
 
-## 5. Developer guide: scoped models
+## 5. Login — your email finds your tenant
+
+NeoDEM uses **email-based tenant routing**. A user signs in with email + password on a
+single login page — no tenant picker, no workspace URL. Behind the scenes:
+
+1. The `User` model has a globally unique `email` field.
+2. `POST /api/auth/login` looks up the user by email, verifies the password, and reads
+   `user.tenantId` off the row.
+3. The JWT is signed with that `tenantId` and every subsequent query through the Prisma
+   isolation extension scopes to the correct tenant.
+
+Error messages on the login page are intentionally generic (`Incorrect email or
+password.`) so we don't leak whether an email is registered or which tenant it belongs
+to. The "Create one" signup link is hidden while `MULTI_TENANCY_ENABLED=true` — new
+users are added by their organization owner via the Team page.
+
+For `@emai.dev` team members who need to access multiple tenants, the super-admin +
+impersonation flow (TASK-160) is the supported path, not a tenant picker at login.
+
+### First login (new teammate)
+
+When an owner adds a teammate via the Team page (TASK-163), the new user is created
+with `forcePasswordChange = true`. On their first login:
+
+1. `AuthService.login` returns the access + refresh tokens as normal plus a
+   `mustChangePassword: true` flag on the response.
+2. The `/me` endpoint also exposes `forcePasswordChange` so a page refresh during the
+   "required" state still works.
+3. The frontend authStore hydrates a `mustChangePassword` flag from both sources.
+4. `ProtectedAppRoute` sees the flag and redirects every protected route to
+   `/set-password` until the user completes the change.
+5. `ChangePasswordForm` calls `POST /api/auth/change-password`, the server clears
+   `forcePasswordChange` inside `UserRepository.updatePassword`, and the store mirrors
+   the reset. Navigation resumes normally.
+
+**MOCK_USER under `AUTH_DISABLED=true`** is returned with `forcePasswordChange: false`
+by the `/me` route so dev sessions never get trapped on `/set-password`.
+
+---
+
+## 6. Developer guide: scoped models
 
 ### Adding a model to the allowlist (follow-up waves)
 
@@ -277,7 +317,7 @@ Outside a request scope (background workers, seeds, cron jobs), `getTenantId()` 
 
 ---
 
-## 6. Escape hatch: `runAsPlatform`
+## 7. Escape hatch: `runAsPlatform`
 
 Sometimes you need to query across tenants on purpose — typically operator-level code
 like the Organizations UI counting robots per tenant. If you just called
@@ -311,7 +351,7 @@ and `getTenantId()` treats the sentinel as "no tenant".
 
 ---
 
-## 7. Current limitations
+## 8. Current limitations
 
 - **Only 4 models are tenant-scoped** (Wave 1): `User`, `Robot`, `Dataset`, `TrainingJob`.
   Alerts, incidents, processes, deployments, etc. still ignore `tenantId`. If a card's
@@ -346,7 +386,7 @@ Legacy values are migrated by `20260412000000_task_162_unified_role_model`:
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### "The page loads but all stat tiles show the same counts"
 
@@ -385,7 +425,7 @@ be added in follow-up waves.
 
 ---
 
-## 9. Reference: files + endpoints
+## 10. Reference: files + endpoints
 
 ### Server
 

@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import { Card } from '@/shared/components/ui';
 import { LoginForm } from '../components/LoginForm';
 import { useBrand } from '@/brand';
+import { useFeatures } from '@/shared/hooks';
 
 // ============================================================================
 // TYPES
@@ -82,8 +83,11 @@ export function LoginPage({
   tagline,
 }: LoginPageProps) {
   const brand = useBrand();
-  const resolvedTitle = title ?? brand.name;
-  const resolvedTagline = tagline ?? brand.tagline;
+  const { multiTenancyEnabled } = useFeatures();
+  const resolvedTitle = title ?? `Sign in to ${brand.name}`;
+  // TASK-164: keep the tagline neutral — no mention of tenants or
+  // workspaces. The user's tenant is implicit in their email address.
+  const resolvedTagline = tagline ?? 'Enter your email and password.';
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-theme-bg px-4 py-12">
       {/* Background gradient decoration */}
@@ -115,15 +119,6 @@ export function LoginPage({
 
         {/* Login Card */}
         <Card variant="elevated" className="p-8">
-          <div className="mb-6">
-            <h2 className="text-lg font-semibold text-theme-primary">
-              Sign in to your account
-            </h2>
-            <p className="mt-1 text-sm text-theme-secondary">
-              Enter your credentials to access the dashboard
-            </p>
-          </div>
-
           <LoginForm onSuccess={onLoginSuccess} />
 
           {/* Forgot password link */}
@@ -136,18 +131,24 @@ export function LoginPage({
             </Link>
           </div>
 
-          {/* Register link */}
-          <div className="mt-4 text-center">
-            <span className="text-sm text-theme-secondary">
-              Don&apos;t have an account?{' '}
-              <Link
-                to="/register"
-                className="font-medium text-cobalt-600 hover:text-cobalt-700 dark:text-cobalt-400 dark:hover:text-cobalt-300"
-              >
-                Create one
-              </Link>
-            </span>
-          </div>
+          {/*
+            TASK-164: signup is invite-only when multi-tenancy is on, so
+            hide the "Create one" link — new users are added by their
+            organization owner via the Team page (TASK-163).
+          */}
+          {!multiTenancyEnabled && (
+            <div className="mt-4 text-center">
+              <span className="text-sm text-theme-secondary">
+                Don&apos;t have an account?{' '}
+                <Link
+                  to="/register"
+                  className="font-medium text-cobalt-600 hover:text-cobalt-700 dark:text-cobalt-400 dark:hover:text-cobalt-300"
+                >
+                  Create one
+                </Link>
+              </span>
+            </div>
+          )}
         </Card>
 
         {/* Footer */}

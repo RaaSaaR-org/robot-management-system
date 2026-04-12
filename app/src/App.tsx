@@ -6,8 +6,9 @@
  */
 
 import { Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ProtectedRoute } from './features/auth';
+import { useAuthStore, selectMustChangePassword } from './features/auth/store/authStore';
 import { AppLayout } from './components/layout';
 import { AlertProvider } from './features/alerts';
 import { PageLoader } from './shared/components/ui/PageLoader';
@@ -18,6 +19,7 @@ import {
   LazyForgotPasswordPage,
   LazyResetPasswordPage,
   LazyAccountPage,
+  LazyForcePasswordChangePage,
   LazyDashboardPage,
   LazyRobotDetailPage,
   LazyFleetPage,
@@ -55,9 +57,17 @@ import {
 // ============================================================================
 
 /**
- * Wrapper for protected routes with AppLayout
+ * Wrapper for protected routes with AppLayout.
+ *
+ * TASK-164: if the signed-in user has `mustChangePassword === true`
+ * (from login or /me), redirect to /set-password and block every
+ * other page. The /set-password route bypasses this guard so the
+ * user can actually complete the set.
  */
 function ProtectedAppRoute({ children }: { children: React.ReactNode }) {
+  const mustChangePassword = useAuthStore(selectMustChangePassword);
+  const location = useLocation();
+
   return (
     <ProtectedRoute onUnauthenticated={() => {
         if (import.meta.env.VITE_DEMO_MODE === 'true') {
@@ -66,7 +76,11 @@ function ProtectedAppRoute({ children }: { children: React.ReactNode }) {
           window.location.href = '/login';
         }
       }}>
-      <AppLayout>{children}</AppLayout>
+      {mustChangePassword && location.pathname !== '/set-password' ? (
+        <Navigate to="/set-password" replace />
+      ) : (
+        <AppLayout>{children}</AppLayout>
+      )}
     </ProtectedRoute>
   );
 }
@@ -197,6 +211,16 @@ function App() {
               <ProtectedAppRoute>
                 <LazyAccountPage />
               </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/set-password"
+            element={
+              <ProtectedRoute onUnauthenticated={() => {
+                window.location.href = '/login';
+              }}>
+                <LazyForcePasswordChangePage />
+              </ProtectedRoute>
             }
           />
           {/* A2A Routes */}
