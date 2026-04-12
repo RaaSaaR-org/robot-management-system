@@ -3,6 +3,19 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.04.12] - 2026-04-12
+
+### Added
+- Per-tenant branding: edit modal, logo display, brand color picker (TASK-161)
+- `PATCH /api/tenants/:id` endpoint for branding updates (TASK-161)
+- Frontend types, API client, and store for tenant branding updates (TASK-161)
+- Onboarding wizard for new organizations (TASK-160)
+- Impersonation banner below TopBar for tenant admin context (TASK-160)
+- Compliance logging for tenant impersonation events (TASK-160)
+
+### Fixed
+- Apply brand color to card icon and TopBar pill (TASK-161)
+
 ## [v0.1.0] - 2026-04-12
 
 Major milestone release — 354 commits since v0.0.2. NeoDEM is now a multi-repo platform with multi-tenancy, production hardening, and a complete VLA training pipeline.

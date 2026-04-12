@@ -1,6 +1,6 @@
 {
   "name": "@neodem/server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A2A Protocol Server for NeoDEM",
   "type": "module",
   "main": "dist/index.js",
