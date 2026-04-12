@@ -8,6 +8,7 @@ import { authService, type TokenPayload } from '../services/AuthService.js';
 import { authenticateServiceToken } from '../services/ServiceAccountService.js';
 import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js';
 import { tenantStore } from './tenantContext.js';
+import { complianceLogService } from '../services/ComplianceLogService.js';
 
 /**
  * Unified role model (TASK-162).
@@ -102,7 +103,23 @@ function continueWithTenant(
   let tenantId = user?.tenantId ?? DEFAULT_TENANT_ID;
   if (user?.role === 'super-admin') {
     const override = req.headers[IMPERSONATE_HEADER];
-    if (typeof override === 'string' && override.length > 0) {
+    if (typeof override === 'string' && override.length > 0 && override !== tenantId) {
+      // Fire-and-forget compliance log (EU AI Act Art. 12)
+      complianceLogService.logSystemEvent({
+        sessionId: `impersonation-${user.id}`,
+        robotId: 'platform',
+        payload: {
+          description: `Super-admin impersonated tenant ${override}`,
+          eventName: 'tenant_impersonation',
+          component: 'auth',
+          metadata: {
+            actorId: user.id,
+            actorEmail: user.email,
+            originalTenantId: tenantId,
+            impersonatedTenantId: override,
+          },
+        },
+      }).catch(() => {}); // Best-effort, never block requests
       tenantId = override;
     }
   }
