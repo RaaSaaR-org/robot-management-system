@@ -105,9 +105,12 @@ NeoDEM has 85 Prisma models. Adding `tenantId` columns + FKs + indexes to all of
 one shot is a large blast-radius migration. Instead, multi-tenancy rolls out in **waves**:
 
 - **Wave 1** (shipped): `User`, `Robot`, `Dataset`, `TrainingJob`.
-- **Wave 2+** (future): `Fleet`, `Zone`, `Alert`, `Incident`, `ProcessDefinition`,
-  `ProcessInstance`, `RobotTask`, `Command`, `ModelVersion`, `Deployment`,
-  `ApprovalRequest`, `Conversation`, `Event`, `SimulationJob`, `SyntheticJob`, `Message`.
+- **Wave 3a** (shipped): `Alert`, `Incident`, `RobotTask`, `RobotCommand`.
+- **Wave 3b** (shipped): `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`.
+- **Wave 3c** (shipped): `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`.
+- **Wave 3d** (shipped): `Zone`, `Conversation`.
+- **Wave 3e** (shipped): `ApiToken`.
+- **Not scoped** (by design): `Fleet` (no DB model), `Message` (implicit via `Conversation` FK).
 
 The allowlist is the single source of truth for "which models are tenant-scoped". Adding
 a model to it without also adding the FK column is a runtime error — that's intentional,
@@ -353,10 +356,14 @@ and `getTenantId()` treats the sentinel as "no tenant".
 
 ## 8. Current limitations
 
-- **Only 4 models are tenant-scoped** (Wave 1): `User`, `Robot`, `Dataset`, `TrainingJob`.
-  Alerts, incidents, processes, deployments, etc. still ignore `tenantId`. If a card's
-  stat tile shows a count for a not-yet-scoped model, that number reflects the whole
-  database — don't trust it as isolation evidence until the model lands in the allowlist.
+- **19 models are tenant-scoped** (Waves 1 + 3a–3e): `User`, `Robot`, `Dataset`,
+  `TrainingJob`, `Alert`, `Incident`, `RobotTask`, `RobotCommand`,
+  `ProcessDefinition`, `ProcessInstance`, `ApprovalRequest`, `Event`,
+  `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`, `Zone`,
+  `Conversation`, `ApiToken`.
+  Models not in this list (e.g. `ComplianceLog`) still show global counts.
+  Note: `ApiToken` auth lookup (`authenticateServiceToken`) runs before tenant
+  context is set, so the extension passes through — this is by design.
 - **No tenant switcher.** The current user is pinned to one tenant for the session. A
   super-admin impersonation flow is a future wave, not in scope today.
 - **No edit flow.** You can create and delete tenants but not rename or re-brand them.

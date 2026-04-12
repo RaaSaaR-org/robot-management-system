@@ -14,7 +14,10 @@
  * zero cost.
  *
  * Wave 1 allowlist: User, Robot, Dataset, TrainingJob (TASK-155).
- * Follow-up waves extend `TENANT_SCOPED_MODELS` and add the FKs + column.
+ * Wave 3a: Alert, Incident, RobotTask, RobotCommand (TASK-158).
+ * Wave 3b: ProcessDefinition, ProcessInstance, ApprovalRequest, Event.
+ * Wave 3c: ModelVersion, Deployment, SimulationJob, SyntheticJob.
+ * Wave 3d: Zone, Conversation.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -27,10 +30,31 @@ import { getTenantId } from '../middleware/tenantContext.js';
  * adding the column will blow up at runtime.
  */
 const TENANT_SCOPED_MODELS = new Set<string>([
+  // Wave 1 (TASK-155)
   'User',
   'Robot',
   'Dataset',
   'TrainingJob',
+  // Wave 3a (TASK-158)
+  'Alert',
+  'Incident',
+  'RobotTask',
+  'RobotCommand',
+  // Wave 3b
+  'ProcessDefinition',
+  'ProcessInstance',
+  'ApprovalRequest',
+  'Event',
+  // Wave 3c
+  'ModelVersion',
+  'Deployment',
+  'SimulationJob',
+  'SyntheticJob',
+  // Wave 3d
+  'Zone',
+  'Conversation',
+  // Wave 3e (TASK-165 service accounts)
+  'ApiToken',
 ]);
 
 const globalForPrisma = globalThis as unknown as {
