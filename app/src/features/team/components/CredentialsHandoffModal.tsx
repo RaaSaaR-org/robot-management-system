@@ -17,6 +17,14 @@ interface CredentialsHandoffModalProps {
   member: TeamMember | null;
   tempPassword: string | null;
   onClose: () => void;
+  /** Override the credential label (default: "Temporary password"). */
+  credentialLabel?: string;
+  /** Override the copy button text (default: "Copy email + password"). */
+  copyLabel?: string;
+  /** Override the warning text (default: "This password will not be shown again."). */
+  warningText?: string;
+  /** Override the helper text below the credential (default: first-login message). */
+  helperText?: string;
 }
 
 export function CredentialsHandoffModal({
@@ -24,6 +32,10 @@ export function CredentialsHandoffModal({
   member,
   tempPassword,
   onClose,
+  credentialLabel = 'Temporary password',
+  copyLabel = 'Copy email + password',
+  warningText,
+  helperText,
 }: CredentialsHandoffModalProps) {
   const [copied, setCopied] = useState(false);
 
@@ -50,7 +62,7 @@ export function CredentialsHandoffModal({
       footer={
         <div className="flex items-center justify-between gap-2 w-full">
           <Button variant="ghost" size="sm" onClick={handleCopyAll}>
-            {copied ? 'Copied!' : 'Copy email + password'}
+            {copied ? 'Copied!' : copyLabel}
           </Button>
           <Button variant="primary" size="sm" onClick={onClose}>
             Done
@@ -60,7 +72,7 @@ export function CredentialsHandoffModal({
     >
       <div className="space-y-4">
         <div className="rounded-brand border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-          <strong className="font-semibold">This password will not be shown again.</strong>{' '}
+          <strong className="font-semibold">{warningText ?? 'This password will not be shown again.'}</strong>{' '}
           Copy it now and send it to {member.name} via a secure channel.
         </div>
 
@@ -75,7 +87,7 @@ export function CredentialsHandoffModal({
           </div>
           <div>
             <div className="text-xs uppercase tracking-wider text-theme-tertiary mb-1">
-              Temporary password
+              {credentialLabel}
             </div>
             <div className="font-mono text-sm text-theme-primary select-all break-all">
               {tempPassword}
@@ -84,7 +96,7 @@ export function CredentialsHandoffModal({
         </div>
 
         <p className="text-xs text-theme-tertiary">
-          {member.name} will be asked to choose a new password on first login.
+          {helperText ?? `${member.name} will be asked to choose a new password on first login.`}
         </p>
       </div>
     </Modal>

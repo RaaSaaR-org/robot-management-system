@@ -4,7 +4,7 @@ aliases:
 - TASK-117
 title: 'Integrierter Teleop-Modus: SO-101 Leader Arm + Browser-UI'
 slug: integrierter-teleop-modus-so-101-leader-arm-browser-ui
-status: in-progress
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -20,6 +20,7 @@ due_date: ''
 created: 2026-03-31
 updated: 2026-04-12
 ---
+
 
 
 
