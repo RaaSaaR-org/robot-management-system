@@ -7,7 +7,7 @@
 import { Router, Request, Response } from 'express';
 import { dataContributionService } from '../services/DataContributionService.js';
 import { contributionService } from '../services/ContributionService.js';
-import { roleMiddleware } from '../middleware/auth.middleware.js';
+import { ownerOnly } from '../middleware/auth.middleware.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import type {
   InitiateContributionRequest,
@@ -541,7 +541,7 @@ contributionsRoutes.get('/db/impact', async (req: Request, res: Response) => {
  */
 contributionsRoutes.put(
   '/db/:id/approve',
-  roleMiddleware('admin'),
+  ownerOnly,
   async (req: Request, res: Response) => {
     try {
       const updated = await contributionService.approveContribution(req.params.id);

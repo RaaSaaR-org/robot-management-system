@@ -8,6 +8,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { superAdminOnly } from '../middleware/auth.middleware.js';
 import {
   tenantService,
   TenantNotEmptyError,
@@ -22,7 +23,7 @@ export const tenantsRoutes = Router();
 // GET /api/tenants — list all tenants (platform admin view)
 // ============================================================================
 
-tenantsRoutes.get('/', async (_req: Request, res: Response) => {
+tenantsRoutes.get('/', superAdminOnly, async (_req: Request, res: Response) => {
   try {
     const tenants = await tenantService.list();
     res.json({ tenants });
@@ -60,7 +61,7 @@ tenantsRoutes.get('/current', async (req: Request, res: Response) => {
 // POST /api/tenants — create a new tenant
 // ============================================================================
 
-tenantsRoutes.post('/', async (req: Request, res: Response) => {
+tenantsRoutes.post('/', superAdminOnly, async (req: Request, res: Response) => {
   try {
     const { name, slug, logoUrl, plan } = req.body ?? {};
     if (!name || typeof name !== 'string') {
@@ -87,7 +88,7 @@ tenantsRoutes.post('/', async (req: Request, res: Response) => {
 // DELETE /api/tenants/:id — delete a tenant (rejects DEFAULT + non-empty)
 // ============================================================================
 
-tenantsRoutes.delete('/:id', async (req: Request, res: Response) => {
+tenantsRoutes.delete('/:id', superAdminOnly, async (req: Request, res: Response) => {
   try {
     await tenantService.delete(req.params.id);
     res.status(204).send();

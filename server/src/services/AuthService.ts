@@ -19,6 +19,11 @@ export interface TokenPayload {
   userId: string;
   email: string;
   name: string;
+  /**
+   * Unified role model (TASK-162): 'super-admin' | 'owner' | 'member' | 'viewer'.
+   * Typed as string here to avoid a circular import with auth.middleware; the
+   * middleware narrows it to UserRole when attaching to req.user.
+   */
   role: string;
   /**
    * Multi-tenancy (TASK-155): tenant this user belongs to. Optional for

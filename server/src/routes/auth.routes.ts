@@ -12,6 +12,7 @@ import {
   authMiddleware,
   type AuthenticatedRequest,
 } from '../middleware/auth.middleware.js';
+import { MULTI_TENANCY_ENABLED } from '../config/features.js';
 
 export const authRoutes = Router();
 
@@ -58,6 +59,17 @@ const mfaDisableLimiter = rateLimit({
  */
 authRoutes.post('/register', async (req: Request, res: Response) => {
   try {
+    // TASK-162: anonymous self-service signup is disabled when multi-tenancy
+    // is on — new users must be added via the Team page (TASK-163) so they
+    // inherit a tenantId. Single-tenant deployments keep the legacy flow.
+    if (MULTI_TENANCY_ENABLED) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message:
+          'Signup is invite-only. Ask your organization owner to add you.',
+      });
+    }
+
     const { email, password, name } = req.body;
 
     if (!email || !password || !name) {

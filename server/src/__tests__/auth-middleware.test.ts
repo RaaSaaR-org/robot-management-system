@@ -89,7 +89,7 @@ describe('Auth Middleware', () => {
 
       const app = express();
       app.use(express.json());
-      app.get('/admin', authMiddleware, roleMiddleware('admin'), (_req, res) => {
+      app.get('/admin', authMiddleware, roleMiddleware('owner'), (_req, res) => {
         res.json({ ok: true });
       });
 

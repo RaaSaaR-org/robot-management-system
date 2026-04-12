@@ -322,12 +322,27 @@ and `getTenantId()` treats the sentinel as "no tenant".
 - **No edit flow.** You can create and delete tenants but not rename or re-brand them.
 - **Single-tenant user model.** A given `User` row belongs to exactly one tenant. No
   "user in multiple tenants" support.
-- **No role-based access on `/organizations`.** While `MULTI_TENANCY_ENABLED=true`, any
-  authenticated user can reach the page (acceptable for dev under `AUTH_DISABLED=true`;
-  for production you'll want a `super-admin` role check before exposing it).
-- **`GET /api/tenants` returns all tenants.** Intentional — it's the platform operator's
-  view of the fleet of tenants. Gate the route behind a super-admin role before exposing
-  to regular tenant users.
+- **Signup is invite-only when `MULTI_TENANCY_ENABLED=true`** (TASK-162). Anonymous
+  `POST /api/auth/register` returns 403 — new users must be added by their organization
+  owner via the Team page (TASK-163). Single-tenant deployments keep the legacy public
+  signup flow.
+- **`GET /api/tenants` / `POST /api/tenants` / `DELETE /api/tenants/:id` are super-admin
+  only** (TASK-162). `GET /api/tenants/current` stays reachable for any authenticated
+  user so the TopBar badge can render.
+
+### Role model (TASK-162)
+
+The unified `UserRole` union replaces the legacy `admin | operator | viewer` triple:
+
+| Role | `tenantId` | Can do |
+|---|---|---|
+| `super-admin` | `null` | Everything, including list/create/delete tenants and impersonate (TASK-160) |
+| `owner` | non-null | Full control of their own tenant: team management, settings, all data |
+| `member` | non-null | Operate robots, run training, manage datasets — everything except team/billing |
+| `viewer` | non-null | Read-only access to dashboards, metrics, and robot state |
+
+Legacy values are migrated by `20260412000000_task_162_unified_role_model`:
+`admin → owner`, `operator → member`, `viewer → viewer`.
 
 ---
 

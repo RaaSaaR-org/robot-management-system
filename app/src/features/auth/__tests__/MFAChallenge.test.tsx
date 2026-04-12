@@ -41,7 +41,7 @@ describe('MFAChallenge', () => {
     const user = userEvent.setup();
     const onSuccess = vi.fn();
     const mockResponse = {
-      user: { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'admin' as const, createdAt: '', updatedAt: '' },
+      user: { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'owner' as const, createdAt: '', updatedAt: '' },
       accessToken: 'new-token',
       refreshToken: 'refresh-token',
       expiresIn: 900000,
@@ -95,7 +95,7 @@ describe('MFAChallenge', () => {
     const user = userEvent.setup();
     const onSuccess = vi.fn();
     const mockResponse = {
-      user: { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'admin' as const, createdAt: '', updatedAt: '' },
+      user: { id: 'user-123', email: 'test@example.com', name: 'Test', role: 'owner' as const, createdAt: '', updatedAt: '' },
       accessToken: 'new-token',
       refreshToken: 'refresh-token',
       expiresIn: 900000,

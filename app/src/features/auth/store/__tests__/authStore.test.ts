@@ -11,7 +11,7 @@ const MOCK_USER: User = {
   id: 'test-user-001',
   email: 'test@neodem.local',
   name: 'Test User',
-  role: 'admin',
+  role: 'owner',
   avatar: undefined,
   tenantId: 'test-tenant',
   createdAt: '2024-01-01T00:00:00.000Z',
