@@ -35,27 +35,32 @@ Wave 1 foundation shipped in PR #122 (commit `07e0747`). Wave 2 UI + `runAsPlatf
 
 Ordered by impact on the demo story:
 
-**Wave 3a — Operations visibility (highest demo value):**
-- `Alert` (`server/prisma/schema.prisma`, ~line 234)
-- `Incident` (~line 875)
-- `RobotTask` (~line 530)
-- `Command` / `RobotCommand` (~line 109)
+**Wave 3a — Operations visibility (highest demo value) — PR #131:**
+- `Alert` (11 queries — full CRUD in AlertRepository)
+- `Incident` (17 queries — full CRUD + stats in IncidentRepository)
+- `RobotTask` (18 queries — full CRUD + stats in RobotTaskRepository)
+- ~~`RobotCommand`~~ — **SKIP**: only 1 Prisma query (GDPR export). Commands go via HTTP to robot agents, not persisted via Prisma.
 
 **Wave 3b — Automations & workflows:**
-- `ProcessDefinition` (~line 431)
-- `ProcessInstance` (~line 462)
-- `ApprovalRequest` (~line 1081)
-- `Event` (~line 284)
+- `ProcessDefinition` (10 queries — full CRUD in ProcessRepository)
+- `ProcessInstance` (8 queries — full CRUD in ProcessRepository)
+- `ApprovalRequest` (17 queries — full CRUD in ApprovalRepository)
+- `Event` (9 queries — audit log in EventRepository)
 
 **Wave 3c — VLA lifecycle:**
-- `ModelVersion` (~line 1901)
-- `Deployment` (~line 1927)
-- `SimulationJob` (~line 1570)
-- `SyntheticJob` (~line 1522)
+- `ModelVersion` (9 queries — VLA lifecycle in VLARepository)
+- `Deployment` (9 queries — VLA lifecycle in VLARepository)
+- `SimulationJob` (5 queries — CRUD in SimulationJobRepository)
+- `SyntheticJob` (18 queries — full CRUD + pagination in SyntheticDataService)
 
 **Wave 3d — Conversations / misc:**
-- `Fleet`, `Zone`
-- `Conversation` (~line 145) + `Message` (~line 166)
+- ~~`Fleet`~~ — **SKIP**: model does not exist in schema.prisma. "Fleet" is a route-level concept only (safety, oversight). No `model Fleet` to scope.
+- `Zone` (10 queries — full CRUD in ZoneRepository)
+- `Conversation` (8 queries — CRUD in ConversationRepository)
+- `Message` — **OPTIONAL**: only 2 queries, always accessed through parent `Conversation` FK. Implicitly isolated if `Conversation` is scoped.
+
+**Wave 3e — Service accounts (new, from TASK-165):**
+- `ApiToken` (8 queries in ServiceAccountService) — auth middleware queries by prefix without tenant filter, potential cross-tenant token leak. Must scope or use `runAsPlatform` for the auth lookup.
 
 ## Implementation Recipe (per model)
 
@@ -98,3 +103,33 @@ Per model, per wave:
 - **Do not** add all models to the allowlist at once. Each wave is independently reviewable and any one of them can reveal a model with custom Prisma middleware, raw SQL, or transactional patterns that need special handling.
 - **Cross-model relations** (e.g. `Alert` has an `Incident[]` relation) — the extension handles these automatically as long as both ends are in the allowlist. If only one end is scoped, cross-tenant data can leak via Prisma `include`.
 - Use `runAsPlatform` (from `server/src/middleware/tenantContext.ts`) for any operator-level aggregation query that needs cross-tenant reads — see `TenantService.countsFor()` for the canonical example.
+- **ApiToken** (TASK-165) — `authenticateServiceToken()` in `ServiceAccountService.ts` does `prisma.apiToken.findMany({ where: { prefix } })` which is a cross-tenant lookup by design (auth must find the token regardless of tenant). This should use `runAsPlatform` or stay unscoped. Other ApiToken queries (list, create, revoke) go through tenant-scoped User FK but could still benefit from explicit scoping.
+
+## Model Usage Audit (2026-04-12)
+
+Prisma query counts per model (excluding tests, node_modules):
+
+| Model | Queries | Status |
+|-------|---------|--------|
+| Alert | 11 | Active — full CRUD |
+| Incident | 17 | Active — full CRUD + stats |
+| RobotTask | 18 | Active — full CRUD + stats |
+| RobotCommand | **1** | **Dead** — GDPR export only |
+| ProcessDefinition | 10 | Active — full CRUD |
+| ProcessInstance | 8 | Active — full CRUD |
+| ApprovalRequest | 17 | Active — full CRUD |
+| Event | 9 | Active — audit log |
+| ModelVersion | 9 | Active — VLA lifecycle |
+| Deployment | 9 | Active — VLA lifecycle |
+| SimulationJob | 5 | Active — CRUD |
+| SyntheticJob | 18 | Active — full CRUD + pagination |
+| Fleet | **0** | **Dead** — no Prisma queries, route-level concept only |
+| Zone | 10 | Active — full CRUD |
+| Conversation | 8 | Active — CRUD |
+| Message | 2 | Light — always via parent Conversation |
+| ApiToken | 8 | Active — service account auth + CRUD (TASK-165) |
+
+## Cleanup TODO (separate from this task)
+
+- **`Fleet`** — listed in the original task but `model Fleet` does not exist in schema.prisma. The concept is route-level only. Remove from any future wave plans.
+- **`RobotCommand`** — only used in GDPR export. Evaluate whether commands should be persisted at all (currently sent via HTTP to robot agents, not stored).

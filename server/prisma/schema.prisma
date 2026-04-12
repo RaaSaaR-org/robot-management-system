@@ -111,6 +111,9 @@ model RobotTelemetry {
   @@index([timestamp])
 }
 
+// TODO(cleanup): RobotCommand has only 1 Prisma query (GDPR export in GDPRRequestService).
+// Commands are sent via HTTP to robot agents (RobotManager.sendCommand), not persisted here.
+// Evaluate whether this model is still needed or should be removed.
 model RobotCommand {
   id           String    @id @default(uuid())
   robotId      String
