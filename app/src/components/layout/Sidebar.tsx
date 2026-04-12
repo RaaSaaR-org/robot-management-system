@@ -281,9 +281,9 @@ const NAV_CATEGORIES: NavCategory[] = [
       },
     ],
   },
-  // Admin group — only visible when multi-tenancy is enabled (TASK-155 Wave 2)
-  // AND the user is an owner or platform super-admin (TASK-162).
-  // Regular members + viewers don't see this group at all.
+  // Admin group — only visible when multi-tenancy is enabled AND the
+  // user is an owner or platform super-admin. Members + viewers don't
+  // see this group at all.
   {
     id: "admin",
     label: "Admin",
@@ -310,7 +310,7 @@ const NAV_CATEGORIES: NavCategory[] = [
         label: "Team",
         path: "/team",
         // Tenant-level team management — owners manage their own tenant;
-        // super-admins can reach any team via impersonation (TASK-160).
+        // super-admins can reach any team via impersonation.
         requiresRole: ["super-admin", "owner"],
         icon: (
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -392,6 +392,36 @@ export function Sidebar({ className }: SidebarProps) {
         {visibleCategories.map((category) => {
           const isExpanded = expandedCategories.has(category.id);
           const hasActiveItem = isCategoryActive(category);
+          const isSingleton = category.items.length === 1;
+
+          // Single-item categories render as a flat nav link — no
+          // collapsible header. Prevents "Robot Management > Fleet"
+          // style redundancy when there's only one child.
+          if (isSingleton) {
+            const item = category.items[0];
+            return (
+              <div key={category.id} className="mb-1">
+                <NavLink
+                  to={item.path}
+                  title={collapsed ? item.label : undefined}
+                  className={({ isActive }) =>
+                    cn(
+                      collapsed
+                        ? "flex items-center justify-center p-2.5 rounded-brand"
+                        : "flex items-center gap-3 px-3 py-2 rounded-brand text-sm",
+                      "transition-colors",
+                      isActive
+                        ? "bg-cobalt text-white"
+                        : "text-theme-secondary hover:text-theme-primary hover:bg-theme-hover"
+                    )
+                  }
+                >
+                  {item.icon}
+                  {!collapsed && <span>{item.label}</span>}
+                </NavLink>
+              </div>
+            );
+          }
 
           return (
             <div key={category.id} className="mb-1">
@@ -494,7 +524,7 @@ export const NAV_ITEMS = NAV_CATEGORIES.flatMap((c) => c.items);
  * Return the flattened list of nav items visible to the current user.
  * Same filter rules as the desktop sidebar — feature flags first, then
  * category-level role, then per-item role. Used by MobileNav so mobile
- * and desktop can't drift out of sync. TASK-163/164.
+ * and desktop can't drift out of sync.
  */
 export function useVisibleNavItems(): NavItem[] {
   const features = useFeatures();

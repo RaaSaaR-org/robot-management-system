@@ -48,7 +48,7 @@ export function TeamPage() {
 
   useEffect(() => {
     if (!toast) return;
-    // Keep error toasts up longer — users need time to read them.
+    // Error toasts persist longer so users have time to read them.
     const ms = toast.kind === 'error' ? 5000 : 2500;
     const t = window.setTimeout(() => setToast(null), ms);
     return () => window.clearTimeout(t);
@@ -131,16 +131,39 @@ export function TeamPage() {
           No team members yet.
         </div>
       ) : (
-        <div className="space-y-2">
-          {members.map((m) => (
-            <TeamMemberRow
-              key={m.id}
-              member={m}
-              onChangeRole={changeRole}
-              onSetActive={setActive}
-              onError={(message) => setToast({ kind: 'error', message })}
-            />
-          ))}
+        <div className="overflow-x-auto rounded-brand border border-theme bg-theme-card">
+          <table className="w-full text-left">
+            <thead className="bg-theme-elevated border-b border-theme">
+              <tr>
+                <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
+                  Name
+                </th>
+                <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
+                  Email
+                </th>
+                <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
+                  Role
+                </th>
+                <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
+                  Last login
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wider text-theme-tertiary">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((m) => (
+                <TeamMemberRow
+                  key={m.id}
+                  member={m}
+                  onChangeRole={changeRole}
+                  onSetActive={setActive}
+                  onError={(message) => setToast({ kind: 'error', message })}
+                />
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

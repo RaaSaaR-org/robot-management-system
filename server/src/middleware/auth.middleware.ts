@@ -62,16 +62,46 @@ function isAuthDisabled(): boolean {
 }
 
 /**
+ * Header used by super-admins to impersonate another tenant. When
+ * present and the caller's role is `super-admin`, every downstream
+ * Prisma query inside the request runs as if the caller belonged to
+ * the named tenant. Non-super-admin callers setting the header are
+ * silently ignored (we never 403 — server treats it as no-op so we
+ * don't leak information about which tenants exist).
+ *
+ * Intentionally minimal for "future troubleshooting" — the real
+ * impersonation flow with ComplianceLog entries + short-lived tokens
+ * lives in TASK-160.
+ */
+const IMPERSONATE_HEADER = 'x-impersonate-tenant';
+
+/**
  * Continue the request chain inside a tenant-scoped AsyncLocalStorage
  * if multi-tenancy is enabled. Pulls tenantId from `req.user` (set by
  * the caller), falling back to DEFAULT for dev/AUTH_DISABLED and for
  * users whose token predates the multi-tenancy upgrade.
+ *
+ * Super-admins can override the tenant for the duration of a single
+ * request via the `x-impersonate-tenant` header. Every other role
+ * sees its own tenantId regardless of what the header says.
  */
-function continueWithTenant(user: AuthUser | undefined, next: NextFunction): void {
+function continueWithTenant(
+  req: Request,
+  user: AuthUser | undefined,
+  next: NextFunction
+): void {
   if (!MULTI_TENANCY_ENABLED) {
     return next();
   }
-  const tenantId = user?.tenantId ?? DEFAULT_TENANT_ID;
+
+  let tenantId = user?.tenantId ?? DEFAULT_TENANT_ID;
+  if (user?.role === 'super-admin') {
+    const override = req.headers[IMPERSONATE_HEADER];
+    if (typeof override === 'string' && override.length > 0) {
+      tenantId = override;
+    }
+  }
+
   tenantStore.run({ tenantId }, () => next());
 }
 
@@ -100,7 +130,7 @@ export function authMiddleware(
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
-    return continueWithTenant(req.user, next);
+    return continueWithTenant(req, req.user, next);
   }
 
   // Extract token
@@ -132,7 +162,7 @@ export function authMiddleware(
     tenantId: payload.tenantId ?? null,
   };
 
-  continueWithTenant(req.user, next);
+  continueWithTenant(req, req.user, next);
 }
 
 /**
@@ -149,13 +179,13 @@ export function optionalAuthMiddleware(
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
-    return continueWithTenant(req.user, next);
+    return continueWithTenant(req, req.user, next);
   }
 
   // Extract token
   const token = extractBearerToken(req);
   if (!token) {
-    return continueWithTenant(undefined, next);
+    return continueWithTenant(req, undefined, next);
   }
 
   // Verify token
@@ -170,7 +200,7 @@ export function optionalAuthMiddleware(
     };
   }
 
-  continueWithTenant(req.user, next);
+  continueWithTenant(req, req.user, next);
 }
 
 /**

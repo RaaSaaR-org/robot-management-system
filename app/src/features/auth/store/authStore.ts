@@ -432,6 +432,13 @@ export const selectMustChangePassword = (state: AuthStore) =>
  * prefer `error.message` (set by the axios interceptor in client.ts)
  * over the local code→message map. The local map is only used as a
  * fallback when we have no server text (offline, 500 with no body).
+ *
+ * Rationale: TASK-164 mapped UNKNOWN_ERROR → "Incorrect email or
+ * password." for login hygiene. Without this ordering, every
+ * non-login flow (change password, etc.) started showing the login
+ * text when the server returned a different 4xx. The login flow
+ * stays hygienic because the server itself returns the generic
+ * string for any 4xx on /login.
  */
 function getErrorMessage(error: unknown): string {
   if (error && typeof error === 'object') {

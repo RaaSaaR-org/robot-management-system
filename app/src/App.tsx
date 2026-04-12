@@ -65,11 +65,11 @@ import {
  * other page. The /set-password route bypasses this guard so the
  * user can actually complete the set.
  *
- * TASK-163 (hardened): `requiresRole` gates a specific route to users
- * with a qualifying role. Users hitting a role-gated route without
- * the right role get bounced to /dashboard so they can't even see
- * the feature's shell (the server also enforces 403 on every mutation,
- * this is defense in depth + UX hygiene).
+ * `requiresRole` gates a specific route to users with a qualifying
+ * role. Users hitting a role-gated route without the right role get
+ * bounced to /dashboard so they can't even see the feature's shell
+ * (the server also enforces 403 on every mutation; this is
+ * defense-in-depth + UX hygiene).
  */
 function ProtectedAppRoute({
   children,
