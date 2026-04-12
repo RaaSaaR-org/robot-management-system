@@ -131,6 +131,28 @@ tenantsRoutes.post('/onboard', superAdminOnly, async (req: Request, res: Respons
 });
 
 // ============================================================================
+// PATCH /api/tenants/:id — update tenant (name, logo, plan, settings)
+// ============================================================================
+
+tenantsRoutes.patch('/:id', superAdminOnly, async (req: Request, res: Response) => {
+  try {
+    const { name, logoUrl, plan, settings } = req.body ?? {};
+
+    const tenant = await tenantService.update(req.params.id, {
+      name: typeof name === 'string' ? name : undefined,
+      logoUrl: logoUrl === null ? null : typeof logoUrl === 'string' ? logoUrl : undefined,
+      plan: plan === null ? null : typeof plan === 'string' ? plan : undefined,
+      settings: settings && typeof settings === 'object' ? settings : undefined,
+    });
+    res.json(tenant);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const status = message === 'Tenant not found' ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+// ============================================================================
 // DELETE /api/tenants/:id — delete a tenant (rejects DEFAULT + non-empty)
 // ============================================================================
 

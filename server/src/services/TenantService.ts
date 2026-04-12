@@ -43,6 +43,13 @@ export interface CreateTenantInput {
   plan?: string | null;
 }
 
+export interface UpdateTenantInput {
+  name?: string;
+  logoUrl?: string | null;
+  plan?: string | null;
+  settings?: Record<string, unknown>;
+}
+
 export class TenantNotEmptyError extends Error {
   constructor(public counts: TenantCounts) {
     super('Tenant is not empty');
@@ -163,6 +170,41 @@ export class TenantService {
         plan: input.plan ?? null,
       },
     });
+    return toDto(row, await countsFor(row.id));
+  }
+
+  async update(id: string, input: UpdateTenantInput): Promise<TenantWithCounts> {
+    const existing = await prisma.tenant.findUnique({ where: { id } });
+    if (!existing) {
+      throw new Error('Tenant not found');
+    }
+
+    const data: Record<string, unknown> = {};
+
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (!name) throw new Error('name cannot be empty');
+      data.name = name;
+    }
+
+    if (input.logoUrl !== undefined) {
+      if (input.logoUrl !== null && input.logoUrl !== '') {
+        try { new URL(input.logoUrl); } catch {
+          throw new Error('logoUrl must be a valid URL');
+        }
+      }
+      data.logoUrl = input.logoUrl || null;
+    }
+
+    if (input.plan !== undefined) {
+      data.plan = input.plan;
+    }
+
+    if (input.settings !== undefined) {
+      data.settings = JSON.stringify(input.settings);
+    }
+
+    const row = await prisma.tenant.update({ where: { id }, data });
     return toDto(row, await countsFor(row.id));
   }
 

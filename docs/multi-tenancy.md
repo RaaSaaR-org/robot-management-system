@@ -392,7 +392,29 @@ resources in a single `prisma.$transaction()`. The admin user gets `role: 'owner
 
 ---
 
-## 9. Current limitations
+## 9. Per-tenant branding (TASK-161)
+
+Each tenant can have its own logo and brand color via `PATCH /api/tenants/:id` (super-admin only).
+
+**Fields:**
+- `logoUrl` — external URL to the tenant's logo (displayed in TopBar pill and OrganizationCard)
+- `settings.brandColor` — hex color string (e.g. `#FF6700`) stored in the `settings` JSON column
+
+**Settings schema** (v1, intentionally minimal):
+```json
+{
+  "brandColor": "#3B82F6",
+  "compactMode": false
+}
+```
+
+The edit modal on the Organizations page has two tabs: Basics (name, plan) and Branding
+(logo URL with preview, color picker with presets). Logos are external URLs — no upload
+pipeline for v1.
+
+---
+
+## 10. Current limitations
 
 - **19 models are tenant-scoped** (Waves 1 + 3a–3e): `User`, `Robot`, `Dataset`,
   `TrainingJob`, `Alert`, `Incident`, `RobotTask`, `RobotCommand`,
@@ -402,7 +424,8 @@ resources in a single `prisma.$transaction()`. The admin user gets `role: 'owner
   Models not in this list (e.g. `ComplianceLog`) still show global counts.
   Note: `ApiToken` auth lookup (`authenticateServiceToken`) runs before tenant
   context is set, so the extension passes through — this is by design.
-- **No edit flow.** You can create and delete tenants but not rename or re-brand them.
+- **No logo upload.** Logos are external URLs only (v1). A future version could add
+  upload to RustFS.
 - **Single-tenant user model.** A given `User` row belongs to exactly one tenant. No
   "user in multiple tenants" support.
 - **Signup is invite-only when `MULTI_TENANCY_ENABLED=true`** (TASK-162). Anonymous

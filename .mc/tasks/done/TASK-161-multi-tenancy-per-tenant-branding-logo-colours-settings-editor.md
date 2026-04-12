@@ -4,7 +4,7 @@ aliases:
 - TASK-161
 title: 'Multi-tenancy: per-tenant branding (logo, colours, settings editor)'
 slug: multi-tenancy-per-tenant-branding-logo-colours-settings-editor
-status: backlog
+status: done
 priority: 3
 owner: ''
 projects: []

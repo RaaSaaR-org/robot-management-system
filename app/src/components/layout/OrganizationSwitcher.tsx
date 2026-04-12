@@ -105,9 +105,11 @@ export function OrganizationSwitcher() {
         className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-theme-elevated border border-theme text-xs text-theme-secondary"
         title={`Current organization: ${label}`}
       >
-        <span className="text-cobalt">
-          <BuildingIcon />
-        </span>
+        {current.logoUrl ? (
+          <img src={current.logoUrl} alt="" className="w-4 h-4 rounded-sm object-contain" />
+        ) : (
+          <span className="text-cobalt"><BuildingIcon /></span>
+        )}
         <span className="font-medium text-theme-primary">{label}</span>
       </span>
     );
@@ -127,9 +129,11 @@ export function OrganizationSwitcher() {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className={impersonating ? 'text-amber-200' : 'text-cobalt'}>
-          <BuildingIcon />
-        </span>
+        {current.logoUrl ? (
+          <img src={current.logoUrl} alt="" className="w-4 h-4 rounded-sm object-contain" />
+        ) : (
+          <span className={impersonating ? 'text-amber-200' : 'text-cobalt'}><BuildingIcon /></span>
+        )}
         <span className="font-medium">{label}</span>
         <ChevronIcon />
       </button>

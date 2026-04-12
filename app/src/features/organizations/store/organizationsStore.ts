@@ -11,6 +11,7 @@ import { organizationsApi } from '../api/organizationsApi';
 import type {
   Organization,
   CreateOrganizationInput,
+  UpdateOrganizationInput,
 } from '../types/organizations.types';
 
 /**
@@ -40,6 +41,7 @@ interface OrganizationsState {
   fetchList: () => Promise<void>;
   fetchCurrent: () => Promise<void>;
   create: (input: CreateOrganizationInput) => Promise<Organization>;
+  update: (id: string, input: UpdateOrganizationInput) => Promise<Organization>;
   remove: (id: string) => Promise<void>;
   reset: () => void;
 }
@@ -86,6 +88,16 @@ export const useOrganizationsStore = create<OrganizationsState>((set, get) => ({
     const created = await organizationsApi.create(input);
     set((state) => ({ list: [...state.list, created] }));
     return created;
+  },
+
+  async update(id, input) {
+    set({ error: null });
+    const updated = await organizationsApi.update(id, input);
+    set((state) => ({
+      list: state.list.map((o) => (o.id === id ? updated : o)),
+      current: state.current?.id === id ? updated : state.current,
+    }));
+    return updated;
   },
 
   async remove(id) {
