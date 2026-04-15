@@ -1,6 +1,17 @@
 import { Link } from 'react-router-dom';
+import { useBrand } from '@/brand';
+
+const LIFECYCLE_STAGES = [
+  { label: 'Collect', tone: 'cobalt' },
+  { label: 'Train', tone: 'cobalt' },
+  { label: 'Deploy', tone: 'cobalt' },
+  { label: 'Evaluate', tone: 'turquoise' },
+  { label: 'Operate', tone: 'turquoise' },
+  { label: 'Comply', tone: 'turquoise' },
+] as const;
 
 export function HeroSection() {
+  const brand = useBrand();
   return (
     <section className="min-h-screen section-primary pt-16 flex items-center relative overflow-hidden">
       {/* Background gradient */}
@@ -17,31 +28,38 @@ export function HeroSection() {
             <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
               Open Physical AI Platform
             </p>
-            <h1 className="text-3xl sm:text-4xl lg:text-6xl font-bold text-theme-primary leading-tight mb-6">
+            <h1 className="text-3xl sm:text-4xl lg:text-6xl font-bold text-theme-primary leading-tight mb-4">
               The Open{' '}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-cobalt to-turquoise">
                 Physical AI
               </span>
               {' '}Platform
             </h1>
+            {brand.nameExpansion && (
+              <p className="text-theme-muted font-mono text-xs sm:text-sm mb-6 tracking-wide">
+                {brand.name} — {brand.nameExpansion}
+              </p>
+            )}
             <p className="text-xl text-theme-secondary mb-8 max-w-xl mx-auto lg:mx-0">
-              From first demonstration to compliant production — the complete
-              Physical AI lifecycle, open source.
+              {brand.shortSlogan ? `${brand.shortSlogan} — ` : ''}from first demonstration to compliant production, open source.
             </p>
 
             {/* Pipeline stages */}
             <div className="flex flex-wrap items-center gap-2 justify-center lg:justify-start mb-8 text-sm font-mono">
-              <span className="px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20">Collect</span>
-              <span className="text-theme-muted">→</span>
-              <span className="px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20">Train</span>
-              <span className="text-theme-muted">→</span>
-              <span className="px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20">Deploy</span>
-              <span className="text-theme-muted">→</span>
-              <span className="px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20">Evaluate</span>
-              <span className="text-theme-muted">→</span>
-              <span className="px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20">Operate</span>
-              <span className="text-theme-muted">→</span>
-              <span className="px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20">Comply</span>
+              {LIFECYCLE_STAGES.map((stage, i) => (
+                <span key={stage.label} className="flex items-center gap-2">
+                  <span
+                    className={
+                      stage.tone === 'cobalt'
+                        ? 'px-3 py-1 rounded-full bg-cobalt/10 text-cobalt border border-cobalt/20'
+                        : 'px-3 py-1 rounded-full bg-turquoise/10 text-turquoise border border-turquoise/20'
+                    }
+                  >
+                    {stage.label}
+                  </span>
+                  {i < LIFECYCLE_STAGES.length - 1 && <span className="text-theme-muted">→</span>}
+                </span>
+              ))}
             </div>
 
             {/* CTAs */}

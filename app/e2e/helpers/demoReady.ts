@@ -1,5 +1,10 @@
 import { Page } from '@playwright/test';
 
+/** CSS injected into every demo page to hide screenshot-unfriendly elements. */
+const DEMO_CLEANUP_CSS = `
+  [data-demo-badge] { display: none !important; }
+`;
+
 /**
  * Navigates to a demo page and waits until MSW is ready and data has loaded.
  */
@@ -15,6 +20,8 @@ export async function gotoDemo(page: Page, path: string): Promise<void> {
   await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
   // Brief settle for React renders
   await page.waitForTimeout(800);
+  // Hide elements that shouldn't appear in marketing assets
+  await page.addStyleTag({ content: DEMO_CLEANUP_CSS }).catch(() => {});
 }
 
 /**

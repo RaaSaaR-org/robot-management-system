@@ -36,6 +36,8 @@ export const TURQUOISE_SCALE: ColorScale = {
 
 export const DEFAULT_BRAND: BrandConfig = {
   name: 'NeoDEM',
+  nameExpansion: 'Neo Data & Execution Management',
   tagline: 'Fleet Management System',
+  shortSlogan: 'Bringing Intelligence to Motion',
   copyright: 'NeoDEM Contributors',
 };

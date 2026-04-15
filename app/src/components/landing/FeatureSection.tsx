@@ -88,14 +88,14 @@ export function FeatureSection() {
         {/* Section Header */}
         <div className="text-center mb-16">
           <p className="text-cobalt font-mono text-sm mb-4 tracking-wider uppercase">
-            The Full Pipeline
+            One Toolchain
           </p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
-            Collect → Train → Deploy → Evaluate → Operate → Comply
+          <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-3">
+            Everything you need, built in
           </h2>
           <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            The complete Physical AI lifecycle — from recording demonstrations
-            to compliant production deployment.
+            Eight focused tools that snap together to form the complete Physical AI
+            lifecycle — no duct tape, no gaps.
           </p>
         </div>
 
