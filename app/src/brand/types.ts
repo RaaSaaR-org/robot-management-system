@@ -28,8 +28,12 @@ export interface ThemeSurfaceOverrides {
 export interface BrandConfig {
   /** Display name shown in UI (e.g., "EmAI RMS", "ACME Robotics") */
   name: string;
+  /** Expansion of the display name acronym (e.g., "Neo Data & Execution Management") */
+  nameExpansion?: string;
   /** Short tagline (e.g., "Robot Management System") */
   tagline: string;
+  /** Short marketing slogan used on the landing hero (e.g., "Bringing Intelligence to Motion") */
+  shortSlogan?: string;
   /** Copyright holder (e.g., "EmAI Robotics GmbH") */
   copyright: string;
   /** Logo filename relative to brand/ folder (e.g., "logo.svg") */
