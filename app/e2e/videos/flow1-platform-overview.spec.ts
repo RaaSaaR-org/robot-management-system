@@ -4,25 +4,31 @@ import { mkdirSync } from 'fs';
 
 mkdirSync('e2e/results/videos', { recursive: true });
 
-test('Flow 1: Platform Overview', async ({ page }) => {
-  // Scene 1: Landing Page
-  await smoothGoto(page, '/#/', 3000);
+/**
+ * Flow 1 — Full Lifecycle Tour
+ * One continuous sweep across the six lifecycle phases:
+ *   Collect → Train → Deploy → Evaluate → Operate → Comply
+ * Target duration: ~14 seconds.
+ */
+test('Flow 1: Full Lifecycle Tour', async ({ page }) => {
+  // Scene 1 — The pitch: landing page
+  await smoothGoto(page, '/#/', 1400);
 
-  // Scene 2: Dashboard — Fleet Overview
-  await smoothGoto(page, '/#/dashboard', 4000);
+  // Scene 2 — Collect
+  await smoothGoto(page, '/#/datasets', 1500);
 
-  // Scene 3: Robot List
-  await smoothGoto(page, '/#/robots', 3500);
+  // Scene 3 — Train
+  await smoothGoto(page, '/#/training', 1500);
 
-  // Scene 4: Fleet Map
-  await smoothGoto(page, '/#/fleet', 4000);
+  // Scene 4 — Deploy
+  await smoothGoto(page, '/#/deployments', 1500);
 
-  // Scene 5: Alerts
-  await smoothGoto(page, '/#/alerts', 3000);
+  // Scene 5 — Operate (the dashboard is the living heart of the platform)
+  await smoothGoto(page, '/#/dashboard', 1800);
 
-  // Scene 6: Docs
-  await smoothGoto(page, '/#/docs', 3000);
+  // Scene 6 — Comply
+  await smoothGoto(page, '/#/compliance', 1800);
 
-  // Final pause
-  await scenePause(page, 2000);
+  // Final beat
+  await scenePause(page, 900);
 });

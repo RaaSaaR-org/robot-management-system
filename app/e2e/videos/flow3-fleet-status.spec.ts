@@ -4,16 +4,24 @@ import { mkdirSync } from 'fs';
 
 mkdirSync('e2e/results/videos', { recursive: true });
 
-test('Flow 3: Fleet Status at a Glance', async ({ page }) => {
-  // Scene 1: Dashboard with fleet overview
-  await smoothGoto(page, '/#/dashboard', 5000);
+/**
+ * Flow 3 — Operate → Comply (the ops side of the loop)
+ * Live dashboard, fleet map, alerts, compliance audit.
+ * Target duration: ~11 seconds.
+ */
+test('Flow 3: Operate and Comply', async ({ page }) => {
+  // Scene 1 — Fleet dashboard (Operate)
+  await smoothGoto(page, '/#/dashboard', 1900);
 
-  // Scene 2: Fleet Map
-  await smoothGoto(page, '/#/fleet', 5000);
+  // Scene 2 — Fleet map (Scale)
+  await smoothGoto(page, '/#/fleet', 1900);
 
-  // Scene 3: Back to dashboard
-  await smoothGoto(page, '/#/dashboard', 4000);
+  // Scene 3 — Alerts
+  await smoothGoto(page, '/#/alerts', 1500);
 
-  // Final pause
-  await scenePause(page, 2000);
+  // Scene 4 — Compliance audit (Trust)
+  await smoothGoto(page, '/#/compliance', 2000);
+
+  // Final beat
+  await scenePause(page, 900);
 });
