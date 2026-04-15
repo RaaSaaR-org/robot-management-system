@@ -18,8 +18,8 @@ const pillars = [
     ),
     title: 'Open Foundation',
     description:
-      'Leverage 970K+ open trajectories from Open X-Embodiment. Fine-tune with ~100 demonstrations per task. Build on proven VLA architectures.',
-    tags: ['970K+ trajectories', 'Quick fine-tuning'],
+      'Built on LeRobot. Fine-tune SmolVLA, π0.5, or GR00T adapters on your own data — ~100 demonstrations per task is enough to get started.',
+    tags: ['LeRobot', 'SmolVLA / π0.5 / GR00T'],
   },
   {
     icon: (
@@ -34,8 +34,8 @@ const pillars = [
     ),
     title: 'Multi-Modal Collection',
     description:
-      'VR teleoperation for intuitive demonstration capture. High-fidelity simulation at 43M+ FPS. Automated quality validation pipelines.',
-    tags: ['VR teleoperation', 'Sim-to-real transfer'],
+      'Capture teleop sessions, kinesthetic demonstrations, and video — every episode versioned and provenance-tracked from day one.',
+    tags: ['Teleop + kinesthetic', 'Versioned episodes'],
   },
   {
     icon: (
@@ -48,10 +48,10 @@ const pillars = [
         />
       </svg>
     ),
-    title: 'Fleet Learning',
+    title: 'Continuous Improvement',
     description:
-      'Federated learning across your robot fleet. Privacy-preserving data aggregation. Every robot contributes, every robot improves.',
-    tags: ['Privacy-first', 'Continuous improvement'],
+      'Every deployed robot becomes a source of new training data. Retrain on real-world episodes, redeploy with canary rollouts, close the loop.',
+    tags: ['Retrain on real episodes', 'Canary rollouts'],
   },
   {
     icon: (
@@ -64,10 +64,10 @@ const pillars = [
         />
       </svg>
     ),
-    title: 'Data Marketplace',
+    title: 'Hub Integration',
     description:
-      'Contribute data, earn service credits. Access shared skill libraries. Track your fleet\'s impact on model improvements.',
-    tags: ['Earn credits', 'Shared skills'],
+      'Publish datasets and skills to the Hugging Face Hub. Pull them back to bootstrap new models — or share inside your own org.',
+    tags: ['Hugging Face Hub', 'Org-private or public'],
   },
 ];
 

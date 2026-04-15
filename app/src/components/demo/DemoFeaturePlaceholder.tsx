@@ -41,8 +41,11 @@ export function DemoFeaturePlaceholder({
         {/* Feature name */}
         <h2 className="text-2xl font-bold text-theme-primary mb-3">{featureName}</h2>
 
-        {/* Demo badge */}
-        <span className="inline-block px-3 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 mb-4">
+        {/* Demo badge — hidden in marketing screenshots via data-demo-badge */}
+        <span
+          data-demo-badge
+          className="inline-block px-3 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 mb-4"
+        >
           Demo &mdash; Not Available
         </span>
 

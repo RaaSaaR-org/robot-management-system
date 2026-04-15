@@ -8,9 +8,24 @@ import { useState } from 'react';
 import { useBrand } from '@/brand';
 
 const VIDEO_TABS = [
-  { id: 'platform-overview', label: 'Platform Overview', file: 'platform-overview.webm' },
-  { id: 'robot-control', label: 'Robot Control', file: 'robot-control.webm' },
-  { id: 'fleet-status', label: 'Fleet Status', file: 'fleet-status.webm' },
+  {
+    id: 'lifecycle-tour',
+    label: 'Full Lifecycle Tour',
+    file: 'lifecycle-tour.webm',
+    caption: 'Collect → Train → Deploy → Evaluate → Operate → Comply in one sweep.',
+  },
+  {
+    id: 'collect-train',
+    label: 'Collect → Train',
+    file: 'collect-train.webm',
+    caption: 'The dev side: record demonstrations, curate datasets, train VLA models.',
+  },
+  {
+    id: 'operate-comply',
+    label: 'Operate → Comply',
+    file: 'operate-comply.webm',
+    caption: 'The ops side: live dashboard, fleet map, and audit-ready compliance.',
+  },
 ] as const;
 
 export function VideoSection() {
@@ -23,14 +38,18 @@ export function VideoSection() {
     <section className="py-20 section-primary">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-10">
-          <h2 className="text-3xl font-bold text-theme-primary mb-3">Watch the Demo</h2>
+          <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
+            Watch the Loop
+          </p>
+          <h2 className="text-3xl font-bold text-theme-primary mb-3">See the Lifecycle in Motion</h2>
           <p className="text-theme-secondary max-w-2xl mx-auto">
-            See {brand.name} manage a multi-robot H1 fleet in real-time.
+            Three short demos of {brand.name} — one for each side of the loop, plus a full
+            tour across every phase.
           </p>
         </div>
 
         {/* Tab buttons */}
-        <div className="flex justify-center gap-2 mb-6">
+        <div className="flex flex-wrap justify-center gap-2 mb-6">
           {VIDEO_TABS.map((tab) => (
             <button
               key={tab.id}
@@ -64,6 +83,7 @@ export function VideoSection() {
               Your browser does not support the video tag.
             </video>
           </div>
+          <p className="text-center text-theme-muted text-sm mt-4 font-mono">{activeVideo.caption}</p>
         </div>
       </div>
     </section>

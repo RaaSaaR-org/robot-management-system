@@ -45,9 +45,14 @@ export function Footer() {
             <div className="mb-4">
               <Logo linkTo="" />
             </div>
-            <p className="text-theme-muted text-sm mb-4">
+            <p className="text-theme-muted text-sm mb-1">
               The Open Physical AI Platform — Collect → Train → Deploy → Evaluate → Operate → Comply.
             </p>
+            {brand.nameExpansion && (
+              <p className="text-theme-muted font-mono text-xs mb-4 tracking-wide">
+                {brand.name} · {brand.nameExpansion}
+              </p>
+            )}
             {/* Social Links */}
             <div className="flex gap-4">
               <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="text-theme-muted hover:text-theme-primary transition-colors">
