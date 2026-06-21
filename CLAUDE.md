@@ -119,6 +119,8 @@ cd robot-agent
 npm run dev          # Default (SimBot Light)
 npm run dev:so101    # SO-ARM100 robot arm
 npm run dev:h1       # Unitree H1 humanoid
+npm run dev:g1       # Unitree G1 humanoid
+npm run dev:g1-edu   # Unitree G1 EDU + Dex3-1 hands (43 DOF)
 ```
 
 ### Robot Agent CLI (`roboctl`)

@@ -1,6 +1,11 @@
 # Robot Integration Guide
 
-This guide covers the SO-101 robot arm setup: hardware connection, calibration, sidecar service, and known issues.
+This guide covers integrating physical robots with NeoDEM:
+
+- **[SO-101](#so-101-overview)** — 6-DOF arm, serial sidecar. Production-tested.
+- **[Unitree G1 EDU (Dex3-1)](#unitree-g1-edu-dex3-1)** — 43-DOF humanoid, DDS sidecar. ⚠️ hardware-pending — see TASK-169 (`.mc/tasks/todo/TASK-169-lab-bringup-unitree-g1-edu-hardware.md`) for the safety-staged lab bring-up.
+
+The pattern is the same for both: a Python **hardware sidecar** exposes a small HTTP API that the Node.js robot agent talks to (`HARDWARE_SIDECAR_URL`); only the underlying driver differs (serial vs. Unitree DDS).
 
 ## SO-101 Overview
 
@@ -121,6 +126,74 @@ sudo systemctl start neodem-agent
 
 The systemd unit uses `--env-file=.env.so101` automatically.
 
+## Unitree G1 EDU (Dex3-1)
+
+> ⚠️ **Hardware-pending / untested.** The G1 sidecar is written to spec against
+> lerobot's `unitree_g1` driver + Unitree SDK2 (DDS) but has **not** been run on a
+> physical robot. The G1 is a **bipedal humanoid that must balance** — do not send
+> raw position commands to a standing robot. Follow the staged, safety-first
+> bring-up in **TASK-169** (`.mc/tasks/todo/TASK-169-lab-bringup-unitree-g1-edu-hardware.md`):
+> install → read-only → teleop → sim → closed-loop AI. Keep the robot on a
+> gantry/harness for any NeoDEM-driven motion.
+
+### Overview
+
+| | |
+|---|---|
+| Type | 43-DOF humanoid (29 G1 body + 2× Dex3-1 hands, 7 DOF each) |
+| Embodiment tag | `unitree_g1_edu_dex3` |
+| Action / proprio dims | 43 / 86 |
+| Interface | LeRobot `unitree_g1` robot + teleoperator over Unitree DDS |
+| Power | Battery |
+| Configs | `robot-agent/src/embodiment/configs/g1_edu.yaml`, `src/robot/joint-configs/g1-edu.config.ts` |
+
+### Sidecar Service
+
+The G1 sidecar (`robot-agent/hardware/g1_sidecar.py`) mirrors the SO-101 HTTP
+contract on **port 8767**, so the existing robot agent / SkillExecutor work
+unchanged — only the driver differs (Unitree DDS instead of serial).
+
+```bash
+# Manual (development)
+uv run python robot-agent/hardware/g1_sidecar.py
+```
+
+It talks to the robot over a DDS network interface (configure to match your unit):
+
+```env
+G1_ROBOT_IP=192.168.123.164   # G1 default
+G1_NET_INTERFACE=eth0         # interface facing the robot
+G1_SIDECAR_PORT=8767
+G1_ROBOT_ID=my_g1_edu
+```
+
+### Key Endpoints
+
+```bash
+curl http://localhost:8767/health          # {"status":"ok","connected":true/false}
+curl http://localhost:8767/state           # 43 joint positions
+# /action, /record/start|stop|status — same shape as the SO-101 sidecar
+```
+
+### Robot Agent Configuration
+
+The agent uses `.env.g1-edu`:
+
+```env
+PORT=41245
+ROBOT_ID=sim-robot-g1-edu
+ROBOT_MODEL=Unitree G1 EDU (Dex3-1)
+ROBOT_TYPE=g1_edu
+HARDWARE_SIDECAR_URL=http://localhost:8767
+```
+
+Start the agent with the G1 EDU profile (simulation by default):
+
+```bash
+cd robot-agent
+npm run dev:g1-edu
+```
+
 ## State Persistence
 
 The agent saves robot state to `robot-agent/data/state.json` on shutdown (SIGTERM). On startup, it restores from this file. If the state file accumulates errors or stale data:
@@ -136,13 +209,16 @@ sudo systemctl start neodem-agent
 To integrate a different robot (e.g., Unitree H1, Go2):
 
 1. Add the type to `robot-agent/src/robot/types.ts` (`RobotType` union)
-2. Create joint config in `robot-agent/src/robot/joint-configs/`
+2. Create joint config in `robot-agent/src/robot/joint-configs/` (+ register in its `index.ts`)
 3. Add telemetry simulation in `robot-agent/src/robot/telemetry.ts`
 4. Copy URDF + meshes to `app/public/assets/robots/{type}/`
 5. Add URDF path in `app/src/features/robots/components/visualization/RobotModel.tsx`
 6. Keep `app/src/features/robots/types/robots.types.ts` in sync
+7. Add an embodiment config + `.env.{type}` profile and `dev:{type}`/`start:{type}` scripts in `robot-agent/package.json`
+8. Seed the robot type (action/proprio dims) in `server/src/scripts/seed-robot-types.ts`
+9. For real hardware, add a sidecar (see `g1_sidecar.py`) exposing the standard sidecar HTTP contract
 
-See the existing H1 and SO-101 implementations as reference.
+See the existing H1, SO-101, and **G1 EDU** implementations as reference (G1 EDU is the most complete recent example, steps 1–9).
 
 ## Known Issues
 
