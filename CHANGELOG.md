@@ -3,6 +3,18 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.06.21.1] - 2026-06-21
+
+### Fixed
+
+- make releases actually build images + repair robot-agent image (#141)
+
+### Maintenance
+
+- release-please-style Release PR flow (keeping CalVer) (#143)
+- add Unitree G1 EDU to the robot integration guide (#142)
+
+
 ## [v2026.06.21] - 2026-06-21
 
 ### Added
