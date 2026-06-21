@@ -11,8 +11,10 @@ async function main() {
     },
     {
       id: uuid(), name: 'Unitree G1 + Dex3',
-      manufacturer: 'Unitree Robotics', model: 'G1',
-      actionDim: 0, proprioceptionDim: 0,
+      manufacturer: 'Unitree Robotics', model: 'G1 EDU (Dex3-1)',
+      // 43 DOF: 29 G1 body + 14 Dex3-1 (7 per hand); proprioception = pos + vel.
+      // Matches robot-agent embodiment tag `unitree_g1_edu_dex3`.
+      actionDim: 43, proprioceptionDim: 86,
     },
     {
       id: uuid(), name: 'ALOHA',
@@ -28,7 +30,13 @@ async function main() {
   for (const t of types) {
     const r = await p.robotType.upsert({
       where: { name: t.name },
-      update: {},
+      // Keep dims/model in sync on re-seed so existing DBs pick up corrections.
+      update: {
+        manufacturer: t.manufacturer,
+        model: t.model,
+        actionDim: t.actionDim,
+        proprioceptionDim: t.proprioceptionDim,
+      },
       create: t,
     });
     console.log('OK:', r.id, r.name);

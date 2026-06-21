@@ -494,3 +494,22 @@ export interface TrainingActions {
   // Reset
   reset: () => void;
 }
+
+// ============================================================================
+// CURATION (interactive episode trim / delete)
+// ============================================================================
+
+/**
+ * Result summary returned by the curation backend after a trim/delete edit.
+ * Edits are non-destructive: a new dataset revision is written at `output`.
+ */
+export interface CurationResult {
+  datasetId: string;
+  ok: boolean;
+  operation: string;
+  output: string;
+  total_episodes: number;
+  total_frames: number;
+  stats_recompute_required: boolean;
+  error?: string;
+}

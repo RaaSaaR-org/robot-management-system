@@ -22,6 +22,7 @@ import type {
   HFDataset,
   EpisodeMeta,
   FrameData,
+  CurationResult,
 } from '../types';
 
 const ENDPOINTS = {
@@ -47,6 +48,10 @@ const ENDPOINTS = {
   datasetEpisodes: (id: string) => `/datasets/${id}/episodes`,
   datasetEpisodeFrames: (id: string, index: number) => `/datasets/${id}/episodes/${index}/frames`,
   datasetEpisodeFlag: (id: string, index: number) => `/datasets/${id}/episodes/${index}/flag`,
+
+  // Curation (interactive episode trim / delete)
+  curationEpisodesDelete: (id: string) => `/curation/${id}/episodes/delete`,
+  curationEpisodeTrim: (id: string, index: number) => `/curation/${id}/episodes/${index}/trim`,
 
   // HuggingFace Import & Push
   huggingFaceImport: '/datasets/import/huggingface',
@@ -178,6 +183,33 @@ export const trainingApi = {
   getEpisodeVideoUrl(datasetId: string, episodeIndex: number, camera: string): string {
     const baseUrl = apiClient.defaults.baseURL ?? '';
     return `${baseUrl}/datasets/${datasetId}/episodes/${episodeIndex}/video/${camera}`;
+  },
+
+  /**
+   * Delete whole episodes, producing a new (non-destructive) dataset revision.
+   */
+  async deleteEpisodes(datasetId: string, episodes: number[]): Promise<CurationResult> {
+    const response = await apiClient.post<CurationResult>(
+      ENDPOINTS.curationEpisodesDelete(datasetId),
+      { episodes }
+    );
+    return response.data;
+  },
+
+  /**
+   * Trim one episode to the frame range [start, end), producing a new revision.
+   */
+  async trimEpisode(
+    datasetId: string,
+    episodeIndex: number,
+    start: number,
+    end: number | null
+  ): Promise<CurationResult> {
+    const response = await apiClient.post<CurationResult>(
+      ENDPOINTS.curationEpisodeTrim(datasetId, episodeIndex),
+      { start, end }
+    );
+    return response.data;
   },
 
   // ============================================================================
