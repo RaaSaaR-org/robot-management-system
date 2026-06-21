@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-NeoDEM is a distributed fleet management platform for autonomous robots. It consists of four main components:
+NeoDEM is the open Physical AI platform covering the **complete lifecycle** — Collect → Train → Deploy → Evaluate → Operate → Comply — not just fleet operation. It's the integrating layer around LeRobot (LeRobotDataset format, HF Hub sync; trains Pi0/ACT/Diffusion/OpenVLA; serves models via the VLA Server). Fleet operation is one of six stages. It consists of four main components:
 
 | Component          | Location         | Description                          | Port  |
 | ------------------ | ---------------- | ------------------------------------ | ----- |
