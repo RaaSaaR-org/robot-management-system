@@ -5,6 +5,7 @@ This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
+- [Releases & Versioned Images](#releases--versioned-images)
 - [Raspberry Pi Setup (systemd)](#raspberry-pi-setup-systemd)
 - [Docker Compose](#docker-compose)
 - [Kubernetes (Helm)](#kubernetes-helm)
@@ -12,6 +13,39 @@ This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (
 - [PostgreSQL Migration (SQLite → PostgreSQL)](#postgresql-migration)
 - [TLS / HTTPS](#tls--https)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Releases & Versioned Images
+
+NeoDEM uses **CalVer** (`vYYYY.MM.DD`, with a `.N` suffix for same-day
+re-releases) — see `CHANGELOG.md`.
+
+**Cutting a release** (maintainers): run the **Release (CalVer)** GitHub Action
+(`.github/workflows/release.yml`, `workflow_dispatch`). It computes the version,
+regenerates the `CHANGELOG.md` section from Conventional Commits since the last
+tag, commits `chore(release): vYYYY.MM.DD`, tags, and creates a GitHub Release.
+Use the `dry_run` input to preview without committing.
+
+> release-please is intentionally not used — it is SemVer-only and can't emit
+> CalVer tags.
+
+**Images:** pushing the tag triggers `build-images.yml`, which publishes
+multi-arch (arm64 + amd64) images to GHCR, tagged with both the full tag
+(`v2026.06.21`) and the bare version (`2026.06.21`), plus `latest`:
+
+- `ghcr.io/raasaar-org/neodem-server`
+- `ghcr.io/raasaar-org/neodem-app`
+- `ghcr.io/raasaar-org/neodem-robot-agent`
+
+**Deploy a pinned version** with Compose:
+
+```bash
+NEODEM_VERSION=2026.06.21 docker compose up -d   # pulls that tag instead of building
+```
+
+For Helm, set the image `tag` in `helm/neodem/values.yaml` to the release version
+(default is `latest`).
 
 ---
 

@@ -1,0 +1,115 @@
+name: Release (CalVer)
+
+# Manual, single-repo CalVer release: computes a YYYY.MM.DD version (with a
+# .N suffix for same-day re-releases), regenerates the CHANGELOG section from
+# Conventional Commits since the last tag, commits, tags `vYYYY.MM.DD`, and
+# creates a GitHub Release. The pushed tag triggers build-images.yml, which
+# publishes versioned container images.
+#
+# release-please is intentionally NOT used: it is SemVer-only and cannot emit
+# the CalVer (YYYY.MM.DD) tags this project uses (see CHANGELOG.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the computed version + changelog without committing/tagging'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Cut CalVer release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute CalVer version
+        id: version
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y.%m.%d)"
+          # Same-day collision -> append .1, .2, ...
+          if git rev-parse "v${DATE}" >/dev/null 2>&1; then
+            N=1
+            while git rev-parse "v${DATE}.${N}" >/dev/null 2>&1; do N=$((N+1)); done
+            VERSION="${DATE}.${N}"
+          else
+            VERSION="${DATE}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: v${VERSION}"
+
+      - name: Generate changelog section
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="${PREV}..HEAD"; else RANGE="HEAD"; fi
+          echo "Changelog range: ${RANGE:-(all)}"
+
+          subjects="$(git log ${RANGE} --no-merges --pretty=format:'%s')"
+
+          section_for() {
+            # $1 = conventional-commit type regex, prints matching bullets
+            echo "$subjects" | grep -E "^($1)(\(.+\))?!?: " | sed -E "s/^($1)(\(.+\))?!?: //" | sed 's/^/- /' || true
+          }
+
+          ADDED="$(section_for 'feat')"
+          FIXED="$(section_for 'fix')"
+          CHANGED="$(section_for 'perf|refactor|revert')"
+          OTHER="$(section_for 'chore|docs|build|ci|test|style')"
+
+          {
+            echo "## [v${VERSION}] - $(date -u +%Y-%m-%d)"
+            echo ""
+            if [ -n "$ADDED" ];   then echo "### Added";   echo ""; echo "$ADDED";   echo ""; fi
+            if [ -n "$FIXED" ];   then echo "### Fixed";   echo ""; echo "$FIXED";   echo ""; fi
+            if [ -n "$CHANGED" ]; then echo "### Changed"; echo ""; echo "$CHANGED"; echo ""; fi
+            if [ -n "$OTHER" ];   then echo "### Maintenance"; echo ""; echo "$OTHER"; echo ""; fi
+            if [ -z "${ADDED}${FIXED}${CHANGED}${OTHER}" ]; then echo "_No notable changes._"; echo ""; fi
+          } > /tmp/section.md
+
+          echo "----- generated changelog section -----"
+          cat /tmp/section.md
+
+      - name: Prepend to CHANGELOG.md
+        run: |
+          set -euo pipefail
+          # Keep the file header (first 4 lines), insert the new section after it.
+          head -n 4 CHANGELOG.md > /tmp/changelog.new
+          echo "" >> /tmp/changelog.new
+          cat /tmp/section.md >> /tmp/changelog.new
+          tail -n +5 CHANGELOG.md >> /tmp/changelog.new
+          mv /tmp/changelog.new CHANGELOG.md
+
+      - name: Commit, tag, push, release
+        if: ${{ inputs.dry_run == false }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(release): v${VERSION}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin HEAD:main
+          git push origin "${TAG}"
+          gh release create "${TAG}" --title "${TAG}" --notes-file /tmp/section.md
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "DRY RUN — would release v${{ steps.version.outputs.version }}"
+          cat /tmp/section.md

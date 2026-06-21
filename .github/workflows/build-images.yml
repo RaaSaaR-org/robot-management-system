@@ -38,9 +38,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-app
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=ref,event=tag
+            type=match,pattern=v(.*),group=1
             type=raw,value=latest
 
       - name: Build and push
@@ -84,9 +83,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-server
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=ref,event=tag
+            type=match,pattern=v(.*),group=1
             type=raw,value=latest
 
       - name: Build and push
@@ -126,9 +124,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-robot-agent
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=ref,event=tag
+            type=match,pattern=v(.*),group=1
             type=raw,value=latest
 
       - name: Build and push
