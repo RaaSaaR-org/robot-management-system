@@ -3,6 +3,18 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.06.21] - 2026-06-21
+
+### Added
+
+- G1 EDU (Dex3-1) embodiment + interactive episode curation GUI (#138)
+
+### Maintenance
+
+- CalVer release automation + deploy quickstart (#140)
+- reframe NeoDEM as full-lifecycle Physical AI platform in CLAUDE.md (#139)
+
+
 ## [v2026.04.12] - 2026-04-12
 
 ### Added
