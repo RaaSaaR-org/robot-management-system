@@ -24,6 +24,8 @@ jobs:
   release:
     name: Cut CalVer release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout (full history + tags)
         uses: actions/checkout@v4
@@ -113,3 +115,17 @@ jobs:
         run: |
           echo "DRY RUN — would release v${{ steps.version.outputs.version }}"
           cat /tmp/section.md
+
+  # Build + publish versioned images in the SAME run. A tag pushed by
+  # GITHUB_TOKEN can't trigger build-images.yml's `on: push: tags`, so we call
+  # it directly here instead of relying on the tag-push trigger.
+  images:
+    name: Build & publish images
+    needs: release
+    if: ${{ inputs.dry_run == false }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-images.yml
+    with:
+      version: ${{ needs.release.outputs.version }}

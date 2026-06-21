@@ -3,6 +3,22 @@ name: Build Container Images
 on:
   push:
     tags: ['v*']
+  # Allow the release workflow to build images in the same run (a tag pushed by
+  # GITHUB_TOKEN cannot trigger `on: push: tags`), and allow manual rebuilds.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Image version tag (e.g. 2026.06.21)'
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version tag to publish (e.g. 2026.06.21). Blank = latest only.'
+        type: string
+        required: false
+        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -38,6 +54,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-app
           tags: |
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=ref,event=tag
             type=match,pattern=v(.*),group=1
             type=raw,value=latest
@@ -83,6 +100,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-server
           tags: |
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=ref,event=tag
             type=match,pattern=v(.*),group=1
             type=raw,value=latest
@@ -124,6 +142,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/neodem-robot-agent
           tags: |
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=ref,event=tag
             type=match,pattern=v(.*),group=1
             type=raw,value=latest
