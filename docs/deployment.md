@@ -21,14 +21,21 @@ This guide covers deploying NeoDEM across three environments: **Raspberry Pi** (
 NeoDEM uses **CalVer** (`vYYYY.MM.DD`, with a `.N` suffix for same-day
 re-releases) — see `CHANGELOG.md`.
 
-**Cutting a release** (maintainers): run the **Release (CalVer)** GitHub Action
-(`.github/workflows/release.yml`, `workflow_dispatch`). It computes the version,
-regenerates the `CHANGELOG.md` section from Conventional Commits since the last
-tag, commits `chore(release): vYYYY.MM.DD`, tags, and creates a GitHub Release.
-Use the `dry_run` input to preview without committing.
+**Cutting a release** (maintainers) — release-please-style **Release PR** flow:
 
-> release-please is intentionally not used — it is SemVer-only and can't emit
-> CalVer tags.
+1. On every push to `main`, **Prepare Release PR**
+   (`.github/workflows/prepare-release-pr.yml`) keeps an always-open PR titled
+   `chore(release): vYYYY.MM.DD`. It shows the next CalVer version and the
+   `CHANGELOG.md` entries accumulated since the last release. Review it any time
+   to see exactly what the next release will contain.
+2. **Squash-merge that PR** when you want to ship.
+3. On merge, **Release (CalVer)** (`.github/workflows/release.yml`) detects the
+   new untagged version at the top of `CHANGELOG.md`, tags `vYYYY.MM.DD`, creates
+   the GitHub Release, and builds + publishes versioned images — all in one run.
+
+> Squash-merge so the release commit subject stays `chore(release): v…`.
+> release-please itself is not used — it is SemVer-only and can't emit CalVer
+> tags — so this reimplements just the Release-PR part with date versioning.
 
 **Images:** pushing the tag triggers `build-images.yml`, which publishes
 multi-arch (arm64 + amd64) images to GHCR, tagged with both the full tag

@@ -1,0 +1,125 @@
+name: Prepare Release PR
+
+# release-please-style flow, but CalVer (YYYY.MM.DD) instead of SemVer.
+#
+# On every push to main, keep an always-open "Release PR" that shows the next
+# version + the changelog accumulated since the last release. You release by
+# merging that PR — `release.yml` then tags it and publishes images.
+#
+# (release-please itself is SemVer-only and can't emit CalVer tags, so this
+# reimplements just the Release-PR part.)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-release-pr
+  cancel-in-progress: true
+
+env:
+  RELEASE_BRANCH: release-please/main
+
+jobs:
+  prepare:
+    name: Upsert Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare or close the Release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # --- Guard: a release is pending publish ----------------------------
+          # If the top CHANGELOG version has no tag yet, the Release PR was just
+          # merged and release.yml is about to tag it — don't recreate a PR.
+          TOP="$(grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?' CHANGELOG.md || true)"
+          if [ -n "$TOP" ] && ! git rev-parse "$TOP" >/dev/null 2>&1; then
+            echo "Top CHANGELOG version $TOP is untagged (release pending) — skipping."
+            exit 0
+          fi
+
+          # --- Collect unreleased commits since the last tag ------------------
+          PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="${PREV}..HEAD"; else RANGE="HEAD"; fi
+          subjects="$(git log ${RANGE} --no-merges --pretty=format:'%s' | grep -vE '^chore\(release\):' || true)"
+
+          if [ -z "$subjects" ]; then
+            echo "No unreleased commits — closing any open Release PR."
+            num="$(gh pr list --head "$RELEASE_BRANCH" --base main --state open --json number -q '.[0].number' || true)"
+            [ -n "$num" ] && gh pr close "$num" --delete-branch || true
+            exit 0
+          fi
+
+          # --- Compute next CalVer version ------------------------------------
+          DATE="$(date -u +%Y.%m.%d)"
+          if git rev-parse "v${DATE}" >/dev/null 2>&1; then
+            N=1
+            while git rev-parse "v${DATE}.${N}" >/dev/null 2>&1; do N=$((N+1)); done
+            VERSION="${DATE}.${N}"
+          else
+            VERSION="${DATE}"
+          fi
+          echo "Next version: v${VERSION}"
+
+          # --- Build the changelog section ------------------------------------
+          section_for() {
+            echo "$subjects" | grep -E "^($1)(\(.+\))?!?: " | sed -E "s/^($1)(\(.+\))?!?: //" | sed 's/^/- /' || true
+          }
+          ADDED="$(section_for 'feat')"
+          FIXED="$(section_for 'fix')"
+          CHANGED="$(section_for 'perf|refactor|revert')"
+          OTHER="$(section_for 'chore|docs|build|ci|test|style')"
+          {
+            echo "## [v${VERSION}] - $(date -u +%Y-%m-%d)"
+            echo ""
+            if [ -n "$ADDED" ];   then echo "### Added";       echo ""; echo "$ADDED";   echo ""; fi
+            if [ -n "$FIXED" ];   then echo "### Fixed";       echo ""; echo "$FIXED";   echo ""; fi
+            if [ -n "$CHANGED" ]; then echo "### Changed";     echo ""; echo "$CHANGED"; echo ""; fi
+            if [ -n "$OTHER" ];   then echo "### Maintenance"; echo ""; echo "$OTHER";   echo ""; fi
+          } > /tmp/section.md
+          echo "----- changelog -----"; cat /tmp/section.md
+
+          # --- Write CHANGELOG on a fresh release branch off main ------------
+          git checkout -B "$RELEASE_BRANCH"
+          head -n 4 CHANGELOG.md > /tmp/changelog.new
+          echo "" >> /tmp/changelog.new
+          cat /tmp/section.md >> /tmp/changelog.new
+          tail -n +5 CHANGELOG.md >> /tmp/changelog.new
+          mv /tmp/changelog.new CHANGELOG.md
+
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No CHANGELOG change."; exit 0
+          fi
+          git commit -m "chore(release): v${VERSION}"
+          git push -f origin "$RELEASE_BRANCH"
+
+          # --- Upsert the PR --------------------------------------------------
+          TITLE="chore(release): v${VERSION}"
+          {
+            echo "Merge to release **v${VERSION}**. Tagging + image publish run automatically on merge."
+            echo ""
+            echo "> ⚠️ Squash-merge this PR so the release commit subject is \`chore(release): v…\`."
+            echo ""
+            cat /tmp/section.md
+          } > /tmp/pr-body.md
+
+          num="$(gh pr list --head "$RELEASE_BRANCH" --base main --state open --json number -q '.[0].number' || true)"
+          if [ -n "$num" ]; then
+            gh pr edit "$num" --title "$TITLE" --body-file /tmp/pr-body.md
+          else
+            gh pr create --base main --head "$RELEASE_BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md
+          fi
