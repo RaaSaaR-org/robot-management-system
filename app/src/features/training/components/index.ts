@@ -12,9 +12,6 @@ export type { DatasetListProps } from './DatasetList';
 export { DatasetUploadModal } from './DatasetUploadModal';
 export type { DatasetUploadModalProps } from './DatasetUploadModal';
 
-export { EpisodeViewerModal } from './EpisodeViewerModal';
-export type { EpisodeViewerModalProps } from './EpisodeViewerModal';
-
 // Training job components
 export { TrainingJobCard } from './TrainingJobCard';
 export type { TrainingJobCardProps } from './TrainingJobCard';

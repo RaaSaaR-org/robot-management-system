@@ -116,7 +116,16 @@ class Recorder:
         leader_id: str = DEFAULT_LEADER_ID,
         dataset_root: Optional[str] = None,
         reset_time_s: float = 5.0,
+        robot_cli: Optional[list[str]] = None,
+        teleop_cli: Optional[list[str]] = None,
     ) -> dict[str, Any]:
+        """Spawn lerobot-record.
+
+        By default this records an SO-101 leader→follower setup. Other robots
+        (e.g. the Unitree G1) pass `robot_cli` / `teleop_cli` — lists of
+        `--robot.*` / `--teleop.*` CLI flags — to override the embodiment while
+        reusing the same subprocess/progress/upload lifecycle.
+        """
         with self._lock:
             if self.is_running:
                 return {"ok": False, "error": "recorder already running"}
@@ -126,15 +135,21 @@ class Recorder:
             Path(dataset_path).parent.mkdir(parents=True, exist_ok=True)
 
             cameras_arg = _format_cameras(cameras)
-            cmd = [
-                "lerobot-record",
+            robot_args = robot_cli if robot_cli is not None else [
                 "--robot.type=so101_follower",
                 f"--robot.port={follower_port}",
                 f"--robot.id={follower_id}",
                 f"--robot.cameras={cameras_arg}",
+            ]
+            teleop_args = teleop_cli if teleop_cli is not None else [
                 "--teleop.type=so101_leader",
                 f"--teleop.port={leader_port}",
                 f"--teleop.id={leader_id}",
+            ]
+            cmd = [
+                "lerobot-record",
+                *robot_args,
+                *teleop_args,
                 f"--dataset.repo_id={repo_id}",
                 f"--dataset.num_episodes={num_episodes}",
                 f"--dataset.episode_time_s={episode_time_s}",

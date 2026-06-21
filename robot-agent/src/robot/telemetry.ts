@@ -97,7 +97,7 @@ function generateJointStates(
 
     if (robotType === 'h1') {
       position = simulateH1Joint(joint.name, time, isMoving, isHolding);
-    } else if (robotType === 'g1') {
+    } else if (robotType === 'g1' || robotType === 'g1_edu') {
       position = simulateG1Joint(joint.name, time, isMoving, isHolding);
     } else if (robotType === 'so101') {
       position = simulateSO101Joint(joint.name, time, isMoving, isHolding);
@@ -178,6 +178,13 @@ function simulateG1Joint(jointName: string, time: number, isMoving: boolean, isH
     if (jointName.includes('knee')) return 0.1;
     if (jointName.includes('elbow') && isHolding) return 0.8;
     if (jointName.includes('waist_yaw')) return Math.sin(time * 0.15) * 0.01;
+    // Dex3 hands (g1_edu): curl fingers when grasping, otherwise relaxed
+    if (jointName.includes('hand')) {
+      if (!isHolding) return 0;
+      if (jointName.includes('thumb_2') || jointName.includes('_1_joint')) return 0.9;
+      if (jointName.includes('thumb_1')) return 0.6;
+      return 0;
+    }
     return 0;
   }
 
@@ -223,6 +230,14 @@ function simulateG1Joint(jointName: string, time: number, isMoving: boolean, isH
     case jointName.includes('wrist_pitch'):
       return isHolding ? 0.1 : 0;
     case jointName.includes('wrist_yaw'):
+      return 0;
+
+    // Dex3 hands (g1_edu): gentle grasp curl when holding, small idle motion otherwise
+    case jointName.includes('hand'):
+      if (jointName.includes('thumb_2') || jointName.includes('_1_joint')) {
+        return isHolding ? 0.9 : Math.max(0, Math.sin(phase) * 0.05);
+      }
+      if (jointName.includes('thumb_1')) return isHolding ? 0.6 : 0;
       return 0;
 
     default:

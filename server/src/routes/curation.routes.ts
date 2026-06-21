@@ -5,8 +5,10 @@
  */
 
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import { dataCurationService } from '../services/DataCurationService.js';
 import { dataAugmentationService } from '../services/DataAugmentationService.js';
+import { episodeCurationService } from '../services/EpisodeCurationService.js';
 import type {
   AnalyzeDistributionRequest,
   CreateBalancedSubsetRequest,
@@ -354,5 +356,77 @@ curationRoutes.post('/diversity-score', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[CurationRoutes] Error computing diversity score:', error);
     res.status(500).json({ error: 'Failed to compute diversity score' });
+  }
+});
+
+// ============================================================================
+// EPISODE EDITING (interactive trim / delete for the curation GUI)
+// ============================================================================
+
+/**
+ * Resolve a dataset's on-disk root. For local/dev and tests, the caller may pass
+ * `datasetPath` directly; otherwise it resolves under CURATION_DATASETS_ROOT.
+ */
+function resolveDatasetPath(datasetId: string, explicit?: string): string {
+  if (explicit) return explicit;
+  const root = process.env.CURATION_DATASETS_ROOT ?? '/tmp/neodem-datasets';
+  return path.join(root, datasetId);
+}
+
+/** Output revision path for a curation edit (sibling dir, never overwrites source). */
+function revisionPath(datasetPath: string, label: string): string {
+  const stamp = Date.now();
+  return `${datasetPath}__${label}-${stamp}`;
+}
+
+/**
+ * POST /api/curation/:id/episodes/delete
+ * Body: { episodes: number[], datasetPath?: string }
+ * Deletes whole episodes, writing a new dataset revision.
+ */
+curationRoutes.post('/:id/episodes/delete', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { episodes, datasetPath } = req.body as { episodes?: number[]; datasetPath?: string };
+    if (!Array.isArray(episodes) || episodes.length === 0) {
+      return res.status(400).json({ error: 'episodes (non-empty number[]) is required' });
+    }
+    const src = resolveDatasetPath(id, datasetPath);
+    const out = revisionPath(src, 'del');
+    const result = await episodeCurationService.deleteEpisodes(src, out, episodes);
+    res.json({ datasetId: id, ...result });
+  } catch (error) {
+    console.error('[CurationRoutes] Error deleting episodes:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to delete episodes' });
+  }
+});
+
+/**
+ * POST /api/curation/:id/episodes/:index/trim
+ * Body: { start: number, end?: number | null, datasetPath?: string }
+ * Trims one episode to the frame range [start, end), writing a new dataset revision.
+ */
+curationRoutes.post('/:id/episodes/:index/trim', async (req: Request, res: Response) => {
+  try {
+    const { id, index } = req.params;
+    const episodeIndex = Number(index);
+    const { start, end, datasetPath } = req.body as {
+      start?: number;
+      end?: number | null;
+      datasetPath?: string;
+    };
+    if (!Number.isInteger(episodeIndex) || episodeIndex < 0) {
+      return res.status(400).json({ error: 'episode index must be a non-negative integer' });
+    }
+    if (typeof start !== 'number' || start < 0) {
+      return res.status(400).json({ error: 'start (>= 0) is required' });
+    }
+    const src = resolveDatasetPath(id, datasetPath);
+    const out = revisionPath(src, 'trim');
+    const result = await episodeCurationService.trimEpisode(src, out, episodeIndex, start, end ?? null);
+    res.json({ datasetId: id, ...result });
+  } catch (error) {
+    console.error('[CurationRoutes] Error trimming episode:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to trim episode' });
   }
 });

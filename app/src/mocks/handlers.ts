@@ -150,10 +150,84 @@ export const handlers = [
   }),
 
   // ========================================================================
+  // Datasets + episodes (demo data for the curation GUI / episode viewer)
+  // ========================================================================
+
+  http.get('/api/datasets', () => {
+    return HttpResponse.json({ datasets: [DEMO_DATASET], pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 } });
+  }),
+
+  http.get('/api/datasets/:id', ({ params }) => {
+    return HttpResponse.json({ dataset: { ...DEMO_DATASET, id: params.id } });
+  }),
+
+  http.get('/api/datasets/:id/episodes', () => {
+    return HttpResponse.json({ episodes: DEMO_EPISODES });
+  }),
+
+  http.get('/api/datasets/:id/episodes/:index/frames', ({ params }) => {
+    const ep = DEMO_EPISODES.find((e) => e.index === Number(params.index)) ?? DEMO_EPISODES[0];
+    const frames = Array.from({ length: ep.frameCount }, (_, i) => ({
+      frameIndex: i,
+      timestamp: +(i / DEMO_DATASET.fps).toFixed(3),
+      action: Array.from({ length: 6 }, (_, j) => +Math.sin(i * 0.1 + j).toFixed(3)),
+      observationState: Array.from({ length: 6 }, (_, j) => +Math.sin(i * 0.1 + j).toFixed(3)),
+    }));
+    return HttpResponse.json({ frames, total: frames.length });
+  }),
+
+  // Curation endpoints — echo a plausible revision summary
+  http.post('/api/curation/:id/episodes/delete', async ({ request }) => {
+    const body = (await request.json()) as { episodes?: number[] };
+    const removed = body?.episodes?.length ?? 1;
+    return HttpResponse.json({
+      datasetId: 'demo', ok: true, operation: `delete episodes ${body?.episodes ?? []}`,
+      output: '/tmp/demo__del', total_episodes: DEMO_EPISODES.length - removed,
+      total_frames: 60, stats_recompute_required: true,
+    });
+  }),
+
+  http.post('/api/curation/:id/episodes/:index/trim', async ({ params }) => {
+    return HttpResponse.json({
+      datasetId: 'demo', ok: true, operation: `trim episode ${params.index}`,
+      output: '/tmp/demo__trim', total_episodes: DEMO_EPISODES.length,
+      total_frames: 70, stats_recompute_required: true,
+    });
+  }),
+
+  // ========================================================================
   // Catch-all: other GET /api/* return empty data
   // ========================================================================
 
   http.get('/api/*', () => {
     return HttpResponse.json({ data: [], total: 0, items: [] });
   }),
+];
+
+// Demo dataset/episodes for the episode viewer + curation GUI
+const DEMO_DATASET = {
+  id: 'demo-g1-edu',
+  name: 'G1 EDU — pick & place (demo)',
+  description: 'Synthetic Unitree G1 EDU (Dex3-1) teleop demo dataset',
+  robotTypeId: 'unitree-g1-edu',
+  storagePath: '/tmp/neodem-datasets/demo-g1-edu',
+  lerobotVersion: 'v2.1',
+  fps: 30,
+  totalFrames: 86,
+  totalDuration: 2.87,
+  demonstrationCount: 4,
+  qualityScore: 82,
+  infoJson: { features: {} },
+  statsJson: {},
+  status: 'ready',
+  createdAt: '2026-06-21T10:00:00Z',
+  updatedAt: '2026-06-21T10:00:00Z',
+  robotType: { id: 'unitree-g1-edu', name: 'Unitree G1 + Dex3', manufacturer: 'Unitree Robotics', model: 'G1 EDU (Dex3-1)' },
+};
+
+const DEMO_EPISODES = [
+  { index: 0, frameCount: 20, durationSeconds: 0.67, flagged: false },
+  { index: 1, frameCount: 21, durationSeconds: 0.7, flagged: false },
+  { index: 2, frameCount: 22, durationSeconds: 0.73, flagged: false },
+  { index: 3, frameCount: 23, durationSeconds: 0.77, flagged: true },
 ];

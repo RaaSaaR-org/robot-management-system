@@ -1,0 +1,128 @@
+# Unitree G1 EDU Robot Configuration (with Dex3-1 dexterous hands)
+# Body based on g1_description/g1_29dof_rev_1_0.urdf + 2x Dex3-1 (7 DOF each)
+# 43 active joints: 12 leg, 3 waist, 14 arm, 14 hand (7 per Dex3-1 hand)
+
+embodiment_tag: unitree_g1_edu_dex3
+manufacturer: Unitree
+model: G1 EDU (Dex3-1)
+description: Unitree G1 EDU humanoid with two Dex3-1 dexterous hands, 43 DOF
+
+action:
+  dim: 43  # 29 body joints + 14 Dex3 hand joints
+  normalization:
+    # Mean values (default positions) — all neutral
+    mean: [
+      # Left Leg (6)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Right Leg (6)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Waist (3)
+      0.0, 0.0, 0.0,
+      # Left Arm (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Right Arm (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Left Hand / Dex3-1 (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      # Right Hand / Dex3-1 (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    ]
+    # Std values (~half range of joint limits) for normalization to ~[-1, 1]
+    std: [
+      # Left Leg (6)
+      2.705, 1.745, 2.758, 1.484, 0.698, 0.262,
+      # Right Leg (6)
+      2.705, 1.745, 2.758, 1.484, 0.698, 0.262,
+      # Waist (3)
+      2.618, 0.52, 0.52,
+      # Left Arm (7)
+      2.880, 1.920, 2.618, 1.571, 1.972, 1.614, 1.614,
+      # Right Arm (7)
+      2.880, 1.920, 2.618, 1.571, 1.972, 1.614, 1.614,
+      # Left Hand / Dex3-1 (7) — placeholder, tune to Dex3 URDF
+      1.047, 0.785, 0.873, 0.524, 0.873, 0.524, 0.873,
+      # Right Hand / Dex3-1 (7)
+      1.047, 0.785, 0.873, 0.524, 0.873, 0.524, 0.873
+    ]
+
+proprioception:
+  dim: 86  # 43 positions + 43 velocities
+  joint_names:
+    # Left Leg
+    - left_hip_pitch_joint
+    - left_hip_roll_joint
+    - left_hip_yaw_joint
+    - left_knee_joint
+    - left_ankle_pitch_joint
+    - left_ankle_roll_joint
+    # Right Leg
+    - right_hip_pitch_joint
+    - right_hip_roll_joint
+    - right_hip_yaw_joint
+    - right_knee_joint
+    - right_ankle_pitch_joint
+    - right_ankle_roll_joint
+    # Waist
+    - waist_yaw_joint
+    - waist_roll_joint
+    - waist_pitch_joint
+    # Left Arm
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - left_wrist_roll_joint
+    - left_wrist_pitch_joint
+    - left_wrist_yaw_joint
+    # Right Arm
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_roll_joint
+    - right_wrist_pitch_joint
+    - right_wrist_yaw_joint
+    # Left Hand (Dex3-1)
+    - left_hand_thumb_0_joint
+    - left_hand_thumb_1_joint
+    - left_hand_thumb_2_joint
+    - left_hand_index_0_joint
+    - left_hand_index_1_joint
+    - left_hand_middle_0_joint
+    - left_hand_middle_1_joint
+    # Right Hand (Dex3-1)
+    - right_hand_thumb_0_joint
+    - right_hand_thumb_1_joint
+    - right_hand_thumb_2_joint
+    - right_hand_index_0_joint
+    - right_hand_index_1_joint
+    - right_hand_middle_0_joint
+    - right_hand_middle_1_joint
+
+cameras:
+  - name: head_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.0, 0.0, 1.2]  # Approximate head height for G1
+    enabled: true
+  - name: left_wrist_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.2, 0.3, 0.9]  # Approximate left wrist mount
+    enabled: false
+  - name: right_wrist_camera
+    resolution: [224, 224]
+    fov: 90
+    position: [0.2, -0.3, 0.9]  # Approximate right wrist mount
+    enabled: false
+
+safety:
+  max_speed: 2.0  # m/s
+  workspace:
+    type: box
+    min: [-2.0, -2.0, 0.0]
+    max: [2.0, 2.0, 1.5]
+  collision_margin: 0.05
+  force_limit: 140.0  # ISO/TS 15066 limit
+
+version: "1.0.0"
