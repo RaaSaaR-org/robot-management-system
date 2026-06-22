@@ -459,7 +459,10 @@ export class BreachAssessmentService {
    * Get the full risk matrix for reference
    */
   getRiskMatrix(): RiskMatrixEntry[] {
-    return [...RISK_MATRIX];
+    // Deep copy: a shallow [...RISK_MATRIX] shares the entry objects with the
+    // module-level constant, so a caller mutating an entry would corrupt the
+    // matrix for every future assessment.
+    return RISK_MATRIX.map((entry) => ({ ...entry }));
   }
 
   /**

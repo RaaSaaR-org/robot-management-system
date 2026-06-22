@@ -41,7 +41,12 @@ export class HttpClientError extends Error {
 
   /** Check if error is a connection refused */
   isConnectionRefused(): boolean {
-    return this.message.includes('ECONNREFUSED');
+    // Match both the raw axios code and the human-readable message this client
+    // generates ("Connection refused: <url>").
+    return (
+      this.message.includes('ECONNREFUSED') ||
+      this.message.includes('Connection refused')
+    );
   }
 
   /** Check if error is a network error */
