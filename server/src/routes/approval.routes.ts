@@ -196,25 +196,6 @@ approvalRoutes.get('/nearing-deadline', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /approvals/:id - Get approval request by ID
- */
-approvalRoutes.get('/:id', async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id;
-    const request = await approvalWorkflowService.getApprovalRequest(id);
-
-    if (!request) {
-      return res.status(404).json({ error: 'Approval request not found' });
-    }
-
-    res.json(request);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get approval request';
-    res.status(500).json({ error: message });
-  }
-});
-
 // ============================================================================
 // APPROVAL ACTIONS
 // ============================================================================
@@ -608,6 +589,33 @@ approvalRoutes.get('/oversight-metrics', async (req: Request, res: Response) => 
     res.json(metrics);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to get oversight metrics';
+    res.status(500).json({ error: message });
+  }
+});
+
+// ============================================================================
+// CATCH-ALL — MUST BE LAST
+// ============================================================================
+
+/**
+ * GET /approvals/:id - Get approval request by ID
+ *
+ * Registered last on purpose: the single-segment '/:id' param route would
+ * otherwise shadow the literal GET routes above (/contests, /metrics,
+ * /sla-report, /oversight-metrics), capturing them as id='contests' etc.
+ */
+approvalRoutes.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const request = await approvalWorkflowService.getApprovalRequest(id);
+
+    if (!request) {
+      return res.status(404).json({ error: 'Approval request not found' });
+    }
+
+    res.json(request);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to get approval request';
     res.status(500).json({ error: message });
   }
 });

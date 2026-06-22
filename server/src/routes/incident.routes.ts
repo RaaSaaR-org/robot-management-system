@@ -153,6 +153,22 @@ incidentRoutes.get('/overdue', async (_req: Request, res: Response) => {
 });
 
 /**
+ * GET /risk-matrix - Get the risk matrix reference
+ *
+ * Registered before the single-segment '/:id' route below, which would
+ * otherwise shadow it (capturing the request as id='risk-matrix').
+ */
+incidentRoutes.get('/risk-matrix', async (_req: Request, res: Response) => {
+  try {
+    const matrix = breachAssessmentService.getRiskMatrix();
+    res.json({ matrix });
+  } catch (error) {
+    console.error('Error getting risk matrix:', error);
+    res.status(500).json({ error: 'Failed to get risk matrix' });
+  }
+});
+
+/**
  * GET /:id - Get a single incident by ID
  */
 incidentRoutes.get('/:id', async (req: Request, res: Response) => {
@@ -421,19 +437,6 @@ incidentRoutes.post('/:id/assess', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error assessing risk:', error);
     res.status(500).json({ error: 'Failed to assess risk' });
-  }
-});
-
-/**
- * GET /risk-matrix - Get the risk matrix reference
- */
-incidentRoutes.get('/risk-matrix', async (_req: Request, res: Response) => {
-  try {
-    const matrix = breachAssessmentService.getRiskMatrix();
-    res.json({ matrix });
-  } catch (error) {
-    console.error('Error getting risk matrix:', error);
-    res.status(500).json({ error: 'Failed to get risk matrix' });
   }
 });
 
