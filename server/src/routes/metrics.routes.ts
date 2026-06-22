@@ -62,8 +62,11 @@ export const metricsRoutes = Router();
 
 metricsRoutes.get('/', async (_req: Request, res: Response) => {
   try {
-    res.set('Content-Type', client.register.contentType);
+    // Set the content type only after metrics() resolves: if it throws, the
+    // error path responds with JSON and must keep the default JSON content
+    // type rather than the pinned text/plain Prometheus type.
     const metrics = await client.register.metrics();
+    res.set('Content-Type', client.register.contentType);
     res.end(metrics);
   } catch (error) {
     res.status(500).json({ error: 'Failed to collect metrics' });
