@@ -363,7 +363,15 @@ export class ExplainabilityService {
    * Get AI system documentation
    */
   getDocumentation(): AIDocumentation {
-    return { ...AI_DOCUMENTATION };
+    // Deep-copy the nested arrays so a caller mutating one (e.g. doc.limitations.push)
+    // can't corrupt the module-level AI_DOCUMENTATION singleton for everyone else.
+    return {
+      ...AI_DOCUMENTATION,
+      capabilities: [...AI_DOCUMENTATION.capabilities],
+      limitations: [...AI_DOCUMENTATION.limitations],
+      operatingConditions: [...AI_DOCUMENTATION.operatingConditions],
+      humanOversightRequirements: [...AI_DOCUMENTATION.humanOversightRequirements],
+    };
   }
 
   // ==========================================================================
