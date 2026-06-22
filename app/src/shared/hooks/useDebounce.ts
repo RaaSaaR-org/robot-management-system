@@ -5,7 +5,7 @@
  * @dependencies None
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
  * Debounces a value, only updating after the specified delay has passed
@@ -62,25 +62,34 @@ export function useDebouncedCallback<T extends (...args: Parameters<T>) => void>
   callback: T,
   delay: number = 500
 ): (...args: Parameters<T>) => void {
-  const [timeoutId, setTimeoutId] = useState<ReturnType<typeof setTimeout> | null>(null);
+  // Hold the pending timer in a ref, not state: rapid synchronous calls share
+  // the same render closure, so a useState id would always be stale and the
+  // previous timer would never be cleared (firing once per call instead of
+  // debouncing). A ref is always current.
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep the latest callback without changing the debounced fn's identity.
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
 
+  // Clear any pending timer on unmount.
   useEffect(() => {
     return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
       }
     };
-  }, [timeoutId]);
+  }, []);
 
-  return (...args: Parameters<T>) => {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+  return useCallback(
+    (...args: Parameters<T>) => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
 
-    const id = setTimeout(() => {
-      callback(...args);
-    }, delay);
-
-    setTimeoutId(id);
-  };
+      timeoutRef.current = setTimeout(() => {
+        callbackRef.current(...args);
+      }, delay);
+    },
+    [delay]
+  );
 }
