@@ -1,0 +1,843 @@
+/**
+ * @file DatasetService.test.ts
+ * @description Unit tests for DatasetService — VLA dataset CRUD, upload workflow,
+ *              LeRobot v3 structure validation, quality scoring, and stats jobs.
+ * @feature datasets
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { DatasetValidationResult } from '../../types/dataset.types.js';
+
+// ---------------------------------------------------------------------------
+// Mocks for external boundaries (DB repos, storage, NATS/messaging, KV)
+// ---------------------------------------------------------------------------
+
+const {
+  getDatasetUploadUrl,
+  deleteDatasetFromStorage,
+  rustfsExists,
+  rustfsDownload,
+  jsPublish,
+} = vi.hoisted(() => ({
+  getDatasetUploadUrl: vi.fn(),
+  deleteDatasetFromStorage: vi.fn(),
+  rustfsExists: vi.fn(),
+  rustfsDownload: vi.fn(),
+  jsPublish: vi.fn(),
+}));
+
+vi.mock('../../repositories/index.js', () => ({
+  datasetRepository: {
+    create: vi.fn(),
+    findById: vi.fn(),
+    findAll: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
+  robotTypeRepository: {
+    findById: vi.fn(),
+  },
+  skillDefinitionRepository: {
+    findById: vi.fn(),
+  },
+}));
+
+vi.mock('../../storage/model-storage.js', () => ({
+  BUCKETS: {
+    TRAINING_DATASETS: 'training-datasets',
+    MODEL_CHECKPOINTS: 'model-checkpoints',
+    PRODUCTION_MODELS: 'production-models',
+    ROBOT_LOGS: 'robot-logs',
+  },
+  modelStorage: {
+    getDatasetUploadUrl,
+    deleteDataset: deleteDatasetFromStorage,
+  },
+}));
+
+vi.mock('../../storage/rustfs-client.js', () => ({
+  isRustFSInitialized: vi.fn(),
+  getRustFSClient: vi.fn(() => ({
+    exists: rustfsExists,
+    download: rustfsDownload,
+  })),
+}));
+
+vi.mock('../../messaging/index.js', () => ({
+  natsClient: {
+    isConnected: vi.fn(),
+    getKV: vi.fn(),
+    getJetStream: vi.fn(() => ({ publish: jsPublish })),
+  },
+}));
+
+vi.mock('../../messaging/kv-stores.js', () => ({
+  KV_STORE_NAMES: {
+    JOB_PROGRESS: 'JOB_PROGRESS',
+    MODEL_REGISTRY: 'MODEL_REGISTRY',
+    FLEET_CONFIG: 'FLEET_CONFIG',
+  },
+  kvGet: vi.fn(),
+  kvPut: vi.fn(),
+}));
+
+vi.mock('uuid', () => ({
+  v4: vi.fn(() => 'generated-uuid'),
+}));
+
+import { datasetService, DatasetService } from '../DatasetService.js';
+import {
+  datasetRepository,
+  robotTypeRepository,
+  skillDefinitionRepository,
+} from '../../repositories/index.js';
+import { isRustFSInitialized } from '../../storage/rustfs-client.js';
+import { natsClient } from '../../messaging/index.js';
+import { kvGet } from '../../messaging/kv-stores.js';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+function makeDataset(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'ds1',
+    name: 'My Dataset',
+    description: 'desc',
+    robotTypeId: 'rt1',
+    skillId: null,
+    storagePath: 'ds1/',
+    lerobotVersion: 'v3.0',
+    fps: 30,
+    totalFrames: 0,
+    totalDuration: 0,
+    demonstrationCount: 0,
+    qualityScore: 0,
+    infoJson: null,
+    statsJson: null,
+    status: 'uploading',
+    huggingFaceRepoId: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+    ...overrides,
+  } as never;
+}
+
+function makeRobotType(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'rt1',
+    name: 'SO-101',
+    manufacturer: 'TheRobotStudio',
+    model: 'so101',
+    ...overrides,
+  } as never;
+}
+
+function makeValidation(overrides: Partial<DatasetValidationResult> = {}): DatasetValidationResult {
+  return {
+    valid: true,
+    errors: [],
+    warnings: [],
+    episodeCount: 0,
+    totalFrames: 0,
+    totalDuration: 0,
+    lerobotVersion: 'v3.0',
+    fps: 30,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Default: storage and NATS unavailable unless a test opts in.
+  vi.mocked(isRustFSInitialized).mockReturnValue(false);
+  vi.mocked(natsClient.isConnected).mockReturnValue(false);
+});
+
+// ===========================================================================
+// create
+// ===========================================================================
+
+describe('create', () => {
+  it('throws when robotTypeId is missing', async () => {
+    await expect(datasetService.create({ name: 'x' } as never)).rejects.toThrow(
+      'robotTypeId is required'
+    );
+    expect(datasetRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('throws when robot type does not exist', async () => {
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(null as never);
+    await expect(
+      datasetService.create({ name: 'x', robotTypeId: 'nope' } as never)
+    ).rejects.toThrow('Robot type not found: nope');
+  });
+
+  it('throws when a provided skillId does not exist', async () => {
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+    vi.mocked(skillDefinitionRepository.findById).mockResolvedValue(null as never);
+    await expect(
+      datasetService.create({ name: 'x', robotTypeId: 'rt1', skillId: 'bad' } as never)
+    ).rejects.toThrow('Skill not found: bad');
+  });
+
+  it('creates the dataset with uploading status and generated storage path, and emits an event', async () => {
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+    const created = makeDataset({ id: 'newds' });
+    vi.mocked(datasetRepository.create).mockResolvedValue(created);
+
+    const events: unknown[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e));
+
+    const result = await datasetService.create({
+      name: 'My Dataset',
+      description: 'desc',
+      robotTypeId: 'rt1',
+    } as never);
+
+    expect(datasetRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'My Dataset',
+        robotTypeId: 'rt1',
+        status: 'uploading',
+        lerobotVersion: 'v3.0',
+        storagePath: 'generated-uuid/',
+      })
+    );
+    expect(result.id).toBe('newds');
+    expect(events).toHaveLength(1);
+    expect((events[0] as { type: string }).type).toBe('dataset:created');
+    unsub();
+  });
+});
+
+// ===========================================================================
+// get
+// ===========================================================================
+
+describe('get', () => {
+  it('returns null when the dataset does not exist', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    expect(await datasetService.get('missing')).toBeNull();
+  });
+
+  it('returns a response with robot type relation populated', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    const result = await datasetService.get('ds1');
+    expect(result?.id).toBe('ds1');
+    expect(result?.robotType).toEqual({
+      id: 'rt1',
+      name: 'SO-101',
+      manufacturer: 'TheRobotStudio',
+      model: 'so101',
+    });
+  });
+});
+
+// ===========================================================================
+// list
+// ===========================================================================
+
+describe('list', () => {
+  it('maps query params and pagination, resolving each row to a response', async () => {
+    vi.mocked(datasetRepository.findAll).mockResolvedValue({
+      data: [makeDataset({ id: 'a' }), makeDataset({ id: 'b' })],
+      pagination: { page: 2, pageSize: 5, total: 12, totalPages: 3 },
+    } as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    const result = await datasetService.list({ page: 2, limit: 5, status: 'ready' } as never);
+
+    expect(datasetRepository.findAll).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 2, pageSize: 5, status: 'ready' })
+    );
+    expect(result.data.map((d) => d.id)).toEqual(['a', 'b']);
+    expect(result.pagination).toEqual({ page: 2, limit: 5, total: 12, totalPages: 3 });
+  });
+
+  it('applies default page=1 and limit=20 when omitted', async () => {
+    vi.mocked(datasetRepository.findAll).mockResolvedValue({
+      data: [],
+      pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+    } as never);
+
+    await datasetService.list({} as never);
+    expect(datasetRepository.findAll).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, pageSize: 20 })
+    );
+  });
+});
+
+// ===========================================================================
+// update
+// ===========================================================================
+
+describe('update', () => {
+  it('returns null when the dataset does not exist', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    expect(await datasetService.update('missing', { name: 'new' } as never)).toBeNull();
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('throws when a provided skillId does not exist', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(skillDefinitionRepository.findById).mockResolvedValue(null as never);
+    await expect(
+      datasetService.update('ds1', { skillId: 'bad' } as never)
+    ).rejects.toThrow('Skill not found: bad');
+  });
+
+  it('updates and emits dataset:updated', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(
+      makeDataset({ name: 'Renamed' })
+    );
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    const result = await datasetService.update('ds1', { name: 'Renamed' } as never);
+    expect(result?.name).toBe('Renamed');
+    expect(datasetRepository.update).toHaveBeenCalledWith(
+      'ds1',
+      expect.objectContaining({ name: 'Renamed' })
+    );
+    expect(events.some((e) => e.type === 'dataset:updated')).toBe(true);
+    unsub();
+  });
+
+  it('returns null when the repository update yields nothing', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(null as never);
+    expect(await datasetService.update('ds1', { name: 'x' } as never)).toBeNull();
+  });
+});
+
+// ===========================================================================
+// delete
+// ===========================================================================
+
+describe('delete', () => {
+  it('returns false when the dataset does not exist', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    expect(await datasetService.delete('missing')).toBe(false);
+    expect(datasetRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes the db record and emits dataset:deleted (no storage when RustFS off)', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    const result = await datasetService.delete('ds1');
+    expect(result).toBe(true);
+    expect(deleteDatasetFromStorage).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === 'dataset:deleted')).toBe(true);
+    unsub();
+  });
+
+  it('attempts storage deletion when RustFS is initialized', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+    deleteDatasetFromStorage.mockResolvedValue(undefined);
+
+    await datasetService.delete('ds1');
+    expect(deleteDatasetFromStorage).toHaveBeenCalledWith('ds1', 'latest');
+  });
+
+  it('still deletes the db record when storage deletion throws', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    deleteDatasetFromStorage.mockRejectedValue(new Error('storage down'));
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    const result = await datasetService.delete('ds1');
+    expect(result).toBe(true);
+    expect(datasetRepository.delete).toHaveBeenCalledWith('ds1');
+  });
+
+  it('does not emit when the db delete reports failure', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.delete).mockResolvedValue(false as never);
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    const result = await datasetService.delete('ds1');
+    expect(result).toBe(false);
+    expect(events.some((e) => e.type === 'dataset:deleted')).toBe(false);
+    unsub();
+  });
+});
+
+// ===========================================================================
+// initiateUpload
+// ===========================================================================
+
+describe('initiateUpload', () => {
+  it('throws when the dataset is not found', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    await expect(datasetService.initiateUpload('missing')).rejects.toThrow(
+      'Dataset not found: missing'
+    );
+  });
+
+  it('throws when the dataset is not in uploading state', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready' })
+    );
+    await expect(datasetService.initiateUpload('ds1')).rejects.toThrow(
+      'Dataset upload already completed or in progress: ds1'
+    );
+  });
+
+  it('throws when storage is unavailable', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    await expect(datasetService.initiateUpload('ds1')).rejects.toThrow(
+      'Storage service not available'
+    );
+  });
+
+  it('returns a presigned upload URL and emits upload:initiated', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    getDatasetUploadUrl.mockResolvedValue('https://signed-url');
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    const result = await datasetService.initiateUpload('ds1', 'application/x-tar', 123);
+    expect(result).toEqual({
+      uploadUrl: 'https://signed-url',
+      expiresIn: 3600,
+      storagePath: 'ds1/data.tar.gz',
+    });
+    expect(getDatasetUploadUrl).toHaveBeenCalledWith('ds1', 'latest', 'application/x-tar');
+    expect(events.some((e) => e.type === 'dataset:upload:initiated')).toBe(true);
+    unsub();
+  });
+});
+
+// ===========================================================================
+// completeUpload
+// ===========================================================================
+
+describe('completeUpload', () => {
+  it('throws when the dataset is not found', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    await expect(datasetService.completeUpload('missing')).rejects.toThrow(
+      'Dataset not found: missing'
+    );
+  });
+
+  it('throws when not in uploading state', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready' })
+    );
+    await expect(datasetService.completeUpload('ds1')).rejects.toThrow(
+      'Dataset not in uploading state: ds1 (status: ready)'
+    );
+  });
+
+  it('queues a validation job via NATS when connected', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+
+    await datasetService.completeUpload('ds1');
+
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'validating' });
+    expect(jsPublish).toHaveBeenCalledWith(
+      'jobs.dataset.validate',
+      expect.any(Uint8Array),
+      expect.objectContaining({ msgID: 'validate-ds1' })
+    );
+  });
+
+  it('runs validation synchronously when NATS is unavailable', async () => {
+    // First findById = uploading; subsequent calls inside validateAndUpdateDataset.
+    vi.mocked(datasetRepository.findById)
+      .mockResolvedValueOnce(makeDataset())
+      .mockResolvedValue(makeDataset({ status: 'ready' }));
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+    // Storage off => validateStructure pushes an error, marks dataset failed.
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+
+    await datasetService.completeUpload('ds1');
+
+    expect(jsPublish).not.toHaveBeenCalled();
+    // Synchronous validation path marks dataset failed (storage unavailable).
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+  });
+});
+
+// ===========================================================================
+// getUploadProgress
+// ===========================================================================
+
+describe('getUploadProgress', () => {
+  it('returns null when no progress KV store is available', async () => {
+    // The shared singleton has not been initialized with a KV store.
+    expect(await datasetService.getUploadProgress('ds1')).toBeNull();
+    expect(kvGet).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// validateStructure
+// ===========================================================================
+
+describe('validateStructure', () => {
+  it('returns invalid with an error when storage is unavailable', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('Storage service not available');
+  });
+
+  it('fails when meta/info.json is missing', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockResolvedValue(false);
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('Missing required file: meta/info.json');
+  });
+
+  it('collects errors for missing required info.json fields', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockImplementation(async (_bucket: string, path: string) =>
+      path.endsWith('info.json')
+    );
+    rustfsDownload.mockResolvedValue(Buffer.from(JSON.stringify({})));
+
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        'info.json missing required field: codebase_version',
+        'info.json missing required field: robot_type',
+        'info.json missing or invalid field: fps',
+        'info.json missing required field: features',
+      ])
+    );
+  });
+
+  it('validates a complete dataset and warns about missing stats/episodes', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockImplementation(async (_bucket: string, path: string) =>
+      path.endsWith('info.json')
+    );
+    rustfsDownload.mockResolvedValue(
+      Buffer.from(
+        JSON.stringify({
+          codebase_version: 'v3.0',
+          robot_type: 'so101',
+          fps: 30,
+          features: { observation: {} },
+          total_episodes: 20,
+          total_frames: 600,
+        })
+      )
+    );
+
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.valid).toBe(true);
+    expect(result.episodeCount).toBe(20);
+    expect(result.totalFrames).toBe(600);
+    expect(result.totalDuration).toBe(20); // 600 / 30
+    expect(result.warnings).toContain(
+      'Missing stats.json - normalization statistics not available'
+    );
+    expect(result.warnings).toContain(
+      'Missing episodes.json - episode boundaries not available'
+    );
+  });
+
+  it('parses stats.json when present', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockResolvedValue(true); // info, stats, episodes all exist
+    rustfsDownload.mockImplementation(async (_bucket: string, path: string) => {
+      if (path.endsWith('info.json')) {
+        return Buffer.from(
+          JSON.stringify({
+            codebase_version: 'v3.0',
+            robot_type: 'so101',
+            fps: 30,
+            features: { x: {} },
+            total_episodes: 5,
+            total_frames: 150,
+          })
+        );
+      }
+      return Buffer.from(JSON.stringify({ mean: [1, 2, 3] }));
+    });
+
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.valid).toBe(true);
+    expect(result.stats).toEqual({ mean: [1, 2, 3] });
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('captures download/parse exceptions as a validation error', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockResolvedValue(true);
+    rustfsDownload.mockRejectedValue(new Error('network blip'));
+
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('network blip'))).toBe(true);
+  });
+});
+
+// ===========================================================================
+// computeQualityScore (pure function)
+// ===========================================================================
+
+describe('computeQualityScore', () => {
+  it('scores a minimal/empty dataset low but with format compliance points', () => {
+    const score = datasetService.computeQualityScore(
+      makeValidation({ episodeCount: 0, totalDuration: 0, valid: true })
+    );
+    // demo=0, duration=0, diversity = 20*0.4=8, compliance: valid only => 3
+    expect(score.demonstrationCount).toBe(0);
+    expect(score.duration).toBe(0);
+    expect(score.diversity).toBe(8);
+    expect(score.formatCompliance).toBe(3);
+    expect(score.total).toBe(11);
+  });
+
+  it('awards full marks at or beyond thresholds and caps total at 100', () => {
+    const score = datasetService.computeQualityScore(
+      makeValidation({
+        episodeCount: 100, // beyond DEMO_COUNT_MAX (50) => capped 40
+        totalDuration: 7200, // beyond DURATION_MAX (3600) => capped 30
+        valid: true,
+        info: { codebase_version: 'v3.0' } as never,
+        stats: { mean: [] } as never,
+      })
+    );
+    expect(score.demonstrationCount).toBe(40);
+    expect(score.duration).toBe(30);
+    expect(score.diversity).toBe(16); // 20 * 0.8 because episodeCount > 10
+    expect(score.formatCompliance).toBe(10); // info(4) + stats(3) + valid(3)
+    expect(score.total).toBe(96);
+    expect(score.total).toBeLessThanOrEqual(100);
+  });
+});
+
+// ===========================================================================
+// getStats
+// ===========================================================================
+
+describe('getStats', () => {
+  it('throws when the dataset is not found', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    await expect(datasetService.getStats('missing')).rejects.toThrow(
+      'Dataset not found: missing'
+    );
+  });
+
+  it('reports hasStats=false when statsJson is empty', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ statsJson: null })
+    );
+    const result = await datasetService.getStats('ds1');
+    expect(result.datasetId).toBe('ds1');
+    expect(result.hasStats).toBeFalsy();
+    expect(result.stats).toBeUndefined();
+  });
+
+  it('returns stats and computedAt when statsJson is populated', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ statsJson: { mean: [1] } })
+    );
+    const result = await datasetService.getStats('ds1');
+    expect(result.hasStats).toBe(true);
+    expect(result.stats).toEqual({ mean: [1] });
+    expect(result.computedAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+});
+
+// ===========================================================================
+// computeStats
+// ===========================================================================
+
+describe('computeStats', () => {
+  it('throws when the dataset is not found', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(null as never);
+    await expect(datasetService.computeStats('missing')).rejects.toThrow(
+      'Dataset not found: missing'
+    );
+  });
+
+  it('throws when the dataset is not ready', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'uploading' })
+    );
+    await expect(datasetService.computeStats('ds1')).rejects.toThrow(
+      'Dataset not ready for stats computation: ds1'
+    );
+  });
+
+  it('throws when stats already exist and force is false', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready', statsJson: { mean: [1] } })
+    );
+    await expect(datasetService.computeStats('ds1')).rejects.toThrow(
+      'Dataset already has stats'
+    );
+  });
+
+  it('throws when NATS is unavailable (worker required)', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready', statsJson: null })
+    );
+    vi.mocked(natsClient.isConnected).mockReturnValue(false);
+    await expect(datasetService.computeStats('ds1')).rejects.toThrow(
+      'Stats computation worker not available'
+    );
+  });
+
+  it('publishes a stats job when NATS is connected', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready', statsJson: null })
+    );
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+
+    await datasetService.computeStats('ds1');
+    expect(jsPublish).toHaveBeenCalledWith(
+      'jobs.dataset.compute-stats',
+      expect.any(Uint8Array),
+      expect.objectContaining({ msgID: expect.stringContaining('stats-ds1-') })
+    );
+  });
+
+  it('recomputes existing stats when force=true', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready', statsJson: { mean: [1] } })
+    );
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+
+    await expect(datasetService.computeStats('ds1', true)).resolves.toBeUndefined();
+    expect(jsPublish).toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// validateAndUpdateDataset (orchestration)
+// ===========================================================================
+
+describe('validateAndUpdateDataset', () => {
+  it('marks the dataset failed and emits validation:failed when structure is invalid', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(false); // structure invalid
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    expect(events.some((e) => e.type === 'dataset:validation:failed')).toBe(true);
+    unsub();
+  });
+
+  it('marks the dataset ready with a quality score on a valid structure', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsExists.mockImplementation(async (_bucket: string, path: string) =>
+      path.endsWith('info.json')
+    );
+    rustfsDownload.mockResolvedValue(
+      Buffer.from(
+        JSON.stringify({
+          codebase_version: 'v3.0',
+          robot_type: 'so101',
+          fps: 30,
+          features: { x: {} },
+          total_episodes: 20,
+          total_frames: 600,
+        })
+      )
+    );
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ status: 'ready', qualityScore: 50 })
+    );
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(datasetRepository.update).toHaveBeenCalledWith(
+      'ds1',
+      expect.objectContaining({ status: 'ready', qualityScore: expect.any(Number) })
+    );
+    expect(events.some((e) => e.type === 'dataset:validation:completed')).toBe(true);
+    unsub();
+  });
+
+  it('marks the dataset failed when an unexpected error is thrown mid-validation', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    // exists throws synchronously inside validateStructure's try, which is
+    // caught there; to hit the outer catch we make update throw on first call.
+    rustfsExists.mockImplementation(async (_bucket: string, path: string) =>
+      path.endsWith('info.json')
+    );
+    rustfsDownload.mockResolvedValue(
+      Buffer.from(
+        JSON.stringify({
+          codebase_version: 'v3.0',
+          robot_type: 'so101',
+          fps: 30,
+          features: { x: {} },
+          total_episodes: 5,
+          total_frames: 150,
+        })
+      )
+    );
+    // First update (to 'ready') throws -> outer catch -> second update to 'failed'.
+    vi.mocked(datasetRepository.update)
+      .mockRejectedValueOnce(new Error('db write failed'))
+      .mockResolvedValue(makeDataset() as never);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    expect(events.some((e) => e.type === 'dataset:validation:failed')).toBe(true);
+    unsub();
+  });
+});
+
+// ===========================================================================
+// singleton + initialization
+// ===========================================================================
+
+describe('singleton & lifecycle', () => {
+  it('getInstance returns the shared singleton', () => {
+    expect(DatasetService.getInstance()).toBe(datasetService);
+  });
+
+  it('initialize is idempotent and sets isInitialized', async () => {
+    await datasetService.initialize();
+    expect(datasetService.isInitialized()).toBe(true);
+    // second call is a no-op (does not query NATS again)
+    vi.mocked(natsClient.isConnected).mockClear();
+    await datasetService.initialize();
+    expect(natsClient.isConnected).not.toHaveBeenCalled();
+  });
+});

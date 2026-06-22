@@ -358,7 +358,7 @@ export class ComplianceTrackerService {
     });
 
     // Log activity
-    await this.logActivity('gap_closed', `New gap identified: ${input.requirement}`, input.framework);
+    await this.logActivity('gap_opened', `New gap identified: ${input.requirement}`, input.framework);
 
     return gap;
   }
@@ -677,7 +677,7 @@ export class ComplianceTrackerService {
   }
 
   private async logActivity(
-    type: 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated',
+    type: 'gap_opened' | 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated',
     description: string,
     framework?: RegulatoryFramework,
     entityId?: string,
