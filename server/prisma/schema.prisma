@@ -1471,7 +1471,7 @@ model RegulatoryDeadline {
 // Compliance Activity - tracks recent compliance-related activities
 model ComplianceActivity {
   id          String    @id @default(uuid())
-  type        String    // 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated'
+  type        String    // 'gap_opened' | 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated'
   description String
   framework   String?   // Optional framework association
   entityId    String?   // ID of related entity (gap, document, training, etc.)

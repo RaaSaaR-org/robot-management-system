@@ -682,7 +682,13 @@ export class GDPRRequestService {
       },
     });
 
-    skippedRecords = eligibility.estimatedRecordsAffected - deletedRecords - pseudonymizedRecords;
+    // Clamp at 0: the estimate only covers user+complianceLog+userConsent, while
+    // deletedRecords also includes GDPR requests and data restrictions, so the raw
+    // subtraction can go negative (a logically impossible "skipped" count).
+    skippedRecords = Math.max(
+      0,
+      eligibility.estimatedRecordsAffected - deletedRecords - pseudonymizedRecords,
+    );
 
     console.log(
       `[GDPRRequestService] Erasure completed for user ${userId}: ` +

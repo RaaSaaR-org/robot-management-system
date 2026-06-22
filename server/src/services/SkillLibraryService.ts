@@ -427,7 +427,9 @@ export class SkillLibraryService extends EventEmitter {
 
     for (const robot of allRobots) {
       const robotType = (robot.metadata?.robotType as string) ?? robot.model;
-      const robotCapabilities = (robot.metadata?.capabilities as string[]) ?? [];
+      // TASK-143: capabilities live on the Robot itself, not in metadata.
+      // Fall back to metadata for legacy/test fixtures (matches checkRobotCompatibility).
+      const robotCapabilities = robot.capabilities ?? (robot.metadata?.capabilities as string[]) ?? [];
 
       const compatibleTypes = skill.compatibleRobotTypes ?? [];
       const typeCompatible = compatibleTypes.length === 0 ||
@@ -465,7 +467,9 @@ export class SkillLibraryService extends EventEmitter {
     }
 
     const robotType = (robot.metadata?.robotType as string) ?? robot.model;
-    const robotCapabilities = (robot.metadata?.capabilities as string[]) ?? [];
+    // TASK-143: capabilities live on the Robot itself, not in metadata.
+    // Fall back to metadata for legacy/test fixtures (matches checkRobotCompatibility).
+    const robotCapabilities = robot.capabilities ?? (robot.metadata?.capabilities as string[]) ?? [];
 
     // Get robot type ID if we have one
     const robotTypeEntity = await robotTypeRepository.findByName(robotType);
