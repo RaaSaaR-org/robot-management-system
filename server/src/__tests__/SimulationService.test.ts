@@ -10,14 +10,25 @@ import type { SimJob, SimMetrics } from '../services/SimulationService.js';
 
 describe('SimulationService', () => {
   let service: SimulationService;
+  const originalBackend = process.env.SIMULATION_BACKEND;
 
   beforeEach(() => {
+    // Force mock progression so the deterministic fake-timer lifecycle below
+    // applies. Without this, canRunReal() finds the Python evaluator script in
+    // the repo and runs the real MuJoCo subprocess path (jobs jump straight to
+    // 'running'), breaking the queued→running→completed timing assertions.
+    process.env.SIMULATION_BACKEND = 'mock';
     // Create a fresh instance for each test (bypass singleton for isolation)
     service = new (SimulationService as unknown as { new (): SimulationService })();
   });
 
   afterEach(() => {
     service.cleanup();
+    if (originalBackend === undefined) {
+      delete process.env.SIMULATION_BACKEND;
+    } else {
+      process.env.SIMULATION_BACKEND = originalBackend;
+    }
   });
 
   // ==========================================================================

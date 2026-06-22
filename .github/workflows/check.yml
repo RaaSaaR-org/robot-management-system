@@ -1,16 +1,17 @@
 name: Check
 
 # Pre-merge gate for the things actually shipped from this repo:
-#   - server typecheck + build
-#   - app   typecheck + build (default mode)
-#   - app   build with VITE_DEMO_MODE=true (mirrors deploy-demo.yml)
+#   - server      typecheck + unit tests + build
+#   - app         typecheck + unit tests + build (default mode)
+#   - app         build with VITE_DEMO_MODE=true (mirrors deploy-demo.yml)
+#   - robot-agent typecheck + unit tests
 #
-# No service containers (no postgres, nats, rustfs) — the previous
-# smoke-test.yml stood up a full stack to exercise one dataset CRUD
-# call against a server image that hasn't been published since
-# v0.0.2 (Jan 2026). The only thing this repo actually deploys via CI
-# is the demo-mode app to GitHub Pages, so we gate on what would
-# break that build, plus general type safety for the local dev loop.
+# Unit tests (vitest) run with no external services — they mock Prisma,
+# NATS, sockets, and subprocesses, so no postgres/nats/rustfs containers
+# are needed. The previous smoke-test.yml stood up a full stack to
+# exercise one dataset CRUD call against a server image that hasn't been
+# published since v0.0.2 (Jan 2026); we gate on the vitest suites plus
+# type safety instead.
 
 on:
   push:
@@ -28,6 +29,11 @@ jobs:
     name: Server typecheck + build
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The committed Prisma schema targets SQLite (provider = "sqlite"); the
+    # vitest suites run against a throwaway file DB created below — no external
+    # Postgres needed.
+    env:
+      DATABASE_URL: file:./ci-test.db
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +54,14 @@ jobs:
       - name: Typecheck
         working-directory: server
         run: npm run typecheck
+
+      - name: Set up test database (SQLite)
+        working-directory: server
+        run: npx prisma db push --skip-generate --accept-data-loss
+
+      - name: Test
+        working-directory: server
+        run: npm test
 
       - name: Build
         working-directory: server
@@ -76,6 +90,10 @@ jobs:
         working-directory: app
         run: npx tsc --noEmit
 
+      - name: Test
+        working-directory: app
+        run: npm test
+
       - name: Build (dev mode)
         working-directory: app
         run: npm run build
@@ -89,3 +107,28 @@ jobs:
         env:
           VITE_DEMO_MODE: 'true'
         run: npm run build
+
+  robot-agent:
+    name: Robot agent typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: robot-agent/package-lock.json
+
+      - name: Install
+        working-directory: robot-agent
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: robot-agent
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: robot-agent
+        run: npm test

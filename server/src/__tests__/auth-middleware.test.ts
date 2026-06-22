@@ -39,7 +39,7 @@ describe('Auth Middleware', () => {
       expect(res.status).toBe(200);
       expect(res.body.user).toBeDefined();
       expect(res.body.user.email).toBe('dev@neodem.local');
-      expect(res.body.user.role).toBe('admin');
+      expect(res.body.user.role).toBe('super-admin');
     });
   });
 
