@@ -29,6 +29,11 @@ jobs:
     name: Server typecheck + build
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The committed Prisma schema targets SQLite (provider = "sqlite"); the
+    # vitest suites run against a throwaway file DB created below — no external
+    # Postgres needed.
+    env:
+      DATABASE_URL: file:./ci-test.db
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +54,10 @@ jobs:
       - name: Typecheck
         working-directory: server
         run: npm run typecheck
+
+      - name: Set up test database (SQLite)
+        working-directory: server
+        run: npx prisma db push --skip-generate --accept-data-loss
 
       - name: Test
         working-directory: server
