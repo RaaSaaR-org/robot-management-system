@@ -336,6 +336,19 @@ describe('RetentionCleanupJob.getRetentionStats', () => {
 // ---------------------------------------------------------------------------
 
 describe('RetentionCleanupJob scheduling', () => {
+  // startSchedule computes the initial delay to the next 2 AM *local* time, so
+  // these timer assertions are timezone-sensitive. Pin TZ=UTC for determinism
+  // (CI runs in UTC, dev machines may not) — with system time at 00:00 UTC the
+  // initial delay is a fixed 2h, well inside the 24h advance window below.
+  const origTZ = process.env.TZ;
+  beforeEach(() => {
+    process.env.TZ = 'UTC';
+  });
+  afterEach(() => {
+    if (origTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = origTZ;
+  });
+
   it('runs the first cleanup after the initial delay then on each interval', async () => {
     vi.useFakeTimers();
     // Fix "now" to a deterministic point well before 2 AM the next reckoning.
@@ -348,8 +361,9 @@ describe('RetentionCleanupJob scheduling', () => {
     // Nothing has fired yet.
     expect(spy).not.toHaveBeenCalled();
 
-    // Advance past the initial setTimeout (initial delay is < 26h).
-    await vi.advanceTimersByTimeAsync(26 * 60 * 60 * 1000);
+    // Advance past the initial setTimeout (initial delay <= 24h in any TZ, so a
+    // 24h advance fires exactly the first run and never the +24h interval tick).
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
     expect(spy).toHaveBeenCalledTimes(1);
 
     // Advance one full interval -> recurring run.
@@ -368,7 +382,7 @@ describe('RetentionCleanupJob scheduling', () => {
 
     // Fire the first schedule's setTimeout so intervalId is set.
     job.startSchedule(24);
-    await vi.advanceTimersByTimeAsync(26 * 60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
     expect(spy).toHaveBeenCalledTimes(1);
 
     // A second startSchedule should be a guarded no-op (interval already set).
@@ -387,7 +401,7 @@ describe('RetentionCleanupJob scheduling', () => {
 
     const spy = vi.spyOn(job, 'runCleanup');
     job.startSchedule(24);
-    await vi.advanceTimersByTimeAsync(26 * 60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
     expect(spy).toHaveBeenCalledTimes(1);
 
     job.stopSchedule();
