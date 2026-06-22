@@ -1,163 +1,155 @@
 /**
  * @file keyboard-teleop.ts
- * @description WebSocket endpoint for keyboard-based teleoperation of the SO-101 arm.
- *              Accepts joint delta commands and presets, forwards to the hardware sidecar.
+ * @description WebSocket endpoint for keyboard-based teleoperation of the
+ *              simulated robot. Embodiment-aware: drives the active robot's
+ *              joints (SO-101, G1, G1-EDU, …) through the RobotStateManager's
+ *              simulated joint state — no hardware sidecar required.
  * @feature teleop
- * @status orphaned
+ * @status live
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'http';
+import type { RobotStateManager } from '../robot/state.js';
 
-const SIDECAR_URL = process.env.HARDWARE_SIDECAR_URL ?? 'http://localhost:8765';
+/** How fast a held joint moves, in radians per second. */
+const SLEW_RATE_RAD_PER_S = 0.8;
+/** Integration tick for held-key motion (~30 Hz). */
+const TICK_MS = 33;
 
-/** Safe joint ranges in degrees */
-const JOINT_LIMITS: Record<string, { min: number; max: number }> = {
-  shoulder_pan:  { min: -100, max: 100 },
-  shoulder_lift: { min: -100, max: 100 },
-  elbow_flex:    { min: -135, max: 135 },
-  wrist_flex:    { min: -45,  max: 45  },
-  wrist_roll:    { min: -180, max: 180 },
-  gripper:       { min: 0,    max: 65  },
-};
-
-const HOME_POSITION: Record<string, number> = {
-  shoulder_pan:  0,
-  shoulder_lift: 0,
-  elbow_flex:    0,
-  wrist_flex:    0,
-  wrist_roll:    0,
-  gripper:       30,
-};
-
-const JOINT_NAMES = [
-  'shoulder_pan', 'shoulder_lift', 'elbow_flex',
-  'wrist_flex', 'wrist_roll', 'gripper',
-];
-
-interface JointDeltaMessage {
+interface DirectionMessage {
   joint: string;
+  /** -1, 0, or +1 — sign of motion while a key is held (0 = stop). */
+  direction: number;
+}
+interface DeltaMessage {
+  joint: string;
+  /** One-shot nudge in radians. */
   delta: number;
 }
-
+interface PositionMessage {
+  joint: string;
+  /** Absolute target angle in radians (clamped to the joint's limits). */
+  position: number;
+}
+interface PoseMessage {
+  /** Absolute target angles (radians) for many joints at once. */
+  positions: Record<string, number>;
+}
 interface PresetMessage {
   preset: 'home' | 'stop';
 }
+type TeleopMessage =
+  | DirectionMessage
+  | DeltaMessage
+  | PositionMessage
+  | PoseMessage
+  | PresetMessage;
 
-type TeleopMessage = JointDeltaMessage | PresetMessage;
+export function createKeyboardTeleopWebSocket(
+  robotStateManager: RobotStateManager
+): WebSocketServer {
+  // noServer: upgrades are routed by the shared dispatcher in index.ts.
+  const wss = new WebSocketServer({ noServer: true });
 
-function isPresetMessage(msg: TeleopMessage): msg is PresetMessage {
-  return 'preset' in msg;
-}
+  console.log('[KeyboardTeleop] WebSocket server ready on path: /ws/keyboard-teleop');
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-async function fetchCurrentState(): Promise<Record<string, number>> {
-  try {
-    const res = await fetch(`${SIDECAR_URL}/state`, { signal: AbortSignal.timeout(1000) });
-    const data = (await res.json()) as {
-      joints: Array<{ name: string; position: number }>;
-    };
-    const state: Record<string, number> = {};
-    for (const j of data.joints) {
-      state[j.name] = j.position;
-    }
-    return state;
-  } catch {
-    // Return home position as fallback
-    return { ...HOME_POSITION };
-  }
-}
-
-async function sendActionToSidecar(joints: Record<string, number>): Promise<void> {
-  try {
-    await fetch(`${SIDECAR_URL}/action`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(joints),
-      signal: AbortSignal.timeout(1000),
-    });
-  } catch (err) {
-    console.error('[KeyboardTeleop] Failed to send action to sidecar:', err);
-  }
-}
-
-export function createKeyboardTeleopWebSocket(server: Server): WebSocketServer {
-  const wss = new WebSocketServer({
-    server,
-    path: '/ws/keyboard-teleop',
-  });
-
-  console.log('[KeyboardTeleop] WebSocket server listening on path: /ws/keyboard-teleop');
-
-  wss.on('connection', async (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket) => {
     console.log('[KeyboardTeleop] Client connected');
 
-    // Fetch initial joint positions from the sidecar
-    let currentPositions = await fetchCurrentState();
+    // Enter teleop mode — joints now follow operator input instead of animation.
+    const positions = robotStateManager.enableTeleop();
+    const joints = robotStateManager.getActiveJointConfig();
 
-    // Send initial state to client
+    // Advertise the embodiment so the client can build controls for any robot.
     ws.send(JSON.stringify({
-      type: 'state',
-      positions: currentPositions,
+      type: 'config',
+      robotType: robotStateManager.getState().robotType,
+      joints: joints.map((j) => ({
+        name: j.name,
+        limitLower: j.limitLower,
+        limitUpper: j.limitUpper,
+        defaultPosition: j.defaultPosition,
+      })),
+      positions,
     }));
 
-    ws.on('message', async (data: Buffer) => {
+    // Per-joint angular velocity (rad/s) for currently-held keys.
+    const velocity = new Map<string, number>();
+    const dt = TICK_MS / 1000;
+
+    const sendState = () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'state', positions: robotStateManager.getTeleopPositions() }));
+      }
+    };
+
+    // Integrate held-key motion at a fixed tick.
+    const timer = setInterval(() => {
+      let moved = false;
+      for (const [joint, vel] of velocity) {
+        if (vel !== 0) {
+          robotStateManager.applyTeleopDelta(joint, vel * dt);
+          moved = true;
+        }
+      }
+      if (moved) sendState();
+    }, TICK_MS);
+
+    ws.on('message', (data: Buffer) => {
+      let msg: TeleopMessage;
       try {
-        const msg: TeleopMessage = JSON.parse(data.toString());
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
 
-        if (isPresetMessage(msg)) {
-          if (msg.preset === 'home') {
-            currentPositions = { ...HOME_POSITION };
-            await sendActionToSidecar(currentPositions);
-            ws.send(JSON.stringify({ type: 'state', positions: currentPositions }));
-          } else if (msg.preset === 'stop') {
-            // Re-read current state (effectively stops at current position)
-            currentPositions = await fetchCurrentState();
-            ws.send(JSON.stringify({ type: 'state', positions: currentPositions }));
-          }
-          return;
+      if ('preset' in msg) {
+        velocity.clear();
+        if (msg.preset === 'home') robotStateManager.homeTeleopJoints();
+        sendState();
+        return;
+      }
+
+      if ('positions' in msg && msg.positions && typeof msg.positions === 'object') {
+        // Pose stream (e.g. WebXR / Meta Quest): absolute targets for many joints.
+        for (const [joint, position] of Object.entries(msg.positions)) {
+          if (typeof position === 'number') robotStateManager.setTeleopJoint(joint, position);
         }
+        sendState();
+        return;
+      }
 
-        // Joint delta message
-        const { joint, delta } = msg as JointDeltaMessage;
-        if (!joint || typeof delta !== 'number') {
-          ws.send(JSON.stringify({ type: 'error', message: 'Invalid message: need joint and delta' }));
-          return;
-        }
+      if ('position' in msg && typeof msg.position === 'number') {
+        // Absolute target for a single joint (radians).
+        robotStateManager.setTeleopJoint(msg.joint, msg.position);
+        sendState();
+        return;
+      }
 
-        if (!JOINT_LIMITS[joint]) {
-          ws.send(JSON.stringify({ type: 'error', message: `Unknown joint: ${joint}` }));
-          return;
-        }
+      if ('direction' in msg && typeof msg.direction === 'number') {
+        // Held-key motion: set (or clear) the joint's velocity.
+        velocity.set(msg.joint, msg.direction * SLEW_RATE_RAD_PER_S);
+        return;
+      }
 
-        const limits = JOINT_LIMITS[joint];
-        const current = currentPositions[joint] ?? 0;
-        const newPos = clamp(current + delta, limits.min, limits.max);
-        currentPositions[joint] = newPos;
-
-        // Send full joint positions to sidecar
-        await sendActionToSidecar(currentPositions);
-
-        // Acknowledge with updated state
-        ws.send(JSON.stringify({
-          type: 'state',
-          positions: currentPositions,
-        }));
-      } catch (err) {
-        console.error('[KeyboardTeleop] Error processing message:', err);
-        ws.send(JSON.stringify({ type: 'error', message: 'Failed to process command' }));
+      if ('delta' in msg && typeof msg.delta === 'number') {
+        // One-shot nudge (radians).
+        robotStateManager.applyTeleopDelta(msg.joint, msg.delta);
+        sendState();
       }
     });
 
     ws.on('close', () => {
       console.log('[KeyboardTeleop] Client disconnected');
+      clearInterval(timer);
+      // Teleop is active only while an operator is connected — resume animation.
+      robotStateManager.disableTeleop();
     });
 
     ws.on('error', (error) => {
       console.error('[KeyboardTeleop] WebSocket error:', error);
+      clearInterval(timer);
+      robotStateManager.disableTeleop();
     });
   });
 

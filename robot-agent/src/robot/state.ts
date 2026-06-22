@@ -18,6 +18,8 @@ import type {
   Zone,
 } from './types.js';
 import { generateTelemetry } from './telemetry.js';
+import { getJointConfig } from './joint-configs/index.js';
+import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
@@ -89,6 +91,10 @@ export class RobotStateManager {
   // Local VLA state — used when delegating to sidecar instead of gRPC VLAController
   private vlaActiveLocal = false;
   private vlaInstructionLocal = '';
+
+  // Keyboard teleop override — when active, the simulated joints follow operator
+  // input instead of the idle/walk animation. Map of joint name -> position (rad).
+  private teleopJoints: Map<string, number> | null = null;
 
   // Embodiment integration (Task 51)
   private jointMapper: JointMapper;
@@ -291,7 +297,16 @@ export class RobotStateManager {
 
   getTelemetry(): RobotTelemetry {
     const telemetry = generateTelemetry(this.state);
-    // Always prefer real joint states over simulated defaults.
+    // Keyboard teleop override: when an operator is teleoperating in simulation,
+    // the joints follow their commanded pose instead of the idle/walk animation.
+    if (this.teleopJoints) {
+      telemetry.jointStates = this.getActiveJointConfig().map((joint) => ({
+        name: joint.name,
+        position: this.teleopJoints!.get(joint.name) ?? joint.defaultPosition,
+        velocity: 0,
+      }));
+    }
+    // Always prefer real joint states over simulated/teleop defaults.
     // Even if the sidecar is temporarily unreachable, keep showing the last known
     // real pose instead of snapping back to simulated defaults (avoids confusion).
     const realJoints = hardwareClient.getJointStates();
@@ -300,6 +315,92 @@ export class RobotStateManager {
       (telemetry as unknown as Record<string, unknown>).hardwareConnected = hardwareClient.isConnected();
     }
     return telemetry;
+  }
+
+  // ============================================================================
+  // KEYBOARD TELEOP (simulation, embodiment-aware)
+  // ============================================================================
+
+  /** Joint configuration for the active embodiment (SO-101, G1, G1-EDU, …). */
+  getActiveJointConfig(): JointConfig[] {
+    return getJointConfig(this.state.robotType);
+  }
+
+  /** Whether keyboard teleop is currently driving the simulated joints. */
+  isTeleopActive(): boolean {
+    return this.teleopJoints !== null;
+  }
+
+  /**
+   * Enter teleop mode. Seeds the override map from the embodiment's default
+   * pose. Idempotent — returns the current teleop pose (radians).
+   */
+  enableTeleop(): Record<string, number> {
+    if (!this.teleopJoints) {
+      this.teleopJoints = new Map();
+      for (const joint of this.getActiveJointConfig()) {
+        this.teleopJoints.set(joint.name, joint.defaultPosition);
+      }
+    }
+    return this.getTeleopPositions();
+  }
+
+  /** Leave teleop mode; the simulation resumes its idle/walk animation. */
+  disableTeleop(): void {
+    this.teleopJoints = null;
+    this.notifyListeners();
+  }
+
+  /** Reset all teleop joints to their default (home) pose. */
+  homeTeleopJoints(): Record<string, number> {
+    if (!this.teleopJoints) this.enableTeleop();
+    for (const joint of this.getActiveJointConfig()) {
+      this.teleopJoints!.set(joint.name, joint.defaultPosition);
+    }
+    return this.getTeleopPositions();
+  }
+
+  /**
+   * Apply a delta (radians) to a single teleop joint, clamped to its limits.
+   * Returns the new clamped position, or null for an unknown joint.
+   *
+   * Note: intentionally does NOT notify state listeners — teleop runs at a high
+   * tick rate and the telemetry stream re-reads getTelemetry() on its own cadence.
+   */
+  applyTeleopDelta(jointName: string, deltaRad: number): number | null {
+    if (!this.teleopJoints) this.enableTeleop();
+    const joint = this.getActiveJointConfig().find((j) => j.name === jointName);
+    if (!joint) return null;
+    const current = this.teleopJoints!.get(jointName) ?? joint.defaultPosition;
+    const next = Math.max(joint.limitLower, Math.min(joint.limitUpper, current + deltaRad));
+    this.teleopJoints!.set(jointName, next);
+    return next;
+  }
+
+  /**
+   * Set a single teleop joint to an absolute angle (radians), clamped to its
+   * limits. Returns the new clamped position, or null for an unknown joint.
+   *
+   * Used by pose-streaming teleop (e.g. WebXR / Meta Quest) where the client
+   * computes target joint angles each frame rather than incremental deltas.
+   * Like applyTeleopDelta, it intentionally does NOT notify state listeners.
+   */
+  setTeleopJoint(jointName: string, positionRad: number): number | null {
+    if (!this.teleopJoints) this.enableTeleop();
+    const joint = this.getActiveJointConfig().find((j) => j.name === jointName);
+    if (!joint) return null;
+    const next = Math.max(joint.limitLower, Math.min(joint.limitUpper, positionRad));
+    this.teleopJoints!.set(jointName, next);
+    return next;
+  }
+
+  /** Current teleop joint positions as a plain map (radians). */
+  getTeleopPositions(): Record<string, number> {
+    const out: Record<string, number> = {};
+    if (this.teleopJoints) {
+      for (const [name, pos] of this.teleopJoints) out[name] = pos;
+    }
+    return out;
   }
 
   getCommandHistory(): RobotCommand[] {

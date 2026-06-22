@@ -5,7 +5,6 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'http';
 import type { RobotStateManager } from '../robot/state.js';
 import {
   formatTelemetryMessage,
@@ -16,16 +15,14 @@ import {
 const TELEMETRY_INTERVAL_MS = 2000;
 
 export function createTelemetryWebSocket(
-  server: Server,
   robotStateManager: RobotStateManager
 ): WebSocketServer {
   const robotId = robotStateManager.getState().id;
-  const wss = new WebSocketServer({
-    server,
-    path: `/ws/telemetry/${robotId}`,
-  });
+  // noServer: upgrades are routed by the shared dispatcher in index.ts. Attaching
+  // multiple {server}-bound ws servers makes the first one 400 every other path.
+  const wss = new WebSocketServer({ noServer: true });
 
-  console.log(`[TelemetryWS] WebSocket server listening on path: /ws/telemetry/${robotId}`);
+  console.log(`[TelemetryWS] WebSocket server ready on path: /ws/telemetry/${robotId}`);
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('[TelemetryWS] Client connected');

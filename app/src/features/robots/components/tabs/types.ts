@@ -69,6 +69,25 @@ export interface Model3DTabProps extends TabCommonProps {
 }
 
 /**
+ * Props for the OverviewTab component — the default landing view that pairs the
+ * 3D model with the robot's primary controls (VLA task + safe ops).
+ */
+export interface OverviewTabProps extends TabCommonProps {
+  /** Live telemetry data (drives the 3D pose) */
+  telemetry: RobotTelemetry | null;
+  /** Whether telemetry connection is active */
+  isTelemetryConnected: boolean;
+  /** Whether a command is currently being executed */
+  isCommandLoading: boolean;
+  /** Whether commands can be executed */
+  canExecuteCommands: boolean;
+  /** Send the robot to a charging dock */
+  onSendToCharge: () => Promise<void>;
+  /** Send the robot to its home base */
+  onReturnHome: () => Promise<void>;
+}
+
+/**
  * Props for the ChatTab component
  */
 export interface ChatTabProps extends TabCommonProps {}

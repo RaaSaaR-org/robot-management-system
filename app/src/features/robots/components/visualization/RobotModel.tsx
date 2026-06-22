@@ -177,7 +177,14 @@ function URDFModel({
       if (!joint) return;
 
       const calib = SO101_LEROBOT_CALIBRATION[name];
-      if (!calib) return;
+      if (!calib) {
+        // No LeRobot calibration entry (e.g. G1 humanoid joints): the position is
+        // already a URDF-frame angle in radians (keyboard / VR teleop, sim
+        // telemetry), so drive the joint directly. This lets non-SO-101 robots
+        // reflect joint motion instead of rendering statically.
+        robot.setJointValue(name, position);
+        return;
+      }
 
       // LeRobot 0° == mid of joint's calibrated range == URDF mid.
       // Map LeRobot's [-halfRangeDeg, +halfRangeDeg] linearly onto URDF [lower, upper].

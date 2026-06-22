@@ -23,6 +23,7 @@ import { setRobotStateManager as setManipulationStateManager } from './tools/man
 import { setRobotStateManager as setStatusStateManager } from './tools/status.js';
 import { complianceLogClient } from './compliance/ComplianceLogClient.js';
 import { createBilateralTeleopWebSocket } from './api/bilateral-teleop.js';
+import { createKeyboardTeleopWebSocket } from './api/keyboard-teleop.js';
 import { FrameRecorder } from './teleop/FrameRecorder.js';
 import { DeviceIdentityManager } from './security/device-identity.js';
 import { SecureBootVerifier } from './security/secure-boot.js';
@@ -176,12 +177,37 @@ async function main() {
   // Create HTTP server
   const server = http.createServer(app);
 
-  // Setup WebSocket for telemetry streaming
-  createTelemetryWebSocket(server, robotStateManager);
-
-  // Setup bilateral teleop WebSocket with frame recorder
+  // Setup WebSocket servers (noServer mode — see the upgrade dispatcher below).
+  // They must NOT each bind to `server`: ws aborts non-matching paths with 400,
+  // so the first-attached server would reject every other endpoint's upgrades.
+  const telemetryWss = createTelemetryWebSocket(robotStateManager);
   const frameRecorder = new FrameRecorder();
-  createBilateralTeleopWebSocket(server, frameRecorder);
+  const bilateralWss = createBilateralTeleopWebSocket(frameRecorder);
+  const keyboardWss = createKeyboardTeleopWebSocket(robotStateManager);
+
+  // Single upgrade dispatcher routes each WebSocket path to its server.
+  server.on('upgrade', (req, socket, head) => {
+    let pathname = '/';
+    try {
+      pathname = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
+
+    const route = (wss: import('ws').WebSocketServer) =>
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+
+    if (pathname === `/ws/telemetry/${ROBOT_ID}`) {
+      route(telemetryWss);
+    } else if (pathname === '/ws/bilateral-teleop') {
+      route(bilateralWss);
+    } else if (pathname === '/ws/keyboard-teleop') {
+      route(keyboardWss);
+    } else {
+      socket.destroy();
+    }
+  });
 
   // Start server
   server.listen(PORT, () => {
@@ -202,6 +228,7 @@ async function main() {
     console.log(`    REST API:       http://localhost:${PORT}/api/v1/robots/${ROBOT_ID}`);
     console.log(`    Registration:   http://localhost:${PORT}/api/v1/register`);
     console.log(`    Telemetry WS:   ws://localhost:${PORT}/ws/telemetry/${ROBOT_ID}`);
+    console.log(`    Keyboard Teleop:ws://localhost:${PORT}/ws/keyboard-teleop`);
     console.log(`    Health Check:   http://localhost:${PORT}/api/v1/health`);
     console.log('');
     console.log('  Press Ctrl+C to stop the server');
