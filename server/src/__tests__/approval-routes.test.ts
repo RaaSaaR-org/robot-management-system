@@ -772,17 +772,27 @@ describe('Approval Routes', () => {
   // getApprovalRequest('contests'). Asserting ACTUAL current behavior.
   // --------------------------------------------------------------------------
 
-  describe('GET /api/approvals/contests (shadowed by /:id)', () => {
-    it('is captured by the /:id handler (current behavior)', async () => {
-      mockApprovalWorkflowService.getApprovalRequest.mockResolvedValue(null);
+  describe('GET /api/approvals/contests', () => {
+    it('lists contests (no longer shadowed by /:id)', async () => {
+      const result = { contests: [{ id: 'contest-1' }], total: 1, page: 1, limit: 20 };
+      mockApprovalWorkflowService.getContests.mockResolvedValue(result);
 
       const response = await request(app).get('/api/approvals/contests');
 
-      // /:id wins; getApprovalRequest('contests') returns null -> 404
-      expect(response.status).toBe(404);
-      expect(response.body.error).toBe('Approval request not found');
-      expect(mockApprovalWorkflowService.getApprovalRequest).toHaveBeenCalledWith('contests');
-      expect(mockApprovalWorkflowService.getContests).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(result);
+      expect(mockApprovalWorkflowService.getContests).toHaveBeenCalledWith({}, 1, 20);
+      // The literal route now wins over /:id.
+      expect(mockApprovalWorkflowService.getApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 on service error', async () => {
+      mockApprovalWorkflowService.getContests.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).get('/api/approvals/contests');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('boom');
     });
   });
 
@@ -894,39 +904,72 @@ describe('Approval Routes', () => {
   // getApprovalRequest(<segment>). Asserting ACTUAL current behavior.
   // --------------------------------------------------------------------------
 
-  describe('GET /api/approvals/metrics (shadowed by /:id)', () => {
-    it('is captured by the /:id handler (current behavior)', async () => {
-      mockApprovalWorkflowService.getApprovalRequest.mockResolvedValue(null);
+  describe('GET /api/approvals/metrics', () => {
+    it('returns workflow metrics (no longer shadowed by /:id)', async () => {
+      const metrics = { total: 5, pending: 2, approved: 3 };
+      mockApprovalWorkflowService.getMetrics.mockResolvedValue(metrics);
 
       const response = await request(app).get('/api/approvals/metrics');
 
-      expect(response.status).toBe(404);
-      expect(mockApprovalWorkflowService.getApprovalRequest).toHaveBeenCalledWith('metrics');
-      expect(mockApprovalWorkflowService.getMetrics).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(metrics);
+      expect(mockApprovalWorkflowService.getMetrics).toHaveBeenCalled();
+      expect(mockApprovalWorkflowService.getApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 on service error', async () => {
+      mockApprovalWorkflowService.getMetrics.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).get('/api/approvals/metrics');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('boom');
     });
   });
 
-  describe('GET /api/approvals/sla-report (shadowed by /:id)', () => {
-    it('is captured by the /:id handler (current behavior)', async () => {
-      mockApprovalWorkflowService.getApprovalRequest.mockResolvedValue(null);
+  describe('GET /api/approvals/sla-report', () => {
+    it('returns the SLA compliance report (no longer shadowed by /:id)', async () => {
+      const report = { compliant: 8, breached: 1 };
+      mockApprovalWorkflowService.getSLAComplianceReport.mockResolvedValue(report);
 
       const response = await request(app).get('/api/approvals/sla-report');
 
-      expect(response.status).toBe(404);
-      expect(mockApprovalWorkflowService.getApprovalRequest).toHaveBeenCalledWith('sla-report');
-      expect(mockApprovalWorkflowService.getSLAComplianceReport).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(report);
+      expect(mockApprovalWorkflowService.getSLAComplianceReport).toHaveBeenCalled();
+      expect(mockApprovalWorkflowService.getApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 on service error', async () => {
+      mockApprovalWorkflowService.getSLAComplianceReport.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).get('/api/approvals/sla-report');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('boom');
     });
   });
 
-  describe('GET /api/approvals/oversight-metrics (shadowed by /:id)', () => {
-    it('is captured by the /:id handler (current behavior)', async () => {
-      mockApprovalWorkflowService.getApprovalRequest.mockResolvedValue(null);
+  describe('GET /api/approvals/oversight-metrics', () => {
+    it('returns meaningful oversight metrics (no longer shadowed by /:id)', async () => {
+      const metrics = { reviewRate: 0.95, avgReviewSec: 42 };
+      mockApprovalWorkflowService.getMeaningfulOversightMetrics.mockResolvedValue(metrics);
 
       const response = await request(app).get('/api/approvals/oversight-metrics');
 
-      expect(response.status).toBe(404);
-      expect(mockApprovalWorkflowService.getApprovalRequest).toHaveBeenCalledWith('oversight-metrics');
-      expect(mockApprovalWorkflowService.getMeaningfulOversightMetrics).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(metrics);
+      expect(mockApprovalWorkflowService.getMeaningfulOversightMetrics).toHaveBeenCalled();
+      expect(mockApprovalWorkflowService.getApprovalRequest).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 on service error', async () => {
+      mockApprovalWorkflowService.getMeaningfulOversightMetrics.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).get('/api/approvals/oversight-metrics');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('boom');
     });
   });
 });

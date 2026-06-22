@@ -216,22 +216,32 @@ describe('Incident Routes', () => {
 
   // --------------------------------------------------------------------------
   // GET /api/incidents/risk-matrix
-  // NOTE: This route is registered AFTER GET /:id, so '/risk-matrix' is
-  // captured by the '/:id' handler (id='risk-matrix'). We assert the ACTUAL
-  // current behavior — see bugsFound.
+  // Registered before GET /:id so the literal route is reachable.
   // --------------------------------------------------------------------------
 
-  describe('GET /api/incidents/risk-matrix (shadowed by /:id)', () => {
-    it('is handled by /:id handler with id=risk-matrix (not the risk-matrix handler)', async () => {
-      mockIncidentService.getIncident.mockResolvedValue(null);
+  describe('GET /api/incidents/risk-matrix', () => {
+    it('returns the risk matrix (no longer shadowed by /:id)', async () => {
+      const matrix = [{ severity: 'high', likelihood: 'likely', risk: 'critical' }];
+      mockBreachAssessmentService.getRiskMatrix.mockReturnValue(matrix);
 
       const response = await request(app).get('/api/incidents/risk-matrix');
 
-      // Falls through to /:id -> getIncident('risk-matrix') -> null -> 404
-      expect(response.status).toBe(404);
-      expect(response.body.error).toBe('Incident not found');
-      expect(mockIncidentService.getIncident).toHaveBeenCalledWith('risk-matrix');
-      expect(mockBreachAssessmentService.getRiskMatrix).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(response.body.matrix).toEqual(matrix);
+      expect(mockBreachAssessmentService.getRiskMatrix).toHaveBeenCalled();
+      // The literal route now wins over /:id.
+      expect(mockIncidentService.getIncident).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 on service error', async () => {
+      mockBreachAssessmentService.getRiskMatrix.mockImplementation(() => {
+        throw new Error('boom');
+      });
+
+      const response = await request(app).get('/api/incidents/risk-matrix');
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Failed to get risk matrix');
     });
   });
 
