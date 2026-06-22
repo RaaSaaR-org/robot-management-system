@@ -4,6 +4,7 @@
  * @feature robots
  */
 
+export { OverviewTab } from './OverviewTab';
 export { TelemetryTab } from './TelemetryTab';
 export { CommandsTab } from './CommandsTab';
 export { TasksTab } from './TasksTab';

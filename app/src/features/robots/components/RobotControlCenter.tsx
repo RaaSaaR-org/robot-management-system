@@ -1,22 +1,25 @@
 /**
  * @file RobotControlCenter.tsx
- * @description Main layout orchestrator for robot detail page — control center with view switcher and chat sidebar
+ * @description Main layout orchestrator for the robot detail page. A pinned alert
+ *              strip sits above a tab switcher whose default "Overview" view pairs
+ *              the live 3D model with the robot's primary controls. The agent chat
+ *              is an on-demand right-side drawer rather than a permanent column, so
+ *              the working area stays uncluttered.
  * @feature robots
  */
 
 import { memo, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '@/shared/utils';
 import { RobotChatPanel } from './RobotChatPanel';
 import { RobotOfflineBanner } from './RobotOfflineBanner';
 import { RobotErrorBanner } from './RobotErrorBanner';
-import { VlaControlSection } from './VlaControlSection';
-import { RobotHeroSection } from './RobotHeroSection';
 import {
+  OverviewTab,
   TelemetryTab,
   CommandsTab,
   TasksTab,
   InfoTab,
-  Model3DTab,
   TeleopTab,
 } from './tabs';
 import type { Robot, RobotTelemetry, RobotCommand } from '../types/robots.types';
@@ -26,7 +29,7 @@ import type { Process } from '@/features/processes/types';
 // TYPES
 // ============================================================================
 
-type ViewId = 'telemetry' | 'commands' | 'tasks' | 'info' | '3d-model' | 'teleop';
+type ViewId = 'overview' | 'telemetry' | 'commands' | 'tasks' | 'teleop' | 'info';
 
 export interface RobotControlCenterProps {
   robot: Robot;
@@ -55,6 +58,15 @@ interface ViewConfig {
 
 const VIEWS: ViewConfig[] = [
   {
+    id: 'overview',
+    label: 'Overview',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+      </svg>
+    ),
+  },
+  {
     id: 'telemetry',
     label: 'Telemetry',
     icon: (
@@ -82,29 +94,20 @@ const VIEWS: ViewConfig[] = [
     ),
   },
   {
-    id: 'info',
-    label: 'Info',
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-      </svg>
-    ),
-  },
-  {
-    id: '3d-model',
-    label: '3D',
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
-      </svg>
-    ),
-  },
-  {
     id: 'teleop',
     label: 'Teleop',
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zM12 2.25V4.5m5.834.166l-1.591 1.591M20.25 10.5H18M7.757 14.743l-1.59 1.59M6 10.5H3.75m4.007-4.243l-1.59-1.59" />
+      </svg>
+    ),
+  },
+  {
+    id: 'info',
+    label: 'Info',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
       </svg>
     ),
   },
@@ -121,9 +124,8 @@ const ChatIcon = (
 // ============================================================================
 
 /**
- * Robot control center layout with view switcher and persistent chat sidebar.
- * Desktop: two-column grid (main view + chat sidebar).
- * Mobile: single column with floating action button for chat.
+ * Robot control center layout: pinned alerts, a tab switcher (default Overview),
+ * and an on-demand chat drawer.
  */
 export const RobotControlCenter = memo(function RobotControlCenter({
   robot,
@@ -139,11 +141,24 @@ export const RobotControlCenter = memo(function RobotControlCenter({
   onReturnHome,
   className,
 }: RobotControlCenterProps) {
-  const [activeView, setActiveView] = useState<ViewId>('telemetry');
-  const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
+  const [activeView, setActiveView] = useState<ViewId>('overview');
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   const renderView = () => {
     switch (activeView) {
+      case 'overview':
+        return (
+          <OverviewTab
+            robot={robot}
+            robotId={robotId}
+            telemetry={telemetry}
+            isTelemetryConnected={isTelemetryConnected}
+            isCommandLoading={isCommandLoading}
+            canExecuteCommands={canExecuteCommands}
+            onSendToCharge={onSendToCharge}
+            onReturnHome={onReturnHome}
+          />
+        );
       case 'telemetry':
         return (
           <TelemetryTab
@@ -168,24 +183,10 @@ export const RobotControlCenter = memo(function RobotControlCenter({
         );
       case 'tasks':
         return <TasksTab robot={robot} robotId={robotId} tasks={tasks} />;
+      case 'teleop':
+        return <TeleopTab robot={robot} robotId={robotId} />;
       case 'info':
         return <InfoTab robot={robot} robotId={robotId} />;
-      case '3d-model':
-        return (
-          <Model3DTab
-            robot={robot}
-            robotId={robotId}
-            telemetry={telemetry}
-            isTelemetryConnected={isTelemetryConnected}
-          />
-        );
-      case 'teleop':
-        return (
-          <TeleopTab
-            robot={robot}
-            robotId={robotId}
-          />
-        );
     }
   };
 
@@ -197,28 +198,10 @@ export const RobotControlCenter = memo(function RobotControlCenter({
       )}
       <RobotErrorBanner robot={robot} telemetry={telemetry} />
 
-      {/* Hero — 3D viewer + Hex HUD + Chat */}
-      <RobotHeroSection
-        robot={robot}
-        telemetry={telemetry}
-        isLive={isTelemetryConnected}
-      >
-        <RobotChatPanel
-          robotId={robotId}
-          robotName={robot.name}
-          agentUrl={robot.a2aAgentUrl}
-          className="h-full w-full"
-        />
-      </RobotHeroSection>
-
-      {/* VLA section */}
-      <VlaControlSection robotId={robotId} />
-
-      {/* View switcher + full-width content */}
-      <div className="flex flex-col gap-3">
-        {/* View switcher */}
+      {/* Tab switcher + chat toggle (desktop; mobile uses the bottom nav + FAB) */}
+      <div className="hidden lg:flex items-center gap-2">
         <div
-          className="flex gap-1 p-1 rounded-xl glass-subtle"
+          className="flex flex-1 gap-1 p-1 rounded-xl glass-subtle overflow-x-auto scrollbar-hide"
           role="tablist"
           aria-label="Robot views"
         >
@@ -232,7 +215,7 @@ export const RobotControlCenter = memo(function RobotControlCenter({
                 onClick={() => setActiveView(view.id)}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium',
-                  'transition-all duration-150 flex-1 justify-center',
+                  'transition-all duration-150 flex-1 justify-center whitespace-nowrap',
                   isActive
                     ? 'text-[#FF6700] bg-[rgba(255,103,0,0.12)] border border-[rgba(255,103,0,0.25)]'
                     : 'text-theme-tertiary hover:text-theme-secondary hover:bg-[rgba(255,255,255,0.04)]'
@@ -245,21 +228,35 @@ export const RobotControlCenter = memo(function RobotControlCenter({
           })}
         </div>
 
-        {/* Active view content — full width */}
-        <div
-          className="glass-card p-4 min-h-[400px]"
-          style={{ animation: 'materialize 0.35s ease-out' }}
-          key={activeView}
+        {/* Desktop chat toggle — mobile uses the FAB below */}
+        <button
+          onClick={() => setIsChatOpen(true)}
+          className={cn(
+            'hidden lg:flex flex-shrink-0 items-center gap-1.5 px-3 py-2.5 rounded-xl',
+            'text-xs font-medium glass-subtle text-theme-secondary',
+            'hover:text-theme-primary hover:bg-[rgba(255,255,255,0.04)] transition-colors duration-150'
+          )}
+          aria-label="Open chat"
         >
-          {renderView()}
-        </div>
+          {ChatIcon}
+          <span>Chat</span>
+        </button>
+      </div>
+
+      {/* Active view content — full width */}
+      <div
+        className="glass-card p-4 min-h-[400px]"
+        style={{ animation: 'materialize 0.35s ease-out' }}
+        key={activeView}
+      >
+        {renderView()}
       </div>
 
       {/* ── Mobile bottom nav ── */}
       <nav
         className={cn(
           'lg:hidden fixed bottom-0 left-0 right-0 z-20',
-          'flex items-center justify-around px-4 py-2',
+          'flex items-center justify-around px-2 py-2',
           'glass-elevated border-t border-[rgba(255,255,255,0.06)]'
         )}
         aria-label="Mobile view navigation"
@@ -294,39 +291,55 @@ export const RobotControlCenter = memo(function RobotControlCenter({
         style={{
           background: 'linear-gradient(135deg, #FF6700, #e55900)',
           boxShadow: '0 4px 20px rgba(255,103,0,0.4)',
-          animation: 'floatUp 3s ease-in-out infinite alternate',
         }}
-        onClick={() => setIsMobileChatOpen(true)}
+        onClick={() => setIsChatOpen(true)}
         aria-label="Open chat"
       >
         {ChatIcon}
       </button>
 
-      {/* ── Mobile chat overlay ── */}
-      {isMobileChatOpen && (
-        <div className="lg:hidden fixed inset-0 z-40 flex flex-col" style={{ background: '#141414' }}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[rgba(255,255,255,0.06)]">
-            <span className="text-sm font-medium text-theme-primary">Chat with {robot.name}</span>
-            <button
-              onClick={() => setIsMobileChatOpen(false)}
-              className="flex items-center justify-center w-8 h-8 rounded-lg text-theme-secondary hover:text-theme-primary hover:bg-[rgba(255,255,255,0.06)]"
-              aria-label="Close chat"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <RobotChatPanel
-              robotId={robotId}
-              robotName={robot.name}
-              agentUrl={robot.a2aAgentUrl}
-              className="h-full"
+      {/* ── Chat drawer (right side on desktop, full-width on mobile) ──
+          Portaled to <body> so it escapes the detail page's transformed
+          ancestor (the `materialize` animation) and covers the full viewport. */}
+      {isChatOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex justify-end">
+            <div
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fade-in"
+              onClick={() => setIsChatOpen(false)}
+              aria-hidden="true"
             />
-          </div>
-        </div>
-      )}
+            <div
+              className="relative flex h-full w-full max-w-md flex-col border-l border-[rgba(255,255,255,0.08)] shadow-2xl"
+              style={{ background: '#141414', animation: 'slideInRight 0.2s ease-out' }}
+              role="dialog"
+              aria-label={`Chat with ${robot.name}`}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b border-[rgba(255,255,255,0.06)]">
+                <span className="text-sm font-medium text-theme-primary">Chat with {robot.name}</span>
+                <button
+                  onClick={() => setIsChatOpen(false)}
+                  className="flex items-center justify-center w-8 h-8 rounded-lg text-theme-secondary hover:text-theme-primary hover:bg-[rgba(255,255,255,0.06)]"
+                  aria-label="Close chat"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <RobotChatPanel
+                  robotId={robotId}
+                  robotName={robot.name}
+                  agentUrl={robot.a2aAgentUrl}
+                  className="h-full"
+                  showHeader={false}
+                />
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 });

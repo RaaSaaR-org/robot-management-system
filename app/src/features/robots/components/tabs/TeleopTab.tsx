@@ -7,55 +7,35 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, Button } from '@/shared/components/ui';
 import type { TeleopTabProps } from './types';
+import { VRTeleopSection } from './vr/VRTeleopSection';
 
 // ============================================================================
-// CONSTANTS
+// TYPES & HELPERS
 // ============================================================================
 
-const JOINT_NAMES = [
-  'shoulder_pan', 'shoulder_lift', 'elbow_flex',
-  'wrist_flex', 'wrist_roll', 'gripper',
-] as const;
+/** A teleoperable joint as advertised by the robot agent's teleop endpoint. */
+interface TeleopJoint {
+  name: string;
+  limitLower: number;
+  limitUpper: number;
+  defaultPosition: number;
+}
 
-const JOINT_LABELS: Record<string, string> = {
-  shoulder_pan: 'Shoulder Pan',
-  shoulder_lift: 'Shoulder Lift',
-  elbow_flex: 'Elbow Flex',
-  wrist_flex: 'Wrist Flex',
-  wrist_roll: 'Wrist Roll',
-  gripper: 'Gripper',
-};
-
-/** Key bindings: key → { joint, direction (+1 or -1) } */
-const KEY_BINDINGS: Record<string, { joint: string; direction: 1 | -1 }> = {
-  w: { joint: 'shoulder_lift', direction: 1 },
-  s: { joint: 'shoulder_lift', direction: -1 },
-  a: { joint: 'shoulder_pan', direction: -1 },
-  d: { joint: 'shoulder_pan', direction: 1 },
-  q: { joint: 'elbow_flex', direction: 1 },
-  e: { joint: 'elbow_flex', direction: -1 },
-  z: { joint: 'wrist_flex', direction: 1 },
-  x: { joint: 'wrist_flex', direction: -1 },
-  ArrowUp: { joint: 'wrist_roll', direction: 1 },
-  ArrowDown: { joint: 'wrist_roll', direction: -1 },
-  o: { joint: 'gripper', direction: 1 },
-  c: { joint: 'gripper', direction: -1 },
-};
-
+/** Controls legend shown while connected (embodiment-agnostic). */
 const KEY_DISPLAY: Array<{ keys: string; label: string }> = [
-  { keys: 'W / S', label: 'Shoulder Lift' },
-  { keys: 'A / D', label: 'Shoulder Pan' },
-  { keys: 'Q / E', label: 'Elbow Flex' },
-  { keys: 'Z / X', label: 'Wrist Flex' },
-  { keys: 'Up / Down', label: 'Wrist Roll' },
-  { keys: 'O / C', label: 'Gripper' },
+  { keys: '↑ / ↓', label: 'Select joint' },
+  { keys: '← / →', label: 'Move joint' },
   { keys: 'H', label: 'Home' },
   { keys: 'Space', label: 'Stop' },
 ];
 
-// ============================================================================
-// HELPERS
-// ============================================================================
+/** Turn a URDF-style joint name into a human label (e.g. `left_elbow_joint` → `Left Elbow`). */
+function prettyJoint(name: string): string {
+  return name
+    .replace(/_joint$/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function getAgentBaseUrl(robot: TeleopTabProps['robot']): string {
   if (robot.a2aAgentUrl) {
@@ -65,14 +45,9 @@ function getAgentBaseUrl(robot: TeleopTabProps['robot']): string {
 }
 
 function getWsBaseUrl(robot: TeleopTabProps['robot']): string {
-  // Keyboard teleop WebSocket runs on the sidecar (port 8766), not the agent
-  const base = getAgentBaseUrl(robot);
-  try {
-    const url = new URL(base);
-    return `ws://${url.hostname}:8766`;
-  } catch {
-    return base.replace(/^http/, 'ws');
-  }
+  // Keyboard teleop WebSocket is served by the robot agent itself (same host/port
+  // as the REST/A2A API), driving the simulated joint state.
+  return getAgentBaseUrl(robot).replace(/^http/, 'ws');
 }
 
 // ============================================================================
@@ -81,9 +56,18 @@ function getWsBaseUrl(robot: TeleopTabProps['robot']): string {
 
 export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
   const [connected, setConnected] = useState(false);
+  const [robotType, setRobotType] = useState('');
+  const [joints, setJoints] = useState<TeleopJoint[]>([]);
   const [positions, setPositions] = useState<Record<string, number>>({});
-  const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState(0);
+  const [activeDir, setActiveDir] = useState(0);
+
   const wsRef = useRef<WebSocket | null>(null);
+  // Refs let the (stable) key handlers read the latest selection/joint list.
+  const selectedRef = useRef(0);
+  const jointsRef = useRef<TeleopJoint[]>([]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { jointsRef.current = joints; }, [joints]);
 
   const connect = useCallback(() => {
     const wsUrl = `${getWsBaseUrl(robot)}/ws/keyboard-teleop`;
@@ -91,18 +75,17 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
     wsRef.current = ws;
 
     ws.onopen = () => setConnected(true);
-    ws.onclose = () => {
-      setConnected(false);
-      wsRef.current = null;
-    };
-    ws.onerror = () => {
-      setConnected(false);
-      wsRef.current = null;
-    };
+    ws.onclose = () => { setConnected(false); wsRef.current = null; };
+    ws.onerror = () => { setConnected(false); wsRef.current = null; };
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'state' && msg.positions) {
+        if (msg.type === 'config') {
+          setRobotType(msg.robotType ?? '');
+          setJoints(msg.joints ?? []);
+          setPositions(msg.positions ?? {});
+          setSelected(0);
+        } else if (msg.type === 'state' && msg.positions) {
           setPositions(msg.positions);
         }
       } catch { /* ignore parse errors */ }
@@ -117,53 +100,49 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
     setConnected(false);
   }, []);
 
-  // Keyboard event handler
+  const send = useCallback((payload: unknown) => {
+    wsRef.current?.send(JSON.stringify(payload));
+  }, []);
+
+  // Keyboard handling: ↑/↓ pick a joint, ←/→ drive the selected joint while held.
   useEffect(() => {
     if (!connected) return;
 
+    const moveSelection = (delta: number) => {
+      setSelected((prev) => {
+        const len = jointsRef.current.length;
+        if (len === 0) return prev;
+        return Math.max(0, Math.min(len - 1, prev + delta));
+      });
+    };
+
+    const driveSelected = (direction: 1 | -1 | 0) => {
+      const joint = jointsRef.current[selectedRef.current];
+      if (!joint) return;
+      setActiveDir(direction);
+      send({ joint: joint.name, direction });
+    };
+
+    const isMoveKey = (k: string) =>
+      k === 'ArrowRight' || k === 'ArrowLeft' || k === '+' || k === '=' || k === '-' || k === '_';
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      // Ignore key repeat — we only need the initial press
-      if (e.repeat) return;
+      const k = e.key;
 
-      const key = e.key;
-      setActiveKeys(prev => new Set(prev).add(key.toLowerCase()));
+      if (k === 'ArrowUp') { moveSelection(-1); e.preventDefault(); return; }
+      if (k === 'ArrowDown') { moveSelection(1); e.preventDefault(); return; }
+      if (k === 'h' || k === 'H') { send({ preset: 'home' }); e.preventDefault(); return; }
+      if (k === ' ') { send({ preset: 'stop' }); setActiveDir(0); e.preventDefault(); return; }
 
-      if (key === 'h' || key === 'H') {
-        wsRef.current?.send(JSON.stringify({ preset: 'home' }));
-        e.preventDefault();
-        return;
-      }
-      if (key === ' ') {
-        wsRef.current?.send(JSON.stringify({ preset: 'stop' }));
-        e.preventDefault();
-        return;
-      }
-
-      const binding = KEY_BINDINGS[key] || KEY_BINDINGS[key.toLowerCase()];
-      if (binding) {
-        wsRef.current?.send(JSON.stringify({ joint: binding.joint, direction: binding.direction }));
-        e.preventDefault();
-      }
+      if (e.repeat) return; // begin motion once per physical key press
+      if (k === 'ArrowRight' || k === '+' || k === '=') { driveSelected(1); e.preventDefault(); return; }
+      if (k === 'ArrowLeft' || k === '-' || k === '_') { driveSelected(-1); e.preventDefault(); return; }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      // Ignore if typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-      setActiveKeys(prev => {
-        const next = new Set(prev);
-        next.delete(e.key.toLowerCase());
-        return next;
-      });
-
-      // Send direction=0 to stop the joint
-      const binding = KEY_BINDINGS[e.key] || KEY_BINDINGS[e.key.toLowerCase()];
-      if (binding) {
-        wsRef.current?.send(JSON.stringify({ joint: binding.joint, direction: 0 }));
-        e.preventDefault();
-      }
+      if (isMoveKey(e.key)) { driveSelected(0); e.preventDefault(); }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -172,15 +151,24 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [connected]);
+  }, [connected, send]);
 
   // Cleanup on unmount
   useEffect(() => () => disconnect(), [disconnect]);
 
+  const selectedJoint = joints[selected];
+
   return (
     <Card className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-theme-primary">Keyboard Teleop</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-theme-primary">Keyboard Teleop</h3>
+          {connected && robotType && (
+            <p className="text-xs text-theme-secondary mt-0.5">
+              {robotType.toUpperCase()} · {joints.length} DOF · simulation
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className={`inline-block w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-400'}`} />
           <span className="text-xs text-theme-secondary">{connected ? 'Connected' : 'Disconnected'}</span>
@@ -195,294 +183,65 @@ export function KeyboardTeleopSection({ robot }: { robot: TeleopTabProps['robot'
 
       {connected && (
         <>
-          {/* Key bindings grid */}
+          {/* Controls legend */}
           <div className="grid grid-cols-2 gap-2">
-            {KEY_DISPLAY.map(({ keys, label }) => {
-              const isActive = keys.toLowerCase().split(' / ').some(k =>
-                activeKeys.has(k.trim().toLowerCase())
-              );
+            {KEY_DISPLAY.map(({ keys, label }) => (
+              <div
+                key={keys}
+                className="flex items-center justify-between px-3 py-2 rounded-lg border text-xs border-theme-subtle bg-theme-secondary text-theme-secondary"
+              >
+                <kbd className="font-mono font-medium">{keys}</kbd>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+
+          {selectedJoint && (
+            <div className="text-xs text-theme-secondary">
+              Selected:{' '}
+              <span className="text-theme-primary font-medium">{prettyJoint(selectedJoint.name)}</span>
+              {activeDir !== 0 && (
+                <span className="ml-2 text-cobalt-600 dark:text-cobalt-400">
+                  {activeDir > 0 ? '▲ moving +' : '▼ moving −'}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Joint list — scrollable so it scales from SO-101 (6) to G1-EDU (43) */}
+          <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
+            {joints.map((joint, i) => {
+              const pos = positions[joint.name] ?? joint.defaultPosition;
+              const range = joint.limitUpper - joint.limitLower;
+              const pct = range > 0 ? ((pos - joint.limitLower) / range) * 100 : 50;
+              const isSel = i === selected;
               return (
-                <div
-                  key={keys}
-                  className={`flex items-center justify-between px-3 py-2 rounded-lg border text-xs ${
-                    isActive
-                      ? 'border-cobalt-500 bg-cobalt-50 dark:bg-cobalt-900/30 text-cobalt-600 dark:text-cobalt-400'
-                      : 'border-theme-subtle bg-theme-secondary text-theme-secondary'
+                <button
+                  key={joint.name}
+                  onClick={() => setSelected(i)}
+                  className={`w-full text-left px-3 py-1.5 rounded-lg border text-xs transition-colors ${
+                    isSel
+                      ? 'border-cobalt-500 bg-cobalt-50 dark:bg-cobalt-900/30'
+                      : 'border-theme-subtle bg-theme-secondary hover:border-cobalt-500/40'
                   }`}
                 >
-                  <kbd className="font-mono font-medium">{keys}</kbd>
-                  <span>{label}</span>
-                </div>
+                  <div className="flex items-center justify-between">
+                    <span className={isSel ? 'text-cobalt-600 dark:text-cobalt-400 font-medium' : 'text-theme-secondary'}>
+                      {prettyJoint(joint.name)}
+                    </span>
+                    <span className="font-mono text-theme-primary">{pos.toFixed(2)} rad</span>
+                  </div>
+                  <div className="mt-1 h-1 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full bg-cobalt-500"
+                      style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+                    />
+                  </div>
+                </button>
               );
             })}
           </div>
-
-          {/* Joint positions */}
-          <div className="space-y-2">
-            <h4 className="text-xs font-medium text-theme-secondary">Joint Positions</h4>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              {JOINT_NAMES.map(name => (
-                <div key={name} className="flex items-center justify-between text-xs">
-                  <span className="text-theme-secondary">{JOINT_LABELS[name]}</span>
-                  <span className="font-mono text-theme-primary">
-                    {(positions[name] ?? 0).toFixed(1)}°
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
         </>
-      )}
-    </Card>
-  );
-}
-
-// ============================================================================
-// LEADER ARM SECTION
-// ============================================================================
-
-/**
- * @deprecated TASK-117 (2026-04-12): this section calls
- * `${agent}/api/v1/teleop/start` and `/api/v1/teleop/status`, but those
- * endpoints don't exist on the robot-agent — the live record flow now
- * runs through the server (`POST /api/teleoperation/sessions/:id/start`)
- * which talks to the sidecar's `lerobot-record` directly. The canonical
- * record surface is the data-collection page at
- * `/data-collection/record/:sessionId` (alias for SessionDetailPage).
- * Left in place to keep the tab functional; remove in the follow-up
- * cleanup task that consumes `git grep "@deprecated TASK-117"`.
- */
-function LeaderArmSection({ robot }: { robot: TeleopTabProps['robot'] }) {
-  const [leaderPort, setLeaderPort] = useState('/dev/ttyACM1');
-  const [active, setActive] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const baseUrl = getAgentBaseUrl(robot);
-
-  const pollStatus = useCallback(async () => {
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/teleop/status`);
-      const data = await res.json();
-      setActive(data.active && data.mode === 'leader');
-    } catch { /* ignore */ }
-  }, [baseUrl]);
-
-  useEffect(() => {
-    pollStatus();
-    const interval = setInterval(pollStatus, 3000);
-    return () => clearInterval(interval);
-  }, [pollStatus]);
-
-  const start = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/teleop/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leaderPort }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to start');
-      setActive(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start leader teleop');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const stop = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      await fetch(`${baseUrl}/api/v1/teleop/stop`, { method: 'POST' });
-      setActive(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to stop');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Card className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-theme-primary">Leader Arm Teleop</h3>
-        <div className="flex items-center gap-2">
-          <span className={`inline-block w-2 h-2 rounded-full ${active ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-          <span className="text-xs text-theme-secondary">{active ? 'Active' : 'Inactive'}</span>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="block text-xs text-theme-secondary">Leader Port</label>
-        <input
-          type="text"
-          value={leaderPort}
-          onChange={e => setLeaderPort(e.target.value)}
-          disabled={active}
-          className="w-full px-3 py-1.5 text-sm rounded-lg border border-theme-subtle bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 disabled:opacity-50"
-          placeholder="/dev/ttyACM1"
-        />
-      </div>
-
-      {error && <p className="text-xs text-red-500">{error}</p>}
-
-      {!active ? (
-        <Button variant="primary" size="sm" onClick={start} disabled={loading}>
-          {loading ? 'Starting...' : 'Start Leader Teleop'}
-        </Button>
-      ) : (
-        <Button variant="ghost" size="sm" onClick={stop} disabled={loading}>
-          {loading ? 'Stopping...' : 'Stop'}
-        </Button>
-      )}
-    </Card>
-  );
-}
-
-// ============================================================================
-// RECORDING SECTION
-// ============================================================================
-
-/**
- * @deprecated TASK-117 (2026-04-12): same reason as `LeaderArmSection` —
- * the `/api/v1/teleop/*` endpoints this calls don't exist on the
- * robot-agent. The canonical record surface is the data-collection page
- * (`/data-collection/record/:sessionId`), which goes through the server's
- * `TeleoperationService.startSession` → sidecar `lerobot-record` →
- * auto-create `Dataset` row. Left in place to keep the tab functional;
- * remove in the follow-up cleanup task.
- */
-function RecordingSection({ robot }: { robot: TeleopTabProps['robot'] }) {
-  const [datasetRepoId, setDatasetRepoId] = useState('RaaSaaR-org/so101-demo');
-  const [task, setTask] = useState('pick up the cup');
-  const [numEpisodes, setNumEpisodes] = useState(10);
-  const [leaderPort, setLeaderPort] = useState('/dev/ttyACM1');
-  const [recording, setRecording] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const baseUrl = getAgentBaseUrl(robot);
-
-  const pollStatus = useCallback(async () => {
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/teleop/status`);
-      const data = await res.json();
-      setRecording(data.active && data.recording);
-    } catch { /* ignore */ }
-  }, [baseUrl]);
-
-  useEffect(() => {
-    pollStatus();
-    const interval = setInterval(pollStatus, 3000);
-    return () => clearInterval(interval);
-  }, [pollStatus]);
-
-  const start = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/teleop/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          leaderPort,
-          record: true,
-          datasetRepoId,
-          task,
-          numEpisodes,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to start recording');
-      setRecording(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start recording');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const stop = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      await fetch(`${baseUrl}/api/v1/teleop/stop`, { method: 'POST' });
-      setRecording(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to stop recording');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Card className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-theme-primary">Dataset Recording</h3>
-        <div className="flex items-center gap-2">
-          {recording && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" />}
-          <span className="text-xs text-theme-secondary">{recording ? 'Recording' : 'Idle'}</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3">
-        <div>
-          <label className="block text-xs text-theme-secondary mb-1">Leader Port</label>
-          <input
-            type="text"
-            value={leaderPort}
-            onChange={e => setLeaderPort(e.target.value)}
-            disabled={recording}
-            className="w-full px-3 py-1.5 text-sm rounded-lg border border-theme-subtle bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 disabled:opacity-50"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-theme-secondary mb-1">Dataset Repo ID</label>
-          <input
-            type="text"
-            value={datasetRepoId}
-            onChange={e => setDatasetRepoId(e.target.value)}
-            disabled={recording}
-            className="w-full px-3 py-1.5 text-sm rounded-lg border border-theme-subtle bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 disabled:opacity-50"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-theme-secondary mb-1">Task Description</label>
-          <input
-            type="text"
-            value={task}
-            onChange={e => setTask(e.target.value)}
-            disabled={recording}
-            className="w-full px-3 py-1.5 text-sm rounded-lg border border-theme-subtle bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 disabled:opacity-50"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-theme-secondary mb-1">Num Episodes</label>
-          <input
-            type="number"
-            value={numEpisodes}
-            onChange={e => setNumEpisodes(parseInt(e.target.value) || 1)}
-            disabled={recording}
-            min={1}
-            className="w-full px-3 py-1.5 text-sm rounded-lg border border-theme-subtle bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 disabled:opacity-50"
-          />
-        </div>
-      </div>
-
-      {error && <p className="text-xs text-red-500">{error}</p>}
-
-      {!recording ? (
-        <Button variant="primary" size="sm" onClick={start} disabled={loading}>
-          {loading ? 'Starting...' : 'Start Recording'}
-        </Button>
-      ) : (
-        <Button variant="ghost" size="sm" onClick={stop} disabled={loading}>
-          {loading ? 'Stopping...' : 'Stop Recording'}
-        </Button>
       )}
     </Card>
   );
@@ -492,12 +251,19 @@ function RecordingSection({ robot }: { robot: TeleopTabProps['robot'] }) {
 // MAIN COMPONENT
 // ============================================================================
 
+// NOTE (TASK-117): the former `LeaderArmSection` and `RecordingSection` were
+// removed here. They polled `${agent}/api/v1/teleop/{start,stop,status}`, which
+// the robot-agent does not implement (every poll 404'd and flooded the console).
+// The canonical record/leader-teleop surface is the data-collection page
+// (`/data-collection/record/:sessionId`), driven server-side by
+// `TeleoperationService` → sidecar `lerobot-record`. This tab now hosts only the
+// live keyboard teleop, which drives the agent's simulated joint state directly.
+
 export function TeleopTab({ robot }: TeleopTabProps) {
   return (
     <div className="space-y-6">
       <KeyboardTeleopSection robot={robot} />
-      <LeaderArmSection robot={robot} />
-      <RecordingSection robot={robot} />
+      <VRTeleopSection robot={robot} />
     </div>
   );
 }

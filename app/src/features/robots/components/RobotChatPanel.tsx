@@ -25,6 +25,9 @@ export interface RobotChatPanelProps {
   agentUrl?: string;
   /** Additional class names */
   className?: string;
+  /** Render the panel's own title/status header (default true). Set false when an
+   *  outer container (e.g. a drawer) already provides a header. */
+  showHeader?: boolean;
 }
 
 // ============================================================================
@@ -42,6 +45,7 @@ export const RobotChatPanel = memo(function RobotChatPanel({
   robotName,
   agentUrl,
   className,
+  showHeader = true,
 }: RobotChatPanelProps) {
   const {
     conversations,
@@ -149,6 +153,7 @@ export const RobotChatPanel = memo(function RobotChatPanel({
   return (
     <div className={cn('flex flex-col h-full', className)}>
       {/* Header */}
+      {showHeader && (
       <div className="flex items-center justify-between px-4 py-3 border-b border-glass-subtle">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -184,6 +189,7 @@ export const RobotChatPanel = memo(function RobotChatPanel({
           </span>
         </div>
       </div>
+      )}
 
       {/* Error banner */}
       {error && (

@@ -8,6 +8,7 @@ import { Card, Spinner, ProgressBar } from '@/shared/components/ui';
 import { formatTimeAgo, CPU_THRESHOLDS, MEMORY_THRESHOLDS, getResourceVariant } from '@/shared/utils';
 import { BatteryGauge } from '../BatteryGauge';
 import { SensorGrid } from '../SensorGrid';
+import { JointStateGrid } from '../visualization';
 import type { TelemetryTabProps } from './types';
 
 // ============================================================================
@@ -166,6 +167,29 @@ export function TelemetryTab({
               <Spinner size="md" color="cobalt" label="Loading sensors..." />
             </div>
           )}
+        </Card.Body>
+      </Card>
+
+      {/* Joint States */}
+      <Card>
+        <Card.Header>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-theme-primary">Joint States</h2>
+            {isTelemetryConnected && telemetry?.jointStates ? (
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-xs text-green-500">Live</span>
+              </div>
+            ) : isOffline ? (
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-gray-500" />
+                <span className="text-xs text-gray-400">Offline</span>
+              </div>
+            ) : null}
+          </div>
+        </Card.Header>
+        <Card.Body className="max-h-[320px] overflow-y-auto">
+          <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
         </Card.Body>
       </Card>
     </div>

@@ -17,7 +17,6 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'http';
 import type { IncomingMessage } from 'http';
 import type { FrameRecorder, JointPositions } from '../teleop/FrameRecorder.js';
 
@@ -141,15 +140,12 @@ function extractSessionId(req: IncomingMessage): string | null {
 // ── Public API ───────────────────────────────────────────────────────────
 
 export function createBilateralTeleopWebSocket(
-  server: Server,
   frameRecorder: FrameRecorder,
 ): WebSocketServer {
-  const wss = new WebSocketServer({
-    server,
-    path: '/ws/bilateral-teleop',
-  });
+  // noServer: upgrades are routed by the shared dispatcher in index.ts.
+  const wss = new WebSocketServer({ noServer: true });
 
-  console.log('[BilateralTeleop] WebSocket server listening on path: /ws/bilateral-teleop');
+  console.log('[BilateralTeleop] WebSocket server ready on path: /ws/bilateral-teleop');
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const sessionId = extractSessionId(req);
