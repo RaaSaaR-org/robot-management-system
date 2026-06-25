@@ -12,6 +12,7 @@ import {
 } from '../repositories/index.js';
 import { robotManager } from './RobotManager.js';
 import { HttpClient, HTTP_TIMEOUTS } from './HttpClient.js';
+import { simToRealValidationService } from './SimToRealValidationService.js';
 import type {
   Deployment,
   DeploymentStatus,
@@ -128,6 +129,28 @@ export class DeploymentService extends EventEmitter {
     );
     if (activeExisting) {
       throw new Error(`Active deployment already exists for model version: ${activeExisting.id}`);
+    }
+
+    // Sim-to-Real validation gate (TASK-171 Phase 3). Off by default; enable
+    // with REQUIRE_SIM_VALIDATION=true. Requires a recent passing validation
+    // (measured domain gap ≤ threshold) unless explicitly overridden.
+    if (process.env.REQUIRE_SIM_VALIDATION === 'true' && !request.overrideSimValidation) {
+      const threshold = Number(process.env.SIM_REAL_GAP_THRESHOLD ?? '0.3');
+      const validation = await simToRealValidationService.getLatestForModelVersion(
+        request.modelVersionId,
+      );
+      if (!validation) {
+        throw new Error(
+          'Sim-to-real validation required before deployment: no validation found for this ' +
+            'model version. Run a sim rollout + real evaluation, or set overrideSimValidation.',
+        );
+      }
+      if (validation.domainGapScore > threshold) {
+        throw new Error(
+          `Sim-to-real domain gap ${validation.domainGapScore} exceeds threshold ${threshold}. ` +
+            'Deployment blocked (override available).',
+        );
+      }
     }
 
     // Merge config with defaults

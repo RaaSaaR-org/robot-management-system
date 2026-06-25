@@ -16,6 +16,12 @@ import { incidentService } from '../services/IncidentService.js';
 import { trainingJobService } from '../services/TrainingJobService.js';
 import { datasetService } from '../services/DatasetService.js';
 import { deploymentService } from '../services/DeploymentService.js';
+import { sensorScanService } from '../services/SensorScanService.js';
+import { scanSessionService } from '../services/ScanSessionService.js';
+import { digitalTwinService } from '../services/DigitalTwinService.js';
+import { twinZoneService } from '../services/TwinZoneService.js';
+import type { SensorScanEvent } from '../types/pointcloud.types.js';
+import type { DigitalTwinEvent, TwinZoneEvent } from '../types/twin.types.js';
 import type { IncidentEvent } from '../types/incident.types.js';
 import type { DeploymentEvent } from '../types/deployment.types.js';
 import type { A2ATaskEvent } from '../types/index.js';
@@ -280,6 +286,58 @@ export function setupWebSocket(server: Server): void {
       progress: event.progress,
       importProgress: event.importProgress,
       error: event.error,
+      timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to sensor-scan events (point clouds) and broadcast to all clients.
+  // Lightweight notifications only — the point bytes are fetched on demand.
+  sensorScanService.onSensorScanEvent((event: SensorScanEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      scanId: event.scanId,
+      robotId: event.robotId,
+      scan: event.scan,
+      timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to digital-twin scan-session + build events (TASK-170).
+  // The capture-loop progress comes from scanSessionService; the sidecar
+  // build progress + ready/failed come from digitalTwinService. Both emit the
+  // same DigitalTwinEvent union, broadcast field-by-field per the contract.
+  const broadcastTwinEvent = (event: DigitalTwinEvent): void => {
+    const base: Record<string, unknown> = { type: event.type, timestamp: event.timestamp };
+    if (event.type === 'session:progress') {
+      base.sessionId = event.sessionId;
+      base.twinId = event.twinId;
+      base.status = event.status;
+      base.frameCount = event.frameCount;
+      base.progress = event.progress;
+      base.stage = event.stage;
+    } else if (event.type === 'twin:ready') {
+      base.twinId = event.twinId;
+      base.sessionId = event.sessionId;
+      base.twin = event.twin;
+    } else if (event.type === 'twin:failed') {
+      base.twinId = event.twinId;
+      base.sessionId = event.sessionId;
+      base.error = event.error;
+    }
+    broadcast(clients, JSON.stringify(base));
+  };
+  scanSessionService.onDigitalTwinEvent(broadcastTwinEvent);
+  digitalTwinService.onDigitalTwinEvent(broadcastTwinEvent);
+
+  // Subscribe to twin-zone authoring events (TASK-170 L2).
+  twinZoneService.onTwinZoneEvent((event: TwinZoneEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      twinId: event.twinId,
+      zone: 'zone' in event ? event.zone : undefined,
+      zoneId: 'zoneId' in event ? event.zoneId : undefined,
       timestamp: event.timestamp,
     });
     broadcast(clients, message);

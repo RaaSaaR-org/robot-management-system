@@ -4,6 +4,28 @@
  */
 
 export { robotRepository, RobotRepository } from './RobotRepository.js';
+export {
+  sensorScanRepository,
+  SensorScanRepository,
+  type SensorScanRecord,
+  type CreateSensorScanInput,
+  type ScanPose,
+} from './SensorScanRepository.js';
+// Digital Twin (TASK-170)
+export { digitalTwinRepository, DigitalTwinRepository } from './DigitalTwinRepository.js';
+export { scanSessionRepository, ScanSessionRepository } from './ScanSessionRepository.js';
+export { twinZoneRepository, TwinZoneRepository } from './TwinZoneRepository.js';
+// Real-to-Sim / Sim-to-Real (TASK-171)
+export {
+  simSceneRepository,
+  SimSceneRepository,
+  type SimSceneRecord,
+  type SimSceneBounds,
+  type SimSceneSource,
+  type SimSceneBackend,
+  type UpsertBuiltinSceneInput,
+  type UpsertTwinSceneInput,
+} from './SimSceneRepository.js';
 export { conversationRepository, ConversationRepository } from './ConversationRepository.js';
 export { taskRepository, TaskRepository } from './TaskRepository.js';
 export { agentRepository, AgentRepository } from './AgentRepository.js';

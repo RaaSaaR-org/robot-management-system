@@ -10,6 +10,7 @@ type DbJob = {
   id: string;
   modelId: string;
   environment: string;
+  sceneId: string | null;
   backend: string;
   rolloutCount: number;
   status: string;
@@ -55,10 +56,12 @@ function dbToDomain(row: DbJob): SimJob {
     jobId: row.id,
     modelId: row.modelId,
     environment: row.environment,
+    sceneId: row.sceneId ?? undefined,
     rolloutCount: row.rolloutCount,
     backend: row.backend as 'mujoco' | 'isaac',
     status: row.status as SimJob['status'],
     progress: row.progress,
+    failureReason: row.failureReason ?? undefined,
     metrics,
     frames: frames && frames.length > 0 ? frames : undefined,
     framesDir: row.framesDir ?? undefined,
@@ -74,6 +77,7 @@ export class SimulationJobRepository {
         id: job.jobId,
         modelId: job.modelId,
         environment: job.environment,
+        sceneId: job.sceneId ?? null,
         backend: job.backend,
         rolloutCount: job.rolloutCount,
         status: job.status,

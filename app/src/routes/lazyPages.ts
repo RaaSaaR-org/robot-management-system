@@ -53,6 +53,16 @@ export const LazyFleetPage = lazy(() =>
 );
 
 /**
+ * Digital Twin — sites gallery and the 3D twin viewer / room scanner
+ */
+export const LazySitesGalleryPage = lazy(() =>
+  import('@/features/digitaltwin').then((m) => ({ default: m.SitesGalleryPage }))
+);
+export const LazyTwinViewerPage = lazy(() =>
+  import('@/features/digitaltwin').then((m) => ({ default: m.TwinViewerPage }))
+);
+
+/**
  * Alerts page - Alert history and management
  */
 export const LazyAlertsPage = lazy(() =>

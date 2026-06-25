@@ -82,7 +82,7 @@ def connect_backend(server_url: str, timeout: float = 10.0):
 
 
 def run_episode(
-    env: SO101TabletopEnv,
+    env,
     backend,
     task: str,
     max_steps: int,
@@ -172,20 +172,31 @@ def evaluate(
     max_steps: int,
     output_path: str | None = None,
     frames_dir: str | None = None,
+    scene_file: str | None = None,
+    embodiment: str = "so101",
 ) -> SimRunMetrics:
     """Run a full evaluation and return aggregated metrics."""
 
     logger.info(
         f"Starting evaluation: server={server_url}, env={environment}, "
-        f"episodes={episodes}, max_steps={max_steps}"
+        f"episodes={episodes}, max_steps={max_steps}, "
+        f"embodiment={embodiment}, scene_file={scene_file}"
     )
 
     # Create frames directory
     if frames_dir:
         os.makedirs(frames_dir, exist_ok=True)
 
-    # Create environment
-    env = SO101TabletopEnv(max_steps=max_steps)
+    # Create environment.
+    # G1 path: a twin-derived scene file OR an explicit g1 embodiment selects the
+    # 29-DOF humanoid env. Otherwise keep the default SO-101 tabletop env.
+    if scene_file or embodiment == "g1":
+        # Import lazily so the SO-101 path never depends on the G1 env loading.
+        from envs.g1_env import G1Env
+
+        env = G1Env(scene_path=scene_file, max_steps=max_steps)
+    else:
+        env = SO101TabletopEnv(max_steps=max_steps)
 
     # Connect to VLA server
     backend = connect_backend(server_url)
@@ -292,6 +303,18 @@ def main():
         default=None,
         help="Directory to save captured frames (JPEG images)",
     )
+    parser.add_argument(
+        "--scene-file",
+        default=None,
+        help="Path to a local MJCF scene file (e.g. a twin-derived G1 scene). "
+        "When set, the G1 environment is used.",
+    )
+    parser.add_argument(
+        "--embodiment",
+        default="so101",
+        help="Robot embodiment: 'so101' (default) or 'g1'. 'g1' selects the "
+        "29-DOF humanoid environment.",
+    )
     args = parser.parse_args()
 
     metrics = evaluate(
@@ -302,6 +325,8 @@ def main():
         max_steps=args.max_steps,
         output_path=args.output,
         frames_dir=args.frames_dir,
+        scene_file=args.scene_file,
+        embodiment=args.embodiment,
     )
 
     # Also print final metrics as JSON line for the server

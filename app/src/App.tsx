@@ -51,6 +51,8 @@ import {
   LazyNewSessionPage,
   LazySessionDetailPage,
   LazyDocsPage,
+  LazySitesGalleryPage,
+  LazyTwinViewerPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -160,6 +162,23 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyFleetPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Digital Twin — room scanning + 3D twin viewer */}
+          <Route
+            path="/sites"
+            element={
+              <ProtectedAppRoute>
+                <LazySitesGalleryPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/sites/:siteId"
+            element={
+              <ProtectedAppRoute>
+                <LazyTwinViewerPage />
               </ProtectedAppRoute>
             }
           />

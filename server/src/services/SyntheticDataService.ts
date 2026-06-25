@@ -652,7 +652,7 @@ export class SyntheticDataService extends EventEmitter {
    */
   private toSimToRealValidation(validation: {
     id: string;
-    syntheticJobId: string;
+    syntheticJobId: string | null;
     modelVersionId: string;
     validationDate: Date;
     simSuccessRate: number;
@@ -665,7 +665,8 @@ export class SyntheticDataService extends EventEmitter {
   }): SimToRealValidation {
     return {
       id: validation.id,
-      syntheticJobId: validation.syntheticJobId,
+      // Twin-derived validations (TASK-171) carry no synthetic job.
+      syntheticJobId: validation.syntheticJobId ?? '',
       modelVersionId: validation.modelVersionId,
       validationDate: validation.validationDate,
       simSuccessRate: validation.simSuccessRate,

@@ -5,6 +5,8 @@
  */
 
 import { getRustFSClient, isRustFSInitialized, type ObjectInfo } from './rustfs-client.js';
+import { promises as fs, createReadStream } from 'fs';
+import path from 'path';
 import type { Readable } from 'stream';
 
 // ============================================================================
@@ -16,6 +18,8 @@ export const BUCKETS = {
   MODEL_CHECKPOINTS: 'model-checkpoints',
   PRODUCTION_MODELS: 'production-models',
   ROBOT_LOGS: 'robot-logs',
+  SENSOR_SCANS: 'sensor-scans',
+  DIGITAL_TWINS: 'digital-twins',
 } as const;
 
 export type BucketName = typeof BUCKETS[keyof typeof BUCKETS];
@@ -25,7 +29,13 @@ export const SIZE_LIMITS = {
   MODEL: 10 * 1024 * 1024 * 1024,       // 10GB
   CHECKPOINT: 5 * 1024 * 1024 * 1024,   // 5GB
   LOG: 1 * 1024 * 1024 * 1024,          // 1GB
+  SCAN: 2 * 1024 * 1024 * 1024,         // 2GB
+  TWIN: 2 * 1024 * 1024 * 1024,         // 2GB (merged cloud + mesh + grids)
 } as const;
+
+// Local fallback root for digital-twin artifacts (used when RustFS is down).
+// Layout: <root>/<twinId>/<name>; the stored "key" is the absolute file path.
+const LOCAL_TWINS_DIR = path.resolve(process.cwd(), 'data', 'twins');
 
 // Default presigned URL expiration times (in seconds)
 export const URL_EXPIRY = {
@@ -454,6 +464,129 @@ export class ModelStorageClient {
   }
 
   // ==========================================================================
+  // SENSOR SCAN OPERATIONS (point clouds)
+  // ==========================================================================
+
+  /**
+   * Upload a recorded point-cloud scan (e.g. binary PCD).
+   */
+  async uploadSensorScan(robotId: string, scanId: string, data: Buffer): Promise<string> {
+    const client = getRustFSClient();
+    const key = this.getSensorScanKey(robotId, scanId);
+    await client.upload(BUCKETS.SENSOR_SCANS, key, data, {
+      contentType: 'application/octet-stream',
+      metadata: { robotId, scanId },
+    });
+    return key;
+  }
+
+  /**
+   * Get a recorded scan as a stream.
+   */
+  async getSensorScanStream(key: string): Promise<Readable> {
+    const client = getRustFSClient();
+    return client.getStream(BUCKETS.SENSOR_SCANS, key);
+  }
+
+  /**
+   * Get a presigned download URL for a recorded scan.
+   */
+  async getSensorScanDownloadUrl(key: string, expiresIn = URL_EXPIRY.DOWNLOAD): Promise<string> {
+    const client = getRustFSClient();
+    return client.getPresignedDownloadUrl(BUCKETS.SENSOR_SCANS, key, expiresIn);
+  }
+
+  /**
+   * Delete a recorded scan.
+   */
+  async deleteSensorScan(key: string): Promise<void> {
+    const client = getRustFSClient();
+    await client.delete(BUCKETS.SENSOR_SCANS, key);
+  }
+
+  private getSensorScanKey(robotId: string, scanId: string): string {
+    return `${robotId}/${scanId}.pcd`;
+  }
+
+  // ==========================================================================
+  // DIGITAL TWIN ARTIFACT OPERATIONS (TASK-170)
+  // ==========================================================================
+  //
+  // One backend per twin. When RustFS is up, artifacts live in the
+  // DIGITAL_TWINS bucket keyed `<twinId>/<name>`. When it is down, they fall
+  // back to the local filesystem (`server/data/twins/<twinId>/<name>`) and the
+  // returned "key" is the absolute file path — mirroring the SensorScan
+  // local-vs-rustfs split. Callers persist the returned key onto the
+  // DigitalTwin row and stream it back via getTwinArtifactStream().
+
+  /**
+   * Upload one built twin artifact (e.g. cloud.pcd, mesh.glb, occupancy.pgm).
+   * Returns the storage key (object key on rustfs, absolute path on local).
+   */
+  async uploadTwinArtifact(twinId: string, name: string, data: Buffer): Promise<string> {
+    if (this.isAvailable()) {
+      const client = getRustFSClient();
+      const key = this.getTwinArtifactKey(twinId, name);
+      await client.upload(BUCKETS.DIGITAL_TWINS, key, data, {
+        contentType: 'application/octet-stream',
+        metadata: { twinId, name },
+      });
+      return key;
+    }
+    const dir = path.join(LOCAL_TWINS_DIR, twinId);
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, name);
+    await fs.writeFile(filePath, data);
+    return filePath;
+  }
+
+  /**
+   * Open a twin artifact for streaming. A key that looks like an absolute
+   * path is read from the local filesystem; otherwise it is fetched from the
+   * DIGITAL_TWINS bucket.
+   */
+  async getTwinArtifactStream(key: string): Promise<Readable> {
+    if (this.isLocalKey(key)) {
+      return createReadStream(key);
+    }
+    const client = getRustFSClient();
+    return client.getStream(BUCKETS.DIGITAL_TWINS, key);
+  }
+
+  /**
+   * Presigned download URL for a twin artifact stored on rustfs. Throws for
+   * local-filesystem keys (those are streamed through the server instead).
+   */
+  async getTwinArtifactDownloadUrl(key: string, expiresIn = URL_EXPIRY.DOWNLOAD): Promise<string> {
+    if (this.isLocalKey(key)) {
+      throw new Error('Cannot presign a local-filesystem twin artifact key');
+    }
+    const client = getRustFSClient();
+    return client.getPresignedDownloadUrl(BUCKETS.DIGITAL_TWINS, key, expiresIn);
+  }
+
+  /**
+   * Delete a twin artifact (local file or rustfs object).
+   */
+  async deleteTwinArtifact(key: string): Promise<void> {
+    if (this.isLocalKey(key)) {
+      await fs.unlink(key).catch(() => {});
+      return;
+    }
+    const client = getRustFSClient();
+    await client.delete(BUCKETS.DIGITAL_TWINS, key);
+  }
+
+  private getTwinArtifactKey(twinId: string, name: string): string {
+    return `${twinId}/${name}`;
+  }
+
+  /** A stored key is "local" when it is an absolute filesystem path. */
+  private isLocalKey(key: string): boolean {
+    return path.isAbsolute(key);
+  }
+
+  // ==========================================================================
   // TEMP UPLOAD MANAGEMENT
   // ==========================================================================
 
@@ -613,6 +746,10 @@ export class ModelStorageClient {
         return SIZE_LIMITS.MODEL;
       case BUCKETS.ROBOT_LOGS:
         return SIZE_LIMITS.LOG;
+      case BUCKETS.SENSOR_SCANS:
+        return SIZE_LIMITS.SCAN;
+      case BUCKETS.DIGITAL_TWINS:
+        return SIZE_LIMITS.TWIN;
       default:
         return SIZE_LIMITS.DATASET;
     }

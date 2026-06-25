@@ -7,3 +7,4 @@
 export * from './useRobots';
 export * from './useTelemetryStream';
 export * from './useRobotWebSocket';
+export * from './usePointCloudStream';

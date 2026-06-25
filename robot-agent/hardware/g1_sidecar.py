@@ -21,6 +21,8 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
   POST /action        → {"<joint>": value, ...} → sends to the robot
   GET  /cameras       → list available camera names
   GET  /cameras/<name>/snapshot → one-shot base64 JPEG
+  GET  /pointcloud/sensors → list available depth/LiDAR sensor names
+  GET  /pointcloud/<name>/snapshot → one-shot point cloud (flat XYZ + intensity)
   POST /record/start  → spawn lerobot-record (G1 teleop + dataset)
   POST /record/stop   → SIGINT the recording subprocess
   GET  /record/status → recording progress / dataset path
@@ -39,12 +41,17 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from recorder import recorder
+from pointcloud_replay import load_frame, resolve_replay_path
 
 PORT = int(os.environ.get("G1_SIDECAR_PORT", "8767"))
 ROBOT_ID = os.environ.get("G1_ROBOT_ID", "my_g1_edu")
 # Unitree G1 talks over DDS on a network interface (see config_unitree_g1.py).
 ROBOT_IP = os.environ.get("G1_ROBOT_IP", "192.168.123.164")
 NET_INTERFACE = os.environ.get("G1_NET_INTERFACE", "eth0")
+
+# Depth / LiDAR sensors on the G1. Names must match
+# robot-agent/src/embodiment/configs/g1*.yaml `depth_sensors`.
+DEPTH_SENSORS = ["mid360_lidar", "d435i_depth"]
 
 # 43 DOF: 29 G1 body + 14 Dex3-1 (7 per hand). Must match
 # robot-agent/src/embodiment/configs/g1_edu.yaml and g1-edu.config.ts.
@@ -128,6 +135,66 @@ def send_action(action: dict) -> dict:
             return {"ok": False, "error": str(e)}
 
 
+def get_point_cloud(name: str) -> dict:
+    """Read one point-cloud frame from a depth / LiDAR sensor.
+
+    Two paths:
+      1. REPLAY (runnable now): when G1_POINTCLOUD_REPLAY points to a real
+         recording (KITTI .bin or PCD), parse + normalize it via
+         pointcloud_replay.load_frame — genuine sensor data, no robot needed.
+      2. LIVE hardware (@status hardware-pending): on a real G1 the data comes
+         from the Livox MID-360 via the Livox SDK2 (UDP) / livox_ros_driver2
+         (`sensor_msgs/PointCloud2` on `/livox/lidar`) or the RealSense D435i
+         ROS2 wrapper (`/camera/depth/color/points`). Subscribe to the topic and
+         copy the latest frame into the same flat contract below.
+
+    Flat contract (matches the Node HardwareClient / PointCloudFrame):
+      positions   = [x0,y0,z0, x1,y1,z1, ...]  (meters, base frame, x-fwd/y-left/z-up)
+      intensities = [i0, i1, ...]              (normalized 0..1)
+    """
+    if name not in DEPTH_SENSORS:
+        return {"ok": False, "error": f"no depth sensor '{name}'"}
+
+    sensor_type = "lidar" if name == "mid360_lidar" else "depth_camera"
+
+    # --- Path 1: real recorded replay -------------------------------------
+    replay_path = resolve_replay_path(name)
+    if replay_path:
+        try:
+            frame = load_frame(replay_path, name)
+            return {
+                "ok": True,
+                "sensor": name,
+                "sensor_type": frame["sensor_type"],
+                "has_intensity": frame["has_intensity"],
+                "positions": frame["positions"],
+                "intensities": frame["intensities"],
+                "source": "replay",
+                "source_label": os.path.basename(replay_path),
+            }
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"replay failed: {e}"}
+
+    # --- Path 2: live hardware (needs a physical sensor) ------------------
+    with robot_lock:
+        if not connected and not _connect_unlocked():
+            return {"ok": False, "error": "not connected"}
+        try:
+            # TODO(hardware): subscribe to the Livox/RealSense topic and copy the
+            # latest frame here. Until a driver is present, return an empty frame
+            # so the contract is exercised without crashing.
+            return {
+                "ok": True,
+                "sensor": name,
+                "sensor_type": sensor_type,
+                "has_intensity": sensor_type == "lidar",
+                "positions": [],
+                "intensities": [],
+            }
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+
+
 def start_record(body: dict) -> dict:
     """Spawn lerobot-record for the G1 with its native teleoperator.
 
@@ -170,7 +237,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send(200, {"status": "ok", "connected": connected})
+            # Point-cloud replay mode reports "connected" so the Node hardware
+            # seam pulls real recorded clouds without a physical robot attached.
+            replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
+            self._send(200, {"status": "ok", "connected": connected or replay})
         elif self.path == "/state":
             self._send(200, get_state())
         elif self.path == "/state/fast":
@@ -180,6 +250,11 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
             name = self.path[len("/cameras/"):-len("/snapshot")]
             self._send(200, self._snapshot(name))
+        elif self.path == "/pointcloud/sensors":
+            self._send(200, {"sensors": DEPTH_SENSORS})
+        elif self.path.startswith("/pointcloud/") and self.path.endswith("/snapshot"):
+            name = self.path[len("/pointcloud/"):-len("/snapshot")]
+            self._send(200, get_point_cloud(name))
         elif self.path == "/record/status":
             self._send(200, recorder.status())
         else:

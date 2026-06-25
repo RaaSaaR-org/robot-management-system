@@ -88,6 +88,14 @@ export interface OverviewTabProps extends TabCommonProps {
 }
 
 /**
+ * Props for the PerceptionTab component (point-cloud / depth perception)
+ */
+export interface PerceptionTabProps extends TabCommonProps {
+  /** Live telemetry data (poses the embedded robot model) */
+  telemetry: RobotTelemetry | null;
+}
+
+/**
  * Props for the ChatTab component
  */
 export interface ChatTabProps extends TabCommonProps {}

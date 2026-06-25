@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   BarChart,
   Bar,
@@ -37,6 +38,9 @@ import {
   Hash,
   Rocket,
   Workflow,
+  MapPin,
+  Boxes,
+  CalendarDays,
 } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
@@ -49,7 +53,13 @@ import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { NextStepBanner } from '@/shared/components/ui/NextStepBanner';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { simulationApi } from '../api/simulationApi';
-import type { SimJob, SimEnvironment, SimToRealComparison } from '../types';
+import {
+  useSimulationStore,
+  selectScenes,
+  selectScenesLoading,
+  selectScenesError,
+} from '../store';
+import type { SimJob, SimToRealComparison, SimScene } from '../types';
 
 // ============================================================================
 // GLOSSARY — hover-tooltip explanations for domain terms
@@ -69,6 +79,8 @@ const GLOSSARY = {
     'Which physics simulator executes the scene. MuJoCo runs locally (fast, CPU). Isaac Lab requires a separate GPU process.',
   environment:
     'A pre-built scene (robot + task + objects). Each environment defines the robot, the objects to manipulate, and the success criterion.',
+  scene:
+    'A registered simulation scene. Built-in scenes ship with the platform; "scanned room" scenes are generated from a digital twin you captured with a robot. Selecting a scene resolves the physics backend and embodiment automatically.',
   rolloutCount:
     'How many independent attempts (episodes) to run. Each attempt randomizes the object start position. More rollouts = more reliable success rate estimate.',
   episode:
@@ -258,28 +270,142 @@ function EducationBanner() {
 // LAUNCH TAB
 // ============================================================================
 
+function SceneCard({
+  scene,
+  selected,
+  onSelect,
+}: {
+  scene: SimScene;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const isTwin = scene.source === 'twin';
+  const previewUrl = scene.builtinEnvId ? simulationApi.getPreviewUrl(scene.builtinEnvId) : null;
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`text-left rounded-brand-lg transition-all border overflow-hidden ${
+        selected
+          ? 'bg-cobalt-500/10 border-cobalt-500/30 ring-1 ring-cobalt-500/20'
+          : 'glass-subtle border-glass-subtle hover:border-glass-highlight'
+      }`}
+    >
+      {/* Preview: built-ins get a rendered preview image; twin rooms get a placeholder */}
+      {previewUrl ? (
+        <img
+          src={previewUrl}
+          alt={scene.name}
+          className="w-full h-32 object-cover bg-glass-bg"
+          loading="lazy"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        />
+      ) : (
+        <div className="w-full h-32 flex items-center justify-center bg-cobalt-500/5 border-b border-glass-subtle">
+          <Boxes className="w-10 h-10 text-cobalt-400/50" />
+        </div>
+      )}
+      <div className="p-3">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <div className="flex items-center gap-2 min-w-0">
+            {isTwin ? (
+              <MapPin className="w-4 h-4 text-cobalt-400 shrink-0" />
+            ) : (
+              <Beaker className="w-4 h-4 text-cobalt-400 shrink-0" />
+            )}
+            <span className="text-sm font-medium text-theme-primary truncate">{scene.name}</span>
+          </div>
+          {isTwin && (
+            <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-cobalt-500/15 text-cobalt-400 border border-cobalt-500/30">
+              <MapPin className="w-3 h-3" />
+              Scanned room
+            </span>
+          )}
+        </div>
+        {scene.description && (
+          <p className="text-xs text-theme-muted leading-relaxed">{scene.description}</p>
+        )}
+        <div className="flex items-center gap-2 mt-2">
+          <Badge variant="default" size="sm">{scene.backend === 'isaac' ? 'Isaac Lab' : 'MuJoCo'}</Badge>
+          {isTwin && (
+            <Badge variant="cobalt" size="sm">{scene.embodimentTag.toUpperCase()}</Badge>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
 function LaunchTab({
-  environments,
   onSubmit,
 }: {
-  environments: SimEnvironment[];
   onSubmit: () => void;
 }) {
+  const [searchParams] = useSearchParams();
+  const scenes = useSimulationStore(selectScenes);
+  const scenesLoading = useSimulationStore(selectScenesLoading);
+  const scenesError = useSimulationStore(selectScenesError);
+  const fetchScenes = useSimulationStore((s) => s.fetchScenes);
+  const selectedSceneId = useSimulationStore((s) => s.selectedSceneId);
+  const selectScene = useSimulationStore((s) => s.selectScene);
+
   const [modelId, setModelId] = useState('');
-  const [environment, setEnvironment] = useState('');
   const [rolloutCount, setRolloutCount] = useState(10);
   const [backend, setBackend] = useState<'mujoco' | 'isaac'>('mujoco');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Fetch the scene registry on mount.
+  useEffect(() => {
+    void fetchScenes();
+  }, [fetchScenes]);
+
+  // Deep-link preselection: ?sceneId=... selects directly; ?twinId=... selects
+  // the scene whose twinId matches (resolved once scenes have loaded).
+  const deepLinkSceneId = searchParams.get('sceneId');
+  const deepLinkTwinId = searchParams.get('twinId');
+  useEffect(() => {
+    if (scenes.length === 0) return;
+    if (deepLinkSceneId) {
+      const match = scenes.find((s) => s.id === deepLinkSceneId);
+      if (match) {
+        selectScene(match.id);
+        setBackend(match.backend);
+      }
+      return;
+    }
+    if (deepLinkTwinId) {
+      const match = scenes.find((s) => s.twinId === deepLinkTwinId);
+      if (match) {
+        selectScene(match.id);
+        setBackend(match.backend);
+      }
+    }
+    // Re-run only when the registry or deep-link changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenes, deepLinkSceneId, deepLinkTwinId]);
+
+  const selectedScene = useMemo(
+    () => scenes.find((s) => s.id === selectedSceneId) ?? null,
+    [scenes, selectedSceneId],
+  );
+
+  const filteredScenes = useMemo(
+    () => scenes.filter((s) => s.backend === backend),
+    [scenes, backend],
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedScene) return;
     setError(null);
     setSubmitting(true);
     try {
-      await simulationApi.submitJob({ modelId, environment, rolloutCount, backend });
+      // Scene-based submit: backend + embodiment resolved server-side.
+      await simulationApi.submitJob({ modelId, sceneId: selectedScene.id, rolloutCount });
       setModelId('');
-      setEnvironment('');
+      selectScene(null);
       onSubmit();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit job');
@@ -287,10 +413,6 @@ function LaunchTab({
       setSubmitting(false);
     }
   };
-
-  const filteredEnvs = environments.filter((env) =>
-    backend === 'mujoco' ? env.backend === 'mujoco' : env.backend === 'isaac'
-  );
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -323,7 +445,7 @@ function LaunchTab({
         </p>
       </div>
 
-      {/* Backend toggle */}
+      {/* Backend toggle — filters the scene grid */}
       <div>
         <label className="flex items-center gap-1.5 text-sm font-medium text-theme-secondary mb-2">
           Backend
@@ -334,7 +456,7 @@ function LaunchTab({
             <button
               key={b}
               type="button"
-              onClick={() => { setBackend(b); setEnvironment(''); }}
+              onClick={() => { setBackend(b); selectScene(null); }}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-brand text-sm font-medium transition-all ${
                 backend === b
                   ? 'bg-cobalt-500/20 text-cobalt-400 border border-cobalt-500/30'
@@ -348,42 +470,36 @@ function LaunchTab({
         </div>
       </div>
 
-      {/* Environment selection as cards */}
+      {/* Scene picker — built-in environments AND scanned-room twins */}
       <div>
         <label className="flex items-center gap-1.5 text-sm font-medium text-theme-secondary mb-2">
-          Environment
-          <InfoIcon content={GLOSSARY.environment} />
+          Scene
+          <InfoIcon content={GLOSSARY.scene} />
         </label>
-        {filteredEnvs.length === 0 ? (
-          <div className="text-theme-muted text-sm py-4">No environments available for {backend}.</div>
+        {scenesError && (
+          <div className="text-red-400 text-sm py-2 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            {scenesError}
+          </div>
+        )}
+        {scenesLoading && scenes.length === 0 ? (
+          <div className="flex items-center gap-2 text-theme-muted text-sm py-4">
+            <Spinner size="sm" color="cobalt" /> Loading scenes…
+          </div>
+        ) : filteredScenes.length === 0 ? (
+          <div className="text-theme-muted text-sm py-4">
+            No {backend === 'isaac' ? 'Isaac Lab' : 'MuJoCo'} scenes available. Scan a room in
+            the Digital Twin to add one, or switch backends.
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {filteredEnvs.map((env) => (
-              <button
-                key={env.id}
-                type="button"
-                onClick={() => setEnvironment(env.id)}
-                className={`text-left rounded-brand-lg transition-all border overflow-hidden ${
-                  environment === env.id
-                    ? 'bg-cobalt-500/10 border-cobalt-500/30 ring-1 ring-cobalt-500/20'
-                    : 'glass-subtle border-glass-subtle hover:border-glass-highlight'
-                }`}
-              >
-                <img
-                  src={simulationApi.getPreviewUrl(env.id)}
-                  alt={env.name}
-                  className="w-full h-32 object-cover bg-glass-bg"
-                  loading="lazy"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                />
-                <div className="p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Beaker className="w-4 h-4 text-cobalt-400" />
-                    <span className="text-sm font-medium text-theme-primary">{env.name}</span>
-                  </div>
-                  <p className="text-xs text-theme-muted leading-relaxed">{env.description}</p>
-                </div>
-              </button>
+            {filteredScenes.map((scene) => (
+              <SceneCard
+                key={scene.id}
+                scene={scene}
+                selected={selectedSceneId === scene.id}
+                onSelect={() => selectScene(scene.id)}
+              />
             ))}
           </div>
         )}
@@ -432,7 +548,7 @@ function LaunchTab({
         fullWidth
         isLoading={submitting}
         loadingText="Submitting..."
-        disabled={!modelId || !environment}
+        disabled={!modelId || !selectedScene}
         leftIcon={<Play className="w-5 h-5" />}
       >
         Launch Simulation
@@ -520,6 +636,14 @@ function JobCard({
               {job.metrics.collisionCount}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Failure reason for failed jobs */}
+      {job.status === 'failed' && job.failureReason && (
+        <div className="flex items-start gap-2 mt-2 px-2.5 py-2 rounded-brand bg-red-500/10 border border-red-500/20">
+          <AlertTriangle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
+          <span className="text-xs text-red-300 break-words">{job.failureReason}</span>
         </div>
       )}
 
@@ -988,9 +1112,18 @@ function ResultsTab({ job }: { job: SimJob | null }) {
 // SIM VS REAL TAB
 // ============================================================================
 
+/** Variant for a gap badge: small gap (<=10pp) is good, large is concerning. */
+function gapBadgeVariant(gap: number): 'success' | 'warning' | 'error' {
+  const pp = Math.abs(gap) * 100;
+  if (pp <= 10) return 'success';
+  if (pp <= 25) return 'warning';
+  return 'error';
+}
+
 function SimVsRealTab() {
   const [modelId, setModelId] = useState('');
   const [comparisons, setComparisons] = useState<SimToRealComparison[]>([]);
+  const [hasFetched, setHasFetched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1001,6 +1134,7 @@ function SimVsRealTab() {
     try {
       const data = await simulationApi.getComparison(modelId);
       setComparisons(data);
+      setHasFetched(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch comparison');
     } finally {
@@ -1009,7 +1143,7 @@ function SimVsRealTab() {
   };
 
   const chartData = comparisons.map((c, i) => ({
-    name: `Env ${i + 1}`,
+    name: c.twinId ? 'Scanned room' : c.simSceneId ? `Scene ${i + 1}` : `Env ${i + 1}`,
     Simulation: Math.round(c.simSuccessRate * 100),
     'Real World': Math.round(c.realSuccessRate * 100),
     gap: Math.round(c.gap * 100),
@@ -1052,11 +1186,32 @@ function SimVsRealTab() {
         </Card>
       )}
 
-      {comparisons.length === 0 && !loading && (
+      {/* Initial prompt — before any fetch */}
+      {!hasFetched && !loading && comparisons.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-theme-muted">
           <GitCompareArrows className="w-12 h-12 mb-4 opacity-30" />
           <p className="text-sm">Enter a Model ID and compare to see sim-to-real gap analysis.</p>
         </div>
+      )}
+
+      {/* Not-yet-validated empty state — fetched, but no real-robot measurements */}
+      {hasFetched && !loading && comparisons.length === 0 && (
+        <Card variant="subtle" className="border border-cobalt-500/20 !bg-cobalt-500/5">
+          <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
+            <div className="p-3 rounded-brand bg-cobalt-500/10 mb-4">
+              <GitCompareArrows className="w-8 h-8 text-cobalt-400" />
+            </div>
+            <p className="text-sm font-semibold text-theme-primary">
+              Not validated against a real robot yet
+            </p>
+            <p className="text-xs text-theme-muted mt-1.5 max-w-md leading-relaxed">
+              No sim-to-real validation has been recorded for{' '}
+              <span className="font-mono text-theme-secondary">{modelId}</span>. The gap is only
+              shown once a real-robot test run is logged against a sim scene — there is no
+              estimated or synthetic gap here.
+            </p>
+          </div>
+        </Card>
       )}
 
       {loading && comparisons.length === 0 && (
@@ -1069,9 +1224,14 @@ function SimVsRealTab() {
         <Card>
           <Card.Header>
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-theme-primary">Sim vs Real Success Rate</h3>
+              <div>
+                <h3 className="text-base font-semibold text-theme-primary">Sim vs Real Success Rate</h3>
+                <p className="text-xs text-theme-muted mt-0.5">
+                  Measured from logged real-robot test runs — not an estimate.
+                </p>
+              </div>
               {comparisons.length > 0 && (
-                <Badge variant="warning" size="sm">
+                <Badge variant={gapBadgeVariant(comparisons[0].gap)} size="sm">
                   Gap: {comparisons[0].gap > 0 ? '+' : ''}{(comparisons[0].gap * 100).toFixed(0)}%
                 </Badge>
               )}
@@ -1122,6 +1282,72 @@ function SimVsRealTab() {
           </Card.Body>
         </Card>
       )}
+
+      {/* Per-validation context — the measured rows behind the chart */}
+      {comparisons.length > 0 && (
+        <Card variant="subtle">
+          <Card.Body>
+            <ul className="divide-y divide-glass-subtle">
+              {comparisons.map((c, i) => (
+                <li
+                  key={c.simSceneId ?? c.twinId ?? `row-${i}`}
+                  className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {c.twinId ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-cobalt-500/15 text-cobalt-400 border border-cobalt-500/30">
+                        <MapPin className="w-3 h-3" />
+                        Scanned room
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium glass-subtle text-theme-secondary border border-glass-subtle">
+                        <Beaker className="w-3 h-3" />
+                        Built-in scene
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs">
+                    <span className="text-theme-muted">
+                      Sim{' '}
+                      <span className="font-mono text-theme-secondary">
+                        {(c.simSuccessRate * 100).toFixed(0)}%
+                      </span>
+                    </span>
+                    <span className="text-theme-muted">
+                      Real{' '}
+                      <span className="font-mono text-theme-secondary">
+                        {(c.realSuccessRate * 100).toFixed(0)}%
+                      </span>
+                    </span>
+                    <Badge variant={gapBadgeVariant(c.gap)} size="sm">
+                      gap {c.gap > 0 ? '+' : ''}{(c.gap * 100).toFixed(0)}%
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs text-theme-muted ml-auto">
+                    {c.realTestCount != null && (
+                      <span className="flex items-center gap-1">
+                        <Hash className="w-3 h-3" />
+                        n={c.realTestCount} real {c.realTestCount === 1 ? 'episode' : 'episodes'}
+                      </span>
+                    )}
+                    {c.validationDate && (
+                      <span
+                        className="flex items-center gap-1"
+                        title={new Date(c.validationDate).toLocaleString()}
+                      >
+                        <CalendarDays className="w-3 h-3" />
+                        {formatRelativeTime(c.validationDate)}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </Card.Body>
+        </Card>
+      )}
     </div>
   );
 }
@@ -1152,9 +1378,10 @@ export function SimulationPage() {
 }
 
 function SimulationPageInner() {
+  // The Launch tab is the default landing tab; deep-links (?sceneId / ?twinId)
+  // are read inside LaunchTab to preselect a scene.
   const [activeTab, setActiveTab] = useState('launch');
   const [jobs, setJobs] = useState<SimJob[]>([]);
-  const [environments, setEnvironments] = useState<SimEnvironment[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<SimJob | null>(null);
 
@@ -1170,18 +1397,8 @@ function SimulationPageInner() {
     }
   }, []);
 
-  const fetchEnvironments = useCallback(async () => {
-    try {
-      const data = await simulationApi.getEnvironments();
-      setEnvironments(data);
-    } catch (err) {
-      console.error('[SimulationPage] Failed to fetch environments:', err);
-    }
-  }, []);
-
   useEffect(() => {
     fetchJobs();
-    fetchEnvironments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1236,7 +1453,6 @@ function SimulationPageInner() {
             content: (
               <Card>
                 <LaunchTab
-                  environments={environments}
                   onSubmit={() => {
                     fetchJobs();
                     setActiveTab('jobs');

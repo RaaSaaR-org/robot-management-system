@@ -11,11 +11,32 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { spawn, type ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  createWriteStream,
+  rmSync,
+} from 'fs';
+import { tmpdir } from 'os';
+import { pipeline } from 'stream/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createInterface } from 'readline';
 import { simulationJobRepository } from '../repositories/SimulationJobRepository.js';
+import {
+  simSceneRepository,
+  digitalTwinRepository,
+  twinZoneRepository,
+  type SimSceneRecord,
+} from '../repositories/index.js';
+import { modelStorage } from '../storage/model-storage.js';
+import {
+  simToRealValidationService,
+  type SimToRealComparisonRow,
+} from './SimToRealValidationService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,10 +63,18 @@ export interface SimJob {
   jobId: string;
   modelId: string;
   environment: string;
+  /** SimScene registry id (TASK-171); null for legacy `environment`-only jobs. */
+  sceneId?: string;
+  /** Robot embodiment to roll out (e.g. 'g1' | 'so101'); drives env selection. */
+  embodiment?: string;
+  /** Resolved local MJCF path passed to the evaluator as `--scene-file`. */
+  sceneFile?: string;
   rolloutCount: number;
   backend: 'mujoco' | 'isaac';
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
+  /** Human-readable reason a job ended in `failed` (e.g. evaluator stderr tail). */
+  failureReason?: string;
   metrics?: SimMetrics;
   frames?: SimFrame[];
   framesDir?: string;
@@ -115,6 +144,12 @@ const EVALUATOR_SCRIPT = path.join(
   PROJECT_ROOT,
   'robot-agent/hardware/sim_evaluator/evaluate_vla.py'
 );
+// Canonical real-to-sim converter. The server spawns its `generate` subcommand
+// so the single world->MJCF transform stays defined only in Python (TASK-171).
+const SCENE_BUILDER_SCRIPT = path.join(
+  PROJECT_ROOT,
+  'robot-agent/hardware/sim_evaluator/scene_builder.py'
+);
 
 const VLA_SERVER_URL = process.env.VLA_SERVER_URL || 'http://localhost:8000';
 
@@ -127,6 +162,49 @@ function jobFramesDir(jobId: string): string {
 }
 function jobResultsPath(jobId: string): string {
   return path.join(SIM_RUNS_DIR, jobId, 'results.json');
+}
+
+/**
+ * Turn an evaluator's stderr tail into a one-line, user-facing failure reason.
+ * Prefers the most specific error line (exception/connection refused/missing
+ * module) over a bare "exit N", so the Jobs tab can tell operators *why* a run
+ * died (e.g. "VLA server unreachable") instead of an opaque exit code.
+ */
+function summarizeStderr(lines: string[], code: number | null): string {
+  const base = `evaluator exit ${code ?? '?'}`;
+  if (lines.length === 0) return base;
+  // Walk from the end for the first line that looks like a real error.
+  const signal = /(Error|Exception|Traceback|refused|Cannot reach|No module|Errno|Failed|Timeout)/i;
+  const hit = [...lines].reverse().find((l) => signal.test(l)) ?? lines[lines.length - 1];
+  const detail = hit.length > 240 ? `${hit.slice(0, 237)}…` : hit;
+  return `${base}: ${detail}`;
+}
+
+/**
+ * Spawn `uv run python scene_builder.py generate …` and resolve when it exits 0,
+ * rejecting with a one-line reason (from its stderr tail) otherwise. Used by
+ * generateSceneFromTwin to build a scene MJCF off the canonical converter.
+ */
+function runSceneBuilder(args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('uv', args, { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
+    const stderrTail: string[] = [];
+    if (proc.stderr) {
+      const rl = createInterface({ input: proc.stderr });
+      rl.on('line', (line) => {
+        const trimmed = line.trim();
+        if (trimmed) {
+          stderrTail.push(trimmed);
+          if (stderrTail.length > 30) stderrTail.shift();
+        }
+      });
+    }
+    proc.on('error', (err) => reject(new Error(`scene_builder spawn error: ${err.message}`)));
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(summarizeStderr(stderrTail, code)));
+    });
+  });
 }
 
 // ============================================================================
@@ -146,6 +224,8 @@ export class SimulationService extends EventEmitter {
     // previous server). Any requests that arrive before this finishes
     // will still work — they just query the DB directly on cache miss.
     void this.loadFromDatabase();
+    // Seed the built-in scenes into the SimScene registry (idempotent).
+    void this.seedBuiltinScenes();
   }
 
   static getInstance(): SimulationService {
@@ -176,7 +256,7 @@ export class SimulationService extends EventEmitter {
   // ==========================================================================
 
   /**
-   * Submit a new simulation job
+   * Submit a new simulation job against a built-in environment string (legacy).
    */
   submitJob(
     modelId: string,
@@ -190,9 +270,7 @@ export class SimulationService extends EventEmitter {
     if (!environment) {
       throw new Error('environment is required');
     }
-    if (rolloutCount < 1 || rolloutCount > 10000) {
-      throw new Error('rolloutCount must be between 1 and 10000');
-    }
+    this.assertRolloutCount(rolloutCount);
     if (backend !== 'mujoco' && backend !== 'isaac') {
       throw new Error('backend must be "mujoco" or "isaac"');
     }
@@ -207,6 +285,7 @@ export class SimulationService extends EventEmitter {
       jobId: uuid(),
       modelId,
       environment,
+      embodiment: environment.startsWith('so101') ? 'so101' : undefined,
       rolloutCount,
       backend,
       status: 'queued',
@@ -215,8 +294,58 @@ export class SimulationService extends EventEmitter {
       updatedAt: now,
     };
 
+    return this.enqueueJob(job);
+  }
+
+  /**
+   * Submit a job targeting a registered SimScene (built-in or twin-derived).
+   * Resolves the scene's backend/embodiment and — for twin scenes — the MJCF
+   * file the evaluator should load (TASK-171 Phase 2).
+   */
+  async submitJobForScene(modelId: string, sceneId: string, rolloutCount: number): Promise<SimJob> {
+    if (!modelId) {
+      throw new Error('modelId is required');
+    }
+    this.assertRolloutCount(rolloutCount);
+
+    const scene = await simSceneRepository.findById(sceneId);
+    if (!scene) {
+      throw new Error(`Unknown scene: ${sceneId}`);
+    }
+
+    const now = new Date();
+    const job: SimJob = {
+      jobId: uuid(),
+      modelId,
+      // Keep a human-readable `environment` for back-compat: built-in scenes
+      // use their stable env id, twin scenes a `twin:<id>` label.
+      environment: scene.builtinEnvId ?? `twin:${scene.twinId}`,
+      sceneId: scene.id,
+      embodiment: scene.embodimentTag,
+      rolloutCount,
+      backend: scene.backend,
+      status: 'queued',
+      progress: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    return this.enqueueJob(job);
+  }
+
+  private assertRolloutCount(rolloutCount: number): void {
+    if (rolloutCount < 1 || rolloutCount > 10000) {
+      throw new Error('rolloutCount must be between 1 and 10000');
+    }
+  }
+
+  /** Register a built job, persist it, and kick off real/mock progression. */
+  private enqueueJob(job: SimJob): SimJob {
     this.jobs.set(job.jobId, job);
-    console.log(`[SimulationService] Job queued: ${job.jobId} (model=${modelId}, env=${environment})`);
+    console.log(
+      `[SimulationService] Job queued: ${job.jobId} (model=${job.modelId}, env=${job.environment}` +
+        `${job.sceneId ? `, scene=${job.sceneId}` : ''})`,
+    );
 
     // Persist to DB — fire-and-forget; the in-memory copy is authoritative
     // for live progress, the DB is updated on state transitions.
@@ -228,7 +357,7 @@ export class SimulationService extends EventEmitter {
 
     // Choose real or mock execution
     if (this.canRunReal()) {
-      this.startRealJobProgression(job.jobId);
+      void this.startRealJobProgression(job.jobId);
     } else {
       this.startMockJobProgression(job.jobId);
     }
@@ -304,10 +433,38 @@ export class SimulationService extends EventEmitter {
   // ==========================================================================
 
   /**
-   * Get all available simulation environments
+   * Get all available simulation environments (legacy built-in list).
    */
   getAvailableEnvironments(): SimEnvironment[] {
     return [...AVAILABLE_ENVIRONMENTS];
+  }
+
+  /**
+   * Get all registered simulation scenes — built-ins AND ready twin-derived
+   * rooms (TASK-171). Replaces `getAvailableEnvironments` for the picker.
+   */
+  async getAvailableScenes(): Promise<SimSceneRecord[]> {
+    return simSceneRepository.listAll();
+  }
+
+  /**
+   * Idempotently seed the built-in scenes into the SimScene registry so the
+   * picker has a stable baseline even before any twin is scanned.
+   */
+  private async seedBuiltinScenes(): Promise<void> {
+    try {
+      for (const env of AVAILABLE_ENVIRONMENTS) {
+        await simSceneRepository.upsertBuiltin({
+          builtinEnvId: env.id,
+          name: env.name,
+          description: env.description,
+          embodimentTag: env.id.startsWith('so101') ? 'so101' : 'generic',
+          backend: env.backend,
+        });
+      }
+    } catch (err) {
+      console.error('[SimulationService] Failed to seed built-in scenes:', err);
+    }
   }
 
   /**
@@ -372,43 +529,16 @@ export class SimulationService extends EventEmitter {
   // ==========================================================================
 
   /**
-   * Get sim-to-real comparison data for a model
+   * Get sim-to-real comparison data for a model — the REAL measured gap from
+   * persisted SimToRealValidation rows (TASK-171 Phase 3). An empty array means
+   * the model has not been validated against a real robot yet.
+   *
+   * The previous `sim * random(0.7..0.9)` approximation has been removed: the
+   * gap is now `simSuccessRate − realSuccessRate` measured by running the same
+   * policy in the twin scene and on the real robot in that physical room.
    */
-  getSimToRealComparison(modelId: string): SimToRealComparison[] {
-    const completedJobs = this.listJobs({ modelId, status: 'completed' });
-
-    if (completedJobs.length === 0) {
-      return [];
-    }
-
-    // Group by environment and compute averages
-    const envGroups = new Map<string, SimMetrics[]>();
-    for (const job of completedJobs) {
-      if (job.metrics) {
-        const group = envGroups.get(job.environment) ?? [];
-        group.push(job.metrics);
-        envGroups.set(job.environment, group);
-      }
-    }
-
-    const comparisons: SimToRealComparison[] = [];
-    for (const [, metrics] of envGroups) {
-      const avgSimSuccess =
-        metrics.reduce((sum, m) => sum + m.successRate, 0) / metrics.length;
-      // Approximate real success rate as sim * (0.7-0.9) offset
-      const realOffset = 0.7 + Math.random() * 0.2;
-      const realSuccessRate = Math.min(1, avgSimSuccess * realOffset);
-      const gap = avgSimSuccess - realSuccessRate;
-
-      comparisons.push({
-        modelId,
-        simSuccessRate: Math.round(avgSimSuccess * 1000) / 1000,
-        realSuccessRate: Math.round(realSuccessRate * 1000) / 1000,
-        gap: Math.round(gap * 1000) / 1000,
-      });
-    }
-
-    return comparisons;
+  async getSimToRealComparison(modelId: string): Promise<SimToRealComparisonRow[]> {
+    return simToRealValidationService.getComparisonForModel(modelId);
   }
 
   // ==========================================================================
@@ -428,7 +558,7 @@ export class SimulationService extends EventEmitter {
   /**
    * Run a real MuJoCo evaluation via Python subprocess
    */
-  private startRealJobProgression(jobId: string): void {
+  private async startRealJobProgression(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId);
     if (!job) return;
 
@@ -452,16 +582,40 @@ export class SimulationService extends EventEmitter {
       .catch((err) => console.error(`[SimulationService] Failed to persist running for ${jobId}:`, err));
     this.emit('job:running', job);
 
-    const proc = spawn('uv', ['run', 'python',
+    // For twin-derived scenes, download the MJCF into the evaluator's mjcf/
+    // dir (so its relative <include> resolves) and pass it via --scene-file.
+    if (job.sceneId) {
+      try {
+        job.sceneFile = await this.materializeSceneFile(job.sceneId, jobId);
+      } catch (err) {
+        console.error(`[SimulationService] Failed to materialize scene for ${jobId}:`, err);
+      }
+    }
+
+    const isG1 = job.embodiment === 'g1' || job.embodiment === 'unitree_g1';
+    const task = isG1
+      ? 'Walk to the goal zone while avoiding keep-out areas.'
+      : 'Pick up the red cube and place it on the target.';
+
+    const args = [
+      'run', 'python',
       EVALUATOR_SCRIPT,
       '--vla-server', VLA_SERVER_URL,
       '--environment', job.environment,
       '--episodes', String(job.rolloutCount),
       '--max-steps', '200',
-      '--task', 'Pick up the red cube and place it on the target.',
+      '--task', task,
       '--output', outputPath,
       '--frames-dir', framesDir,
-    ], {
+    ];
+    if (job.embodiment) {
+      args.push('--embodiment', job.embodiment);
+    }
+    if (job.sceneFile) {
+      args.push('--scene-file', job.sceneFile);
+    }
+
+    const proc = spawn('uv', args, {
       cwd: path.dirname(EVALUATOR_SCRIPT),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -487,17 +641,24 @@ export class SimulationService extends EventEmitter {
       });
     }
 
-    // Log stderr
+    // Log stderr and keep a short tail so a failed job can report *why*.
+    const stderrTail: string[] = [];
     if (proc.stderr) {
       const rl = createInterface({ input: proc.stderr });
       rl.on('line', (line) => {
         console.log(`[SimEval:${jobId.slice(0, 8)}] ${line}`);
+        const trimmed = line.trim();
+        if (trimmed) {
+          stderrTail.push(trimmed);
+          if (stderrTail.length > 30) stderrTail.shift();
+        }
       });
     }
 
     // Handle process exit
     proc.on('close', (code) => {
       this.processes.delete(jobId);
+      this.cleanupSceneFile(job.sceneFile);
       const current = this.jobs.get(jobId);
       if (!current || current.status !== 'running') return;
 
@@ -536,9 +697,11 @@ export class SimulationService extends EventEmitter {
       } else {
         current.status = 'failed';
         current.updatedAt = new Date();
-        console.error(`[SimulationService] Evaluator exited with code ${code} for ${jobId}`);
+        const reason = summarizeStderr(stderrTail, code);
+        current.failureReason = reason;
+        console.error(`[SimulationService] Evaluator exited with code ${code} for ${jobId}: ${reason}`);
         void simulationJobRepository
-          .update(jobId, { status: 'failed', failureReason: `evaluator exit ${code}` })
+          .update(jobId, { status: 'failed', failureReason: reason })
           .catch((err) => console.error(`[SimulationService] Failed to persist exit-fail for ${jobId}:`, err));
         this.emit('job:failed', current);
       }
@@ -546,6 +709,7 @@ export class SimulationService extends EventEmitter {
 
     proc.on('error', (err) => {
       this.processes.delete(jobId);
+      this.cleanupSceneFile(job.sceneFile);
       const current = this.jobs.get(jobId);
       if (current) {
         current.status = 'failed';
@@ -557,6 +721,145 @@ export class SimulationService extends EventEmitter {
         this.emit('job:failed', current);
       }
     });
+  }
+
+  /**
+   * Generate (or refresh) a MuJoCo scene for an existing twin on demand,
+   * threading the twin's REAL occupancy floor-plan + semantic zones through the
+   * canonical scene_builder so the room walls follow the scan (not just the
+   * AABB box). Uploads `scene.mjcf.xml` as a twin artifact, records it on the
+   * twin, and (up)registers the SimScene. Works even for twins built without
+   * `ENABLE_SIM_SCENE` in the twin-builder. (TASK-171 fidelity follow-up.)
+   */
+  async generateSceneFromTwin(twinId: string): Promise<SimSceneRecord> {
+    if (!twinId) {
+      throw new Error('twinId is required');
+    }
+    const twin = await digitalTwinRepository.findById(twinId);
+    if (!twin) {
+      throw new Error(`Unknown twin: ${twinId}`);
+    }
+    const bounds = {
+      minX: twin.minX, minY: twin.minY, minZ: twin.minZ,
+      maxX: twin.maxX, maxY: twin.maxY, maxZ: twin.maxZ,
+    };
+    if (!(bounds.maxX > bounds.minX && bounds.maxY > bounds.minY)) {
+      throw new Error(`Twin ${twinId} has no usable bounds (scan not complete?)`);
+    }
+
+    const workDir = mkdtempSync(path.join(tmpdir(), `twinscene-${twinId}-`));
+    const outPath = path.join(workDir, 'scene.mjcf.xml');
+    try {
+      // Materialize the occupancy floor-plan locally when the twin has one, so
+      // the builder extrudes real walls instead of falling back to the AABB box.
+      let pgmPath: string | undefined;
+      let yamlPath: string | undefined;
+      if (twin.occupancyPgmKey) {
+        pgmPath = path.join(workDir, 'occupancy.pgm');
+        await pipeline(
+          await modelStorage.getTwinArtifactStream(twin.occupancyPgmKey),
+          createWriteStream(pgmPath)
+        );
+        if (twin.occupancyYamlKey) {
+          yamlPath = path.join(workDir, 'occupancy.yaml');
+          await pipeline(
+            await modelStorage.getTwinArtifactStream(twin.occupancyYamlKey),
+            createWriteStream(yamlPath)
+          );
+        }
+      }
+
+      // Semantic zones (charging→spawn, workcell→goal, keepout→penalty).
+      const zones = await twinZoneRepository.listByTwin(twinId);
+      const zonesPath = path.join(workDir, 'zones.json');
+      writeFileSync(
+        zonesPath,
+        JSON.stringify(
+          zones.map((z) => ({
+            name: z.name,
+            type: z.type,
+            points: z.points.map((p) => [p.x, p.y]),
+            minZ: z.minZ,
+            maxZ: z.maxZ,
+          }))
+        )
+      );
+
+      const args = [
+        'run', 'python', SCENE_BUILDER_SCRIPT, 'generate',
+        '--aabb',
+        String(bounds.minX), String(bounds.minY), String(bounds.minZ),
+        String(bounds.maxX), String(bounds.maxY), String(bounds.maxZ),
+        '--out', outPath,
+        '--resolution', String(twin.resolution ?? 0.05),
+        '--zones-json', zonesPath,
+        '--embodiment', 'g1',
+      ];
+      if (pgmPath) {
+        args.push('--occupancy-pgm', pgmPath);
+        if (yamlPath) args.push('--occupancy-yaml', yamlPath);
+      }
+
+      await runSceneBuilder(args, path.dirname(SCENE_BUILDER_SCRIPT));
+
+      const mjcf = readFileSync(outPath);
+      const mjcfKey = await modelStorage.uploadTwinArtifact(twinId, 'scene.mjcf.xml', mjcf);
+
+      // Record on the twin so its DTO reports a sim scene, and register it.
+      await digitalTwinRepository.update(twinId, {
+        simSceneKey: mjcfKey,
+        simSceneBackend: 'mujoco',
+      });
+      const scene = await simSceneRepository.upsertForTwin({
+        twinId,
+        name: `${twin.name} (scanned room)`,
+        description: 'Twin-derived MuJoCo scene — Unitree G1 in the scanned room',
+        embodimentTag: 'g1',
+        backend: 'mujoco',
+        mjcfKey,
+        bounds,
+        status: 'ready',
+      });
+      console.log(
+        `[SimulationService] Generated SimScene for twin ${twinId}` +
+          (pgmPath ? ' (occupancy floor-plan)' : ' (AABB perimeter fallback)')
+      );
+      return scene;
+    } finally {
+      try {
+        rmSync(workDir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  /**
+   * Download a twin scene's MJCF into the evaluator's mjcf/ directory so its
+   * relative `<include file="g1/…">` resolves, returning the local path. The
+   * file is unique per job and removed once the evaluator exits.
+   */
+  private async materializeSceneFile(sceneId: string, jobId: string): Promise<string | undefined> {
+    const scene = await simSceneRepository.findById(sceneId);
+    if (!scene || !scene.mjcfKey) return undefined;
+
+    const mjcfDir = path.join(path.dirname(EVALUATOR_SCRIPT), 'mjcf');
+    const dest = path.join(mjcfDir, `.twinscene_${jobId}.xml`);
+    mkdirSync(mjcfDir, { recursive: true });
+    const stream = await modelStorage.getTwinArtifactStream(scene.mjcfKey);
+    await pipeline(stream, createWriteStream(dest));
+    console.log(`[SimulationService] Materialized scene ${sceneId} → ${dest}`);
+    return dest;
+  }
+
+  /** Remove a per-job materialized scene file (best-effort). */
+  private cleanupSceneFile(sceneFile?: string): void {
+    if (!sceneFile) return;
+    try {
+      rmSync(sceneFile, { force: true });
+    } catch {
+      // best-effort cleanup
+    }
   }
 
   // ==========================================================================

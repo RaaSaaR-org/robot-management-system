@@ -11,5 +11,13 @@ dependencies = [
     "httpx>=0.25.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
 [project.scripts]
 evaluate-vla = "evaluate_vla:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

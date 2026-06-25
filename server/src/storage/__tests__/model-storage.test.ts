@@ -77,12 +77,14 @@ beforeEach(() => {
 });
 
 describe('constants', () => {
-  it('exposes the four bucket names', () => {
+  it('exposes the bucket names', () => {
     expect(BUCKETS).toEqual({
       TRAINING_DATASETS: 'training-datasets',
       MODEL_CHECKPOINTS: 'model-checkpoints',
       PRODUCTION_MODELS: 'production-models',
       ROBOT_LOGS: 'robot-logs',
+      SENSOR_SCANS: 'sensor-scans',
+      DIGITAL_TWINS: 'digital-twins',
     });
   });
 
@@ -91,6 +93,7 @@ describe('constants', () => {
     expect(SIZE_LIMITS.MODEL).toBe(10 * 1024 * 1024 * 1024);
     expect(SIZE_LIMITS.CHECKPOINT).toBe(5 * 1024 * 1024 * 1024);
     expect(SIZE_LIMITS.LOG).toBe(1 * 1024 * 1024 * 1024);
+    expect(SIZE_LIMITS.SCAN).toBe(2 * 1024 * 1024 * 1024);
   });
 
   it('exposes URL expiry defaults', () => {
@@ -659,5 +662,42 @@ describe('getPresignedDownloadUrl', () => {
       'job/epoch-1/model.safetensors',
       URL_EXPIRY.DOWNLOAD
     );
+  });
+});
+
+describe('digital-twin artifacts (TASK-170)', () => {
+  const svc = new ModelStorageClient();
+
+  it('uploads to the DIGITAL_TWINS bucket under <twinId>/<name> when rustfs is up', async () => {
+    mocks.isRustFSInitialized.mockReturnValue(true);
+    client.upload.mockResolvedValue(undefined);
+    const key = await svc.uploadTwinArtifact('twin-1', 'occupancy.pgm', Buffer.from('P5'));
+    expect(key).toBe('twin-1/occupancy.pgm');
+    expect(client.upload).toHaveBeenCalledWith(
+      BUCKETS.DIGITAL_TWINS,
+      'twin-1/occupancy.pgm',
+      expect.any(Buffer),
+      expect.objectContaining({ metadata: { twinId: 'twin-1', name: 'occupancy.pgm' } })
+    );
+  });
+
+  it('streams a rustfs key from the DIGITAL_TWINS bucket', async () => {
+    client.getStream.mockResolvedValue('stream' as never);
+    await svc.getTwinArtifactStream('twin-1/cloud.pcd');
+    expect(client.getStream).toHaveBeenCalledWith(BUCKETS.DIGITAL_TWINS, 'twin-1/cloud.pcd');
+  });
+
+  it('presigns a rustfs key but refuses an absolute (local) path key', async () => {
+    client.getPresignedDownloadUrl.mockResolvedValue('https://dl');
+    await expect(svc.getTwinArtifactDownloadUrl('twin-1/mesh.glb')).resolves.toBe('https://dl');
+    await expect(svc.getTwinArtifactDownloadUrl('/var/data/twins/twin-1/mesh.glb')).rejects.toThrow(
+      /local-filesystem/
+    );
+  });
+
+  it('deletes a rustfs key from the DIGITAL_TWINS bucket', async () => {
+    client.delete.mockResolvedValue(undefined);
+    await svc.deleteTwinArtifact('twin-1/roadmap.json');
+    expect(client.delete).toHaveBeenCalledWith(BUCKETS.DIGITAL_TWINS, 'twin-1/roadmap.json');
   });
 });

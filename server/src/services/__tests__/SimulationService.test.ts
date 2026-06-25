@@ -53,6 +53,7 @@ vi.mock('child_process', () => ({
 }));
 
 import { SimulationService, simulationService } from '../SimulationService.js';
+import { simToRealValidationService } from '../SimToRealValidationService.js';
 import { simulationJobRepository as _simRepo } from '../../repositories/SimulationJobRepository.js';
 import { existsSync as _existsSync } from 'fs';
 import { spawn as _spawn } from 'child_process';
@@ -372,59 +373,43 @@ describe('getFramesDir', () => {
 });
 
 // ===========================================================================
-// getSimToRealComparison (aggregation math)
+// getSimToRealComparison — REAL measured gap (TASK-171)
 // ===========================================================================
 
 describe('getSimToRealComparison', () => {
-  it('returns an empty array when there are no completed jobs', () => {
-    simulationService.submitJob('m1', VALID_ENV, 10, 'mujoco'); // queued, not completed
-    expect(simulationService.getSimToRealComparison('m1')).toEqual([]);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('averages success rate per environment and derives a non-negative gap', () => {
-    // Run two jobs to completion with deterministic metrics so we can assert
-    // the aggregation math exactly. Stub Math.random:
-    //  - generateMockMetrics(): successRate = round((0.6 + r*0.35)*1000)/1000
-    //    with r=0 → 0.6
-    //  - getSimToRealComparison(): realOffset = 0.7 + r*0.2, with r=0 → 0.7
-    vi.useFakeTimers();
-    const randSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+  // The previous `sim * random(0.7..0.9)` approximation has been deleted. The
+  // comparison now reads persisted SimToRealValidation rows: empty until a
+  // policy is run in a twin scene AND evaluated on the real robot.
+  it('returns an empty array when the model has no validations', async () => {
+    vi.spyOn(simToRealValidationService, 'getComparisonForModel').mockResolvedValue([]);
+    await expect(simulationService.getSimToRealComparison('m1')).resolves.toEqual([]);
+  });
 
-    const j1 = simulationService.submitJob('mX', VALID_ENV, 5, 'mujoco');
-    vi.advanceTimersByTime(1500);
-    const j2 = simulationService.submitJob('mX', VALID_ENV, 5, 'mujoco');
-    vi.advanceTimersByTime(1500);
+  it('returns the measured (non-random) gap from validation rows', async () => {
+    vi.spyOn(simToRealValidationService, 'getComparisonForModel').mockResolvedValue([
+      {
+        modelId: 'mX',
+        simSuccessRate: 0.6,
+        realSuccessRate: 0.42,
+        gap: 0.18,
+        twinId: 'twin-1',
+        simSceneId: 'scene-1',
+        validationDate: '2026-06-25T00:00:00.000Z',
+        realTestCount: 5,
+      },
+    ]);
 
-    expect(simulationService.getJob(j1.jobId)!.status).toBe('completed');
-    expect(simulationService.getJob(j2.jobId)!.status).toBe('completed');
-
-    const comparisons = simulationService.getSimToRealComparison('mX');
-    expect(comparisons).toHaveLength(1); // one environment group
+    const comparisons = await simulationService.getSimToRealComparison('mX');
+    expect(comparisons).toHaveLength(1);
     const c = comparisons[0];
     expect(c.modelId).toBe('mX');
-    // avg sim success = 0.6 ; real = 0.6 * 0.7 = 0.42 ; gap = 0.18
     expect(c.simSuccessRate).toBe(0.6);
     expect(c.realSuccessRate).toBe(0.42);
     expect(c.gap).toBeCloseTo(0.18, 3);
-
-    randSpy.mockRestore();
-  });
-
-  it('groups completed jobs by environment into separate comparisons', () => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, 'random').mockReturnValue(0);
-
-    const a = simulationService.submitJob('mY', 'so101_tabletop', 5, 'mujoco');
-    vi.advanceTimersByTime(1500);
-    const b = simulationService.submitJob('mY', 'so101_sorting', 5, 'mujoco');
-    vi.advanceTimersByTime(1500);
-
-    expect(simulationService.getJob(a.jobId)!.status).toBe('completed');
-    expect(simulationService.getJob(b.jobId)!.status).toBe('completed');
-
-    const comparisons = simulationService.getSimToRealComparison('mY');
-    expect(comparisons).toHaveLength(2);
-    expect(comparisons.every((c) => c.gap >= 0)).toBe(true);
   });
 });
 

@@ -10,6 +10,7 @@ export { CommandsTab } from './CommandsTab';
 export { TasksTab } from './TasksTab';
 export { InfoTab } from './InfoTab';
 export { Model3DTab } from './Model3DTab';
+export { PerceptionTab } from './PerceptionTab';
 export { TeleopTab } from './TeleopTab';
 export { ChatTab } from './ChatTab';
 export type * from './types';

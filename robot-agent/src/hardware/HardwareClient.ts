@@ -8,7 +8,7 @@
  * @status live
  */
 
-import type { JointState } from '../robot/types.js';
+import type { JointState, PointCloudFrame, PointCloudSensorType } from '../robot/types.js';
 
 const SIDECAR_URL = process.env.HARDWARE_SIDECAR_URL ?? 'http://localhost:8765';
 // Poll every 2s — avoids monopolizing /dev/ttyACM0 so other tools can use the arm.
@@ -152,6 +152,64 @@ export class HardwareClient {
       throw new Error(`Sidecar snapshot ${name}: empty response`);
     }
     return data.image_b64;
+  }
+
+  /**
+   * List of depth / LiDAR sensor names the sidecar exposes.
+   *
+   * @status hardware-pending — on real G1 hardware these come from the Livox
+   * SDK2 / livox_ros_driver2 (`/livox/lidar`) and the RealSense ROS2 wrapper
+   * (`/camera/depth/color/points`). Sim is the default; this path is only taken
+   * when a connected sidecar reports real sensors.
+   */
+  async getPointCloudSensors(): Promise<string[]> {
+    const res = await fetch(`${SIDECAR_URL}/pointcloud/sensors`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar /pointcloud/sensors returned ${res.status}`);
+    }
+    const data = (await res.json()) as { sensors?: string[] };
+    return data.sensors ?? [];
+  }
+
+  /**
+   * One-shot point-cloud snapshot from a real depth / LiDAR sensor.
+   *
+   * @status hardware-pending — returns XYZ(+intensity) as flat arrays so it maps
+   * 1:1 onto {@link PointCloudFrame}. The caller (RobotStateManager) fills in
+   * robotId / sequence / timestamp.
+   */
+  async snapshotPointCloud(name: string): Promise<PointCloudFrame> {
+    const res = await fetch(`${SIDECAR_URL}/pointcloud/${encodeURIComponent(name)}/snapshot`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar point cloud ${name} failed: HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      positions?: number[];
+      intensities?: number[];
+      sensor_type?: PointCloudSensorType;
+      has_intensity?: boolean;
+      origin?: [number, number, number];
+    };
+    const positions = data.positions ?? [];
+    const intensities = data.intensities ?? [];
+    return {
+      robotId: '',
+      sensor: name,
+      sensorType: data.sensor_type ?? 'lidar',
+      frame: 'base_link',
+      pointCount: Math.floor(positions.length / 3),
+      positions,
+      intensities,
+      hasIntensity: data.has_intensity ?? intensities.length > 0,
+      sequence: 0,
+      origin: data.origin,
+      source: 'hardware',
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /**

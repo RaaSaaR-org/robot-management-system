@@ -23,7 +23,7 @@ model Robot {
   model           String
   serialNumber    String?  @unique
   status          String   @default("offline") // RobotStatus enum as string
-  batteryLevel    Int?     @default(100)  // null = no battery / AC-powered
+  batteryLevel    Int?     @default(100) // null = no battery / AC-powered
   location        String   @default("{}") // JSON: RobotLocation
   lastSeen        DateTime @default(now())
   currentTaskId   String?
@@ -31,13 +31,13 @@ model Robot {
   capabilities    String   @default("[]") // JSON: string[]
   firmware        String?
   ipAddress       String?
-  metadata        String?  // JSON: Record<string, unknown>
+  metadata        String? // JSON: Record<string, unknown>
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   // A2A Integration
-  a2aEnabled   Boolean @default(false)
-  a2aAgentUrl  String?
+  a2aEnabled  Boolean @default(false)
+  a2aAgentUrl String?
 
   // Registration metadata
   registeredAt    DateTime?
@@ -50,21 +50,171 @@ model Robot {
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
-  conversations Conversation[]
-  telemetryLogs RobotTelemetry[]
-  commands      RobotCommand[]
-  agentCard     AgentCard?
-  endpoints     RobotEndpoints?
-  alerts        Alert[]
-  robotTasks    RobotTask[]
-  incidents     Incident[]
+  conversations      Conversation[]
+  telemetryLogs      RobotTelemetry[]
+  commands           RobotCommand[]
+  agentCard          AgentCard?
+  endpoints          RobotEndpoints?
+  alerts             Alert[]
+  robotTasks         RobotTask[]
+  incidents          Incident[]
   evaluationEpisodes EvaluationEpisode[]
   deviceCertificate  DeviceCertificate?
   vlaSessions        VlaSession[]
+  sensorScans        SensorScan[]
 
   @@index([status])
   @@index([a2aEnabled])
   @@index([tenantId, updatedAt])
+}
+
+// Recorded point-cloud scan from a depth / LiDAR sensor (e.g. Livox MID-360).
+// The point bytes live in object storage (RustFS) or a local file; this row is
+// the queryable metadata + storage pointer, mirroring how TeleoperationFrame
+// references depth frames by path rather than inlining the blob.
+model SensorScan {
+  id             String   @id @default(uuid())
+  robotId        String
+  sensorName     String
+  sensorType     String // 'lidar' | 'depth_camera'
+  format         String   @default("pcd") // storage format
+  pointCount     Int
+  fileSize       Int
+  hasIntensity   Boolean  @default(true)
+  storageBackend String   @default("rustfs") // 'rustfs' | 'local'
+  storageBucket  String   @default("sensor-scans")
+  storageKey     String // object key, or local file path when backend='local'
+  // Axis-aligned bounding box (meters) for quick preview / placement
+  minX           Float    @default(0)
+  minY           Float    @default(0)
+  minZ           Float    @default(0)
+  maxX           Float    @default(0)
+  maxY           Float    @default(0)
+  maxZ           Float    @default(0)
+  // Digital-twin scan-session linkage (TASK-170). Nullable so ad-hoc Perception
+  // captures keep working; populated only for frames captured during a sweep.
+  sessionId      String? // → ScanSession.id (plain FK, no relation to stay additive)
+  frameIndex     Int? // monotonic index within the sweep
+  // Robot world pose at capture time (twin world frame). Quaternion defaults to identity.
+  poseX          Float    @default(0)
+  poseY          Float    @default(0)
+  poseZ          Float    @default(0)
+  poseQx         Float    @default(0)
+  poseQy         Float    @default(0)
+  poseQz         Float    @default(0)
+  poseQw         Float    @default(1)
+  metadata       String? // JSON: Record<string, unknown>
+  capturedAt     DateTime @default(now())
+
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@index([robotId, capturedAt])
+  @@index([capturedAt])
+  @@index([sessionId, frameIndex])
+}
+
+// ============================================================================
+// DIGITAL TWIN (TASK-170) — G1 walks a workzone, frames accumulate into one
+// world-frame twin; user paints semantic zones; export Nav2 mask + VDA5050.
+// ============================================================================
+
+// DigitalTwin — the persistent system-of-record for one scanned workzone/room.
+// App "Site" maps 1:1 to this row. It is the single source of the world frame
+// (origin + resolution) and holds storage refs to the built artifacts.
+model DigitalTwin {
+  id               String   @id @default(uuid())
+  name             String
+  robotId          String? // robot that scanned it (informational; no relation)
+  floor            String? // optional building floor label
+  status           String   @default("draft") // draft | recording | processing | ready | failed
+  version          Int      @default(1)
+  // World frame — the ONE origin/resolution source for every layer (L0–L3 + export)
+  worldOriginX     Float    @default(0)
+  worldOriginY     Float    @default(0)
+  worldOriginZ     Float    @default(0)
+  resolution       Float    @default(0.05) // meters / occupancy-grid pixel
+  // Axis-aligned bounding box of the accumulated cloud (meters)
+  minX             Float    @default(0)
+  minY             Float    @default(0)
+  minZ             Float    @default(0)
+  maxX             Float    @default(0)
+  maxY             Float    @default(0)
+  maxZ             Float    @default(0)
+  pointCount       Int      @default(0)
+  // Built-artifact storage refs (one backend per twin; keys nullable until built)
+  storageBackend   String   @default("local") // 'rustfs' | 'local'
+  cloudKey         String? // merged PCD
+  meshKey          String? // GLB backdrop mesh
+  occupancyPgmKey  String? // L1 occupancy grid (PGM)
+  occupancyYamlKey String? // L1 occupancy metadata (YAML)
+  roadmapKey       String? // VDA5050 roadmap (JSON)
+  simSceneKey      String? // MJCF physics scene (real→sim, TASK-171)
+  simSceneBackend  String? // 'mujoco' | 'isaac' — backend the sim scene targets
+  errorMessage     String?
+  tenantId         String? // multi-tenancy (nullable → single-tenant works)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  zones    TwinZone[]
+  sessions ScanSession[]
+
+  @@index([robotId])
+  @@index([status])
+  @@index([tenantId, updatedAt])
+}
+
+// ScanSession — one recording sweep + its build-job lifecycle (no separate job
+// table). The sidecar claims sessions in 'processing' status, builds the twin,
+// and writes artifacts back onto the linked DigitalTwin.
+model ScanSession {
+  id            String    @id @default(uuid())
+  robotId       String
+  twinId        String
+  status        String    @default("idle") // idle | recording | processing | complete | failed
+  frameCount    Int       @default(0)
+  // Anchor: robot world pose at scan-start (twin world frame origin offset)
+  originX       Float     @default(0)
+  originY       Float     @default(0)
+  originZ       Float     @default(0)
+  startedAt     DateTime?
+  endedAt       DateTime?
+  // Build-job tracking (sidecar poll/claim, mirrors TrainingJob worker fields)
+  progress      Int       @default(0) // 0-100
+  stage         String? // 'downloading' | 'merging' | 'occupancy' | 'mesh' | 'roadmap'
+  workerId      String?
+  lastHeartbeat DateTime?
+  errorMessage  String?
+  tenantId      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  twin DigitalTwin @relation(fields: [twinId], references: [id], onDelete: Cascade)
+
+  @@index([twinId])
+  @@index([robotId])
+  @@index([status])
+  @@index([workerId, lastHeartbeat])
+}
+
+// TwinZone — L2 semantic zone (typed polygon) in the twin world frame. NEW model
+// (do NOT merge with the fleet `Zone`: that is a 2D AABB with a different enum and
+// drives the SVG FleetMap). TwinZone is the sole source for Nav2/VDA5050 export.
+model TwinZone {
+  id        String   @id @default(uuid())
+  twinId    String
+  name      String
+  type      String   @default("keepout") // keepout | workcell | charging | speed
+  points    String   @default("[]") // JSON: Array<{ x: number; y: number }> (world meters)
+  minZ      Float    @default(0)
+  maxZ      Float    @default(2)
+  color     String? // optional hex override for the 3D volume
+  metadata  String? // JSON: Record<string, unknown> (e.g. speed limit)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  twin DigitalTwin @relation(fields: [twinId], references: [id], onDelete: Cascade)
+
+  @@index([twinId])
 }
 
 // ============================================================================
@@ -75,8 +225,8 @@ model DeviceCertificate {
   id          String    @id @default(cuid())
   robotId     String    @unique
   fingerprint String    @unique
-  publicKey   String    // PEM-encoded public key
-  certificate String    // PEM-encoded certificate
+  publicKey   String // PEM-encoded public key
+  certificate String // PEM-encoded certificate
   issuedAt    DateTime  @default(now())
   expiresAt   DateTime?
   status      String    @default("active") // active, revoked, expired
@@ -91,7 +241,7 @@ model DeviceCertificate {
 model RobotTelemetry {
   id                 String   @id @default(uuid())
   robotId            String
-  batteryLevel       Int?     // null = no battery / AC-powered
+  batteryLevel       Int? // null = no battery / AC-powered
   batteryVoltage     Float?
   batteryTemperature Float?
   cpuUsage           Float
@@ -121,7 +271,7 @@ model RobotCommand {
   payload      String    @default("{}") // JSON
   status       String    @default("pending") // CommandStatus enum as string
   priority     String    @default("normal") // CommandPriority enum as string
-  result       String?   // JSON
+  result       String? // JSON
   errorMessage String?
   createdAt    DateTime  @default(now())
   startedAt    DateTime?
@@ -155,12 +305,12 @@ model RobotEndpoints {
 // ============================================================================
 
 model Conversation {
-  id        String    @id @default(uuid())
+  id        String   @id @default(uuid())
   name      String
-  isActive  Boolean   @default(true)
+  isActive  Boolean  @default(true)
   robotId   String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Soft delete support
   deletedAt DateTime?
@@ -185,7 +335,7 @@ model Message {
   parts          String // JSON: A2APart[]
   conversationId String?
   taskId         String?
-  metadata       String?  // JSON: Record<string, unknown>
+  metadata       String? // JSON: Record<string, unknown>
   timestamp      DateTime @default(now())
 
   // Relations
@@ -200,7 +350,7 @@ model Task {
   id              String   @id @default(uuid())
   conversationId  String?
   state           String   @default("submitted") // TaskState enum as string
-  statusMessage   String?  // JSON: A2AMessage
+  statusMessage   String? // JSON: A2AMessage
   statusTimestamp DateTime @default(now())
   artifacts       String   @default("[]") // JSON: A2AArtifact[]
   history         String   @default("[]") // JSON: A2AMessage[]
@@ -227,9 +377,9 @@ model AgentCard {
   url                String
   version            String?
   documentationUrl   String?
-  provider           String?  // JSON: { organization, url? }
-  capabilities       String?  // JSON: { streaming?, pushNotifications?, stateTransitionHistory? }
-  authentication     String?  // JSON: { schemes[], credentials? }
+  provider           String? // JSON: { organization, url? }
+  capabilities       String? // JSON: { streaming?, pushNotifications?, stateTransitionHistory? }
+  authentication     String? // JSON: { schemes[], credentials? }
   defaultInputModes  String   @default("[]") // JSON: string[]
   defaultOutputModes String   @default("[]") // JSON: string[]
   skills             String   @default("[]") // JSON: A2ASkill[]
@@ -353,7 +503,7 @@ model User {
   loginAttempts     Int       @default(0)
   lockedUntil       DateTime?
   passwordChangedAt DateTime?
-  recoveryCodes     String?   // JSON array of hashed recovery codes
+  recoveryCodes     String? // JSON array of hashed recovery codes
 
   // Relations
   refreshTokens    RefreshToken[]
@@ -364,7 +514,7 @@ model User {
   accountLockout   AccountLockout?
   settings         UserSettings?
   apiTokens        ApiToken[]
-  createdTokens    ApiToken[] @relation("CreatedTokens")
+  createdTokens    ApiToken[]        @relation("CreatedTokens")
 
   @@index([email])
   @@index([role])
@@ -377,34 +527,34 @@ model User {
 // ============================================================================
 
 model ApiToken {
-  id          String    @id @default(cuid())
+  id String @id @default(cuid())
 
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// Human label, e.g. "github-actions deploy" or "kira agent prod".
-  name        String
+  name String
 
   /// First 12 chars of the token for index lookup + truncated display.
-  prefix      String
+  prefix String
 
   /// SHA-256 hash of the full token. Constant-time-compared on auth.
-  hash        String
+  hash String
 
   /// Expiry. Default now() + 90 days, max 1 year.
-  expiresAt   DateTime?
+  expiresAt DateTime?
 
   /// Best-effort fire-and-forget stamp from the auth middleware.
-  lastUsedAt  DateTime?
+  lastUsedAt DateTime?
 
   /// When set, the token is rejected regardless of expiry.
-  revokedAt   DateTime?
+  revokedAt DateTime?
 
-  createdAt   DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   /// Human user who minted this token. Required for audit.
   createdById String
-  createdBy   User      @relation("CreatedTokens", fields: [createdById], references: [id], onDelete: NoAction)
+  createdBy   User   @relation("CreatedTokens", fields: [createdById], references: [id], onDelete: NoAction)
 
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
@@ -420,35 +570,35 @@ model ApiToken {
 // ============================================================================
 
 model UserSettings {
-  id                    String   @id @default(cuid())
-  userId                String   @unique
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Appearance
-  theme                 String   @default("system")  // "light" | "dark" | "system"
-  language              String   @default("en")
-  compactMode           Boolean  @default(false)
+  theme       String  @default("system") // "light" | "dark" | "system"
+  language    String  @default("en")
+  compactMode Boolean @default(false)
 
   // Notifications
-  emailNotifications    Boolean  @default(true)
-  alertsEnabled         Boolean  @default(true)
-  maintenanceReminders  Boolean  @default(true)
-  weeklyDigest          Boolean  @default(false)
+  emailNotifications   Boolean @default(true)
+  alertsEnabled        Boolean @default(true)
+  maintenanceReminders Boolean @default(true)
+  weeklyDigest         Boolean @default(false)
 
   // Dashboard
-  defaultDashboardView  String   @default("fleet")   // "fleet" | "robots" | "training"
-  refreshIntervalSec    Int      @default(30)
+  defaultDashboardView String @default("fleet") // "fleet" | "robots" | "training"
+  refreshIntervalSec   Int    @default(30)
 
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model MFACredential {
   id         String    @id @default(uuid())
   userId     String
-  type       String    // "totp" | "webauthn" | "recovery"
-  secret     String    // TOTP secret or WebAuthn credential ID
-  name       String?   // "Authenticator App", "YubiKey", etc.
+  type       String // "totp" | "webauthn" | "recovery"
+  secret     String // TOTP secret or WebAuthn credential ID
+  name       String? // "Authenticator App", "YubiKey", etc.
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
 
@@ -512,25 +662,25 @@ model CommandInterpretation {
 // ============================================================================
 
 model ProcessDefinition {
-  id                       String   @id @default(uuid())
+  id                       String    @id @default(uuid())
   name                     String
   description              String?
-  version                  Int      @default(1)
-  status                   String   @default("draft") // ProcessDefinitionStatus: 'draft' | 'ready' | 'archived'
-  stepTemplates            String   @default("[]") // JSON: StepTemplate[]
-  requiredCapabilities     String   @default("[]") // JSON: string[]
+  version                  Int       @default(1)
+  status                   String    @default("draft") // ProcessDefinitionStatus: 'draft' | 'ready' | 'archived'
+  stepTemplates            String    @default("[]") // JSON: StepTemplate[]
+  requiredCapabilities     String    @default("[]") // JSON: string[]
   estimatedDurationMinutes Int?
   maxConcurrentInstances   Int?
-  tags                     String   @default("[]") // JSON: string[]
+  tags                     String    @default("[]") // JSON: string[]
   // Scheduling (TASK-143)
-  triggerType              String   @default("manual") // 'manual' | 'scheduled' | 'event'
-  cronExpression           String?  // 5-field cron, only when triggerType='scheduled'
-  enabled                  Boolean  @default(true) // schedule active?
+  triggerType              String    @default("manual") // 'manual' | 'scheduled' | 'event'
+  cronExpression           String? // 5-field cron, only when triggerType='scheduled'
+  enabled                  Boolean   @default(true) // schedule active?
   nextRunAt                DateTime? // computed by ProcessSchedulerService
   lastScheduledRunAt       DateTime? // last time scheduler created an instance
   createdBy                String
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   // Relations
   instances ProcessInstance[]
@@ -561,8 +711,8 @@ model ProcessInstance {
   startedAt             DateTime?
   completedAt           DateTime?
   estimatedCompletionAt DateTime?
-  inputData             String?   // JSON: Record<string, unknown>
-  outputData            String?   // JSON: Record<string, unknown>
+  inputData             String? // JSON: Record<string, unknown>
+  outputData            String? // JSON: Record<string, unknown>
   errorMessage          String?
   createdBy             String
   createdAt             DateTime  @default(now())
@@ -597,7 +747,7 @@ model StepInstance {
   assignedRobotId   String?
   startedAt         DateTime?
   completedAt       DateTime?
-  result            String?   // JSON: StepResult
+  result            String? // JSON: StepResult
   error             String?
   retryCount        Int       @default(0)
   maxRetries        Int       @default(3)
@@ -623,7 +773,7 @@ model RobotTask {
   processInstanceId String?
   stepInstanceId    String?   @unique
   source            String    @default("manual") // RobotTaskSource: 'process' | 'command' | 'manual'
-  robotId           String?   // Optional until assigned by TaskDistributor
+  robotId           String? // Optional until assigned by TaskDistributor
   priority          String    @default("normal") // Priority
   status            String    @default("pending") // RobotTaskStatus
   actionType        String // StepActionType
@@ -635,7 +785,7 @@ model RobotTask {
   startedAt         DateTime?
   completedAt       DateTime?
   timeoutMs         Int?
-  result            String?   // JSON: RobotTaskResult
+  result            String? // JSON: RobotTaskResult
   error             String?
   retryCount        Int       @default(0)
   maxRetries        Int       @default(3)
@@ -664,7 +814,7 @@ model RobotTask {
 // ============================================================================
 
 model Decision {
-  id           String   @id @default(uuid())
+  id           String @id @default(uuid())
   decisionType String // 'command_interpretation' | 'task_execution' | 'safety_action'
   entityId     String // Foreign key to CommandInterpretation, RobotTask, etc.
   robotId      String
@@ -692,7 +842,7 @@ model Decision {
 // ============================================================================
 
 model ComplianceLog {
-  id         String @id @default(uuid())
+  id         String  @id @default(uuid())
   sessionId  String // Session identifier for grouping related logs
   robotId    String // Robot that generated the event
   operatorId String? // User/operator ID (null for autonomous operations)
@@ -730,7 +880,7 @@ model ComplianceLog {
 
   // Retention management (Task 24)
   retentionExpiresAt DateTime? // When this log can be deleted
-  legalHoldId        String?   // If under legal hold, references LegalHold.id
+  legalHoldId        String? // If under legal hold, references LegalHold.id
 
   // Relations
   accessLogs ComplianceLogAccess[]
@@ -747,13 +897,13 @@ model ComplianceLog {
 }
 
 model ComplianceLogAccess {
-  id        String   @id @default(uuid())
-  logId     String
-  userId    String? // User who accessed (null for system access)
+  id         String   @id @default(uuid())
+  logId      String
+  userId     String? // User who accessed (null for system access)
   accessType String // 'view' | 'export' | 'verify' | 'audit'
-  ipAddress String?
-  userAgent String?
-  timestamp DateTime @default(now())
+  ipAddress  String?
+  userAgent  String?
+  timestamp  DateTime @default(now())
 
   // Relations
   log ComplianceLog @relation(fields: [logId], references: [id], onDelete: Cascade)
@@ -770,7 +920,7 @@ model ComplianceLogAccess {
 model RetentionPolicy {
   id            String   @id @default(uuid())
   eventType     String   @unique // 'ai_decision' | 'safety_action' | 'command_execution' | 'system_event' | 'access_audit'
-  retentionDays Int      // Days to retain logs (e.g., 3650 = 10 years)
+  retentionDays Int // Days to retain logs (e.g., 3650 = 10 years)
   description   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -782,11 +932,11 @@ model LegalHold {
   id        String    @id @default(uuid())
   name      String
   reason    String
-  createdBy String    // User ID who created the hold
+  createdBy String // User ID who created the hold
   startDate DateTime  @default(now())
   endDate   DateTime?
   isActive  Boolean   @default(true)
-  logIds    String   @default("[]") // JSON: ComplianceLog IDs under hold
+  logIds    String    @default("[]") // JSON: ComplianceLog IDs under hold
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -797,15 +947,15 @@ model LegalHold {
 // GDPR Article 30 - Records of Processing Activities
 model RopaEntry {
   id                    String   @id @default(uuid())
-  processingActivity    String   // Name of the processing activity
-  purpose               String   // Purpose of processing
+  processingActivity    String // Name of the processing activity
+  purpose               String // Purpose of processing
   dataCategories        String   @default("[]") // JSON: Types of personal data processed
   dataSubjects          String   @default("[]") // JSON: Categories of data subjects
   recipients            String   @default("[]") // JSON: Recipients of the data
-  thirdCountryTransfers String?  // International transfers info
-  retentionPeriod       String   // How long data is retained
+  thirdCountryTransfers String? // International transfers info
+  retentionPeriod       String // How long data is retained
   securityMeasures      String   @default("[]") // JSON: Technical/organizational security measures
-  legalBasis            String   // GDPR legal basis (consent, contract, legal obligation, etc.)
+  legalBasis            String // GDPR legal basis (consent, contract, legal obligation, etc.)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -815,12 +965,12 @@ model RopaEntry {
 // AI Provider Documentation (EU AI Act transparency requirements)
 model ProviderDocumentation {
   id           String    @id @default(uuid())
-  providerName String    // e.g., 'Google Gemini', 'OpenAI'
-  modelVersion String    // e.g., 'gemini-2.0-flash'
-  documentType String    // 'technical_doc' | 'risk_assessment' | 'conformity_declaration' | 'user_manual'
-  documentUrl  String?   // URL to external documentation
-  content      String    // Documentation content or summary
-  validFrom    DateTime  // When this documentation became valid
+  providerName String // e.g., 'Google Gemini', 'OpenAI'
+  modelVersion String // e.g., 'gemini-2.0-flash'
+  documentType String // 'technical_doc' | 'risk_assessment' | 'conformity_declaration' | 'user_manual'
+  documentUrl  String? // URL to external documentation
+  content      String // Documentation content or summary
+  validFrom    DateTime // When this documentation became valid
   validTo      DateTime? // When this documentation expires (null = still valid)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -836,20 +986,20 @@ model ProviderDocumentation {
 
 // Core GDPR Request model - handles all request types
 model GDPRRequest {
-  id              String    @id @default(uuid())
-  userId          String
-  requestType     String    // 'access' | 'rectification' | 'erasure' | 'restriction' | 'portability' | 'objection' | 'adm_review'
-  status          String    @default("pending") // 'pending' | 'acknowledged' | 'in_progress' | 'completed' | 'rejected'
+  id          String @id @default(uuid())
+  userId      String
+  requestType String // 'access' | 'rectification' | 'erasure' | 'restriction' | 'portability' | 'objection' | 'adm_review'
+  status      String @default("pending") // 'pending' | 'acknowledged' | 'in_progress' | 'completed' | 'rejected'
 
   // SLA tracking
-  submittedAt     DateTime  @default(now())
-  acknowledgedAt  DateTime?
-  slaDeadline     DateTime  // 30 days from submission (or 72 hours for ADM acknowledgment)
-  completedAt     DateTime?
+  submittedAt    DateTime  @default(now())
+  acknowledgedAt DateTime?
+  slaDeadline    DateTime // 30 days from submission (or 72 hours for ADM acknowledgment)
+  completedAt    DateTime?
 
   // Request details (JSON for flexibility per type)
-  requestData     String    @default("{}") // JSON: type-specific request data
-  responseData    String?   // JSON: result data (export path, changes made, etc.)
+  requestData  String  @default("{}") // JSON: type-specific request data
+  responseData String? // JSON: result data (export path, changes made, etc.)
 
   // Verification for sensitive requests
   verificationToken   String?   @unique
@@ -857,17 +1007,17 @@ model GDPRRequest {
   verifiedAt          DateTime?
 
   // Processing
-  assignedTo      String?   // Admin user ID handling the request
-  internalNotes   String?   // Admin notes (not visible to user)
+  assignedTo      String? // Admin user ID handling the request
+  internalNotes   String? // Admin notes (not visible to user)
   rejectionReason String?
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  statusHistory   GDPRRequestStatusHistory[]
-  admReview       ADMReviewQueue?
+  user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  statusHistory GDPRRequestStatusHistory[]
+  admReview     ADMReviewQueue?
 
   @@index([userId])
   @@index([requestType])
@@ -878,15 +1028,15 @@ model GDPRRequest {
 
 // Status history for audit trail
 model GDPRRequestStatusHistory {
-  id          String   @id @default(uuid())
-  requestId   String
-  fromStatus  String?
-  toStatus    String
-  changedBy   String?  // User ID who made the change (null for system)
-  reason      String?
-  timestamp   DateTime @default(now())
+  id         String   @id @default(uuid())
+  requestId  String
+  fromStatus String?
+  toStatus   String
+  changedBy  String? // User ID who made the change (null for system)
+  reason     String?
+  timestamp  DateTime @default(now())
 
-  request     GDPRRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  request GDPRRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
   @@index([requestId])
   @@index([timestamp])
@@ -894,19 +1044,19 @@ model GDPRRequestStatusHistory {
 
 // User consent tracking (GDPR consent requirements)
 model UserConsent {
-  id            String    @id @default(uuid())
-  userId        String
-  consentType   String    // 'marketing' | 'analytics' | 'ai_processing' | 'data_sharing' | 'third_party'
-  granted       Boolean   @default(false)
-  grantedAt     DateTime?
-  revokedAt     DateTime?
-  version       String    // Consent policy version at time of consent
-  ipAddress     String?   // IP at time of consent (for proof)
-  userAgent     String?   // Browser/device info
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String    @id @default(uuid())
+  userId      String
+  consentType String // 'marketing' | 'analytics' | 'ai_processing' | 'data_sharing' | 'third_party'
+  granted     Boolean   @default(false)
+  grantedAt   DateTime?
+  revokedAt   DateTime?
+  version     String // Consent policy version at time of consent
+  ipAddress   String? // IP at time of consent (for proof)
+  userAgent   String? // Browser/device info
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, consentType])
   @@index([userId])
@@ -917,16 +1067,16 @@ model UserConsent {
 model DataRestriction {
   id            String    @id @default(uuid())
   userId        String
-  scope         String    // 'all' | 'ai_processing' | 'sharing' | 'marketing' | specific data category
-  reason        String    // 'accuracy_disputed' | 'unlawful_processing' | 'no_longer_needed' | 'objection_pending'
-  gdprRequestId String?   // Link to original GDPR request if applicable
+  scope         String // 'all' | 'ai_processing' | 'sharing' | 'marketing' | specific data category
+  reason        String // 'accuracy_disputed' | 'unlawful_processing' | 'no_longer_needed' | 'objection_pending'
+  gdprRequestId String? // Link to original GDPR request if applicable
   startDate     DateTime  @default(now())
   endDate       DateTime?
   isActive      Boolean   @default(true)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([isActive])
@@ -935,26 +1085,26 @@ model DataRestriction {
 
 // ADM (Automated Decision Making) Human Review Queue (GDPR Art. 22)
 model ADMReviewQueue {
-  id              String    @id @default(uuid())
-  gdprRequestId   String    @unique  // Links to GDPRRequest of type 'adm_review'
-  decisionId      String    // Original AI Decision that's being contested
-  userId          String    // User contesting the decision
+  id            String @id @default(uuid())
+  gdprRequestId String @unique // Links to GDPRRequest of type 'adm_review'
+  decisionId    String // Original AI Decision that's being contested
+  userId        String // User contesting the decision
 
-  contestReason   String    // Why the user is contesting
-  userEvidence    String?   // JSON: Evidence provided by user
+  contestReason String // Why the user is contesting
+  userEvidence  String? // JSON: Evidence provided by user
 
-  status          String    @default("queued") // 'queued' | 'assigned' | 'under_review' | 'decision_overturned' | 'decision_upheld'
-  priority        String    @default("normal") // 'low' | 'normal' | 'high' | 'urgent'
+  status   String @default("queued") // 'queued' | 'assigned' | 'under_review' | 'decision_overturned' | 'decision_upheld'
+  priority String @default("normal") // 'low' | 'normal' | 'high' | 'urgent'
 
-  assignedTo      String?   // Admin assigned to review
-  reviewNotes     String?   // Admin review notes
-  reviewOutcome   String?   // Final decision explanation
+  assignedTo    String? // Admin assigned to review
+  reviewNotes   String? // Admin review notes
+  reviewOutcome String? // Final decision explanation
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  completedAt     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
 
-  gdprRequest     GDPRRequest @relation(fields: [gdprRequestId], references: [id], onDelete: Cascade)
+  gdprRequest GDPRRequest @relation(fields: [gdprRequestId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@index([priority])
@@ -968,8 +1118,8 @@ model ADMReviewQueue {
 // ============================================================================
 
 model Incident {
-  id             String   @id @default(uuid())
-  incidentNumber String   @unique // INC-2026-001 format
+  id             String @id @default(uuid())
+  incidentNumber String @unique // INC-2026-001 format
 
   // Classification
   type     String // 'safety' | 'security' | 'data_breach' | 'ai_malfunction' | 'vulnerability'
@@ -983,9 +1133,9 @@ model Incident {
   resolution  String?
 
   // Risk Assessment
-  riskScore            Int?     // 0-100
-  affectedDataSubjects Int?     // For GDPR assessment
-  dataCategories       String   @default("[]") // JSON: Personal data types affected
+  riskScore            Int? // 0-100
+  affectedDataSubjects Int? // For GDPR assessment
+  dataCategories       String @default("[]") // JSON: Personal data types affected
 
   // Timestamps
   detectedAt  DateTime
@@ -995,8 +1145,8 @@ model Incident {
 
   // Evidence Links
   robotId          String?
-  complianceLogIds String   @default("[]") // JSON: Links to ComplianceLog entries
-  alertIds         String   @default("[]") // JSON: Links to Alert entries
+  complianceLogIds String  @default("[]") // JSON: Links to ComplianceLog entries
+  alertIds         String  @default("[]") // JSON: Links to Alert entries
 
   // System State Snapshot
   systemSnapshot String? // JSON: SystemSnapshot
@@ -1030,8 +1180,8 @@ model IncidentNotification {
   regulation String // 'ai_act' | 'gdpr' | 'nis2' | 'cra'
 
   // Notification Type & Deadline
-  notificationType String   // 'early_warning' | 'initial' | 'intermediate' | 'final'
-  deadlineHours    Int      // Hours from incident detection
+  notificationType String // 'early_warning' | 'initial' | 'intermediate' | 'final'
+  deadlineHours    Int // Hours from incident detection
   dueAt            DateTime
 
   // Status
@@ -1059,14 +1209,14 @@ model IncidentNotification {
 }
 
 model NotificationTemplate {
-  id         String  @id @default(uuid())
+  id         String   @id @default(uuid())
   name       String
-  regulation String  // 'ai_act' | 'gdpr' | 'nis2' | 'cra'
-  authority  String  // 'ai_act_authority' | 'dpa' | 'data_subject' | 'csirt' | 'enisa'
-  type       String  // 'early_warning' | 'initial' | 'intermediate' | 'final'
+  regulation String // 'ai_act' | 'gdpr' | 'nis2' | 'cra'
+  authority  String // 'ai_act_authority' | 'dpa' | 'data_subject' | 'csirt' | 'enisa'
+  type       String // 'early_warning' | 'initial' | 'intermediate' | 'final'
   subject    String
-  body       String  // Template with {{placeholders}}
-  isDefault  Boolean @default(false)
+  body       String // Template with {{placeholders}}
+  isDefault  Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -1088,8 +1238,8 @@ model ManualControlSession {
   startedAt          DateTime  @default(now())
   endedAt            DateTime?
   isActive           Boolean   @default(true)
-  speedLimitMmPerSec Int       @default(250)  // ISO 10218-1 reduced speed limit
-  forceLimitN        Int       @default(140)  // ISO/TS 15066 force limit
+  speedLimitMmPerSec Int       @default(250) // ISO 10218-1 reduced speed limit
+  forceLimitN        Int       @default(140) // ISO/TS 15066 force limit
 
   @@index([robotId])
   @@index([operatorId])
@@ -1101,9 +1251,9 @@ model VerificationSchedule {
   id              String   @id @default(uuid())
   name            String
   description     String?
-  intervalMinutes Int      // How often verification is required
+  intervalMinutes Int // How often verification is required
   robotScope      String   @default("all") // 'all' | 'robot' | 'zone'
-  scopeId         String?  // Specific robot or zone ID
+  scopeId         String? // Specific robot or zone ID
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1121,7 +1271,7 @@ model VerificationCompletion {
   scheduleId  String
   operatorId  String
   robotId     String?
-  status      String   // 'completed' | 'skipped' | 'deferred'
+  status      String // 'completed' | 'skipped' | 'deferred'
   notes       String?
   completedAt DateTime @default(now())
 
@@ -1136,7 +1286,7 @@ model VerificationCompletion {
 // Oversight Log - audit trail of all human oversight actions
 model OversightLog {
   id         String   @id @default(uuid())
-  actionType String   // 'manual_mode_activated' | 'task_reassigned' | etc.
+  actionType String // 'manual_mode_activated' | 'task_reassigned' | etc.
   operatorId String
   robotId    String?
   taskId     String?
@@ -1155,8 +1305,8 @@ model OversightLog {
 model AnomalyRecord {
   id             String    @id @default(uuid())
   robotId        String
-  anomalyType    String    // 'confidence_drop' | 'behavior_drift' | 'performance_degradation' | 'safety_warning'
-  severity       String    // 'low' | 'medium' | 'high' | 'critical'
+  anomalyType    String // 'confidence_drop' | 'behavior_drift' | 'performance_degradation' | 'safety_warning'
+  severity       String // 'low' | 'medium' | 'high' | 'critical'
   description    String
   detectedAt     DateTime  @default(now())
   acknowledgedAt DateTime?
@@ -1180,22 +1330,22 @@ model AnomalyRecord {
 model ApprovalRequest {
   id              String    @id @default(uuid())
   requestNumber   String    @unique // APR-2026-001 format
-  entityType      String    // 'performance_evaluation' | 'shift_change' | 'disciplinary_action' | 'safety_parameter_modification' | 'software_update'
+  entityType      String // 'performance_evaluation' | 'shift_change' | 'disciplinary_action' | 'safety_parameter_modification' | 'software_update'
   entityId        String
   entityData      String    @default("{}") // JSON snapshot of entity at request time
-  approvalType    String    // 'single_approval' | 'dual_approval' | 'chain_approval'
+  approvalType    String // 'single_approval' | 'dual_approval' | 'chain_approval'
   priority        String    @default("normal") // 'low' | 'normal' | 'high' | 'critical' | 'urgent'
   status          String    @default("pending") // 'pending' | 'in_progress' | 'approved' | 'rejected' | 'escalated' | 'expired' | 'cancelled'
-  affectedUserId  String?   // Worker affected by this decision (GDPR Art. 22)
-  affectedRobotId String?   // Robot affected (for safety changes)
-  slaHours        Int       // SLA deadline in hours
-  slaDeadline     DateTime  // Calculated deadline
+  affectedUserId  String? // Worker affected by this decision (GDPR Art. 22)
+  affectedRobotId String? // Robot affected (for safety changes)
+  slaHours        Int // SLA deadline in hours
+  slaDeadline     DateTime // Calculated deadline
   escalatedAt     DateTime?
   escalationLevel Int       @default(0)
   requestedBy     String
   requestReason   String
   blocksExecution Boolean   @default(true)
-  rollbackPlan    String?   // JSON: RollbackPlan for safety-critical changes
+  rollbackPlan    String? // JSON: RollbackPlan for safety-critical changes
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   completedAt     DateTime?
@@ -1240,22 +1390,22 @@ model ApprovalChain {
 
 // Approval Step - individual approval action by an approver
 model ApprovalStep {
-  id                String    @id @default(uuid())
-  approvalRequestId String
-  stepOrder         Int
-  approverRole      String    // 'supervisor' | 'manager' | 'safety_officer' | 'admin'
-  assignedTo        String?   // Specific user assigned (null = any user with role)
-  status            String    @default("pending") // 'pending' | 'awaiting' | 'approved' | 'rejected' | 'skipped'
-  decision          String?   // 'approve' | 'reject' | 'defer' | 'request_info'
-  decidedBy         String?
-  decisionNotes     String?
-  activeEngagement  Boolean   @default(false) // Art. 14: Did approver actively engage?
-  reviewDurationSec Int?      // Time spent reviewing (anti-rubber-stamp)
-  competenceVerified Boolean  @default(false) // Has approver been verified competent?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  assignedAt        DateTime?
-  decidedAt         DateTime?
+  id                 String    @id @default(uuid())
+  approvalRequestId  String
+  stepOrder          Int
+  approverRole       String // 'supervisor' | 'manager' | 'safety_officer' | 'admin'
+  assignedTo         String? // Specific user assigned (null = any user with role)
+  status             String    @default("pending") // 'pending' | 'awaiting' | 'approved' | 'rejected' | 'skipped'
+  decision           String? // 'approve' | 'reject' | 'defer' | 'request_info'
+  decidedBy          String?
+  decisionNotes      String?
+  activeEngagement   Boolean   @default(false) // Art. 14: Did approver actively engage?
+  reviewDurationSec  Int? // Time spent reviewing (anti-rubber-stamp)
+  competenceVerified Boolean   @default(false) // Has approver been verified competent?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  assignedAt         DateTime?
+  decidedAt          DateTime?
 
   // Relations
   approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
@@ -1312,18 +1462,18 @@ model WorkerViewpoint {
 model DecisionContest {
   id                        String    @id @default(uuid())
   approvalRequestId         String?   @unique
-  decisionId                String    // Original AI Decision being contested
+  decisionId                String // Original AI Decision being contested
   workerId                  String
   contestReason             String
-  contestEvidence           String?   // JSON: Evidence provided by worker
+  contestEvidence           String? // JSON: Evidence provided by worker
   requestedOutcome          String?
   status                    String    @default("submitted") // 'submitted' | 'under_review' | 'human_intervention_granted' | 'decision_overturned' | 'decision_upheld'
   priority                  String    @default("normal")
-  assignedTo                String?   // Admin assigned to review
+  assignedTo                String? // Admin assigned to review
   reviewNotes               String?
   reviewOutcome             String?
   humanInterventionProvided Boolean   @default(false)
-  newDecisionData           String?   // JSON: Modified decision if overturned
+  newDecisionData           String? // JSON: Modified decision if overturned
   submittedAt               DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
   reviewedAt                DateTime?
@@ -1343,11 +1493,11 @@ model EscalationRule {
   id               String   @id @default(uuid())
   name             String
   description      String?
-  entityType       String   // Which entity type this applies to
-  approvalType     String?  // Specific approval type (null = all)
-  triggerCondition String   // 'overdue' | 'near_deadline' | 'high_priority' | 'repeated_rejection'
-  triggerThreshold Int      // Hours overdue, or percentage of deadline
-  escalateTo       String   // Role to escalate to
+  entityType       String // Which entity type this applies to
+  approvalType     String? // Specific approval type (null = all)
+  triggerCondition String // 'overdue' | 'near_deadline' | 'high_priority' | 'repeated_rejection'
+  triggerThreshold Int // Hours overdue, or percentage of deadline
+  escalateTo       String // Role to escalate to
   notifyOriginal   Boolean  @default(true)
   notifyAdmin      Boolean  @default(true)
   isActive         Boolean  @default(true)
@@ -1368,7 +1518,7 @@ model TrainingRecord {
   userId           String
   userName         String
   userEmail        String?
-  trainingType     String   // 'operator_competence' | 'safety_training' | 'emergency_response' | 'first_aid' | 'maintenance_training'
+  trainingType     String // 'operator_competence' | 'safety_training' | 'emergency_response' | 'first_aid' | 'maintenance_training'
   completedAt      DateTime
   expiresAt        DateTime
   certificateUrl   String?
@@ -1385,7 +1535,7 @@ model TrainingRecord {
 // Inspection Schedule - DGUV Vorschrift 3 and ISO inspections
 model InspectionSchedule {
   id                 String   @id @default(uuid())
-  inspectionType     String   // 'electrical' | 'force_verification' | 'biomechanical' | 'safety_function' | 'protective_device'
+  inspectionType     String // 'electrical' | 'force_verification' | 'biomechanical' | 'safety_function' | 'protective_device'
   robotId            String?
   robotName          String?
   lastInspectionDate DateTime
@@ -1406,7 +1556,7 @@ model InspectionSchedule {
 // Risk Assessment - tracks risk assessment documents and review schedules
 model RiskAssessment {
   id                String   @id @default(uuid())
-  assessmentType    String   // 'ai_risk' | 'machinery_risk' | 'dpia' | 'cybersecurity' | 'occupational'
+  assessmentType    String // 'ai_risk' | 'machinery_risk' | 'dpia' | 'cybersecurity' | 'occupational'
   name              String
   version           String
   description       String?
@@ -1426,10 +1576,10 @@ model RiskAssessment {
 // Compliance Gap - tracks gaps in regulatory compliance
 model ComplianceGap {
   id               String    @id @default(uuid())
-  framework        String    // 'ai_act' | 'machinery_regulation' | 'gdpr' | 'nis2' | 'cra' | 'red' | 'dguv'
+  framework        String // 'ai_act' | 'machinery_regulation' | 'gdpr' | 'nis2' | 'cra' | 'red' | 'dguv'
   requirement      String
-  articleReference String    // e.g., "Art. 12" or "Annex IV.2"
-  severity         String    // 'critical' | 'high' | 'medium' | 'low'
+  articleReference String // e.g., "Art. 12" or "Annex IV.2"
+  severity         String // 'critical' | 'high' | 'medium' | 'low'
   description      String
   currentState     String
   targetState      String
@@ -1452,7 +1602,7 @@ model ComplianceGap {
 // Regulatory Deadline - tracks key regulatory deadlines
 model RegulatoryDeadline {
   id                    String   @id @default(uuid())
-  framework             String   // 'ai_act' | 'machinery_regulation' | 'gdpr' | 'nis2' | 'cra' | 'red' | 'dguv'
+  framework             String // 'ai_act' | 'machinery_regulation' | 'gdpr' | 'nis2' | 'cra' | 'red' | 'dguv'
   name                  String
   deadline              DateTime
   description           String
@@ -1470,15 +1620,15 @@ model RegulatoryDeadline {
 
 // Compliance Activity - tracks recent compliance-related activities
 model ComplianceActivity {
-  id          String    @id @default(uuid())
-  type        String    // 'gap_opened' | 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated'
+  id          String   @id @default(uuid())
+  type        String // 'gap_opened' | 'gap_closed' | 'document_renewed' | 'training_completed' | 'inspection_done' | 'assessment_updated'
   description String
-  framework   String?   // Optional framework association
-  entityId    String?   // ID of related entity (gap, document, training, etc.)
-  entityType  String?   // Type of related entity
+  framework   String? // Optional framework association
+  entityId    String? // ID of related entity (gap, document, training, etc.)
+  entityType  String? // Type of related entity
   userId      String?
   userName    String?
-  timestamp   DateTime  @default(now())
+  timestamp   DateTime @default(now())
 
   @@index([type])
   @@index([framework])
@@ -1491,30 +1641,30 @@ model ComplianceActivity {
 
 // TeleoperationSession - Data collection session for demonstrations
 model TeleoperationSession {
-  id              String    @id @default(uuid())
-  operatorId      String
-  robotId         String
-  type            String    // vr_quest, vr_vision_pro, bilateral_aloha, kinesthetic
-  status          String    @default("created") // created, recording, paused, completed, failed
-  startedAt       DateTime?
-  endedAt         DateTime?
-  frameCount      Int       @default(0)
-  duration        Float?    // seconds
-  fps             Int       @default(30)
-  languageInstr   String?   // Language instruction for this demonstration
-  qualityScore    Float?    // Computed quality score (0-100)
-  exportedDatasetId String? // If exported to a Dataset
-  errorMessage    String?   // Error message if failed
+  id                 String    @id @default(uuid())
+  operatorId         String
+  robotId            String
+  type               String // vr_quest, vr_vision_pro, bilateral_aloha, kinesthetic
+  status             String    @default("created") // created, recording, paused, completed, failed
+  startedAt          DateTime?
+  endedAt            DateTime?
+  frameCount         Int       @default(0)
+  duration           Float? // seconds
+  fps                Int       @default(30)
+  languageInstr      String? // Language instruction for this demonstration
+  qualityScore       Float? // Computed quality score (0-100)
+  exportedDatasetId  String? // If exported to a Dataset
+  errorMessage       String? // Error message if failed
   // Hardware-backed recording (sidecar-orchestrated lerobot-record)
-  numEpisodes        Int?    // Target episode count passed to sidecar
-  episodeTimeS       Float?  // Per-episode max duration (seconds)
+  numEpisodes        Int? // Target episode count passed to sidecar
+  episodeTimeS       Float? // Per-episode max duration (seconds)
   datasetRepoId      String? // HF-style repo_id (e.g. "robot0/pick-block-xyz")
   sidecarDatasetPath String? // Path on the pi where lerobot-record wrote the dataset
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   // Relations
-  frames          TeleoperationFrame[]
+  frames TeleoperationFrame[]
 
   @@index([operatorId])
   @@index([robotId])
@@ -1529,22 +1679,22 @@ model TeleoperationSession {
 
 // DatasetProvenance - Source documentation for training datasets
 model DatasetProvenance {
-  id                String   @id @default(uuid())
-  datasetId         String   @unique
-  sourceType        String   // collected, purchased, synthetic, open_source, contributed
-  sourceName        String?  // Name of source (e.g., "Open X-Embodiment")
-  sourceUrl         String?  // URL to source
-  collectionMethod  String?  // How data was collected
-  collectionPeriod  Json?    // { start: Date, end: Date }
-  labelingProcedure String?  // How data was labeled
-  annotatorInfo     String?  // Information about annotators
-  cleaningSteps     Json?    // string[] - Data cleaning steps applied
-  licenseType       String?  // License under which data is held
+  id                  String   @id @default(uuid())
+  datasetId           String   @unique
+  sourceType          String // collected, purchased, synthetic, open_source, contributed
+  sourceName          String? // Name of source (e.g., "Open X-Embodiment")
+  sourceUrl           String? // URL to source
+  collectionMethod    String? // How data was collected
+  collectionPeriod    Json? // { start: Date, end: Date }
+  labelingProcedure   String? // How data was labeled
+  annotatorInfo       String? // Information about annotators
+  cleaningSteps       Json? // string[] - Data cleaning steps applied
+  licenseType         String? // License under which data is held
   copyrightCompliance String? // Copyright compliance measures
-  chainOfCustody    Json?    // Array of custody transfers
-  recordedAt        DateTime @default(now())
-  recordedBy        String
-  updatedAt         DateTime @updatedAt
+  chainOfCustody      Json? // Array of custody transfers
+  recordedAt          DateTime @default(now())
+  recordedBy          String
+  updatedAt           DateTime @updatedAt
 
   @@index([datasetId])
   @@index([sourceType])
@@ -1552,21 +1702,21 @@ model DatasetProvenance {
 
 // TrainingDataSummary - AI Act GPAI training data summary per model version
 model TrainingDataSummary {
-  id                String   @id @default(uuid())
-  modelVersionId    String   @unique
-  datasetIds        Json     // string[] - Datasets used in training
-  totalTrajectories Int
-  publicDatasets    Json?    // string[] - IDs of public datasets
-  privateDatasets   Json?    // string[] - IDs of private datasets
-  webScrapingSources Json?   // string[] - Web scraping sources if any
-  copyrightMeasures String   // Copyright compliance measures
-  processingPurposes Json    // string[] - Purposes of processing
-  knownGaps         Json     // string[] - Known data gaps
-  limitations       Json?    // string[] - Known limitations
-  generatedAt       DateTime @default(now())
-  lastUpdated       DateTime @default(now())
-  nextUpdateDue     DateTime // 6 months from lastUpdated per AI Act
-  generatedBy       String
+  id                 String   @id @default(uuid())
+  modelVersionId     String   @unique
+  datasetIds         Json // string[] - Datasets used in training
+  totalTrajectories  Int
+  publicDatasets     Json? // string[] - IDs of public datasets
+  privateDatasets    Json? // string[] - IDs of private datasets
+  webScrapingSources Json? // string[] - Web scraping sources if any
+  copyrightMeasures  String // Copyright compliance measures
+  processingPurposes Json // string[] - Purposes of processing
+  knownGaps          Json // string[] - Known data gaps
+  limitations        Json? // string[] - Known limitations
+  generatedAt        DateTime @default(now())
+  lastUpdated        DateTime @default(now())
+  nextUpdateDue      DateTime // 6 months from lastUpdated per AI Act
+  generatedBy        String
 
   @@index([modelVersionId])
   @@index([nextUpdateDue])
@@ -1574,21 +1724,21 @@ model TrainingDataSummary {
 
 // BiasAssessment - Bias and fairness documentation per model version
 model BiasAssessment {
-  id                   String   @id @default(uuid())
+  id                   String    @id @default(uuid())
   modelVersionId       String
-  assessmentVersion    Int      @default(1)
-  demographicCoverage  Json     // Record<string, string> - coverage by demographic
-  geographicCoverage   Json?    // Record<string, string> - coverage by region
-  taskCoverage         Json?    // Record<string, string> - coverage by task type
-  knownLimitations     Json     // string[] - Known limitations
-  potentialBiasSources Json     // string[] - Potential bias sources
-  mitigationMeasures   Json     // string[] - Measures taken to mitigate bias
-  testingResults       Json?    // Bias testing results
+  assessmentVersion    Int       @default(1)
+  demographicCoverage  Json // Record<string, string> - coverage by demographic
+  geographicCoverage   Json? // Record<string, string> - coverage by region
+  taskCoverage         Json? // Record<string, string> - coverage by task type
+  knownLimitations     Json // string[] - Known limitations
+  potentialBiasSources Json // string[] - Potential bias sources
+  mitigationMeasures   Json // string[] - Measures taken to mitigate bias
+  testingResults       Json? // Bias testing results
   assessedBy           String
   reviewedBy           String?
-  assessmentDate       DateTime @default(now())
+  assessmentDate       DateTime  @default(now())
   reviewedDate         DateTime?
-  status               String   @default("draft") // draft, reviewed, approved
+  status               String    @default("draft") // draft, reviewed, approved
   notes                String?
 
   @@unique([modelVersionId, assessmentVersion])
@@ -1599,19 +1749,19 @@ model BiasAssessment {
 
 // TeleoperationFrame - Individual frame in a teleoperation session
 model TeleoperationFrame {
-  id              String   @id @default(uuid())
+  id              String  @id @default(uuid())
   sessionId       String
-  frameIndex      Int      // Sequential frame index
-  timestamp       Float    // seconds from session start
-  jointPositions  Json     // array of floats
-  jointVelocities Json?    // array of floats (optional)
-  action          Json     // commanded action
-  imagePath       String?  // RustFS path to camera frame
-  depthImagePath  String?  // RustFS path to depth image (optional)
-  isIntervention  Boolean  @default(false) // Human intervention marker
+  frameIndex      Int // Sequential frame index
+  timestamp       Float // seconds from session start
+  jointPositions  Json // array of floats
+  jointVelocities Json? // array of floats (optional)
+  action          Json // commanded action
+  imagePath       String? // RustFS path to camera frame
+  depthImagePath  String? // RustFS path to depth image (optional)
+  isIntervention  Boolean @default(false) // Human intervention marker
 
   // Relations
-  session         TeleoperationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session TeleoperationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, frameIndex])
   @@index([sessionId])
@@ -1624,17 +1774,17 @@ model TeleoperationFrame {
 
 model SyntheticJob {
   id                     String    @id @default(uuid())
-  task                   String    // Isaac Lab task name
-  embodiment             String    // Embodiment tag
-  trajectoryCount        Int       // Requested trajectory count
-  config                 Json      // SyntheticJobConfig
+  task                   String // Isaac Lab task name
+  embodiment             String // Embodiment tag
+  trajectoryCount        Int // Requested trajectory count
+  config                 Json // SyntheticJobConfig
   status                 String    @default("pending") // pending, queued, running, processing, completed, failed, cancelled
   progress               Int       @default(0) // 0-100
   generatedCount         Int       @default(0)
   successfulCount        Int       @default(0)
   failedCount            Int       @default(0)
-  processingRate         Float?    // trajectories per second
-  estimatedTimeRemaining Float?    // seconds
+  processingRate         Float? // trajectories per second
+  estimatedTimeRemaining Float? // seconds
   outputDatasetId        String?
   errorMessage           String?
   startedAt              DateTime?
@@ -1656,31 +1806,67 @@ model SyntheticJob {
 
 model SimToRealValidation {
   id              String   @id @default(uuid())
-  syntheticJobId  String
+  // Source is either a synthetic-data job (Isaac Lab) OR a twin-derived sim scene
+  // (TASK-171). Both are optional so a twin-scene validation needs no SyntheticJob.
+  syntheticJobId  String?
+  twinId          String? // DigitalTwin the sim scene was built from
+  simSceneId      String? // SimScene registry id the policy ran in
+  embodimentTag   String? // robot the gap was measured for (e.g. unitree_g1)
   modelVersionId  String
   validationDate  DateTime @default(now())
   simSuccessRate  Float
   realSuccessRate Float
-  domainGapScore  Float
+  domainGapScore  Float // simSuccessRate − realSuccessRate
   realTestCount   Int
-  taskCategories  Json     // string[]
-  perTaskMetrics  Json?    // Record<string, { simSuccess, realSuccess, gap }>
+  taskCategories  Json // string[]
+  perTaskMetrics  Json? // Record<string, { simSuccess, realSuccess, gap }>
   notes           String?
 
-  syntheticJob SyntheticJob @relation(fields: [syntheticJobId], references: [id], onDelete: Cascade)
+  syntheticJob SyntheticJob? @relation(fields: [syntheticJobId], references: [id], onDelete: Cascade)
 
   @@index([syntheticJobId])
   @@index([modelVersionId])
+  @@index([twinId])
   @@index([validationDate])
+}
+
+// SimScene — registry of physics simulation environments (TASK-171). Replaces the
+// 4 hardcoded environment strings: built-in scenes are seeded, twin-derived scenes
+// are upserted when a DigitalTwin build completes with a `simSceneKey`.
+model SimScene {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  source        String   @default("builtin") // 'builtin' | 'twin'
+  builtinEnvId  String?  @unique // stable id for built-in scenes (so101_tabletop, …)
+  twinId        String?  @unique // source twin for twin-derived scenes
+  embodimentTag String   @default("so101") // 'so101' | 'g1' | …
+  backend       String   @default("mujoco") // 'mujoco' | 'isaac'
+  mjcfKey       String? // twin-artifact key for the MJCF scene (source='twin')
+  usdKey        String? // optional USD scene key (Isaac)
+  status        String   @default("ready") // 'ready' | 'building' | 'failed'
+  minX          Float    @default(0)
+  minY          Float    @default(0)
+  minZ          Float    @default(0)
+  maxX          Float    @default(0)
+  maxY          Float    @default(0)
+  maxZ          Float    @default(0)
+  tenantId      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([source])
+  @@index([tenantId])
 }
 
 model SimulationJob {
   id                 String   @id @default(uuid())
   modelId            String
   environment        String
-  backend            String   // "mujoco" | "isaac"
+  sceneId            String? // SimScene registry id (TASK-171); null → legacy `environment`
+  backend            String // "mujoco" | "isaac"
   rolloutCount       Int
-  status             String   // "queued" | "running" | "completed" | "failed"
+  status             String // "queued" | "running" | "completed" | "failed"
   progress           Int      @default(0)
   successRate        Float?
   avgSteps           Float?
@@ -1725,12 +1911,12 @@ model FederatedRound {
   status                String    @default("created") // created, selecting, distributing, training, collecting, aggregating, completed, failed
   globalModelVersion    String
   newModelVersion       String?
-  config                Json      // FederatedRoundConfig
+  config                Json // FederatedRoundConfig
   participantCount      Int       @default(0)
   completedParticipants Int       @default(0)
   failedParticipants    Int       @default(0)
   totalLocalSamples     Int       @default(0)
-  metrics               Json?     // RoundMetrics
+  metrics               Json? // RoundMetrics
   startedAt             DateTime?
   completedAt           DateTime?
   createdAt             DateTime  @default(now())
@@ -1781,7 +1967,7 @@ model InterventionRecord {
   id               String   @id @default(uuid())
   robotId          String
   task             String
-  interventionType String   // correction, demonstration, abort
+  interventionType String // correction, demonstration, abort
   confidenceBefore Float?
   confidenceAfter  Float?
   description      String?
@@ -1797,7 +1983,7 @@ model InterventionRecord {
 // ============================================================================
 
 model PredictionLog {
-  id           String    @id @default(uuid())
+  id           String   @id @default(uuid())
   modelId      String
   robotId      String
   inputHash    String
@@ -1806,7 +1992,7 @@ model PredictionLog {
   confidence   Float
   wasCorrect   Boolean?
   metadata     Json?
-  timestamp    DateTime  @default(now())
+  timestamp    DateTime @default(now())
 
   @@index([modelId, taskCategory])
   @@index([modelId, environment])
@@ -1816,7 +2002,7 @@ model PredictionLog {
 
 model CollectionTarget {
   id             String   @id @default(uuid())
-  targetType     String   // task, environment, task_environment
+  targetType     String // task, environment, task_environment
   targetName     String
   priorityScore  Float    @default(0.5)
   estimatedDemos Int
@@ -1840,8 +2026,8 @@ model RobotType {
   name              String   @unique
   manufacturer      String
   model             String
-  actionDim         Int      // VLA action dimensions
-  proprioceptionDim Int      // VLA observation dimensions
+  actionDim         Int // VLA action dimensions
+  proprioceptionDim Int // VLA observation dimensions
   cameras           String   @default("[]") // JSON: CameraConfig[]
   capabilities      String   @default("[]") // JSON: Robot capabilities array
   limits            String   @default("{}") // JSON: JointLimits
@@ -1859,19 +2045,19 @@ model RobotType {
 // Embodiment - YAML-based embodiment configurations for VLA pipeline
 model Embodiment {
   id                String   @id @default(uuid())
-  tag               String   @unique  // e.g., 'unitree_h1', 'so101_arm'
+  tag               String   @unique // e.g., 'unitree_h1', 'so101_arm'
   manufacturer      String
   model             String
   description       String?
-  configYaml        String             // Full YAML configuration content
-  actionDim         Int                // Action space dimension
-  proprioceptionDim Int                // Proprioception dimension
-  robotTypeId       String?            // Optional link to RobotType
+  configYaml        String // Full YAML configuration content
+  actionDim         Int // Action space dimension
+  proprioceptionDim Int // Proprioception dimension
+  robotTypeId       String? // Optional link to RobotType
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   // Relations
-  robotType         RobotType? @relation(fields: [robotTypeId], references: [id], onDelete: SetNull)
+  robotType RobotType? @relation(fields: [robotTypeId], references: [id], onDelete: SetNull)
 
   @@index([robotTypeId])
   @@index([manufacturer])
@@ -1889,10 +2075,10 @@ model SkillDefinition {
   preconditions        String   @default("[]") // JSON: Condition[]
   postconditions       String   @default("[]") // JSON: Condition[]
   requiredCapabilities String   @default("[]") // JSON: Array of required robot capabilities
-  timeout              Int?     // Execution timeout in seconds
+  timeout              Int? // Execution timeout in seconds
   maxRetries           Int      @default(3)
   status               String   @default("draft") // 'draft' | 'published' | 'deprecated' | 'archived'
-  linkedModelVersionId String?  // Optional link to a trained model version
+  linkedModelVersionId String? // Optional link to a trained model version
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -1913,7 +2099,7 @@ model SkillChain {
   name              String
   description       String?
   status            String   @default("draft") // 'draft' | 'active' | 'archived'
-  estimatedDuration Int?     // Total estimated duration in seconds
+  estimatedDuration Int? // Total estimated duration in seconds
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -1929,12 +2115,12 @@ model SkillChainStep {
   id              String @id @default(uuid())
   chainId         String
   skillId         String
-  order           Int    // Order in the chain (0-indexed)
+  order           Int // Order in the chain (0-indexed)
   parameters      String @default("{}") // JSON: Record<string, unknown>
   inputMapping    String @default("{}") // JSON: Record<string, string> - Map previous output to input
   onFailure       String @default("abort") // 'abort' | 'skip' | 'retry'
-  maxRetries      Int?   // Override skill's default maxRetries
-  timeoutOverride Int?   // Override skill's default timeout
+  maxRetries      Int? // Override skill's default maxRetries
+  timeoutOverride Int? // Override skill's default timeout
 
   // Relations
   chain SkillChain      @relation(fields: [chainId], references: [id], onDelete: Cascade)
@@ -1952,23 +2138,23 @@ model Dataset {
   description        String?
   robotTypeId        String
   skillId            String?
-  storagePath        String   // RustFS storage location
-  lerobotVersion     String   // LeRobot v3 format version
+  storagePath        String // RustFS storage location
+  lerobotVersion     String // LeRobot v3 format version
   fps                Int
   totalFrames        Int
-  totalDuration      Float    // Duration in seconds
+  totalDuration      Float // Duration in seconds
   demonstrationCount Int
-  qualityScore       Int?     // 0-100
+  qualityScore       Int? // 0-100
   infoJson           String   @default("{}") // JSON: LeRobot metadata
   statsJson          String   @default("{}") // JSON: LeRobot stats
   status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
-  huggingFaceRepoId  String?  // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
+  huggingFaceRepoId  String? // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
-  tenantId     String?
-  tenant       Tenant?          @relation(fields: [tenantId], references: [id])
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
   robotType    RobotType        @relation(fields: [robotTypeId], references: [id])
@@ -1986,8 +2172,8 @@ model Dataset {
 model TrainingJob {
   id                 String    @id @default(uuid())
   datasetId          String
-  baseModel          String    // 'pi0' | 'pi0_6' | 'openvla' | 'groot' | 'smolvla'
-  fineTuneMethod     String    // 'lora' | 'full' | 'oft'
+  baseModel          String // 'pi0' | 'pi0_6' | 'openvla' | 'groot' | 'smolvla'
+  fineTuneMethod     String // 'lora' | 'full' | 'oft'
   hyperparameters    String    @default("{}") // JSON: { learning_rate, batch_size, epochs, lora_rank, warmup_steps }
   gpuRequirements    String    @default("{}") // JSON: { count, memory, type }
   status             String    @default("pending") // 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -1997,7 +2183,7 @@ model TrainingJob {
   metrics            String    @default("{}") // JSON: training/validation loss curves
   mlflowRunId        String?
   mlflowExperimentId String?
-  bullmqJobId        String?   // BullMQ queue tracking
+  bullmqJobId        String? // BullMQ queue tracking
   startedAt          DateTime?
   completedAt        DateTime?
   errorMessage       String?
@@ -2005,8 +2191,8 @@ model TrainingJob {
   updatedAt          DateTime  @updatedAt
 
   // Multi-tenancy (TASK-155) — nullable so single-tenant mode works without it
-  tenantId           String?
-  tenant             Tenant?   @relation(fields: [tenantId], references: [id])
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
   dataset       Dataset        @relation(fields: [datasetId], references: [id])
@@ -2021,11 +2207,11 @@ model TrainingJob {
 // ModelVersion - Trained model artifacts
 model ModelVersion {
   id                 String   @id @default(uuid())
-  skillId            String?  // Optional — models can be linked to a skill later
+  skillId            String? // Optional — models can be linked to a skill later
   trainingJobId      String
-  version            String   // Semantic version string
-  artifactUri        String   // RustFS model location
-  checkpointUri      String?  // Intermediate checkpoints location
+  version            String // Semantic version string
+  artifactUri        String // RustFS model location
+  checkpointUri      String? // Intermediate checkpoints location
   trainingMetrics    String   @default("{}") // JSON: training metrics
   validationMetrics  String   @default("{}") // JSON: validation metrics
   deploymentStatus   String   @default("staging") // 'staging' | 'canary' | 'production' | 'archived'
@@ -2052,7 +2238,7 @@ model ModelVersion {
 model Deployment {
   id                 String    @id @default(uuid())
   modelVersionId     String
-  strategy           String    // 'canary' | 'blue_green' | 'rolling'
+  strategy           String // 'canary' | 'blue_green' | 'rolling'
   targetRobotTypes   String    @default("[]") // JSON: Robot types to deploy to
   targetZones        String    @default("[]") // JSON: Zones to deploy to
   trafficPercentage  Int       @default(0) // 0-100
@@ -2079,18 +2265,18 @@ model Deployment {
 
 // EvaluationEpisode - Track VLA model evaluation rollouts
 model EvaluationEpisode {
-  id            String   @id @default(uuid())
-  robotId       String
-  modelVersion  String
-  taskPrompt    String
-  startedAt     DateTime
-  endedAt       DateTime
-  durationMs    Int
-  success       Boolean
-  errorType     String?
-  videoUrl      String?
-  metadata      String   @default("{}") // JSON: Record<string, unknown>
-  createdAt     DateTime @default(now())
+  id           String   @id @default(uuid())
+  robotId      String
+  modelVersion String
+  taskPrompt   String
+  startedAt    DateTime
+  endedAt      DateTime
+  durationMs   Int
+  success      Boolean
+  errorType    String?
+  videoUrl     String?
+  metadata     String   @default("{}") // JSON: Record<string, unknown>
+  createdAt    DateTime @default(now())
 
   robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
@@ -2105,17 +2291,17 @@ model EvaluationEpisode {
 // ============================================================================
 
 model UpdatePackage {
-  id          String   @id @default(cuid())
-  version     String
-  changelog   String
-  signature   String   // Base64 Ed25519 signature
-  publicKey   String   // Base64 public key
-  checksum    String   // SHA-256 of package
-  fileSize    Int      @default(0)
-  status      String   @default("pending") // 'pending' | 'approved' | 'deployed' | 'rolled_back'
-  approvedBy  String?
-  approvedAt  DateTime?
-  createdAt   DateTime @default(now())
+  id         String    @id @default(cuid())
+  version    String
+  changelog  String
+  signature  String // Base64 Ed25519 signature
+  publicKey  String // Base64 public key
+  checksum   String // SHA-256 of package
+  fileSize   Int       @default(0)
+  status     String    @default("pending") // 'pending' | 'approved' | 'deployed' | 'rolled_back'
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
 
   deployments UpdateDeployment[]
 
@@ -2157,7 +2343,7 @@ model DataContribution {
   status        String   @default("pending") // pending | processing | approved | rejected
   creditAwarded Int      @default(0)
   impactScore   Float    @default(0)
-  metadata      String?  // JSON string
+  metadata      String? // JSON string
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -2214,7 +2400,7 @@ model Tenant {
   slug      String   @unique // e.g. "default", "acme", "contoso"
   name      String
   logoUrl   String?
-  plan      String?  // optional: "free" | "pro" | ...
+  plan      String? // optional: "free" | "pro" | ...
   settings  String   @default("{}") // JSON: per-tenant feature overrides, branding
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

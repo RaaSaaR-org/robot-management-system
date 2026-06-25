@@ -112,6 +112,77 @@ export interface RobotTelemetry {
 }
 
 // ============================================================================
+// POINT CLOUD / DEPTH PERCEPTION TYPES
+// ============================================================================
+
+export type PointCloudSensorType = 'lidar' | 'depth_camera';
+
+/**
+ * Where a point-cloud frame came from:
+ *   - `sim`      synthetic generator (no hardware)
+ *   - `hardware` live Livox / RealSense via the sidecar
+ *   - `replay`   a real recorded scan played back through the pipeline
+ */
+export type PointCloudSource = 'sim' | 'hardware' | 'replay';
+
+/**
+ * Robot/sensor pose in the world frame at the moment a point-cloud frame was
+ * captured. Carried on frames produced during a scan session so the points can
+ * be lifted from `base_link` into one shared world map (the digital twin).
+ *
+ * IMPORTANT: `yaw` is in **radians** (robotics frame, about +z). The simulator
+ * stores heading in degrees — convert in exactly one place
+ * (`RobotStateManager.getPointCloudFrame`) to avoid a silent deg/rad bug.
+ */
+export interface PointCloudPose {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  roll?: number;
+  pitch?: number;
+}
+
+/**
+ * A single point-cloud frame from a depth / LiDAR sensor.
+ *
+ * Points are carried as flat numeric arrays (structure-of-arrays) so the wire
+ * format can later swap from JSON to a binary `Float32Array` without changing
+ * any consumer: `positions` is `[x0,y0,z0, x1,y1,z1, ...]` (length
+ * `pointCount * 3`, meters, robotics frame: x-forward, y-left, z-up) and
+ * `intensities` is `[i0, i1, ...]` (length `pointCount`, normalized 0..1).
+ */
+export interface PointCloudFrame {
+  robotId: string;
+  /** Sensor identifier, e.g. "mid360_lidar" */
+  sensor: string;
+  sensorType: PointCloudSensorType;
+  /** Reference frame the points are expressed in */
+  frame: 'sensor' | 'base_link';
+  pointCount: number;
+  positions: number[];
+  intensities: number[];
+  hasIntensity: boolean;
+  /** Monotonic frame counter for drop detection */
+  sequence: number;
+  /** Sensor origin relative to robot base [x, y, z] in meters */
+  origin?: [number, number, number];
+  /** Provenance of the frame (synthetic, live hardware, or a real recording) */
+  source?: PointCloudSource;
+  /** Human-readable label for the data source, e.g. "KITTI 000000.bin" */
+  sourceLabel?: string;
+  /**
+   * World pose of the robot/sensor when this frame was captured. Present only
+   * on frames produced during a scan session; used to merge `base_link` frames
+   * into one world map. Absent on ordinary live/replay frames.
+   */
+  pose?: PointCloudPose;
+  /** Scan session this frame belongs to, when captured during a sweep. */
+  scanSessionId?: string;
+  timestamp: string;
+}
+
+// ============================================================================
 // COMMAND TYPES
 // ============================================================================
 
@@ -242,6 +313,8 @@ export interface RegistrationInfo {
     command: string;
     telemetry: string;
     telemetryWs: string;
+    pointCloud?: string;
+    pointCloudWs?: string;
   };
   a2a: {
     agentCard: string;
