@@ -57,15 +57,20 @@ in dev. To prove the **full circle**:
 
 ### B. Geometry fidelity
 
-- [ ] **GLB→OBJ in the pipeline** so the room uses true scanned **mesh**
-      collision geometry. MuJoCo can't load the twin's `mesh.glb`; convert to
-      OBJ/STL first (e.g. `trimesh`), then feed it via `--mesh` to the
-      `scene_builder generate` CLI (it already prefers a `.obj/.stl/.msh` mesh
-      over occupancy walls). The occupancy floor-plan path (TASK-171) is the
-      cheaper 2D win already shipped; this adds 3D detail.
-- [ ] **Vendor the real Unitree `g1_description` meshes** — replace the
-      primitive kinematic proxy in `mjcf/g1/g1_29dof.xml`; pin + document the
-      source + licensing.
+- [ ] **GLB→OBJ in the pipeline** → moved to **[[TASK-173]]** (the proper
+      mesh-collision pipeline). A single converted OBJ is *not* enough — MuJoCo
+      convex-hulls a lone mesh geom and collapses the room interior into a solid
+      block, so it needs CoACD convex decomposition (trimesh → obj2mjcf + CoACD).
+      The occupancy floor-plan path (TASK-171) is the cheaper 2D win already
+      shipped; TASK-173 adds true 3D collision detail.
+- [x] **Vendor the real Unitree G1 meshes** — *done (2026-06-25).*
+      `mjcf/g1/g1_29dof.xml` is now the real Unitree G1 (36 STL collision/visual
+      meshes under `mjcf/g1/meshes/`), derived from `unitreerobotics/unitree_mujoco`
+      @ `ae6a840` (BSD-3-Clause) by `mjcf/g1/build_g1_include.py`. Made includable
+      for `scene_builder` (no `<compiler>`, `g1/meshes/` paths), kept POSITION
+      actuators in g1.yaml order, mounted a `head_camera`. Source + license pinned
+      in `mjcf/g1/MESHES_LICENSE.md`; loads in MuJoCo (nq=36, nu=29, 36 meshes,
+      head_camera renders); 17 pytest green.
 
 ### C. Phase 4 — sim-RL training (`@status heavier-lift`)
 

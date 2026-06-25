@@ -29,6 +29,9 @@ def test_bundled_g1_model_loads():
     assert m.nu == 29, f"expected 29 actuators, got {m.nu}"
     # 29 hinge joints + 1 freejoint
     assert m.njnt == 30, f"expected 30 joints, got {m.njnt}"
+    # Real Unitree meshes (one per link) must be loaded — guards against a
+    # regression back to the primitive-geometry proxy.
+    assert m.nmesh >= 30, f"expected real link meshes, got nmesh={m.nmesh}"
 
 
 def test_g1_29dof_loads_via_scene():
@@ -53,7 +56,7 @@ def test_g1_29dof_loads_via_scene():
         out.unlink(missing_ok=True)
 
 
-def test_g1_env_from_twin_scene(tmp_path):
+def test_g1_env_from_twin_scene():
     from envs.g1_env import G1Env
 
     scene = TwinSceneInput(
@@ -65,12 +68,12 @@ def test_g1_env_from_twin_scene(tmp_path):
                          [(1.4, 1.4), (1.9, 1.4), (1.9, 1.9), (1.4, 1.9)]),
         ],
     )
-    scene_file = tmp_path / "scene.mjcf.xml"
-    # The g1_include must resolve from the scene file's directory, so the scene
-    # file must live next to (or pointing at) the mjcf dir. Use an absolute
-    # include path so it resolves from tmp_path.
-    abs_include = str(_ROOT / "mjcf" / "g1" / "g1_29dof.xml")
-    write_scene(scene, str(scene_file), g1_include=abs_include)
+    # Materialize the scene into mjcf/ with a RELATIVE g1 include, exactly like
+    # the server's materializeSceneFile (-> mjcf/.twinscene_<job>.xml). The real
+    # Unitree meshes (g1/meshes/*.STL) resolve next to the scene file, so the
+    # scene must live in mjcf/ — which the server always guarantees.
+    scene_file = _ROOT / "mjcf" / ".test_env_twin_scene.xml"
+    write_scene(scene, str(scene_file), g1_include="g1/g1_29dof.xml")
 
     env = G1Env(scene_path=str(scene_file), max_steps=10)
     try:
@@ -90,6 +93,7 @@ def test_g1_env_from_twin_scene(tmp_path):
         assert "success" in info2 and "distance" in info2
     finally:
         env.close()
+        scene_file.unlink(missing_ok=True)
 
 
 def test_g1_env_fallback_scene():
