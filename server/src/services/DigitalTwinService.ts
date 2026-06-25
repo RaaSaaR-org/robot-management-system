@@ -17,6 +17,7 @@ import {
   sensorScanRepository,
   simSceneRepository,
 } from '../repositories/index.js';
+import { sensorScanService } from './SensorScanService.js';
 import { twinToDTO } from './twinDto.js';
 import type {
   TwinBuildJob,
@@ -38,10 +39,15 @@ import type {
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000;
 // On boot, sessions stuck in 'processing' past this threshold are failed.
 const STALE_RUNNING_MS = 5 * 60 * 1000;
+// Periodic reaper cadence: at runtime a sidecar can die mid-build, leaving a
+// 'processing' session with a stale heartbeat that the boot reaper won't catch
+// until the next restart. Sweep for those on this interval.
+const REAPER_INTERVAL_MS = 5 * 60 * 1000;
 
 export class DigitalTwinService extends EventEmitter {
   private static instance: DigitalTwinService;
   private initialized = false;
+  private reaperInterval: ReturnType<typeof setInterval> | null = null;
 
   private constructor() {
     super();
@@ -55,20 +61,36 @@ export class DigitalTwinService extends EventEmitter {
   }
 
   /**
-   * Boot-time init: reap sessions left stuck in 'processing' from a prior run.
+   * Boot-time init: reap orphaned sessions from a prior run — both build jobs
+   * stuck in 'processing' (stale heartbeat) and sweeps stuck in 'recording'
+   * (their in-memory capture loop did not survive the restart) — then start the
+   * periodic reaper for sidecars that die mid-build at runtime.
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
     try {
-      const reaped = await this.reapStaleRunningJobs();
-      if (reaped > 0) {
-        console.log(`[DigitalTwinService] Reaped ${reaped} stale build job(s) on boot`);
+      const reapedProcessing = await this.reapStaleRunningJobs();
+      const reapedRecording = await this.reapOrphanedRecordingSessions();
+      const total = reapedProcessing + reapedRecording;
+      if (total > 0) {
+        console.log(
+          `[DigitalTwinService] Reaped ${total} orphaned session(s) on boot ` +
+            `(${reapedProcessing} stale build, ${reapedRecording} interrupted recording)`,
+        );
       }
     } catch (err) {
-      console.error('[DigitalTwinService] Failed to reap stale build jobs:', err);
+      console.error('[DigitalTwinService] Failed to reap orphaned sessions:', err);
     }
+    this.startReaper();
     this.initialized = true;
     console.log('[DigitalTwinService] Initialized');
+  }
+
+  /** Whether to prune raw per-frame scans after a build completes (default on;
+   *  set TWIN_PRUNE_RAW_FRAMES=false to keep them for debugging). Read per-call
+   *  so the policy can be toggled without a restart. */
+  private shouldPruneFrames(): boolean {
+    return process.env.TWIN_PRUNE_RAW_FRAMES !== 'false';
   }
 
   isInitialized(): boolean {
@@ -196,6 +218,20 @@ export class DigitalTwinService extends EventEmitter {
       return { ok: false };
     }
 
+    // Atomically claim the terminal transition BEFORE touching the twin or
+    // irreversibly pruning frames. If the session already left 'processing'
+    // (a concurrent reaper failed it, an external cancel, or a double-complete)
+    // this returns false and we bail — never resurrect a cancelled session and
+    // never prune behind the reaper's back.
+    const claimed = await scanSessionRepository.completeIfProcessing(req.sessionId);
+    if (!claimed) {
+      console.warn(
+        `[DigitalTwinService] complete: session ${req.sessionId} is no longer 'processing' ` +
+          `(status=${session.status}); ignoring completion`,
+      );
+      return { ok: false };
+    }
+
     const [minX, minY, minZ, maxX, maxY, maxZ] = req.bounds;
     const simSceneKey = req.artifacts.simSceneKey ?? null;
     const twin = await digitalTwinRepository.update(session.twinId, {
@@ -211,13 +247,6 @@ export class DigitalTwinService extends EventEmitter {
       simSceneKey,
       simSceneBackend: simSceneKey ? 'mujoco' : null,
       errorMessage: null,
-    });
-
-    await scanSessionRepository.update(req.sessionId, {
-      status: 'complete',
-      progress: 100,
-      stage: null,
-      endedAt: new Date(),
     });
 
     // Real→Sim (TASK-171): a completed twin carrying a physics scene becomes a
@@ -250,6 +279,23 @@ export class DigitalTwinService extends EventEmitter {
       } satisfies DigitalTwinEvent);
     }
 
+    // Prune the now-redundant raw frames: the merged cloud/occupancy/mesh are
+    // the durable artifacts, so the per-frame SensorScans only bloat storage.
+    // Gated on `twin` so we never delete the raw inputs when the artifact write
+    // itself failed. Best-effort — a prune failure must never fail a good build.
+    if (twin && this.shouldPruneFrames()) {
+      try {
+        const pruned = await sensorScanService.pruneSessionFrames(req.sessionId);
+        if (pruned > 0) {
+          console.log(
+            `[DigitalTwinService] Pruned ${pruned} raw frame(s) for session ${req.sessionId}`,
+          );
+        }
+      } catch (err) {
+        console.error(`[DigitalTwinService] Frame prune failed for ${req.sessionId}:`, err);
+      }
+    }
+
     console.log(`[DigitalTwinService] Job completed: ${req.sessionId}`);
     return { ok: true };
   }
@@ -261,12 +307,14 @@ export class DigitalTwinService extends EventEmitter {
     const session = await scanSessionRepository.findById(req.sessionId);
     if (!session) return { ok: false };
 
-    await scanSessionRepository.update(req.sessionId, {
-      status: 'failed',
-      stage: null,
-      errorMessage: req.error,
-      endedAt: new Date(),
-    });
+    // Atomically fail ONLY a still-active session. If it already reached a
+    // terminal state (e.g. a concurrent completeJob just finished and pruned
+    // its frames), do not clobber it to 'failed' — leave the good twin alone.
+    const failed = await scanSessionRepository.failIfActive(req.sessionId, req.error);
+    if (!failed) {
+      return { ok: false };
+    }
+
     await digitalTwinRepository.update(session.twinId, {
       status: 'failed',
       errorMessage: req.error,
@@ -293,14 +341,74 @@ export class DigitalTwinService extends EventEmitter {
     const stuck = await scanSessionRepository.listStuck(cutoff);
     let reaped = 0;
     for (const session of stuck) {
-      await this.failJob({
+      // Distinguish "a worker claimed it then went silent" (genuine timeout)
+      // from "no worker ever picked it up" (common in dev with no sidecar) —
+      // this error is broadcast to the app, so it must name the real cause.
+      const neverClaimed = session.lastHeartbeat == null;
+      const error = neverClaimed
+        ? 'no build worker claimed this job within 5m (is the twin-builder sidecar running?)'
+        : 'worker timeout: no heartbeat/progress for >5m (reaped)';
+      const result = await this.failJob({
         sessionId: session.id,
         workerId: session.workerId ?? 'reaper',
-        error: 'worker timeout: no heartbeat/progress for >5m (reaped on boot)',
+        error,
       });
-      reaped++;
+      // failJob no-ops (returns ok:false) if the session reached a terminal
+      // state between our snapshot and now — only count real reaps.
+      if (result.ok) reaped++;
     }
     return reaped;
+  }
+
+  /**
+   * Fail sweeps left in 'recording' by a process restart. The capture loop is
+   * an in-memory interval (ScanSessionService) that cannot survive a restart,
+   * so every 'recording' session at boot is orphaned with no way to resume.
+   * Call on boot ONLY — at runtime a 'recording' session has a live loop and
+   * must be left alone. Returns the number reaped.
+   */
+  async reapOrphanedRecordingSessions(): Promise<number> {
+    const orphans = await scanSessionRepository.listOrphanedRecording();
+    let reaped = 0;
+    for (const session of orphans) {
+      const result = await this.failJob({
+        sessionId: session.id,
+        workerId: session.workerId ?? 'reaper',
+        error: 'recording interrupted by server restart (capture loop lost); re-scan to retry',
+      });
+      if (result.ok) reaped++;
+    }
+    return reaped;
+  }
+
+  /**
+   * Start the periodic reaper. A sidecar can die mid-build at runtime, leaving a
+   * 'processing' session with a stale heartbeat that the boot reaper won't catch
+   * until the next restart; this sweep fails those on an interval. Reaps only
+   * stale 'processing' jobs (NOT 'recording', which has a live capture loop at
+   * runtime). Idempotent; the timer is unref'd so it never holds the process up.
+   */
+  startReaper(intervalMs = REAPER_INTERVAL_MS): void {
+    if (this.reaperInterval) return;
+    const timer = setInterval(() => {
+      this.reapStaleRunningJobs()
+        .then((n) => {
+          if (n > 0) {
+            console.log(`[DigitalTwinService] Periodic reaper failed ${n} stale build job(s)`);
+          }
+        })
+        .catch((err) => console.error('[DigitalTwinService] Periodic reaper error:', err));
+    }, intervalMs);
+    timer.unref?.();
+    this.reaperInterval = timer;
+  }
+
+  /** Stop the periodic reaper (graceful shutdown). */
+  stopReaper(): void {
+    if (this.reaperInterval) {
+      clearInterval(this.reaperInterval);
+      this.reaperInterval = null;
+    }
   }
 
   // ==========================================================================

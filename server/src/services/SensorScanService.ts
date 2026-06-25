@@ -242,6 +242,30 @@ export class SensorScanService extends EventEmitter {
     return true;
   }
 
+  /**
+   * Delete every persisted frame (DB row + storage blob) of a finished scan
+   * session. Called once a twin build completes — the merged cloud/occupancy/
+   * mesh artifacts supersede the raw per-frame scans, so keeping them only
+   * bloats storage. Best-effort per frame; never throws. Returns the count
+   * deleted. Only frames carrying this sessionId are touched, so ad-hoc
+   * Perception captures (sessionId null) are never affected.
+   */
+  async pruneSessionFrames(sessionId: string): Promise<number> {
+    const records = await sensorScanRepository.listBySession(sessionId);
+    let deleted = 0;
+    for (const record of records) {
+      try {
+        if (await this.deleteScan(record.id)) deleted++;
+      } catch (err) {
+        console.warn(
+          `[SensorScanService] prune: failed to delete scan ${record.id}:`,
+          err,
+        );
+      }
+    }
+    return deleted;
+  }
+
   // ==========================================================================
   // EVENTS
   // ==========================================================================

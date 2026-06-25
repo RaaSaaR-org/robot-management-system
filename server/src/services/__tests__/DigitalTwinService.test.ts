@@ -11,19 +11,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => ({
   ssFindById: vi.fn(),
   ssUpdate: vi.fn(),
+  ssCompleteIfProcessing: vi.fn(),
+  ssFailIfActive: vi.fn(),
   ssListClaimable: vi.fn(),
   ssListStuck: vi.fn(),
+  ssListOrphanedRecording: vi.fn(),
   dtFindById: vi.fn(),
   dtUpdate: vi.fn(),
   scanListBySession: vi.fn(),
+  pruneSessionFrames: vi.fn(),
 }));
 
 vi.mock('../../repositories/index.js', () => ({
   scanSessionRepository: {
     findById: mocks.ssFindById,
     update: mocks.ssUpdate,
+    completeIfProcessing: mocks.ssCompleteIfProcessing,
+    failIfActive: mocks.ssFailIfActive,
     listClaimable: mocks.ssListClaimable,
     listStuck: mocks.ssListStuck,
+    listOrphanedRecording: mocks.ssListOrphanedRecording,
   },
   digitalTwinRepository: {
     findById: mocks.dtFindById,
@@ -31,6 +38,12 @@ vi.mock('../../repositories/index.js', () => ({
   },
   sensorScanRepository: {
     listBySession: mocks.scanListBySession,
+  },
+}));
+
+vi.mock('../SensorScanService.js', () => ({
+  sensorScanService: {
+    pruneSessionFrames: mocks.pruneSessionFrames,
   },
 }));
 
@@ -85,6 +98,11 @@ describe('DigitalTwinService', () => {
     mocks.dtUpdate.mockImplementation((_id: string, patch: Record<string, unknown>) =>
       makeTwin(patch),
     );
+    mocks.pruneSessionFrames.mockResolvedValue(0);
+    // CAS transitions succeed by default; tests that exercise a lost race
+    // override these to false.
+    mocks.ssCompleteIfProcessing.mockResolvedValue(true);
+    mocks.ssFailIfActive.mockResolvedValue(true);
   });
 
   describe('claimNextPendingJob', () => {
@@ -193,10 +211,7 @@ describe('DigitalTwinService', () => {
           occupancyPgmKey: 'twin-1/occupancy.pgm',
         }),
       );
-      expect(mocks.ssUpdate).toHaveBeenCalledWith(
-        'session-1',
-        expect.objectContaining({ status: 'complete', progress: 100 }),
-      );
+      expect(mocks.ssCompleteIfProcessing).toHaveBeenCalledWith('session-1');
       const ready = events.find((e) => e.type === 'twin:ready');
       expect(ready).toBeDefined();
       expect((ready as { twin: { id: string } }).twin.id).toBe('twin-1');
@@ -209,6 +224,59 @@ describe('DigitalTwinService', () => {
         bounds: [0, 0, 0, 0, 0, 0], artifacts: {}, storageBackend: 'local',
       });
       expect(result).toEqual({ ok: false });
+    });
+
+    it('prunes the redundant raw frames after a successful build', async () => {
+      mocks.ssFindById.mockResolvedValue(makeSession());
+      mocks.pruneSessionFrames.mockResolvedValue(7);
+
+      await service.completeJob({
+        sessionId: 'session-1', workerId: 'worker-1', pointCount: 10,
+        bounds: [0, 0, 0, 1, 1, 1], artifacts: { cloudKey: 'k' }, storageBackend: 'local',
+      });
+
+      expect(mocks.pruneSessionFrames).toHaveBeenCalledWith('session-1');
+    });
+
+    it('keeps raw frames when TWIN_PRUNE_RAW_FRAMES=false', async () => {
+      vi.stubEnv('TWIN_PRUNE_RAW_FRAMES', 'false');
+      mocks.ssFindById.mockResolvedValue(makeSession());
+
+      await service.completeJob({
+        sessionId: 'session-1', workerId: 'worker-1', pointCount: 10,
+        bounds: [0, 0, 0, 1, 1, 1], artifacts: { cloudKey: 'k' }, storageBackend: 'local',
+      });
+
+      expect(mocks.pruneSessionFrames).not.toHaveBeenCalled();
+      vi.unstubAllEnvs();
+    });
+
+    it('still completes ok when pruning throws', async () => {
+      mocks.ssFindById.mockResolvedValue(makeSession());
+      mocks.pruneSessionFrames.mockRejectedValue(new Error('storage down'));
+
+      const result = await service.completeJob({
+        sessionId: 'session-1', workerId: 'worker-1', pointCount: 10,
+        bounds: [0, 0, 0, 1, 1, 1], artifacts: { cloudKey: 'k' }, storageBackend: 'local',
+      });
+
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('bails out without writing the twin or pruning when the CAS is lost (reaper won)', async () => {
+      // findById still sees 'processing', but the atomic claim fails because a
+      // concurrent reaper already flipped the session to a terminal state.
+      mocks.ssFindById.mockResolvedValue(makeSession());
+      mocks.ssCompleteIfProcessing.mockResolvedValue(false);
+
+      const result = await service.completeJob({
+        sessionId: 'session-1', workerId: 'worker-1', pointCount: 10,
+        bounds: [0, 0, 0, 1, 1, 1], artifacts: { cloudKey: 'k' }, storageBackend: 'local',
+      });
+
+      expect(result).toEqual({ ok: false });
+      expect(mocks.dtUpdate).not.toHaveBeenCalled();      // twin not touched
+      expect(mocks.pruneSessionFrames).not.toHaveBeenCalled(); // frames preserved
     });
   });
 
@@ -223,15 +291,27 @@ describe('DigitalTwinService', () => {
       });
 
       expect(result).toEqual({ ok: true });
-      expect(mocks.ssUpdate).toHaveBeenCalledWith(
-        'session-1',
-        expect.objectContaining({ status: 'failed', errorMessage: 'merge exploded' }),
-      );
+      expect(mocks.ssFailIfActive).toHaveBeenCalledWith('session-1', 'merge exploded');
       expect(mocks.dtUpdate).toHaveBeenCalledWith(
         'twin-1',
         expect.objectContaining({ status: 'failed', errorMessage: 'merge exploded' }),
       );
       expect(events.some((e) => e.type === 'twin:failed')).toBe(true);
+    });
+
+    it('does not clobber a session that already reached a terminal state (CAS lost)', async () => {
+      mocks.ssFindById.mockResolvedValue(makeSession({ status: 'complete' }));
+      mocks.ssFailIfActive.mockResolvedValue(false);
+      const events: DigitalTwinEvent[] = [];
+      service.onDigitalTwinEvent((e) => events.push(e));
+
+      const result = await service.failJob({
+        sessionId: 'session-1', workerId: 'reaper', error: 'worker timeout',
+      });
+
+      expect(result).toEqual({ ok: false });
+      expect(mocks.dtUpdate).not.toHaveBeenCalled();         // twin left 'ready'
+      expect(events.some((e) => e.type === 'twin:failed')).toBe(false);
     });
   });
 
@@ -244,10 +324,72 @@ describe('DigitalTwinService', () => {
 
       const reaped = await service.reapStaleRunningJobs();
       expect(reaped).toBe(2);
-      expect(mocks.ssUpdate).toHaveBeenCalledWith(
+      expect(mocks.ssFailIfActive).toHaveBeenCalledTimes(2);
+    });
+
+    it('counts only sessions it actually reaped (skips ones already terminal)', async () => {
+      mocks.ssListStuck.mockResolvedValue([makeSession(), makeSession({ id: 'session-2', twinId: 'twin-2' })]);
+      mocks.ssFindById.mockImplementation((id: string) => Promise.resolve(makeSession({ id })));
+      // session-2 was completed by the sidecar between snapshot and reap.
+      mocks.ssFailIfActive.mockImplementation((id: string) => Promise.resolve(id === 'session-1'));
+
+      expect(await service.reapStaleRunningJobs()).toBe(1);
+    });
+
+    it('names the real cause: never-claimed vs genuine worker timeout', async () => {
+      mocks.ssListStuck.mockResolvedValue([
+        makeSession({ id: 'never', lastHeartbeat: null }),
+        makeSession({ id: 'timed-out', lastHeartbeat: '2026-06-23T00:00:00.000Z' }),
+      ]);
+      mocks.ssFindById.mockImplementation((id: string) => Promise.resolve(makeSession({ id })));
+
+      await service.reapStaleRunningJobs();
+
+      expect(mocks.ssFailIfActive).toHaveBeenCalledWith('never', expect.stringContaining('no build worker claimed'));
+      expect(mocks.ssFailIfActive).toHaveBeenCalledWith('timed-out', expect.stringContaining('worker timeout'));
+    });
+  });
+
+  describe('reapOrphanedRecordingSessions', () => {
+    it('fails sweeps left in recording by a restart, with a re-scan message', async () => {
+      mocks.ssListOrphanedRecording.mockResolvedValue([makeSession({ status: 'recording' })]);
+      mocks.ssFindById.mockResolvedValue(makeSession({ status: 'recording' }));
+
+      const reaped = await service.reapOrphanedRecordingSessions();
+
+      expect(reaped).toBe(1);
+      expect(mocks.ssFailIfActive).toHaveBeenCalledWith(
         'session-1',
-        expect.objectContaining({ status: 'failed' }),
+        expect.stringContaining('recording interrupted by server restart'),
       );
+    });
+
+    it('returns 0 when nothing is orphaned', async () => {
+      mocks.ssListOrphanedRecording.mockResolvedValue([]);
+      expect(await service.reapOrphanedRecordingSessions()).toBe(0);
+    });
+  });
+
+  describe('startReaper / stopReaper', () => {
+    it('periodically reaps stale processing jobs and is idempotent', async () => {
+      vi.useFakeTimers();
+      try {
+        mocks.ssListStuck.mockResolvedValue([]);
+        service.startReaper(1000);
+        service.startReaper(1000); // second call is a no-op (idempotent)
+
+        await vi.advanceTimersByTimeAsync(2500);
+        // 2 ticks fired (at 1000ms and 2000ms), each sweeping for stale jobs.
+        expect(mocks.ssListStuck.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+        service.stopReaper();
+        const callsAfterStop = mocks.ssListStuck.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(mocks.ssListStuck.mock.calls.length).toBe(callsAfterStop);
+      } finally {
+        service.stopReaper();
+        vi.useRealTimers();
+      }
     });
   });
 });

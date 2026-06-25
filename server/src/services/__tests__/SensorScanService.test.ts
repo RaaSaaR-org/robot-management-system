@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   repoCreate: vi.fn(),
   repoFindById: vi.fn(),
   repoListByRobot: vi.fn(),
+  repoListBySession: vi.fn(),
   repoListAll: vi.fn(),
   repoDelete: vi.fn(),
   mkdir: vi.fn().mockResolvedValue(undefined),
@@ -49,6 +50,7 @@ vi.mock('../../repositories/SensorScanRepository.js', () => ({
     create: mocks.repoCreate,
     findById: mocks.repoFindById,
     listByRobot: mocks.repoListByRobot,
+    listBySession: mocks.repoListBySession,
     listAll: mocks.repoListAll,
     delete: mocks.repoDelete,
   },
@@ -170,5 +172,42 @@ describe('SensorScanService', () => {
     expect(mocks.unlink).toHaveBeenCalledWith('/tmp/scan.pcd');
     expect(mocks.repoDelete).toHaveBeenCalledWith('scan-001');
     expect(events[0].type).toBe('scan:deleted');
+  });
+
+  it('pruneSessionFrames deletes every frame of a session and returns the count', async () => {
+    mocks.repoListBySession.mockResolvedValue([
+      recordFrom({ id: 'scan-001', storageKey: '/tmp/a.pcd' }),
+      recordFrom({ id: 'scan-002', storageKey: '/tmp/b.pcd' }),
+    ]);
+    // deleteScan re-fetches each record by id before deleting.
+    mocks.repoFindById.mockImplementation((id: string) =>
+      Promise.resolve(recordFrom({ id, storageKey: `/tmp/${id}.pcd` })),
+    );
+    mocks.repoDelete.mockResolvedValue(true);
+
+    const pruned = await service.pruneSessionFrames('session-xyz');
+
+    expect(pruned).toBe(2);
+    expect(mocks.repoListBySession).toHaveBeenCalledWith('session-xyz');
+    expect(mocks.repoDelete).toHaveBeenCalledTimes(2);
+    expect(mocks.unlink).toHaveBeenCalledTimes(2);
+  });
+
+  it('pruneSessionFrames is resilient: a failed frame does not abort the rest', async () => {
+    mocks.repoListBySession.mockResolvedValue([
+      recordFrom({ id: 'scan-001' }),
+      recordFrom({ id: 'scan-002' }),
+    ]);
+    mocks.repoFindById.mockImplementation((id: string) =>
+      id === 'scan-001'
+        ? Promise.reject(new Error('db hiccup'))
+        : Promise.resolve(recordFrom({ id })),
+    );
+    mocks.repoDelete.mockResolvedValue(true);
+
+    const pruned = await service.pruneSessionFrames('session-xyz');
+
+    // scan-001 threw, scan-002 still pruned.
+    expect(pruned).toBe(1);
   });
 });

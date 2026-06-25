@@ -137,6 +137,7 @@ async function main() {
     processSchedulerService.stop();
     retentionCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
+    digitalTwinService.stopReaper();
     trainingJobService.stopAllWatchers();
     await syntheticDataWorker.stop();
     await trainingWorker.stop();

@@ -74,6 +74,36 @@ export class ScanSessionRepository {
   }
 
   /**
+   * Atomically transition a session to 'complete' ONLY if it is still
+   * 'processing'. Returns true iff THIS call performed the transition; false
+   * means another path (the reaper, or a cancel) already moved it to a terminal
+   * state, so the caller must NOT run the completion cascade (twin write,
+   * irreversible frame prune). A single conditional UPDATE closes the
+   * check-then-act window the periodic reaper would otherwise open.
+   */
+  async completeIfProcessing(id: string): Promise<boolean> {
+    const { count } = await prisma.scanSession.updateMany({
+      where: { id, status: 'processing' },
+      data: { status: 'complete', progress: 100, stage: null, endedAt: new Date() },
+    });
+    return count === 1;
+  }
+
+  /**
+   * Atomically transition a session to 'failed' ONLY if it is still in a
+   * non-terminal state (idle/recording/processing). Returns true iff THIS call
+   * performed the transition. Prevents the reaper from clobbering a session a
+   * concurrent completeJob already finished (and pruned) to 'failed'.
+   */
+  async failIfActive(id: string, error: string): Promise<boolean> {
+    const { count } = await prisma.scanSession.updateMany({
+      where: { id, status: { in: ['idle', 'recording', 'processing'] } },
+      data: { status: 'failed', stage: null, errorMessage: error, endedAt: new Date() },
+    });
+    return count === 1;
+  }
+
+  /**
    * Sessions a sidecar may claim: oldest-first 'processing' sessions with no
    * fresh heartbeat (either never claimed, or the previous worker went stale).
    * The `freshSince` cutoff lets the caller skip sessions another worker is
@@ -103,6 +133,19 @@ export class ScanSessionRepository {
           { AND: [{ lastHeartbeat: null }, { updatedAt: { lt: staleSince } }] },
         ],
       },
+    });
+    return rows.map(dbToDomain);
+  }
+
+  /**
+   * All sessions still in 'recording'. The capture loop is an in-memory
+   * interval (ScanSessionService) that cannot survive a process restart, so any
+   * 'recording' session found at boot is orphaned. Used by the boot reaper —
+   * never call this at runtime, where a 'recording' session has a live loop.
+   */
+  async listOrphanedRecording(): Promise<ScanSessionRecord[]> {
+    const rows = await prisma.scanSession.findMany({
+      where: { status: 'recording' },
     });
     return rows.map(dbToDomain);
   }
