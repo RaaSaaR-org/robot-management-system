@@ -180,12 +180,24 @@ function summarizeStderr(lines: string[], code: number | null): string {
   return `${base}: ${detail}`;
 }
 
+/** Wall-clock cap on scene generation. CoACD convex decomposition (TASK-173)
+ *  now runs inside this subprocess; it is bounded to seconds in practice
+ *  (preprocess_resolution=40, max_convex_hull=64), so a minute is a generous
+ *  kill-switch against a wedged native call rather than a normal limit. */
+const SCENE_BUILDER_TIMEOUT_MS = 120_000;
+
 /**
  * Spawn `uv run python scene_builder.py generate …` and resolve when it exits 0,
  * rejecting with a one-line reason (from its stderr tail) otherwise. Used by
  * generateSceneFromTwin to build a scene MJCF off the canonical converter.
+ * Bounded by SCENE_BUILDER_TIMEOUT_MS so a wedged subprocess can't hold the
+ * HTTP request (and the child) open indefinitely.
  */
-function runSceneBuilder(args: string[], cwd: string): Promise<void> {
+function runSceneBuilder(
+  args: string[],
+  cwd: string,
+  timeoutMs = SCENE_BUILDER_TIMEOUT_MS
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn('uv', args, { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
     const stderrTail: string[] = [];
@@ -199,10 +211,33 @@ function runSceneBuilder(args: string[], cwd: string): Promise<void> {
         }
       });
     }
-    proc.on('error', (err) => reject(new Error(`scene_builder spawn error: ${err.message}`)));
+
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGTERM');
+      // Escalate to SIGKILL if it ignores the term signal.
+      killTimer = setTimeout(() => proc.kill('SIGKILL'), 5_000);
+    }, timeoutMs);
+    const clearTimers = () => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    };
+
+    proc.on('error', (err) => {
+      clearTimers();
+      reject(new Error(`scene_builder spawn error: ${err.message}`));
+    });
     proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(summarizeStderr(stderrTail, code)));
+      clearTimers();
+      if (timedOut) {
+        reject(new Error(`scene_builder timed out after ${Math.round(timeoutMs / 1000)}s`));
+      } else if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(summarizeStderr(stderrTail, code)));
+      }
     });
   });
 }
@@ -750,6 +785,32 @@ export class SimulationService extends EventEmitter {
     const workDir = mkdtempSync(path.join(tmpdir(), `twinscene-${twinId}-`));
     const outPath = path.join(workDir, 'scene.mjcf.xml');
     try {
+      // Materialize the scanned room mesh (GLB) when present, so the builder can
+      // convert + CoACD-decompose it into true convex collision geometry
+      // (TASK-173). Degenerate/solid meshes are auto-rejected by the converter,
+      // which then falls back to the occupancy floor-plan below — so we always
+      // pass the occupancy too. Decomposed pieces are written to a host-local dir
+      // (not workDir, which is deleted in finally) and the MJCF references them by
+      // ABSOLUTE path. NOTE: only the MJCF is uploaded to durable storage, not the
+      // OBJ pieces — so the generated scene resolves its mesh assets only on this
+      // same host while twin_meshes/ persists. A job on another host (or after a
+      // git-clean of the gitignored dir) fails fast in materializeSceneFile with a
+      // "regenerate the scene" error rather than an opaque MuJoCo load failure.
+      // Multi-host durability (uploading the OBJs as twin artifacts) is tracked in
+      // TASK-172; today the real backend only runs on the single sim host.
+      let meshPath: string | undefined;
+      let meshOutDir: string | undefined;
+      if (twin.meshKey) {
+        meshPath = path.join(workDir, 'mesh.glb');
+        await pipeline(
+          await modelStorage.getTwinArtifactStream(twin.meshKey),
+          createWriteStream(meshPath)
+        );
+        meshOutDir = path.join(
+          path.dirname(SCENE_BUILDER_SCRIPT), 'mjcf', 'twin_meshes', twinId
+        );
+      }
+
       // Materialize the occupancy floor-plan locally when the twin has one, so
       // the builder extrudes real walls instead of falling back to the AABB box.
       let pgmPath: string | undefined;
@@ -795,6 +856,10 @@ export class SimulationService extends EventEmitter {
         '--zones-json', zonesPath,
         '--embodiment', 'g1',
       ];
+      if (meshPath) {
+        args.push('--mesh', meshPath);
+        if (meshOutDir) args.push('--mesh-out-dir', meshOutDir);
+      }
       if (pgmPath) {
         args.push('--occupancy-pgm', pgmPath);
         if (yamlPath) args.push('--occupancy-yaml', yamlPath);
@@ -848,6 +913,24 @@ export class SimulationService extends EventEmitter {
     mkdirSync(mjcfDir, { recursive: true });
     const stream = await modelStorage.getTwinArtifactStream(scene.mjcfKey);
     await pipeline(stream, createWriteStream(dest));
+
+    // The MJCF references decomposed room meshes (TASK-173) by ABSOLUTE path into
+    // a host-local dir that is not uploaded to durable storage. Verify they exist
+    // up front so a cross-host / git-cleaned scene fails with an actionable reason
+    // instead of an opaque MuJoCo "file not found". (Relative `<include>` paths —
+    // the G1 model + its meshes — resolve against mjcfDir and are not checked.)
+    const mjcfText = readFileSync(dest, 'utf8');
+    const missing = [...mjcfText.matchAll(/file="([^"]+)"/g)]
+      .map((m) => m[1])
+      .filter((f) => path.isAbsolute(f) && !existsSync(f));
+    if (missing.length > 0) {
+      this.cleanupSceneFile(dest);
+      throw new Error(
+        `Scene ${sceneId} references ${missing.length} missing mesh asset(s) ` +
+          `(e.g. ${path.basename(missing[0])}); regenerate the scene for this twin.`
+      );
+    }
+
     console.log(`[SimulationService] Materialized scene ${sceneId} → ${dest}`);
     return dest;
   }

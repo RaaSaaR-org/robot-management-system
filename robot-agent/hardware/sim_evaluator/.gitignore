@@ -3,3 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# Server-generated twin scenes + decomposed room collision meshes (TASK-173).
+mjcf/twin_meshes/
+mjcf/.twinscene_*.xml

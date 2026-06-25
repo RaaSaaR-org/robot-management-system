@@ -82,6 +82,12 @@ class TwinSceneInput:
     resolution: float = 0.05
     zones: list[TwinZoneSpec] = field(default_factory=list)
     embodiment: str = "g1"  # which robot to include
+    # Pre-decomposed room collision (TASK-173): a list of CONVEX collision mesh
+    # files (OBJ/STL) plus one full-res visual mesh. When present these take
+    # precedence over `mesh_path`/occupancy — emitted as N convex collision
+    # geoms + one no-contact visual geom. Empty => fall back to occupancy/walls.
+    collision_mesh_paths: list[str] = field(default_factory=list)
+    visual_mesh_path: str | None = None
 
 
 # --------------------------------------------------------------------------- helpers
@@ -295,18 +301,28 @@ def build_scene_xml(scene: TwinSceneInput, g1_include: str = "g1/g1_29dof.xml") 
     lines.append('    <material name="goal_material" rgba="0.2 0.8 0.3 0.4"/>')
     lines.append('    <material name="keepout_material" rgba="0.9 0.15 0.15 0.3"/>')
 
-    # Room mesh asset (collision-only static mesh), if provided.
-    # NOTE: MuJoCo loads OBJ/STL/MSH meshes, NOT GLB. The twin produces mesh.glb,
-    # so a GLB path is intentionally NOT used as a <mesh> here — we fall through
-    # to occupancy/perimeter walls instead (which always load). TODO: convert
-    # the twin GLB to OBJ in the pipeline and feed that here for true room
-    # collision geometry.
-    use_mesh = bool(scene.mesh_path) and Path(scene.mesh_path).suffix.lower() in (
-        ".obj",
-        ".stl",
-        ".msh",
-    )
-    if use_mesh:
+    # Room collision geometry. Precedence:
+    #   1) Decomposed convex meshes (TASK-173): N convex collision pieces + one
+    #      visual mesh — the only way a real room shell collides correctly, since
+    #      MuJoCo replaces each mesh geom with its CONVEX HULL (a single shell
+    #      mesh would collapse the interior into a solid block).
+    #   2) A single pre-converted OBJ/STL/MSH (`mesh_path`) — kept for back-compat
+    #      (treated as one convex hull; fine for convex props, not room shells).
+    #   3) Occupancy/perimeter walls (the GLB the twin emits can't load directly).
+    use_decomposed = bool(scene.collision_mesh_paths)
+    use_mesh = (not use_decomposed) and bool(scene.mesh_path) and Path(
+        scene.mesh_path
+    ).suffix.lower() in (".obj", ".stl", ".msh")
+    if use_decomposed:
+        for i, mp in enumerate(scene.collision_mesh_paths):
+            lines.append(
+                f'    <mesh name="room_col_{i}" file="{Path(mp).resolve()}"/>'
+            )
+        if scene.visual_mesh_path:
+            lines.append(
+                f'    <mesh name="room_visual" file="{Path(scene.visual_mesh_path).resolve()}"/>'
+            )
+    elif use_mesh:
         mesh_abs = str(Path(scene.mesh_path).resolve())
         lines.append(f'    <mesh name="room" file="{mesh_abs}"/>')
     lines.append("  </asset>")
@@ -325,11 +341,27 @@ def build_scene_xml(scene: TwinSceneInput, g1_include: str = "g1/g1_29dof.xml") 
         f'pos="0 0 {_fmt(min_z)}" material="groundplane"/>'
     )
 
-    # Room geometry.
-    if use_mesh:
-        # Static collision mesh (no body/freejoint => world-static). Translated
-        # by the recenter offset; z preserved.
-        ox, oy, oz = _to_mjcf(0.0, 0.0, 0.0)
+    # Room geometry. Mesh vertices are authored in WORLD coords, so each room
+    # geom is placed at the recenter offset (_to_mjcf(0,0,0)); the same planar
+    # translation applied to every other geom/site keeps them aligned.
+    ox, oy, oz = _to_mjcf(0.0, 0.0, 0.0)
+    if use_decomposed:
+        # N convex collision pieces (collide, hidden in group 3) + one full-res
+        # visual mesh (group 2, contype/conaffinity=0 => renders, never collides).
+        for i in range(len(scene.collision_mesh_paths)):
+            lines.append(
+                f'    <geom name="room_col_{i}" type="mesh" mesh="room_col_{i}" '
+                f'pos="{_fmt(ox)} {_fmt(oy)} {_fmt(oz)}" material="wall_material" '
+                f'contype="1" conaffinity="1" group="3"/>'
+            )
+        if scene.visual_mesh_path:
+            lines.append(
+                f'    <geom name="room_visual" type="mesh" mesh="room_visual" '
+                f'pos="{_fmt(ox)} {_fmt(oy)} {_fmt(oz)}" material="wall_material" '
+                f'contype="0" conaffinity="0" group="2"/>'
+            )
+    elif use_mesh:
+        # Static collision mesh (no body/freejoint => world-static).
         lines.append(
             f'    <geom name="room_mesh" type="mesh" mesh="room" '
             f'pos="{_fmt(ox)} {_fmt(oy)} {_fmt(oz)}" material="wall_material" '
@@ -613,9 +645,59 @@ def _generate_cli(ns: argparse.Namespace) -> int:
         zones=_load_zones(ns.zones_json),
         embodiment=ns.embodiment,
     )
+
+    # TASK-173: turn a room mesh into TRUE collision geometry. A GLB can't load
+    # in MuJoCo at all, and any single mesh geom is convex-hulled (a room shell
+    # collapses to a solid block) — so convert + CoACD-decompose into convex
+    # pieces. OBJ/STL keep the legacy single-mesh path unless --decompose is set.
+    if ns.mesh:
+        suffix = Path(ns.mesh).suffix.lower()
+        is_glb = suffix in (".glb", ".gltf")
+        if (is_glb or ns.decompose) and not ns.no_decompose:
+            _apply_room_collision(scene, ns)
+
     write_scene(scene, ns.out, g1_include=ns.g1_include)
     print(ns.out)
     return 0
+
+
+def _apply_room_collision(scene: TwinSceneInput, ns: argparse.Namespace) -> None:
+    """Run the GLB->OBJ->CoACD pipeline and attach the result to `scene`.
+
+    NEVER fatal: on any rejection/failure the mesh is dropped (mesh_path=None)
+    so build_scene_xml falls back to occupancy/AABB walls. Collision pieces are
+    written next to the output scene under `<out_stem>_meshes/`.
+    """
+    from glb_to_obj import build_room_collision  # lazy: keeps trimesh optional
+
+    # Pieces go beside the scene by default; --mesh-out-dir lets a caller (the
+    # server) persist them outside a temp work dir so jobs can resolve the
+    # absolute mesh paths later.
+    if ns.mesh_out_dir:
+        mesh_dir = Path(ns.mesh_out_dir)
+    else:
+        mesh_dir = Path(f"{Path(ns.out).with_suffix('')}_meshes")
+    result = build_room_collision(
+        ns.mesh,
+        mesh_dir,
+        declared_aabb=tuple(ns.aabb),  # type: ignore[arg-type]
+        up=ns.mesh_up,
+        scale=ns.mesh_scale,
+        threshold=ns.decompose_threshold,
+        max_parts=ns.max_collision_parts,
+        solidity_max=ns.solidity_max,
+    )
+    if result.collision_mesh_paths:
+        scene.collision_mesh_paths = result.collision_mesh_paths
+        scene.visual_mesh_path = result.visual_mesh_path
+        scene.mesh_path = None  # superseded by the decomposed pieces
+        logger.info(
+            "Room collision: %d convex pieces (solidity %.2f, rotated_y_up=%s)",
+            result.n_parts, result.solidity, result.rotated_y_up,
+        )
+    else:
+        scene.mesh_path = None  # GLB/solid/failed => occupancy/AABB walls
+        logger.warning("Room mesh not used (%s) — falling back to walls", result.deferred)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -640,8 +722,37 @@ def main(argv: list[str] | None = None) -> int:
         help="Occupancy YAML (map origin + resolution).",
     )
     gen.add_argument(
-        "--mesh", default=None, help="Room mesh (OBJ/STL/MSH; GLB is ignored)."
+        "--mesh", default=None,
+        help="Room mesh. GLB/glTF is converted + CoACD-decomposed into convex "
+        "collision pieces; OBJ/STL/MSH load directly (add --decompose to split).",
     )
+    gen.add_argument(
+        "--decompose", action="store_true",
+        help="Force CoACD convex decomposition even for an OBJ/STL mesh.",
+    )
+    gen.add_argument(
+        "--no-decompose", action="store_true",
+        help="Skip the mesh pipeline entirely (GLB then ignored).",
+    )
+    gen.add_argument(
+        "--mesh-up", dest="mesh_up", choices=("auto", "y", "z"), default="auto",
+        help="Mesh up-axis: 'auto' aligns to the AABB, 'y' rotates Y-up->Z-up.",
+    )
+    gen.add_argument("--mesh-scale", dest="mesh_scale", type=float, default=1.0,
+                     help="Uniform scale applied to the mesh (units fix).")
+    gen.add_argument("--mesh-out-dir", dest="mesh_out_dir", default=None,
+                     help="Where to write decomposed collision/visual mesh files "
+                     "(default: <out>_meshes/). The MJCF references these by ABSOLUTE "
+                     "path, so the dir must stay on the SAME HOST that runs the job "
+                     "(the pieces are not uploaded to durable storage).")
+    gen.add_argument("--decompose-threshold", dest="decompose_threshold",
+                     type=float, default=0.08,
+                     help="CoACD concavity threshold (lower => more pieces).")
+    gen.add_argument("--max-collision-parts", dest="max_collision_parts",
+                     type=int, default=64, help="Cap on convex collision pieces.")
+    gen.add_argument("--solidity-max", dest="solidity_max", type=float, default=0.6,
+                     help="Defer to walls if decomposed solid volume exceeds this "
+                     "fraction of the mesh AABB (a solid block, not a room).")
     gen.add_argument("--resolution", type=float, default=0.05)
     gen.add_argument(
         "--zones-json", dest="zones_json", default=None,

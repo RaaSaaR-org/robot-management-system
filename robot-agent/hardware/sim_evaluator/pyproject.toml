@@ -9,6 +9,12 @@ dependencies = [
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
     "httpx>=0.25.0",
+    # Real-to-sim room mesh pipeline (TASK-173): GLB->OBJ + CoACD convex
+    # decomposition. Import-guarded in glb_to_obj.py — the evaluator still boots
+    # and degrades to occupancy/AABB walls if these are absent.
+    "trimesh>=4.0.0",
+    "coacd>=1.0.0",
+    "scipy>=1.10.0",
 ]
 
 [project.optional-dependencies]
@@ -21,3 +27,6 @@ evaluate-vla = "evaluate_vla:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: heavy tests needing coacd + mujoco (CoACD decomposition / physics)",
+]
