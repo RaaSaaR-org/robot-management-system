@@ -32,6 +32,37 @@
   --color-turquoise-900: #043129;
   --color-turquoise: #18E4C3;
 
+  /* Semantic brand aliases.
+     `primary` = the brand primary (cobalt slot), `accent` = the brand accent
+     (turquoise slot). Defined as var() references so they automatically inherit
+     BrandProvider's runtime white-label overrides of --color-cobalt-* /
+     --color-turquoise-* — a custom brand recolors primary/accent for free.
+     Without these, the primary / accent utilities (used in ~30 files for
+     selection and focus states) emit no color and render invisible. */
+  --color-primary: var(--color-cobalt);
+  --color-primary-50: var(--color-cobalt-50);
+  --color-primary-100: var(--color-cobalt-100);
+  --color-primary-200: var(--color-cobalt-200);
+  --color-primary-300: var(--color-cobalt-300);
+  --color-primary-400: var(--color-cobalt-400);
+  --color-primary-500: var(--color-cobalt-500);
+  --color-primary-600: var(--color-cobalt-600);
+  --color-primary-700: var(--color-cobalt-700);
+  --color-primary-800: var(--color-cobalt-800);
+  --color-primary-900: var(--color-cobalt-900);
+
+  --color-accent: var(--color-turquoise);
+  --color-accent-50: var(--color-turquoise-50);
+  --color-accent-100: var(--color-turquoise-100);
+  --color-accent-200: var(--color-turquoise-200);
+  --color-accent-300: var(--color-turquoise-300);
+  --color-accent-400: var(--color-turquoise-400);
+  --color-accent-500: var(--color-turquoise-500);
+  --color-accent-600: var(--color-turquoise-600);
+  --color-accent-700: var(--color-turquoise-700);
+  --color-accent-800: var(--color-turquoise-800);
+  --color-accent-900: var(--color-turquoise-900);
+
   /* Legacy colors */
   --color-slate-gray: #1E1F24;
   --color-soft-white: #F7F9FB;
