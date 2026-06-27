@@ -20,7 +20,7 @@ depends_on:
 - "[[TASK-171]]"
 due_date: ''
 created: 2026-06-25
-updated: 2026-06-25
+updated: 2026-06-26
 ---
 
 # Real-to-Sim follow-ups
@@ -75,22 +75,222 @@ in dev. To prove the **full circle**:
 ### C. Phase 4 — sim-RL training (`@status heavier-lift`)
 
 New `../sim-trainer` sibling repo (peer of `../training-worker`): copy the poll
-loop (claim/progress/complete/fail/heartbeat), train a **nav/locomotion** policy
-(PPO/SAC via the `g1_env.py` MuJoCo scene; reward = progress to a `TwinZone`
-goal, penalty for keepout/collision/energy) with domain randomization. Output a
-policy artifact consumable by the Phase-3 gate; optionally generate synthetic
-trajectories → `outputDatasetId` (wire the dormant `SyntheticJob` model). Reuse
-`TrainingOrchestrator`'s job lifecycle via a `kind: 'sim_rl'` discriminator.
+loop (claim/progress/complete/fail/heartbeat) and train a **navigation** policy
+for the G1 in a twin-derived MuJoCo scene, with a server-side job lifecycle.
+
+Design decided 2026-06-26 via an adversarial multi-architect design review
+(3 competing designs → skeptic → judges → synthesis). Verdict below.
+
+#### Scope caveat — read first (it changes acceptance)
+
+There is **no G1 gait primitive anywhere in the repo**, and `g1_env.py` exposes
+**29 raw joint position-targets** with a `-distance` reward that terminates on
+falling. Model-free RL cannot learn G1 **locomotion from scratch** on a single,
+non-vectorized, render-every-step MuJoCo env on a Mac — legged RL needs
+thousands of parallel envs on CUDA/MJX. **v1 ships the full sim-RL *lifecycle* +
+a navigation policy that leans/shuffles toward the goal — NOT a walking robot.**
+State this plainly in `../sim-trainer/README.md` (German-primary); do **not**
+advertise sim-to-real-validated locomotion. Real gait is deferred to an MJX/
+`rsl_rl` CUDA trainer behind the same trainer interface (`mjx_ppo.py`
+placeholder).
+
+#### 1. Job model — reuse `TrainingJob` + `kind='sim_rl'`
+
+Not a new model, not `SyntheticJob`. Reusing `TrainingJob` is the only option
+that satisfies the **required** non-null `ModelVersion.trainingJobId` FK for free
+(`completeJob` sets `trainingJobId = jobId`). Reject `SyntheticJob` (its
+`completeJob` writes a required `outputDatasetId`, `submitJob` fires an in-process
+fake unconditionally, and it has **no** claim/heartbeat/reap). Reject a new
+`SimRlJob` (forks the proven 791-line orchestrator and still re-touches
+`ModelVersion`). Purely additive migration (default `kind='supervised'`, no
+backfill). Exact Prisma diff:
+
+```prisma
+model TrainingJob {
+  kind           String  @default("supervised") // 'supervised' | 'sim_rl'   [NEW]
+  datasetId      String?                         // was String                [NULLABLE]
+  baseModel      String?                         // was String                [NULLABLE]
+  fineTuneMethod String?                         // was String                [NULLABLE]
+  sceneId        String?                         // SimScene = the RL env      [NEW]
+  twinId         String?                         // denormalized convenience   [NEW]
+  dataset        Dataset?  @relation(fields:[datasetId], references:[id])      // was non-opt
+  scene          SimScene? @relation(fields:[sceneId],  references:[id])       [NEW]
+  @@index([kind])                                                             [NEW]
+}
+model SimScene            { trainingJobs TrainingJob[] }                       // inverse [NEW]
+model ModelVersion        { modelType String @default("vla") } // 'vla'|'rl_policy' [NEW]
+model SimToRealValidation { realSuccessRate Float?  domainGapScore Float? }    // [NULLABLE]
+```
+
+Blast radius is tiny: only **two** readers hard-deref `job.datasetId` —
+`training.routes.ts:263` (claim) and `TrainingOrchestrator.ts:578`
+(`completeJob`); `:733` already does `?? null`. Before shipping, grep-audit every
+`baseModel`/`datasetId`/`fineTuneMethod` deref in `TrainingJobService`, route
+serializers, and `app/`, and add a regression test asserting supervised jobs are
+byte-for-byte unaffected.
+
+#### 2. Server wiring — reuse `TrainingOrchestrator` + `/api/training/workers/*`
+
+No new orchestrator, repository, or route file. Changes:
+
+- **Kind-aware claim:** claim body gains `kinds?: string[]`;
+  `claimNextPendingJob(workerId, device, kinds = ['supervised'])` filters FIFO by
+  `kind IN kinds`. `sim-trainer` sends `kinds:['sim_rl']`; the existing
+  training-worker is unchanged (defaults to `['supervised']`) → no cross-claiming.
+- **Claim route (`training.routes.ts:~263`)** branches on `job.kind`:
+  `supervised` → `{ job, dataset }` (today); `sim_rl` → look up
+  `simSceneRepository.findById(job.sceneId)` → `{ job, dataset:null, scene:{ id,
+  mjcfKey, twinId, embodimentTag, aabb } }`.
+- **`completeJob` (`:578`)** guards null dataset + tags
+  `modelType: job.kind==='sim_rl' ? 'rl_policy' : 'vla'` on the new `ModelVersion`
+  (`dataset?.skillId ?? null` is already null-tolerant).
+- **`POST /api/training/jobs`** kind-aware validation: for `sim_rl` require
+  `sceneId`, skip the `datasetId/baseModel/fineTuneMethod` required-checks.
+
+#### 3. Phase-3 gate — must be FIXED, not reused
+
+`domainGapScore = sim − real` is meaningless for a policy with no real-G1-nav
+counterpart (forces a fabricated `real` number → blocks good policies). So:
+
+- Make `SimToRealValidation.realSuccessRate/domainGapScore` nullable (§1) and add
+  a `modelType`-aware **sim-only branch** in `DeploymentService` (`:137–154`):
+  when `domainGapScore == null`, gate on absolute `simSuccessRate ≥
+  SIM_MIN_SUCCESS` (default `0.6`); else the unchanged VLA gap path. **This is
+  load-bearing, NOT deferrable.**
+- A **new runner is required**: `evaluate_vla.py:run_episode` only passes
+  `(images, state, task)` and HTTP-resets a VLA server — it physically cannot
+  feed the 61-dim goal-relative nav obs. Add, in `sim_evaluator/`:
+  `envs/nav_wrappers.py` (the **shared** `NavObsWrapper`, used by **both** trainer
+  and gate for train/eval parity), `policy_backend.py` (loads `policy.onnx`/`.zip`
+  + `vecnormalize.pkl` **locally**, no VLA server), `evaluate_policy.py` (steps
+  `G1Env`+wrapper for N rollouts, emits the same stdout JSON as `evaluate_vla.py`).
+  `SimulationService` branches on `ModelVersion.modelType==='rl_policy'` → spawn
+  `evaluate_policy.py --policy-file … --scene-file …` instead of `evaluate_vla.py`.
+
+#### 4. RL scope (feasibility-driven)
+
+- **Navigation, not locomotion.** Physics stays **real** — do NOT teleport the
+  pelvis freejoint (it fights the solver and corrupts the `collision_count`/
+  `fallen` signals the gate reads).
+- **State-only obs:** `[29 qpos, 29 qvel, goal_dx, goal_dy, |goal|]` (61-dim).
+  Upstream `g1_env.py` edit (bundled, same branch): add `obs_mode='rgb_state'|
+  'state'` — in `'state'` skip `render()` in `_get_obs` **and guard the
+  `mujoco.Renderer` construction in `__init__`** (each `SubprocVecEnv` worker else
+  builds a GL context — the dominant cost + a headless-Mac crash source). Default
+  `'rgb_state'` = byte-identical to today; cover with a regression test.
+- **Reward shaping is MANDATORY, in a wrapper** (env reward is hard-coded to
+  `-distance`): potential-based progress + **alive/standing bonus** + keepout +
+  energy + terminal shaping. Without the alive bonus the from-scratch problem is
+  ill-posed (random policy just falls). Acceptance = "beats random on a
+  goal-at-spawn standing case," NOT walking.
+- **Library:** stable-baselines3 **PPO** (`MlpPolicy`) + `SubprocVecEnv`
+  (`N_ENVS=8` on Mac) + `VecNormalize` + domain randomization (spawn/goal/
+  friction/mass/latency). MJX/`rsl_rl` thousands-of-envs CUDA path =
+  `mjx_ppo.py` placeholder.
+- **Stub-first (mandatory):** `stub_rl.py` rolls out bundled
+  `g1_empty_scene.xml` ~20 ticks with a zero policy and writes a *loadable* SB3
+  `.zip` + `policy.onnx` — proves the whole vertical slice with zero locomotion
+  solved.
+
+#### 5. `../sim-trainer` repo — clones training-worker's poll loop
+
+Sibling repo, peer of `../training-worker`. `worker.py` poll loop,
+`HeartbeatThread`, `ServerClient`, `storage.py`, `config.py`, and
+`_pick_trainer(TRAINER_STUB)` are **copied**; only the trainer abstraction +
+the `sim_rl` claim-payload branch are new. uv path-dep on
+`robot-agent/hardware/sim_evaluator` (pin in `uv.lock`; CI `import envs.g1_env`
+smoke check).
+
+```
+../sim-trainer/
+  pyproject.toml  uv.lock  .env.example  README.md  CLAUDE.md   # German-primary
+  config.py  server_client.py  storage.py  worker.py           # COPIED + sim_rl branch
+  trainers/  base.py  stub_rl.py  ppo_nav.py  mjx_ppo.py(placeholder)
+  tests/     test_server_client  test_stub_rl  test_nav_wrappers  test_ppo_smoke
+```
+
+**Artifact** → `s3://models/<jobId>/`: `policy.zip` (SB3, = `artifactUri`),
+`policy.onnx`, `vecnormalize.pkl`, `manifest.json {kind:'sim_rl',
+embodimentTag:'g1', obs_layout, action_dim:29, sceneId, vecnorm}`.
+
+#### 6. Goal / scene sourcing
+
+The goal is **baked into the twin MJCF** — the worker needs nothing beyond
+`scene.mjcfKey`. `scene_builder.py` already emits `<site name="goal_site">` at
+the first workcell zone center + keepout sites; `G1Env` reads `goal_site` by
+name. Builtin scenes (no `mjcfKey`) fall back to bundled `g1_empty_scene.xml`.
+**Drop any per-job `goalZoneName` override** — it is inert (the site is baked at
+build time; a claim-time selector cannot move it without re-running
+`scene_builder`).
+
+#### Phased delivery
+
+| Phase | Deliverable | Test (acceptance) |
+|-------|-------------|-------------------|
+| ✅ **0 — Server/schema (no Python)** | All of §1–3 in one additive migration + wiring (kind, nullable cols, sceneId/twinId, `ModelVersion.modelType`, **nullable `SimToRealValidation` gap**, kind-aware claim/`completeJob`/`POST /jobs`, **`DeploymentService` sim-only branch**) | Vitest: create `kind='sim_rl'` job w/ `sceneId` + null dataset → claim returns `{scene.mjcfKey, dataset:null}` → `complete` creates `ModelVersion(modelType='rl_policy', staging)`; sim-only validation gates by `SIM_MIN_SUCCESS`; **existing supervised tests stay green** |
+| ✅ **1 — Thin vertical slice (stub policy)** | `../sim-trainer` scaffold (poll loop copied) + `stub_rl.py`; claims a `sim_rl` job, rolls out `g1_empty_scene.xml`, uploads loadable `.zip`+`onnx`, posts `/complete` | `pytest` (mocked `ServerClient`, zip+onnx load) + worker glue test (claim→train→upload→complete, server+storage faked). *Live full-server smoke deferred (needs running server+RustFS).* |
+| ✅ **2 — Real PPO nav** | `g1_env.py` `obs_mode`; `nav_wrappers.py` (NavObs + alive-bonus ShapedReward + DR); `ppo_nav.py` (SubprocVecEnv + VecNormalize); SB3 callback → progress/heartbeat-cancel | `test_ppo_smoke`: `learn()` over SubprocVecEnv+VecNormalize; heartbeat `'stop'` aborts; `rgb_state` obs byte-identical. ⚠️ "beats random" is **xfail (non-strict)** — see review note: model-free PPO doesn't reliably beat random at CPU/single-env budget (real capability = MJX/CUDA, Phase 4) |
+| ✅ **3 — Gate consumability** | `policy_backend.py` + `evaluate_policy.py` + shared `nav_wrappers.py`; `SimulationService` `modelType` branch; sim-only `SimToRealValidation` row | Sim job runs `policy.onnx` in `G1Env` → `simSuccessRate` → validation → `DeploymentService` gates; train vs gate produce identical actions **and** identical normalization (real `VecNormalize` cross-checked) for a fixed obs |
+| **4 — Deferred** | Synthetic-traj export → `outputDatasetId`; `mjx_ppo.py` real CUDA/MJX gait; rl_policy serving | Out of v1 (needs a CUDA host) |
+
+#### Implementation status (2026-06-26)
+
+Phases 0–3 **implemented + tested** on branch `feat/g1-pointcloud` (uncommitted).
+Suites green: **sim_evaluator 39**, **sim-trainer 14** (non-slow; +1 slow xfail),
+**server 4738** (full), server `tsc` clean.
+
+Validated by an adversarial multi-agent review (4 dimensions → per-finding skeptic
+verification, 20 agents): **15 confirmed findings, all fixed**, 1 dismissed. Notably:
+- **HIGH** — `POST /api/simulation/validations` dropped `simOnly`, making the
+  sim-only deploy gate unreachable through its only production entry point; now
+  forwarded + auto-derived from `modelType==='rl_policy'` (route test added).
+- **MED** — gate ran N byte-identical rollouts (`success_rate` could only be 0/1);
+  now seeded spawn-only domain-randomization so the rate samples a distribution.
+- **MED** — `_sim_evaluator_path` brittle `sys.path` scan → now passed explicitly
+  via `SimRlContext.sim_evaluator_path`.
+- **MED** — twin scene silently degraded to the bundled empty room; server now
+  **fails the job** instead of scoring in the wrong environment, trainer surfaces
+  `usedFallbackScene`.
+- **MED** — `test_ppo_beats_random` was a false green (unnormalized obs); fixed to
+  evaluate through the real gate path → revealed the honest scope boundary (xfail).
+- LOWs: policy-dir leak on materialize failure, cancel-before-spawn race, manifest
+  error vs not-found discrimination, float64 VecNormalize parity, manifest-parse
+  crash guard, gate render-cost, DR reset-info staleness, RL metrics persisted into
+  `trainingMetrics`, worker heartbeat/cleanup robustness, gate-parity test now
+  cross-checks real `VecNormalize`.
+
+#### Top 3 risks
+
+1. **RL feasibility / no in-repo gait (high).** v1 can't deliver a walking G1 on
+   a Mac. *Mitigation:* stub-first delivers the lifecycle independent of gait
+   quality; scope = nav + state-only + VecEnv + **mandatory alive-bonus shaping**;
+   honest docs; gait deferred to `mjx_ppo.py`.
+2. **Gate semantics for a policy with no real counterpart (medium-high).**
+   `domainGapScore = sim − real` is undefined sim-only. *Mitigation:* nullable-gap
+   + `SIM_MIN_SUCCESS` branch are **Phase-0, load-bearing**.
+3. **Nullable-ing hot `TrainingJob` columns + cross-repo path-dep (medium).**
+   *Mitigation:* grep-audit every `baseModel/datasetId` deref before shipping;
+   supervised-unaffected regression test; pin the `sim_evaluator` uv path-dep with
+   a CI import smoke check.
 
 - **Key files:** `../sim-trainer/*` (new),
-  `server/src/services/TrainingOrchestrator.ts` (job-kind),
-  `server/prisma/schema.prisma` (`SyntheticJob` wiring),
-  `robot-agent/hardware/sim_evaluator/envs/g1_env.py` (reward/termination).
+  `server/prisma/schema.prisma` (`TrainingJob` :2172 / `ModelVersion` :2208 /
+  `SimToRealValidation` :1807 / `SimScene` :1836),
+  `server/src/services/TrainingOrchestrator.ts` (:578 claim-kind +
+  `completeJob`), `server/src/routes/training.routes.ts` (:263 claim),
+  `server/src/services/DeploymentService.ts` (:137–154 sim-only gate),
+  `robot-agent/hardware/sim_evaluator/{envs/g1_env.py (obs_mode),
+  envs/nav_wrappers.py, policy_backend.py, evaluate_policy.py}` (new).
 
 ## Test Strategy
 
 - **B (GLB→OBJ):** pytest — converter produces a MuJoCo-loadable OBJ; a scene
   built with `--mesh room.obj` emits a `room_mesh` geom and loads in MuJoCo.
-- **C (sim-RL):** launch a sim-RL job against a twin scene, watch reward climb,
-  deploy the resulting nav policy through the Phase-3 gate onto the real G1.
+- **C (sim-RL):** per-phase (see table). Phase 0 = vitest (sim_rl job claims w/
+  null dataset → `ModelVersion(rl_policy)`; sim-only gate; supervised unaffected).
+  Phase 1 = stub vertical slice goes pending→running→completed with an artifact.
+  Phase 2 = PPO `learn()` beats random on goal-at-spawn + heartbeat-cancel aborts.
+  Phase 3 = `evaluate_policy.py` rolls out the policy → `simSuccessRate` →
+  `DeploymentService` gates on `SIM_MIN_SUCCESS`. v1 acceptance is a navigation
+  policy through the gate — **not** a walking G1 (gait deferred).
 - **A:** the manual full-circle checklist above.

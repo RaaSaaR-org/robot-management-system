@@ -145,7 +145,18 @@ export class DeploymentService extends EventEmitter {
             'model version. Run a sim rollout + real evaluation, or set overrideSimValidation.',
         );
       }
-      if (validation.domainGapScore > threshold) {
+      if (validation.domainGapScore == null) {
+        // Sim-only policy (TASK-172.C): no real-hardware counterpart, so the
+        // sim−real gap is undefined. Gate on an absolute sim success rate
+        // instead of fabricating a `real` number that would block good policies.
+        const minSuccess = Number(process.env.SIM_MIN_SUCCESS ?? '0.6');
+        if (validation.simSuccessRate < minSuccess) {
+          throw new Error(
+            `Sim success rate ${validation.simSuccessRate} is below the minimum ${minSuccess} ` +
+              '(sim-only policy, no real counterpart). Deployment blocked (override available).',
+          );
+        }
+      } else if (validation.domainGapScore > threshold) {
         throw new Error(
           `Sim-to-real domain gap ${validation.domainGapScore} exceeds threshold ${threshold}. ` +
             'Deployment blocked (override available).',

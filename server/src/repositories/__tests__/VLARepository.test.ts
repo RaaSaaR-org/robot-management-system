@@ -765,9 +765,12 @@ describe('TrainingJobRepository', () => {
     });
     expect(prismaMock.trainingJob.create).toHaveBeenCalledWith({
       data: {
+        kind: 'supervised',
         datasetId: 'ds-1',
         baseModel: 'smolvla',
         fineTuneMethod: 'lora',
+        sceneId: null,
+        twinId: null,
         hyperparameters: JSON.stringify({ learning_rate: 1e-4, batch_size: 32, epochs: 100 }),
         gpuRequirements: JSON.stringify({ count: 1, memory: 40 }),
         totalEpochs: 100,
@@ -909,6 +912,7 @@ describe('ModelVersionRepository', () => {
       data: {
         skillId: 'sk-1',
         trainingJobId: 'tj-1',
+        modelType: 'vla',
         version: '1.0.0',
         artifactUri: 's3://models/mv-1',
         checkpointUri: undefined,

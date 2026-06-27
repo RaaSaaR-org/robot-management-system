@@ -27,6 +27,14 @@ export interface CreateValidationInput {
   embodimentTag?: string;
   /** Sim success rate measured in the twin scene, 0–1. */
   simSuccessRate: number;
+  /**
+   * Sim-only validation (TASK-172.C): the policy has no real-hardware
+   * counterpart (e.g. a twin-derived RL nav policy), so realSuccessRate and
+   * domainGapScore are stored as null and the deployment gate falls back to an
+   * absolute simSuccessRate threshold. When true, the real-rate derive is
+   * skipped entirely.
+   */
+  simOnly?: boolean;
   /** Real success rate, 0–1. If omitted, derived from EvaluationEpisodes. */
   realSuccessRate?: number;
   /** Number of real episodes behind `realSuccessRate` (sample size). Ignored
@@ -48,8 +56,9 @@ export interface SimToRealValidationDTO {
   embodimentTag: string | null;
   validationDate: string;
   simSuccessRate: number;
-  realSuccessRate: number;
-  domainGapScore: number;
+  // null for sim-only validations (no real-hardware counterpart).
+  realSuccessRate: number | null;
+  domainGapScore: number | null;
   realTestCount: number;
   taskCategories: string[];
   notes: string | null;
@@ -59,8 +68,8 @@ export interface SimToRealValidationDTO {
 export interface SimToRealComparisonRow {
   modelId: string;
   simSuccessRate: number;
-  realSuccessRate: number;
-  gap: number;
+  realSuccessRate: number | null;
+  gap: number | null;
   twinId: string | null;
   simSceneId: string | null;
   validationDate: string;
@@ -79,8 +88,8 @@ type ValidationRow = {
   embodimentTag: string | null;
   validationDate: Date;
   simSuccessRate: number;
-  realSuccessRate: number;
-  domainGapScore: number;
+  realSuccessRate: number | null;
+  domainGapScore: number | null;
   realTestCount: number;
   taskCategories: unknown;
   notes: string | null;
@@ -123,6 +132,36 @@ export class SimToRealValidationService extends EventEmitter {
    * domainGapScore = simSuccessRate − realSuccessRate (both 0–1).
    */
   async createValidation(input: CreateValidationInput): Promise<SimToRealValidationDTO> {
+    const simSuccessRateClamped = round3(Math.max(0, Math.min(1, input.simSuccessRate)));
+
+    // Sim-only validation (TASK-172.C): no real-hardware counterpart. Store
+    // null real-rate + null gap; the deployment gate falls back to an absolute
+    // simSuccessRate threshold. Skips the real-rate derive entirely.
+    if (input.simOnly) {
+      const row = await prisma.simToRealValidation.create({
+        data: {
+          syntheticJobId: null,
+          twinId: input.twinId ?? null,
+          simSceneId: input.simSceneId ?? null,
+          embodimentTag: input.embodimentTag ?? null,
+          modelVersionId: input.modelVersionId,
+          simSuccessRate: simSuccessRateClamped,
+          realSuccessRate: null,
+          domainGapScore: null,
+          realTestCount: Math.max(0, Math.round(input.realTestCount ?? 0)),
+          taskCategories: input.taskCategories ?? [],
+          notes: input.notes ?? null,
+        },
+      });
+      const dto = toDTO(row as ValidationRow);
+      this.emit('validation:created', dto);
+      console.log(
+        `[SimToRealValidation] model=${input.modelVersionId} sim=${simSuccessRateClamped} ` +
+          '(sim-only — no real counterpart, gap=null)',
+      );
+      return dto;
+    }
+
     const modelVersionKey = input.modelVersion ?? input.modelVersionId;
     const period: EvaluationPeriod = input.period ?? '30d';
 

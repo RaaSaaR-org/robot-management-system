@@ -200,9 +200,12 @@ function dbTrainingJobToDomain(
   const latestVersion = db.modelVersions?.[0];
   return {
     id: db.id,
+    kind: (db.kind as TrainingJob['kind']) ?? 'supervised',
     datasetId: db.datasetId,
     baseModel: db.baseModel as TrainingJob['baseModel'],
     fineTuneMethod: db.fineTuneMethod as TrainingJob['fineTuneMethod'],
+    sceneId: db.sceneId ?? null,
+    twinId: db.twinId ?? null,
     hyperparameters: JSON.parse(db.hyperparameters) as Hyperparameters,
     gpuRequirements: JSON.parse(db.gpuRequirements) as GpuRequirements,
     status: db.status as TrainingJobStatus,
@@ -229,6 +232,7 @@ function dbModelVersionToDomain(db: PrismaModelVersion): ModelVersion {
     id: db.id,
     skillId: db.skillId,
     trainingJobId: db.trainingJobId,
+    modelType: (db.modelType as ModelVersion['modelType']) ?? 'vla',
     version: db.version,
     artifactUri: db.artifactUri,
     checkpointUri: db.checkpointUri ?? undefined,
@@ -709,9 +713,12 @@ export class TrainingJobRepository {
   async create(input: CreateTrainingJobInput): Promise<TrainingJob> {
     const job = await prisma.trainingJob.create({
       data: {
-        datasetId: input.datasetId,
-        baseModel: input.baseModel,
-        fineTuneMethod: input.fineTuneMethod,
+        kind: input.kind ?? 'supervised',
+        datasetId: input.datasetId ?? null,
+        baseModel: input.baseModel ?? null,
+        fineTuneMethod: input.fineTuneMethod ?? null,
+        sceneId: input.sceneId ?? null,
+        twinId: input.twinId ?? null,
         hyperparameters: JSON.stringify(input.hyperparameters ?? {
           learning_rate: 1e-4,
           batch_size: 32,
@@ -854,6 +861,7 @@ export class ModelVersionRepository {
       data: {
         skillId: input.skillId,
         trainingJobId: input.trainingJobId,
+        modelType: input.modelType ?? 'vla',
         version: input.version,
         artifactUri: input.artifactUri,
         checkpointUri: input.checkpointUri,

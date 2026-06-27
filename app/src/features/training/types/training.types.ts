@@ -89,6 +89,12 @@ export interface TrainingMetrics {
   epoch_times?: number[];
   best_epoch?: number;
   final_loss?: number;
+  // Sim-RL (kind === 'sim_rl') metrics — RL jobs report reward/success, not loss.
+  // Emitted by the server's TrainingOrchestrator for sim_rl jobs. (TASK-172.C)
+  mean_reward?: number;
+  success_rate?: number; // 0..1
+  total_timesteps?: number;
+  trainer?: string; // e.g. "ppo_nav"
 }
 
 export interface LeRobotInfo {
@@ -177,11 +183,22 @@ export interface DatasetQueryParams {
 // DOMAIN TYPES - TrainingJob
 // ============================================================================
 
+/**
+ * Training job kind. `supervised` is the classic VLA fine-tune (dataset +
+ * baseModel + fineTuneMethod). `sim_rl` trains an RL navigation policy in a
+ * twin-derived MuJoCo scene (sceneId; no dataset/model). (TASK-172.C)
+ */
+export type TrainingJobKind = 'supervised' | 'sim_rl';
+
 export interface TrainingJob {
   id: string;
-  datasetId: string;
-  baseModel: BaseModel;
-  fineTuneMethod: FineTuneMethod;
+  kind: TrainingJobKind;
+  // null for sim_rl jobs (they carry sceneId/twinId instead)
+  datasetId: string | null;
+  baseModel: BaseModel | null;
+  fineTuneMethod: FineTuneMethod | null;
+  sceneId?: string | null;
+  twinId?: string | null;
   hyperparameters: Hyperparameters;
   gpuRequirements: GpuRequirements;
   status: TrainingJobStatus;
@@ -205,6 +222,18 @@ export interface SubmitTrainingJobInput {
   fineTuneMethod: FineTuneMethod;
   hyperparameters?: Partial<Hyperparameters>;
   gpuRequirements?: Partial<GpuRequirements>;
+  totalEpochs?: number;
+  priority?: 'low' | 'normal' | 'high';
+}
+
+/**
+ * Submit body for a sim_rl (twin-derived RL navigation) training job.
+ * Carries a SimScene id instead of a dataset/model. (TASK-172.C)
+ */
+export interface SubmitSimRlJobInput {
+  kind: 'sim_rl';
+  sceneId: string;
+  hyperparameters?: Partial<Hyperparameters>;
   totalEpochs?: number;
   priority?: 'low' | 'normal' | 'high';
 }
@@ -475,7 +504,9 @@ export interface TrainingActions {
 
   // Training Jobs
   fetchTrainingJobs: (params?: TrainingJobQueryParams) => Promise<void>;
-  submitTrainingJob: (input: SubmitTrainingJobInput) => Promise<TrainingJob>;
+  submitTrainingJob: (
+    input: SubmitTrainingJobInput | SubmitSimRlJobInput
+  ) => Promise<TrainingJob>;
   getTrainingJob: (id: string) => Promise<void>;
   cancelTrainingJob: (id: string) => Promise<void>;
   retryTrainingJob: (id: string) => Promise<void>;

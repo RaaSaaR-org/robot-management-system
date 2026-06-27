@@ -9,6 +9,7 @@ import { existsSync, createReadStream } from 'fs';
 import path from 'path';
 import { simulationService } from '../services/SimulationService.js';
 import { simToRealValidationService } from '../services/SimToRealValidationService.js';
+import { modelVersionRepository } from '../repositories/index.js';
 
 export const simulationRoutes = Router();
 
@@ -204,6 +205,7 @@ simulationRoutes.post('/validations', async (req: Request, res: Response) => {
       simSceneId,
       embodimentTag,
       simSuccessRate,
+      simOnly,
       realSuccessRate,
       realTestCount,
       realRobotId,
@@ -219,6 +221,17 @@ simulationRoutes.post('/validations', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'simSuccessRate (0–1) is required and must be a number' });
     }
 
+    // Sim-only gate (TASK-172.C): an `rl_policy` has no real-hardware
+    // counterpart, so its validation must store a null gap and let the deploy
+    // gate fall back to an absolute simSuccessRate threshold. Honour an explicit
+    // `simOnly`, else auto-derive it from the model type so a caller that forgets
+    // the flag does not get a bogus realSuccessRate=0 → domainGap=simSuccessRate.
+    let resolvedSimOnly = simOnly;
+    if (resolvedSimOnly === undefined) {
+      const mv = await modelVersionRepository.findById(modelVersionId).catch(() => null);
+      resolvedSimOnly = mv?.modelType === 'rl_policy';
+    }
+
     const validation = await simToRealValidationService.createValidation({
       modelVersionId,
       modelVersion,
@@ -226,6 +239,7 @@ simulationRoutes.post('/validations', async (req: Request, res: Response) => {
       simSceneId,
       embodimentTag,
       simSuccessRate,
+      simOnly: resolvedSimOnly,
       realSuccessRate,
       realTestCount,
       realRobotId,

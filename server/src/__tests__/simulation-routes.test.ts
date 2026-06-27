@@ -10,26 +10,42 @@ import request from 'supertest';
 import { Readable } from 'stream';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockSimulationService, mockFs } = vi.hoisted(() => ({
-  mockSimulationService: {
-    submitJob: vi.fn(),
-    listJobs: vi.fn(),
-    getJob: vi.fn(),
-    cancelJob: vi.fn(),
-    getAvailableEnvironments: vi.fn(),
-    getSimToRealComparison: vi.fn(),
-    getFramesDir: vi.fn(),
-    getEnvironmentPreview: vi.fn(),
-    generateSceneFromTwin: vi.fn(),
-  },
-  mockFs: {
-    existsSync: vi.fn(),
-    createReadStream: vi.fn(),
-  },
-}));
+const { mockSimulationService, mockSimToRealValidationService, mockModelVersionRepository, mockFs } =
+  vi.hoisted(() => ({
+    mockSimulationService: {
+      submitJob: vi.fn(),
+      listJobs: vi.fn(),
+      getJob: vi.fn(),
+      cancelJob: vi.fn(),
+      getAvailableEnvironments: vi.fn(),
+      getSimToRealComparison: vi.fn(),
+      getFramesDir: vi.fn(),
+      getEnvironmentPreview: vi.fn(),
+      generateSceneFromTwin: vi.fn(),
+    },
+    mockSimToRealValidationService: {
+      createValidation: vi.fn(),
+      listForModelVersion: vi.fn(),
+    },
+    mockModelVersionRepository: {
+      findById: vi.fn(),
+    },
+    mockFs: {
+      existsSync: vi.fn(),
+      createReadStream: vi.fn(),
+    },
+  }));
 
 vi.mock('../services/SimulationService.js', () => ({
   simulationService: mockSimulationService,
+}));
+
+vi.mock('../services/SimToRealValidationService.js', () => ({
+  simToRealValidationService: mockSimToRealValidationService,
+}));
+
+vi.mock('../repositories/index.js', () => ({
+  modelVersionRepository: mockModelVersionRepository,
 }));
 
 vi.mock('fs', () => ({
@@ -444,6 +460,64 @@ describe('Simulation Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('boom');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/simulation/validations — sim-only gate passthrough (TASK-172.C)
+  // --------------------------------------------------------------------------
+
+  describe('POST /api/simulation/validations', () => {
+    it('forwards an explicit simOnly=true into createValidation', async () => {
+      mockSimToRealValidationService.createValidation.mockResolvedValue({ id: 'val-1' });
+
+      const response = await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-1', simSuccessRate: 0.8, simOnly: true });
+
+      expect(response.status).toBe(201);
+      expect(mockSimToRealValidationService.createValidation).toHaveBeenCalledWith(
+        expect.objectContaining({ modelVersionId: 'mv-1', simSuccessRate: 0.8, simOnly: true })
+      );
+      // Explicit flag short-circuits the model-type lookup.
+      expect(mockModelVersionRepository.findById).not.toHaveBeenCalled();
+    });
+
+    it('auto-derives simOnly=true for an rl_policy when the flag is omitted', async () => {
+      mockModelVersionRepository.findById.mockResolvedValue({ id: 'mv-2', modelType: 'rl_policy' });
+      mockSimToRealValidationService.createValidation.mockResolvedValue({ id: 'val-2' });
+
+      const response = await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-2', simSuccessRate: 0.9 });
+
+      expect(response.status).toBe(201);
+      expect(mockModelVersionRepository.findById).toHaveBeenCalledWith('mv-2');
+      expect(mockSimToRealValidationService.createValidation).toHaveBeenCalledWith(
+        expect.objectContaining({ simOnly: true })
+      );
+    });
+
+    it('auto-derives simOnly=false for a vla model when the flag is omitted', async () => {
+      mockModelVersionRepository.findById.mockResolvedValue({ id: 'mv-3', modelType: 'vla' });
+      mockSimToRealValidationService.createValidation.mockResolvedValue({ id: 'val-3' });
+
+      await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-3', simSuccessRate: 0.5 });
+
+      expect(mockSimToRealValidationService.createValidation).toHaveBeenCalledWith(
+        expect.objectContaining({ simOnly: false })
+      );
+    });
+
+    it('rejects a missing simSuccessRate', async () => {
+      const response = await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-1' });
+
+      expect(response.status).toBe(400);
+      expect(mockSimToRealValidationService.createValidation).not.toHaveBeenCalled();
     });
   });
 });

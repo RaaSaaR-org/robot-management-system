@@ -326,7 +326,8 @@ export class TrainingOrchestrator extends EventEmitter {
    */
   async claimNextPendingJob(
     workerId: string,
-    device?: string
+    device?: string,
+    kinds: string[] = ['supervised']
   ): Promise<TrainingJob | null> {
     // Pull pending/queued jobs; findAll returns newest-first so we pick
     // the oldest entry (closest to head of FIFO queue).
@@ -336,14 +337,21 @@ export class TrainingOrchestrator extends EventEmitter {
       pageSize: 50,
     });
 
+    // Filter by job kind so a supervised VLA worker never claims a sim_rl
+    // job and vice-versa (TASK-172.C). Defaults to 'supervised' for back-compat
+    // with existing training-workers that don't send `kinds`.
+    const matching = candidates.data.filter((j) =>
+      kinds.includes(j.kind ?? 'supervised')
+    );
+
     // Touch the worker registry on every claim poll so idle workers
     // also show up in `listWorkers()`. The currentJobId is set below
     // once we know whether we actually picked up a job.
-    if (candidates.data.length === 0) {
+    if (matching.length === 0) {
       this.touchWorker(workerId, device, null);
       return null;
     }
-    const job = candidates.data[candidates.data.length - 1];
+    const job = matching[matching.length - 1];
     const started = await this.startJob(job.id);
     if (!started) {
       this.touchWorker(workerId, device, null);
@@ -560,6 +568,24 @@ export class TrainingOrchestrator extends EventEmitter {
       best_epoch: finalMetrics.bestEpoch,
     };
 
+    // sim-RL jobs report reward/success quality, not loss/epoch — persist a
+    // labelled summary so the model registry has a meaningful signal for an
+    // rl_policy (TASK-172.C). `finalMetrics` carries these only for sim_rl.
+    if (job.kind === 'sim_rl') {
+      if (typeof finalMetrics.meanReward === 'number') {
+        updatedMetrics.mean_reward = finalMetrics.meanReward;
+      }
+      if (typeof finalMetrics.successRate === 'number') {
+        updatedMetrics.success_rate = finalMetrics.successRate;
+      }
+      if (typeof finalMetrics.totalTimesteps === 'number') {
+        updatedMetrics.total_timesteps = finalMetrics.totalTimesteps;
+      }
+      if (typeof finalMetrics.trainer === 'string') {
+        updatedMetrics.trainer = finalMetrics.trainer;
+      }
+    }
+
     // Update job status
     const updatedJob = await trainingJobService.updateJobStatus(jobId, 'completed', {
       progress: 100,
@@ -575,13 +601,17 @@ export class TrainingOrchestrator extends EventEmitter {
     // Create ModelVersion — always, even when the dataset has no skill yet.
     // Skill linkage can be set later via the model registry.
     try {
-      const dataset = await datasetRepository.findById(job.datasetId);
+      // sim_rl jobs have no dataset; guard the lookup (TASK-172.C).
+      const dataset = job.datasetId
+        ? await datasetRepository.findById(job.datasetId)
+        : null;
       const timestamp = Date.now();
       const version = `v${timestamp}`;
 
       const modelVersion = await modelVersionRepository.create({
         skillId: dataset?.skillId ?? null,
         trainingJobId: jobId,
+        modelType: job.kind === 'sim_rl' ? 'rl_policy' : 'vla',
         version,
         artifactUri,
         trainingMetrics: updatedMetrics,
@@ -593,9 +623,9 @@ export class TrainingOrchestrator extends EventEmitter {
 
       modelVersionId = modelVersion.id;
       console.log(
-        `[TrainingOrchestrator] Created ModelVersion: ${modelVersionId} (skill=${
-          dataset?.skillId ?? 'none'
-        })`
+        `[TrainingOrchestrator] Created ModelVersion: ${modelVersionId} (kind=${
+          job.kind ?? 'supervised'
+        }, skill=${dataset?.skillId ?? 'none'})`
       );
     } catch (error) {
       console.error('[TrainingOrchestrator] Failed to create ModelVersion:', error);

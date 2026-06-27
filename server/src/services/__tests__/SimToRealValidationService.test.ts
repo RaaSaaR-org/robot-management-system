@@ -102,6 +102,24 @@ describe('SimToRealValidationService.createValidation', () => {
     expect(dto.realSuccessRate).toBe(0);
     expect(dto.domainGapScore).toBe(1);
   });
+
+  it('stores null real-rate + null gap for a sim-only validation (TASK-172.C)', async () => {
+    const dto = await simToRealValidationService.createValidation({
+      modelVersionId: 'mv-rl',
+      simSceneId: 'scene-1',
+      embodimentTag: 'g1',
+      simSuccessRate: 0.72,
+      simOnly: true,
+    });
+
+    // No real-rate derive; gap is undefined (null), not fabricated.
+    expect(getSuccessRateMock).not.toHaveBeenCalled();
+    expect(dto.simSuccessRate).toBe(0.72);
+    expect(dto.realSuccessRate).toBeNull();
+    expect(dto.domainGapScore).toBeNull();
+    expect(createMock.mock.calls[0][0].data.realSuccessRate).toBeNull();
+    expect(createMock.mock.calls[0][0].data.domainGapScore).toBeNull();
+  });
 });
 
 describe('SimToRealValidationService.getComparisonForModel', () => {

@@ -1815,8 +1815,11 @@ model SimToRealValidation {
   modelVersionId  String
   validationDate  DateTime @default(now())
   simSuccessRate  Float
-  realSuccessRate Float
-  domainGapScore  Float // simSuccessRate − realSuccessRate
+  // null for sim-only validations (a policy with no real-hardware counterpart,
+  // e.g. a twin-derived RL nav policy). The deployment gate then falls back to
+  // an absolute simSuccessRate threshold instead of the sim−real gap. (TASK-172.C)
+  realSuccessRate Float?
+  domainGapScore  Float? // simSuccessRate − realSuccessRate; null when sim-only
   realTestCount   Int
   taskCategories  Json // string[]
   perTaskMetrics  Json? // Record<string, { simSuccess, realSuccess, gap }>
@@ -1854,6 +1857,9 @@ model SimScene {
   tenantId      String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  // sim_rl training jobs that train a policy in this scene (TASK-172.C)
+  trainingJobs TrainingJob[]
 
   @@index([source])
   @@index([tenantId])
@@ -2171,9 +2177,14 @@ model Dataset {
 // TrainingJob - Training job queue entries
 model TrainingJob {
   id                 String    @id @default(uuid())
-  datasetId          String
-  baseModel          String // 'pi0' | 'pi0_6' | 'openvla' | 'groot' | 'smolvla'
-  fineTuneMethod     String // 'lora' | 'full' | 'oft'
+  // 'supervised' (VLA fine-tune, the default) | 'sim_rl' (twin-derived RL nav
+  // policy, TASK-172.C). sim_rl jobs carry sceneId instead of datasetId.
+  kind               String    @default("supervised")
+  datasetId          String? // null for sim_rl jobs
+  baseModel          String? // 'pi0' | 'pi0_6' | 'openvla' | 'groot' | 'smolvla'; null for sim_rl
+  fineTuneMethod     String? // 'lora' | 'full' | 'oft'; null for sim_rl
+  sceneId            String? // SimScene the RL policy trains in (sim_rl only)
+  twinId             String? // denormalized convenience (source twin of the scene)
   hyperparameters    String    @default("{}") // JSON: { learning_rate, batch_size, epochs, lora_rank, warmup_steps }
   gpuRequirements    String    @default("{}") // JSON: { count, memory, type }
   status             String    @default("pending") // 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -2195,12 +2206,14 @@ model TrainingJob {
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
-  dataset       Dataset        @relation(fields: [datasetId], references: [id])
+  dataset       Dataset?       @relation(fields: [datasetId], references: [id])
+  scene         SimScene?      @relation(fields: [sceneId], references: [id])
   modelVersions ModelVersion[]
 
   @@index([datasetId])
   @@index([status])
   @@index([baseModel])
+  @@index([kind])
   @@index([tenantId, updatedAt])
 }
 
@@ -2209,6 +2222,9 @@ model ModelVersion {
   id                 String   @id @default(uuid())
   skillId            String? // Optional — models can be linked to a skill later
   trainingJobId      String
+  // 'vla' (supervised fine-tune, default) | 'rl_policy' (sim_rl nav policy,
+  // TASK-172.C). Drives the sim-only validation gate + the eval runner choice.
+  modelType          String   @default("vla")
   version            String // Semantic version string
   artifactUri        String // RustFS model location
   checkpointUri      String? // Intermediate checkpoints location

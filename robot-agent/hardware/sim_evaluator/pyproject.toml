@@ -15,6 +15,10 @@ dependencies = [
     "trimesh>=4.0.0",
     "coacd>=1.0.0",
     "scipy>=1.10.0",
+    # Sim-RL deployment gate (TASK-172.C Phase 3): run a trained policy.onnx
+    # locally with no VLA server and no torch/SB3 — onnxruntime is enough to
+    # score a navigation policy for the sim-to-real validation gate.
+    "onnxruntime>=1.17.0",
 ]
 
 [project.optional-dependencies]

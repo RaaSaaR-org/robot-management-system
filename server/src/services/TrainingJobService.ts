@@ -6,7 +6,11 @@
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { trainingJobRepository, datasetRepository } from '../repositories/index.js';
+import {
+  trainingJobRepository,
+  datasetRepository,
+  simSceneRepository,
+} from '../repositories/index.js';
 import {
   getJobQueue,
   JetStreamJobQueue,
@@ -28,6 +32,7 @@ import type {
   JobProgress,
   QueueStats,
   SubmitTrainingJobRequest,
+  SubmitSimRlJobRequest,
 } from '../types/training.types.js';
 
 // ============================================================================
@@ -145,12 +150,14 @@ export class TrainingJobService extends EventEmitter {
 
     // Add to NATS queue if available. The HTTP claim worker reads jobs
     // directly from the DB (status='pending'), so NATS is optional here.
+    // Source the supervised-only fields from `request` (always non-null here)
+    // rather than the now-nullable domain `job` fields.
     if (this.jobQueue) {
       await this.jobQueue.addJob('finetune', {
         jobId: job.id,
-        datasetId: job.datasetId,
-        baseModel: job.baseModel,
-        fineTuneMethod: job.fineTuneMethod,
+        datasetId: request.datasetId,
+        baseModel: request.baseModel,
+        fineTuneMethod: request.fineTuneMethod,
         hyperparameters: job.hyperparameters,
         gpuRequirements: job.gpuRequirements,
         priority: request.priority ?? 5,
@@ -168,6 +175,53 @@ export class TrainingJobService extends EventEmitter {
     });
 
     console.log(`[TrainingJobService] Job submitted: ${job.id}`);
+    return job;
+  }
+
+  /**
+   * Submit a sim_rl training job (TASK-172.C). Trains an RL navigation policy
+   * in a twin-derived MuJoCo scene rather than fine-tuning on a dataset.
+   * Carries a SimScene id; the goal is baked into the scene's MJCF. Claimed
+   * over HTTP by the `sim-trainer` worker (kinds:['sim_rl']) — no NATS enqueue.
+   */
+  async submitSimRlJob(request: SubmitSimRlJobRequest): Promise<TrainingJob> {
+    if (!request.sceneId) {
+      throw new Error('sceneId is required for a sim_rl job');
+    }
+    // Validate the scene exists — it IS the RL environment.
+    const scene = await simSceneRepository.findById(request.sceneId);
+    if (!scene) {
+      throw new Error(`Sim scene not found: ${request.sceneId}`);
+    }
+
+    const hyperparameters: Hyperparameters = {
+      ...DEFAULT_HYPERPARAMETERS,
+      ...request.hyperparameters,
+    };
+    const gpuRequirements: GpuRequirements = {
+      ...DEFAULT_GPU_REQUIREMENTS,
+      ...request.gpuRequirements,
+    };
+
+    const job = await trainingJobRepository.create({
+      kind: 'sim_rl',
+      sceneId: scene.id,
+      twinId: scene.twinId,
+      hyperparameters,
+      gpuRequirements,
+      totalEpochs: request.totalEpochs ?? hyperparameters.epochs,
+    });
+
+    this.emitJobEvent({
+      type: 'training:job:created',
+      jobId: job.id,
+      job,
+      timestamp: new Date().toISOString(),
+    });
+
+    console.log(
+      `[TrainingJobService] sim_rl job submitted: ${job.id} (scene=${scene.id})`,
+    );
     return job;
   }
 
@@ -260,7 +314,16 @@ export class TrainingJobService extends EventEmitter {
       completedAt: undefined,
     });
 
-    if (!updatedJob || !this.jobQueue) {
+    // sim_rl jobs (and any job missing the supervised fields) are re-claimed by
+    // their HTTP worker via status='pending'; they have no NATS finetune payload.
+    if (
+      !updatedJob ||
+      !this.jobQueue ||
+      updatedJob.kind === 'sim_rl' ||
+      !updatedJob.datasetId ||
+      !updatedJob.baseModel ||
+      !updatedJob.fineTuneMethod
+    ) {
       return updatedJob;
     }
 

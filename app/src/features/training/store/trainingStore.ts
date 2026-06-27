@@ -16,6 +16,7 @@ import type {
   DatasetQueryParams,
   TrainingJob,
   SubmitTrainingJobInput,
+  SubmitSimRlJobInput,
   TrainingJobQueryParams,
   JobProgress,
   TrainingJobEvent,
@@ -169,11 +170,18 @@ export const useTrainingStore = create<TrainingStore>()(
         }
       },
 
-      submitTrainingJob: async (input: SubmitTrainingJobInput): Promise<TrainingJob> => {
+      submitTrainingJob: async (
+        input: SubmitTrainingJobInput | SubmitSimRlJobInput
+      ): Promise<TrainingJob> => {
         const job = await trainingApi.submitTrainingJob(input);
 
         set((state) => {
-          state.trainingJobs.unshift(job);
+          // Guard against a duplicate when a concurrent poll-fetch already
+          // pulled in the just-created job (otherwise React warns about
+          // non-unique list keys).
+          if (!state.trainingJobs.some((j) => j.id === job.id)) {
+            state.trainingJobs.unshift(job);
+          }
         });
 
         return job;

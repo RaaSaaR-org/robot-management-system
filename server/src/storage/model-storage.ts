@@ -310,6 +310,20 @@ export class ModelStorageClient {
   }
 
   /**
+   * Open a trained-model artifact for streaming by its raw key in the
+   * MODEL_CHECKPOINTS bucket — e.g. `<jobId>/policy.onnx` / `<jobId>/manifest.json`
+   * for a sim-RL navigation policy (TASK-172.C Phase 3). A key that looks like an
+   * absolute path is read from the local filesystem (parity with twin artifacts).
+   */
+  async getModelCheckpointStream(key: string): Promise<Readable> {
+    if (this.isLocalKey(key)) {
+      return createReadStream(key);
+    }
+    const client = getRustFSClient();
+    return client.getStream(BUCKETS.MODEL_CHECKPOINTS, key);
+  }
+
+  /**
    * Delete all checkpoints for a job
    */
   async deleteJobCheckpoints(jobId: string): Promise<number> {

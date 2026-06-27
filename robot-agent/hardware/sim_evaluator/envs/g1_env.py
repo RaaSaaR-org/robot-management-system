@@ -116,6 +116,7 @@ class G1Env(gym.Env):
         scene_path: str | Path | None = None,
         max_steps: int = _MAX_STEPS,
         success_threshold: float = _SUCCESS_THRESHOLD,
+        obs_mode: str = "rgb_state",
     ):
         super().__init__()
         if not _MUJOCO_AVAILABLE:
@@ -123,6 +124,18 @@ class G1Env(gym.Env):
                 "G1Env requires MuJoCo, which is not installed. Install `mujoco>=3.0` "
                 "or run via the mock-fallback runners (mujoco_runner.py)."
             )
+
+        if obs_mode not in ("rgb_state", "state"):
+            raise ValueError(
+                f"obs_mode must be 'rgb_state' or 'state', got {obs_mode!r}"
+            )
+        # obs_mode == 'state' is the sim-RL training path (TASK-172.C): it skips
+        # rendering entirely so SubprocVecEnv workers never build a GL context —
+        # the dominant per-step cost and a headless-Mac crash source. The 58-dim
+        # proprioception state is still produced; NavObsWrapper turns it into the
+        # 61-dim goal-relative nav observation. 'rgb_state' (default) is unchanged
+        # and byte-identical to the historical behaviour.
+        self.obs_mode = obs_mode
 
         self.render_mode = render_mode
         self.max_steps = max_steps
@@ -141,7 +154,14 @@ class G1Env(gym.Env):
 
         self.model = mujoco.MjModel.from_xml_path(str(scene))
         self.data = mujoco.MjData(self.model)
-        self.renderer = mujoco.Renderer(self.model, _RENDER_HEIGHT, _RENDER_WIDTH)
+        # Only build the GL renderer when images are actually consumed. In
+        # 'state' mode (training) this is skipped: each SubprocVecEnv worker would
+        # otherwise open its own GL context.
+        self.renderer = (
+            mujoco.Renderer(self.model, _RENDER_HEIGHT, _RENDER_WIDTH)
+            if self.obs_mode == "rgb_state"
+            else None
+        )
 
         # Joint qpos/qvel addresses, looked up by name.
         self._joint_qpos_indices: list[int] = []
@@ -189,23 +209,27 @@ class G1Env(gym.Env):
             dtype=np.float32,
         )
 
-        # Observation: head-camera image + 58-dim proprioception state.
-        self.observation_space = spaces.Dict(
-            {
-                "image": spaces.Box(
-                    low=0,
-                    high=255,
-                    shape=(_RENDER_HEIGHT, _RENDER_WIDTH, 3),
-                    dtype=np.uint8,
-                ),
-                "state": spaces.Box(
-                    low=-np.inf,
-                    high=np.inf,
-                    shape=(2 * N_JOINTS,),
-                    dtype=np.float32,
-                ),
-            }
+        # Observation: head-camera image (rgb_state only) + 58-dim proprioception.
+        state_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(2 * N_JOINTS,),
+            dtype=np.float32,
         )
+        if self.obs_mode == "rgb_state":
+            self.observation_space = spaces.Dict(
+                {
+                    "image": spaces.Box(
+                        low=0,
+                        high=255,
+                        shape=(_RENDER_HEIGHT, _RENDER_WIDTH, 3),
+                        dtype=np.uint8,
+                    ),
+                    "state": state_space,
+                }
+            )
+        else:
+            self.observation_space = spaces.Dict({"state": state_space})
 
         # Home pose = zeros (neutral standing).
         self._home_qpos = np.zeros(N_JOINTS, dtype=np.float64)
@@ -292,6 +316,30 @@ class G1Env(gym.Env):
 
     # ----------------------------------------------------------------- render
     def render(self):
+        if self.renderer is None:
+            raise RuntimeError(
+                "render() called on a 'state'-mode G1Env (no GL renderer was "
+                "built). Construct with obs_mode='rgb_state' to capture frames."
+            )
+        if self._camera == -1:
+            self.renderer.update_scene(self.data)
+        else:
+            self.renderer.update_scene(self.data, camera=self._camera)
+        return self.renderer.render()
+
+    def capture_frame(self) -> np.ndarray:
+        """Render an RGB frame on demand, lazily building a renderer if needed.
+
+        For the eval gate, which steps in ``obs_mode='state'`` (so ``_get_obs``
+        does not render every step — most frames are discarded by
+        ``NavObsWrapper``) but still wants periodic frames for the UI. Unlike
+        ``render()``, which deliberately raises in ``'state'`` mode to catch
+        training-time misuse (a GL context must never be created in a
+        SubprocVecEnv worker), this is the explicit opt-in capture path: only the
+        single-process gate ever calls it.
+        """
+        if self.renderer is None:
+            self.renderer = mujoco.Renderer(self.model, _RENDER_HEIGHT, _RENDER_WIDTH)
         if self._camera == -1:
             self.renderer.update_scene(self.data)
         else:
@@ -305,7 +353,6 @@ class G1Env(gym.Env):
 
     # ----------------------------------------------------------------- internals
     def _get_obs(self):
-        image = self.render()
         pos = np.array(
             [self.data.qpos[idx] for idx in self._joint_qpos_indices],
             dtype=np.float32,
@@ -315,7 +362,9 @@ class G1Env(gym.Env):
             dtype=np.float32,
         )
         state = np.concatenate([pos, vel]).astype(np.float32)
-        return {"image": image, "state": state}
+        if self.obs_mode == "state":
+            return {"state": state}
+        return {"image": self.render(), "state": state}
 
     def _get_info(self):
         return {

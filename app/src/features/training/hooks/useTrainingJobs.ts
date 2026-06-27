@@ -19,6 +19,7 @@ import type {
   TrainingJob,
   TrainingJobQueryParams,
   SubmitTrainingJobInput,
+  SubmitSimRlJobInput,
   JobProgress,
 } from '../types';
 
@@ -35,7 +36,7 @@ export interface UseTrainingJobsReturn {
     totalPages: number;
   };
   fetchJobs: (params?: TrainingJobQueryParams) => Promise<void>;
-  submitJob: (input: SubmitTrainingJobInput) => Promise<TrainingJob>;
+  submitJob: (input: SubmitTrainingJobInput | SubmitSimRlJobInput) => Promise<TrainingJob>;
   cancelJob: (id: string) => Promise<void>;
   retryJob: (id: string) => Promise<void>;
   setFilters: (filters: Partial<TrainingJobQueryParams>) => void;
@@ -74,7 +75,7 @@ export function useTrainingJobs(): UseTrainingJobsReturn {
   );
 
   const submitJob = useCallback(
-    async (input: SubmitTrainingJobInput) => {
+    async (input: SubmitTrainingJobInput | SubmitSimRlJobInput) => {
       return await storeSubmitJob(input);
     },
     [storeSubmitJob]

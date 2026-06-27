@@ -83,9 +83,12 @@ const trainingJobService = vi.mocked(_trainingJobService, true);
 function makeJob(overrides: Partial<TrainingJob> = {}): TrainingJob {
   return {
     id: 'job1',
+    kind: 'supervised',
     datasetId: 'ds1',
     baseModel: 'smolvla' as TrainingJob['baseModel'],
     fineTuneMethod: 'lora' as TrainingJob['fineTuneMethod'],
+    sceneId: null,
+    twinId: null,
     hyperparameters: {} as Hyperparameters,
     gpuRequirements: {} as TrainingJob['gpuRequirements'],
     status: 'pending',
@@ -403,6 +406,37 @@ describe('claimNextPendingJob', () => {
     const workers = await trainingOrchestrator.listWorkers();
     expect(workers.workers.find((w) => w.workerId === 'w3')?.status).toBe('idle');
   });
+
+  it('a default (supervised) worker skips a sim_rl job', async () => {
+    const simJob = makeJob({ id: 'simrl', kind: 'sim_rl', datasetId: null, sceneId: 'scene1' });
+    trainingJobRepository.findAll.mockResolvedValue({
+      data: [simJob],
+      pagination: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
+    });
+
+    // No `kinds` arg → defaults to ['supervised'] → the sim_rl job is filtered out.
+    const result = await trainingOrchestrator.claimNextPendingJob('w-sup', 'cpu');
+
+    expect(result).toBeNull();
+  });
+
+  it('a sim_rl worker claims a sim_rl job and skips supervised jobs', async () => {
+    const supervised = makeJob({ id: 'sup', kind: 'supervised' });
+    const simJob = makeJob({ id: 'simrl', kind: 'sim_rl', datasetId: null, sceneId: 'scene1' });
+    trainingJobRepository.findAll.mockResolvedValue({
+      data: [supervised, simJob],
+      pagination: { page: 1, pageSize: 50, total: 2, totalPages: 1 },
+    });
+    trainingJobRepository.findById.mockResolvedValue(simJob);
+    trainingJobService.updateJobStatus.mockResolvedValue(
+      makeJob({ id: 'simrl', kind: 'sim_rl', status: 'running' })
+    );
+
+    const result = await trainingOrchestrator.claimNextPendingJob('w-rl', 'mps', ['sim_rl']);
+
+    expect(result?.id).toBe('simrl');
+    expect(trainingJobRepository.findById).toHaveBeenCalledWith('simrl');
+  });
 });
 
 // ===========================================================================
@@ -560,6 +594,94 @@ describe('completeJob', () => {
     expect(modelVersionRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ skillId: null })
     );
+  });
+
+  it('tags a sim_rl job ModelVersion as rl_policy and skips the dataset lookup', async () => {
+    const simJob = makeJob({
+      kind: 'sim_rl',
+      status: 'running',
+      datasetId: null,
+      baseModel: null,
+      fineTuneMethod: null,
+      sceneId: 'scene1',
+      twinId: 'twin1',
+    });
+    trainingJobRepository.findById.mockResolvedValue(simJob);
+    trainingJobService.updateJobStatus.mockResolvedValue(
+      makeJob({ kind: 'sim_rl', status: 'completed', progress: 100 })
+    );
+    modelVersionRepository.create.mockResolvedValue({ id: 'mvrl' } as never);
+
+    const res = await trainingOrchestrator.completeJob(req);
+
+    expect(res.modelVersionId).toBe('mvrl');
+    // sim_rl has no dataset — the orchestrator must not look one up.
+    expect(datasetRepository.findById).not.toHaveBeenCalled();
+    expect(modelVersionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ modelType: 'rl_policy', skillId: null, deploymentStatus: 'staging' })
+    );
+  });
+
+  it('persists sim-RL quality metrics (reward/success/timesteps) into trainingMetrics', async () => {
+    const simJob = makeJob({
+      kind: 'sim_rl',
+      status: 'running',
+      datasetId: null,
+      sceneId: 'scene1',
+      twinId: 'twin1',
+    });
+    trainingJobRepository.findById.mockResolvedValue(simJob);
+    trainingJobService.updateJobStatus.mockResolvedValue(
+      makeJob({ kind: 'sim_rl', status: 'completed', progress: 100 })
+    );
+    modelVersionRepository.create.mockResolvedValue({ id: 'mvrl' } as never);
+
+    const rlReq: WorkerCompleteRequest = {
+      jobId: 'job1',
+      artifactUri: 's3://model-checkpoints/job1/policy.zip',
+      finalMetrics: {
+        finalLoss: 0,
+        trainingTimeSeconds: 42,
+        bestEpoch: 0,
+        meanReward: 12.5,
+        successRate: 0.7,
+        totalTimesteps: 50000,
+        trainer: 'ppo',
+      },
+    };
+
+    await trainingOrchestrator.completeJob(rlReq);
+
+    // The labelled RL summary must reach the model registry, not just the
+    // inverted-reward loss curve (TASK-172.C review finding).
+    expect(modelVersionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelType: 'rl_policy',
+        trainingMetrics: expect.objectContaining({
+          mean_reward: 12.5,
+          success_rate: 0.7,
+          total_timesteps: 50000,
+          trainer: 'ppo',
+        }),
+      })
+    );
+  });
+
+  it('does NOT add RL metric keys for a supervised job', async () => {
+    trainingJobRepository.findById.mockResolvedValue(makeJob({ status: 'running' }));
+    trainingJobService.updateJobStatus.mockResolvedValue(makeJob({ status: 'completed' }));
+    datasetRepository.findById.mockResolvedValue(makeDataset({ skillId: 'skillX' }));
+    modelVersionRepository.create.mockResolvedValue({ id: 'mv1' } as never);
+
+    await trainingOrchestrator.completeJob({
+      ...req,
+      finalMetrics: { ...req.finalMetrics, meanReward: 9 } as never,
+    });
+
+    const created = modelVersionRepository.create.mock.calls[0][0] as unknown as {
+      trainingMetrics: Record<string, unknown>;
+    };
+    expect(created.trainingMetrics).not.toHaveProperty('mean_reward');
   });
 });
 

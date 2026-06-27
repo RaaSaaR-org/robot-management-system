@@ -30,6 +30,7 @@ import {
   simSceneRepository,
   digitalTwinRepository,
   twinZoneRepository,
+  modelVersionRepository,
   type SimSceneRecord,
 } from '../repositories/index.js';
 import { modelStorage } from '../storage/model-storage.js';
@@ -37,9 +38,18 @@ import {
   simToRealValidationService,
   type SimToRealComparisonRow,
 } from './SimToRealValidationService.js';
+import type { ModelVersion } from '../types/vla.types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/** True for S3/RustFS "object does not exist" errors (vs. transient failures). */
+function isNotFoundError(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  const status = (err as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata
+    ?.httpStatusCode;
+  return name === 'NoSuchKey' || name === 'NotFound' || status === 404;
+}
 
 // ============================================================================
 // TYPES
@@ -143,6 +153,13 @@ const PROJECT_ROOT = path.resolve(process.cwd(), '..');
 const EVALUATOR_SCRIPT = path.join(
   PROJECT_ROOT,
   'robot-agent/hardware/sim_evaluator/evaluate_vla.py'
+);
+// Sim-RL policy evaluator (TASK-172.C Phase 3): scores a trained policy.onnx
+// locally by stepping the nav env — no VLA server. Used when the model under
+// test is a `rl_policy` ModelVersion.
+const EVALUATOR_POLICY_SCRIPT = path.join(
+  PROJECT_ROOT,
+  'robot-agent/hardware/sim_evaluator/evaluate_policy.py'
 );
 // Canonical real-to-sim converter. The server spawns its `generate` subcommand
 // so the single world->MJCF transform stays defined only in Python (TASK-171).
@@ -623,31 +640,111 @@ export class SimulationService extends EventEmitter {
       try {
         job.sceneFile = await this.materializeSceneFile(job.sceneId, jobId);
       } catch (err) {
-        console.error(`[SimulationService] Failed to materialize scene for ${jobId}:`, err);
+        // A scene whose MJCF/meshes can't be materialized must NOT silently fall
+        // back to the bundled empty room — the gate would score the policy in the
+        // wrong environment and still report a green simSuccessRate to the deploy
+        // gate. Fail loudly instead (TASK-172.C review finding). Built-in scenes
+        // (no mjcfKey) resolve to `undefined` without throwing and are unaffected.
+        return this.failJob(
+          jobId,
+          job,
+          `Failed to materialize scene ${job.sceneId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
       }
     }
 
-    const isG1 = job.embodiment === 'g1' || job.embodiment === 'unitree_g1';
-    const task = isG1
-      ? 'Walk to the goal zone while avoiding keep-out areas.'
-      : 'Pick up the red cube and place it on the target.';
+    // Branch on the model type (TASK-172.C Phase 3): a sim-RL `rl_policy` is
+    // scored by stepping evaluate_policy.py against its own policy.onnx (no VLA
+    // server); a supervised VLA model goes through evaluate_vla.py as before.
+    const modelVersion = await modelVersionRepository
+      .findById(job.modelId)
+      .catch((err) => {
+        console.error(
+          `[SimulationService] Failed to load model ${job.modelId} for ${jobId}:`,
+          err
+        );
+        return null;
+      });
+    const isRlPolicy = modelVersion?.modelType === 'rl_policy';
 
-    const args = [
-      'run', 'python',
-      EVALUATOR_SCRIPT,
-      '--vla-server', VLA_SERVER_URL,
-      '--environment', job.environment,
-      '--episodes', String(job.rolloutCount),
-      '--max-steps', '200',
-      '--task', task,
-      '--output', outputPath,
-      '--frames-dir', framesDir,
-    ];
-    if (job.embodiment) {
-      args.push('--embodiment', job.embodiment);
+    let policyDir: string | undefined;
+    let args: string[];
+
+    if (isRlPolicy) {
+      if (!existsSync(EVALUATOR_POLICY_SCRIPT)) {
+        return this.failJob(jobId, job, 'evaluate_policy.py not found (sim-RL gate)');
+      }
+      let policy: { policyFile: string; manifestFile?: string };
+      try {
+        policy = await this.materializePolicyFiles(modelVersion!, jobId);
+      } catch (err) {
+        return this.failJob(
+          jobId,
+          job,
+          `Failed to fetch RL policy artifact: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+      policyDir = path.dirname(policy.policyFile);
+      args = [
+        'run', 'python',
+        EVALUATOR_POLICY_SCRIPT,
+        '--policy-file', policy.policyFile,
+        '--episodes', String(job.rolloutCount),
+        '--max-steps', '200',
+        '--output', outputPath,
+        '--frames-dir', framesDir,
+      ];
+      if (policy.manifestFile) {
+        args.push('--manifest-file', policy.manifestFile);
+      }
+      if (job.sceneFile) {
+        args.push('--scene-file', job.sceneFile);
+      }
+    } else {
+      const isG1 = job.embodiment === 'g1' || job.embodiment === 'unitree_g1';
+      const task = isG1
+        ? 'Walk to the goal zone while avoiding keep-out areas.'
+        : 'Pick up the red cube and place it on the target.';
+
+      args = [
+        'run', 'python',
+        EVALUATOR_SCRIPT,
+        '--vla-server', VLA_SERVER_URL,
+        '--environment', job.environment,
+        '--episodes', String(job.rolloutCount),
+        '--max-steps', '200',
+        '--task', task,
+        '--output', outputPath,
+        '--frames-dir', framesDir,
+      ];
+      if (job.embodiment) {
+        args.push('--embodiment', job.embodiment);
+      }
+      if (job.sceneFile) {
+        args.push('--scene-file', job.sceneFile);
+      }
     }
-    if (job.sceneFile) {
-      args.push('--scene-file', job.sceneFile);
+
+    // A cancel that arrived during the (now network-bound) scene/policy
+    // downloads above set status='failed' but found no process to kill yet.
+    // Re-check before spawning so we don't launch an un-killable evaluator for
+    // an already-abandoned job. No await separates this check from the spawn +
+    // processes.set, so the window is closed in single-threaded Node.
+    if (this.jobs.get(jobId)?.status !== 'running') {
+      this.cleanupSceneFile(job.sceneFile);
+      if (policyDir) {
+        try {
+          rmSync(policyDir, { recursive: true, force: true });
+        } catch {
+          /* best-effort */
+        }
+      }
+      console.log(`[SimulationService] Job ${jobId} cancelled before spawn; skipping eval`);
+      return;
     }
 
     const proc = spawn('uv', args, {
@@ -694,6 +791,13 @@ export class SimulationService extends EventEmitter {
     proc.on('close', (code) => {
       this.processes.delete(jobId);
       this.cleanupSceneFile(job.sceneFile);
+      if (policyDir) {
+        try {
+          rmSync(policyDir, { recursive: true, force: true });
+        } catch (err) {
+          console.error(`[SimulationService] Failed to clean policy dir ${policyDir}:`, err);
+        }
+      }
       const current = this.jobs.get(jobId);
       if (!current || current.status !== 'running') return;
 
@@ -943,6 +1047,80 @@ export class SimulationService extends EventEmitter {
     } catch {
       // best-effort cleanup
     }
+  }
+
+  /**
+   * Download a sim-RL policy's artifacts (policy.onnx + optional manifest.json)
+   * from the MODEL_CHECKPOINTS bucket into a per-job dir (TASK-172.C Phase 3).
+   * The training worker uploads them under `<trainingJobId>/…` and `completeJob`
+   * sets `ModelVersion.trainingJobId = jobId`, so that prefix locates them. The
+   * manifest carries the VecNormalize obs stats; it is optional (the gate falls
+   * back to identity normalization when absent).
+   */
+  private async materializePolicyFiles(
+    modelVersion: ModelVersion,
+    jobId: string
+  ): Promise<{ policyFile: string; manifestFile?: string }> {
+    const prefix = modelVersion.trainingJobId;
+    if (!prefix) {
+      throw new Error(`ModelVersion ${modelVersion.id} has no trainingJobId`);
+    }
+    const destDir = path.join(SIM_RUNS_DIR, jobId, 'policy');
+    mkdirSync(destDir, { recursive: true });
+
+    const policyFile = path.join(destDir, 'policy.onnx');
+    try {
+      const policyStream = await modelStorage.getModelCheckpointStream(`${prefix}/policy.onnx`);
+      await pipeline(policyStream, createWriteStream(policyFile));
+    } catch (err) {
+      // No subprocess spawns on this path, so proc 'close' never fires to clean
+      // up — remove the empty/partial dir here so failed RL evals don't leak it.
+      try {
+        rmSync(destDir, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+      throw err;
+    }
+
+    let manifestFile: string | undefined = path.join(destDir, 'manifest.json');
+    try {
+      const manifestStream = await modelStorage.getModelCheckpointStream(`${prefix}/manifest.json`);
+      await pipeline(manifestStream, createWriteStream(manifestFile));
+    } catch (err) {
+      // A genuinely-absent manifest is fine — the gate falls back to identity
+      // normalization. A *transient* storage error is not: don't silently
+      // conflate the two. Surface non-not-found errors, and drop any partial
+      // file so PolicyBackend's sibling auto-discovery can't read a truncated
+      // manifest. Either way fall back rather than failing the whole eval.
+      if (!isNotFoundError(err)) {
+        console.warn(
+          `[SimulationService] manifest fetch failed (non-not-found) for ${prefix}/manifest.json:`,
+          err
+        );
+      }
+      try {
+        rmSync(manifestFile, { force: true });
+      } catch {
+        /* best-effort */
+      }
+      manifestFile = undefined;
+    }
+
+    console.log(`[SimulationService] Materialized RL policy ${modelVersion.id} → ${policyFile}`);
+    return { policyFile, manifestFile };
+  }
+
+  /** Mark a real job failed with a reason before its subprocess spawns. */
+  private failJob(jobId: string, job: SimJob, reason: string): void {
+    console.error(`[SimulationService] ${reason} for ${jobId}`);
+    job.status = 'failed';
+    job.failureReason = reason;
+    job.updatedAt = new Date();
+    void simulationJobRepository
+      .update(jobId, { status: 'failed', failureReason: reason })
+      .catch((err) => console.error(`[SimulationService] Failed to persist fail for ${jobId}:`, err));
+    this.emit('job:failed', job);
   }
 
   // ==========================================================================

@@ -12,6 +12,7 @@ import type {
   DatasetsListResponse,
   TrainingJob,
   SubmitTrainingJobInput,
+  SubmitSimRlJobInput,
   TrainingJobQueryParams,
   TrainingJobsListResponse,
   TrainingJobResponse,
@@ -259,9 +260,12 @@ export const trainingApi = {
   },
 
   /**
-   * Submit a new training job
+   * Submit a new training job — supervised VLA fine-tune or a sim_rl policy
+   * (same endpoint; the server branches on `kind`). (TASK-172.C)
    */
-  async submitTrainingJob(input: SubmitTrainingJobInput): Promise<TrainingJob> {
+  async submitTrainingJob(
+    input: SubmitTrainingJobInput | SubmitSimRlJobInput
+  ): Promise<TrainingJob> {
     const response = await apiClient.post<{ job: TrainingJob }>(ENDPOINTS.trainingJobs, input);
     return response.data.job;
   },
