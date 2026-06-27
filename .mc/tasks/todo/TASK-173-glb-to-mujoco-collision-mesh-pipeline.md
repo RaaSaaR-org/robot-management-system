@@ -68,7 +68,16 @@ A `/deep-research` run (22 sources, 25 claims adversarially verified) establishe
 
 Full report: see the deep-research output referenced in the PR / task discussion.
 
-## Current state
+## Status (2026-06-27)
+
+**Implemented + committed on PR #164** (`ce8ef65` — GLB→MuJoCo collision-mesh
+pipeline: trimesh keeps axes, MuJoCo convex-hulls meshes, CoACD decomposes, a
+solidity guard defers degenerate boxes to occupancy). Code-complete; **nothing
+software-side is open** — remaining validation is part of the TASK-172 §A
+hardware run (build a scene from a real scanned `mesh.glb` and walk the G1 into
+the decomposed geometry). Candidate to move to `done`.
+
+## Current state (historical — pre-implementation)
 
 - `robot-agent/hardware/sim_evaluator/scene_builder.py:298-343` — `use_mesh`
   branch accepts only `.obj/.stl/.msh` and emits a **single** `room_mesh` geom

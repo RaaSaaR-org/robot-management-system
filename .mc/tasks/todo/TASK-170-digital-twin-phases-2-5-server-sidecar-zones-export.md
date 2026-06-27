@@ -36,9 +36,17 @@ and verified.** This task is the remaining phases 2–5.
 Full plan: `~/.claude/plans/the-unitree-g1-has-hidden-marshmallow.md` (read it
 first — has architecture, conflict reconciliations, risks, per-phase demos).
 
-## Current state (2026-06-24)
+## Status (2026-06-27)
 
-**Branch `feat/g1-pointcloud` — uncommitted, builds on the point-cloud feature.**
+**Phases 0–5 code is implemented + committed on PR #164** (`e063f8b` the
+scan→twin→real-to-sim loop, `dd80486` Phase 5 scan-session reaper + raw-frame
+prune); Playwright-validated. **Still open:** the Phase 5 **hardware** path —
+real MID-360 LiDAR capture + the real Open3D mesh/occupancy pipeline
+(`@status hardware-pending`); everything below it is software-done.
+
+## Current state (2026-06-24, historical — pre-Phase-2)
+
+**Branch `feat/g1-pointcloud` — builds on the point-cloud feature.**
 
 Done & verified (337 agent tests pass, all 3 typechecks clean, app build clean,
 full loop + Playwright confirmed: room fills 6k→28k pts, Stop persists backdrop):

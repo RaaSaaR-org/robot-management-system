@@ -235,9 +235,14 @@ build time; a claim-time selector cannot move it without re-running
 
 #### Implementation status (2026-06-26)
 
-Phases 0–3 **implemented + tested** on branch `feat/g1-pointcloud` (uncommitted).
-Suites green: **sim_evaluator 39**, **sim-trainer 14** (non-slow; +1 slow xfail),
-**server 4738** (full), server `tsc` clean.
+Phases 0–3 **implemented + tested**, **committed on PR #164** (`05b379d`,
+2026-06-27). Suites green: **sim_evaluator 39**, **sim-trainer 14** (non-slow;
++1 slow xfail), **server 4738** (full), **app 973**, all typechecks clean.
+
+**Still open on this task:** §A full-circle hardware run (VLA server :8000 +
+real-G1 eval — all `[ ]` above), Phase 4 (CUDA/MJX gait + `rl_policy` serving),
+and the production **Prisma migration** for the new columns (line 42 — done in
+local dev via `db:push`, not yet a committed migration).
 
 Validated by an adversarial multi-agent review (4 dimensions → per-finding skeptic
 verification, 20 agents): **15 confirmed findings, all fixed**, 1 dismissed. Notably:
