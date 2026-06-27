@@ -3,6 +3,37 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.06.27] - 2026-06-27
+
+### Added
+
+- G1 room scan → twin → MuJoCo sim → RL nav-policy (TASK-170/171/172.C) (#164)
+- simplify robot detail view + polish VR teleop (#145)
+
+### Fixed
+
+- unshadow static GET routes hidden behind /:id (#158)
+
+### Maintenance
+
+- jobs + workers + websocket coverage — wave 13 (125 tests) (#163)
+- unit tests for storage + messaging modules (wave 12) (#162)
+- unit tests for cross-cutting modules — utils, security, middleware (wave 11) (#161)
+- unit tests for final 9 repository data-access classes (wave 10) (#160)
+- unit tests for 10 repository data-access classes (wave 9) (#159)
+- cover final 14 route modules via supertest (wave 8) (#157)
+- cover 15 more route modules via supertest (wave 7) (#156)
+- cover 15 route modules via supertest (wave 6) (#155)
+- cover final 5 services — completes service tier (wave 5) (#154)
+- cover ML/training-tier services (wave 4) (#153)
+- cover 14 more services (central + compliance + misc) (#152)
+- cover 14 DB-heavy server services + app useApi/useWebSocket hooks (#151)
+- cover data/safety/compliance/http services (#150)
+- cover shared utils, hooks, and all Zustand stores (#149)
+- run vitest in CI + fix stale server tests (#148)
+- cover robot detail-view refactor + VR/keyboard teleop (#147)
+
+
 ## [v2026.06.21.1] - 2026-06-21
 
 ### Fixed
