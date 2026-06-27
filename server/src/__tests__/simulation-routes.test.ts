@@ -10,25 +10,42 @@ import request from 'supertest';
 import { Readable } from 'stream';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockSimulationService, mockFs } = vi.hoisted(() => ({
-  mockSimulationService: {
-    submitJob: vi.fn(),
-    listJobs: vi.fn(),
-    getJob: vi.fn(),
-    cancelJob: vi.fn(),
-    getAvailableEnvironments: vi.fn(),
-    getSimToRealComparison: vi.fn(),
-    getFramesDir: vi.fn(),
-    getEnvironmentPreview: vi.fn(),
-  },
-  mockFs: {
-    existsSync: vi.fn(),
-    createReadStream: vi.fn(),
-  },
-}));
+const { mockSimulationService, mockSimToRealValidationService, mockModelVersionRepository, mockFs } =
+  vi.hoisted(() => ({
+    mockSimulationService: {
+      submitJob: vi.fn(),
+      listJobs: vi.fn(),
+      getJob: vi.fn(),
+      cancelJob: vi.fn(),
+      getAvailableEnvironments: vi.fn(),
+      getSimToRealComparison: vi.fn(),
+      getFramesDir: vi.fn(),
+      getEnvironmentPreview: vi.fn(),
+      generateSceneFromTwin: vi.fn(),
+    },
+    mockSimToRealValidationService: {
+      createValidation: vi.fn(),
+      listForModelVersion: vi.fn(),
+    },
+    mockModelVersionRepository: {
+      findById: vi.fn(),
+    },
+    mockFs: {
+      existsSync: vi.fn(),
+      createReadStream: vi.fn(),
+    },
+  }));
 
 vi.mock('../services/SimulationService.js', () => ({
   simulationService: mockSimulationService,
+}));
+
+vi.mock('../services/SimToRealValidationService.js', () => ({
+  simToRealValidationService: mockSimToRealValidationService,
+}));
+
+vi.mock('../repositories/index.js', () => ({
+  modelVersionRepository: mockModelVersionRepository,
 }));
 
 vi.mock('fs', () => ({
@@ -105,7 +122,7 @@ describe('Simulation Routes', () => {
         .send({ modelId: 'model-abc', rolloutCount: 5, backend: 'mujoco' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe('environment is required');
+      expect(response.body.error).toBe('environment or sceneId is required');
     });
 
     it('returns 400 when rolloutCount is missing', async () => {
@@ -391,6 +408,116 @@ describe('Simulation Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to serve preview');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/simulation/scenes/generate
+  // --------------------------------------------------------------------------
+
+  describe('POST /api/simulation/scenes/generate', () => {
+    const MOCK_SCENE = { id: 'scene-1', twinId: 'twin-1', source: 'twin', mjcfKey: 'k' };
+
+    it('generates a scene for a twin', async () => {
+      mockSimulationService.generateSceneFromTwin.mockResolvedValue(MOCK_SCENE);
+
+      const response = await request(app)
+        .post('/api/simulation/scenes/generate')
+        .send({ twinId: 'twin-1' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.scene.id).toBe('scene-1');
+      expect(mockSimulationService.generateSceneFromTwin).toHaveBeenCalledWith('twin-1');
+    });
+
+    it('returns 400 when twinId is missing', async () => {
+      const response = await request(app).post('/api/simulation/scenes/generate').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('twinId is required');
+      expect(mockSimulationService.generateSceneFromTwin).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 when the twin is unknown', async () => {
+      mockSimulationService.generateSceneFromTwin.mockRejectedValue(
+        new Error('Unknown twin: twin-x')
+      );
+
+      const response = await request(app)
+        .post('/api/simulation/scenes/generate')
+        .send({ twinId: 'twin-x' });
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe('Unknown twin: twin-x');
+    });
+
+    it('returns 500 on unexpected service error', async () => {
+      mockSimulationService.generateSceneFromTwin.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app)
+        .post('/api/simulation/scenes/generate')
+        .send({ twinId: 'twin-1' });
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('boom');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/simulation/validations — sim-only gate passthrough (TASK-172.C)
+  // --------------------------------------------------------------------------
+
+  describe('POST /api/simulation/validations', () => {
+    it('forwards an explicit simOnly=true into createValidation', async () => {
+      mockSimToRealValidationService.createValidation.mockResolvedValue({ id: 'val-1' });
+
+      const response = await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-1', simSuccessRate: 0.8, simOnly: true });
+
+      expect(response.status).toBe(201);
+      expect(mockSimToRealValidationService.createValidation).toHaveBeenCalledWith(
+        expect.objectContaining({ modelVersionId: 'mv-1', simSuccessRate: 0.8, simOnly: true })
+      );
+      // Explicit flag short-circuits the model-type lookup.
+      expect(mockModelVersionRepository.findById).not.toHaveBeenCalled();
+    });
+
+    it('auto-derives simOnly=true for an rl_policy when the flag is omitted', async () => {
+      mockModelVersionRepository.findById.mockResolvedValue({ id: 'mv-2', modelType: 'rl_policy' });
+      mockSimToRealValidationService.createValidation.mockResolvedValue({ id: 'val-2' });
+
+      const response = await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-2', simSuccessRate: 0.9 });
+
+      expect(response.status).toBe(201);
+      expect(mockModelVersionRepository.findById).toHaveBeenCalledWith('mv-2');
+      expect(mockSimToRealValidationService.createValidation).toHaveBeenCalledWith(
+        expect.objectContaining({ simOnly: true })
+      );
+    });
+
+    it('auto-derives simOnly=false for a vla model when the flag is omitted', async () => {
+      mockModelVersionRepository.findById.mockResolvedValue({ id: 'mv-3', modelType: 'vla' });
+      mockSimToRealValidationService.createValidation.mockResolvedValue({ id: 'val-3' });
+
+      await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-3', simSuccessRate: 0.5 });
+
+      expect(mockSimToRealValidationService.createValidation).toHaveBeenCalledWith(
+        expect.objectContaining({ simOnly: false })
+      );
+    });
+
+    it('rejects a missing simSuccessRate', async () => {
+      const response = await request(app)
+        .post('/api/simulation/validations')
+        .send({ modelVersionId: 'mv-1' });
+
+      expect(response.status).toBe(400);
+      expect(mockSimToRealValidationService.createValidation).not.toHaveBeenCalled();
     });
   });
 });

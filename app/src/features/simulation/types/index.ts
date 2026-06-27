@@ -30,10 +30,62 @@ export interface SimJob {
   backend: 'mujoco' | 'isaac';
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
+  /** Human-readable reason a job ended in `failed` (evaluator stderr tail). */
+  failureReason?: string;
   metrics?: SimMetrics;
   frames?: SimFrame[];
   createdAt: string;
   updatedAt: string;
+  /** Set when the job was launched from a registry scene. */
+  sceneId?: string;
+  /** Embodiment resolved server-side from the scene (e.g. 'g1', 'so101'). */
+  embodiment?: string;
+}
+
+// ============================================================================
+// SIM SCENES (registry — built-in environments + twin-derived rooms)
+// ============================================================================
+
+export interface SimSceneBounds {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+}
+
+export interface SimScene {
+  id: string;
+  name: string;
+  description: string | null;
+  source: 'builtin' | 'twin';
+  builtinEnvId: string | null;
+  twinId: string | null;
+  embodimentTag: string;
+  backend: 'mujoco' | 'isaac';
+  mjcfKey: string | null;
+  usdKey: string | null;
+  status: string;
+  bounds: SimSceneBounds;
+  tenantId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SimToRealValidation {
+  id: string;
+  modelVersionId: string;
+  twinId: string | null;
+  simSceneId: string | null;
+  embodimentTag: string | null;
+  validationDate: string;
+  simSuccessRate: number;
+  realSuccessRate: number;
+  domainGapScore: number;
+  realTestCount: number;
+  taskCategories: string[];
+  notes: string | null;
 }
 
 export interface SimEnvironment {
@@ -49,11 +101,36 @@ export interface SimToRealComparison {
   simSuccessRate: number;
   realSuccessRate: number;
   gap: number;
+  twinId?: string | null;
+  simSceneId?: string | null;
+  validationDate?: string;
+  realTestCount?: number;
 }
 
 export interface SubmitSimJobInput {
   modelId: string;
-  environment: string;
   rolloutCount: number;
-  backend: 'mujoco' | 'isaac';
+  /** Preferred: backend + embodiment resolved server-side from the scene. */
+  sceneId?: string;
+  /** Legacy: explicit environment id (when not submitting via a registry scene). */
+  environment?: string;
+  /** Legacy: explicit backend (when not submitting via a registry scene). */
+  backend?: 'mujoco' | 'isaac';
+}
+
+/** Body for POST /api/simulation/validations. */
+export interface CreateSimValidationInput {
+  modelVersionId: string;
+  simSuccessRate: number;
+  modelVersion?: string;
+  twinId?: string;
+  simSceneId?: string;
+  embodimentTag?: string;
+  realSuccessRate?: number;
+  /** Real episode sample size behind an explicit realSuccessRate. */
+  realTestCount?: number;
+  realRobotId?: string;
+  period?: string;
+  taskCategories?: string[];
+  notes?: string;
 }

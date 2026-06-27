@@ -1,0 +1,50 @@
+<mujoco model="g1_empty_scene">
+  <!--
+    Minimal standalone G1 scene: a floor, the 29-DOF G1 model (real Unitree
+    meshes), lights, and a single `goal_site`. Used by G1Env as a fallback when
+    no twin-derived scene is supplied, and by tests to load the G1 without a room.
+
+    A real evaluation scene comes from a digital twin via scene_builder.py
+    (build_scene_xml / write_scene); this file is only for standalone runs.
+
+    meshdir=".." because g1_29dof.xml references meshes as `g1/meshes/*.STL`
+    (paths chosen so they resolve next to twin scenes, which sit in mjcf/). This
+    scene sits one level deeper in mjcf/g1/, so meshdir backs up to mjcf/.
+  -->
+  <compiler angle="radian" autolimits="true" meshdir=".."/>
+
+  <include file="g1_29dof.xml"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="160" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0"
+             width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true"
+              texrepeat="5 5" reflectance="0.2"/>
+    <material name="goal_material" rgba="0.2 0.8 0.3 0.4"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3.5" dir="0 0 -1" directional="true"/>
+    <light pos="1.0 -1.0 2.5" dir="-0.3 0.3 -1" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane"/>
+
+    <!-- Goal region the robot should reach (1.5 m ahead in +x) -->
+    <site name="goal_site" pos="1.5 0 0.01" size="0.25 0.25 0.01" type="box"
+          material="goal_material"/>
+
+    <!-- Third-person front camera for rendering -->
+    <camera name="front" pos="3.0 -3.0 2.0" xyaxes="1 1 0 -0.4 0.4 1.4" fovy="55"/>
+  </worldbody>
+</mujoco>

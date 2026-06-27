@@ -16,8 +16,14 @@ import type {
   RobotLocation,
   PushedTask,
   Zone,
+  RobotType,
+  PointCloudFrame,
+  PointCloudPose,
 } from './types.js';
 import { generateTelemetry } from './telemetry.js';
+import { generateSyntheticScan, LIVE_POINTS_PER_FRAME } from './pointcloud-sim.js';
+import { PointCloudReplaySource } from './pointcloud-replay.js';
+import { createScanRoom, generatePosedScan, seedFromString, type ScanRoom } from './scan-sim.js';
 import { getJointConfig } from './joint-configs/index.js';
 import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
@@ -44,7 +50,9 @@ import {
   EmbodimentLoader,
   JointMapper,
   CameraConfigManager,
+  DepthSensorManager,
   type EmbodimentConfig,
+  type DepthSensorSpec,
 } from '../embodiment/index.js';
 import path from 'path';
 import { StatePersistence, type PersistedState } from './StatePersistence.js';
@@ -99,6 +107,21 @@ export class RobotStateManager {
   // Embodiment integration (Task 51)
   private jointMapper: JointMapper;
   private cameraConfigManager: CameraConfigManager;
+  private depthSensorManager: DepthSensorManager;
+
+  // Point-cloud frame counter (monotonic, for drop detection on the stream)
+  private pointCloudSequence = 0;
+
+  // Real-recording replay source: undefined = unchecked, null = none configured.
+  private replaySource: PointCloudReplaySource | null | undefined = undefined;
+
+  // Active digital-twin scan session. Holds ONE fixed room (centered on the
+  // twin's world origin = the robot's pose when scanning started) so successive
+  // pose-stamped frames accumulate into a single map as the robot walks. Poses
+  // are expressed relative to (originX, originY).
+  private activeScan:
+    | { sessionId: string; room: ScanRoom; startedAt: string; frames: number; originX: number; originY: number }
+    | null = null;
 
   // State persistence (Task 39)
   private persistence: StatePersistence;
@@ -184,6 +207,7 @@ export class RobotStateManager {
     // Initialize embodiment utilities (Task 51)
     this.jointMapper = new JointMapper();
     this.cameraConfigManager = new CameraConfigManager();
+    this.depthSensorManager = new DepthSensorManager();
 
     // Initialize state persistence — per-robot file to support multi-instance
     this.persistence = new StatePersistence(
@@ -315,6 +339,172 @@ export class RobotStateManager {
       (telemetry as unknown as Record<string, unknown>).hardwareConnected = hardwareClient.isConnected();
     }
     return telemetry;
+  }
+
+  // ============================================================================
+  // POINT CLOUD / DEPTH PERCEPTION
+  // ============================================================================
+
+  /**
+   * Produce a point-cloud frame for the requested (or primary) depth sensor.
+   *
+   * This is the single sim↔hardware seam for perception: when the hardware
+   * sidecar reports a connected robot we pull a real Livox/RealSense frame;
+   * otherwise we synthesize a believable MID-360-style scan. Pulled on demand
+   * (no simulation-loop coupling), exactly like {@link getTelemetry}.
+   *
+   * @param sensorName Specific depth sensor name, or undefined for the primary
+   * @param opts.full  Request a full-resolution capture instead of a live frame
+   */
+  async getPointCloudFrame(
+    sensorName?: string,
+    opts: { full?: boolean } = {},
+  ): Promise<PointCloudFrame> {
+    const sequence = this.pointCloudSequence++;
+    const spec = this.resolveDepthSensorSpec(sensorName);
+
+    // Hardware seam — real Livox / RealSense via the sidecar when connected.
+    if (hardwareClient.isConnected()) {
+      try {
+        const real = await hardwareClient.snapshotPointCloud(spec?.name ?? 'mid360_lidar');
+        return { ...real, robotId: this.state.id, sequence, source: 'hardware', timestamp: new Date().toISOString() };
+      } catch (err) {
+        console.warn('[RobotStateManager] Hardware point cloud unavailable, using simulation:', err);
+      }
+    }
+
+    // Replay seam — real recorded scans (KITTI / PCD) played back when configured
+    // via POINTCLOUD_REPLAY_FILE / _DIR. Opt-in, so it never displaces hardware.
+    const replay = this.getReplaySource();
+    if (replay && replay.size > 0) {
+      return replay.getFrame(spec, sequence, { full: opts.full, robotId: this.state.id, livePoints: LIVE_POINTS_PER_FRAME });
+    }
+
+    const targetPoints = opts.full ? (spec?.points_per_frame ?? 20000) : LIVE_POINTS_PER_FRAME;
+
+    // Scan-session seam — when a digital-twin sweep is active (and we'd
+    // otherwise synthesize), return a pose-dependent slice of one fixed world
+    // room so frames accumulate into a map. Only replaces the synthetic
+    // fallback, never hardware/replay, so live perception is unaffected.
+    if (this.activeScan) {
+      this.activeScan.frames++;
+      return generatePosedScan(
+        this.activeScan.room,
+        this.state,
+        this.currentScanPose(this.activeScan.originX, this.activeScan.originY),
+        spec,
+        sequence,
+        { targetPoints, scanSessionId: this.activeScan.sessionId },
+      );
+    }
+
+    return generateSyntheticScan(this.state, spec, sequence, { targetPoints });
+  }
+
+  /**
+   * Robot pose in the twin's world frame: position relative to the scan origin
+   * (where scanning started), heading in radians. This is the ONLY place the
+   * simulator's degree heading is converted to radians — keep it here to avoid a
+   * deg/rad mix.
+   */
+  private currentScanPose(originX: number, originY: number): PointCloudPose {
+    const loc = this.state.location;
+    return {
+      x: loc.x - originX,
+      y: loc.y - originY,
+      z: loc.z ?? 0,
+      yaw: ((loc.heading ?? 0) * Math.PI) / 180,
+    };
+  }
+
+  // ============================================================================
+  // SCAN SESSIONS (digital-twin sweep)
+  // ============================================================================
+
+  /**
+   * Begin a scan session: seed one fixed world room and switch the synthetic
+   * perception path to pose-dependent slices of it. Idempotent per id — calling
+   * again replaces the active session.
+   */
+  startScanSession(opts: { sessionId?: string } = {}): { sessionId: string; active: true } {
+    const sessionId = opts.sessionId ?? `sess_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    this.activeScan = {
+      sessionId,
+      room: createScanRoom(seedFromString(sessionId)),
+      startedAt: new Date().toISOString(),
+      frames: 0,
+      // Anchor the twin's world origin at the robot's current location.
+      originX: this.state.location.x,
+      originY: this.state.location.y,
+    };
+    console.log(
+      `[RobotStateManager] Scan session started: ${sessionId} (origin ${this.state.location.x.toFixed(1)},${this.state.location.y.toFixed(1)})`,
+    );
+    return { sessionId, active: true };
+  }
+
+  /** End the active scan session (perception reverts to the standard sim). */
+  stopScanSession(): { sessionId: string | null; frames: number } {
+    if (!this.activeScan) return { sessionId: null, frames: 0 };
+    const { sessionId, frames } = this.activeScan;
+    this.activeScan = null;
+    console.log(`[RobotStateManager] Scan session stopped: ${sessionId} (${frames} frames)`);
+    return { sessionId, frames };
+  }
+
+  /** Current scan-session status. */
+  getScanStatus(): { active: boolean; sessionId?: string; frames: number; startedAt?: string } {
+    if (!this.activeScan) return { active: false, frames: 0 };
+    return {
+      active: true,
+      sessionId: this.activeScan.sessionId,
+      frames: this.activeScan.frames,
+      startedAt: this.activeScan.startedAt,
+    };
+  }
+
+  /**
+   * Lazily resolve the real-recording replay source from the environment.
+   * `null` once we've checked and found none configured (so we don't re-scan).
+   */
+  private getReplaySource(): PointCloudReplaySource | undefined {
+    if (this.replaySource === undefined) {
+      this.replaySource = PointCloudReplaySource.fromEnv() ?? null;
+      if (this.replaySource) {
+        console.log(
+          `[RobotStateManager] Point-cloud replay active (${this.replaySource.size} recording(s): ${this.replaySource.labels.join(', ')})`,
+        );
+      }
+    }
+    return this.replaySource ?? undefined;
+  }
+
+  /**
+   * Resolve a depth sensor spec from the loaded embodiment config (if any).
+   * Falls back to undefined, in which case the generator uses MID-360 defaults.
+   */
+  private resolveDepthSensorSpec(sensorName?: string): DepthSensorSpec | undefined {
+    const tag = this.embodimentTagForRobotType(this.state.robotType);
+    if (!tag) return undefined;
+    const config = EmbodimentLoader.getInstance().getEmbodiment(tag);
+    if (!config) return undefined;
+    return sensorName
+      ? this.depthSensorManager.getDepthSensor(sensorName, config)
+      : this.depthSensorManager.getPrimaryDepthSensor(config);
+  }
+
+  /** Map a robot type to its embodiment config tag. */
+  private embodimentTagForRobotType(type: RobotType): string | undefined {
+    switch (type) {
+      case 'g1':
+        return 'unitree_g1';
+      case 'g1_edu':
+        return 'unitree_g1_edu_dex3';
+      case 'h1':
+        return 'unitree_h1';
+      default:
+        return undefined;
+    }
   }
 
   // ============================================================================

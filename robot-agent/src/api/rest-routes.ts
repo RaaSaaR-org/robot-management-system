@@ -89,6 +89,62 @@ export function createRestRoutes(
     res.json(telemetry);
   });
 
+  // GET /robots/:id/pointcloud - Get a point-cloud frame from a depth/LiDAR sensor.
+  // Query: ?sensor=<name> (defaults to the primary sensor), ?full=true for a
+  // full-resolution capture (used by the server's scan-capture path).
+  router.get('/robots/:id/pointcloud', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({
+        code: 'ROBOT_NOT_FOUND',
+        message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+      });
+      return;
+    }
+
+    const sensorName = typeof req.query.sensor === 'string' ? req.query.sensor : undefined;
+    const full = req.query.full === 'true' || req.query.full === '1';
+
+    try {
+      const frame = await robotStateManager.getPointCloudFrame(sensorName, { full });
+      res.json(frame);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to generate point cloud';
+      res.status(500).json({ code: 'POINTCLOUD_FAILED', message });
+    }
+  });
+
+  // Scan sessions (digital-twin sweep): start/stop/status. While a session is
+  // active the /pointcloud endpoint returns pose-dependent slices of one fixed
+  // world room, so accumulated frames reconstruct the room as the robot walks.
+  router.post('/robots/:id/pointcloud/scan/start', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}` });
+      return;
+    }
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
+    res.status(201).json(robotStateManager.startScanSession({ sessionId }));
+  });
+
+  router.post('/robots/:id/pointcloud/scan/stop', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}` });
+      return;
+    }
+    res.json(robotStateManager.stopScanSession());
+  });
+
+  router.get('/robots/:id/pointcloud/scan/status', (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}` });
+      return;
+    }
+    res.json(robotStateManager.getScanStatus());
+  });
+
   // GET /robots/:id/commands - Get command history
   router.get('/robots/:id/commands', (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
@@ -128,6 +184,8 @@ export function createRestRoutes(
         command: `/api/v1/robots/${robot.id}/command`,
         telemetry: `/api/v1/robots/${robot.id}/telemetry`,
         telemetryWs: `ws://localhost:${config.port}/ws/telemetry/${robot.id}`,
+        pointCloud: `/api/v1/robots/${robot.id}/pointcloud`,
+        pointCloudWs: `ws://localhost:${config.port}/ws/pointcloud/${robot.id}`,
       },
       a2a: {
         agentCard: `/.well-known/agent-card.json`,

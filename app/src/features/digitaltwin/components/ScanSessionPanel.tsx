@@ -1,0 +1,110 @@
+/**
+ * @file ScanSessionPanel.tsx
+ * @description Controls + live status for a digital-twin sweep: Start/Stop,
+ *   frames captured (server-authoritative when available), coverage estimate,
+ *   server build progress + stage during finalize, and a connection dot. Drive
+ *   the G1 around the room while it scans and watch the room fill in.
+ * @feature digitaltwin
+ */
+
+import { memo } from 'react';
+import { Button, Badge } from '@/shared/components/ui';
+import type { ScanStatus } from '../types/twin.types';
+
+export interface ScanSessionPanelProps {
+  robotName: string;
+  status: ScanStatus;
+  framesCaptured: number;
+  coveragePct: number;
+  pointCount: number;
+  isConnected: boolean;
+  /** Server build progress 0..100 (shown during finalize). */
+  serverProgress?: number;
+  /** Server build stage during finalize. */
+  serverStage?: string | null;
+  /** True once the rendered cloud is the authoritative server build. */
+  isAuthoritative?: boolean;
+  onStart: () => void;
+  onStop: () => void;
+}
+
+const STATUS_LABEL: Record<ScanStatus, string> = {
+  idle: 'Ready',
+  scanning: 'Scanning…',
+  finalizing: 'Building…',
+  done: 'Complete',
+  error: 'Error',
+};
+
+export const ScanSessionPanel = memo(function ScanSessionPanel({
+  robotName, status, framesCaptured, coveragePct, pointCount, isConnected,
+  serverProgress = 0, serverStage, isAuthoritative, onStart, onStop,
+}: ScanSessionPanelProps) {
+  const scanning = status === 'scanning';
+  const finalizing = status === 'finalizing';
+  const busy = scanning || finalizing;
+
+  return (
+    <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-4 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-theme-primary">Room scan</h3>
+          <Badge variant={scanning ? 'turquoise' : 'default'} size="sm">{STATUS_LABEL[status]}</Badge>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-theme-tertiary">
+          <span className={`inline-block w-2 h-2 rounded-full ${isConnected && scanning ? 'bg-green-400' : 'bg-surface-500'}`} />
+          {isConnected && scanning ? 'Live' : 'Idle'}
+        </div>
+      </div>
+
+      <p className="text-xs text-theme-tertiary">
+        Sweeping with <span className="text-theme-secondary font-medium">{robotName}</span>. On Start the server
+        captures pose-stamped frames while the robot walks a loop and the LiDAR map fills in.
+        {isAuthoritative && <span className="text-[#18E4C3]"> Showing the server-built cloud.</span>}
+      </p>
+
+      {/* Coverage (scanning) */}
+      {!finalizing && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-theme-tertiary">
+            <span>Coverage (est.)</span>
+            <span>{coveragePct}%</span>
+          </div>
+          <div className="h-2 rounded bg-surface-700 overflow-hidden">
+            <div className="h-full bg-[#FF6700] transition-all" style={{ width: `${coveragePct}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* Build progress (finalizing) */}
+      {finalizing && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-theme-tertiary">
+            <span>Building twin{serverStage ? ` · ${serverStage}` : ''}</span>
+            <span>{serverProgress}%</span>
+          </div>
+          <div className="h-2 rounded bg-surface-700 overflow-hidden">
+            <div className="h-full bg-[#18E4C3] transition-all" style={{ width: `${serverProgress}%` }} />
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-4 text-xs text-theme-tertiary">
+        <span>Frames: <span className="text-theme-secondary font-mono">{framesCaptured}</span></span>
+        <span>Points: <span className="text-theme-secondary font-mono">{pointCount.toLocaleString()}</span></span>
+      </div>
+
+      <div className="flex gap-2">
+        {!scanning ? (
+          <Button variant="primary" size="sm" onClick={onStart} disabled={finalizing}>
+            {status === 'done' ? 'Re-scan' : 'Start sweep'}
+          </Button>
+        ) : (
+          <Button variant="secondary" size="sm" onClick={onStop} disabled={!busy}>
+            Stop &amp; build
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+});

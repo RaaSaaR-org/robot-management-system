@@ -19,6 +19,11 @@ export interface UseWebSocketOptions<T> {
   reconnectInterval?: number;
   /** Callback when a message is received */
   onMessage?: (message: WebSocketMessage<T>) => void;
+  /** Wire format. 'arraybuffer' delivers binary frames to onBinaryMessage and
+   *  skips JSON parsing. Defaults to 'json'. */
+  binaryType?: 'json' | 'arraybuffer';
+  /** Callback when a binary (ArrayBuffer) frame is received */
+  onBinaryMessage?: (data: ArrayBuffer) => void;
   /** Callback when connection is established */
   onConnect?: () => void;
   /** Callback when connection is closed */
@@ -59,7 +64,9 @@ export function useWebSocket<T = unknown>(
     reconnect = true,
     maxReconnectAttempts = 5,
     reconnectInterval = 3000,
+    binaryType = 'json',
     onMessage,
+    onBinaryMessage,
     onConnect,
     onDisconnect,
     onError,
@@ -75,8 +82,8 @@ export function useWebSocket<T = unknown>(
   const isConnectingRef = useRef(false);
 
   // Store callbacks in refs to avoid recreating connect function
-  const callbacksRef = useRef({ onMessage, onConnect, onDisconnect, onError });
-  callbacksRef.current = { onMessage, onConnect, onDisconnect, onError };
+  const callbacksRef = useRef({ onMessage, onBinaryMessage, onConnect, onDisconnect, onError });
+  callbacksRef.current = { onMessage, onBinaryMessage, onConnect, onDisconnect, onError };
 
   // Clear reconnect timeout
   const clearReconnectTimeout = useCallback(() => {
@@ -123,6 +130,9 @@ export function useWebSocket<T = unknown>(
 
     try {
       const ws = new WebSocket(url);
+      if (binaryType === 'arraybuffer') {
+        ws.binaryType = 'arraybuffer';
+      }
 
       ws.onopen = () => {
         isConnectingRef.current = false;
@@ -134,6 +144,12 @@ export function useWebSocket<T = unknown>(
 
       ws.onmessage = (event: MessageEvent) => {
         if (!mountedRef.current) return;
+        // Binary frames bypass JSON parsing entirely and are NOT pushed into
+        // React state (high-rate streams would re-render every frame).
+        if (event.data instanceof ArrayBuffer) {
+          callbacksRef.current.onBinaryMessage?.(event.data);
+          return;
+        }
         try {
           const message = JSON.parse(event.data) as WebSocketMessage<T>;
           setLastMessage(message);
@@ -177,7 +193,7 @@ export function useWebSocket<T = unknown>(
       console.error('Failed to create WebSocket:', error);
       setStatus('error');
     }
-  }, [url, reconnect, maxReconnectAttempts, reconnectInterval, closeExisting, clearReconnectTimeout]);
+  }, [url, reconnect, maxReconnectAttempts, reconnectInterval, binaryType, closeExisting, clearReconnectTimeout]);
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {

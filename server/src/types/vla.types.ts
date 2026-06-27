@@ -122,6 +122,13 @@ export interface TrainingMetrics {
   epoch_times?: number[];
   best_epoch?: number;
   final_loss?: number;
+  // sim-RL quality summary (TASK-172.C) — populated only for `sim_rl` jobs so
+  // the model registry shows a labelled reward/success signal, not just the
+  // inverted-reward loss curve.
+  mean_reward?: number;
+  success_rate?: number;
+  total_timesteps?: number;
+  trainer?: string;
 }
 
 /**
@@ -377,13 +384,25 @@ export interface DatasetQueryParams {
 // ============================================================================
 
 /**
+ * Training job kind. `supervised` is the classic VLA fine-tune (datasetId +
+ * baseModel + fineTuneMethod). `sim_rl` trains an RL navigation policy in a
+ * twin-derived MuJoCo scene (sceneId; no dataset/baseModel). (TASK-172.C)
+ */
+export type TrainingJobKind = 'supervised' | 'sim_rl';
+
+/**
  * Training job queue entry
  */
 export interface TrainingJob {
   id: string;
-  datasetId: string;
-  baseModel: BaseModel;
-  fineTuneMethod: FineTuneMethod;
+  kind: TrainingJobKind;
+  // null for sim_rl jobs (they carry sceneId/twinId instead)
+  datasetId: string | null;
+  baseModel: BaseModel | null;
+  fineTuneMethod: FineTuneMethod | null;
+  // SimScene the RL policy trains in + its source twin (sim_rl only)
+  sceneId: string | null;
+  twinId: string | null;
   hyperparameters: Hyperparameters;
   gpuRequirements: GpuRequirements;
   status: TrainingJobStatus;
@@ -407,9 +426,13 @@ export interface TrainingJob {
 }
 
 export interface CreateTrainingJobInput {
-  datasetId: string;
-  baseModel: BaseModel;
-  fineTuneMethod: FineTuneMethod;
+  // Defaults to 'supervised' in the repository when omitted.
+  kind?: TrainingJobKind;
+  datasetId?: string | null;
+  baseModel?: BaseModel | null;
+  fineTuneMethod?: FineTuneMethod | null;
+  sceneId?: string | null;
+  twinId?: string | null;
   hyperparameters?: Hyperparameters;
   gpuRequirements?: GpuRequirements;
   totalEpochs?: number;
@@ -440,12 +463,20 @@ export interface TrainingJobQueryParams {
 // ============================================================================
 
 /**
+ * Model artifact kind. `vla` is a supervised vision-language-action model
+ * (default). `rl_policy` is a sim_rl navigation policy — gated sim-only and
+ * served/evaluated through a different runner. (TASK-172.C)
+ */
+export type ModelType = 'vla' | 'rl_policy';
+
+/**
  * Trained model artifact version
  */
 export interface ModelVersion {
   id: string;
   skillId: string | null;
   trainingJobId: string;
+  modelType: ModelType;
   version: string;
   artifactUri: string;
   checkpointUri?: string;
@@ -463,6 +494,7 @@ export interface ModelVersion {
 export interface CreateModelVersionInput {
   skillId: string | null;
   trainingJobId: string;
+  modelType?: ModelType;
   version: string;
   artifactUri: string;
   checkpointUri?: string;

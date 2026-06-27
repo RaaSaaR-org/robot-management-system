@@ -8,6 +8,7 @@
 
 import { createStore } from '@/store';
 import { robotsApi } from '../api/robotsApi';
+import { sensorScansApi } from '../api/sensorScansApi';
 import type {
   RobotsStore,
   Robot,
@@ -16,6 +17,7 @@ import type {
   RobotFilters,
   RobotCommandRequest,
   RobotErrorCode,
+  SensorScanSummary,
 } from '../types/robots.types';
 
 // ============================================================================
@@ -36,6 +38,7 @@ const initialState = {
   error: null as string | null,
   robotDetail: null as Robot | null,
   telemetryCache: {} as Record<string, RobotTelemetry>,
+  sensorScans: [] as SensorScanSummary[],
 };
 
 // ============================================================================
@@ -305,6 +308,20 @@ export const useRobotsStore = createStore<RobotsStore>(
       set((state) => {
         state.telemetryCache[robotId] = telemetry;
       });
+    },
+
+    // --------------------------------------------------------------------------
+    // Fetch Sensor Scans (recorded point clouds)
+    // --------------------------------------------------------------------------
+    fetchSensorScans: async (robotId: string) => {
+      try {
+        const scans = await sensorScansApi.listScans(robotId);
+        set((state) => {
+          state.sensorScans = scans;
+        });
+      } catch (error) {
+        console.error('Failed to fetch sensor scans:', error);
+      }
     },
 
     // --------------------------------------------------------------------------

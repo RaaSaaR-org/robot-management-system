@@ -17,13 +17,17 @@ export interface TrainingJobCardProps {
   className?: string;
 }
 
-const statusColors: Record<TrainingJobStatus, string> = {
-  pending: 'bg-gray-100 text-gray-800',
-  queued: 'bg-blue-100 text-blue-800',
-  running: 'bg-yellow-100 text-yellow-800',
-  completed: 'bg-green-100 text-green-800',
-  failed: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-100 text-gray-800',
+// Dark-first glass badges via the Badge variant API (was light-mode bg-*-100).
+const statusVariant: Record<
+  TrainingJobStatus,
+  'default' | 'info' | 'warning' | 'success' | 'error'
+> = {
+  pending: 'default',
+  queued: 'info',
+  running: 'warning',
+  completed: 'success',
+  failed: 'error',
+  cancelled: 'default',
 };
 
 const statusLabels: Record<TrainingJobStatus, string> = {
@@ -33,6 +37,13 @@ const statusLabels: Record<TrainingJobStatus, string> = {
   completed: 'Completed',
   failed: 'Failed',
   cancelled: 'Cancelled',
+};
+
+// Proper-cased fine-tune labels (was raw .toUpperCase() → "LORA").
+const fineTuneLabels: Record<string, string> = {
+  lora: 'LoRA',
+  full: 'Full',
+  frozen_backbone: 'Frozen Backbone',
 };
 
 /**
@@ -55,27 +66,45 @@ export function TrainingJobCard({
       interactive={!!onClick}
       className={cn(
         'transition-all',
-        selected && 'ring-2 ring-primary-500',
+        selected && 'ring-2 ring-cobalt-500',
         className
       )}
     >
       <Card.Body>
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-theme-primary">
-                {job.baseModel.toUpperCase()}
-              </span>
-              <span className="text-theme-tertiary">&bull;</span>
-              <span className="text-sm text-theme-secondary">
-                {job.fineTuneMethod.toUpperCase()}
-              </span>
+            <div className="flex items-center gap-2" data-testid="training-job-header">
+              {job.kind === 'sim_rl' ? (
+                <>
+                  <Badge variant="purple" data-testid="job-kind-badge">
+                    SIM-RL
+                  </Badge>
+                  <span className="text-sm text-theme-secondary">Navigation policy</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm font-medium text-theme-primary">
+                    {(job.baseModel ?? 'vla').toUpperCase()}
+                  </span>
+                  <span className="text-theme-tertiary">&bull;</span>
+                  <span className="text-sm text-theme-secondary">
+                    {fineTuneLabels[job.fineTuneMethod ?? ''] ??
+                      (job.fineTuneMethod ?? '').toUpperCase()}
+                  </span>
+                </>
+              )}
             </div>
             <p className="text-xs text-theme-tertiary mt-1 font-mono truncate">
               {job.id}
             </p>
           </div>
-          <Badge className={statusColors[job.status]}>{statusLabels[job.status]}</Badge>
+          <Badge
+            variant={statusVariant[job.status]}
+            dot={job.status === 'running'}
+            dotPulse={job.status === 'running'}
+          >
+            {statusLabels[job.status]}
+          </Badge>
         </div>
 
         {/* Progress bar for running jobs */}
@@ -93,27 +122,54 @@ export function TrainingJobCard({
           </div>
         )}
 
-        {/* Metrics for completed jobs */}
-        {job.status === 'completed' && job.metrics.final_loss !== undefined && (
+        {/* Metrics for completed sim-RL jobs — reward/success, not loss */}
+        {job.status === 'completed' && job.kind === 'sim_rl' && (
           <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
             <div>
-              <span className="text-theme-tertiary">Final Loss</span>
-              <p className="font-medium text-theme-primary">
-                {job.metrics.final_loss.toFixed(4)}
+              <span className="text-theme-tertiary">Success Rate</span>
+              <p className="font-medium text-green-400">
+                {job.metrics.success_rate !== undefined
+                  ? `${(job.metrics.success_rate * 100).toFixed(0)}%`
+                  : '—'}
               </p>
             </div>
-            {job.metrics.best_epoch !== undefined && (
-              <div>
-                <span className="text-theme-tertiary">Best Epoch</span>
-                <p className="font-medium text-theme-primary">{job.metrics.best_epoch}</p>
-              </div>
-            )}
+            <div>
+              <span className="text-theme-tertiary">Mean Reward</span>
+              <p className="font-medium text-theme-primary">
+                {job.metrics.mean_reward !== undefined
+                  ? job.metrics.mean_reward.toFixed(2)
+                  : '—'}
+              </p>
+            </div>
           </div>
         )}
 
+        {/* Metrics for completed supervised jobs */}
+        {job.status === 'completed' &&
+          job.kind !== 'sim_rl' &&
+          job.metrics.final_loss !== undefined && (
+            <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-theme-tertiary">Final Loss</span>
+                <p className="font-medium text-theme-primary">
+                  {job.metrics.final_loss.toFixed(4)}
+                </p>
+              </div>
+              {job.metrics.best_epoch !== undefined && (
+                <div>
+                  <span className="text-theme-tertiary">Best Epoch</span>
+                  <p className="font-medium text-theme-primary">{job.metrics.best_epoch}</p>
+                </div>
+              )}
+            </div>
+          )}
+
         {/* Error message for failed jobs */}
         {job.status === 'failed' && job.errorMessage && (
-          <div className="mt-4 p-2 bg-red-50 rounded text-sm text-red-700 line-clamp-2">
+          <div
+            role="alert"
+            className="mt-4 p-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400 line-clamp-2"
+          >
             {job.errorMessage}
           </div>
         )}
@@ -127,7 +183,7 @@ export function TrainingJobCard({
             Batch: {job.hyperparameters.batch_size}
           </span>
           <span className="px-2 py-0.5 bg-theme-secondary/10 rounded">
-            Epochs: {job.hyperparameters.epochs}
+            {job.kind === 'sim_rl' ? 'Iterations' : 'Epochs'}: {job.hyperparameters.epochs}
           </span>
           {job.hyperparameters.lora_rank && (
             <span className="px-2 py-0.5 bg-theme-secondary/10 rounded">

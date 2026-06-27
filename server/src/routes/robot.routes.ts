@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import { robotManager } from '../services/RobotManager.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClient.js';
+import { sensorScanService } from '../services/SensorScanService.js';
 import { prisma } from '../database/index.js';
 
 export const robotRoutes = Router();
@@ -200,6 +201,107 @@ robotRoutes.get('/:id/camera/:name', async (req: Request, res: Response) => {
     if (!res.headersSent) {
       res.status(500).json({ error: 'Camera proxy error' });
     }
+  }
+});
+
+// ============================================================================
+// POINT CLOUD / PERCEPTION ROUTES — live snapshot proxy + scan capture
+// ============================================================================
+
+/**
+ * GET /:id/pointcloud/snapshot — Proxy a live point-cloud frame from the agent.
+ */
+robotRoutes.get('/:id/pointcloud/snapshot', async (req: Request, res: Response) => {
+  try {
+    const sensor = typeof req.query.sensor === 'string' ? req.query.sensor : undefined;
+    const frame = await sensorScanService.getLiveSnapshot(req.params.id, sensor);
+    res.json(frame);
+  } catch (error) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
+      return res.status(502).json({ error: 'Unable to communicate with robot agent' });
+    }
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+    console.error('[PointCloud] snapshot error:', error);
+    res.status(500).json({ error: 'Failed to get point cloud' });
+  }
+});
+
+/**
+ * POST /:id/pointcloud/capture — Capture a full-resolution scan into storage.
+ */
+robotRoutes.post('/:id/pointcloud/capture', async (req: Request, res: Response) => {
+  try {
+    const sensor = typeof req.body?.sensor === 'string' ? req.body.sensor : undefined;
+    const scan = await sensorScanService.captureScan(req.params.id, sensor);
+    res.status(201).json(scan);
+  } catch (error) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
+      return res.status(502).json({ error: 'Unable to communicate with robot agent' });
+    }
+    if (error instanceof Error && error.message.includes('not found')) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+    console.error('[PointCloud] capture error:', error);
+    res.status(500).json({ error: 'Failed to capture scan' });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// Scan sessions (digital-twin sweep) — thin proxy to the agent. The agent holds
+// the session + fixed world room; the server forwards start/stop/status so the
+// browser talks only to the server (agent-direct WS isn't reachable in prod).
+// The server-of-record ScanSession (persistence) lands in a later phase.
+// ----------------------------------------------------------------------------
+
+robotRoutes.post('/:id/pointcloud/scan/start', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) return res.status(404).json({ error: 'Robot not found' });
+    const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.MEDIUM);
+    const data = await httpClient.post(`/api/v1/robots/${req.params.id}/pointcloud/scan/start`, {
+      sessionId: typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined,
+    });
+    res.status(201).json(data);
+  } catch (error) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
+      return res.status(502).json({ error: 'Unable to communicate with robot agent' });
+    }
+    console.error('[ScanSession] start error:', error);
+    res.status(500).json({ error: 'Failed to start scan session' });
+  }
+});
+
+robotRoutes.post('/:id/pointcloud/scan/stop', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) return res.status(404).json({ error: 'Robot not found' });
+    const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.MEDIUM);
+    const data = await httpClient.post(`/api/v1/robots/${req.params.id}/pointcloud/scan/stop`);
+    res.json(data);
+  } catch (error) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
+      return res.status(502).json({ error: 'Unable to communicate with robot agent' });
+    }
+    console.error('[ScanSession] stop error:', error);
+    res.status(500).json({ error: 'Failed to stop scan session' });
+  }
+});
+
+robotRoutes.get('/:id/pointcloud/scan/status', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) return res.status(404).json({ error: 'Robot not found' });
+    const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.SHORT);
+    const data = await httpClient.get(`/api/v1/robots/${req.params.id}/pointcloud/scan/status`);
+    res.json(data);
+  } catch (error) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
+      return res.status(502).json({ error: 'Unable to communicate with robot agent' });
+    }
+    console.error('[ScanSession] status error:', error);
+    res.status(500).json({ error: 'Failed to get scan status' });
   }
 });
 

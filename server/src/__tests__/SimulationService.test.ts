@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SimulationService } from '../services/SimulationService.js';
 import type { SimJob, SimMetrics } from '../services/SimulationService.js';
+import { simToRealValidationService } from '../services/SimToRealValidationService.js';
 
 describe('SimulationService', () => {
   let service: SimulationService;
@@ -290,39 +291,40 @@ describe('SimulationService', () => {
   // getSimToRealComparison
   // ==========================================================================
 
+  // getSimToRealComparison now returns the REAL measured gap from persisted
+  // SimToRealValidation rows (TASK-171). The faked `sim * random()` path is gone.
   describe('getSimToRealComparison', () => {
-    it('returns empty array when no completed jobs exist', () => {
-      const comparisons = service.getSimToRealComparison('model-1');
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('returns empty array when the model has no validations', async () => {
+      vi.spyOn(simToRealValidationService, 'getComparisonForModel').mockResolvedValue([]);
+      const comparisons = await service.getSimToRealComparison('model-1');
       expect(comparisons).toEqual([]);
     });
 
-    it('returns comparison data with correct shape after completion', async () => {
-      vi.useFakeTimers();
+    it('returns measured validation rows for the model', async () => {
+      vi.spyOn(simToRealValidationService, 'getComparisonForModel').mockResolvedValue([
+        {
+          modelId: 'model-1',
+          simSuccessRate: 0.8,
+          realSuccessRate: 0.6,
+          gap: 0.2,
+          twinId: 'twin-1',
+          simSceneId: 'scene-1',
+          validationDate: '2026-06-25T00:00:00.000Z',
+          realTestCount: 5,
+        },
+      ]);
 
-      service.submitJob('model-1', 'so101_tabletop', 10, 'mujoco');
-      vi.advanceTimersByTime(60000);
-
-      const comparisons = service.getSimToRealComparison('model-1');
-      expect(comparisons.length).toBeGreaterThanOrEqual(1);
-
-      for (const c of comparisons) {
-        expect(c.modelId).toBe('model-1');
-        expect(typeof c.simSuccessRate).toBe('number');
-        expect(typeof c.realSuccessRate).toBe('number');
-        expect(typeof c.gap).toBe('number');
-        expect(c.simSuccessRate).toBeGreaterThanOrEqual(0);
-        expect(c.simSuccessRate).toBeLessThanOrEqual(1);
-        expect(c.realSuccessRate).toBeGreaterThanOrEqual(0);
-        expect(c.realSuccessRate).toBeLessThanOrEqual(1);
-      }
-
-      vi.useRealTimers();
-    });
-
-    it('returns empty when model has only queued jobs', () => {
-      service.submitJob('model-2', 'so101_tabletop', 100, 'mujoco');
-      const comparisons = service.getSimToRealComparison('model-2');
-      expect(comparisons).toEqual([]);
+      const comparisons = await service.getSimToRealComparison('model-1');
+      expect(comparisons).toHaveLength(1);
+      const c = comparisons[0];
+      expect(c.modelId).toBe('model-1');
+      expect(c.gap).toBe(0.2);
+      expect(c.simSuccessRate).toBe(0.8);
+      expect(c.realSuccessRate).toBe(0.6);
     });
   });
 });

@@ -34,6 +34,9 @@ vi.mock('../../repositories/index.js', () => ({
   datasetRepository: {
     findById: vi.fn(),
   },
+  simSceneRepository: {
+    findById: vi.fn(),
+  },
 }));
 
 vi.mock('../../messaging/index.js', () => ({
@@ -47,11 +50,13 @@ import { trainingJobService, TrainingJobService } from '../TrainingJobService.js
 import {
   trainingJobRepository as _trainingJobRepository,
   datasetRepository as _datasetRepository,
+  simSceneRepository as _simSceneRepository,
 } from '../../repositories/index.js';
 import { natsClient as _natsClient, getJobQueue as _getJobQueue } from '../../messaging/index.js';
 
 const trainingJobRepository = vi.mocked(_trainingJobRepository, true);
 const datasetRepository = vi.mocked(_datasetRepository, true);
+const simSceneRepository = vi.mocked(_simSceneRepository, true);
 const natsClient = vi.mocked(_natsClient, true);
 const getJobQueue = vi.mocked(_getJobQueue, true);
 
@@ -108,9 +113,12 @@ function makeDataset(overrides: Partial<Dataset> = {}): Dataset {
 function makeJob(overrides: Partial<TrainingJob> = {}): TrainingJob {
   return {
     id: 'job1',
+    kind: 'supervised',
     datasetId: 'ds1',
     baseModel: 'smolvla',
     fineTuneMethod: 'lora',
+    sceneId: null,
+    twinId: null,
     hyperparameters: { learning_rate: 1e-4, batch_size: 32, epochs: 100 },
     gpuRequirements: { count: 1, memory: 40 },
     status: 'pending',
@@ -261,6 +269,49 @@ describe('submitJob', () => {
       expect.objectContaining({ jobId: 'job-q', datasetId: 'ds1', priority: 9 }),
       { msgID: 'job-q' }
     );
+  });
+});
+
+// ===========================================================================
+// submitSimRlJob (TASK-172.C)
+// ===========================================================================
+
+describe('submitSimRlJob', () => {
+  it('throws when the scene does not exist', async () => {
+    simSceneRepository.findById.mockResolvedValue(null);
+    await expect(
+      trainingJobService.submitSimRlJob({ kind: 'sim_rl', sceneId: 'missing' })
+    ).rejects.toThrow('Sim scene not found: missing');
+    expect(trainingJobRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a sim_rl job (kind/sceneId/twinId, null dataset) and never enqueues NATS', async () => {
+    const queue = makeJobQueue();
+    setJobQueue(queue);
+    simSceneRepository.findById.mockResolvedValue({
+      id: 'scene-1',
+      twinId: 'twin-1',
+      embodimentTag: 'g1',
+      mjcfKey: 'twins/twin-1/scene.xml',
+    } as never);
+    const job = makeJob({ id: 'sim-created', kind: 'sim_rl', datasetId: null, sceneId: 'scene-1' });
+    trainingJobRepository.create.mockResolvedValue(job);
+
+    const cb = vi.fn();
+    const unsub = trainingJobService.onJobEvent(cb);
+
+    const result = await trainingJobService.submitSimRlJob({ kind: 'sim_rl', sceneId: 'scene-1' });
+
+    expect(result).toBe(job);
+    expect(trainingJobRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'sim_rl', sceneId: 'scene-1', twinId: 'twin-1' })
+    );
+    // sim_rl is claimed over HTTP — it must NOT be enqueued in NATS.
+    expect(queue.addJob).not.toHaveBeenCalled();
+    expect(cb).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'training:job:created', jobId: 'sim-created' })
+    );
+    unsub();
   });
 });
 

@@ -74,9 +74,12 @@ function makeDataset(overrides: Partial<Dataset> = {}): Dataset {
 function makeJob(overrides: Partial<TrainingJob> = {}): TrainingJob {
   return {
     id: 'job-1',
+    kind: 'supervised',
     datasetId: 'ds-1',
     baseModel: 'smolvla',
     fineTuneMethod: 'lora',
+    sceneId: null,
+    twinId: null,
     hyperparameters: {} as TrainingJob['hyperparameters'],
     gpuRequirements: {} as TrainingJob['gpuRequirements'],
     status: 'queued',
@@ -336,6 +339,20 @@ describe('trainingStore', () => {
 
       expect(result).toEqual(job);
       expect(useTrainingStore.getState().trainingJobs.map((j) => j.id)).toEqual(['new', 'old']);
+    });
+
+    it('does not duplicate when a concurrent fetch already added the job', async () => {
+      const job = makeJob({ id: 'race' });
+      // Simulate a poll-fetch that already pulled in the just-created job.
+      useTrainingStore.setState({ trainingJobs: [job] });
+      vi.mocked(trainingApi.submitTrainingJob).mockResolvedValue(job);
+
+      await useTrainingStore.getState().submitTrainingJob({
+        kind: 'sim_rl',
+        sceneId: 'scene-1',
+      });
+
+      expect(useTrainingStore.getState().trainingJobs.map((j) => j.id)).toEqual(['race']);
     });
   });
 

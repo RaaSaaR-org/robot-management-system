@@ -53,6 +53,9 @@ import { deploymentsRoutes } from './routes/deployments.routes.js';
 import { skillsRoutes } from './routes/skills.routes.js';
 import { embodimentsRoutes } from './routes/embodiments.routes.js';
 import { teleoperationRoutes } from './routes/teleoperation.routes.js';
+import { sensorScanRoutes } from './routes/sensorscan.routes.js';
+import { scanSessionRoutes } from './routes/scansession.routes.js';
+import { twinWorkerRoutes, digitalTwinRoutes } from './routes/twin.routes.js';
 import { trainingDocsRoutes } from './routes/training-docs.routes.js';
 import { curationRoutes } from './routes/curation.routes.js';
 import { activeLearningRoutes } from './routes/active-learning.routes.js';
@@ -258,6 +261,19 @@ export function createApp(): Express {
 
   // Teleoperation routes (protected) - VLA data collection via teleoperation
   app.use('/api/teleoperation', authMiddleware, teleoperationRoutes);
+
+  // Sensor scan routes (protected) - recorded point-cloud scans
+  app.use('/api/sensor-scans', authMiddleware, sensorScanRoutes);
+
+  // Digital twin scan-session routes (protected) - TASK-170 sweep lifecycle
+  app.use('/api/scan-sessions', authMiddleware, scanSessionRoutes);
+
+  // Digital twin sidecar worker routes (protected) - build-job poll/claim.
+  // Worker sub-routes get additional token-based auth (mirrors training workers).
+  app.use('/api/twin/workers', authMiddleware, workerAuthMiddleware, twinWorkerRoutes);
+
+  // Digital twin CRUD + artifacts + zones + export (protected) - TASK-170
+  app.use('/api/digital-twins', authMiddleware, digitalTwinRoutes);
 
   // Training data documentation routes (protected) - EU AI Act GPAI compliance
   app.use('/api/training-docs', authMiddleware, trainingDocsRoutes);

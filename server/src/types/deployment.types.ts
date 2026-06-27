@@ -67,6 +67,8 @@ export interface StartDeploymentRequest {
   targetZones?: string[];
   canaryConfig?: Partial<CanaryConfig>;
   rollbackThresholds?: Partial<RollbackThresholds>;
+  /** Bypass the sim-to-real validation gate (TASK-171) for this deployment. */
+  overrideSimValidation?: boolean;
 }
 
 /**

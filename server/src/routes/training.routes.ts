@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import { trainingJobService } from '../services/TrainingJobService.js';
 import type {
   SubmitTrainingJobRequest,
+  SubmitSimRlJobRequest,
   ListTrainingJobsQuery,
 } from '../types/training.types.js';
 import type { TrainingJobStatus, BaseModel, FineTuneMethod } from '../types/vla.types.js';
@@ -20,6 +21,33 @@ export const trainingRoutes = Router();
 
 trainingRoutes.post('/jobs', async (req: Request, res: Response) => {
   try {
+    // sim_rl jobs (TASK-172.C) carry a sceneId instead of dataset/baseModel.
+    if ((req.body as { kind?: string }).kind === 'sim_rl') {
+      const simRequest = req.body as SubmitSimRlJobRequest;
+      if (!simRequest.sceneId) {
+        return res.status(400).json({ error: 'sceneId is required for a sim_rl job' });
+      }
+      if (simRequest.hyperparameters) {
+        try {
+          const { trainingOrchestrator } = await import('../services/TrainingOrchestrator.js');
+          // sim_rl has no fineTuneMethod — validate as a generic ('full') set.
+          simRequest.hyperparameters = trainingOrchestrator.validateHyperparameters(
+            simRequest.hyperparameters,
+            'full'
+          );
+        } catch (validationError) {
+          const message =
+            validationError instanceof Error ? validationError.message : 'Invalid hyperparameters';
+          return res.status(400).json({ error: message });
+        }
+      }
+      const simJob = await trainingJobService.submitSimRlJob(simRequest);
+      return res.status(201).json({
+        job: simJob,
+        message: 'Sim-RL training job submitted successfully',
+      });
+    }
+
     const request = req.body as SubmitTrainingJobRequest;
 
     // Validate required fields
@@ -223,7 +251,7 @@ trainingRoutes.get('/active', async (req: Request, res: Response) => {
 // ============================================================================
 
 import { trainingOrchestrator } from '../services/TrainingOrchestrator.js';
-import { datasetRepository } from '../repositories/index.js';
+import { datasetRepository, simSceneRepository } from '../repositories/index.js';
 import type {
   WorkerHeartbeatRequest,
   WorkerHeartbeatResponse,
@@ -248,19 +276,52 @@ import type {
 
 trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
   try {
-    const { workerId, device } = req.body as { workerId?: string; device?: string };
+    const { workerId, device, kinds } = req.body as {
+      workerId?: string;
+      device?: string;
+      kinds?: string[];
+    };
     if (!workerId) {
       return res.status(400).json({ error: 'workerId is required' });
     }
-    const job = await trainingOrchestrator.claimNextPendingJob(workerId, device);
+    // `kinds` lets the sim-trainer claim only sim_rl jobs and the classic
+    // training-worker only supervised jobs (defaults to ['supervised']).
+    const claimKinds =
+      Array.isArray(kinds) && kinds.length > 0 ? kinds : ['supervised'];
+    const job = await trainingOrchestrator.claimNextPendingJob(
+      workerId,
+      device,
+      claimKinds
+    );
     if (!job) {
       return res.status(204).send();
     }
-    // Return the job plus its dataset reference so the worker has
+
+    // sim_rl jobs carry a SimScene (the RL env) instead of a dataset. The
+    // worker needs the scene + its MJCF key; the goal is baked into the MJCF.
+    if (job.kind === 'sim_rl') {
+      const scene = job.sceneId ? await simSceneRepository.findById(job.sceneId) : null;
+      return res.json({
+        job,
+        dataset: null,
+        scene: scene
+          ? {
+              id: scene.id,
+              mjcfKey: scene.mjcfKey,
+              twinId: scene.twinId,
+              embodimentTag: scene.embodimentTag,
+              backend: scene.backend,
+              bounds: scene.bounds,
+            }
+          : null,
+      });
+    }
+
+    // Supervised: return the job plus its dataset reference so the worker has
     // everything it needs in one round-trip. The `dataset.storagePath`
     // is the RustFS prefix the worker should download from — it is a
     // separate UUID from `job.datasetId` for HF-imported datasets.
-    const dataset = await datasetRepository.findById(job.datasetId);
+    const dataset = job.datasetId ? await datasetRepository.findById(job.datasetId) : null;
     res.json({
       job,
       dataset: dataset
@@ -456,6 +517,12 @@ trainingRoutes.get('/jobs/:id/estimate', async (req: Request, res: Response) => 
     const job = await trainingJobService.getJob(id);
     if (!job) {
       return res.status(404).json({ error: 'Training job not found' });
+    }
+    // Duration estimate is dataset-frame based; sim_rl jobs have no dataset.
+    if (!job.datasetId) {
+      return res
+        .status(400)
+        .json({ error: 'Duration estimate is not available for sim_rl jobs' });
     }
 
     const estimate = await trainingOrchestrator.estimateTrainingDuration(

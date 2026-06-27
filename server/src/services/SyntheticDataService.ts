@@ -652,12 +652,14 @@ export class SyntheticDataService extends EventEmitter {
    */
   private toSimToRealValidation(validation: {
     id: string;
-    syntheticJobId: string;
+    syntheticJobId: string | null;
     modelVersionId: string;
     validationDate: Date;
     simSuccessRate: number;
-    realSuccessRate: number;
-    domainGapScore: number;
+    // Nullable since TASK-172.C (sim-only validations). The synthetic/Isaac
+    // path always writes both, so coercing null→0 here is type-safety only.
+    realSuccessRate: number | null;
+    domainGapScore: number | null;
     realTestCount: number;
     taskCategories: unknown;
     perTaskMetrics: unknown;
@@ -665,12 +667,13 @@ export class SyntheticDataService extends EventEmitter {
   }): SimToRealValidation {
     return {
       id: validation.id,
-      syntheticJobId: validation.syntheticJobId,
+      // Twin-derived validations (TASK-171) carry no synthetic job.
+      syntheticJobId: validation.syntheticJobId ?? '',
       modelVersionId: validation.modelVersionId,
       validationDate: validation.validationDate,
       simSuccessRate: validation.simSuccessRate,
-      realSuccessRate: validation.realSuccessRate,
-      domainGapScore: validation.domainGapScore,
+      realSuccessRate: validation.realSuccessRate ?? 0,
+      domainGapScore: validation.domainGapScore ?? 0,
       realTestCount: validation.realTestCount,
       taskCategories: validation.taskCategories as string[],
       perTaskMetrics: validation.perTaskMetrics as

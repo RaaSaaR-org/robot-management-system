@@ -8,6 +8,8 @@ import { Router, type Request, type Response } from 'express';
 import { existsSync, createReadStream } from 'fs';
 import path from 'path';
 import { simulationService } from '../services/SimulationService.js';
+import { simToRealValidationService } from '../services/SimToRealValidationService.js';
+import { modelVersionRepository } from '../repositories/index.js';
 
 export const simulationRoutes = Router();
 
@@ -17,22 +19,29 @@ export const simulationRoutes = Router();
 
 simulationRoutes.post('/jobs', async (req: Request, res: Response) => {
   try {
-    const { modelId, environment, rolloutCount, backend } = req.body;
+    const { modelId, environment, sceneId, rolloutCount, backend } = req.body;
 
     if (!modelId) {
       return res.status(400).json({ error: 'modelId is required' });
     }
-    if (!environment) {
-      return res.status(400).json({ error: 'environment is required' });
-    }
     if (!rolloutCount || typeof rolloutCount !== 'number') {
       return res.status(400).json({ error: 'rolloutCount is required and must be a number' });
     }
-    if (!backend) {
-      return res.status(400).json({ error: 'backend is required' });
-    }
 
-    const job = simulationService.submitJob(modelId, environment, rolloutCount, backend);
+    // Scene-registry path (TASK-171): backend + embodiment + scene file are
+    // resolved from the SimScene. Legacy path still accepts environment+backend.
+    let job;
+    if (sceneId) {
+      job = await simulationService.submitJobForScene(modelId, sceneId, rolloutCount);
+    } else {
+      if (!environment) {
+        return res.status(400).json({ error: 'environment or sceneId is required' });
+      }
+      if (!backend) {
+        return res.status(400).json({ error: 'backend is required' });
+      }
+      job = simulationService.submitJob(modelId, environment, rolloutCount, backend);
+    }
 
     res.status(201).json({
       job,
@@ -129,17 +138,134 @@ simulationRoutes.get('/environments', async (_req: Request, res: Response) => {
 });
 
 // ============================================================================
+// GET /api/simulation/scenes — Registered scenes (built-ins + ready twins)
+// ============================================================================
+
+simulationRoutes.get('/scenes', async (_req: Request, res: Response) => {
+  try {
+    const scenes = await simulationService.getAvailableScenes();
+    res.json({ scenes });
+  } catch (error) {
+    console.error('[SimulationRoutes] Error listing scenes:', error);
+    const message = error instanceof Error ? error.message : 'Failed to list scenes';
+    res.status(500).json({ error: message });
+  }
+});
+
+// ============================================================================
+// POST /api/simulation/scenes/generate — build/refresh a twin's MuJoCo scene
+// from its real occupancy floor-plan + zones (works for any ready twin).
+// ============================================================================
+
+simulationRoutes.post('/scenes/generate', async (req: Request, res: Response) => {
+  try {
+    const { twinId } = req.body ?? {};
+    if (!twinId || typeof twinId !== 'string') {
+      return res.status(400).json({ error: 'twinId is required' });
+    }
+    const scene = await simulationService.generateSceneFromTwin(twinId);
+    res.status(201).json({ scene });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to generate scene';
+    console.error('[SimulationRoutes] Error generating scene:', error);
+    const status = /Unknown twin|no usable bounds/.test(message) ? 404 : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+// ============================================================================
 // GET /api/simulation/comparison/:modelId — Sim-to-real comparison
 // ============================================================================
 
 simulationRoutes.get('/comparison/:modelId', async (req: Request, res: Response) => {
   try {
-    const comparisons = simulationService.getSimToRealComparison(req.params.modelId);
+    const comparisons = await simulationService.getSimToRealComparison(req.params.modelId);
 
     res.json({ comparisons });
   } catch (error) {
     console.error('[SimulationRoutes] Error getting comparison:', error);
     const message = error instanceof Error ? error.message : 'Failed to get sim-to-real comparison';
+    res.status(500).json({ error: message });
+  }
+});
+
+// ============================================================================
+// Sim-to-Real validations (TASK-171 Phase 3)
+// ============================================================================
+
+// POST /api/simulation/validations — record a measured sim-to-real gap. The
+// real success rate is derived from real-hardware EvaluationEpisodes when not
+// supplied explicitly.
+simulationRoutes.post('/validations', async (req: Request, res: Response) => {
+  try {
+    const {
+      modelVersionId,
+      modelVersion,
+      twinId,
+      simSceneId,
+      embodimentTag,
+      simSuccessRate,
+      simOnly,
+      realSuccessRate,
+      realTestCount,
+      realRobotId,
+      period,
+      taskCategories,
+      notes,
+    } = req.body;
+
+    if (!modelVersionId) {
+      return res.status(400).json({ error: 'modelVersionId is required' });
+    }
+    if (typeof simSuccessRate !== 'number') {
+      return res.status(400).json({ error: 'simSuccessRate (0–1) is required and must be a number' });
+    }
+
+    // Sim-only gate (TASK-172.C): an `rl_policy` has no real-hardware
+    // counterpart, so its validation must store a null gap and let the deploy
+    // gate fall back to an absolute simSuccessRate threshold. Honour an explicit
+    // `simOnly`, else auto-derive it from the model type so a caller that forgets
+    // the flag does not get a bogus realSuccessRate=0 → domainGap=simSuccessRate.
+    let resolvedSimOnly = simOnly;
+    if (resolvedSimOnly === undefined) {
+      const mv = await modelVersionRepository.findById(modelVersionId).catch(() => null);
+      resolvedSimOnly = mv?.modelType === 'rl_policy';
+    }
+
+    const validation = await simToRealValidationService.createValidation({
+      modelVersionId,
+      modelVersion,
+      twinId,
+      simSceneId,
+      embodimentTag,
+      simSuccessRate,
+      simOnly: resolvedSimOnly,
+      realSuccessRate,
+      realTestCount,
+      realRobotId,
+      period,
+      taskCategories,
+      notes,
+    });
+
+    res.status(201).json({ validation, message: 'Sim-to-real validation recorded' });
+  } catch (error) {
+    console.error('[SimulationRoutes] Error creating validation:', error);
+    const message = error instanceof Error ? error.message : 'Failed to record validation';
+    res.status(400).json({ error: message });
+  }
+});
+
+// GET /api/simulation/validations/:modelVersionId — list validations for a model
+simulationRoutes.get('/validations/:modelVersionId', async (req: Request, res: Response) => {
+  try {
+    const validations = await simToRealValidationService.listForModelVersion(
+      req.params.modelVersionId,
+    );
+    res.json({ validations });
+  } catch (error) {
+    console.error('[SimulationRoutes] Error listing validations:', error);
+    const message = error instanceof Error ? error.message : 'Failed to list validations';
     res.status(500).json({ error: message });
   }
 });

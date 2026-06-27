@@ -112,6 +112,15 @@ const NAV_CATEGORIES: NavCategory[] = [
           </svg>
         ),
       },
+      {
+        label: "Digital Twin",
+        path: "/sites",
+        icon: (
+          <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11l-7-4-7 4m14 0l-7 4m7-4v6l-7 4m0-10L5 11m7 4v10M5 11v6l7 4" />
+          </svg>
+        ),
+      },
     ],
   },
   {

@@ -18,6 +18,7 @@ import { createRobotAgentCard } from './agent/agent-card.js';
 import { RobotAgentExecutor } from './agent/agent-executor.js';
 import { createRestRoutes } from './api/rest-routes.js';
 import { createTelemetryWebSocket } from './api/websocket.js';
+import { createPointCloudWebSocket } from './api/pointcloud-websocket.js';
 import { setRobotStateManager as setNavigationStateManager } from './tools/navigation.js';
 import { setRobotStateManager as setManipulationStateManager } from './tools/manipulation.js';
 import { setRobotStateManager as setStatusStateManager } from './tools/status.js';
@@ -181,6 +182,7 @@ async function main() {
   // They must NOT each bind to `server`: ws aborts non-matching paths with 400,
   // so the first-attached server would reject every other endpoint's upgrades.
   const telemetryWss = createTelemetryWebSocket(robotStateManager);
+  const pointCloudWss = createPointCloudWebSocket(robotStateManager);
   const frameRecorder = new FrameRecorder();
   const bilateralWss = createBilateralTeleopWebSocket(frameRecorder);
   const keyboardWss = createKeyboardTeleopWebSocket(robotStateManager);
@@ -200,6 +202,8 @@ async function main() {
 
     if (pathname === `/ws/telemetry/${ROBOT_ID}`) {
       route(telemetryWss);
+    } else if (pathname === `/ws/pointcloud/${ROBOT_ID}`) {
+      route(pointCloudWss);
     } else if (pathname === '/ws/bilateral-teleop') {
       route(bilateralWss);
     } else if (pathname === '/ws/keyboard-teleop') {
@@ -228,6 +232,8 @@ async function main() {
     console.log(`    REST API:       http://localhost:${PORT}/api/v1/robots/${ROBOT_ID}`);
     console.log(`    Registration:   http://localhost:${PORT}/api/v1/register`);
     console.log(`    Telemetry WS:   ws://localhost:${PORT}/ws/telemetry/${ROBOT_ID}`);
+    console.log(`    PointCloud WS:  ws://localhost:${PORT}/ws/pointcloud/${ROBOT_ID}`);
+    console.log(`    PointCloud:     http://localhost:${PORT}/api/v1/robots/${ROBOT_ID}/pointcloud`);
     console.log(`    Keyboard Teleop:ws://localhost:${PORT}/ws/keyboard-teleop`);
     console.log(`    Health Check:   http://localhost:${PORT}/api/v1/health`);
     console.log('');

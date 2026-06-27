@@ -247,12 +247,34 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | GET    | `/api/v1/robots/:id/tasks` | Get task queue |
 | DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
 | POST   | `/api/v1/robots/:id/reset` | Reset robot state |
+| GET    | `/api/v1/robots/:id/pointcloud` | Depth/LiDAR point-cloud frame (`?sensor=`, `?full=`) |
 | GET    | `/api/v1/register` | Registration info for server |
 | GET    | `/api/v1/health` | Health check |
 
 ### WebSocket
 
 - `ws://localhost:41243/ws/telemetry/:robotId` - Real-time telemetry (every 2s) + alerts on state change
+- `ws://localhost:41243/ws/pointcloud/:robotId` - Binary point-cloud stream (~3 Hz)
+
+### Point-cloud sources (G1 / G1-EDU)
+
+`getPointCloudFrame()` picks a source in priority order: **hardware** (live Livox/
+RealSense via the sidecar when connected) → **replay** (real recorded scans) →
+**sim** (synthetic generator). Every frame is tagged with `source` so the UI shows
+real vs. synthetic.
+
+To feed **real recorded LiDAR** (KITTI `.bin` or PCD ascii/binary/binary_compressed):
+
+```bash
+./scripts/fetch-sample-pointclouds.sh   # downloads real Unitree + KITTI scans (gitignored)
+POINTCLOUD_REPLAY_FILE=data/pointclouds-real/unitree-mid360.pcd npm run dev:g1
+# or a directory (cycles through frames):
+POINTCLOUD_REPLAY_DIR=data/pointclouds-real npm run dev:g1
+```
+
+Parsers live in `src/robot/pointcloud-formats.ts`; replay/normalization in
+`src/robot/pointcloud-replay.ts`. The Python sidecar honors the same data via
+`G1_POINTCLOUD_REPLAY` (see `hardware/pointcloud_replay.py`).
 
 ## Key Dependencies
 

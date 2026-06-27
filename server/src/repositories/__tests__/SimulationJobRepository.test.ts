@@ -118,6 +118,7 @@ describe('SimulationJobRepository.create', () => {
         id: 'job-1',
         modelId: 'model-1',
         environment: 'kitchen',
+        sceneId: null,
         backend: 'mujoco',
         rolloutCount: 5,
         status: 'running',

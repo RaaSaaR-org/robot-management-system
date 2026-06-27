@@ -12,7 +12,7 @@ import { cn } from '@/shared/utils/cn';
 // TYPES
 // ============================================================================
 
-export type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info' | 'cobalt' | 'turquoise';
+export type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info' | 'cobalt' | 'turquoise' | 'purple';
 export type BadgeSize = 'sm' | 'md' | 'lg';
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
@@ -43,6 +43,7 @@ const variantStyles: Record<BadgeVariant, string> = {
   info: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20',
   cobalt: 'bg-cobalt-500/10 text-cobalt-600 dark:text-cobalt-400 border border-cobalt-500/20',
   turquoise: 'bg-turquoise-500/10 text-turquoise-600 dark:text-turquoise-400 border border-turquoise-500/20',
+  purple: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20',
 };
 
 const dotColors: Record<BadgeVariant, string> = {
@@ -53,6 +54,7 @@ const dotColors: Record<BadgeVariant, string> = {
   info: 'bg-blue-500',
   cobalt: 'bg-cobalt-500',
   turquoise: 'bg-turquoise-500',
+  purple: 'bg-purple-500',
 };
 
 const sizeStyles: Record<BadgeSize, string> = {
@@ -108,7 +110,7 @@ export function Badge({
             'rounded-full',
             dotSizeStyles[size],
             dotColors[variant],
-            dotPulse && 'animate-pulse'
+            dotPulse && 'motion-safe:animate-pulse'
           )}
           aria-hidden="true"
         />

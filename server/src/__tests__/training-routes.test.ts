@@ -9,34 +9,41 @@ import express from 'express';
 import request from 'supertest';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockTrainingJobService, mockTrainingOrchestrator, mockDatasetRepository } = vi.hoisted(
-  () => ({
-    mockTrainingJobService: {
-      submitJob: vi.fn(),
-      getJobs: vi.fn(),
-      getJob: vi.fn(),
-      getJobWithProgress: vi.fn(),
-      cancelJob: vi.fn(),
-      retryJob: vi.fn(),
-      getQueueStats: vi.fn(),
-      getActiveJobs: vi.fn(),
-    },
-    mockTrainingOrchestrator: {
-      validateHyperparameters: vi.fn(),
-      claimNextPendingJob: vi.fn(),
-      recordHeartbeat: vi.fn(),
-      updateProgress: vi.fn(),
-      completeJob: vi.fn(),
-      failJob: vi.fn(),
-      recordCheckpoint: vi.fn(),
-      listWorkers: vi.fn(),
-      estimateTrainingDuration: vi.fn(),
-    },
-    mockDatasetRepository: {
-      findById: vi.fn(),
-    },
-  })
-);
+const {
+  mockTrainingJobService,
+  mockTrainingOrchestrator,
+  mockDatasetRepository,
+  mockSimSceneRepository,
+} = vi.hoisted(() => ({
+  mockTrainingJobService: {
+    submitJob: vi.fn(),
+    submitSimRlJob: vi.fn(),
+    getJobs: vi.fn(),
+    getJob: vi.fn(),
+    getJobWithProgress: vi.fn(),
+    cancelJob: vi.fn(),
+    retryJob: vi.fn(),
+    getQueueStats: vi.fn(),
+    getActiveJobs: vi.fn(),
+  },
+  mockTrainingOrchestrator: {
+    validateHyperparameters: vi.fn(),
+    claimNextPendingJob: vi.fn(),
+    recordHeartbeat: vi.fn(),
+    updateProgress: vi.fn(),
+    completeJob: vi.fn(),
+    failJob: vi.fn(),
+    recordCheckpoint: vi.fn(),
+    listWorkers: vi.fn(),
+    estimateTrainingDuration: vi.fn(),
+  },
+  mockDatasetRepository: {
+    findById: vi.fn(),
+  },
+  mockSimSceneRepository: {
+    findById: vi.fn(),
+  },
+}));
 
 vi.mock('../services/TrainingJobService.js', () => ({
   trainingJobService: mockTrainingJobService,
@@ -48,6 +55,7 @@ vi.mock('../services/TrainingOrchestrator.js', () => ({
 
 vi.mock('../repositories/index.js', () => ({
   datasetRepository: mockDatasetRepository,
+  simSceneRepository: mockSimSceneRepository,
 }));
 
 vi.mock('../middleware/auth.middleware.js', () => ({
@@ -190,6 +198,34 @@ describe('Training Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('dataset not found');
+    });
+
+    // ---- sim_rl jobs (TASK-172.C) ----
+
+    it('submits a sim_rl job via submitSimRlJob (201)', async () => {
+      const SIM_JOB = { id: 'sim-001', kind: 'sim_rl', sceneId: 'scene-1' };
+      mockTrainingJobService.submitSimRlJob.mockResolvedValue(SIM_JOB);
+
+      const response = await request(app)
+        .post('/api/training/jobs')
+        .send({ kind: 'sim_rl', sceneId: 'scene-1' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.job.id).toBe('sim-001');
+      expect(response.body.message).toBe('Sim-RL training job submitted successfully');
+      expect(mockTrainingJobService.submitSimRlJob).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'sim_rl', sceneId: 'scene-1' })
+      );
+      // The supervised path must not be touched.
+      expect(mockTrainingJobService.submitJob).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when a sim_rl job is missing sceneId', async () => {
+      const response = await request(app).post('/api/training/jobs').send({ kind: 'sim_rl' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('sceneId is required for a sim_rl job');
+      expect(mockTrainingJobService.submitSimRlJob).not.toHaveBeenCalled();
     });
   });
 
@@ -467,7 +503,9 @@ describe('Training Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.job.id).toBe('job-001');
       expect(response.body.dataset.storagePath).toBe('datasets/abc');
-      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith('worker-1', 'cuda');
+      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith('worker-1', 'cuda', [
+        'supervised',
+      ]);
       expect(mockDatasetRepository.findById).toHaveBeenCalledWith('dataset-001');
     });
 
@@ -481,6 +519,35 @@ describe('Training Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.dataset).toBeNull();
+    });
+
+    it('claims a sim_rl job and returns the scene (no dataset)', async () => {
+      const SIM_JOB = { id: 'sim-001', kind: 'sim_rl', sceneId: 'scene-1', datasetId: null };
+      mockTrainingOrchestrator.claimNextPendingJob.mockResolvedValue(SIM_JOB);
+      mockSimSceneRepository.findById.mockResolvedValue({
+        id: 'scene-1',
+        mjcfKey: 'twins/twin-1/scene.xml',
+        twinId: 'twin-1',
+        embodimentTag: 'g1',
+        backend: 'mujoco',
+        bounds: { minX: 0, minY: 0, minZ: 0, maxX: 5, maxY: 5, maxZ: 3 },
+      });
+
+      const response = await request(app)
+        .post('/api/training/workers/claim')
+        .send({ workerId: 'sim-worker', device: 'mps', kinds: ['sim_rl'] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.dataset).toBeNull();
+      expect(response.body.scene.mjcfKey).toBe('twins/twin-1/scene.xml');
+      expect(response.body.scene.embodimentTag).toBe('g1');
+      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith(
+        'sim-worker',
+        'mps',
+        ['sim_rl']
+      );
+      // sim_rl must not look up a dataset.
+      expect(mockDatasetRepository.findById).not.toHaveBeenCalled();
     });
 
     it('returns 204 when no jobs waiting', async () => {

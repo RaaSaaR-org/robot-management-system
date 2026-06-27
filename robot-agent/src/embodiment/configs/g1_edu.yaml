@@ -116,6 +116,29 @@ cameras:
     position: [0.2, -0.3, 0.9]  # Approximate right wrist mount
     enabled: false
 
+# Depth / 3D perception sensors (produce point clouds)
+depth_sensors:
+  - name: mid360_lidar       # Livox MID-360 — primary 360° perception
+    type: lidar
+    fov_horizontal: 360
+    fov_vertical: 59         # -7° to +52°
+    range: [0.1, 40.0]       # 40 m @ 10% reflectivity
+    points_per_frame: 20000  # ~200k pts/s @ 10 Hz
+    frame_rate: 10
+    has_intensity: true
+    position: [0.0, 0.0, 1.0]  # torso-mounted
+    enabled: true
+  - name: d435i_depth        # Intel RealSense D435i — near-field RGB-D
+    type: depth_camera
+    fov_horizontal: 87
+    fov_vertical: 58
+    range: [0.2, 10.0]
+    points_per_frame: 15000
+    frame_rate: 30
+    has_intensity: false
+    position: [0.0, 0.0, 1.2]  # head height
+    enabled: true
+
 safety:
   max_speed: 2.0  # m/s
   workspace:

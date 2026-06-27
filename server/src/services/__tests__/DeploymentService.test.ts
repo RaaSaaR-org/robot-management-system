@@ -57,9 +57,16 @@ vi.mock('../RobotManager.js', () => ({
   },
 }));
 
+vi.mock('../SimToRealValidationService.js', () => ({
+  simToRealValidationService: {
+    getLatestForModelVersion: vi.fn(),
+  },
+}));
+
 import { DeploymentService } from '../DeploymentService.js';
 import { deploymentRepository, modelVersionRepository } from '../../repositories/index.js';
 import { robotManager } from '../RobotManager.js';
+import { simToRealValidationService } from '../SimToRealValidationService.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -258,6 +265,62 @@ describe('createDeployment', () => {
 
     const result = await service.createDeployment(baseRequest);
     expect(result).toBe(created);
+  });
+});
+
+// ===========================================================================
+// createDeployment — sim-to-real validation gate (TASK-171 / TASK-172.C)
+// ===========================================================================
+
+describe('createDeployment — sim-to-real validation gate', () => {
+  const req: StartDeploymentRequest = { modelVersionId: 'mv-1' };
+  const getLatest = vi.mocked(simToRealValidationService.getLatestForModelVersion);
+
+  beforeEach(() => {
+    vi.mocked(modelVersionRepository.findById).mockResolvedValue(makeModelVersion() as never);
+    vi.mocked(deploymentRepository.findByModelVersion).mockResolvedValue([] as never);
+    vi.mocked(deploymentRepository.create).mockResolvedValue(makeDeployment() as never);
+  });
+
+  afterEach(() => {
+    delete process.env.REQUIRE_SIM_VALIDATION;
+    delete process.env.SIM_MIN_SUCCESS;
+    delete process.env.SIM_REAL_GAP_THRESHOLD;
+  });
+
+  it('blocks deployment when no validation exists and the gate is on', async () => {
+    process.env.REQUIRE_SIM_VALIDATION = 'true';
+    getLatest.mockResolvedValue(null as never);
+    await expect(service.createDeployment(req)).rejects.toThrow(
+      /Sim-to-real validation required/,
+    );
+  });
+
+  it('blocks a sim-only policy (null gap) below SIM_MIN_SUCCESS', async () => {
+    process.env.REQUIRE_SIM_VALIDATION = 'true';
+    process.env.SIM_MIN_SUCCESS = '0.6';
+    getLatest.mockResolvedValue({ domainGapScore: null, simSuccessRate: 0.4 } as never);
+    await expect(service.createDeployment(req)).rejects.toThrow(/below the minimum/);
+  });
+
+  it('allows a sim-only policy (null gap) that meets SIM_MIN_SUCCESS', async () => {
+    process.env.REQUIRE_SIM_VALIDATION = 'true';
+    process.env.SIM_MIN_SUCCESS = '0.6';
+    getLatest.mockResolvedValue({ domainGapScore: null, simSuccessRate: 0.8 } as never);
+    await expect(service.createDeployment(req)).resolves.toBeDefined();
+  });
+
+  it('still gates VLA policies on the sim−real gap when a gap is present', async () => {
+    process.env.REQUIRE_SIM_VALIDATION = 'true';
+    process.env.SIM_REAL_GAP_THRESHOLD = '0.3';
+    getLatest.mockResolvedValue({ domainGapScore: 0.5, simSuccessRate: 0.9 } as never);
+    await expect(service.createDeployment(req)).rejects.toThrow(/domain gap/);
+  });
+
+  it('skips the gate entirely when REQUIRE_SIM_VALIDATION is unset', async () => {
+    getLatest.mockResolvedValue(null as never);
+    await expect(service.createDeployment(req)).resolves.toBeDefined();
+    expect(getLatest).not.toHaveBeenCalled();
   });
 });
 

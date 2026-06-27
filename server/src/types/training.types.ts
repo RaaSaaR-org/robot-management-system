@@ -111,12 +111,28 @@ export interface QueueStats {
 // ============================================================================
 
 /**
- * Request body for submitting a training job
+ * Request body for submitting a supervised VLA fine-tune training job.
+ * `kind` is optional and defaults to 'supervised'.
  */
 export interface SubmitTrainingJobRequest {
+  kind?: 'supervised';
   datasetId: string;
   baseModel: BaseModel;
   fineTuneMethod: FineTuneMethod;
+  hyperparameters?: Partial<Hyperparameters>;
+  gpuRequirements?: Partial<GpuRequirements>;
+  totalEpochs?: number;
+  priority?: number;
+}
+
+/**
+ * Request body for submitting a sim_rl (twin-derived RL navigation) training
+ * job. Carries a SimScene id instead of a dataset/baseModel. (TASK-172.C)
+ */
+export interface SubmitSimRlJobRequest {
+  kind: 'sim_rl';
+  /** SimScene registry id the policy will train in (the RL env). */
+  sceneId: string;
   hyperparameters?: Partial<Hyperparameters>;
   gpuRequirements?: Partial<GpuRequirements>;
   totalEpochs?: number;
@@ -225,6 +241,11 @@ export interface WorkerCompleteRequest {
     validationLoss?: number;
     trainingTimeSeconds: number;
     bestEpoch: number;
+    // sim-RL quality summary (TASK-172.C); present only for `sim_rl` jobs.
+    meanReward?: number;
+    successRate?: number;
+    totalTimesteps?: number;
+    trainer?: string;
   };
 }
 

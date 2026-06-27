@@ -42,6 +42,30 @@ export const CameraSpecSchema = z.object({
 });
 
 /**
+ * Depth / 3D-sensor specification (LiDAR or depth camera) for point-cloud
+ * perception. Mirrors {@link CameraSpecSchema} but describes a sensor that
+ * produces XYZ(+intensity) points rather than an RGB image.
+ *
+ * Real G1 / G1 EDU hardware carries a Livox MID-360 LiDAR (360°×59° FOV,
+ * ~20k points/frame @ 10 Hz) and an Intel RealSense D435i depth camera.
+ */
+export const DepthSensorSpecSchema = z.object({
+  name: z.string().describe('Depth sensor identifier'),
+  type: z.enum(['lidar', 'depth_camera']).describe('Sensor modality'),
+  fov_horizontal: z.number().positive().optional().describe('Horizontal field of view in degrees'),
+  fov_vertical: z.number().positive().optional().describe('Vertical field of view in degrees'),
+  range: z.tuple([z.number(), z.number()]).optional()
+    .describe('Measurement range [min, max] in meters'),
+  points_per_frame: z.number().int().positive().optional()
+    .describe('Approximate points produced per full-resolution frame'),
+  frame_rate: z.number().positive().optional().describe('Native frame rate in Hz'),
+  has_intensity: z.boolean().default(true).describe('Whether the sensor reports per-point intensity'),
+  position: z.tuple([z.number(), z.number(), z.number()]).optional()
+    .describe('Sensor origin relative to robot base [x, y, z] in meters'),
+  enabled: z.boolean().default(true).describe('Whether the sensor is active'),
+});
+
+/**
  * Joint position, velocity, and torque limits
  */
 export const JointLimitsSchema = z.object({
@@ -100,6 +124,11 @@ export const EmbodimentConfigSchema = z.object({
   // Camera configuration
   cameras: z.array(CameraSpecSchema).default([]).describe('Camera configurations'),
 
+  // Depth / 3D sensor configuration (LiDAR, depth cameras) for point clouds.
+  // Optional (not defaulted) so existing typed EmbodimentConfig literals stay
+  // valid; consumers read it via `config.depth_sensors ?? []`.
+  depth_sensors: z.array(DepthSensorSpecSchema).optional().describe('Depth / LiDAR sensor configurations'),
+
   // Joint limits
   limits: JointLimitsSchema.optional().describe('Joint limits configuration'),
 
@@ -119,6 +148,7 @@ export const EmbodimentConfigSchema = z.object({
 export type ActionNormalization = z.infer<typeof ActionNormalizationSchema>;
 export type ProprioceptionConfig = z.infer<typeof ProprioceptionConfigSchema>;
 export type CameraSpec = z.infer<typeof CameraSpecSchema>;
+export type DepthSensorSpec = z.infer<typeof DepthSensorSpecSchema>;
 export type JointLimits = z.infer<typeof JointLimitsSchema>;
 export type WorkspaceBounds = z.infer<typeof WorkspaceBoundsSchema>;
 export type SafetyConfig = z.infer<typeof SafetyConfigSchema>;

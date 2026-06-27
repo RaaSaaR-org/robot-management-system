@@ -5,7 +5,15 @@
  */
 
 import { apiClient } from '@/api/client';
-import type { SimJob, SimEnvironment, SimToRealComparison, SubmitSimJobInput } from '../types';
+import type {
+  SimJob,
+  SimEnvironment,
+  SimToRealComparison,
+  SubmitSimJobInput,
+  SimScene,
+  SimToRealValidation,
+  CreateSimValidationInput,
+} from '../types';
 
 // ============================================================================
 // ENDPOINTS
@@ -20,7 +28,11 @@ const ENDPOINTS = {
   jobs: '/simulation/jobs',
   job: (id: string) => `/simulation/jobs/${id}`,
   environments: '/simulation/environments',
+  scenes: '/simulation/scenes',
+  generateScene: '/simulation/scenes/generate',
   comparison: (modelId: string) => `/simulation/comparison/${modelId}`,
+  validations: (modelVersionId: string) => `/simulation/validations/${modelVersionId}`,
+  validationsBase: '/simulation/validations',
   frame: (jobId: string, filename: string) => `/simulation/jobs/${jobId}/frames/${filename}`,
   preview: (envId: string) => `/simulation/preview/${envId}`,
 } as const;
@@ -89,13 +101,55 @@ export const simulationApi = {
   },
 
   /**
-   * Get sim-to-real comparison data for a model
+   * Get the sim-scene registry — built-in environments AND twin-derived rooms.
+   */
+  async getScenes(): Promise<SimScene[]> {
+    const response = await apiClient.get<{ scenes: SimScene[] }>(ENDPOINTS.scenes);
+    return response.data.scenes;
+  },
+
+  /**
+   * Generate (or refresh) a MuJoCo sim scene for a twin from its REAL occupancy
+   * floor-plan + zones, registering it as a SimScene. Works for any ready twin —
+   * including those scanned without a pre-baked scene (TASK-171).
+   */
+  async generateTwinScene(twinId: string): Promise<SimScene> {
+    const response = await apiClient.post<{ scene: SimScene }>(ENDPOINTS.generateScene, {
+      twinId,
+    });
+    return response.data.scene;
+  },
+
+  /**
+   * Get sim-to-real comparison data for a model. The server returns the REAL
+   * measured gap; an empty array means "not validated against a real robot yet".
    */
   async getComparison(modelId: string): Promise<SimToRealComparison[]> {
     const response = await apiClient.get<{ comparisons: SimToRealComparison[] }>(
       ENDPOINTS.comparison(modelId)
     );
     return response.data.comparisons;
+  },
+
+  /**
+   * List sim-to-real validation records for a model version.
+   */
+  async listValidations(modelVersionId: string): Promise<SimToRealValidation[]> {
+    const response = await apiClient.get<{ validations: SimToRealValidation[] }>(
+      ENDPOINTS.validations(modelVersionId)
+    );
+    return response.data.validations;
+  },
+
+  /**
+   * Create a sim-to-real validation record.
+   */
+  async createValidation(input: CreateSimValidationInput): Promise<SimToRealValidation> {
+    const response = await apiClient.post<{ validation: SimToRealValidation }>(
+      ENDPOINTS.validationsBase,
+      input
+    );
+    return response.data.validation;
   },
 
   /**

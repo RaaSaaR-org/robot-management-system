@@ -49,6 +49,76 @@ export interface JointState {
 }
 
 // ============================================================================
+// POINT CLOUD / PERCEPTION TYPES
+// ============================================================================
+
+export type PointCloudSensorType = 'lidar' | 'depth_camera';
+
+/** Provenance of a point cloud: synthetic, live hardware, or a real recording. */
+export type PointCloudSource = 'sim' | 'hardware' | 'replay';
+
+/**
+ * Robot/sensor world pose at capture time (world frame; `yaw` in radians).
+ * Present on frames produced during a digital-twin scan session, so `base_link`
+ * points can be lifted into the shared world map.
+ */
+export interface PointCloudPose {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  roll?: number;
+  pitch?: number;
+}
+
+/**
+ * A point-cloud frame for the perception viewer. Positions/intensities are
+ * flat arrays — `number[]` from the JSON snapshot path, `Float32Array` from the
+ * binary WebSocket path. The viewer normalizes via `new Float32Array(...)`.
+ */
+export interface PointCloudFrame {
+  robotId: string;
+  sensor: string;
+  sensorType: PointCloudSensorType;
+  frame: 'sensor' | 'base_link';
+  pointCount: number;
+  positions: number[] | Float32Array;
+  intensities: number[] | Float32Array;
+  hasIntensity: boolean;
+  sequence: number;
+  origin?: [number, number, number];
+  /** Provenance: synthetic, live hardware, or a real recording. */
+  source?: PointCloudSource;
+  /** Human-readable source label, e.g. "KITTI 000000.bin". */
+  sourceLabel?: string;
+  /** World pose at capture time (scan-session frames only). */
+  pose?: PointCloudPose;
+  /** Scan session this frame belongs to (scan-session frames only). */
+  scanSessionId?: string;
+  timestamp: string;
+}
+
+/** Summary of a recorded point-cloud scan. */
+export interface SensorScanSummary {
+  id: string;
+  robotId: string;
+  sensorName: string;
+  sensorType: PointCloudSensorType;
+  format: string;
+  pointCount: number;
+  fileSize: number;
+  hasIntensity: boolean;
+  /** [minX,minY,minZ, maxX,maxY,maxZ] in meters */
+  bounds: [number, number, number, number, number, number];
+  downloadUrl: string;
+  /** Provenance of the captured cloud. */
+  source?: PointCloudSource;
+  /** Human-readable source label for the capture. */
+  sourceLabel?: string;
+  capturedAt: string;
+}
+
+// ============================================================================
 // LOCATION TYPES
 // ============================================================================
 
@@ -211,6 +281,8 @@ export interface RobotsState {
   robotDetail: Robot | null;
   /** Robot telemetry cache */
   telemetryCache: Record<string, RobotTelemetry>;
+  /** Recorded point-cloud scans for the current detail view */
+  sensorScans: SensorScanSummary[];
 }
 
 /** Robot endpoints for communication */
@@ -253,6 +325,8 @@ export interface RobotsActions {
   updateRobot: (robot: Partial<Robot> & { id: string }) => void;
   /** Update telemetry cache */
   updateTelemetry: (robotId: string, telemetry: RobotTelemetry) => void;
+  /** Fetch recorded point-cloud scans for a robot */
+  fetchSensorScans: (robotId: string) => Promise<void>;
   /** Add a robot to the list (for WebSocket updates) */
   addRobot: (robot: Robot) => void;
   /** Remove a robot from the list (for WebSocket updates) */

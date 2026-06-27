@@ -10,5 +10,8 @@ export * from './types';
 // API
 export * from './api';
 
+// Store
+export * from './store';
+
 // Pages
 export * from './pages';

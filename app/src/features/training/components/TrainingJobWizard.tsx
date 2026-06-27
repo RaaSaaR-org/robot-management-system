@@ -4,35 +4,58 @@
  * @feature training
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Modal, Button, Badge } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { HyperparameterForm, getDefaultHyperparameters } from './HyperparameterForm';
+import {
+  useSimulationStore,
+  selectScenes,
+  selectScenesLoading,
+} from '@/features/simulation/store/simulationStore';
 import type {
   Dataset,
   BaseModel,
   FineTuneMethod,
   HyperparametersInput,
   SubmitTrainingJobInput,
+  SubmitSimRlJobInput,
+  TrainingJobKind,
 } from '../types';
 
 export interface TrainingJobWizardProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (input: SubmitTrainingJobInput) => Promise<void>;
+  onSubmit: (input: SubmitTrainingJobInput | SubmitSimRlJobInput) => Promise<void>;
   datasets: Dataset[];
   isSubmitting?: boolean;
 }
 
-type Step = 'dataset' | 'model' | 'hyperparams' | 'gpu' | 'review';
+type Step = 'type' | 'dataset' | 'model' | 'scene' | 'hyperparams' | 'gpu' | 'review';
 
-const steps: { id: Step; label: string }[] = [
-  { id: 'dataset', label: 'Dataset' },
-  { id: 'model', label: 'Model' },
-  { id: 'hyperparams', label: 'Hyperparams' },
-  { id: 'gpu', label: 'Resources' },
-  { id: 'review', label: 'Review' },
-];
+/**
+ * Step list depends on the job kind: supervised picks a dataset + model,
+ * sim_rl picks a twin-derived scene instead. (TASK-172.C)
+ */
+function stepsFor(kind: TrainingJobKind): { id: Step; label: string }[] {
+  if (kind === 'sim_rl') {
+    return [
+      { id: 'type', label: 'Type' },
+      { id: 'scene', label: 'Scene' },
+      { id: 'hyperparams', label: 'Hyperparams' },
+      { id: 'gpu', label: 'Resources' },
+      { id: 'review', label: 'Review' },
+    ];
+  }
+  return [
+    { id: 'type', label: 'Type' },
+    { id: 'dataset', label: 'Dataset' },
+    { id: 'model', label: 'Model' },
+    { id: 'hyperparams', label: 'Hyperparams' },
+    { id: 'gpu', label: 'Resources' },
+    { id: 'review', label: 'Review' },
+  ];
+}
 
 const baseModels: { value: BaseModel; label: string; description: string }[] = [
   { value: 'smolvla', label: 'SmolVLA', description: 'HuggingFace small VLA, LoRA-friendly on Apple Silicon' },
@@ -67,12 +90,47 @@ const TRAINING_PRESETS = {
 } as const;
 
 interface FormState {
+  kind: TrainingJobKind;
   datasetId: string;
   baseModel: BaseModel;
   fineTuneMethod: FineTuneMethod;
+  sceneId: string;
   hyperparameters: HyperparametersInput;
   gpuType: 'a100' | 'h100' | 'any';
   priority: 'low' | 'normal' | 'high';
+}
+
+const INITIAL_FORM: FormState = {
+  kind: 'supervised',
+  datasetId: '',
+  baseModel: 'pi0',
+  fineTuneMethod: 'lora',
+  sceneId: '',
+  hyperparameters: getDefaultHyperparameters('lora'),
+  gpuType: 'any',
+  priority: 'normal',
+};
+
+/**
+ * Shared styling for the wizard's single-select "cards" (type, dataset, model,
+ * scene, gpu, priority). Centralises the selected/hover/focus-ring treatment so
+ * every group is keyboard-accessible and visually consistent.
+ * `cobalt` = the brand-primary selection accent (matches the CTA); `purple` is
+ * reserved for the Sim-RL identity. (TASK-172.C UX pass)
+ */
+function selectCardCls(active: boolean, accent: 'cobalt' | 'purple' = 'cobalt'): string {
+  const on =
+    accent === 'purple' ? 'border-purple-500 bg-purple-500/10' : 'border-cobalt-500 bg-cobalt-500/10';
+  const off =
+    accent === 'purple'
+      ? 'border-theme-secondary/30 hover:border-purple-500/50'
+      : 'border-theme-secondary/30 hover:border-cobalt-500/50';
+  const ring = accent === 'purple' ? 'focus-visible:ring-purple-500/60' : 'focus-visible:ring-cobalt-500/60';
+  return cn(
+    'rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2',
+    ring,
+    active ? on : off
+  );
 }
 
 /**
@@ -85,29 +143,28 @@ export function TrainingJobWizard({
   datasets,
   isSubmitting,
 }: TrainingJobWizardProps) {
-  const [currentStep, setCurrentStep] = useState<Step>('dataset');
-  const [form, setForm] = useState<FormState>({
-    datasetId: '',
-    baseModel: 'pi0',
-    fineTuneMethod: 'lora',
-    hyperparameters: getDefaultHyperparameters('lora'),
-    gpuType: 'any',
-    priority: 'normal',
-  });
+  const [currentStep, setCurrentStep] = useState<Step>('type');
+  const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [error, setError] = useState<string | null>(null);
 
+  // SimScene registry (shared with the Simulation tab) for the sim_rl picker.
+  const scenes = useSimulationStore(selectScenes);
+  const scenesLoading = useSimulationStore(selectScenesLoading);
+  const fetchScenes = useSimulationStore((s) => s.fetchScenes);
+
+  // Load scenes the first time the wizard opens so the sim_rl Scene step has data.
+  useEffect(() => {
+    if (isOpen && scenes.length === 0) {
+      void fetchScenes();
+    }
+  }, [isOpen, scenes.length, fetchScenes]);
+
+  const steps = stepsFor(form.kind);
   const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
 
   const resetForm = useCallback(() => {
-    setCurrentStep('dataset');
-    setForm({
-      datasetId: '',
-      baseModel: 'pi0',
-      fineTuneMethod: 'lora',
-      hyperparameters: getDefaultHyperparameters('lora'),
-      gpuType: 'any',
-      priority: 'normal',
-    });
+    setCurrentStep('type');
+    setForm(INITIAL_FORM);
     setError(null);
   }, []);
 
@@ -116,19 +173,25 @@ export function TrainingJobWizard({
     onClose();
   }, [resetForm, onClose]);
 
+  // Recompute the step list from form.kind here rather than closing over the
+  // render-scoped `steps`: when the kind changes on the type step,
+  // currentStepIndex stays 0, so a `[currentStepIndex]` dep would keep a stale
+  // closure and navigate the wrong (supervised) flow. (TASK-172.C)
   const handleNext = useCallback(() => {
-    const nextIndex = currentStepIndex + 1;
-    if (nextIndex < steps.length) {
-      setCurrentStep(steps[nextIndex].id);
+    const list = stepsFor(form.kind);
+    const idx = list.findIndex((s) => s.id === currentStep);
+    if (idx + 1 < list.length) {
+      setCurrentStep(list[idx + 1].id);
     }
-  }, [currentStepIndex]);
+  }, [form.kind, currentStep]);
 
   const handleBack = useCallback(() => {
-    const prevIndex = currentStepIndex - 1;
-    if (prevIndex >= 0) {
-      setCurrentStep(steps[prevIndex].id);
+    const list = stepsFor(form.kind);
+    const idx = list.findIndex((s) => s.id === currentStep);
+    if (idx - 1 >= 0) {
+      setCurrentStep(list[idx - 1].id);
     }
-  }, [currentStepIndex]);
+  }, [form.kind, currentStep]);
 
   const handleFineTuneMethodChange = useCallback((method: FineTuneMethod) => {
     setForm((prev) => ({
@@ -141,13 +204,22 @@ export function TrainingJobWizard({
   const handleSubmit = useCallback(async () => {
     setError(null);
     try {
-      await onSubmit({
-        datasetId: form.datasetId,
-        baseModel: form.baseModel,
-        fineTuneMethod: form.fineTuneMethod,
-        hyperparameters: form.hyperparameters,
-        priority: form.priority,
-      });
+      if (form.kind === 'sim_rl') {
+        await onSubmit({
+          kind: 'sim_rl',
+          sceneId: form.sceneId,
+          hyperparameters: form.hyperparameters,
+          priority: form.priority,
+        });
+      } else {
+        await onSubmit({
+          datasetId: form.datasetId,
+          baseModel: form.baseModel,
+          fineTuneMethod: form.fineTuneMethod,
+          hyperparameters: form.hyperparameters,
+          priority: form.priority,
+        });
+      }
       handleClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit training job');
@@ -156,10 +228,14 @@ export function TrainingJobWizard({
 
   const canProceed = useCallback(() => {
     switch (currentStep) {
+      case 'type':
+        return true;
       case 'dataset':
         return !!form.datasetId;
       case 'model':
         return !!form.baseModel && !!form.fineTuneMethod;
+      case 'scene':
+        return !!form.sceneId;
       case 'hyperparams':
         return form.hyperparameters.learning_rate > 0 && form.hyperparameters.epochs > 0;
       case 'gpu':
@@ -172,6 +248,7 @@ export function TrainingJobWizard({
   }, [currentStep, form]);
 
   const selectedDataset = datasets.find((d) => d.id === form.datasetId);
+  const selectedScene = scenes.find((s) => s.id === form.sceneId);
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="New Training Job" size="lg">
@@ -183,10 +260,13 @@ export function TrainingJobWizard({
               <button
                 onClick={() => index < currentStepIndex && setCurrentStep(step.id)}
                 disabled={index > currentStepIndex}
+                aria-current={currentStep === step.id ? 'step' : undefined}
+                aria-label={`Step ${index + 1}: ${step.label}`}
                 className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
                   currentStep === step.id
-                    ? 'bg-primary-500 text-white'
+                    ? 'bg-cobalt-500 text-white'
                     : index < currentStepIndex
                       ? 'bg-green-500 text-white cursor-pointer hover:bg-green-600'
                       : 'bg-theme-secondary/20 text-theme-secondary'
@@ -215,6 +295,95 @@ export function TrainingJobWizard({
 
         {/* Step content */}
         <div className="min-h-[300px]">
+          {/* Job type selection (TASK-172.C) */}
+          {currentStep === 'type' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-theme-primary">Training Type</h3>
+              <p className="text-sm text-theme-secondary">
+                Choose what to train. Supervised fine-tunes a VLA model on a recorded dataset;
+                Sim-RL trains a navigation policy in a digital-twin simulation scene.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="group" aria-label="Training type">
+                <button
+                  data-testid="wizard-kind-supervised"
+                  aria-pressed={form.kind === 'supervised'}
+                  onClick={() => setForm({ ...form, kind: 'supervised' })}
+                  className={cn('p-4 text-left', selectCardCls(form.kind === 'supervised'))}
+                >
+                  <span className="font-medium text-theme-primary">Supervised Fine-tune</span>
+                  <p className="text-xs text-theme-secondary mt-1">
+                    Fine-tune a VLA model (SmolVLA, Pi0, …) on a validated dataset.
+                  </p>
+                </button>
+
+                <button
+                  data-testid="wizard-kind-sim_rl"
+                  aria-pressed={form.kind === 'sim_rl'}
+                  onClick={() => setForm({ ...form, kind: 'sim_rl' })}
+                  className={cn('p-4 text-left', selectCardCls(form.kind === 'sim_rl', 'purple'))}
+                >
+                  <span className="font-medium text-theme-primary">Sim-RL Policy</span>
+                  <Badge variant="purple" className="ml-2">
+                    Beta
+                  </Badge>
+                  <p className="text-xs text-theme-secondary mt-1">
+                    Train an RL navigation policy for a robot in a simulation scene.
+                  </p>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* SimScene selection (sim_rl, TASK-172.C) */}
+          {currentStep === 'scene' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-theme-primary">Select Scene</h3>
+              <p className="text-sm text-theme-secondary">
+                Choose the simulation environment. Digital-twin scenes replicate a real room's
+                geometry; the navigation goal is part of the scene.
+              </p>
+
+              <div
+                className="grid gap-3 max-h-[300px] overflow-y-auto"
+                data-testid="scene-list"
+                role="group"
+                aria-label="Simulation scene"
+              >
+                {scenesLoading && scenes.length === 0 && (
+                  <p className="text-center py-8 text-theme-secondary">Loading scenes…</p>
+                )}
+                {scenes.map((scene) => (
+                  <button
+                    key={scene.id}
+                    data-testid={`scene-option-${scene.id}`}
+                    aria-pressed={form.sceneId === scene.id}
+                    onClick={() => setForm({ ...form, sceneId: scene.id })}
+                    className={cn('p-4 text-left', selectCardCls(form.sceneId === scene.id, 'purple'))}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-theme-primary">{scene.name}</span>
+                      <div className="flex gap-1">
+                        <Badge variant="default">{scene.embodimentTag}</Badge>
+                        <Badge variant={scene.source === 'twin' ? 'info' : 'default'}>
+                          {scene.source === 'twin' ? 'Digital twin' : scene.source}
+                        </Badge>
+                      </div>
+                    </div>
+                    {scene.description && (
+                      <p className="text-xs text-theme-secondary mt-1">{scene.description}</p>
+                    )}
+                  </button>
+                ))}
+                {!scenesLoading && scenes.length === 0 && (
+                  <p className="text-center py-8 text-theme-secondary">
+                    No simulation scenes yet. Build a digital twin or add a built-in scene to get started.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Dataset selection */}
           {currentStep === 'dataset' && (
             <div className="space-y-4">
@@ -223,21 +392,21 @@ export function TrainingJobWizard({
                 Choose a validated dataset for training.
               </p>
 
-              <div className="grid gap-3 max-h-[300px] overflow-y-auto">
+              <div
+                className="grid gap-3 max-h-[300px] overflow-y-auto"
+                role="group"
+                aria-label="Dataset"
+              >
                 {datasets.filter((d) => d.status === 'ready').map((dataset) => (
                   <button
                     key={dataset.id}
+                    aria-pressed={form.datasetId === dataset.id}
                     onClick={() => setForm({ ...form, datasetId: dataset.id })}
-                    className={cn(
-                      'p-4 text-left rounded-lg border transition-colors',
-                      form.datasetId === dataset.id
-                        ? 'border-primary-500 bg-primary-500/10'
-                        : 'border-theme-secondary/30 hover:border-primary-500/50'
-                    )}
+                    className={cn('p-4 text-left', selectCardCls(form.datasetId === dataset.id))}
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-theme-primary">{dataset.name}</span>
-                      <Badge className="bg-green-100 text-green-800">Ready</Badge>
+                      <Badge variant="success">Ready</Badge>
                     </div>
                     <p className="text-sm text-theme-secondary mt-1">
                       {dataset.totalFrames.toLocaleString()} frames
@@ -261,17 +430,13 @@ export function TrainingJobWizard({
                 <p className="text-sm text-theme-secondary mb-3">
                   Select the VLA foundation model to fine-tune.
                 </p>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3" role="group" aria-label="Base model">
                   {baseModels.map((model) => (
                     <button
                       key={model.value}
+                      aria-pressed={form.baseModel === model.value}
                       onClick={() => setForm({ ...form, baseModel: model.value })}
-                      className={cn(
-                        'p-4 text-left rounded-lg border transition-colors',
-                        form.baseModel === model.value
-                          ? 'border-primary-500 bg-primary-500/10'
-                          : 'border-theme-secondary/30 hover:border-primary-500/50'
-                      )}
+                      className={cn('p-4 text-left', selectCardCls(form.baseModel === model.value))}
                     >
                       <span className="font-medium text-theme-primary">{model.label}</span>
                       <p className="text-xs text-theme-secondary mt-1">{model.description}</p>
@@ -285,17 +450,13 @@ export function TrainingJobWizard({
                 <p className="text-sm text-theme-secondary mb-3">
                   Choose how to adapt the model.
                 </p>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-3 gap-3" role="group" aria-label="Fine-tuning method">
                   {fineTuneMethods.map((method) => (
                     <button
                       key={method.value}
+                      aria-pressed={form.fineTuneMethod === method.value}
                       onClick={() => handleFineTuneMethodChange(method.value)}
-                      className={cn(
-                        'p-4 text-left rounded-lg border transition-colors',
-                        form.fineTuneMethod === method.value
-                          ? 'border-accent-500 bg-accent-500/10'
-                          : 'border-theme-secondary/30 hover:border-accent-500/50'
-                      )}
+                      className={cn('p-4 text-left', selectCardCls(form.fineTuneMethod === method.value))}
                     >
                       <span className="font-medium text-theme-primary">{method.label}</span>
                       <p className="text-xs text-theme-secondary mt-1">{method.description}</p>
@@ -311,7 +472,9 @@ export function TrainingJobWizard({
             <div className="space-y-4">
               <h3 className="text-lg font-medium text-theme-primary">Hyperparameters</h3>
               <p className="text-sm text-theme-secondary">
-                Configure training hyperparameters. Defaults are optimized for {form.fineTuneMethod.toUpperCase()}.
+                {form.kind === 'sim_rl'
+                  ? 'Configure RL training hyperparameters (learning rate, steps, …).'
+                  : `Configure training hyperparameters. Defaults are optimized for ${form.fineTuneMethod.toUpperCase()}.`}
               </p>
 
               {/* Training presets */}
@@ -326,7 +489,7 @@ export function TrainingJobWizard({
                         hyperparameters: { ...form.hyperparameters, ...preset.hyperparameters },
                       })
                     }
-                    className="px-3 py-1.5 text-sm rounded-lg border border-theme-secondary/30 hover:border-primary-500 hover:bg-primary-500/10 transition-colors text-theme-primary"
+                    className="px-3 py-1.5 text-sm rounded-lg border border-theme-secondary/30 hover:border-cobalt-500 hover:bg-cobalt-500/10 transition-colors text-theme-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500/60"
                     title={preset.description}
                   >
                     {preset.label}
@@ -350,7 +513,7 @@ export function TrainingJobWizard({
                 <p className="text-sm text-theme-secondary mb-3">
                   Select preferred GPU type or allow any available.
                 </p>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-3 gap-3" role="group" aria-label="GPU preference">
                   {[
                     { value: 'any' as const, label: 'Any Available' },
                     { value: 'a100' as const, label: 'A100' },
@@ -358,13 +521,9 @@ export function TrainingJobWizard({
                   ].map((option) => (
                     <button
                       key={option.value}
+                      aria-pressed={form.gpuType === option.value}
                       onClick={() => setForm({ ...form, gpuType: option.value })}
-                      className={cn(
-                        'p-4 text-left rounded-lg border transition-colors',
-                        form.gpuType === option.value
-                          ? 'border-primary-500 bg-primary-500/10'
-                          : 'border-theme-secondary/30 hover:border-primary-500/50'
-                      )}
+                      className={cn('p-4 text-left', selectCardCls(form.gpuType === option.value))}
                     >
                       <span className="font-medium text-theme-primary">{option.label}</span>
                     </button>
@@ -377,7 +536,7 @@ export function TrainingJobWizard({
                 <p className="text-sm text-theme-secondary mb-3">
                   Higher priority jobs are scheduled first.
                 </p>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-3 gap-3" role="group" aria-label="Priority">
                   {[
                     { value: 'low' as const, label: 'Low' },
                     { value: 'normal' as const, label: 'Normal' },
@@ -385,13 +544,9 @@ export function TrainingJobWizard({
                   ].map((option) => (
                     <button
                       key={option.value}
+                      aria-pressed={form.priority === option.value}
                       onClick={() => setForm({ ...form, priority: option.value })}
-                      className={cn(
-                        'p-4 text-center rounded-lg border transition-colors',
-                        form.priority === option.value
-                          ? 'border-accent-500 bg-accent-500/10'
-                          : 'border-theme-secondary/30 hover:border-accent-500/50'
-                      )}
+                      className={cn('p-4 text-center', selectCardCls(form.priority === option.value))}
                     >
                       <span className="font-medium text-theme-primary">{option.label}</span>
                     </button>
@@ -410,22 +565,45 @@ export function TrainingJobWizard({
                 Review your configuration before submitting.
               </p>
 
-              <div className="space-y-4 p-4 bg-theme-secondary/10 rounded-lg">
+              <div className="space-y-4 p-4 bg-theme-secondary/10 rounded-lg" data-testid="review-summary">
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-sm text-theme-tertiary">Dataset</span>
-                    <p className="font-medium text-theme-primary">{selectedDataset?.name}</p>
-                  </div>
-                  <div>
-                    <span className="text-sm text-theme-tertiary">Base Model</span>
-                    <p className="font-medium text-theme-primary">{form.baseModel.toUpperCase()}</p>
-                  </div>
-                  <div>
-                    <span className="text-sm text-theme-tertiary">Fine-tune Method</span>
-                    <p className="font-medium text-theme-primary">
-                      {fineTuneMethods.find((m) => m.value === form.fineTuneMethod)?.label}
-                    </p>
-                  </div>
+                  {form.kind === 'sim_rl' ? (
+                    <>
+                      <div>
+                        <span className="text-sm text-theme-tertiary">Type</span>
+                        <p className="font-medium text-theme-primary">Sim-RL Policy</p>
+                      </div>
+                      <div>
+                        <span className="text-sm text-theme-tertiary">Scene</span>
+                        <p className="font-medium text-theme-primary">{selectedScene?.name}</p>
+                      </div>
+                      <div>
+                        <span className="text-sm text-theme-tertiary">Embodiment</span>
+                        <p className="font-medium text-theme-primary">
+                          {selectedScene?.embodimentTag}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <span className="text-sm text-theme-tertiary">Dataset</span>
+                        <p className="font-medium text-theme-primary">{selectedDataset?.name}</p>
+                      </div>
+                      <div>
+                        <span className="text-sm text-theme-tertiary">Base Model</span>
+                        <p className="font-medium text-theme-primary">
+                          {form.baseModel.toUpperCase()}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-sm text-theme-tertiary">Fine-tune Method</span>
+                        <p className="font-medium text-theme-primary">
+                          {fineTuneMethods.find((m) => m.value === form.fineTuneMethod)?.label}
+                        </p>
+                      </div>
+                    </>
+                  )}
                   <div>
                     <span className="text-sm text-theme-tertiary">Priority</span>
                     <p className="font-medium text-theme-primary capitalize">{form.priority}</p>
@@ -442,13 +620,15 @@ export function TrainingJobWizard({
                       Batch: {form.hyperparameters.batch_size}
                     </span>
                     <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                      Epochs: {form.hyperparameters.epochs}
+                      {form.kind === 'sim_rl' ? 'Iterations' : 'Epochs'}: {form.hyperparameters.epochs}
                     </span>
-                    {form.fineTuneMethod === 'lora' && form.hyperparameters.lora_rank && (
-                      <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
-                        LoRA Rank: {form.hyperparameters.lora_rank}
-                      </span>
-                    )}
+                    {form.kind !== 'sim_rl' &&
+                      form.fineTuneMethod === 'lora' &&
+                      form.hyperparameters.lora_rank && (
+                        <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
+                          LoRA Rank: {form.hyperparameters.lora_rank}
+                        </span>
+                      )}
                   </div>
                 </div>
               </div>
@@ -458,7 +638,12 @@ export function TrainingJobWizard({
 
         {/* Error message */}
         {error && (
-          <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>
+          <div
+            role="alert"
+            className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm"
+          >
+            {error}
+          </div>
         )}
 
         {/* Actions */}

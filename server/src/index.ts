@@ -26,6 +26,7 @@ import { syntheticDataWorker } from './workers/SyntheticDataWorker.js';
 import { initializeRustFSClient } from './storage/index.js';
 import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
+import { digitalTwinService } from './services/DigitalTwinService.js';
 import { processSchedulerService } from './services/ProcessSchedulerService.js';
 import { MULTI_TENANCY_ENABLED } from './config/features.js';
 
@@ -69,6 +70,11 @@ async function main() {
 
   // Start process scheduler (TASK-143) — fires scheduled ProcessDefinitions
   processSchedulerService.start();
+
+  // Initialize digital-twin build orchestrator (TASK-170) — reaps any scan
+  // sessions left stuck in 'processing' from a prior run. No NATS dependency:
+  // the sidecar claims sessions over the HTTP worker endpoints.
+  await digitalTwinService.initialize();
 
   // Initialize NATS JetStream (optional - graceful degradation if not available)
   try {
@@ -131,6 +137,7 @@ async function main() {
     processSchedulerService.stop();
     retentionCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
+    digitalTwinService.stopReaper();
     trainingJobService.stopAllWatchers();
     await syntheticDataWorker.stop();
     await trainingWorker.stop();
