@@ -46,7 +46,7 @@ NeoDEM is the first open-source platform covering the complete Physical AI pipel
 | 🤖 **Operate** | Fleet dashboard, natural language control via A2A Protocol, real-time telemetry, safety controls. |
 | ✅ **Comply** | EU AI Act compliance logging, decision audit trails, risk assessment — ready for August 2026. |
 
-Whether you're running a single SO-101 arm or a warehouse of humanoids, NeoDEM gives you one unified interface to manage the entire Physical AI lifecycle.
+NeoDEM is hardware-agnostic, but our focus is **cognitive humanoids — specialized on the Unitree G1**. The SO-101 arm was where we started; the platform now centers on humanoid embodiments while still supporting arms and other robots. From a single SO-101 arm to a fleet of G1 humanoids, NeoDEM gives you one unified interface to manage the entire Physical AI lifecycle.
 
 ---
 

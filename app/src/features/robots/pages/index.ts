@@ -6,3 +6,4 @@
 
 export * from './RobotsPage';
 export * from './RobotDetailPage';
+export * from './RobotCockpitPage';

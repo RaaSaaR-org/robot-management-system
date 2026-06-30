@@ -1,0 +1,82 @@
+{
+  "codebase_version": "v2.1",
+  "robot_type": "widowx_bridge",
+  "fps": 5,
+  "total_episodes": 4,
+  "total_frames": 68,
+  "total_tasks": 3,
+  "total_videos": 4,
+  "total_chunks": 1,
+  "chunks_size": 1000,
+  "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+  "video_path": "videos/{video_key}/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.mp4",
+  "splits": {
+    "train": "0:4"
+  },
+  "features": {
+    "observation.images.image_0": {
+      "dtype": "video",
+      "shape": [
+        480,
+        640,
+        3
+      ],
+      "names": [
+        "height",
+        "width",
+        "channel"
+      ]
+    },
+    "observation.state": {
+      "dtype": "float32",
+      "shape": [
+        7
+      ],
+      "names": null
+    },
+    "action": {
+      "dtype": "float32",
+      "shape": [
+        7
+      ],
+      "names": null
+    },
+    "timestamp": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ],
+      "names": null
+    },
+    "frame_index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ],
+      "names": null
+    },
+    "episode_index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ],
+      "names": null
+    },
+    "index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ],
+      "names": null
+    },
+    "task_index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ],
+      "names": null
+    }
+  },
+  "_generator": "nvidia/Cosmos3-Nano via Cosmos3-Action-Viewer-Prerelease (forward_dynamics)",
+  "_synthetic": true
+}

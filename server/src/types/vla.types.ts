@@ -157,6 +157,10 @@ export interface LeRobotInfo {
   robot_type?: string;
   fps?: number;
   features?: Record<string, unknown>;
+  /** Set true for datasets produced by a generator (e.g. Cosmos 3). TASK-178 */
+  _synthetic?: boolean;
+  /** Human-readable provenance string for synthetic datasets. TASK-178 */
+  _generator?: string;
 }
 
 /**

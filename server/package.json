@@ -15,6 +15,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "seed:evaluation": "tsx src/scripts/seed-evaluation.ts",
+    "seed:synthetic": "tsx src/scripts/seed-synthetic-demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

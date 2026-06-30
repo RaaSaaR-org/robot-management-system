@@ -1,0 +1,30 @@
+[
+  {
+    "episode_index": 0,
+    "tasks": [
+      "A WidowX robot arm picks up an object from the tabletop."
+    ],
+    "length": 17
+  },
+  {
+    "episode_index": 1,
+    "tasks": [
+      "A WidowX robot arm places an object into the container."
+    ],
+    "length": 17
+  },
+  {
+    "episode_index": 2,
+    "tasks": [
+      "A WidowX robot arm reaches toward and grasps an item on the table."
+    ],
+    "length": 17
+  },
+  {
+    "episode_index": 3,
+    "tasks": [
+      "A WidowX robot arm picks up an object from the tabletop."
+    ],
+    "length": 17
+  }
+]

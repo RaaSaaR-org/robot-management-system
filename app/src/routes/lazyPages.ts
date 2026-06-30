@@ -32,6 +32,13 @@ export const LazyRobotDetailPage = lazy(() =>
 );
 
 /**
+ * Robot Control Center — single-screen cockpit (camera, LiDAR, vitals, control)
+ */
+export const LazyRobotCockpitPage = lazy(() =>
+  import('@/features/robots').then((m) => ({ default: m.RobotCockpitPage }))
+);
+
+/**
  * Processes list page - All processes/workflows with filtering
  */
 export const LazyProcessesPage = lazy(() =>

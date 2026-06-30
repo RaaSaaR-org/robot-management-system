@@ -9,3 +9,4 @@ export * from './useTrainingJobs';
 export * from './useTrainingProgress';
 export * from './useWorkers';
 export * from './useQueueStats';
+export * from './useSyntheticGeneration';

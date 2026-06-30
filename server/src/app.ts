@@ -61,6 +61,7 @@ import { curationRoutes } from './routes/curation.routes.js';
 import { activeLearningRoutes } from './routes/active-learning.routes.js';
 import { syntheticRoutes } from './routes/synthetic.routes.js';
 import { syntheticJobsRoutes } from './routes/synthetic-jobs.routes.js';
+import { cosmosSyntheticRoutes } from './routes/cosmos-synthetic.routes.js';
 import { federatedRoutes } from './routes/federated.routes.js';
 import { aggregationRoutes } from './routes/aggregation.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
@@ -289,6 +290,9 @@ export function createApp(): Express {
 
   // Synthetic data NATS job queue routes (protected) - TASK-068
   app.use('/api/synthetic-jobs', authMiddleware, syntheticJobsRoutes);
+
+  // Cosmos 3 synthetic-episode generation (protected) - TASK-178
+  app.use('/api/synthetic-cosmos', authMiddleware, cosmosSyntheticRoutes);
 
   // Secure aggregation routes (protected) - Masked gradient aggregation (TASK-071)
   // Registered before general federated routes so secure-aggregation endpoints take precedence
