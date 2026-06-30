@@ -59,9 +59,9 @@ const HUMANOID_ROBOT_TYPES: ReadonlySet<RobotType> = new Set<RobotType>([
 export interface ImuReading {
   /** Body orientation [roll, pitch, yaw] in radians. */
   rpy: [number, number, number];
-  /** Body angular velocity [wx, wy, wz] in rad/s. */
-  gyro: [number, number, number];
-  /** Linear acceleration [ax, ay, az] in m/s². Optional — fall detection uses only rpy + gyro. */
+  /** Body angular velocity [wx, wy, wz] in rad/s. Optional — drives the fast-tip check; the tilt stop runs on rpy alone. */
+  gyro?: [number, number, number];
+  /** Linear acceleration [ax, ay, az] in m/s². Optional — fall detection uses only rpy (+ gyro). */
   accel?: [number, number, number];
 }
 
@@ -573,19 +573,23 @@ export class SafetyMonitor {
     if (this.estopState.status === 'triggered') return;
 
     const [roll, pitch] = imu.rpy;
-    const [gx, gy, gz] = imu.gyro;
 
-    // 1. Fast tip-over in progress (angular velocity).
-    const gyroMag = Math.hypot(gx, gy, gz);
-    if (gyroMag > this.humanoidConfig.gyroTipStopRadPerSec) {
-      this.tiltWarning = null;
-      this.tiltWarnActive = false;
-      this.triggerProtectiveStop(
-        'protective_stop',
-        `Fall risk: fast body rotation ${gyroMag.toFixed(2)} rad/s exceeds tip ` +
-          `threshold ${this.humanoidConfig.gyroTipStopRadPerSec} rad/s`
-      );
-      return;
+    // 1. Fast tip-over in progress (angular velocity). Only when gyro is present
+    //    (optional signal). Magnitude uses roll/pitch rate ONLY — yaw rate (gz)
+    //    is in-place turning and must not trip the tip net.
+    if (imu.gyro) {
+      const [gx, gy] = imu.gyro;
+      const gyroMag = Math.hypot(gx, gy);
+      if (gyroMag > this.humanoidConfig.gyroTipStopRadPerSec) {
+        this.tiltWarning = null;
+        this.tiltWarnActive = false;
+        this.triggerProtectiveStop(
+          'protective_stop',
+          `Fall risk: fast body rotation ${gyroMag.toFixed(2)} rad/s exceeds tip ` +
+            `threshold ${this.humanoidConfig.gyroTipStopRadPerSec} rad/s`
+        );
+        return;
+      }
     }
 
     // 2. Absolute body tilt past the stop threshold.

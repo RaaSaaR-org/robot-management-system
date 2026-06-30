@@ -223,6 +223,11 @@ export function useTelemetryStream(
   useEffect(() => {
     mountedRef.current = true;
 
+    // Reset telemetry when the robot changes so a switch never shows the prior
+    // robot's data (consumers treat `telemetry !== null` as the liveness signal).
+    setTelemetry(null);
+    setLastUpdate(null);
+
     if (autoConnect) {
       connect();
     }

@@ -791,8 +791,12 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     }
 
     const query = req.query as Record<string, string | undefined>;
-    const offset = query.offset ? parseInt(query.offset, 10) : 0;
-    const limit = query.limit ? parseInt(query.limit, 10) : 500;
+    // Clamp: a non-numeric ?offset/?limit must not become NaN (slice(NaN, NaN)
+    // silently behaves as slice(0, …)); fall back to sane defaults.
+    const offsetRaw = query.offset ? parseInt(query.offset, 10) : 0;
+    const limitRaw = query.limit ? parseInt(query.limit, 10) : 500;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, limitRaw) : 500;
 
     const info = typeof dataset.infoJson === 'string'
       ? JSON.parse(dataset.infoJson as string)

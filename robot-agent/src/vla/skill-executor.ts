@@ -244,6 +244,12 @@ export class SkillExecutor {
           : raw;
 
       if (mode === 'hardware') {
+        // Re-check abort right before commanding hardware: a protective stop
+        // (e.g. fall detection via the safety loop's abortAll) can fire during
+        // the VLA predict await above, after the top-of-loop check.
+        if (this.aborted) {
+          return this.abortedResult(mode, step, startedAt, lastApplied);
+        }
         try {
           await hardwareClient.sendActionVector(safe);
         } catch (err) {
@@ -482,6 +488,19 @@ class SkillExecutorRegistry {
     if (!exec) return false;
     exec.abort();
     return true;
+  }
+
+  /**
+   * Abort every active executor. Called by the safety loop on a protective stop
+   * so a detected fall actually halts the VLA command path. Returns the count.
+   */
+  abortAll(): number {
+    let n = 0;
+    for (const exec of this.active.values()) {
+      exec.abort();
+      n += 1;
+    }
+    return n;
   }
 }
 

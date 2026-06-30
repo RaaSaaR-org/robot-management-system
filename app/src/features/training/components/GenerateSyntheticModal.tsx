@@ -105,6 +105,12 @@ export function GenerateSyntheticModal({
 
   const clampEpisodes = (n: number) => Math.max(1, Math.min(maxEpisodes, n));
 
+  // Re-clamp the episode count once the server-reported cap arrives — the
+  // initial default (3) may exceed a smaller maxEpisodes.
+  useEffect(() => {
+    setEpisodes((n) => Math.max(1, Math.min(maxEpisodes, n)));
+  }, [maxEpisodes]);
+
   const handleStart = async () => {
     await start({ episodes, prompt: prompt.trim() || undefined });
   };
@@ -316,6 +322,7 @@ function ConfigureView({
           onChange={(e) => setPrompt(e.target.value)}
           placeholder={PROMPT_PLACEHOLDER}
           rows={2}
+          maxLength={2000}
           className="w-full resize-none rounded-lg border border-theme-secondary/30 bg-theme-primary px-3 py-2 text-sm text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
         />
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -499,6 +506,7 @@ function ResultView({
   episodes: number;
 }) {
   const videoUrl = trainingApi.getEpisodeVideoUrl(datasetId, 0, 'image_0');
+  const [videoFailed, setVideoFailed] = useState(false);
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 rounded-lg border border-green-500/20 bg-green-500/5 p-3">
@@ -522,16 +530,23 @@ function ResultView({
           <Film className="h-3.5 w-3.5" /> Preview · episode 0
         </p>
         <div className="overflow-hidden rounded-lg border border-theme-secondary/20 bg-black">
-          <video
-            key={videoUrl}
-            src={videoUrl}
-            className="aspect-video w-full"
-            controls
-            autoPlay
-            muted
-            loop
-            playsInline
-          />
+          {videoFailed ? (
+            <div className="flex aspect-video w-full items-center justify-center bg-purple-500/5">
+              <Sparkles className="h-7 w-7 text-purple-400/50" />
+            </div>
+          ) : (
+            <video
+              key={videoUrl}
+              src={videoUrl}
+              className="aspect-video w-full"
+              controls
+              autoPlay
+              muted
+              loop
+              playsInline
+              onError={() => setVideoFailed(true)}
+            />
+          )}
         </div>
       </div>
     </div>

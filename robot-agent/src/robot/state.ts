@@ -29,6 +29,7 @@ import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
+import { skillExecutorRegistry } from '../vla/skill-executor.js';
 import { SimulationEngine } from './SimulationEngine.js';
 import { TaskQueue } from './TaskQueue.js';
 import {
@@ -136,6 +137,8 @@ export class RobotStateManager {
   private humanoidSafetyTimer: NodeJS.Timeout | null = null;
   /** Guards the humanoid safety loop against overlapping in-flight IMU fetches. */
   private imuPollInFlight = false;
+  /** Latch so a protective stop propagates to the motion path once, not every tick. */
+  private estopPropagated = false;
 
   constructor(config: RobotConfig) {
     // Initialize state
@@ -786,6 +789,26 @@ export class RobotStateManager {
         }
         // Leg-joint balance-margin warnings (no-op until real joints arrive).
         this.safetyMonitor.updateJointStates(hardwareClient.getJointStates());
+
+        // Propagate a protective stop to the MOTION-COMMAND path (once per
+        // trigger): detection alone doesn't stop the robot. Abort any running VLA
+        // executor so it stops emitting action chunks, and soft-stop the sidecar
+        // ramp. Latched so we don't re-fire every 50ms tick; reset on E-stop
+        // clear so a later stop propagates again.
+        if (this.safetyMonitor.isEStopTriggered()) {
+          if (!this.estopPropagated) {
+            this.estopPropagated = true;
+            const aborted = skillExecutorRegistry.abortAll();
+            if (aborted > 0) {
+              console.warn(
+                `[Safety] Protective stop — aborted ${aborted} active skill executor(s)`,
+              );
+            }
+            void hardwareClient.sendEstop();
+          }
+        } else {
+          this.estopPropagated = false;
+        }
       }, HUMANOID_SAFETY_POLL_MS);
     }
   }

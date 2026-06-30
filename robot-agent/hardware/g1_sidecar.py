@@ -78,69 +78,90 @@ JOINT_NAMES = BODY_JOINTS + HAND_JOINTS
 # ---------------------------------------------------------------------------
 # BLOCKER #2 — action ramping / rate-limiting (TASK-169)
 # ---------------------------------------------------------------------------
-# Per-joint position limits. Derived from g1_edu.yaml's
-# action.normalization {mean, std}: std is "~half range of joint limits" and
-# mean is the neutral pose (all 0.0), so a conservative absolute limit is
-# mean ± std. These are baked in here (in JOINT_NAMES order) so the file works
-# without PyYAML; if PyYAML is installed they are refined from the live YAML by
-# _maybe_override_limits_from_yaml() below.
-_JOINT_HALF_RANGE = [
-    # Left Leg (6)
-    2.705, 1.745, 2.758, 1.484, 0.698, 0.262,
-    # Right Leg (6)
-    2.705, 1.745, 2.758, 1.484, 0.698, 0.262,
-    # Waist (3)
-    2.618, 0.52, 0.52,
-    # Left Arm (7)
-    2.880, 1.920, 2.618, 1.571, 1.972, 1.614, 1.614,
-    # Right Arm (7)
-    2.880, 1.920, 2.618, 1.571, 1.972, 1.614, 1.614,
-    # Left Hand / Dex3-1 (7)
-    1.047, 0.785, 0.873, 0.524, 0.873, 0.524, 0.873,
-    # Right Hand / Dex3-1 (7)
-    1.047, 0.785, 0.873, 0.524, 0.873, 0.524, 0.873,
-]
+# Per-joint position limits (rad) as ASYMMETRIC (lower, upper) tuples, taken from
+# the real URDF-derived limits in src/robot/joint-configs/g1-edu.config.ts — the
+# single source of truth the rest of the system uses. This is the hard clamp that
+# protects against garbage VLA targets, so it MUST use the true asymmetric stops:
+# the previous symmetric ±half-range allowed e.g. ~1.4 rad of knee hyperextension
+# past the real -0.087 rad lower stop. (Dex3-1 hand limits are the config's
+# placeholders — tune against the official Dex3-1 URDF before real hand control.)
+# Keep in sync with g1-edu.config.ts (JOINT_NAMES order, by name).
 _DEFAULT_LIMIT = 3.1416  # fallback half-range (rad) for any unmapped joint
-POS_LIMITS = {
-    name: (-_JOINT_HALF_RANGE[i], _JOINT_HALF_RANGE[i])
-    for i, name in enumerate(JOINT_NAMES)
-    if i < len(_JOINT_HALF_RANGE)
+POS_LIMITS: dict[str, tuple[float, float]] = {
+    # Left Leg
+    "left_hip_pitch_joint": (-2.5307, 2.8798),
+    "left_hip_roll_joint": (-0.5236, 2.9671),
+    "left_hip_yaw_joint": (-2.7576, 2.7576),
+    "left_knee_joint": (-0.087267, 2.8798),
+    "left_ankle_pitch_joint": (-0.87267, 0.5236),
+    "left_ankle_roll_joint": (-0.2618, 0.2618),
+    # Right Leg
+    "right_hip_pitch_joint": (-2.5307, 2.8798),
+    "right_hip_roll_joint": (-2.9671, 0.5236),
+    "right_hip_yaw_joint": (-2.7576, 2.7576),
+    "right_knee_joint": (-0.087267, 2.8798),
+    "right_ankle_pitch_joint": (-0.87267, 0.5236),
+    "right_ankle_roll_joint": (-0.2618, 0.2618),
+    # Waist
+    "waist_yaw_joint": (-2.618, 2.618),
+    "waist_roll_joint": (-0.52, 0.52),
+    "waist_pitch_joint": (-0.52, 0.52),
+    # Left Arm
+    "left_shoulder_pitch_joint": (-3.0892, 2.6704),
+    "left_shoulder_roll_joint": (-1.5882, 2.2515),
+    "left_shoulder_yaw_joint": (-2.618, 2.618),
+    "left_elbow_joint": (-1.0472, 2.0944),
+    "left_wrist_roll_joint": (-1.972222, 1.972222),
+    "left_wrist_pitch_joint": (-1.61443, 1.61443),
+    "left_wrist_yaw_joint": (-1.61443, 1.61443),
+    # Right Arm
+    "right_shoulder_pitch_joint": (-3.0892, 2.6704),
+    "right_shoulder_roll_joint": (-2.2515, 1.5882),
+    "right_shoulder_yaw_joint": (-2.618, 2.618),
+    "right_elbow_joint": (-1.0472, 2.0944),
+    "right_wrist_roll_joint": (-1.972222, 1.972222),
+    "right_wrist_pitch_joint": (-1.61443, 1.61443),
+    "right_wrist_yaw_joint": (-1.61443, 1.61443),
+    # Left Hand / Dex3-1 (placeholders — see note above)
+    "left_hand_thumb_0_joint": (-1.0472, 1.0472),
+    "left_hand_thumb_1_joint": (0.0, 1.5708),
+    "left_hand_thumb_2_joint": (0.0, 1.7453),
+    "left_hand_index_0_joint": (-0.5236, 0.5236),
+    "left_hand_index_1_joint": (0.0, 1.7453),
+    "left_hand_middle_0_joint": (-0.5236, 0.5236),
+    "left_hand_middle_1_joint": (0.0, 1.7453),
+    # Right Hand / Dex3-1 (placeholders — see note above)
+    "right_hand_thumb_0_joint": (-1.0472, 1.0472),
+    "right_hand_thumb_1_joint": (0.0, 1.5708),
+    "right_hand_thumb_2_joint": (0.0, 1.7453),
+    "right_hand_index_0_joint": (-0.5236, 0.5236),
+    "right_hand_index_1_joint": (0.0, 1.7453),
+    "right_hand_middle_0_joint": (-0.5236, 0.5236),
+    "right_hand_middle_1_joint": (0.0, 1.7453),
 }
 
-
-def _maybe_override_limits_from_yaml() -> None:
-    """Refine POS_LIMITS from g1_edu.yaml when PyYAML is available.
-
-    Optional: if PyYAML isn't installed (or the file moved) we silently keep the
-    baked-in defaults above. Limits = mean ± std per joint, in JOINT_NAMES order.
-    """
-    try:
-        import yaml  # type: ignore  # optional dependency
-    except ImportError:
-        return
-    path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..", "src", "embodiment", "configs", "g1_edu.yaml",
-    )
-    try:
-        with open(path) as f:
-            cfg = yaml.safe_load(f)
-        norm = cfg["action"]["normalization"]
-        mean, std = norm["mean"], norm["std"]
-        for i, name in enumerate(JOINT_NAMES):
-            if i < len(mean) and i < len(std):
-                POS_LIMITS[name] = (mean[i] - std[i], mean[i] + std[i])
-        print(f"[G1 Sidecar] Loaded per-joint limits from {os.path.basename(path)}", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"[G1 Sidecar] YAML limit override skipped ({e}); using baked-in defaults", flush=True)
-
-
-_maybe_override_limits_from_yaml()
-
 # Slew-rate config (overridable via env). max per-tick step = vel / control_hz.
-CONTROL_HZ = float(os.environ.get("G1_CONTROL_HZ", "50") or 50.0)
-MAX_JOINT_VEL = float(os.environ.get("G1_MAX_JOINT_VEL", "1.0") or 1.0)  # rad/s, conservative
-_MAX_STEP = (MAX_JOINT_VEL / CONTROL_HZ) if CONTROL_HZ > 0 else MAX_JOINT_VEL  # rad per /action
+def _pos_float(name: str, default: float) -> float:
+    """Parse a strictly-positive float env var; fall back to default on
+    missing/empty/non-numeric/non-positive (a 0 or garbage value would otherwise
+    disable slew limiting or crash the sidecar at import)."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        val = float(raw)
+    except ValueError:
+        print(f"[G1 Sidecar] {name}={raw!r} not numeric; using {default}", flush=True)
+        return default
+    if val <= 0:
+        print(f"[G1 Sidecar] {name}={val} must be > 0; using {default}", flush=True)
+        return default
+    return val
+
+
+CONTROL_HZ = _pos_float("G1_CONTROL_HZ", 50.0)
+MAX_JOINT_VEL = _pos_float("G1_MAX_JOINT_VEL", 1.0)  # rad/s, conservative
+_MAX_STEP = MAX_JOINT_VEL / CONTROL_HZ  # rad per /action (both guaranteed > 0)
 
 # Last position we actually COMMANDED per joint. Ramp state; the ramp advances
 # this toward the requested target by at most _MAX_STEP each /action call.
@@ -283,25 +304,26 @@ def _seed_commanded_unlocked() -> None:
     """Seed the ramp state from the live joint positions (once). Hold robot_lock.
 
     Seeding from the real current pose means the first /action ramps FROM where
-    the robot actually is, not from 0 — avoiding a large initial jump.
+    the robot actually is, not from 0 — avoiding a large initial jump. If the
+    pose can't be read we let the exception propagate so the caller REFUSES the
+    action: ramping from a false 0.0 would command a large jump away from the
+    true pose on the very first tick (the opposite of slew limiting). Built into
+    a local dict first so a mid-read failure never leaves _commanded_pos partial.
     """
     if _commanded_pos:
         return
-    try:
-        obs = robot.get_observation()
-        for name in JOINT_NAMES:
-            _commanded_pos[name] = float(obs.get(f"{name}.pos", 0.0))
-    except Exception:  # noqa: BLE001
-        for name in JOINT_NAMES:
-            _commanded_pos[name] = 0.0
+    obs = robot.get_observation()  # may raise — caller treats it as action failure
+    _commanded_pos.update(
+        {name: float(obs.get(f"{name}.pos", 0.0)) for name in JOINT_NAMES}
+    )
 
 
 def send_action(action: dict) -> dict:
     """Send a joint-position action ({"<joint>": value, ...}), RAMPED + CLAMPED.
 
     BLOCKER #2 fix — slew-rate limiting:
-      1. Every requested target is CLAMPED to the joint's position limits
-         (POS_LIMITS, from g1_edu.yaml mean±std).
+      1. Every requested target is CLAMPED to the joint's real asymmetric
+         position limits (POS_LIMITS, from g1-edu.config.ts).
       2. The commanded value moves toward the target by at most _MAX_STEP rad
          per call, where _MAX_STEP = G1_MAX_JOINT_VEL / G1_CONTROL_HZ. Large
          targets therefore RAMP across multiple /action calls instead of

@@ -66,6 +66,10 @@ export function RobotCockpitPage() {
     );
   }
 
+  return <RobotCockpitPageInner />;
+}
+
+function RobotCockpitPageInner() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { robots, isLoading, fetchRobots } = useRobots();

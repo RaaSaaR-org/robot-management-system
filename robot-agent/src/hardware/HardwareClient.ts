@@ -26,12 +26,18 @@ import { config } from '../config/config.js';
  * the SafetyMonitor for humanoid fall detection.
  */
 export interface ImuReading {
+  /** Body orientation [roll, pitch, yaw] in radians. REQUIRED — drives the tilt stop. */
   rpy: [number, number, number];
-  gyro: [number, number, number];
+  /**
+   * Body angular velocity [wx, wy, wz] in rad/s. OPTIONAL — drives the fast-tip
+   * check; if absent the absolute-tilt stop (rpy) still runs, so a robot that
+   * reports orientation but no angular rate must NOT have the whole net disabled.
+   */
+  gyro?: [number, number, number];
   /**
    * Linear acceleration [ax, ay, az] in m/s². OPTIONAL — fall detection consumes
-   * only rpy + gyro, so a robot reporting orientation + angular rate but no accel
-   * must NOT be treated as "no IMU". Present only when the sidecar reports it.
+   * only rpy (+ gyro), so a robot reporting orientation but no accel must NOT be
+   * treated as "no IMU". Present only when the sidecar reports it.
    */
   accel?: [number, number, number];
 }
@@ -335,10 +341,10 @@ export class HardwareClient {
    * reading is malformed — callers must treat null as "no reliable IMU" rather
    * than "upright". The SafetyMonitor uses this for humanoid fall detection.
    *
-   * Strict on the CONSUMED signals: rpy and gyro must both be well-formed numeric
-   * triples or null is returned — they are never fabricated, since a zero-filled
-   * reading could mask a fall. accel is optional (the fall-detection net ignores
-   * it), so a missing/malformed accel does NOT disable the safety net.
+   * Strict on rpy — the absolute-tilt stop runs on orientation alone, and a
+   * zero-filled reading could mask a fall, so rpy is never fabricated. gyro
+   * (fast-tip) and accel are optional refinements: a robot that reports rpy but
+   * not gyro/accel keeps the tilt net armed rather than having it disabled.
    */
   async getImuNow(): Promise<ImuReading | null> {
     let data: { imu?: unknown };
@@ -356,15 +362,36 @@ export class HardwareClient {
     if (!imu || typeof imu !== 'object') return null;
     const { rpy, gyro, accel } = imu as Record<string, unknown>;
     const rpyVec = _toVec3(rpy);
+    // Require only rpy — the absolute-tilt stop runs on orientation alone. gating
+    // the whole reading on gyro/accel would silently disable the tilt net for a
+    // robot that reports orientation but not angular rate / acceleration.
+    if (!rpyVec) return null;
     const gyroVec = _toVec3(gyro);
-    // Require only the signals fall detection actually uses (rpy + gyro). accel is
-    // optional — gating the whole reading on a field nobody reads would silently
-    // disable the safety net for a robot that reports orientation but no accel.
-    if (!rpyVec || !gyroVec) return null;
     const accelVec = _toVec3(accel);
-    return accelVec
-      ? { rpy: rpyVec, gyro: gyroVec, accel: accelVec }
-      : { rpy: rpyVec, gyro: gyroVec };
+    const reading: ImuReading = { rpy: rpyVec };
+    if (gyroVec) reading.gyro = gyroVec;
+    if (accelVec) reading.accel = accelVec;
+    return reading;
+  }
+
+  /**
+   * Best-effort soft E-stop: POST the sidecar's `/estop`, which clears the action
+   * ramp so a later command re-seeds the ramp from the true pose. The safety loop
+   * calls this to propagate a protective stop to the hardware command path. Never
+   * throws — if the sidecar is unreachable there is nothing more to do here.
+   *
+   * ⚠️ SOFT stop (ramp reset), NOT a physical motor cut. Real-hardware bring-up
+   * still needs Unitree's damping/E-stop mode + a safety gantry.
+   */
+  async sendEstop(): Promise<void> {
+    try {
+      await fetch(`${SIDECAR_URL}/estop`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(1500),
+      });
+    } catch {
+      // Sidecar unreachable / timeout — best-effort only.
+    }
   }
 }
 
