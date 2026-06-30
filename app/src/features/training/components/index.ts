@@ -11,6 +11,8 @@ export { DatasetList } from './DatasetList';
 export type { DatasetListProps } from './DatasetList';
 export { DatasetUploadModal } from './DatasetUploadModal';
 export type { DatasetUploadModalProps } from './DatasetUploadModal';
+export { GenerateSyntheticModal } from './GenerateSyntheticModal';
+export type { GenerateSyntheticModalProps } from './GenerateSyntheticModal';
 
 // Training job components
 export { TrainingJobCard } from './TrainingJobCard';

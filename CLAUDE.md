@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 NeoDEM is the open Physical AI platform covering the **complete lifecycle** — Collect → Train → Deploy → Evaluate → Operate → Comply — not just fleet operation. It's the integrating layer around LeRobot (LeRobotDataset format, HF Hub sync; trains Pi0/ACT/Diffusion/OpenVLA; serves models via the VLA Server). Fleet operation is one of six stages. It consists of four main components:
 
+**Embodiment focus:** The platform is hardware-agnostic, but development and go-to-market focus on **cognitive humanoids, specialized on the Unitree G1** (incl. G1 EDU + Dex3-1 hands). The SO-101 arm was the bootstrap embodiment — still supported, but new feature work (sim, digital twin, RL, VLA, teleop, demos) defaults to the G1 humanoid.
+
 | Component          | Location         | Description                          | Port  |
 | ------------------ | ---------------- | ------------------------------------ | ----- |
 | **App**            | `app/`           | React + Tauri frontend               | 1420  |

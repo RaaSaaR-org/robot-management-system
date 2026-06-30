@@ -5,3 +5,4 @@
  */
 
 export * from './trainingApi';
+export * from './syntheticApi';

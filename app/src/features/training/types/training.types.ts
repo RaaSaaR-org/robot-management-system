@@ -102,6 +102,10 @@ export interface LeRobotInfo {
   robot_type?: string;
   fps?: number;
   features?: Record<string, unknown>;
+  /** True for generator-produced datasets (e.g. Cosmos 3). TASK-178 */
+  _synthetic?: boolean;
+  /** Human-readable provenance for synthetic datasets. TASK-178 */
+  _generator?: string;
 }
 
 export interface LeRobotStats {
@@ -543,4 +547,59 @@ export interface CurationResult {
   total_frames: number;
   stats_recompute_required: boolean;
   error?: string;
+}
+
+// ============================================================================
+// COSMOS 3 SYNTHETIC GENERATION (TASK-178)
+// ============================================================================
+
+export const CosmosJobStatuses = [
+  'queued',
+  'generating',
+  'converting',
+  'registering',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+export type CosmosJobStatus = (typeof CosmosJobStatuses)[number];
+
+/** A Cosmos 3 synthetic-episode generation job (in-memory on the server). */
+export interface CosmosSyntheticJob {
+  id: string;
+  status: CosmosJobStatus;
+  /** Short human-readable phase label. */
+  phase: string;
+  /** 0-100. */
+  progress: number;
+  episodes: number;
+  prompt?: string;
+  embodiment: string;
+  generatedCount: number;
+  /** Set once the dataset row is created. */
+  datasetId?: string;
+  datasetName?: string;
+  error?: string;
+  /** Tail of the generator's stdout/stderr for the live console. */
+  log: string[];
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+/** Whether the Cosmos generator is runnable + configured. */
+export interface CosmosSyntheticConfig {
+  available: boolean;
+  hasToken: boolean;
+  embodiment: string;
+  maxEpisodes: number;
+  python: string;
+  scriptPath: string;
+  outRoot: string;
+}
+
+export interface GenerateSyntheticInput {
+  episodes: number;
+  prompt?: string;
 }

@@ -4,9 +4,9 @@
  * @feature training
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Database } from 'lucide-react';
+import { Database, Sparkles } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Button, Modal } from '@/shared/components/ui';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
@@ -14,6 +14,7 @@ import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
 import { HFDatasetBrowserModal } from '../components/HFDatasetBrowserModal';
 import { HFPushModal } from '../components/HFPushModal';
+import { GenerateSyntheticModal } from '../components/GenerateSyntheticModal';
 import { useDatasetsAutoFetch } from '../hooks';
 import { useTrainingStore } from '../store';
 import type { Dataset, DatasetQueryParams } from '../types';
@@ -42,13 +43,24 @@ export function DatasetsPage() {
   const navigate = useNavigate();
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isHFBrowserOpen, setIsHFBrowserOpen] = useState(false);
+  const [isGenerateOpen, setIsGenerateOpen] = useState(false);
   const [pushDataset, setPushDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [filters, setFilters] = useState<DatasetQueryParams>({});
+  const [showSyntheticOnly, setShowSyntheticOnly] = useState(false);
 
   const { datasets, isLoading, error, fetchDatasets, deleteDataset } = useDatasetsAutoFetch();
   const setDatasetFilters = useTrainingStore((state) => state.setDatasetFilters);
+
+  const syntheticCount = useMemo(
+    () => datasets.filter((d) => d.infoJson?._synthetic).length,
+    [datasets],
+  );
+  const displayedDatasets = useMemo(
+    () => (showSyntheticOnly ? datasets.filter((d) => d.infoJson?._synthetic) : datasets),
+    [datasets, showSyntheticOnly],
+  );
 
   const handleUploadSuccess = () => {
     fetchDatasets();
@@ -96,6 +108,13 @@ export function DatasetsPage() {
           <PipelineBreadcrumb stage="dataset" />
           <Button variant="ghost" onClick={() => setIsHFBrowserOpen(true)}>
             Import from Hub
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => setIsGenerateOpen(true)}
+            leftIcon={<Sparkles className="h-4 w-4" />}
+          >
+            Generate Synthetic
           </Button>
           <Button onClick={() => setIsUploadModalOpen(true)}>
             <svg
@@ -153,6 +172,19 @@ export function DatasetsPage() {
           <option value="navigation">Navigation</option>
           <option value="manipulation">Manipulation</option>
         </select>
+        {(syntheticCount > 0 || showSyntheticOnly) && (
+          <button
+            onClick={() => setShowSyntheticOnly((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+              showSyntheticOnly
+                ? 'border-purple-500/50 bg-purple-500/10 text-purple-300'
+                : 'border-theme-secondary/30 text-theme-secondary hover:border-purple-500/40'
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Synthetic only
+          </button>
+        )}
       </div>
 
       {/* Stats summary */}
@@ -168,9 +200,9 @@ export function DatasetsPage() {
             color="green"
           />
           <StatCard
-            label="Validating"
-            value={datasets.filter((d) => d.status === 'validating').length}
-            color="yellow"
+            label="Synthetic"
+            value={syntheticCount}
+            color="purple"
           />
           <StatCard
             label="Total Frames"
@@ -181,7 +213,7 @@ export function DatasetsPage() {
 
       {/* Dataset list */}
       <DatasetList
-        datasets={datasets}
+        datasets={displayedDatasets}
         isLoading={isLoading}
         onSelect={handleSelectDataset}
         onViewEpisodes={(dataset) => navigate(`/datasets/${dataset.id}/episodes`)}
@@ -201,6 +233,14 @@ export function DatasetsPage() {
         onClose={() => setIsHFBrowserOpen(false)}
         onSuccess={handleUploadSuccess}
         existingDatasets={datasets}
+      />
+
+      {/* Cosmos 3 synthetic generation wizard */}
+      <GenerateSyntheticModal
+        isOpen={isGenerateOpen}
+        onClose={() => setIsGenerateOpen(false)}
+        onSuccess={() => fetchDatasets()}
+        onViewDataset={(datasetId) => navigate(`/datasets/${datasetId}/episodes`)}
       />
 
       {/* HuggingFace push modal */}
@@ -245,7 +285,7 @@ export function DatasetsPage() {
 interface StatCardProps {
   label: string;
   value: string | number;
-  color?: 'green' | 'yellow' | 'red' | 'blue';
+  color?: 'green' | 'yellow' | 'red' | 'blue' | 'purple';
 }
 
 function StatCard({ label, value, color }: StatCardProps) {
@@ -254,6 +294,7 @@ function StatCard({ label, value, color }: StatCardProps) {
     yellow: 'text-yellow-600',
     red: 'text-red-600',
     blue: 'text-blue-600',
+    purple: 'text-purple-400',
   };
 
   return (

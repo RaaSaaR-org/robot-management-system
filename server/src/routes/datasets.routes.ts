@@ -27,11 +27,182 @@ import type {
   UnflagTrajectoryRequest,
 } from '../types/data-quality.types.js';
 import { spawn } from 'child_process';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
+import { createReadStream, existsSync, statSync } from 'fs';
+import { readFile } from 'fs/promises';
+import type { Readable } from 'stream';
 
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
+
+// ============================================================================
+// Local on-disk datasets (synthetic / Cosmos 3 — TASK-178)
+//
+// Synthetic datasets are stored as a LeRobot v2.1 directory on the local disk
+// (absolute storagePath) rather than in RustFS. These helpers let the standard
+// episodes / frames / video routes serve them, so the existing viewer works
+// unchanged. All branches are guarded by `isLocalDataset`, so RustFS/HF
+// datasets are entirely unaffected.
+// ============================================================================
+
+function isLocalDataset(storagePath: string): boolean {
+  return storagePath.startsWith('/') && existsSync(storagePath);
+}
+
+function padEpisode(index: number): string {
+  return String(index).padStart(6, '0');
+}
+
+/** Camera keys are simple identifiers; anything else could traverse the path. */
+const CAMERA_KEY_RE = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Pipe a readable to the response with error handling and abort cleanup.
+ * A bare `stream.pipe(res)` leaves the read stream's 'error' unhandled (an I/O
+ * error mid-stream then crashes the whole process) and leaks the fd when the
+ * client aborts early (common with video Range scrubbing → eventual EMFILE).
+ */
+function pipeStreamToResponse(stream: Readable, res: Response): void {
+  const cleanup = () => stream.destroy();
+  stream.on('error', (err: Error) => {
+    res.removeListener('close', cleanup);
+    if (!res.headersSent) res.status(500).end();
+    else res.destroy(err);
+  });
+  res.on('close', cleanup);
+  stream.pipe(res);
+}
+
+/** pyarrow list<float32> may surface as a plain array or parquetjs `{list:[{element}]}`. */
+function toNumberArray(value: unknown): number[] {
+  if (Array.isArray(value)) {
+    return value.map((x) => Number((x as { element?: number })?.element ?? x));
+  }
+  const list = (value as { list?: Array<{ element?: number }> })?.list;
+  if (Array.isArray(list)) return list.map((it) => Number(it?.element ?? 0));
+  return [];
+}
+
+async function readLocalEpisodes(storagePath: string, fps: number): Promise<EpisodeMeta[] | null> {
+  try {
+    const raw = await readFile(join(storagePath, 'meta', 'episodes.json'), 'utf8');
+    const arr = JSON.parse(raw) as Array<{ episode_index?: number; length?: number }>;
+    if (!Array.isArray(arr)) return null;
+    return arr.map((e, i) => {
+      const frameCount = Number(e.length ?? 0);
+      return {
+        index: Number(e.episode_index ?? i),
+        frameCount,
+        durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
+        flagged: false,
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function readLocalFrames(
+  storagePath: string,
+  episodeIndex: number,
+  fps: number,
+  offset: number,
+  limit: number,
+): Promise<{ frames: FrameData[]; total: number } | null> {
+  const file = join(storagePath, 'data', 'chunk-000', `episode_${padEpisode(episodeIndex)}.parquet`);
+  if (!existsSync(file)) return null;
+  try {
+    const { ParquetReader } = await import('@dsnp/parquetjs');
+    const reader = await ParquetReader.openFile(file);
+    const cursor = reader.getCursor();
+    let row: Record<string, unknown> | null;
+    const all: FrameData[] = [];
+    while ((row = (await cursor.next()) as Record<string, unknown> | null)) {
+      all.push({
+        frameIndex: Number(row['frame_index'] ?? all.length),
+        timestamp: Number(row['timestamp'] ?? all.length / fps),
+        observationState: toNumberArray(row['observation.state']),
+        action: toNumberArray(row['action']),
+      });
+    }
+    await reader.close();
+    return { frames: all.slice(offset, offset + limit), total: all.length };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stream a local v2.1 per-episode mp4 with Range support. Returns false only
+ * when the file is genuinely absent (so the caller can 404). All error/response
+ * paths return true because they have already written a response.
+ */
+function streamLocalVideo(
+  storagePath: string,
+  episodeIndex: number,
+  camera: string,
+  req: Request,
+  res: Response,
+): boolean {
+  // Guard against path traversal via the camera segment: Express decodes %2f
+  // inside a single param after route matching, so `x%2f..%2f..` would escape
+  // the dataset dir once join() normalizes the `..` sequences.
+  if (!CAMERA_KEY_RE.test(camera)) {
+    res.status(400).json({ error: 'Invalid camera key' });
+    return true;
+  }
+  const baseDir = resolve(storagePath);
+  const file = resolve(
+    baseDir,
+    'videos',
+    `observation.images.${camera}`,
+    'chunk-000',
+    `episode_${padEpisode(episodeIndex)}.mp4`,
+  );
+  // Defense in depth: the resolved file must stay within the dataset dir.
+  if (file !== baseDir && !file.startsWith(baseDir + sep)) {
+    res.status(400).json({ error: 'Invalid path' });
+    return true;
+  }
+  if (!existsSync(file)) return false;
+
+  const { size } = statSync(file);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Accept-Ranges', 'bytes');
+
+  const range = req.headers.range;
+  if (range) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (!m || (!m[1] && !m[2])) {
+      res.status(416).setHeader('Content-Range', `bytes */${size}`);
+      return res.end(), true;
+    }
+    let start: number;
+    let end: number;
+    if (!m[1]) {
+      // suffix range `bytes=-N` → last N bytes
+      start = Math.max(0, size - parseInt(m[2], 10));
+      end = size - 1;
+    } else {
+      start = parseInt(m[1], 10);
+      end = m[2] ? parseInt(m[2], 10) : size - 1;
+    }
+    end = Math.min(end, size - 1);
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
+      res.status(416).setHeader('Content-Range', `bytes */${size}`);
+      return res.end(), true;
+    }
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+    res.setHeader('Content-Length', end - start + 1);
+    pipeStreamToResponse(createReadStream(file, { start, end }), res);
+  } else {
+    res.setHeader('Content-Length', size);
+    pipeStreamToResponse(createReadStream(file), res);
+  }
+  return true;
+}
 
 /**
  * Read a parquet file from RustFS, trying both 'training-datasets' and legacy 'datasets' buckets.
@@ -546,6 +717,14 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
       : dataset.infoJson;
     const fps = info?.fps ?? dataset.fps ?? 30;
 
+    // Local synthetic datasets (TASK-178): read meta/episodes.json from disk.
+    if (isLocalDataset(dataset.storagePath)) {
+      const local = await readLocalEpisodes(dataset.storagePath, fps);
+      if (local && local.length > 0) {
+        return res.json({ episodes: local });
+      }
+    }
+
     // Try to read real episode metadata from parquet
     const episodes: EpisodeMeta[] = [];
     try {
@@ -619,6 +798,18 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
       ? JSON.parse(dataset.infoJson as string)
       : dataset.infoJson;
     const fps = info?.fps ?? dataset.fps ?? 30;
+
+    // Local synthetic datasets (TASK-178): read per-episode parquet from disk.
+    // Branch decisively — never fall through to the fabricated-frame generator
+    // below: a missing parquet is a 404, a present one returns its real frames
+    // (even if the requested offset slice is empty) with the true episode total.
+    if (isLocalDataset(dataset.storagePath)) {
+      const local = await readLocalFrames(dataset.storagePath, episodeIndex, fps, offset, limit);
+      if (local === null) {
+        return res.status(404).json({ error: 'Episode frames not found' });
+      }
+      return res.json({ frames: local.frames, total: local.total });
+    }
 
     // Read real frame data from parquet
     let frames: FrameData[] = [];
@@ -702,6 +893,12 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
+    // Local synthetic datasets (TASK-178): stream the v2.1 per-episode mp4 from disk.
+    if (isLocalDataset(dataset.storagePath)) {
+      if (streamLocalVideo(dataset.storagePath, episodeIndex, camera, req, res)) return;
+      return res.status(404).json({ error: 'Video not found for synthetic dataset' });
+    }
+
     // LeRobot v3 video path: videos/observation.images.{camera}/chunk-{chunk:03d}/file-000.mp4
     // One video file per chunk containing all episodes concatenated
     const CHUNKS_SIZE = 1000;
@@ -733,7 +930,7 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
             res.setHeader('Content-Length', fileSize);
             res.setHeader('Accept-Ranges', 'bytes');
             const stream = await rustfs.getStream(bucket, videoKey);
-            return stream.pipe(res);
+            return pipeStreamToResponse(stream as unknown as Readable, res);
           }
         }
       }
@@ -767,9 +964,9 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
     }
     res.setHeader('Accept-Ranges', 'bytes');
 
-    const { Readable } = await import('stream');
-    const nodeStream = Readable.fromWeb(hfResponse.body as import('stream/web').ReadableStream);
-    nodeStream.pipe(res);
+    const { Readable: NodeReadable } = await import('stream');
+    const nodeStream = NodeReadable.fromWeb(hfResponse.body as import('stream/web').ReadableStream);
+    pipeStreamToResponse(nodeStream, res);
   } catch (error) {
     console.error('[DatasetRoutes] Error streaming video:', error);
     res.status(500).json({ error: 'Failed to stream video' });

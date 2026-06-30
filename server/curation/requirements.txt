@@ -1,2 +1,6 @@
 pyarrow>=14
 pandas>=2
+# cosmos3_synth.py (TASK-175) only:
+numpy>=1.26
+httpx>=0.27
+huggingface_hub>=0.25
