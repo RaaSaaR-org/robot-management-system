@@ -1,6 +1,9 @@
 /**
  * @file SafetyMonitor.ts
- * @description Core safety monitoring system per ISO 10218-1, ISO/TS 15066, and MR Annex III
+ * @description Core safety monitoring system per ISO 10218-1, ISO/TS 15066, and MR Annex III.
+ *              Arm path (force/speed/comms) plus an embodiment-gated humanoid
+ *              fall/tilt safety net (G1 / G1-EDU / H1) — fall DETECTION → stop,
+ *              not fall PREVENTION (see TASK-169 Stage 4).
  * @feature safety
  * @status live
  */
@@ -18,7 +21,7 @@ import type {
   ForceReading,
 } from './types.js';
 import { DEFAULT_SAFETY_CONFIG } from './types.js';
-import type { SimulatedRobotState } from '../robot/types.js';
+import type { SimulatedRobotState, RobotType } from '../robot/types.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 
 // ============================================================================
@@ -30,6 +33,105 @@ type StateUpdater = (updater: (state: SimulatedRobotState) => void) => void;
 type ChangeNotifier = () => void;
 
 export type SafetyEventCallback = (event: SafetyEvent) => void;
+
+// ============================================================================
+// HUMANOID FALL / TILT SAFETY (G1 / G1-EDU / H1)
+// ============================================================================
+
+/**
+ * Embodiments that walk on two legs and can therefore tip over. The humanoid
+ * fall/tilt net below is enabled only for these; arms (so101) keep the original
+ * ARM-shaped behavior unchanged.
+ */
+const HUMANOID_ROBOT_TYPES: ReadonlySet<RobotType> = new Set<RobotType>([
+  'g1',
+  'g1_edu',
+  'h1',
+]);
+
+/**
+ * A single IMU sample. SHARED CONTRACT with HardwareClient (owned by the
+ * hardware agent): `hardwareClient.getImuNow()` resolves to this shape, or
+ * `null` when no IMU telemetry is available yet.
+ *
+ * Frame: robotics convention (x-forward, y-left, z-up).
+ */
+export interface ImuReading {
+  /** Body orientation [roll, pitch, yaw] in radians. */
+  rpy: [number, number, number];
+  /** Body angular velocity [wx, wy, wz] in rad/s. */
+  gyro: [number, number, number];
+  /** Linear acceleration [ax, ay, az] in m/s². Optional — fall detection uses only rpy + gyro. */
+  accel?: [number, number, number];
+}
+
+/** Static joint travel limits fed in at construction for balance-margin checks. */
+export interface JointLimit {
+  name: string;
+  /** Lower travel limit (rad). */
+  limitLower: number;
+  /** Upper travel limit (rad). */
+  limitUpper: number;
+}
+
+/**
+ * Tunable thresholds for the humanoid fall/tilt net. Conservative defaults;
+ * override via constructor opts or the `SAFETY_*` env vars.
+ */
+export interface HumanoidSafetyConfig {
+  /** |roll| or |pitch| (rad) that triggers a protective stop. ~0.5 rad ≈ 28°. */
+  tiltStopRad: number;
+  /** Earlier warn-band tilt (rad) surfaced as a safety warning. ~0.35 rad ≈ 20°. */
+  tiltWarnRad: number;
+  /** Body angular-velocity magnitude (rad/s) treated as a fast tip-over. */
+  gyroTipStopRadPerSec: number;
+  /** Warn when a leg joint sits within this fraction of its travel range of a limit. */
+  jointLimitMarginFrac: number;
+}
+
+/** Conservative humanoid defaults — catch a tip-over without nuisance trips. */
+export const DEFAULT_HUMANOID_SAFETY_CONFIG: HumanoidSafetyConfig = {
+  tiltStopRad: 0.5,            // ~28.6°
+  tiltWarnRad: 0.35,           // ~20°
+  gyroTipStopRadPerSec: 2.5,   // fast body rotation = fall in progress
+  jointLimitMarginFrac: 0.03,  // 3% of travel from a hard limit
+};
+
+/**
+ * Options that enable / tune the humanoid safety net. All optional so existing
+ * callers (and the arm path) are unaffected.
+ */
+export interface SafetyMonitorOptions {
+  /** Active embodiment. Humanoid types enable the fall/tilt net; arms do not. */
+  robotType?: RobotType;
+  /** Override individual humanoid thresholds. */
+  humanoid?: Partial<HumanoidSafetyConfig>;
+  /** Leg-joint travel limits (hip/knee/ankle) for balance-margin warnings. */
+  legJointLimits?: JointLimit[];
+}
+
+/** Read a finite float from env, or undefined when unset/invalid. */
+function readEnvFloat(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Drop keys whose value is undefined so spreads don't clobber defaults. */
+function stripUndefined<T extends object>(obj: T): Partial<T> {
+  const out: Partial<T> = {};
+  (Object.keys(obj) as (keyof T)[]).forEach((k) => {
+    const v = obj[k];
+    if (v !== undefined) out[k] = v;
+  });
+  return out;
+}
+
+/** Radians → degrees, one decimal, as a string for human-readable reasons. */
+function toDeg(rad: number): string {
+  return ((rad * 180) / Math.PI).toFixed(1);
+}
 
 // ============================================================================
 // BUTTERWORTH FILTER (2nd order low-pass for force monitoring)
@@ -111,6 +213,10 @@ class ButterworthFilter {
  * - E-stop state management
  * - Protective stop triggering
  * - Safety event logging
+ * - Humanoid fall/tilt net (G1 / G1-EDU / H1, embodiment-gated): orientation +
+ *   leg-joint balance margin. This is fall DETECTION → protective stop, NOT
+ *   fall PREVENTION — keeping a biped upright needs a balance / whole-body
+ *   controller (TASK-169 Stage 4). CoM/ZMP balance is a documented gap.
  */
 export class SafetyMonitor {
   private readonly config: SafetyConfig;
@@ -149,11 +255,28 @@ export class SafetyMonitor {
   private speedLimitActive = false;
   private speedLimitReason = '';
 
+  // ── Humanoid fall/tilt safety net (G1 / G1-EDU / H1) ──────────────────────
+  // Honesty: fall DETECTION → protective stop, NOT fall PREVENTION. Keeping a
+  // biped upright needs a balance / whole-body controller (TASK-169 Stage 4).
+  // CoM/ZMP balance margin is a DOCUMENTED GAP — not faked; the net is
+  // orientation- + leg-joint-limit-based. All of this is inert on arms.
+  private readonly isHumanoid: boolean;
+  private readonly humanoidConfig: HumanoidSafetyConfig;
+  private readonly legJointLimits: JointLimit[];
+  /** Logged ONCE when humanoid + no IMU, so the degraded net is visible. */
+  private imuMissingLogged = false;
+  /** True while inside the tilt warn-band (transition-logged to avoid flooding). */
+  private tiltWarnActive = false;
+  /** Active humanoid warnings surfaced via getStatus(); self-clearing per update. */
+  private tiltWarning: string | null = null;
+  private jointLimitWarnings: string[] = [];
+
   constructor(
     stateGetter: StateGetter,
     stateUpdater: StateUpdater,
     changeNotifier: ChangeNotifier,
-    config: Partial<SafetyConfig> = {}
+    config: Partial<SafetyConfig> = {},
+    options: SafetyMonitorOptions = {}
   ) {
     this.config = { ...DEFAULT_SAFETY_CONFIG, ...config };
     this.stateGetter = stateGetter;
@@ -167,6 +290,33 @@ export class SafetyMonitor {
       this.config.forceFilterCutoffHz,
       actualSampleRate
     );
+
+    // Humanoid fall/tilt net — enabled only for bipedal embodiments. Thresholds:
+    // defaults < SAFETY_* env overrides < explicit constructor opts.
+    this.isHumanoid = options.robotType
+      ? HUMANOID_ROBOT_TYPES.has(options.robotType)
+      : false;
+    this.legJointLimits = options.legJointLimits ?? [];
+    const envHumanoid: Partial<HumanoidSafetyConfig> = {
+      tiltStopRad: readEnvFloat('SAFETY_TILT_STOP_RAD'),
+      tiltWarnRad: readEnvFloat('SAFETY_TILT_WARN_RAD'),
+      gyroTipStopRadPerSec: readEnvFloat('SAFETY_GYRO_TIP_RAD_S'),
+      jointLimitMarginFrac: readEnvFloat('SAFETY_JOINT_MARGIN_FRAC'),
+    };
+    this.humanoidConfig = {
+      ...DEFAULT_HUMANOID_SAFETY_CONFIG,
+      ...stripUndefined(envHumanoid),
+      ...stripUndefined(options.humanoid ?? {}),
+    };
+
+    if (this.isHumanoid) {
+      console.log(
+        `[SafetyMonitor] Humanoid fall/tilt net ARMED for ${options.robotType} ` +
+          `(tilt-stop ${toDeg(this.humanoidConfig.tiltStopRad)}°, ` +
+          `gyro-tip ${this.humanoidConfig.gyroTipStopRadPerSec} rad/s, ` +
+          `${this.legJointLimits.length} leg joints)`
+      );
+    }
   }
 
   // ============================================================================
@@ -205,6 +355,14 @@ export class SafetyMonitor {
    */
   get isRunning(): boolean {
     return this.monitoringInterval !== null;
+  }
+
+  /**
+   * Whether the active embodiment is a humanoid (enables the fall/tilt net).
+   * Used by the state manager to gate IMU/joint polling for bipedal robots.
+   */
+  get isHumanoidEmbodiment(): boolean {
+    return this.isHumanoid;
   }
 
   // ============================================================================
@@ -364,6 +522,134 @@ export class SafetyMonitor {
       magnitude: baseForce + Math.abs(noise),
       timestamp: Date.now(),
     };
+  }
+
+  // ============================================================================
+  // HUMANOID FALL / TILT SAFETY NET
+  // ============================================================================
+
+  /**
+   * Feed a fresh IMU sample into the humanoid fall/tilt net.
+   *
+   * Detection ladder (fail-safe, reuses the existing protective-stop machinery,
+   * event callbacks and compliance logging — no parallel path):
+   *   1. Fast tip-over — gyro magnitude over `gyroTipStopRadPerSec`. Catches a
+   *      fall already in progress before the body has rotated far.
+   *   2. Body tilt     — |roll| or |pitch| over `tiltStopRad`: the robot is past
+   *      recovery → protective stop.
+   *   3. Warn band     — tilt over `tiltWarnRad`: surfaced as a warning, no stop.
+   *
+   * HONESTY: this is fall DETECTION → stop, NOT fall PREVENTION. A real biped
+   * stays upright via a balance / whole-body controller (TASK-169 Stage 4); this
+   * only brings the robot to a safe stop once a tip-over is detected.
+   *
+   * No-op on arm embodiments. When `imu` is null (no IMU telemetry) it never
+   * false-trips — it logs ONCE that the net is degraded, then returns.
+   */
+  updateOrientation(imu: ImuReading | null): void {
+    if (!this.isHumanoid) return;
+
+    if (imu === null) {
+      if (!this.imuMissingLogged) {
+        this.imuMissingLogged = true;
+        this.tiltWarning = null;
+        this.tiltWarnActive = false;
+        console.warn(
+          '[SafetyMonitor] Humanoid fall-detection INACTIVE — no IMU telemetry ' +
+            '(getImuNow() returned null). Tilt/tip safety net is DEGRADED until ' +
+            'IMU data is available.'
+        );
+      }
+      return;
+    }
+
+    // IMU recovered after a gap — re-arm logging so a later loss is visible again.
+    if (this.imuMissingLogged) {
+      this.imuMissingLogged = false;
+      console.log('[SafetyMonitor] IMU telemetry available — humanoid fall-detection active');
+    }
+
+    // Already stopped — don't re-trigger on every poll (floods compliance log).
+    if (this.estopState.status === 'triggered') return;
+
+    const [roll, pitch] = imu.rpy;
+    const [gx, gy, gz] = imu.gyro;
+
+    // 1. Fast tip-over in progress (angular velocity).
+    const gyroMag = Math.hypot(gx, gy, gz);
+    if (gyroMag > this.humanoidConfig.gyroTipStopRadPerSec) {
+      this.tiltWarning = null;
+      this.tiltWarnActive = false;
+      this.triggerProtectiveStop(
+        'protective_stop',
+        `Fall risk: fast body rotation ${gyroMag.toFixed(2)} rad/s exceeds tip ` +
+          `threshold ${this.humanoidConfig.gyroTipStopRadPerSec} rad/s`
+      );
+      return;
+    }
+
+    // 2. Absolute body tilt past the stop threshold.
+    const maxTilt = Math.max(Math.abs(roll), Math.abs(pitch));
+    if (maxTilt > this.humanoidConfig.tiltStopRad) {
+      this.tiltWarning = null;
+      this.tiltWarnActive = false;
+      this.triggerProtectiveStop(
+        'protective_stop',
+        `Fall risk: body tilt ${toDeg(maxTilt)}° exceeds ` +
+          `${toDeg(this.humanoidConfig.tiltStopRad)}° limit ` +
+          `(roll=${toDeg(roll)}°, pitch=${toDeg(pitch)}°)`
+      );
+      return;
+    }
+
+    // 3. Warn band — heads-up before the hard stop. Self-clears below threshold.
+    if (maxTilt > this.humanoidConfig.tiltWarnRad) {
+      this.tiltWarning = `Body tilt ${toDeg(maxTilt)}° (warn ≥ ${toDeg(this.humanoidConfig.tiltWarnRad)}°)`;
+      if (!this.tiltWarnActive) {
+        this.tiltWarnActive = true;
+        console.warn(`[SafetyMonitor] ${this.tiltWarning}`);
+      }
+    } else {
+      this.tiltWarning = null;
+      this.tiltWarnActive = false;
+    }
+  }
+
+  /**
+   * Feed current joint state into the balance-margin net. Warns (does NOT stop)
+   * when a leg joint (hip/knee/ankle) sits within `jointLimitMarginFrac` of a
+   * hard travel limit — an over-extension that often precedes a stumble. The
+   * hard-stop authority stays with {@link updateOrientation}; this only raises
+   * warnings surfaced through {@link getStatus}.
+   *
+   * No-op on arms, when no leg limits were configured, or when joint telemetry
+   * is empty (e.g. pure sim with no sidecar). DOCUMENTED GAP: true balance needs
+   * CoM/ZMP data we do not have here — we do not fake it.
+   */
+  updateJointStates(joints: ReadonlyArray<{ name: string; position: number }>): void {
+    if (!this.isHumanoid || this.legJointLimits.length === 0 || joints.length === 0) {
+      if (this.jointLimitWarnings.length > 0) this.jointLimitWarnings = [];
+      return;
+    }
+
+    const byName = new Map(joints.map((j) => [j.name, j.position]));
+    const warnings: string[] = [];
+
+    for (const limit of this.legJointLimits) {
+      const pos = byName.get(limit.name);
+      if (pos === undefined) continue;
+      const range = limit.limitUpper - limit.limitLower;
+      if (range <= 0) continue;
+      const margin = range * this.humanoidConfig.jointLimitMarginFrac;
+      if (pos <= limit.limitLower + margin || pos >= limit.limitUpper - margin) {
+        warnings.push(
+          `Leg joint ${limit.name} near limit (${pos.toFixed(2)} rad of ` +
+            `[${limit.limitLower.toFixed(2)}, ${limit.limitUpper.toFixed(2)}])`
+        );
+      }
+    }
+
+    this.jointLimitWarnings = warnings;
   }
 
   // ============================================================================
@@ -579,7 +865,11 @@ export class SafetyMonitor {
       activeForceLimit: this.config.forceLimitN,
       activeSpeedLimit: this.getEffectiveSpeedLimit(),
       systemHealthy: this.estopState.status === 'armed',
-      warnings: this.speedLimitActive ? [this.speedLimitReason] : [],
+      warnings: [
+        ...(this.speedLimitActive ? [this.speedLimitReason] : []),
+        ...(this.tiltWarning ? [this.tiltWarning] : []),
+        ...this.jointLimitWarnings,
+      ],
       lastCheckTimestamp: new Date().toISOString(),
     };
   }

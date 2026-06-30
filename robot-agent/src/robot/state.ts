@@ -81,6 +81,12 @@ const SAFETY_CONFIG = {
   estopRequiresManualReset: true,
 };
 
+// Humanoid fall/tilt poll cadence (ms). IMU/leg-joint state is read over HTTP
+// from the hardware sidecar, so this runs slower than the in-process 100Hz
+// safety tick. 20Hz is a reasonable detection cadence for a fall-NET; on real
+// hardware the IMU should ideally be read in-process at ≥100Hz (HARDWARE GAP).
+const HUMANOID_SAFETY_POLL_MS = 50;
+
 // ============================================================================
 // ROBOT STATE MANAGER
 // ============================================================================
@@ -125,6 +131,11 @@ export class RobotStateManager {
 
   // State persistence (Task 39)
   private persistence: StatePersistence;
+
+  // Humanoid fall/tilt poll loop handle (null when not running / arm embodiment)
+  private humanoidSafetyTimer: NodeJS.Timeout | null = null;
+  /** Guards the humanoid safety loop against overlapping in-flight IMU fetches. */
+  private imuPollInFlight = false;
 
   constructor(config: RobotConfig) {
     // Initialize state
@@ -193,12 +204,26 @@ export class RobotStateManager {
       TASK_QUEUE_CONFIG
     );
 
-    // Initialize safety monitor
+    // Initialize safety monitor. For humanoids (G1/G1-EDU/H1) also pass the
+    // embodiment + leg-joint travel limits so the SafetyMonitor can run its
+    // fall/tilt safety net; arms (so101) get the unchanged ARM-shaped behavior.
+    // NOTE: limits are resolved once here from the static embodiment joint
+    // config (empty for arms / generic → net stays inert).
     this.safetyMonitor = new SafetyMonitor(
       stateGetter,
       stateUpdater,
       changeNotifier,
-      SAFETY_CONFIG
+      SAFETY_CONFIG,
+      {
+        robotType: this.state.robotType,
+        legJointLimits: getJointConfig(this.state.robotType)
+          .filter((j) => /hip|knee|ankle/.test(j.name))
+          .map((j) => ({
+            name: j.name,
+            limitLower: j.limitLower,
+            limitUpper: j.limitUpper,
+          })),
+      }
     );
 
     // Initialize VLA model manager (Task 47)
@@ -732,6 +757,37 @@ export class RobotStateManager {
    */
   startSafetyMonitoring(): void {
     this.safetyMonitor.start();
+
+    // Humanoid fall/tilt safety net: poll the IMU (and leg-joint state) and feed
+    // the SafetyMonitor so it can protective-stop on a tip-over. Arms (SO-101)
+    // have no IMU and no fall hazard, so this loop only runs for humanoids.
+    //
+    // HONESTY: this is fall DETECTION → stop, not fall PREVENTION (TASK-169
+    // Stage 4 covers a real balance / whole-body controller).
+    if (this.safetyMonitor.isHumanoidEmbodiment && !this.humanoidSafetyTimer) {
+      // Shared contract (owned by the hardware agent): getImuNow() resolves to an
+      // {rpy,gyro,accel} sample, or null when no IMU telemetry is available yet.
+      // A rejected fetch (sidecar down) is treated as null so the net stays
+      // visibly degraded and never false-trips.
+      this.humanoidSafetyTimer = setInterval(() => {
+        // Re-entrancy guard: getImuNow() can take up to its fetch timeout (≫ the
+        // 50ms tick) when the sidecar lags. Without this, slow ticks stack
+        // overlapping /state fetches. Skip a tick while one is still in flight —
+        // the previous result keeps driving the net until it resolves.
+        if (!this.imuPollInFlight) {
+          this.imuPollInFlight = true;
+          void hardwareClient
+            .getImuNow()
+            .then((imu) => this.safetyMonitor.updateOrientation(imu))
+            .catch(() => this.safetyMonitor.updateOrientation(null))
+            .finally(() => {
+              this.imuPollInFlight = false;
+            });
+        }
+        // Leg-joint balance-margin warnings (no-op until real joints arrive).
+        this.safetyMonitor.updateJointStates(hardwareClient.getJointStates());
+      }, HUMANOID_SAFETY_POLL_MS);
+    }
   }
 
   /**
@@ -739,6 +795,10 @@ export class RobotStateManager {
    */
   stopSafetyMonitoring(): void {
     this.safetyMonitor.stop();
+    if (this.humanoidSafetyTimer) {
+      clearInterval(this.humanoidSafetyTimer);
+      this.humanoidSafetyTimer = null;
+    }
   }
 
   /**

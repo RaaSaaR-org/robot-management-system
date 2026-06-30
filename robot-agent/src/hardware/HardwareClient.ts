@@ -1,14 +1,54 @@
 /**
  * @file HardwareClient.ts
- * @description HTTP client for the SO-101 hardware sidecar (so101_sidecar.py).
- *              Polls real joint states and forwards actions to the real arm.
+ * @description HTTP client for a hardware sidecar (so101_sidecar.py / g1_sidecar.py).
+ *              Polls real joint states and forwards actions to the real robot.
  *              TASK-146 extended this with snapshot/getStateNow/sendActionVector
  *              for the TS-owned closed loop.
+ *
+ *              Embodiment-aware: the joint vector order used by getStateNow /
+ *              sendActionVector is resolved dynamically from the active robot
+ *              type (ROBOT_TYPE → getJointConfig), not hardcoded to SO-101. This
+ *              lets a G1 (29 DOF) / G1 EDU (43 DOF) be controlled without
+ *              silently dropping its non-arm joints. Also exposes getImuNow() so
+ *              the SafetyMonitor can read humanoid orientation for fall detection.
  * @feature hardware
  * @status live
  */
 
 import type { JointState, PointCloudFrame, PointCloudSensorType } from '../robot/types.js';
+import { getJointConfig } from '../robot/joint-configs/index.js';
+import { config } from '../config/config.js';
+
+/**
+ * A single IMU reading from the robot's base, as carried in the sidecar's
+ * `/state` response under the `"imu"` key. Orientation is in radians (roll,
+ * pitch, yaw), angular rate in rad/s, linear acceleration in m/s². Consumed by
+ * the SafetyMonitor for humanoid fall detection.
+ */
+export interface ImuReading {
+  rpy: [number, number, number];
+  gyro: [number, number, number];
+  /**
+   * Linear acceleration [ax, ay, az] in m/s². OPTIONAL — fall detection consumes
+   * only rpy + gyro, so a robot reporting orientation + angular rate but no accel
+   * must NOT be treated as "no IMU". Present only when the sidecar reports it.
+   */
+  accel?: [number, number, number];
+}
+
+/**
+ * Coerce an unknown value into a numeric 3-tuple, or null if it isn't a
+ * well-formed array of three finite numbers. Used to defensively parse IMU
+ * sub-vectors that arrive over the wire.
+ */
+function _toVec3(v: unknown): [number, number, number] | null {
+  if (!Array.isArray(v) || v.length < 3) return null;
+  const a = Number(v[0]);
+  const b = Number(v[1]);
+  const c = Number(v[2]);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return null;
+  return [a, b, c];
+}
 
 const SIDECAR_URL = process.env.HARDWARE_SIDECAR_URL ?? 'http://localhost:8765';
 // Poll every 2s — avoids monopolizing /dev/ttyACM0 so other tools can use the arm.
@@ -20,6 +60,28 @@ export class HardwareClient {
   private sidecarAvailable = false;
   private jointStates: JointState[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
+  /** Ordered joint names for the active embodiment; resolved lazily, then cached. */
+  private jointOrder: string[] | null = null;
+
+  /**
+   * Ordered list of joint names for the active embodiment (ROBOT_TYPE),
+   * e.g. SO-101 → 6 arm joints, G1 → 29 DOF, G1 EDU → 43 DOF. This is the
+   * canonical index↔joint mapping for getStateNow / sendActionVector, so an
+   * N-DOF action vector is no longer truncated to the SO-101 6.
+   *
+   * Resolved from the same source the 3D viewer / sim use
+   * (getJointConfig), memoized because ROBOT_TYPE is fixed per process.
+   * Empty for the `generic` embodiment (must not throw — callers no-op).
+   */
+  private getJointOrder(): string[] {
+    if (this.jointOrder === null) {
+      this.jointOrder = getJointConfig(config.robotType).map((j) => j.name);
+      console.log(
+        `[Hardware] Joint order resolved for robotType=${config.robotType}: ${this.jointOrder.length} joints`,
+      );
+    }
+    return this.jointOrder;
+  }
 
   async init(): Promise<boolean> {
     const ok = await this._tryConnect();
@@ -215,10 +277,11 @@ export class HardwareClient {
   /**
    * Synchronous joint read (unlike the 2s `jointStates` poll). Uses the
    * sidecar's /state/fast endpoint, which skips the between-read torque
-   * disable so the arm holds position during a closed-loop run.
+   * disable so the robot holds position during a closed-loop run.
    *
-   * Returns a 6-element vector in the canonical SO-101 joint order:
-   * [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
+   * Returns a vector in the active embodiment's joint order (see
+   * {@link getJointOrder}): SO-101 → 6 elements, G1 → 29, G1 EDU → 43.
+   * Missing joints read as 0; an empty order (generic) yields [].
    */
   async getStateNow(): Promise<number[]> {
     const res = await fetch(`${SIDECAR_URL}/state/fast`, {
@@ -230,36 +293,78 @@ export class HardwareClient {
     const data = (await res.json()) as {
       joints: Array<{ name: string; position: number }>;
     };
-    const order = [
-      'shoulder_pan',
-      'shoulder_lift',
-      'elbow_flex',
-      'wrist_flex',
-      'wrist_roll',
-      'gripper',
-    ];
+    const order = this.getJointOrder();
     const byName = new Map(data.joints.map((j) => [j.name, j.position]));
     return order.map((n) => byName.get(n) ?? 0);
   }
 
   /**
-   * Send an action vector in the canonical SO-101 joint order
-   * (see `getStateNow`). Wraps `sendAction` with the naming.
+   * Send an action vector in the active embodiment's joint order (see
+   * {@link getStateNow}). Maps `action[i]` to the i-th joint name and POSTs a
+   * name-keyed dict (the shape both sidecars' `send_action` expect).
+   *
+   * Length mismatches are logged and the overlap is mapped — never silently
+   * truncated (the old SO-101 hardcoding dropped a G1's joints 7..N silently).
    */
   async sendActionVector(action: number[]): Promise<void> {
-    const order = [
-      'shoulder_pan',
-      'shoulder_lift',
-      'elbow_flex',
-      'wrist_flex',
-      'wrist_roll',
-      'gripper',
-    ];
+    const order = this.getJointOrder();
+    if (order.length === 0) {
+      console.warn(
+        `[Hardware] sendActionVector: no joint order for robotType=${config.robotType} — action of ${action.length} ignored`,
+      );
+      return;
+    }
+    if (action.length !== order.length) {
+      console.warn(
+        `[Hardware] sendActionVector: action length ${action.length} ≠ ${order.length} joints ` +
+          `(robotType=${config.robotType}) — mapping overlap of ${Math.min(action.length, order.length)}`,
+      );
+    }
     const joints: Record<string, number> = {};
-    for (let i = 0; i < order.length && i < action.length; i++) {
+    const n = Math.min(order.length, action.length);
+    for (let i = 0; i < n; i++) {
       joints[order[i]] = action[i];
     }
     await this.sendAction(joints);
+  }
+
+  /**
+   * Read the robot's base IMU from the sidecar's `/state` response (the same
+   * gentle path the 2s poll uses). Returns null when the sidecar carries no
+   * `"imu"` field (e.g. SO-101, or a G1 not yet reporting IMU) or when the
+   * reading is malformed — callers must treat null as "no reliable IMU" rather
+   * than "upright". The SafetyMonitor uses this for humanoid fall detection.
+   *
+   * Strict on the CONSUMED signals: rpy and gyro must both be well-formed numeric
+   * triples or null is returned — they are never fabricated, since a zero-filled
+   * reading could mask a fall. accel is optional (the fall-detection net ignores
+   * it), so a missing/malformed accel does NOT disable the safety net.
+   */
+  async getImuNow(): Promise<ImuReading | null> {
+    let data: { imu?: unknown };
+    try {
+      const res = await fetch(`${SIDECAR_URL}/state`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!res.ok) return null;
+      data = (await res.json()) as { imu?: unknown };
+    } catch {
+      // Sidecar unreachable / timeout — no IMU available this tick.
+      return null;
+    }
+    const imu = data?.imu;
+    if (!imu || typeof imu !== 'object') return null;
+    const { rpy, gyro, accel } = imu as Record<string, unknown>;
+    const rpyVec = _toVec3(rpy);
+    const gyroVec = _toVec3(gyro);
+    // Require only the signals fall detection actually uses (rpy + gyro). accel is
+    // optional — gating the whole reading on a field nobody reads would silently
+    // disable the safety net for a robot that reports orientation but no accel.
+    if (!rpyVec || !gyroVec) return null;
+    const accelVec = _toVec3(accel);
+    return accelVec
+      ? { rpy: rpyVec, gyro: gyroVec, accel: accelVec }
+      : { rpy: rpyVec, gyro: gyroVec };
   }
 }
 
