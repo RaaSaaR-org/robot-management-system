@@ -132,7 +132,10 @@ services:
       RUSTFS_ENDPOINT: http://rustfs:9000
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
-      COMPLIANCE_LOG_ENCRYPTION_KEY: ${COMPLIANCE_LOG_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      # Required: this stack runs NODE_ENV=production, so the server refuses to
+      # start without a real key (or with the public example value).
+      # Generate one: openssl rand -hex 32
+      COMPLIANCE_LOG_ENCRYPTION_KEY: ${COMPLIANCE_LOG_ENCRYPTION_KEY:-}
     ports:
       - "3001:3001"
     depends_on:
