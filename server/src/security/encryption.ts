@@ -30,6 +30,11 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96 bits recommended for GCM
 const TAG_LENGTH = 16; // 128 bits
 
+// The public placeholder shipped in docker-compose.yml / .env.example. Using it
+// in production means compliance logs are "encrypted" with a globally-known key.
+const KNOWN_INSECURE_KEY =
+  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
 /**
  * Get encryption key from environment variable.
  * Key must be 64 hex characters (256 bits).
@@ -61,6 +66,18 @@ function getEncryptionKey(): Buffer {
 
   if (!/^[0-9a-fA-F]+$/.test(keyHex)) {
     throw new Error('COMPLIANCE_LOG_ENCRYPTION_KEY must contain only hexadecimal characters');
+  }
+
+  // Reject the public placeholder key — fail fast in production, warn elsewhere.
+  if (keyHex.toLowerCase() === KNOWN_INSECURE_KEY) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'COMPLIANCE_LOG_ENCRYPTION_KEY is set to the public example value — refusing to start in production. Generate a unique key with: openssl rand -hex 32',
+      );
+    }
+    console.warn(
+      '[Encryption] COMPLIANCE_LOG_ENCRYPTION_KEY is the public example value. DO NOT use in production!',
+    );
   }
 
   _cachedKey = Buffer.from(keyHex, 'hex');

@@ -267,6 +267,27 @@ describe('encryption key resolution (env branches)', () => {
     );
   });
 
+  it('throws in production when the key is the public example value', async () => {
+    process.env.COMPLIANCE_LOG_ENCRYPTION_KEY =
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    process.env.NODE_ENV = 'production';
+
+    const mod = await import('../encryption.js');
+    expect(() => mod.encrypt('x')).toThrow('public example value');
+  });
+
+  it('warns but works outside production when the key is the public example value', async () => {
+    process.env.COMPLIANCE_LOG_ENCRYPTION_KEY =
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    process.env.NODE_ENV = 'development';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const mod = await import('../encryption.js');
+    const enc = mod.encrypt('dev-default-payload');
+    expect(mod.decrypt(enc)).toBe('dev-default-payload');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('public example value'));
+  });
+
   it('throws when the key is not exactly 64 hex characters', async () => {
     process.env.COMPLIANCE_LOG_ENCRYPTION_KEY = 'abcdef'; // too short
     process.env.NODE_ENV = 'production';
