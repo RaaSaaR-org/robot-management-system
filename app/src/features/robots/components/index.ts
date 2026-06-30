@@ -20,3 +20,4 @@ export * from './SensorGrid';
 export * from './EmergencyStopButton';
 export * from './AddRobotDialog';
 export * from './visualization';
+export * from './cockpit';

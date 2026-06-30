@@ -23,6 +23,7 @@ import {
   LazyForcePasswordChangePage,
   LazyDashboardPage,
   LazyRobotDetailPage,
+  LazyRobotCockpitPage,
   LazyFleetPage,
   LazyAlertsPage,
   LazyProcessesPage,
@@ -154,6 +155,23 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyRobotDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Robot Control Center — cockpit (camera, LiDAR, vitals, control) */}
+          <Route
+            path="/control-center"
+            element={
+              <ProtectedAppRoute>
+                <LazyRobotCockpitPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/robots/:id/cockpit"
+            element={
+              <ProtectedAppRoute>
+                <LazyRobotCockpitPage />
               </ProtectedAppRoute>
             }
           />
