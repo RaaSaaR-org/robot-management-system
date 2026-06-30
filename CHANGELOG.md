@@ -3,6 +3,19 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.06.30] - 2026-06-30
+
+### Added
+
+- Cosmos-3 synthetic data + G1 Control Center cockpit + G1 safety hardening (#170)
+
+### Fixed
+
+- fail fast on the public compliance encryption key (#173)
+- rootless nginx image + deployment-agnostic API upstream (#172)
+- add catch-up migration for 17 db-push-only tables (#165)
+
+
 ## [v2026.06.27] - 2026-06-27
 
 ### Added
