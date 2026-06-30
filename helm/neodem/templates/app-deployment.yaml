@@ -32,9 +32,14 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
           imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          env:
+            # Point the baked nginx proxy at this release's server Service
+            # instead of the hardcoded docker-compose name "server".
+            - name: API_UPSTREAM
+              value: "{{ include "neodem.server.fullname" . }}:{{ .Values.server.service.port }}"
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -60,6 +65,9 @@ spec:
               mountPath: /var/cache/nginx
             - name: run
               mountPath: /var/run
+            # Entrypoint renders the envsubst template here at startup.
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
           {{- end }}
       {{- if .Values.securityContext.readOnlyRootFilesystem }}
       volumes:
@@ -68,6 +76,8 @@ spec:
         - name: cache
           emptyDir: {}
         - name: run
+          emptyDir: {}
+        - name: nginx-conf
           emptyDir: {}
       {{- end }}
       {{- with .Values.nodeSelector }}

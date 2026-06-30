@@ -1,10 +1,19 @@
 # ============================================================================
-# NeoDEM App - Nginx Configuration
-# Serves React SPA with API proxy support
+# NeoDEM App - Nginx Configuration (envsubst template)
+# Serves React SPA with API proxy support.
+#
+# Rendered at container start by the official nginx entrypoint
+# (/docker-entrypoint.d/20-envsubst-on-templates.sh): only the variables
+# present in the environment are substituted, so nginx runtime variables
+# like $host / $uri / $http_upgrade are left untouched.
+#
+#   API_UPSTREAM  backend host:port the /api + A2A routes proxy to
+#                 (default "server:3001" — the docker-compose service name).
 # ============================================================================
 
 server {
-    listen 80;
+    # Non-root nginx (nginxinc/nginx-unprivileged) cannot bind ports < 1024.
+    listen 8080;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
@@ -42,7 +51,7 @@ server {
 
     # API proxy - forward to backend server
     location /api {
-        proxy_pass http://server:3001;
+        proxy_pass http://${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -55,7 +64,7 @@ server {
 
     # Well-known A2A endpoints (agent cards)
     location /.well-known/a2a {
-        proxy_pass http://server:3001;
+        proxy_pass http://${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

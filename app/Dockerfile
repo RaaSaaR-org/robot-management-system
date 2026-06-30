@@ -31,22 +31,29 @@ ENV VITE_A2A_SERVER_URL=$VITE_A2A_SERVER_URL
 RUN npm run build
 
 # -----------------------------------------------------------------------------
-# Stage 2: Runner (nginx)
+# Stage 2: Runner (nginx, rootless)
 # -----------------------------------------------------------------------------
-FROM nginx:alpine AS runner
+# nginxinc/nginx-unprivileged runs as a non-root UID and listens on 8080, so
+# the image works under restricted PodSecurity (runAsNonRoot / arbitrary UID).
+FROM nginxinc/nginx-unprivileged:alpine AS runner
 
 # Copy built assets
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy nginx config as a template — the base image entrypoint runs envsubst on
+# /etc/nginx/templates/*.template at startup, injecting API_UPSTREAM.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
-# Expose port
-EXPOSE 80
+# Backend the /api + A2A routes proxy to. Override per deployment
+# (e.g. API_UPSTREAM=neodem-server:3001 in Kubernetes).
+ENV API_UPSTREAM=server:3001
+
+# Expose port (non-root nginx binds 8080)
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
-# Start nginx
+# Base image entrypoint renders templates then starts nginx.
 CMD ["nginx", "-g", "daemon off;"]
