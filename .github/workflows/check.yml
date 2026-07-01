@@ -132,3 +132,65 @@ jobs:
       - name: Test
         working-directory: robot-agent
         run: npm test
+
+  migrations:
+    name: Prisma migrations match schema (Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Production deploys run `prisma migrate deploy` against Postgres, then
+    # generate the client from schema.prisma. If a model was only ever applied
+    # via `db push`, a fresh migrate deploy produces a schema that DOESN'T match
+    # the client → runtime P2022 "column does not exist" (issue #174). This job
+    # replays the committed migrations onto a clean Postgres and fails if the
+    # result drifts from schema.prisma, forcing a catch-up migration.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: shadow
+          POSTGRES_DB: neodem
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:shadow@localhost:5432/neodem
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install
+        working-directory: server
+        run: npm ci
+
+      # Mirror the production build: the committed schema targets SQLite for
+      # local dev; deploys sed it to postgresql (see server/Dockerfile).
+      - name: Switch Prisma provider to PostgreSQL
+        working-directory: server
+        run: sed -i 's/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma
+
+      - name: Apply migrations to a clean Postgres
+        working-directory: server
+        run: npx prisma migrate deploy
+
+      # --exit-code returns 2 when the live (migration-only) DB differs from
+      # schema.prisma — i.e. drift that a fresh deploy would carry into the
+      # generated client. Add a catch-up migration to resolve it.
+      - name: Assert migrations == schema (no drift)
+        working-directory: server
+        run: |
+          npx prisma migrate diff \
+            --from-schema-datasource prisma/schema.prisma \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code || {
+              echo "::error::prisma/migrations drifts from schema.prisma. A model was likely applied via 'db push' without a migration. Generate a catch-up migration (see prisma/migrations/20260701120000_catch_up_db_push_column_drift)."
+              exit 1
+            }
