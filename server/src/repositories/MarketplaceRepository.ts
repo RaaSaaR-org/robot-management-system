@@ -430,26 +430,25 @@ export class MarketplaceRepository {
       }),
       prisma.marketplaceListing.findMany({
         where: { sellerId: { in: uniqueIds } },
-        select: { id: true, sellerId: true, rating: true, reviewCount: true, status: true },
+        select: {
+          id: true,
+          sellerId: true,
+          rating: true,
+          reviewCount: true,
+          status: true,
+          downloadCount: true,
+        },
       }),
     ]);
 
-    const purchaseGroups = sellerListings.length
-      ? await prisma.listingPurchase.groupBy({
-          by: ['listingId'],
-          where: { listingId: { in: sellerListings.map((l) => l.id) } },
-          _count: { _all: true },
-        })
-      : [];
-    const purchasesByListing = new Map(purchaseGroups.map((g) => [g.listingId, g._count._all]));
     const creditsBySeller = new Map(creditGroups.map((g) => [g.userId, g._sum.amount ?? 0]));
 
     for (const sellerId of uniqueIds) {
       const listings = sellerListings.filter((l) => l.sellerId === sellerId);
-      const totalSales = listings.reduce(
-        (sum, l) => sum + (purchasesByListing.get(l.id) ?? 0),
-        0
-      );
+      // Downloads are the sales signal: every purchase leads to a download and
+      // seeded listings carry historic download counts, while ListingPurchase
+      // rows only exist for purchases made through this instance.
+      const totalSales = listings.reduce((sum, l) => sum + l.downloadCount, 0);
       const rated = listings.filter((l) => l.status === 'published' && l.reviewCount > 0);
       const rating = rated.length
         ? Math.round((rated.reduce((sum, l) => sum + l.rating, 0) / rated.length) * 10) / 10

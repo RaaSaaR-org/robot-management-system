@@ -356,11 +356,21 @@ export function useMarketplaceDownload(
 
     setError(null);
 
+    // The server increments the listing's download count; refresh the detail
+    // view (if it is showing this listing) so the UI reflects it.
+    const refreshListing = () => {
+      const store = useMarketplaceStore.getState();
+      if (store.currentListing?.id === listingId) {
+        void store.fetchListing(listingId);
+      }
+    };
+
     // Presigned URL path: hand off to the browser, complete immediately
     if (info.url) {
       triggerBrowserDownload(info.url, info.fileName);
       setProgress(100);
       setState('complete');
+      refreshListing();
       return;
     }
 
@@ -385,6 +395,7 @@ export function useMarketplaceDownload(
 
       setProgress(100);
       setState('complete');
+      refreshListing();
     } catch (err: unknown) {
       setState('error');
       setError(err instanceof Error ? err.message : 'Download failed');

@@ -52,7 +52,9 @@ export function MarketplaceDetailPage() {
         <div className="text-center">
           <AlertTriangle size={32} className="mx-auto text-gray-600 mb-3" />
           <p className="text-gray-300 font-medium mb-1">Listing not found</p>
-          {error && <p className="text-sm text-gray-500 mb-3">{error}</p>}
+          {error && error.toLowerCase() !== 'listing not found' && (
+            <p className="text-sm text-gray-500 mb-3">{error}</p>
+          )}
           <button type="button" onClick={() => navigate('/marketplace')} className="text-[#FF6700] hover:underline">
             Back to Marketplace
           </button>

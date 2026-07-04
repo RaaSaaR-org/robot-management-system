@@ -18,7 +18,7 @@ export type MarketplaceLicenseTier =
   | 'per_fleet'
   | 'enterprise';
 
-export type RobotHardwareType = 'SO-101' | 'Unitree H1' | 'Generic';
+export type RobotHardwareType = 'SO-101' | 'Unitree G1' | 'Unitree H1' | 'Generic';
 
 export type BaseModelType = 'SmolVLA' | 'Pi0.5' | 'OpenVLA' | 'None';
 

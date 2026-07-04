@@ -169,6 +169,7 @@ export function MarketplacePage() {
           >
             <option value="all">All Robots</option>
             <option value="SO-101">SO-101</option>
+            <option value="Unitree G1">Unitree G1</option>
             <option value="Unitree H1">Unitree H1</option>
             <option value="Generic">Generic</option>
           </select>

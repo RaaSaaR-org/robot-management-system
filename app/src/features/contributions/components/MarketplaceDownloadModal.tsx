@@ -4,7 +4,7 @@
  * @feature marketplace
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   X, Download, Shield, HardDrive, FileText, Server,
   CheckCircle, Cpu, Copy, Check, Lock, AlertTriangle, Loader2,
@@ -36,6 +36,16 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   return (
@@ -44,7 +54,12 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative w-full max-w-lg rounded-2xl bg-[#1a1b1f] border border-white/10 shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Download ${listing.title}`}
+        className="relative w-full max-w-lg rounded-2xl bg-[#1a1b1f] border border-white/10 shadow-2xl"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-white/10">
           <div className="flex items-center gap-3">
@@ -59,7 +74,7 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
               <p className="text-xs text-gray-500">{listing.title}</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
             <X size={18} />
           </button>
         </div>

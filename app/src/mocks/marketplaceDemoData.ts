@@ -384,6 +384,37 @@ export const DEMO_MARKETPLACE_LISTINGS: MarketplaceListing[] = [
       { id: 'r17', authorName: 'Locomotion Lab', authorTier: 'platinum', rating: 5, body: 'The MoCap ground truth makes this invaluable. Only 90 episodes but each one is gold.', createdAt: '2026-04-08T10:00:00.000Z', robotType: 'Unitree H1' },
     ],
   },
+  {
+    id: 'ml-011',
+    type: 'skill',
+    title: 'G1 Bimanual Object Fetch — Household',
+    shortDescription: 'Whole-body fetch-and-carry for the Unitree G1: locate, grasp bimanually, and hand over household objects.',
+    fullDescription: `Whole-body mobile manipulation skill for the Unitree G1 cognitive humanoid.\n\nThe robot locates a requested object, walks to it, grasps it bimanually (Dex3-1 hands supported), and delivers it to a handover pose. Covers bottles, boxes, laundry items, and trays up to 2 kg.\n\nTrained on 1,400 teleoperation episodes across 6 apartments with Pi0.5 base. Includes fall-safe recovery behaviors and collision-aware navigation between rooms.`,
+    seller: sellers.roboticsLab,
+    robotType: 'Unitree G1',
+    baseModel: 'Pi0.5',
+    tags: ['g1', 'humanoid', 'bimanual', 'fetch', 'household'],
+    rating: 4.7,
+    reviewCount: 21,
+    downloadCount: 412,
+    isTrending: false,
+    isFeatured: true,
+    taskCategory: 'Mobile Manipulation',
+    successRate: 86,
+    adapterSizeMB: 210,
+    priceTiers: [
+      { tier: 'research', label: 'Research', description: 'Non-commercial', priceCredits: 320, features: ['Single user', 'Research only'] },
+      { tier: 'per_robot', label: 'Per Robot', description: 'One robot', priceCredits: 1100, features: ['1 robot license', 'Commercial use'] },
+      { tier: 'per_fleet', label: 'Per Fleet', description: 'Unlimited robots', priceCredits: 3600, features: ['Unlimited robots', 'Priority support'] },
+      { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 11000, features: ['Unlimited', 'Redistribution', 'SLA'] },
+    ],
+    lowestPriceCredits: 320,
+    createdAt: '2026-05-12T10:00:00.000Z',
+    reviews: [
+      { id: 'r18', authorName: 'Haushalt Robotik Köln', authorTier: 'gold', rating: 5, body: 'Läuft stabil auf unserem G1 EDU mit Dex3-1 Händen. Die beidhändige Übergabe funktioniert deutlich besser als unsere eigene Lösung.', createdAt: '2026-06-02T10:00:00.000Z', robotType: 'Unitree G1' },
+      { id: 'r19', authorName: 'Embodied AI Lab', authorTier: 'platinum', rating: 4, body: 'Solid whole-body coordination. Handover poses are natural. Trays near the 2 kg limit occasionally tilt during walking.', createdAt: '2026-05-24T10:00:00.000Z', robotType: 'Unitree G1' },
+    ],
+  },
 ];
 
 // ============================================================================

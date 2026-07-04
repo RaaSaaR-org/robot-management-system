@@ -4,7 +4,7 @@
  * @feature marketplace
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, Brain, Database, Plus, Loader2, AlertTriangle, Tag } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import {
@@ -23,7 +23,7 @@ export interface MarketplacePublishDialogProps {
   isSubmitting: boolean;
 }
 
-const ROBOT_TYPES: RobotHardwareType[] = ['SO-101', 'Unitree H1', 'Generic'];
+const ROBOT_TYPES: RobotHardwareType[] = ['Unitree G1', 'SO-101', 'Unitree H1', 'Generic'];
 const BASE_MODELS: BaseModelType[] = ['SmolVLA', 'Pi0.5', 'OpenVLA', 'None'];
 const LICENSE_TIERS: MarketplaceLicenseTier[] = ['research', 'per_robot', 'per_fleet', 'enterprise'];
 
@@ -56,7 +56,7 @@ export function MarketplacePublishDialog({
   const [title, setTitle] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   const [fullDescription, setFullDescription] = useState('');
-  const [robotType, setRobotType] = useState<RobotHardwareType>('SO-101');
+  const [robotType, setRobotType] = useState<RobotHardwareType>('Unitree G1');
   const [baseModel, setBaseModel] = useState<BaseModelType>('SmolVLA');
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -72,6 +72,7 @@ export function MarketplacePublishDialog({
   // Pricing
   const [tiers, setTiers] = useState<Record<MarketplaceLicenseTier, TierFormState>>(INITIAL_TIERS);
   const [formError, setFormError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement | null>(null);
 
   // Reset the form each time the dialog opens
   useEffect(() => {
@@ -80,7 +81,7 @@ export function MarketplacePublishDialog({
       setTitle('');
       setShortDescription('');
       setFullDescription('');
-      setRobotType('SO-101');
+      setRobotType('Unitree G1');
       setBaseModel('SmolVLA');
       setTagInput('');
       setTags([]);
@@ -95,6 +96,23 @@ export function MarketplacePublishDialog({
       setFormError(null);
     }
   }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
+
+  // The dialog body scrolls; make sure a validation error is actually seen
+  useEffect(() => {
+    if (formError) {
+      errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [formError]);
 
   if (!open) return null;
 
@@ -182,7 +200,12 @@ export function MarketplacePublishDialog({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-[#1a1b1f] border border-white/10 shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="List a Skill or Dataset"
+        className="relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-[#1a1b1f] border border-white/10 shadow-2xl"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-3">
@@ -197,6 +220,7 @@ export function MarketplacePublishDialog({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close"
             className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
           >
             <X size={18} />
@@ -447,7 +471,11 @@ export function MarketplacePublishDialog({
 
           {/* Error */}
           {formError && (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+            <div
+              ref={errorRef}
+              role="alert"
+              className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2"
+            >
               <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
               <p className="text-xs text-red-400">{formError}</p>
             </div>

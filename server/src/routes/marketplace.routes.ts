@@ -22,7 +22,7 @@ import {
 export const marketplaceRoutes = Router();
 
 const VALID_TYPES: MarketplaceListingType[] = ['skill', 'dataset'];
-const VALID_ROBOT_TYPES: RobotHardwareType[] = ['SO-101', 'Unitree H1', 'Generic'];
+const VALID_ROBOT_TYPES: RobotHardwareType[] = ['SO-101', 'Unitree G1', 'Unitree H1', 'Generic'];
 const VALID_BASE_MODELS: BaseModelType[] = ['SmolVLA', 'Pi0.5', 'OpenVLA', 'None'];
 
 // Upper bounds on user-supplied content (express.json allows 10 MB bodies;
