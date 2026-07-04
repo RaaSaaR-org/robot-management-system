@@ -30,8 +30,30 @@ export {
   selectAffordableRewards,
 } from './store/contributionsStore';
 
+// Marketplace Store
+export { useMarketplaceStore } from './store/marketplaceStore';
+export {
+  selectMarketplaceListings,
+  selectCurrentListing,
+  selectMyPurchases,
+  selectMyListings,
+  selectMarketplaceCreditBalance,
+  selectIsLoadingListings,
+  selectIsLoadingDetail,
+  selectIsLoadingMy,
+  selectIsPurchasing,
+  selectIsSubmittingReview,
+  selectIsCreatingListing,
+  selectMarketplaceError,
+  selectPurchaseError,
+  selectFeaturedListings,
+  selectTrendingListings,
+} from './store/marketplaceStore';
+export type { MarketplaceStore } from './store/marketplaceStore';
+
 // API
 export { contributionsApi } from './api/contributionsApi';
+export { marketplaceApi, InsufficientCreditsError } from './api/marketplaceApi';
 
 // Hooks
 export {
@@ -50,6 +72,19 @@ export type {
   UseLeaderboardReturn,
   UseRewardsReturn,
 } from './hooks/contributions';
+export {
+  useMarketplace,
+  useMarketplaceListing,
+  useMyMarketplace,
+  useMarketplaceDownload,
+} from './hooks/marketplace';
+export type {
+  UseMarketplaceReturn,
+  UseMarketplaceListingReturn,
+  UseMyMarketplaceReturn,
+  UseMarketplaceDownloadReturn,
+  MarketplaceDownloadState,
+} from './hooks/marketplace';
 
 // Components
 export {
@@ -68,6 +103,11 @@ export {
   ContributionBadge,
   CreditBalance,
   LeaderboardTable,
+  MarketplaceListingCard,
+  MarketplaceLicenseTierSelector,
+  MarketplaceStarRating,
+  MarketplaceDownloadModal,
+  MarketplacePublishDialog,
 } from './components';
 export type {
   ContributionStatusBadgeProps,
@@ -87,6 +127,11 @@ export type {
   CreditBalanceProps,
   LeaderboardTableProps,
   LeaderboardRow,
+  MarketplaceListingCardProps,
+  MarketplaceLicenseTierSelectorProps,
+  MarketplaceStarRatingProps,
+  MarketplaceDownloadModalProps,
+  MarketplacePublishDialogProps,
 } from './components';
 
 // Pages

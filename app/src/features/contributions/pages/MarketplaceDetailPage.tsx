@@ -4,11 +4,11 @@
  * @feature marketplace
  */
 
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Brain, Database, Cpu, TrendingUp, Download,
-  CheckCircle, Shield, Play, FileText, Clock,
+  CheckCircle, Shield, Play, FileText, Clock, Loader2, AlertTriangle, Star, MessageSquarePlus,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { TierBadge } from '../components/TierBadge';
@@ -16,24 +16,45 @@ import { MarketplaceStarRating } from '../components/MarketplaceStarRating';
 import { MarketplaceLicenseTierSelector } from '../components/MarketplaceLicenseTierSelector';
 import { MarketplaceDownloadModal } from '../components/MarketplaceDownloadModal';
 import { formatCredits } from '../types/contributions.types';
-import { MOCK_LISTINGS, MOCK_MY_PURCHASES, MOCK_MY_CREDIT_BALANCE } from '../mockMarketplaceData';
+import { useMarketplaceListing } from '../hooks/marketplace';
 import type { MarketplaceLicenseTier } from '../types/marketplace.types';
 
 export function MarketplaceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const listing = useMemo(() => MOCK_LISTINGS.find((l) => l.id === id), [id]);
-  const alreadyPurchased = useMemo(() => MOCK_MY_PURCHASES.some((p) => p.listingId === id), [id]);
+  const {
+    listing,
+    isLoading,
+    error,
+    creditBalance,
+    alreadyPurchased,
+    purchase,
+    isPurchasing,
+    purchaseError,
+    submitReview,
+    isSubmittingReview,
+  } = useMarketplaceListing(id);
 
   const [selectedTier, setSelectedTier] = useState<MarketplaceLicenseTier | null>(null);
   const [justPurchased, setJustPurchased] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [hasReviewed, setHasReviewed] = useState(false);
 
+  // Loading skeleton
+  if (!listing && isLoading) {
+    return <DetailSkeleton onBack={() => navigate('/marketplace')} />;
+  }
+
+  // Not found / load error
   if (!listing) {
     return (
       <div className="min-h-screen bg-[#0f1012] flex items-center justify-center">
         <div className="text-center">
-          <p className="text-gray-400 mb-4">Listing not found</p>
+          <AlertTriangle size={32} className="mx-auto text-gray-600 mb-3" />
+          <p className="text-gray-300 font-medium mb-1">Listing not found</p>
+          {error && error.toLowerCase() !== 'listing not found' && (
+            <p className="text-sm text-gray-500 mb-3">{error}</p>
+          )}
           <button type="button" onClick={() => navigate('/marketplace')} className="text-[#FF6700] hover:underline">
             Back to Marketplace
           </button>
@@ -45,6 +66,18 @@ export function MarketplaceDetailPage() {
   const isSkill = listing.type === 'skill';
   const selectedPrice = listing.priceTiers.find((t) => t.tier === selectedTier)?.priceCredits ?? 0;
   const purchased = alreadyPurchased || justPurchased;
+  const balance = creditBalance ?? 0;
+  const canPurchase = !!selectedTier && balance >= selectedPrice && !isPurchasing;
+
+  const handlePurchase = async () => {
+    if (!selectedTier) return;
+    try {
+      await purchase(selectedTier);
+      setJustPurchased(true);
+    } catch {
+      // purchaseError is surfaced inline below the button
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#0f1012]">
@@ -160,11 +193,22 @@ export function MarketplaceDetailPage() {
                     <SpecRow label="Robot" value={listing.robotType} />
                     {listing.baseModel !== 'None' && <SpecRow label="Base Model" value={listing.baseModel} />}
                     <SpecRow label="Downloads" value={listing.downloadCount.toLocaleString()} />
-                    <SpecRow label="Published" value={listing.createdAt} />
+                    <SpecRow label="Published" value={formatDate(listing.createdAt)} />
                   </tbody>
                 </table>
               </div>
             </div>
+
+            {/* Write a review */}
+            {purchased && !hasReviewed && (
+              <ReviewForm
+                isSubmitting={isSubmittingReview}
+                onSubmit={async (rating, body) => {
+                  await submitReview({ rating, body, robotType: listing.robotType });
+                  setHasReviewed(true);
+                }}
+              />
+            )}
 
             {/* Reviews */}
             <div className="mb-6">
@@ -185,13 +229,18 @@ export function MarketplaceDetailPage() {
                       </div>
                       <span className="text-xs text-gray-500 flex items-center gap-1">
                         <Clock size={10} />
-                        {review.createdAt}
+                        {formatDate(review.createdAt)}
                       </span>
                     </div>
                     <MarketplaceStarRating rating={review.rating} size="sm" className="mb-2" />
                     <p className="text-sm text-gray-300">{review.body}</p>
                   </div>
                 ))}
+                {listing.reviews.length === 0 && (
+                  <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-500">
+                    No reviews yet.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -227,30 +276,46 @@ export function MarketplaceDetailPage() {
                     tiers={listing.priceTiers}
                     selected={selectedTier}
                     onChange={setSelectedTier}
-                    userCredits={MOCK_MY_CREDIT_BALANCE}
+                    userCredits={balance}
                   />
 
                   <button
                     type="button"
-                    disabled={!selectedTier || MOCK_MY_CREDIT_BALANCE < selectedPrice}
-                    onClick={() => setJustPurchased(true)}
+                    disabled={!canPurchase}
+                    onClick={handlePurchase}
                     className={cn(
                       'w-full mt-4 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2',
-                      selectedTier && MOCK_MY_CREDIT_BALANCE >= selectedPrice
+                      canPurchase
                         ? 'bg-[#FF6700] text-white hover:bg-[#e05d00]'
                         : 'bg-white/10 text-gray-500 cursor-not-allowed'
                     )}
                   >
-                    <FileText size={16} />
-                    {selectedTier
-                      ? `Purchase — ${formatCredits(selectedPrice)} credits`
-                      : 'Select a license tier'}
+                    {isPurchasing ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        Processing purchase...
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={16} />
+                        {selectedTier
+                          ? `Purchase — ${formatCredits(selectedPrice)} credits`
+                          : 'Select a license tier'}
+                      </>
+                    )}
                   </button>
+
+                  {purchaseError && (
+                    <div className="mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+                      <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
+                      <p className="text-xs text-red-400">{purchaseError}</p>
+                    </div>
+                  )}
 
                   <div className="mt-4 pt-4 border-t border-white/10">
                     <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
                       <span>Your balance</span>
-                      <span className="text-white font-medium">{formatCredits(MOCK_MY_CREDIT_BALANCE)} credits</span>
+                      <span className="text-white font-medium">{formatCredits(balance)} credits</span>
                     </div>
                   </div>
                 </>
@@ -287,6 +352,11 @@ export function MarketplaceDetailPage() {
 // HELPERS
 // ============================================================================
 
+function formatDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+}
+
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="p-3 rounded-lg bg-white/5 border border-white/10">
@@ -302,5 +372,162 @@ function SpecRow({ label, value }: { label: string; value: string }) {
       <td className="px-4 py-2.5 text-gray-500 font-medium">{label}</td>
       <td className="px-4 py-2.5 text-white text-right">{value}</td>
     </tr>
+  );
+}
+
+// ============================================================================
+// REVIEW FORM
+// ============================================================================
+
+interface ReviewFormProps {
+  isSubmitting: boolean;
+  onSubmit: (rating: number, body: string) => Promise<void>;
+}
+
+function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
+  const [rating, setRating] = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [body, setBody] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+
+  if (submitted) {
+    return (
+      <div className="mb-6 p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2">
+        <CheckCircle size={16} className="text-emerald-400 shrink-0" />
+        <p className="text-sm text-emerald-400">Thanks — your review has been published.</p>
+      </div>
+    );
+  }
+
+  const handleSubmit = async () => {
+    if (rating < 1) {
+      setFormError('Please select a star rating.');
+      return;
+    }
+    if (!body.trim()) {
+      setFormError('Please write a few words about your experience.');
+      return;
+    }
+    setFormError(null);
+    try {
+      await onSubmit(rating, body.trim());
+      setSubmitted(true);
+    } catch (error) {
+      // Surface server-side rejections gracefully (e.g. "You already reviewed this listing")
+      setFormError(error instanceof Error ? error.message : 'Failed to submit review');
+    }
+  };
+
+  const displayRating = hoverRating || rating;
+
+  return (
+    <div className="mb-6 p-4 rounded-lg bg-white/5 border border-white/10">
+      <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+        <MessageSquarePlus size={14} className="text-[#FF6700]" />
+        Write a review
+      </h2>
+      <div className="flex items-center gap-1 mb-3" role="radiogroup" aria-label="Rating">
+        {[1, 2, 3, 4, 5].map((star) => (
+          <button
+            key={star}
+            type="button"
+            role="radio"
+            aria-checked={rating === star}
+            aria-label={`${star} star${star > 1 ? 's' : ''}`}
+            onClick={() => setRating(star)}
+            onMouseEnter={() => setHoverRating(star)}
+            onMouseLeave={() => setHoverRating(0)}
+            className="p-0.5"
+          >
+            <Star
+              size={20}
+              className={cn(
+                'transition-colors',
+                star <= displayRating ? 'text-[#FF6700] fill-[#FF6700]' : 'text-gray-600'
+              )}
+            />
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={3}
+        placeholder="How did this perform on your robot?"
+        className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FF6700]/50 resize-none mb-3"
+      />
+      {formError && (
+        <div className="mb-3 p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+          <AlertTriangle size={13} className="text-red-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-red-400">{formError}</p>
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={isSubmitting}
+        onClick={handleSubmit}
+        className={cn(
+          'px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2',
+          isSubmitting
+            ? 'bg-white/10 text-gray-500 cursor-not-allowed'
+            : 'bg-[#FF6700] text-white hover:bg-[#e05d00]'
+        )}
+      >
+        {isSubmitting && <Loader2 size={14} className="animate-spin" />}
+        {isSubmitting ? 'Submitting...' : 'Submit review'}
+      </button>
+    </div>
+  );
+}
+
+// ============================================================================
+// LOADING SKELETON
+// ============================================================================
+
+function DetailSkeleton({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="min-h-screen bg-[#0f1012]">
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-2 text-sm text-gray-400 hover:text-white mb-6 transition-colors"
+        >
+          <ArrowLeft size={16} />
+          Back to Marketplace
+        </button>
+        <div className="flex flex-col lg:flex-row gap-8 animate-pulse" aria-busy="true" aria-label="Loading listing">
+          <div className="flex-1 min-w-0">
+            <div className="h-5 w-20 rounded-full bg-white/10 mb-4" />
+            <div className="h-7 w-2/3 rounded bg-white/10 mb-3" />
+            <div className="h-4 w-full rounded bg-white/5 mb-6" />
+            <div className="h-16 rounded-lg bg-white/5 border border-white/10 mb-6" />
+            <div className="space-y-2 mb-6">
+              <div className="h-3 w-full rounded bg-white/5" />
+              <div className="h-3 w-5/6 rounded bg-white/5" />
+              <div className="h-3 w-4/6 rounded bg-white/5" />
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-16 rounded-lg bg-white/5 border border-white/10" />
+              ))}
+            </div>
+            <div className="h-40 rounded-lg bg-white/5 border border-white/10" />
+          </div>
+          <div className="w-full lg:w-80 shrink-0">
+            <div className="rounded-xl bg-[#1a1b1f] border border-white/10 p-5">
+              <div className="h-5 w-32 rounded bg-white/10 mb-4" />
+              <div className="space-y-3">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-14 rounded-lg bg-white/5 border border-white/10" />
+                ))}
+              </div>
+              <div className="h-10 rounded-lg bg-[#FF6700]/20 mt-4" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

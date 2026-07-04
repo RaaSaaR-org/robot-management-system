@@ -4,7 +4,7 @@ aliases:
 - TASK-156
 title: 'Refactor Data Contributions to Skill & Data Marketplace'
 slug: skill-data-marketplace
-status: deferred
+status: done
 priority: 2
 owner: ''
 projects: []

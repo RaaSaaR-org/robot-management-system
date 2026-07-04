@@ -2381,6 +2381,114 @@ model ContributionCredit {
 }
 
 // ============================================================================
+// SKILL & DATA MARKETPLACE (TASK-156)
+// ============================================================================
+//
+// Loose sellerId/buyerId/authorId strings — NO relation to User, matching the
+// DataContribution/ContributionCredit convention above.
+
+model MarketplaceListing {
+  id               String   @id @default(cuid())
+  sellerId         String
+  sellerName       String
+  type             String // skill | dataset
+  title            String
+  shortDescription String
+  fullDescription  String
+  robotType        String // SO-101 | Unitree H1 | Generic
+  baseModel        String   @default("None") // SmolVLA | Pi0.5 | OpenVLA | None
+  tags             String   @default("[]") // JSON: string[]
+  status           String   @default("published") // draft | pending_review | published | suspended
+  isFeatured       Boolean  @default(false)
+  isTrending       Boolean  @default(false)
+  downloadCount    Int      @default(0)
+  rating           Float    @default(0) // denormalized avg, updated on review
+  reviewCount      Int      @default(0) // denormalized
+  taskCategory     String?
+  successRate      Float?
+  adapterSizeMB    Float?
+  episodeCount     Int?
+  frameCount       Int?
+  datasetSizeGB    Float?
+  collectionMethod String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  licenses  ListingLicense[]
+  versions  ListingVersion[]
+  purchases ListingPurchase[]
+  reviews   ListingReview[]
+
+  @@index([sellerId])
+  @@index([type])
+  @@index([status])
+  @@index([robotType])
+}
+
+model ListingVersion {
+  id             String   @id @default(cuid())
+  listingId      String
+  listing        MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  version        String   @default("1.0.0")
+  artifactUri    String // "local://<relative path>" or "rustfs://<bucket>/<key>"
+  fileName       String
+  fileSizeBytes  BigInt   @default(0)
+  checksumSha256 String?
+  changelog      String?
+  createdAt      DateTime @default(now())
+
+  @@index([listingId])
+}
+
+model ListingLicense {
+  id           String @id @default(cuid())
+  listingId    String
+  listing      MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  tier         String // research | per_robot | per_fleet | enterprise
+  label        String
+  description  String
+  priceCredits Int
+  features     String @default("[]") // JSON: string[]
+
+  purchases ListingPurchase[]
+
+  @@unique([listingId, tier])
+}
+
+model ListingPurchase {
+  id            String   @id @default(cuid())
+  buyerId       String
+  listingId     String
+  listing       MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  licenseId     String
+  license       ListingLicense @relation(fields: [licenseId], references: [id])
+  versionId     String?
+  creditsPaid   Int
+  downloadCount Int      @default(0)
+  purchasedAt   DateTime @default(now())
+
+  @@unique([buyerId, listingId])
+  @@index([buyerId])
+  @@index([listingId])
+}
+
+model ListingReview {
+  id         String   @id @default(cuid())
+  listingId  String
+  listing    MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  authorId   String
+  authorName String
+  authorTier String   @default("bronze")
+  rating     Int
+  body       String
+  robotType  String   @default("Generic")
+  createdAt  DateTime @default(now())
+
+  @@unique([listingId, authorId])
+  @@index([listingId])
+}
+
+// ============================================================================
 // VLA SESSION TRACKING (TASK-077)
 // ============================================================================
 

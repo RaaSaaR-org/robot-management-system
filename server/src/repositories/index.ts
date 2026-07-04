@@ -77,6 +77,18 @@ export type {
   DecisionType,
 } from './DecisionRepository.js';
 export { complianceLogRepository, ComplianceLogRepository } from './ComplianceLogRepository.js';
+// Skill & Data Marketplace (TASK-156)
+export {
+  marketplaceRepository,
+  MarketplaceRepository,
+  type MarketplaceListingRecord,
+  type ListingLicenseRecord,
+  type ListingReviewRecord,
+  type ListingVersionRecord,
+  type ListingPurchaseRecord,
+  type SellerStats,
+  type ListingFilter,
+} from './MarketplaceRepository.js';
 
 // VLA (Vision-Language-Action) Training Management
 export {

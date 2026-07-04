@@ -65,6 +65,7 @@ import { cosmosSyntheticRoutes } from './routes/cosmos-synthetic.routes.js';
 import { federatedRoutes } from './routes/federated.routes.js';
 import { aggregationRoutes } from './routes/aggregation.routes.js';
 import { contributionsRoutes } from './routes/contributions.routes.js';
+import { marketplaceRoutes } from './routes/marketplace.routes.js';
 import { evaluationRoutes } from './routes/evaluation.routes.js';
 import { securityRoutes } from './routes/security.routes.js';
 import { updateRoutes } from './routes/update.routes.js';
@@ -303,6 +304,9 @@ export function createApp(): Express {
 
   // Customer data contribution routes (protected) - Data contribution portal
   app.use('/api/contributions', authMiddleware, contributionsRoutes);
+
+  // Skill & Data Marketplace routes (protected) - TASK-156
+  app.use('/api/marketplace', authMiddleware, marketplaceRoutes);
 
   // Evaluation routes (protected) - VLA model evaluation dashboard
   app.use('/api/evaluation', authMiddleware, evaluationRoutes);

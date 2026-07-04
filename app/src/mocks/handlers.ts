@@ -12,6 +12,21 @@ import {
   DEMO_ALERTS,
   DEMO_ZONES,
 } from './demoData';
+import {
+  DEMO_MARKETPLACE_LISTINGS,
+  DEMO_MARKETPLACE_CREDIT_BALANCE,
+  DEMO_MY_PURCHASES,
+  DEMO_MY_LISTINGS,
+  withoutReviews,
+} from './marketplaceDemoData';
+import type {
+  MarketplaceListing,
+  MarketplacePurchase,
+  MarketplaceReview,
+  MarketplaceLicenseTier,
+  CreateListingInput,
+  SubmitReviewInput,
+} from '@/features/contributions/types/marketplace.types';
 
 export const handlers = [
   // ========================================================================
@@ -196,6 +211,241 @@ export const handlers = [
   }),
 
   // ========================================================================
+  // Marketplace (Skill & Data Marketplace demo data)
+  // ========================================================================
+
+  http.get('/api/marketplace/listings', ({ request }) => {
+    const url = new URL(request.url);
+    const type = url.searchParams.get('type');
+    const robotType = url.searchParams.get('robotType');
+    const baseModel = url.searchParams.get('baseModel');
+    const search = url.searchParams.get('search');
+    const featured = url.searchParams.get('featured');
+    const trending = url.searchParams.get('trending');
+
+    const listings = demoMarketplaceListings
+      .filter((l) => {
+        if (type && l.type !== type) return false;
+        if (robotType && l.robotType !== robotType) return false;
+        if (baseModel && l.baseModel !== baseModel) return false;
+        if (featured === 'true' && !l.isFeatured) return false;
+        if (trending === 'true' && !l.isTrending) return false;
+        if (search) {
+          const q = search.toLowerCase();
+          return (
+            l.title.toLowerCase().includes(q) ||
+            l.shortDescription.toLowerCase().includes(q) ||
+            l.tags.some((t) => t.toLowerCase().includes(q))
+          );
+        }
+        return true;
+      })
+      .map(withoutReviews);
+
+    return HttpResponse.json({ listings, total: listings.length });
+  }),
+
+  http.post('/api/marketplace/listings', async ({ request }) => {
+    const body = (await request.json()) as CreateListingInput;
+    const priceTiers = (body.priceTiers ?? []).map((t) => ({
+      tier: t.tier,
+      label: DEMO_TIER_LABELS[t.tier] ?? t.tier,
+      description: t.description ?? '',
+      priceCredits: t.priceCredits,
+      features: t.features ?? [],
+    }));
+    const listing: MarketplaceListing = {
+      id: `ml-demo-${Date.now()}`,
+      type: body.type,
+      title: body.title,
+      shortDescription: body.shortDescription,
+      fullDescription: body.fullDescription,
+      seller: {
+        id: 'demo-user',
+        displayName: 'Demo User',
+        tier: 'silver',
+        totalSales: 0,
+        rating: 0,
+        avatarInitials: 'DU',
+      },
+      robotType: body.robotType,
+      baseModel: body.baseModel,
+      tags: body.tags ?? [],
+      rating: 0,
+      reviewCount: 0,
+      downloadCount: 0,
+      isTrending: false,
+      isFeatured: false,
+      taskCategory: body.taskCategory,
+      successRate: body.successRate,
+      adapterSizeMB: body.adapterSizeMB,
+      episodeCount: body.episodeCount,
+      frameCount: body.frameCount,
+      datasetSizeGB: body.datasetSizeGB,
+      collectionMethod: body.collectionMethod,
+      priceTiers,
+      lowestPriceCredits: Math.min(...priceTiers.map((t) => t.priceCredits)),
+      createdAt: new Date().toISOString(),
+      reviews: [],
+    };
+    demoMarketplaceListings.unshift(listing);
+    demoMyListings.unshift({ listing: withoutReviews(listing), totalRevenue: 0, totalDownloads: 0, status: 'active' as const });
+    return HttpResponse.json({ listing }, { status: 201 });
+  }),
+
+  http.get('/api/marketplace/listings/:id', ({ params }) => {
+    const listing = demoMarketplaceListings.find((l) => l.id === params.id);
+    if (!listing) {
+      return HttpResponse.json({ error: 'Listing not found' }, { status: 404 });
+    }
+    return HttpResponse.json({ listing });
+  }),
+
+  http.post('/api/marketplace/listings/:id/purchase', async ({ params, request }) => {
+    const body = (await request.json()) as { tier: MarketplaceLicenseTier };
+    const listing = demoMarketplaceListings.find((l) => l.id === params.id);
+    if (!listing) {
+      return HttpResponse.json({ error: 'Listing not found' }, { status: 404 });
+    }
+    const tier = listing.priceTiers.find((t) => t.tier === body.tier);
+    if (!tier) {
+      return HttpResponse.json({ error: 'Unknown license tier for this listing' }, { status: 400 });
+    }
+    if (demoMyListings.some((m) => m.listing.id === listing.id)) {
+      return HttpResponse.json(
+        { error: 'Sellers cannot purchase their own listing' },
+        { status: 400 }
+      );
+    }
+    if (demoMyPurchases.some((p) => p.listingId === listing.id)) {
+      return HttpResponse.json({ error: 'You already own this listing' }, { status: 400 });
+    }
+    if (demoCreditBalance < tier.priceCredits) {
+      return HttpResponse.json(
+        { error: 'Insufficient credits', balance: demoCreditBalance, required: tier.priceCredits },
+        { status: 402 }
+      );
+    }
+    demoCreditBalance -= tier.priceCredits;
+    const purchase: MarketplacePurchase = {
+      id: `mp-demo-${Date.now()}`,
+      listingId: listing.id,
+      listing: withoutReviews(listing),
+      licenseTier: tier.tier,
+      purchasedAt: new Date().toISOString(),
+      creditsSpent: tier.priceCredits,
+    };
+    demoMyPurchases.unshift(purchase);
+    return HttpResponse.json({ purchase, balance: demoCreditBalance }, { status: 201 });
+  }),
+
+  http.get('/api/marketplace/listings/:id/download', ({ params }) => {
+    const listing = demoMarketplaceListings.find((l) => l.id === params.id);
+    if (!listing) {
+      return HttpResponse.json({ error: 'Listing not found' }, { status: 404 });
+    }
+    if (!demoUserOwnsOrSells(listing.id)) {
+      return HttpResponse.json(
+        { error: 'You must purchase this listing to download it' },
+        { status: 403 }
+      );
+    }
+    listing.downloadCount += 1;
+    const slug = listing.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const isSkill = listing.type === 'skill';
+    return HttpResponse.json({
+      fileName: isSkill ? `${slug}-adapter.safetensors` : `${slug}-lerobot-v3.tar.gz`,
+      fileSizeBytes: isSkill
+        ? Math.round((listing.adapterSizeMB ?? 128) * 1024 * 1024)
+        : Math.round((listing.datasetSizeGB ?? 1) * 1024 * 1024 * 1024),
+      checksumSha256: `${listing.id.replace(/-/g, '')}a7f3b2c9e1d4f6081b3c5d7e9f0a2b4c6d8e0f1a2b3c4d5e6f7a8b9c0d1e2f3`.slice(0, 64),
+      format: isSkill ? 'safetensors' : 'lerobot-v3',
+      version: '1.0.0',
+      url: null,
+      expiresInSeconds: null,
+    });
+  }),
+
+  http.get('/api/marketplace/listings/:id/download/file', ({ params }) => {
+    const listing = demoMarketplaceListings.find((l) => l.id === params.id);
+    if (!listing) {
+      return HttpResponse.json({ error: 'Artifact not found' }, { status: 404 });
+    }
+    if (!demoUserOwnsOrSells(listing.id)) {
+      return HttpResponse.json(
+        { error: 'You must purchase this listing to download it' },
+        { status: 403 }
+      );
+    }
+    // Small deterministic pseudo-random payload (64 KB)
+    const bytes = new Uint8Array(64 * 1024);
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = (i * 31 + 7) % 256;
+    }
+    return new HttpResponse(bytes.buffer, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(bytes.length),
+        'Content-Disposition': 'attachment; filename="demo-artifact.bin"',
+      },
+    });
+  }),
+
+  http.post('/api/marketplace/listings/:id/reviews', async ({ params, request }) => {
+    const body = (await request.json()) as SubmitReviewInput;
+    const listing = demoMarketplaceListings.find((l) => l.id === params.id);
+    if (!listing) {
+      return HttpResponse.json({ error: 'Listing not found' }, { status: 404 });
+    }
+    if (demoMyListings.some((m) => m.listing.id === listing.id)) {
+      return HttpResponse.json(
+        { error: 'Sellers cannot review their own listing' },
+        { status: 403 }
+      );
+    }
+    if (!demoMyPurchases.some((p) => p.listingId === listing.id)) {
+      return HttpResponse.json(
+        { error: 'You must purchase this listing before reviewing it' },
+        { status: 403 }
+      );
+    }
+    if (listing.reviews.some((r) => r.authorName === 'Demo User')) {
+      return HttpResponse.json(
+        { error: 'You already reviewed this listing' },
+        { status: 400 }
+      );
+    }
+    const review: MarketplaceReview = {
+      id: `r-demo-${Date.now()}`,
+      authorName: 'Demo User',
+      authorTier: 'silver',
+      rating: body.rating,
+      body: body.body,
+      createdAt: new Date().toISOString(),
+      robotType: body.robotType ?? 'Generic',
+    };
+    const newCount = listing.reviewCount + 1;
+    const newRating = +(((listing.rating * listing.reviewCount) + body.rating) / newCount).toFixed(1);
+    listing.reviews.unshift(review);
+    listing.rating = newRating;
+    listing.reviewCount = newCount;
+    return HttpResponse.json({ review, rating: newRating, reviewCount: newCount }, { status: 201 });
+  }),
+
+  http.get('/api/marketplace/my/purchases', () => {
+    return HttpResponse.json({ purchases: demoMyPurchases });
+  }),
+
+  http.get('/api/marketplace/my/listings', () => {
+    return HttpResponse.json({ listings: demoMyListings });
+  }),
+
+  http.get('/api/marketplace/credits/balance', () => {
+    return HttpResponse.json({ balance: demoCreditBalance });
+  }),
+
+  // ========================================================================
   // Catch-all: other GET /api/* return empty data
   // ========================================================================
 
@@ -203,6 +453,33 @@ export const handlers = [
     return HttpResponse.json({ data: [], total: 0, items: [] });
   }),
 ];
+
+// ============================================================================
+// Marketplace demo state (mutable so purchases/reviews persist per session)
+// ============================================================================
+
+const demoMarketplaceListings: MarketplaceListing[] = DEMO_MARKETPLACE_LISTINGS.map((l) => ({
+  ...l,
+  reviews: [...l.reviews],
+}));
+const demoMyPurchases: MarketplacePurchase[] = [...DEMO_MY_PURCHASES];
+const demoMyListings = [...DEMO_MY_LISTINGS];
+let demoCreditBalance = DEMO_MARKETPLACE_CREDIT_BALANCE;
+
+/** Mirrors the real API's download gate: purchaser or seller only. */
+function demoUserOwnsOrSells(listingId: string): boolean {
+  return (
+    demoMyPurchases.some((p) => p.listingId === listingId) ||
+    demoMyListings.some((m) => m.listing.id === listingId)
+  );
+}
+
+const DEMO_TIER_LABELS: Record<MarketplaceLicenseTier, string> = {
+  research: 'Research',
+  per_robot: 'Per Robot',
+  per_fleet: 'Per Fleet',
+  enterprise: 'Enterprise',
+};
 
 // Demo dataset/episodes for the episode viewer + curation GUI
 const DEMO_DATASET = {
