@@ -43,6 +43,68 @@ logger = logging.getLogger(__name__)
 
 FRAME_INTERVAL = 10
 
+# manifest.control keys forwarded to make_locomotion_env (guards against extra /
+# debug keys in the manifest reaching the env constructor).
+_LOCO_CONTROL_KEYS = {
+    "command", "action_scale", "default_joint_pos", "pd_gains", "control_hz",
+    "joint_order", "obs_scales", "success_cfg",
+}
+
+
+def _read_manifest(manifest_file: str | None, policy_file: str) -> dict:
+    """Load the policy manifest (defaults to manifest.json next to the policy).
+
+    A missing/unreadable manifest falls back to ``{}`` — the caller then defaults
+    to the nav env, preserving behaviour for pre-existing nav policies.
+    """
+    from pathlib import Path
+
+    path = manifest_file
+    if path is None:
+        cand = Path(policy_file).parent / "manifest.json"
+        path = str(cand) if cand.exists() else None
+    if path and Path(path).exists():
+        try:
+            return json.loads(Path(path).read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Manifest %s unreadable (%s) — assuming nav env", path, e)
+    return {}
+
+
+def _build_eval_env(manifest: dict, scene_file, max_steps: int, eval_spawn_radius: float):
+    """Dispatch the eval env on ``manifest['env']`` (default 'nav').
+
+    The manifest is the sim-to-sim contract: a 'locomotion' policy rebuilds the
+    Isaac-matched MuJoCo env from its ``control`` block; a 'nav' policy (or any
+    manifest without ``env``) uses the unchanged navigation env.
+    """
+    env_kind = (manifest.get("env") or "nav").lower()
+    if env_kind == "locomotion":
+        from envs.locomotion_wrappers import make_locomotion_env
+
+        control = {
+            k: v for k, v in (manifest.get("control") or {}).items()
+            if k in _LOCO_CONTROL_KEYS
+        }
+        logger.info("Building locomotion eval env from manifest control block")
+        return make_locomotion_env(scene_path=scene_file, max_steps=max_steps, **control)
+
+    # nav (default, unchanged) — spawn-only DR with nominal physics so the N
+    # rollouts sample the success distribution the policy was trained on.
+    return make_nav_env(
+        scene_path=scene_file,
+        obs_mode="state",
+        max_steps=max_steps,
+        shaped=False,
+        domain_rand=True,
+        dr_kwargs={
+            "spawn_radius": eval_spawn_radius,
+            "friction_range": (1.0, 1.0),
+            "mass_scale_range": (1.0, 1.0),
+            "latency_steps_range": (0, 0),
+        },
+    )
+
 
 def save_frame(rgb_array: np.ndarray, path: str) -> None:
     Image.fromarray(rgb_array).save(path, format="JPEG", quality=90)
@@ -154,27 +216,12 @@ def evaluate(
 
     backend = PolicyBackend.from_artifacts(policy_file, manifest_file)
 
-    # Gate env steps in obs_mode='state' (no per-step GL render — frames are
-    # captured on demand via base.capture_frame()) and enables *spawn-only*
-    # domain randomization with nominal physics. Without per-episode spawn
-    # variation every rollout would be byte-identical and simSuccessRate could
-    # only be 0.0 or 1.0, making the SIM_MIN_SUCCESS rate threshold meaningless;
-    # the spawn jitter (seeded for reproducibility) lets the N rollouts sample
-    # the success distribution the policy was trained on. The 61-dim obs layout
-    # is unchanged, preserving the nav_wrappers parity contract.
-    env = make_nav_env(
-        scene_path=scene_file,
-        obs_mode="state",
-        max_steps=max_steps,
-        shaped=False,
-        domain_rand=True,
-        dr_kwargs={
-            "spawn_radius": eval_spawn_radius,
-            "friction_range": (1.0, 1.0),
-            "mass_scale_range": (1.0, 1.0),
-            "latency_steps_range": (0, 0),
-        },
-    )
+    # The manifest picks the env: a 'locomotion' policy rebuilds the Isaac-matched
+    # MuJoCo locomotion env from its control block; anything else (incl. legacy nav
+    # policies with no ``env`` field) uses the unchanged 61-dim navigation env. The
+    # gate steps in obs_mode='state' (frames captured on demand) either way.
+    manifest = _read_manifest(manifest_file, policy_file)
+    env = _build_eval_env(manifest, scene_file, max_steps, eval_spawn_radius)
 
     if frames_dir:
         env.reset(seed=seed)

@@ -7,6 +7,7 @@
 import { Card, Badge, ProgressBar, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { TrainingJob, TrainingJobStatus } from '../types';
+import { simRlTrainerLabel } from '../types';
 
 export interface TrainingJobCardProps {
   job: TrainingJob;
@@ -79,7 +80,9 @@ export function TrainingJobCard({
                   <Badge variant="purple" data-testid="job-kind-badge">
                     SIM-RL
                   </Badge>
-                  <span className="text-sm text-theme-secondary">Navigation policy</span>
+                  <span className="text-sm text-theme-secondary">
+                    {simRlTrainerLabel(job.metrics.trainer)}
+                  </span>
                 </>
               ) : (
                 <>

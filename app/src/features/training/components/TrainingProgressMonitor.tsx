@@ -7,6 +7,7 @@
 import { Card, ProgressBar, Badge, Spinner } from '@/shared/components/ui';
 import { LossCurveChart } from './LossCurveChart';
 import type { TrainingJob, TrainingJobStatus } from '../types';
+import { simRlTrainerLabel } from '../types';
 
 export interface TrainingProgressMonitorProps {
   job: TrainingJob;
@@ -113,9 +114,7 @@ export function TrainingProgressMonitor({
             <span className="text-sm text-theme-tertiary">Method</span>
             <p className="font-medium text-theme-primary">
               {job.kind === 'sim_rl'
-                ? job.metrics.trainer
-                  ? job.metrics.trainer.replace(/_/g, ' ')
-                  : 'Navigation'
+                ? simRlTrainerLabel(job.metrics.trainer)
                 : (fineTuneLabels[job.fineTuneMethod ?? ''] ??
                   (job.fineTuneMethod ?? '').toUpperCase())}
             </p>
