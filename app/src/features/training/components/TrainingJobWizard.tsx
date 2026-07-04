@@ -301,7 +301,8 @@ export function TrainingJobWizard({
               <h3 className="text-lg font-medium text-theme-primary">Training Type</h3>
               <p className="text-sm text-theme-secondary">
                 Choose what to train. Supervised fine-tunes a VLA model on a recorded dataset;
-                Sim-RL trains a navigation policy in a digital-twin simulation scene.
+                Sim-RL trains a control policy (navigation or locomotion gait) in a digital-twin
+                simulation scene.
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="group" aria-label="Training type">
@@ -328,7 +329,8 @@ export function TrainingJobWizard({
                     Beta
                   </Badge>
                   <p className="text-xs text-theme-secondary mt-1">
-                    Train an RL navigation policy for a robot in a simulation scene.
+                    Train an RL control policy (navigation or locomotion gait) for a robot in a
+                    simulation scene.
                   </p>
                 </button>
               </div>

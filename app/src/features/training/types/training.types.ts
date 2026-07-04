@@ -94,7 +94,27 @@ export interface TrainingMetrics {
   mean_reward?: number;
   success_rate?: number; // 0..1
   total_timesteps?: number;
-  trainer?: string; // e.g. "ppo_nav"
+  trainer?: string; // worker-reported: "isaac" | "ppo" | "stub"
+}
+
+/**
+ * Human-readable label for a completed sim_rl job's trainer/env, keyed on the
+ * read-only `metrics.trainer` value the worker reports back (never derived on the
+ * client). Keeps TrainingJobCard + TrainingProgressMonitor DRY. Unknown/absent ids
+ * degrade gracefully so a future trainer is a one-line addition here.
+ */
+export function simRlTrainerLabel(trainer?: string): string {
+  switch (trainer) {
+    case 'isaac':
+      return 'Isaac Lab · locomotion gait';
+    case 'ppo':
+      return 'PPO · navigation';
+    case 'stub':
+      return 'Stub';
+    default:
+      if (!trainer) return 'Sim-RL policy';
+      return trainer.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 }
 
 export interface LeRobotInfo {
