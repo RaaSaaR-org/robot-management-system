@@ -71,6 +71,21 @@ def test_default_stance_and_zero_joint_pos_rel():
         env.close()
 
 
+def test_out_of_range_stance_keeps_joint_pos_rel_zero():
+    """The env clips its reset pose to ctrlrange; the wrappers must use that SAME
+    clipped pose as the obs subtrahend so joint_pos_rel stays 0 at the default stance
+    even if a supplied stance angle is out of range (no silent obs drift)."""
+    stance = np.zeros(ACTION_DIM, dtype=np.float64)
+    stance[3] = 100.0  # far above the knee's upper limit -> clipped on reset
+    env = make_locomotion_env(max_steps=2, default_joint_pos=stance, reset_jitter=False)
+    try:
+        env.reset(seed=0)
+        jpos_rel = env.observation(None)[9 : 9 + ACTION_DIM]
+        np.testing.assert_allclose(jpos_rel, np.zeros(ACTION_DIM), atol=1e-5)
+    finally:
+        env.close()
+
+
 def test_projected_gravity_is_down_when_upright():
     env = G1LocomotionEnv(max_steps=2, reset_jitter=False)
     try:

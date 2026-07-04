@@ -302,8 +302,12 @@ def make_locomotion_env(
         fall_z=fall_z,
         reset_jitter=reset_jitter,
     )
+    # Use the env's CLIPPED default (== the actual reset pose) as the action
+    # baseline + obs subtrahend, so joint_pos_rel is exactly 0 at the default stance
+    # even if a supplied stance angle lands outside a joint's ctrlrange (otherwise the
+    # exported obs would silently drift from what the robot resets to).
     act_w = LocomotionActionWrapper(
-        env, action_scale=action_scale, default_joint_pos=default_joint_pos,
+        env, action_scale=action_scale, default_joint_pos=env.default_joint_pos,
         joint_order=joint_order,
     )
     cmd_w = VelocityCommandWrapper(act_w, command=command, success_cfg=success_cfg)
