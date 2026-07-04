@@ -535,7 +535,8 @@ export class MarketplaceService {
    * Download metadata: presigned RustFS URL when storage is up, otherwise
    * `url: null` (client falls back to the streaming endpoint). Never 500s on
    * a missing version — returns metadata derived from the listing instead.
-   * Increments download counters (listing + purchase when purchaser).
+   * Increments download counters for purchasers (once per purchase on the
+   * listing); seller self-downloads are not counted.
    */
   async getDownloadInfo(
     userId: string,
@@ -566,7 +567,11 @@ export class MarketplaceService {
       }
     }
 
-    await marketplaceRepository.incrementDownloadCounts(listingId, purchaseId ?? undefined);
+    // Sellers fetching their own artifact are not a download signal, and a
+    // purchaser only counts toward the listing total once (see repository).
+    if (purchaseId) {
+      await marketplaceRepository.incrementDownloadCounts(listingId, purchaseId);
+    }
 
     return {
       ok: true,

@@ -365,25 +365,28 @@ export class MarketplaceRepository {
   }
 
   /**
-   * Increment download counters: always on the listing, and on the purchase
-   * when the downloader is a purchaser (sellers download without a purchase).
+   * Increment download counters. The purchase's own counter tracks every
+   * download, but the listing counter is a public sales signal (it feeds
+   * seller totalSales), so it only increments on the purchase's FIRST
+   * download — repeated fetches cannot inflate it. The `downloadCount: 0`
+   * guard on the updateMany makes the first-download check atomic.
    */
-  async incrementDownloadCounts(listingId: string, purchaseId?: string): Promise<void> {
-    const ops: Prisma.PrismaPromise<unknown>[] = [
-      prisma.marketplaceListing.update({
+  async incrementDownloadCounts(listingId: string, purchaseId: string): Promise<void> {
+    const first = await prisma.listingPurchase.updateMany({
+      where: { id: purchaseId, downloadCount: 0 },
+      data: { downloadCount: { increment: 1 } },
+    });
+    if (first.count === 1) {
+      await prisma.marketplaceListing.update({
         where: { id: listingId },
         data: { downloadCount: { increment: 1 } },
-      }),
-    ];
-    if (purchaseId) {
-      ops.push(
-        prisma.listingPurchase.update({
-          where: { id: purchaseId },
-          data: { downloadCount: { increment: 1 } },
-        })
-      );
+      });
+      return;
     }
-    await prisma.$transaction(ops);
+    await prisma.listingPurchase.update({
+      where: { id: purchaseId },
+      data: { downloadCount: { increment: 1 } },
+    });
   }
 
   /** SUM(ContributionCredit.amount) for a user (0 if none). */
