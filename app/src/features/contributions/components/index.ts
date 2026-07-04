@@ -59,3 +59,6 @@ export type { MarketplaceStarRatingProps } from './MarketplaceStarRating';
 
 export { MarketplaceDownloadModal } from './MarketplaceDownloadModal';
 export type { MarketplaceDownloadModalProps } from './MarketplaceDownloadModal';
+
+export { MarketplacePublishDialog } from './MarketplacePublishDialog';
+export type { MarketplacePublishDialogProps } from './MarketplacePublishDialog';

@@ -1,7 +1,9 @@
 /**
- * @file mockMarketplaceData.ts
- * @description Mock data for the Skill & Data Marketplace prototype
- * @feature marketplace
+ * @file marketplaceDemoData.ts
+ * @description Demo marketplace data served by MSW in demo mode (VITE_DEMO_MODE=true).
+ *              Ported from the former features/contributions/mockMarketplaceData.ts,
+ *              reshaped as API responses per the /api/marketplace contract.
+ * @feature mocks
  */
 
 import type {
@@ -9,7 +11,7 @@ import type {
   MarketplacePurchase,
   MyMarketplaceListing,
   MarketplaceSeller,
-} from './types/marketplace.types';
+} from '@/features/contributions/types/marketplace.types';
 
 // ============================================================================
 // SELLERS
@@ -17,7 +19,7 @@ import type {
 
 const sellers: Record<string, MarketplaceSeller> = {
   roboticsLab: {
-    id: 's1',
+    id: 'seller-robotics-lab-berlin',
     displayName: 'Robotics Lab Berlin',
     tier: 'platinum',
     totalSales: 234,
@@ -25,7 +27,7 @@ const sellers: Record<string, MarketplaceSeller> = {
     avatarInitials: 'RB',
   },
   automate: {
-    id: 's2',
+    id: 'seller-automate-gmbh',
     displayName: 'AutoMate GmbH',
     tier: 'gold',
     totalSales: 87,
@@ -33,7 +35,7 @@ const sellers: Record<string, MarketplaceSeller> = {
     avatarInitials: 'AM',
   },
   tuMunich: {
-    id: 's3',
+    id: 'seller-tu-munich',
     displayName: 'TU Munich Robotics',
     tier: 'diamond',
     totalSales: 512,
@@ -41,7 +43,7 @@ const sellers: Record<string, MarketplaceSeller> = {
     avatarInitials: 'TM',
   },
   graspAI: {
-    id: 's4',
+    id: 'seller-graspai',
     displayName: 'GraspAI',
     tier: 'silver',
     totalSales: 31,
@@ -49,7 +51,7 @@ const sellers: Record<string, MarketplaceSeller> = {
     avatarInitials: 'GA',
   },
   factoryBot: {
-    id: 's5',
+    id: 'seller-factorybot',
     displayName: 'FactoryBot Solutions',
     tier: 'gold',
     totalSales: 156,
@@ -57,7 +59,7 @@ const sellers: Record<string, MarketplaceSeller> = {
     avatarInitials: 'FB',
   },
   openRobotics: {
-    id: 's6',
+    id: 'seller-open-robotics',
     displayName: 'Open Robotics Collective',
     tier: 'platinum',
     totalSales: 389,
@@ -67,10 +69,10 @@ const sellers: Record<string, MarketplaceSeller> = {
 };
 
 // ============================================================================
-// LISTINGS
+// LISTINGS (reviews populated — the list handler strips them)
 // ============================================================================
 
-export const MOCK_LISTINGS: MarketplaceListing[] = [
+export const DEMO_MARKETPLACE_LISTINGS: MarketplaceListing[] = [
   {
     id: 'ml-001',
     type: 'skill',
@@ -96,11 +98,11 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Unlimited + redistribution', priceCredits: 8000, features: ['Unlimited robots', 'Redistribution rights', 'SLA support', 'Custom fine-tuning'] },
     ],
     lowestPriceCredits: 200,
-    createdAt: '2026-03-15',
+    createdAt: '2026-03-15T10:00:00.000Z',
     reviews: [
-      { id: 'r1', authorName: 'Dr. Schmidt', authorTier: 'gold', rating: 5, body: 'Excellent adapter. Works out of the box on our SO-101 setup. The grasping precision is remarkably better than base SmolVLA.', createdAt: '2026-04-01', robotType: 'SO-101' },
-      { id: 'r2', authorName: 'RoboTest Lab', authorTier: 'silver', rating: 4, body: 'Good results on standard objects. Struggles slightly with transparent items but overall very reliable.', createdAt: '2026-03-28', robotType: 'SO-101' },
-      { id: 'r3', authorName: 'Maker Space HH', authorTier: 'bronze', rating: 5, body: 'Genau was wir gebraucht haben. Sofort einsatzbereit.', createdAt: '2026-03-20', robotType: 'SO-101' },
+      { id: 'r1', authorName: 'Dr. Schmidt', authorTier: 'gold', rating: 5, body: 'Excellent adapter. Works out of the box on our SO-101 setup. The grasping precision is remarkably better than base SmolVLA.', createdAt: '2026-04-01T10:00:00.000Z', robotType: 'SO-101' },
+      { id: 'r2', authorName: 'RoboTest Lab', authorTier: 'silver', rating: 4, body: 'Good results on standard objects. Struggles slightly with transparent items but overall very reliable.', createdAt: '2026-03-28T10:00:00.000Z', robotType: 'SO-101' },
+      { id: 'r3', authorName: 'Maker Space HH', authorTier: 'bronze', rating: 5, body: 'Genau was wir gebraucht haben. Sofort einsatzbereit.', createdAt: '2026-03-20T10:00:00.000Z', robotType: 'SO-101' },
     ],
   },
   {
@@ -128,10 +130,10 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Unlimited + redistribution', priceCredits: 12000, features: ['Unlimited robots', 'Redistribution rights', 'SLA support', 'Custom fine-tuning'] },
     ],
     lowestPriceCredits: 350,
-    createdAt: '2026-02-20',
+    createdAt: '2026-02-20T10:00:00.000Z',
     reviews: [
-      { id: 'r4', authorName: 'LogiTech AG', authorTier: 'platinum', rating: 5, body: 'Running this on 12 H1 units in our fulfillment center. Reliable and fast. ROI within 3 months.', createdAt: '2026-03-15', robotType: 'Unitree H1' },
-      { id: 'r5', authorName: 'WareBot Team', authorTier: 'gold', rating: 4, body: 'Great for standard boxes. Had to supplement with custom training for oddly-shaped packages.', createdAt: '2026-03-10', robotType: 'Unitree H1' },
+      { id: 'r4', authorName: 'LogiTech AG', authorTier: 'platinum', rating: 5, body: 'Running this on 12 H1 units in our fulfillment center. Reliable and fast. ROI within 3 months.', createdAt: '2026-03-15T10:00:00.000Z', robotType: 'Unitree H1' },
+      { id: 'r5', authorName: 'WareBot Team', authorTier: 'gold', rating: 4, body: 'Great for standard boxes. Had to supplement with custom training for oddly-shaped packages.', createdAt: '2026-03-10T10:00:00.000Z', robotType: 'Unitree H1' },
     ],
   },
   {
@@ -160,10 +162,10 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights + redistribution', priceCredits: 5000, features: ['Full rights', 'Redistribution', 'SLA support', 'Raw annotations'] },
     ],
     lowestPriceCredits: 150,
-    createdAt: '2026-01-10',
+    createdAt: '2026-01-10T10:00:00.000Z',
     reviews: [
-      { id: 'r6', authorName: 'KI-Küche Lab', authorTier: 'gold', rating: 5, body: 'Beste Küchenmanipulations-Daten die wir gefunden haben. Exzellente Qualität und Vielfalt.', createdAt: '2026-03-05', robotType: 'SO-101' },
-      { id: 'r7', authorName: 'HomeBotIQ', authorTier: 'silver', rating: 5, body: 'Trained a LoRA on this dataset alone and got 91% success rate on pouring tasks. Amazing quality.', createdAt: '2026-02-28', robotType: 'SO-101' },
+      { id: 'r6', authorName: 'KI-Küche Lab', authorTier: 'gold', rating: 5, body: 'Beste Küchenmanipulations-Daten die wir gefunden haben. Exzellente Qualität und Vielfalt.', createdAt: '2026-03-05T10:00:00.000Z', robotType: 'SO-101' },
+      { id: 'r7', authorName: 'HomeBotIQ', authorTier: 'silver', rating: 5, body: 'Trained a LoRA on this dataset alone and got 91% success rate on pouring tasks. Amazing quality.', createdAt: '2026-02-28T10:00:00.000Z', robotType: 'SO-101' },
     ],
   },
   {
@@ -191,9 +193,9 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Unlimited + redistribution', priceCredits: 6500, features: ['Unlimited robots', 'Redistribution rights', 'SLA support'] },
     ],
     lowestPriceCredits: 180,
-    createdAt: '2026-03-01',
+    createdAt: '2026-03-01T10:00:00.000Z',
     reviews: [
-      { id: 'r8', authorName: 'Office Automation Inc', authorTier: 'silver', rating: 4, body: 'Works well with standard IKEA furniture. Some issues with very old wooden cabinets but overall solid.', createdAt: '2026-03-25', robotType: 'Generic' },
+      { id: 'r8', authorName: 'Office Automation Inc', authorTier: 'silver', rating: 4, body: 'Works well with standard IKEA furniture. Some issues with very old wooden cabinets but overall solid.', createdAt: '2026-03-25T10:00:00.000Z', robotType: 'Generic' },
     ],
   },
   {
@@ -222,10 +224,10 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 9000, features: ['Full rights', 'Redistribution', 'SLA support'] },
     ],
     lowestPriceCredits: 250,
-    createdAt: '2026-02-05',
+    createdAt: '2026-02-05T10:00:00.000Z',
     reviews: [
-      { id: 'r9', authorName: 'WalkBot Research', authorTier: 'gold', rating: 5, body: 'Excellent quality. The human correction annotations are incredibly valuable for training stable gaits.', createdAt: '2026-03-18', robotType: 'Unitree H1' },
-      { id: 'r10', authorName: 'BipedalAI', authorTier: 'silver', rating: 4, body: 'Good variety of environments. Would love to see outdoor data in a future version.', createdAt: '2026-03-12', robotType: 'Unitree H1' },
+      { id: 'r9', authorName: 'WalkBot Research', authorTier: 'gold', rating: 5, body: 'Excellent quality. The human correction annotations are incredibly valuable for training stable gaits.', createdAt: '2026-03-18T10:00:00.000Z', robotType: 'Unitree H1' },
+      { id: 'r10', authorName: 'BipedalAI', authorTier: 'silver', rating: 4, body: 'Good variety of environments. Would love to see outdoor data in a future version.', createdAt: '2026-03-12T10:00:00.000Z', robotType: 'Unitree H1' },
     ],
   },
   {
@@ -253,9 +255,9 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 7000, features: ['Unlimited', 'Redistribution', 'SLA'] },
     ],
     lowestPriceCredits: 220,
-    createdAt: '2026-03-08',
+    createdAt: '2026-03-08T10:00:00.000Z',
     reviews: [
-      { id: 'r11', authorName: 'DualArm Lab', authorTier: 'gold', rating: 5, body: 'Finally a bimanual skill that actually works! The coordination is smooth and reliable.', createdAt: '2026-04-02', robotType: 'SO-101' },
+      { id: 'r11', authorName: 'DualArm Lab', authorTier: 'gold', rating: 5, body: 'Finally a bimanual skill that actually works! The coordination is smooth and reliable.', createdAt: '2026-04-02T10:00:00.000Z', robotType: 'SO-101' },
     ],
   },
   {
@@ -284,10 +286,10 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 10000, features: ['Full rights', 'Redistribution', 'Annotations'] },
     ],
     lowestPriceCredits: 300,
-    createdAt: '2025-12-15',
+    createdAt: '2025-12-15T10:00:00.000Z',
     reviews: [
-      { id: 'r12', authorName: 'Manipulation Lab ETH', authorTier: 'platinum', rating: 5, body: 'The gold standard for pre-training manipulation models. Used this as foundation for 3 different downstream tasks.', createdAt: '2026-02-10', robotType: 'Generic' },
-      { id: 'r13', authorName: 'StartupBot', authorTier: 'bronze', rating: 5, body: 'Incredible value. Saved us months of data collection.', createdAt: '2026-01-25', robotType: 'SO-101' },
+      { id: 'r12', authorName: 'Manipulation Lab ETH', authorTier: 'platinum', rating: 5, body: 'The gold standard for pre-training manipulation models. Used this as foundation for 3 different downstream tasks.', createdAt: '2026-02-10T10:00:00.000Z', robotType: 'Generic' },
+      { id: 'r13', authorName: 'StartupBot', authorTier: 'bronze', rating: 5, body: 'Incredible value. Saved us months of data collection.', createdAt: '2026-01-25T10:00:00.000Z', robotType: 'SO-101' },
     ],
   },
   {
@@ -315,9 +317,9 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 9500, features: ['Unlimited', 'Redistribution', 'SLA'] },
     ],
     lowestPriceCredits: 280,
-    createdAt: '2026-03-22',
+    createdAt: '2026-03-22T10:00:00.000Z',
     reviews: [
-      { id: 'r14', authorName: 'EMS Factory', authorTier: 'gold', rating: 5, body: 'Game changer for our cable routing station. Reduced manual intervention by 70%.', createdAt: '2026-04-05', robotType: 'SO-101' },
+      { id: 'r14', authorName: 'EMS Factory', authorTier: 'gold', rating: 5, body: 'Game changer for our cable routing station. Reduced manual intervention by 70%.', createdAt: '2026-04-05T10:00:00.000Z', robotType: 'SO-101' },
     ],
   },
   {
@@ -345,10 +347,10 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 7500, features: ['Unlimited', 'Redistribution', 'SLA'] },
     ],
     lowestPriceCredits: 200,
-    createdAt: '2026-02-14',
+    createdAt: '2026-02-14T10:00:00.000Z',
     reviews: [
-      { id: 'r15', authorName: 'ServiceBot Co', authorTier: 'gold', rating: 5, body: 'Works on every door type in our office building. Lever handles, fire doors, everything.', createdAt: '2026-03-20', robotType: 'Unitree H1' },
-      { id: 'r16', authorName: 'Home Assistant Lab', authorTier: 'silver', rating: 4, body: 'Good general-purpose skill. Round knobs are trickier than levers but still decent success rate.', createdAt: '2026-03-08', robotType: 'Generic' },
+      { id: 'r15', authorName: 'ServiceBot Co', authorTier: 'gold', rating: 5, body: 'Works on every door type in our office building. Lever handles, fire doors, everything.', createdAt: '2026-03-20T10:00:00.000Z', robotType: 'Unitree H1' },
+      { id: 'r16', authorName: 'Home Assistant Lab', authorTier: 'silver', rating: 4, body: 'Good general-purpose skill. Round knobs are trickier than levers but still decent success rate.', createdAt: '2026-03-08T10:00:00.000Z', robotType: 'Generic' },
     ],
   },
   {
@@ -377,58 +379,60 @@ export const MOCK_LISTINGS: MarketplaceListing[] = [
       { tier: 'enterprise', label: 'Enterprise', description: 'Full rights', priceCredits: 15000, features: ['Full rights', 'Redistribution', 'Raw MoCap'] },
     ],
     lowestPriceCredits: 400,
-    createdAt: '2026-03-30',
+    createdAt: '2026-03-30T10:00:00.000Z',
     reviews: [
-      { id: 'r17', authorName: 'Locomotion Lab', authorTier: 'platinum', rating: 5, body: 'The MoCap ground truth makes this invaluable. Only 90 episodes but each one is gold.', createdAt: '2026-04-08', robotType: 'Unitree H1' },
+      { id: 'r17', authorName: 'Locomotion Lab', authorTier: 'platinum', rating: 5, body: 'The MoCap ground truth makes this invaluable. Only 90 episodes but each one is gold.', createdAt: '2026-04-08T10:00:00.000Z', robotType: 'Unitree H1' },
     ],
   },
 ];
 
 // ============================================================================
-// DERIVED DATA
+// DERIVED / MY-MARKETPLACE DATA
 // ============================================================================
 
-export const MOCK_FEATURED = MOCK_LISTINGS.filter((l) => l.isFeatured);
-export const MOCK_TRENDING = MOCK_LISTINGS.filter((l) => l.isTrending);
+export const DEMO_MARKETPLACE_CREDIT_BALANCE = 4800;
 
-export const MOCK_MY_CREDIT_BALANCE = 4800;
+/** Strip reviews for list responses (per contract, reviews are [] in lists) */
+export function withoutReviews(listing: MarketplaceListing): MarketplaceListing {
+  return { ...listing, reviews: [] };
+}
 
-export const MOCK_MY_PURCHASES: MarketplacePurchase[] = [
+export const DEMO_MY_PURCHASES: MarketplacePurchase[] = [
   {
     id: 'mp-001',
     listingId: 'ml-001',
-    listing: MOCK_LISTINGS[0],
+    listing: withoutReviews(DEMO_MARKETPLACE_LISTINGS[0]),
     licenseTier: 'per_robot',
-    purchasedAt: '2026-04-02',
+    purchasedAt: '2026-04-02T10:00:00.000Z',
     creditsSpent: 800,
   },
   {
     id: 'mp-002',
     listingId: 'ml-003',
-    listing: MOCK_LISTINGS[2],
+    listing: withoutReviews(DEMO_MARKETPLACE_LISTINGS[2]),
     licenseTier: 'research',
-    purchasedAt: '2026-03-18',
+    purchasedAt: '2026-03-18T10:00:00.000Z',
     creditsSpent: 150,
   },
   {
     id: 'mp-003',
     listingId: 'ml-005',
-    listing: MOCK_LISTINGS[4],
+    listing: withoutReviews(DEMO_MARKETPLACE_LISTINGS[4]),
     licenseTier: 'per_fleet',
-    purchasedAt: '2026-03-25',
+    purchasedAt: '2026-03-25T10:00:00.000Z',
     creditsSpent: 2800,
   },
 ];
 
-export const MOCK_MY_LISTINGS: MyMarketplaceListing[] = [
+export const DEMO_MY_LISTINGS: MyMarketplaceListing[] = [
   {
-    listing: MOCK_LISTINGS[1],
+    listing: withoutReviews(DEMO_MARKETPLACE_LISTINGS[1]),
     totalRevenue: 14400,
     totalDownloads: 567,
     status: 'active',
   },
   {
-    listing: MOCK_LISTINGS[5],
+    listing: withoutReviews(DEMO_MARKETPLACE_LISTINGS[5]),
     totalRevenue: 3750,
     totalDownloads: 445,
     status: 'active',

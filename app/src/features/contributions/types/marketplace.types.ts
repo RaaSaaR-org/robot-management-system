@@ -109,6 +109,110 @@ export interface MarketplaceFilters {
 }
 
 // ============================================================================
+// API REQUEST / RESPONSE TYPES
+// ============================================================================
+
+/** Price tier input when creating a listing */
+export interface CreateListingPriceTierInput {
+  tier: MarketplaceLicenseTier;
+  priceCredits: number;
+  description?: string;
+  features?: string[];
+}
+
+/** Request body for POST /marketplace/listings */
+export interface CreateListingInput {
+  type: MarketplaceItemType;
+  title: string;
+  shortDescription: string;
+  fullDescription: string;
+  robotType: RobotHardwareType;
+  baseModel: BaseModelType;
+  tags?: string[];
+  // Skill-specific
+  taskCategory?: string;
+  successRate?: number;
+  adapterSizeMB?: number;
+  // Dataset-specific
+  episodeCount?: number;
+  frameCount?: number;
+  datasetSizeGB?: number;
+  collectionMethod?: string;
+  priceTiers: CreateListingPriceTierInput[];
+}
+
+/** Request body for POST /marketplace/listings/:id/reviews */
+export interface SubmitReviewInput {
+  rating: number;
+  body: string;
+  robotType?: RobotHardwareType;
+}
+
+/** Download metadata from GET /marketplace/listings/:id/download */
+export interface MarketplaceDownloadInfo {
+  fileName: string;
+  fileSizeBytes: number;
+  checksumSha256: string | null;
+  /** e.g. 'safetensors' | 'lerobot-v3' */
+  format: string;
+  /** e.g. '1.0.0' */
+  version: string;
+  /** Presigned URL when object storage is available, else null (stream endpoint) */
+  url: string | null;
+  expiresInSeconds: number | null;
+}
+
+/** Query params for GET /marketplace/listings */
+export interface ListListingsParams {
+  type?: MarketplaceItemType;
+  robotType?: RobotHardwareType;
+  baseModel?: BaseModelType;
+  search?: string;
+  featured?: boolean;
+  trending?: boolean;
+}
+
+/** Response of GET /marketplace/listings */
+export interface ListListingsResponse {
+  listings: MarketplaceListing[];
+  total: number;
+}
+
+/** Response of GET /marketplace/listings/:id */
+export interface GetListingResponse {
+  listing: MarketplaceListing;
+}
+
+/** Response of POST /marketplace/listings/:id/purchase */
+export interface PurchaseListingResponse {
+  purchase: MarketplacePurchase;
+  /** Buyer's new credit balance */
+  balance: number;
+}
+
+/** Response of POST /marketplace/listings/:id/reviews */
+export interface SubmitReviewResponse {
+  review: MarketplaceReview;
+  rating: number;
+  reviewCount: number;
+}
+
+/** Response of GET /marketplace/my/purchases */
+export interface MyPurchasesResponse {
+  purchases: MarketplacePurchase[];
+}
+
+/** Response of GET /marketplace/my/listings */
+export interface MyListingsResponse {
+  listings: MyMarketplaceListing[];
+}
+
+/** Response of GET /marketplace/credits/balance */
+export interface MarketplaceCreditBalanceResponse {
+  balance: number;
+}
+
+// ============================================================================
 // CONSTANTS
 // ============================================================================
 
