@@ -3,6 +3,18 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.07.04] - 2026-07-04
+
+### Added
+
+- G1 locomotion sim-to-sim gate + Isaac trainer label UX (#178)
+- make the Skill & Data Marketplace real (TASK-156) (#176)
+
+### Fixed
+
+- catch-up migration for db-push-only column/index/FK drift (#174) (#175)
+
+
 ## [v2026.06.30] - 2026-06-30
 
 ### Added
