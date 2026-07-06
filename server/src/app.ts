@@ -50,6 +50,7 @@ import { trainingRoutes } from './routes/training.routes.js';
 import { storageRoutes } from './routes/storage.routes.js';
 import { datasetRoutes } from './routes/datasets.routes.js';
 import { deploymentsRoutes } from './routes/deployments.routes.js';
+import { modelsRoutes } from './routes/models.routes.js';
 import { skillsRoutes } from './routes/skills.routes.js';
 import { embodimentsRoutes } from './routes/embodiments.routes.js';
 import { teleoperationRoutes } from './routes/teleoperation.routes.js';
@@ -254,6 +255,9 @@ export function createApp(): Express {
 
   // Deployment routes (protected) - VLA model fleet deployment
   app.use('/api/deployments', authMiddleware, deploymentsRoutes);
+
+  // Model versions (listing for the deployment UI)
+  app.use('/api/models', authMiddleware, modelsRoutes);
 
   // Skills routes (protected) - VLA skill library management
   app.use('/api/skills', authMiddleware, skillsRoutes);
