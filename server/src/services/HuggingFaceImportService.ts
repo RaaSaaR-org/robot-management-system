@@ -26,6 +26,7 @@ import type {
 // ============================================================================
 
 const HF_BASE_URL = 'https://huggingface.co/datasets';
+const HF_API_BASE_URL = 'https://huggingface.co/api/datasets';
 const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_RETRY_DELAY_MS = 30_000;
@@ -174,8 +175,8 @@ export class HuggingFaceImportService {
     includeVideos: boolean
   ): Promise<void> {
     try {
-      // Phase 2: Build file list
-      const files = this.buildFileList(info, includeVideos);
+      // Phase 2: Build file list (from the authoritative repo tree)
+      const files = await this.resolveFileList(repoId, revision, info, includeVideos);
 
       this.emitProgress(datasetId, {
         datasetId,
@@ -292,6 +293,76 @@ export class HuggingFaceImportService {
   // ============================================================================
   // PHASE 2: BUILD FILE LIST
   // ============================================================================
+
+  /**
+   * Resolve the exact set of files to download.
+   *
+   * Prefers the authoritative HuggingFace repo tree, which handles LeRobot v3.0
+   * datasets that split a single chunk across multiple files (data/videos named
+   * file-000, file-001, …) — a layout the pattern-based {@link buildFileList}
+   * cannot enumerate, so it silently dropped every file past file-000 (leaving
+   * later episodes with no video). Falls back to the pattern-based list only if
+   * the tree API is unavailable.
+   */
+  private async resolveFileList(
+    repoId: string,
+    revision: string,
+    info: LeRobotInfoV3,
+    includeVideos: boolean
+  ): Promise<string[]> {
+    let tree: string[] = [];
+    try {
+      tree = await this.listRepoFiles(repoId, revision);
+    } catch (error) {
+      console.warn(
+        `[HFImport] Repo tree listing failed for ${repoId}; falling back to pattern-based file list:`,
+        error
+      );
+    }
+
+    if (tree.length === 0) {
+      return this.buildFileList(info, includeVideos);
+    }
+
+    // Select from the real tree: all metadata + all data parquets, plus every
+    // video mp4 when requested. Selecting by prefix/extension (rather than by a
+    // presumed file-000 name) is what fixes the multi-file-per-chunk gap.
+    return tree.filter((path) => {
+      if (path.startsWith('meta/')) return true;
+      if (path.startsWith('data/') && path.endsWith('.parquet')) return true;
+      if (path.startsWith('videos/')) return includeVideos && path.endsWith('.mp4');
+      return false;
+    });
+  }
+
+  /**
+   * List every file path in a HuggingFace dataset repo via the tree API,
+   * following pagination (the `Link: …; rel="next"` header) for large trees.
+   */
+  private async listRepoFiles(repoId: string, revision: string): Promise<string[]> {
+    const files: string[] = [];
+    let url: string | undefined = `${HF_API_BASE_URL}/${repoId}/tree/${revision}?recursive=true`;
+
+    // Guard against pathological pagination loops.
+    for (let page = 0; page < 100 && url; page++) {
+      const response = await this.fetchWithRetry(url);
+      if (!response.ok) {
+        throw new Error(`Tree API returned ${response.status} for ${repoId}`);
+      }
+
+      const entries = (await response.json()) as Array<{ type: string; path: string }>;
+      for (const entry of entries) {
+        if (entry.type === 'file') files.push(entry.path);
+      }
+
+      // HuggingFace paginates large trees with a Link header cursor.
+      const link = response.headers.get('link');
+      const next = link ? /<([^>]+)>;\s*rel="next"/.exec(link) : null;
+      url = next ? next[1] : undefined;
+    }
+
+    return files;
+  }
 
   /**
    * Build the list of files to download based on info.json metadata
