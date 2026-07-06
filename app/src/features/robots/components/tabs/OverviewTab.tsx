@@ -11,7 +11,7 @@ import { Suspense, lazy } from 'react';
 import { Card, Button, Badge } from '@/shared/components/ui';
 import { Robot3DViewerFallback } from '../visualization';
 import { VlaControlSection } from '../VlaControlSection';
-import { isRobotAvailable, type RobotType } from '../../types/robots.types';
+import { isRobotAvailable, normalizeRobotType } from '../../types/robots.types';
 import type { OverviewTabProps } from './types';
 
 // Lazy-load the 3D viewer to keep it out of the initial bundle.
@@ -49,10 +49,9 @@ export function OverviewTab({
   onSendToCharge,
   onReturnHome,
 }: OverviewTabProps) {
-  const robotType =
-    (telemetry?.robotType as RobotType) ??
-    (robot.metadata?.robotType as RobotType) ??
-    'generic';
+  const reportedType =
+    telemetry?.robotType ?? (robot.metadata?.robotType as string | undefined) ?? 'generic';
+  const robotType = normalizeRobotType(reportedType);
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
@@ -61,7 +60,7 @@ export function OverviewTab({
         <div className="flex items-center justify-between px-4 py-3 border-b border-theme">
           <h2 className="text-sm font-semibold text-theme-primary">Live Model</h2>
           <div className="flex items-center gap-2">
-            <Badge variant="cobalt" size="sm">{robotType.toUpperCase()}</Badge>
+            <Badge variant="cobalt" size="sm">{reportedType.toUpperCase()}</Badge>
             <span className="flex items-center gap-1.5 text-xs text-theme-tertiary">
               <span
                 className={`w-1.5 h-1.5 rounded-full ${

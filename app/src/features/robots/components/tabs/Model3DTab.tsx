@@ -7,7 +7,7 @@
 import { Suspense, lazy } from 'react';
 import { Card, Badge } from '@/shared/components/ui';
 import { JointStateGrid, Robot3DViewerFallback } from '../visualization';
-import type { RobotType } from '../../types/robots.types';
+import { normalizeRobotType } from '../../types/robots.types';
 import type { Model3DTabProps } from './types';
 
 // Lazy load 3D viewer to reduce initial bundle size
@@ -39,7 +39,7 @@ export function Model3DTab({ robot, telemetry, isTelemetryConnected }: Model3DTa
         <Card.Body className="p-0 h-[350px]">
           <Suspense fallback={<Robot3DViewerFallback />}>
             <Robot3DViewer
-              robotType={(telemetry?.robotType as RobotType) ?? (robot.metadata?.robotType as RobotType) ?? 'generic'}
+              robotType={normalizeRobotType(telemetry?.robotType ?? robot.metadata?.robotType)}
               jointStates={telemetry?.jointStates}
               isAnimating={isTelemetryConnected}
             />

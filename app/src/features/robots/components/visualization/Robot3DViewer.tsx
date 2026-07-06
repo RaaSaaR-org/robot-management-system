@@ -8,7 +8,7 @@ import { Suspense, memo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid, Center } from '@react-three/drei';
 import { RobotModel } from './RobotModel';
-import type { RobotType, JointState } from '../../types/robots.types';
+import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
 import { cn } from '@/shared/utils/cn';
 import { brandColors } from '@/brand';
 
@@ -50,7 +50,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
   isAnimating = true,
   className,
 }: Robot3DViewerProps) {
-  const robotType = rawRobotType.toLowerCase() as RobotType;
+  const robotType = normalizeRobotType(rawRobotType);
   const colors = brandColors();
 
   // Camera position based on robot type

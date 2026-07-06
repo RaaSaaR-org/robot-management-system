@@ -8,7 +8,7 @@ import { useRef, useState, useEffect, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import URDFLoader, { URDFRobot } from 'urdf-loader';
-import type { RobotType, JointState } from '../../types/robots.types';
+import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
 import { brandColors } from '@/brand';
 
 // ============================================================================
@@ -349,7 +349,7 @@ function ProceduralModel({
 // ============================================================================
 
 export function RobotModel(props: RobotModelProps) {
-  const normalizedType = props.robotType.toLowerCase() as RobotType;
+  const normalizedType = normalizeRobotType(props.robotType);
   const normalizedProps = { ...props, robotType: normalizedType };
 
   // Use URDF for supported types, fallback to procedural for others
