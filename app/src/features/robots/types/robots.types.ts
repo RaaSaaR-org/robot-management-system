@@ -36,6 +36,21 @@ export type CommandType =
 /** Robot type for 3D visualization */
 export type RobotType = 'h1' | 'g1' | 'so101' | 'generic';
 
+const ROBOT_TYPES: readonly RobotType[] = ['h1', 'g1', 'so101', 'generic'];
+
+/** Reported types that render with an existing model (g1_edu = G1 body + Dex3 hands; hand joints absent from g1.urdf are ignored by the viewer) */
+const ROBOT_TYPE_ALIASES: Record<string, RobotType> = {
+  g1_edu: 'g1',
+};
+
+/** Normalize a backend-reported robot type (telemetry/metadata) to one the 3D viewer can render */
+export function normalizeRobotType(value: unknown): RobotType {
+  if (typeof value !== 'string') return 'generic';
+  const lower = value.toLowerCase();
+  if ((ROBOT_TYPES as readonly string[]).includes(lower)) return lower as RobotType;
+  return ROBOT_TYPE_ALIASES[lower] ?? 'generic';
+}
+
 // ============================================================================
 // JOINT TYPES (for 3D visualization)
 // ============================================================================

@@ -51,6 +51,19 @@ ROBOT_ID = os.environ.get("G1_ROBOT_ID", "my_g1_edu")
 ROBOT_IP = os.environ.get("G1_ROBOT_IP", "192.168.123.164")
 NET_INTERFACE = os.environ.get("G1_NET_INTERFACE", "eth0")
 
+# ---------------------------------------------------------------------------
+# READ-ONLY MODE (stage 1: telemetry only) — DEFAULT ON
+# ---------------------------------------------------------------------------
+# While G1_READ_ONLY != "0" this process has NO write path to the robot:
+#   • the lerobot UnitreeG1 driver is never loaded (its connect() initializes a
+#     rt/lowcmd DDS publisher — a command path must not even exist);
+#   • POST /action and POST /record/start return 403;
+#   • state comes from a ZMQ SUB to the read-only bridge on the robot's PC2
+#     (g1_state_bridge_readonly.py, port 6001) — subscribe-only by design.
+# Set G1_READ_ONLY=0 explicitly and deliberately to enable the command path.
+READ_ONLY = os.environ.get("G1_READ_ONLY", "1").strip() != "0"
+LOWSTATE_ENDPOINT = os.environ.get("G1_LOWSTATE_ENDPOINT", f"tcp://{ROBOT_IP}:6001")
+
 # Depth / LiDAR sensors on the G1. Names must match
 # robot-agent/src/embodiment/configs/g1*.yaml `depth_sensors`.
 DEPTH_SENSORS = ["mid360_lidar", "d435i_depth"]
@@ -179,6 +192,10 @@ def _connect_unlocked() -> bool:
     (and answer /health) even where the Unitree SDK isn't installed.
     """
     global robot, connected
+    if READ_ONLY:
+        # NEVER load the lerobot driver in read-only mode — UnitreeG1.connect()
+        # initializes a rt/lowcmd DDS publisher, i.e. a command path.
+        return False
     try:
         from lerobot.robots.unitree_g1 import UnitreeG1, UnitreeG1Config  # type: ignore
 
@@ -276,12 +293,107 @@ def _extract_imu(obs):
     return {"rpy": rpy, "gyro": gyro, "accel": accel}
 
 
+# ---------------------------------------------------------------------------
+# Read-only state path (ZMQ SUB → g1_state_bridge_readonly.py on PC2)
+# ---------------------------------------------------------------------------
+
+
+class _LowStateReader:
+    """Subscribe-only LowState client for READ_ONLY mode.
+
+    Holds the newest LowState dict published by the read-only bridge. No
+    command socket exists in this process while READ_ONLY is active — port
+    6000 (lowcmd) is never opened anywhere.
+    """
+
+    def __init__(self, endpoint: str) -> None:
+        self.endpoint = endpoint
+        self._latest: dict | None = None
+        self._latest_ts = 0.0
+        self._lock = threading.Lock()
+        self._started = False
+
+    def start(self) -> bool:
+        if self._started:
+            return True
+        try:
+            import zmq  # lazy — the only dependency of the read-only path
+        except ImportError:
+            print("[G1 Sidecar] pyzmq missing — read-only state unavailable", flush=True)
+            return False
+        ctx = zmq.Context.instance()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt_string(zmq.SUBSCRIBE, "")
+        sock.setsockopt(zmq.CONFLATE, 1)  # keep only the newest sample
+        sock.connect(self.endpoint)
+        self._started = True
+        threading.Thread(target=self._spin, args=(sock,), daemon=True).start()
+        print(f"[G1 Sidecar] read-only LowState subscriber → {self.endpoint}", flush=True)
+        return True
+
+    def _spin(self, sock) -> None:
+        while True:
+            try:
+                payload = sock.recv()
+                msg = json.loads(payload.decode("utf-8"))
+                data = msg.get("data") if isinstance(msg, dict) else None
+                if isinstance(data, dict):
+                    with self._lock:
+                        self._latest = data
+                        self._latest_ts = time.time()
+            except Exception as e:  # noqa: BLE001
+                print(f"[G1 Sidecar] lowstate recv error: {e}", flush=True)
+                time.sleep(1.0)
+
+    def latest(self, max_age_s: float = 2.0) -> dict | None:
+        """Newest LowState dict, or None if nothing fresh arrived."""
+        with self._lock:
+            if self._latest is None or time.time() - self._latest_ts > max_age_s:
+                return None
+            return self._latest
+
+
+_lowstate_reader = _LowStateReader(LOWSTATE_ENDPOINT)
+
+
+def _get_state_readonly() -> dict:
+    """Build the /state response from the read-only bridge feed.
+
+    DDS motor index i ↔ BODY_JOINTS[i] — verified against lerobot's
+    G1_29_JointIndex enum (0-5 left leg, 6-11 right leg, 12-14 waist,
+    15-21 left arm, 22-28 right arm). Dex3-1 hands live on separate DDS
+    topics, not in rt/lowstate, so hand joints are OMITTED here (never
+    fabricated as 0.0).
+    """
+    if not _lowstate_reader.start():
+        return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
+    data = _lowstate_reader.latest()
+    if data is None:
+        return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
+    motors = data.get("motor_state") or []
+    joints = []
+    for i, name in enumerate(BODY_JOINTS):
+        if i < len(motors) and isinstance(motors[i], dict):
+            joints.append({"name": name, "position": float(motors[i].get("q", 0.0))})
+    result = {"joints": joints, "connected": True, "simulated": False, "timestamp": time.time()}
+    imu_state = data.get("imu_state")
+    if isinstance(imu_state, dict):
+        rpy = _coerce3(imu_state.get("rpy"))
+        gyro = _coerce3(imu_state.get("gyroscope"))
+        accel = _coerce3(imu_state.get("accelerometer"))
+        if rpy is not None or gyro is not None or accel is not None:
+            result["imu"] = {"rpy": rpy, "gyro": gyro, "accel": accel}
+    return result
+
+
 def get_state(keep_alive: bool = False) -> dict:
     """Read joint positions. `keep_alive` keeps motors enabled for closed loop.
 
     Adds an `imu` field (radians / rad·s⁻¹ / m·s⁻²) when the driver exposes one;
     omitted otherwise (see _extract_imu — no fabricated values).
     """
+    if READ_ONLY:
+        return _get_state_readonly()
     with robot_lock:
         if not connected and not _connect_unlocked():
             return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
@@ -344,6 +456,8 @@ def send_action(action: dict) -> dict:
     locomotion policy). Stage-4 closed-loop on real hardware still requires a
     balance controller + a safety gantry. See @status hardware-pending.
     """
+    if READ_ONLY:
+        return {"ok": False, "error": "G1_READ_ONLY — command path disabled (stage 1: telemetry only)"}
     with robot_lock:
         if not connected and not _connect_unlocked():
             return {"ok": False, "error": "not connected"}
@@ -776,6 +890,10 @@ class Handler(BaseHTTPRequestHandler):
             # Point-cloud replay mode reports "connected" so the Node hardware
             # seam pulls real recorded clouds without a physical robot attached.
             replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
+            if READ_ONLY:
+                live = _lowstate_reader.start() and _lowstate_reader.latest() is not None
+                self._send(200, {"status": "ok", "connected": live or replay, "read_only": True})
+                return
             self._send(200, {"status": "ok", "connected": connected or replay})
         elif self.path == "/state":
             self._send(200, get_state())
@@ -800,10 +918,17 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}") if length else {}
         if self.path == "/action":
+            if READ_ONLY:
+                self._send(403, {"ok": False, "error": "G1_READ_ONLY — command path disabled (stage 1: telemetry only)"})
+                return
             self._send(200, send_action(body))
         elif self.path == "/estop":
             self._send(200, reset_ramp_state())
         elif self.path == "/record/start":
+            if READ_ONLY:
+                # lerobot-record spawns a G1 teleoperator — that DRIVES the robot.
+                self._send(403, {"ok": False, "error": "G1_READ_ONLY — recording (teleop) disabled (stage 1: telemetry only)"})
+                return
             self._send(200, start_record(body))
         elif self.path == "/record/stop":
             self._send(200, recorder.stop())
@@ -854,11 +979,19 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     print(f"[G1 Sidecar] starting on :{PORT} (robot {ROBOT_ID} @ {ROBOT_IP}/{NET_INTERFACE})", flush=True)
     print(f"[G1 Sidecar] {len(JOINT_NAMES)} joints ({len(BODY_JOINTS)} body + {len(HAND_JOINTS)} Dex3)", flush=True)
-    print(
-        f"[G1 Sidecar] action ramp: max_vel={MAX_JOINT_VEL} rad/s @ {CONTROL_HZ} Hz "
-        f"→ {_MAX_STEP:.4f} rad/tick (NOT balance control)",
-        flush=True,
-    )
+    if READ_ONLY:
+        print(
+            "[G1 Sidecar] READ-ONLY MODE (G1_READ_ONLY) - telemetry only. "
+            f"State source: {LOWSTATE_ENDPOINT}. POST /action and /record/start are BLOCKED; "
+            "the lerobot driver (rt/lowcmd publisher) is never loaded.",
+            flush=True,
+        )
+    else:
+        print(
+            f"[G1 Sidecar] action ramp: max_vel={MAX_JOINT_VEL} rad/s @ {CONTROL_HZ} Hz "
+            f"→ {_MAX_STEP:.4f} rad/tick (NOT balance control)",
+            flush=True,
+        )
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 

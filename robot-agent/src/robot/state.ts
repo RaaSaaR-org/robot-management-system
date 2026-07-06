@@ -56,6 +56,7 @@ import {
   type DepthSensorSpec,
 } from '../embodiment/index.js';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { StatePersistence, type PersistedState } from './StatePersistence.js';
 import { config as appConfig } from '../config/config.js';
 
@@ -239,7 +240,7 @@ export class RobotStateManager {
 
     // Initialize state persistence — per-robot file to support multi-instance
     this.persistence = new StatePersistence(
-      path.resolve(path.dirname(new URL(import.meta.url).pathname), `../../data/state-${appConfig.robotId}.json`)
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), `../../data/state-${appConfig.robotId}.json`)
     );
     this.restorePersistedState();
   }

@@ -8,6 +8,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
+import { fileURLToPath } from 'url';
 import type { TaskStore } from '@a2a-js/sdk/server';
 import { InMemoryTaskStore, DefaultRequestHandler } from '@a2a-js/sdk/server';
 import { A2AExpressApp } from '@a2a-js/sdk/server/express';
@@ -50,7 +51,7 @@ async function main() {
   console.log(`[DeviceIdentity] Device fingerprint: ${deviceIdentity.getDeviceFingerprint().slice(0, 20)}...`);
 
   // Secure boot verification (CRA Annex I — software integrity)
-  const packageDir = new URL('..', import.meta.url).pathname;
+  const packageDir = fileURLToPath(new URL('..', import.meta.url));
   const secureBoot = new SecureBootVerifier(packageDir);
   const attestation = secureBoot.verify(ROBOT_ID, deviceIdentity.getDeviceFingerprint());
   if (!attestation.versionCompliant) {
