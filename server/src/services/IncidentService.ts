@@ -10,10 +10,12 @@
  * - CRA Article 14 (Vulnerability handling)
  */
 
+import type { Readable } from 'stream';
 import {
   incidentRepository,
   incidentNotificationRepository,
 } from '../repositories/IncidentRepository.js';
+import { modelStorage } from '../storage/model-storage.js';
 import { safetyService, type EStopEvent } from './SafetyService.js';
 import { robotManager } from './RobotManager.js';
 import { alertService } from './AlertService.js';
@@ -347,6 +349,49 @@ export class IncidentService {
     }
 
     return incident;
+  }
+
+  // ============================================================================
+  // HIGHLIGHT CLIPS (TASK-179 §6)
+  // ============================================================================
+
+  /**
+   * Store an uploaded highlight clip (raw jpeg-frames JSON bytes) for an
+   * incident and persist the storage key on `Incident.clipKey`.
+   * Returns null when the incident does not exist.
+   */
+  async storeClip(incidentId: string, data: Buffer): Promise<{ clipKey: string } | null> {
+    const incident = await incidentRepository.findById(incidentId);
+    if (!incident) {
+      return null;
+    }
+
+    const clipKey = await modelStorage.uploadIncidentClip(incidentId, data);
+    const updated = await incidentRepository.updateClipKey(incidentId, clipKey);
+    if (!updated) {
+      return null;
+    }
+
+    this.emitEvent({
+      type: 'incident_updated',
+      incident: updated,
+      timestamp: new Date(),
+    });
+
+    console.log(`[IncidentService] Stored clip for incident ${incident.incidentNumber}: ${clipKey}`);
+    return { clipKey };
+  }
+
+  /**
+   * Open the stored highlight clip of an incident for streaming.
+   * Returns null when the incident does not exist or has no clip.
+   */
+  async getClipStream(incidentId: string): Promise<Readable | null> {
+    const incident = await incidentRepository.findById(incidentId);
+    if (!incident || !incident.clipKey) {
+      return null;
+    }
+    return modelStorage.getIncidentClipStream(incident.clipKey);
   }
 
   // ============================================================================

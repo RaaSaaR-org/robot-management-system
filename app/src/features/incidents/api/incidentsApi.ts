@@ -18,6 +18,7 @@ import type {
   DashboardStats,
   NotificationTemplate,
   IncidentNotification,
+  IncidentClip,
 } from '../types/incidents.types';
 
 // ============================================================================
@@ -61,6 +62,7 @@ const ENDPOINTS = {
   assess: (id: string) => `/incidents/${id}/assess`,
   evidence: (id: string) => `/incidents/${id}/evidence`,
   snapshot: (id: string) => `/incidents/${id}/snapshot`,
+  clip: (id: string) => `/incidents/${id}/clip`,
   templates: '/notification-templates',
   templateById: (id: string) => `/notification-templates/${id}`,
 } as const;
@@ -269,6 +271,16 @@ export const incidentsApi = {
 
   async captureSnapshot(incidentId: string): Promise<Incident> {
     const response = await apiClient.post<Incident>(ENDPOINTS.snapshot(incidentId));
+    return response.data;
+  },
+
+  /**
+   * Fetch the rollout clip captured by the `highlight` strategy
+   * (base64 JPEG frames + fps). Only exists when `Incident.clipKey` is set.
+   * (TASK-179)
+   */
+  async getIncidentClip(incidentId: string): Promise<IncidentClip> {
+    const response = await apiClient.get<IncidentClip>(ENDPOINTS.clip(incidentId));
     return response.data;
   },
 

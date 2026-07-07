@@ -9,6 +9,22 @@
  */
 
 /**
+ * Rollout strategy for a closed-loop skill execution (TASK-179, LeRobot 0.6.0
+ * adoption). Identical string values are used by app, server, and robot-agent:
+ *
+ * - `default`   — plain rollout, no side effects (pre-TASK-179 behavior)
+ * - `sentry`    — record the rollout as a LeRobot dataset via the hardware
+ *                 sidecar (`POST /record/start|stop`); sim mode is a no-op
+ * - `highlight` — keep a ring buffer of recent camera frames; on failure or
+ *                 abort, create an incident on the server and upload the clip
+ * - `dagger`    — sim teleop overrides pre-empt the policy per step; the mixed
+ *                 human/policy step trace is posted as an InterventionEpisode
+ */
+export const RolloutStrategies = ['default', 'sentry', 'highlight', 'dagger'] as const;
+
+export type RolloutStrategy = (typeof RolloutStrategies)[number];
+
+/**
  * Action represents a single timestep control command.
  */
 export interface Action {

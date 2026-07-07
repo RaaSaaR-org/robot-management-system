@@ -208,6 +208,10 @@ export interface Incident {
   robotId: string | null;
   complianceLogIds: string[];
   alertIds: string[];
+  // Storage key of the uploaded highlight clip (jpeg-frames JSON, TASK-179).
+  // Optional so pre-existing fixtures/partials stay valid; the repository
+  // mapper always sets it (null when no clip was uploaded).
+  clipKey?: string | null;
 
   // System State Snapshot
   systemSnapshot: SystemSnapshot | null;
@@ -303,6 +307,17 @@ export interface UpdateIncidentInput {
   containedAt?: Date;
   resolvedAt?: Date;
   closedAt?: Date;
+}
+
+/**
+ * Highlight-clip payload uploaded by the robot agent as raw UTF-8 JSON bytes
+ * via PUT /api/incidents/:id/clip (lerobot-rollout 'highlight', TASK-179 §6).
+ */
+export interface IncidentClipPayload {
+  format: 'jpeg-frames';
+  fps: number;
+  capturedAt: string;
+  frames: string[]; // base64-encoded JPEGs
 }
 
 /**

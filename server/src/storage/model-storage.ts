@@ -20,6 +20,7 @@ export const BUCKETS = {
   ROBOT_LOGS: 'robot-logs',
   SENSOR_SCANS: 'sensor-scans',
   DIGITAL_TWINS: 'digital-twins',
+  INCIDENT_CLIPS: 'incident-clips',
 } as const;
 
 export type BucketName = typeof BUCKETS[keyof typeof BUCKETS];
@@ -31,11 +32,16 @@ export const SIZE_LIMITS = {
   LOG: 1 * 1024 * 1024 * 1024,          // 1GB
   SCAN: 2 * 1024 * 1024 * 1024,         // 2GB
   TWIN: 2 * 1024 * 1024 * 1024,         // 2GB (merged cloud + mesh + grids)
+  INCIDENT_CLIP: 32 * 1024 * 1024,      // 32MB (jpeg-frames JSON, TASK-179)
 } as const;
 
 // Local fallback root for digital-twin artifacts (used when RustFS is down).
 // Layout: <root>/<twinId>/<name>; the stored "key" is the absolute file path.
 const LOCAL_TWINS_DIR = path.resolve(process.cwd(), 'data', 'twins');
+
+// Local fallback root for incident highlight clips (mirrors the twin split).
+// Layout: <root>/<incidentId>/clip.json; local "key" is the absolute path.
+const LOCAL_INCIDENT_CLIPS_DIR = path.resolve(process.cwd(), 'data', 'incident-clips');
 
 // Default presigned URL expiration times (in seconds)
 export const URL_EXPIRY = {
@@ -598,6 +604,64 @@ export class ModelStorageClient {
   /** A stored key is "local" when it is an absolute filesystem path. */
   private isLocalKey(key: string): boolean {
     return path.isAbsolute(key);
+  }
+
+  // ==========================================================================
+  // INCIDENT CLIP OPERATIONS (TASK-179 §6)
+  // ==========================================================================
+  //
+  // Highlight clips are small JSON documents ({ format: 'jpeg-frames', ... })
+  // uploaded by the robot agent when a rollout fails. Mirrors the digital-twin
+  // artifact split: RustFS bucket when available, local filesystem fallback
+  // otherwise (the returned "key" is then the absolute file path).
+
+  /**
+   * Store an incident highlight clip (raw JSON bytes). Returns the storage
+   * key persisted on `Incident.clipKey`.
+   */
+  async uploadIncidentClip(incidentId: string, data: Buffer): Promise<string> {
+    if (this.isAvailable()) {
+      const client = getRustFSClient();
+      const key = this.getIncidentClipKey(incidentId);
+      await client.upload(BUCKETS.INCIDENT_CLIPS, key, data, {
+        contentType: 'application/json',
+        metadata: { incidentId },
+      });
+      return key;
+    }
+    const dir = path.join(LOCAL_INCIDENT_CLIPS_DIR, incidentId);
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, 'clip.json');
+    await fs.writeFile(filePath, data);
+    return filePath;
+  }
+
+  /**
+   * Open an incident clip for streaming. Absolute-path keys are read from
+   * the local filesystem; other keys from the INCIDENT_CLIPS bucket.
+   */
+  async getIncidentClipStream(key: string): Promise<Readable> {
+    if (this.isLocalKey(key)) {
+      return createReadStream(key);
+    }
+    const client = getRustFSClient();
+    return client.getStream(BUCKETS.INCIDENT_CLIPS, key);
+  }
+
+  /**
+   * Delete an incident clip (local file or rustfs object).
+   */
+  async deleteIncidentClip(key: string): Promise<void> {
+    if (this.isLocalKey(key)) {
+      await fs.unlink(key).catch(() => {});
+      return;
+    }
+    const client = getRustFSClient();
+    await client.delete(BUCKETS.INCIDENT_CLIPS, key);
+  }
+
+  private getIncidentClipKey(incidentId: string): string {
+    return `incidents/${incidentId}/clip.json`;
   }
 
   // ==========================================================================

@@ -85,6 +85,7 @@ describe('constants', () => {
       ROBOT_LOGS: 'robot-logs',
       SENSOR_SCANS: 'sensor-scans',
       DIGITAL_TWINS: 'digital-twins',
+      INCIDENT_CLIPS: 'incident-clips',
     });
   });
 
@@ -94,6 +95,7 @@ describe('constants', () => {
     expect(SIZE_LIMITS.CHECKPOINT).toBe(5 * 1024 * 1024 * 1024);
     expect(SIZE_LIMITS.LOG).toBe(1 * 1024 * 1024 * 1024);
     expect(SIZE_LIMITS.SCAN).toBe(2 * 1024 * 1024 * 1024);
+    expect(SIZE_LIMITS.INCIDENT_CLIP).toBe(32 * 1024 * 1024);
   });
 
   it('exposes URL expiry defaults', () => {
@@ -699,5 +701,43 @@ describe('digital-twin artifacts (TASK-170)', () => {
     client.delete.mockResolvedValue(undefined);
     await svc.deleteTwinArtifact('twin-1/roadmap.json');
     expect(client.delete).toHaveBeenCalledWith(BUCKETS.DIGITAL_TWINS, 'twin-1/roadmap.json');
+  });
+});
+
+describe('incident clips (TASK-179)', () => {
+  const svc = new ModelStorageClient();
+
+  it('uploads to the INCIDENT_CLIPS bucket under incidents/<id>/clip.json when rustfs is up', async () => {
+    mocks.isRustFSInitialized.mockReturnValue(true);
+    client.upload.mockResolvedValue(undefined);
+    const key = await svc.uploadIncidentClip('inc-1', Buffer.from('{"format":"jpeg-frames"}'));
+    expect(key).toBe('incidents/inc-1/clip.json');
+    expect(client.upload).toHaveBeenCalledWith(
+      BUCKETS.INCIDENT_CLIPS,
+      'incidents/inc-1/clip.json',
+      expect.any(Buffer),
+      expect.objectContaining({
+        contentType: 'application/json',
+        metadata: { incidentId: 'inc-1' },
+      })
+    );
+  });
+
+  it('streams a rustfs key from the INCIDENT_CLIPS bucket', async () => {
+    client.getStream.mockResolvedValue('stream' as never);
+    await svc.getIncidentClipStream('incidents/inc-1/clip.json');
+    expect(client.getStream).toHaveBeenCalledWith(
+      BUCKETS.INCIDENT_CLIPS,
+      'incidents/inc-1/clip.json'
+    );
+  });
+
+  it('deletes a rustfs key from the INCIDENT_CLIPS bucket', async () => {
+    client.delete.mockResolvedValue(undefined);
+    await svc.deleteIncidentClip('incidents/inc-1/clip.json');
+    expect(client.delete).toHaveBeenCalledWith(
+      BUCKETS.INCIDENT_CLIPS,
+      'incidents/inc-1/clip.json'
+    );
   });
 });

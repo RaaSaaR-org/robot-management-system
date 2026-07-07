@@ -11,6 +11,7 @@ import { Spinner } from '@/shared/components/ui/Spinner';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { StatusBadge } from '../components/StatusBadge';
 import { NotificationTimeline } from '../components/NotificationTimeline';
+import { IncidentClipPlayer } from '../components/IncidentClipPlayer';
 import { useIncident } from '../hooks/useIncidents';
 import {
   INCIDENT_TYPE_LABELS,
@@ -185,6 +186,17 @@ export function IncidentDetailPage() {
                 {incident.description}
               </p>
             </div>
+
+            {/* Rollout clip (highlight strategy, TASK-179) */}
+            {incident.clipKey && (
+              <div className="bg-theme-elevated rounded-lg p-4 border border-theme-base">
+                <h3 className="font-medium text-theme-primary mb-2">Rollout clip</h3>
+                <p className="text-xs text-theme-tertiary mb-3">
+                  Frames captured by the robot around the failure (highlight strategy).
+                </p>
+                <IncidentClipPlayer incidentId={incident.id} />
+              </div>
+            )}
 
             {/* Root Cause & Resolution */}
             {(incident.rootCause || incident.resolution) && (

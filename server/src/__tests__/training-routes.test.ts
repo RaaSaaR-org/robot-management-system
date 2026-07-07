@@ -550,6 +550,38 @@ describe('Training Routes', () => {
       expect(mockDatasetRepository.findById).not.toHaveBeenCalled();
     });
 
+    it('claims a reward_model job via the kinds filter and returns job (incl. kind) + dataset (TASK-179)', async () => {
+      const REWARD_JOB = {
+        id: 'job-rm-1',
+        kind: 'reward_model',
+        datasetId: 'dataset-001',
+        baseModel: 'robometer',
+        hyperparameters: { rewardType: 'robometer', episodes: [0, 1] },
+        status: 'running',
+      };
+      mockTrainingOrchestrator.claimNextPendingJob.mockResolvedValue(REWARD_JOB);
+      mockDatasetRepository.findById.mockResolvedValue({
+        id: 'dataset-001',
+        storagePath: 'datasets/abc',
+        lerobotVersion: 'v3.0',
+      });
+
+      const response = await request(app)
+        .post('/api/training/workers/claim')
+        .send({ workerId: 'worker-1', device: 'cuda', kinds: ['supervised', 'reward_model', 'annotate'] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.job.id).toBe('job-rm-1');
+      expect(response.body.job.kind).toBe('reward_model');
+      expect(response.body.job.baseModel).toBe('robometer');
+      expect(response.body.dataset.storagePath).toBe('datasets/abc');
+      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith(
+        'worker-1',
+        'cuda',
+        ['supervised', 'reward_model', 'annotate']
+      );
+    });
+
     it('returns 204 when no jobs waiting', async () => {
       mockTrainingOrchestrator.claimNextPendingJob.mockResolvedValue(null);
 

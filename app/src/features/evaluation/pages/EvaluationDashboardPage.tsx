@@ -16,6 +16,7 @@ import { ErrorAnalysisPanel } from '../components/ErrorAnalysisPanel';
 import { ModelComparisonTable } from '../components/ModelComparisonTable';
 import { RolloutTimeline } from '../components/RolloutTimeline';
 import { HardwareTestPanel } from '../components/HardwareTestPanel';
+import { RewardModelPanel } from '../components/RewardModelPanel';
 
 // ============================================================================
 // STAT CARD
@@ -234,6 +235,10 @@ export function EvaluationDashboardPage() {
           <div ref={hardwareTestRef}>
             <HardwareTestPanel onComplete={() => fetchData(period, true)} />
           </div>
+
+          {/* Reward-model evaluation (LeRobot 0.6.0, TASK-179) — offline episode
+              scoring via Robometer/TOPReward, independent of rollout episodes */}
+          <RewardModelPanel />
         </>
       )}
     </div>

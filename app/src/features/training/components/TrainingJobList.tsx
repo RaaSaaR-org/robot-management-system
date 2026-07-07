@@ -82,7 +82,7 @@ export function TrainingJobList({
           </div>
 
           <div className="flex flex-wrap gap-1">
-            {(['all', 'smolvla', 'pi0', 'pi0_6', 'openvla', 'groot'] as const).map((model) => (
+            {(['all', 'smolvla', 'pi0', 'pi0_6', 'openvla', 'groot', 'groot_n1_7'] as const).map((model) => (
               <button
                 key={model}
                 onClick={() => setModelFilter(model)}
@@ -92,7 +92,7 @@ export function TrainingJobList({
                     : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
                 }`}
               >
-                {model === 'all' ? 'All Models' : model.toUpperCase()}
+                {model === 'all' ? 'All Models' : model === 'groot_n1_7' ? 'GR00T N1.7' : model.toUpperCase()}
               </button>
             ))}
           </div>

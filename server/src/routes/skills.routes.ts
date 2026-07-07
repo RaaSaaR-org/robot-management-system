@@ -599,6 +599,9 @@ skillsRoutes.post('/:id/execute', async (req: Request, res: Response) => {
       parameters: body.parameters,
       skipPreconditions: body.skipPreconditions,
       skipPostconditions: body.skipPostconditions,
+      // lerobot-rollout strategy (TASK-179 §5) — forwarded unchanged to the
+      // robot agent by SkillExecutionService.
+      rolloutStrategy: body.rolloutStrategy,
     };
 
     const result = await skillExecutionService.executeSkill(request);

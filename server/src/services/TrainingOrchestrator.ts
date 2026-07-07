@@ -17,6 +17,7 @@ import {
   trainingJobRepository,
   modelVersionRepository,
   datasetRepository,
+  episodeRewardRepository,
 } from '../repositories/index.js';
 import { getJobQueue, natsClient } from '../messaging/index.js';
 import { trainingJobService } from './TrainingJobService.js';
@@ -103,6 +104,14 @@ export const hyperparametersSchema = z.object({
     .optional(),
   lora_alpha: z.number().int().positive().optional(),
   lora_dropout: z.number().min(0).max(1).optional(),
+  // DataLoader worker count honored by the training-worker on CUDA
+  // (TASK-179 contract §9). Must be listed here — z.object() strips
+  // unknown keys, which would silently drop it before the worker sees it.
+  dataloader_num_workers: z
+    .number()
+    .int('dataloader_num_workers must be an integer')
+    .min(0, 'dataloader_num_workers must be at least 0')
+    .optional(),
 });
 
 // ============================================================================
@@ -561,6 +570,12 @@ export class TrainingOrchestrator extends EventEmitter {
       return { job: null, modelVersionId: null };
     }
 
+    // reward_model / annotate jobs (TASK-179) persist their result payloads
+    // and complete WITHOUT creating a ModelVersion.
+    if (job.kind === 'reward_model' || job.kind === 'annotate') {
+      return this.completeAuxiliaryJob(job, finalMetrics);
+    }
+
     // Update job metrics
     const updatedMetrics: TrainingMetrics = {
       ...job.metrics,
@@ -633,6 +648,63 @@ export class TrainingOrchestrator extends EventEmitter {
 
     console.log(`[TrainingOrchestrator] Job completed: ${jobId}`);
     return { job: updatedJob, modelVersionId };
+  }
+
+  /**
+   * Complete a reward_model or annotate job (TASK-179 contract §1):
+   * - reward_model → upsert EpisodeReward rows from finalMetrics.rewards
+   *   (unique on datasetId+episodeIndex+rewardType)
+   * - annotate → store finalMetrics.annotations on Dataset.annotationsJson
+   * Neither creates a ModelVersion.
+   */
+  private async completeAuxiliaryJob(
+    job: TrainingJob,
+    finalMetrics: WorkerCompleteRequest['finalMetrics']
+  ): Promise<{ job: TrainingJob | null; modelVersionId: string | null }> {
+    const jobId = job.id;
+
+    if (!job.datasetId) {
+      console.error(`[TrainingOrchestrator] ${job.kind} job ${jobId} has no datasetId`);
+    } else if (job.kind === 'reward_model') {
+      const rewards = Array.isArray(finalMetrics.rewards) ? finalMetrics.rewards : [];
+      // rewardType mirrors the job's baseModel; the explicit field wins.
+      const rewardType =
+        finalMetrics.rewardType ??
+        (job.baseModel === 'topreward' ? 'topreward' : 'robometer');
+      await episodeRewardRepository.upsertMany(
+        rewards.map((r) => ({
+          datasetId: job.datasetId as string,
+          episodeIndex: r.episodeIndex,
+          rewardType,
+          score: r.score,
+          success: r.success ?? null,
+          curve: Array.isArray(r.curve) ? r.curve : [],
+          fps: r.fps ?? null,
+          jobId,
+        }))
+      );
+      console.log(
+        `[TrainingOrchestrator] Stored ${rewards.length} episode rewards (job=${jobId}, rewardType=${rewardType})`
+      );
+    } else {
+      const annotations = Array.isArray(finalMetrics.annotations)
+        ? finalMetrics.annotations
+        : [];
+      await datasetRepository.update(job.datasetId, { annotations });
+      console.log(
+        `[TrainingOrchestrator] Stored ${annotations.length} episode annotations (job=${jobId}, dataset=${job.datasetId})`
+      );
+    }
+
+    const updatedJob = await trainingJobService.updateJobStatus(jobId, 'completed', {
+      progress: 100,
+      completedAt: new Date(),
+    });
+
+    this.etaStates.delete(jobId);
+
+    console.log(`[TrainingOrchestrator] Job completed: ${jobId} (kind=${job.kind}, no ModelVersion)`);
+    return { job: updatedJob, modelVersionId: null };
   }
 
   // ============================================================================

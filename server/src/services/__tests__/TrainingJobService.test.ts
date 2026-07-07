@@ -316,6 +316,89 @@ describe('submitSimRlJob', () => {
 });
 
 // ===========================================================================
+// submitRewardModelJob / submitAnnotateJob (TASK-179)
+// ===========================================================================
+
+describe('submitRewardModelJob', () => {
+  it('throws when the dataset does not exist or is not ready', async () => {
+    datasetRepository.findById.mockResolvedValue(null);
+    await expect(
+      trainingJobService.submitRewardModelJob({ datasetId: 'missing', rewardType: 'robometer' })
+    ).rejects.toThrow('Dataset not found: missing');
+
+    datasetRepository.findById.mockResolvedValue(makeDataset({ status: 'validating' }));
+    await expect(
+      trainingJobService.submitRewardModelJob({ datasetId: 'ds1', rewardType: 'robometer' })
+    ).rejects.toThrow('Dataset not ready');
+    expect(trainingJobRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a reward_model job (baseModel mirrors rewardType) and never enqueues NATS', async () => {
+    const queue = makeJobQueue();
+    setJobQueue(queue);
+    datasetRepository.findById.mockResolvedValue(makeDataset());
+    const job = makeJob({ id: 'rm-created', kind: 'reward_model', baseModel: 'topreward' });
+    trainingJobRepository.create.mockResolvedValue(job);
+
+    const result = await trainingJobService.submitRewardModelJob({
+      datasetId: 'ds1',
+      rewardType: 'topreward',
+      episodes: [0, 1],
+      task: 'stack the blocks',
+      imageKey: 'observation.images.top',
+      maxFrames: 200,
+    });
+
+    expect(result).toBe(job);
+    expect(trainingJobRepository.create).toHaveBeenCalledWith({
+      kind: 'reward_model',
+      datasetId: 'ds1',
+      baseModel: 'topreward',
+      hyperparameters: {
+        rewardType: 'topreward',
+        episodes: [0, 1],
+        task: 'stack the blocks',
+        imageKey: 'observation.images.top',
+        maxFrames: 200,
+      },
+    });
+    // reward_model is claimed over HTTP — it must NOT be enqueued in NATS.
+    expect(queue.addJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('submitAnnotateJob', () => {
+  it('creates an annotate job with baseModel lerobot-annotate and never enqueues NATS', async () => {
+    const queue = makeJobQueue();
+    setJobQueue(queue);
+    datasetRepository.findById.mockResolvedValue(makeDataset());
+    const job = makeJob({ id: 'an-created', kind: 'annotate', baseModel: 'lerobot-annotate' });
+    trainingJobRepository.create.mockResolvedValue(job);
+
+    const result = await trainingJobService.submitAnnotateJob({
+      datasetId: 'ds1',
+      episodes: [3],
+    });
+
+    expect(result).toBe(job);
+    expect(trainingJobRepository.create).toHaveBeenCalledWith({
+      kind: 'annotate',
+      datasetId: 'ds1',
+      baseModel: 'lerobot-annotate',
+      hyperparameters: { episodes: [3] },
+    });
+    expect(queue.addJob).not.toHaveBeenCalled();
+  });
+
+  it('throws when the dataset does not exist', async () => {
+    datasetRepository.findById.mockResolvedValue(null);
+    await expect(
+      trainingJobService.submitAnnotateJob({ datasetId: 'missing' })
+    ).rejects.toThrow('Dataset not found: missing');
+  });
+});
+
+// ===========================================================================
 // getJob / getJobWithProgress
 // ===========================================================================
 

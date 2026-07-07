@@ -24,6 +24,7 @@ import type {
   EpisodeMeta,
   FrameData,
   CurationResult,
+  EpisodeAnnotation,
 } from '../types';
 
 const ENDPOINTS = {
@@ -53,6 +54,10 @@ const ENDPOINTS = {
   // Curation (interactive episode trim / delete)
   curationEpisodesDelete: (id: string) => `/curation/${id}/episodes/delete`,
   curationEpisodeTrim: (id: string, index: number) => `/curation/${id}/episodes/${index}/trim`,
+
+  // Annotations (lerobot-annotate, TASK-179)
+  datasetAnnotations: (id: string) => `/datasets/${id}/annotations`,
+  datasetAnnotate: (id: string) => `/datasets/${id}/annotate`,
 
   // HuggingFace Import & Push
   huggingFaceImport: '/datasets/import/huggingface',
@@ -209,6 +214,32 @@ export const trainingApi = {
     const response = await apiClient.post<CurationResult>(
       ENDPOINTS.curationEpisodeTrim(datasetId, episodeIndex),
       { start, end }
+    );
+    return response.data;
+  },
+
+  // ============================================================================
+  // ANNOTATIONS (lerobot-annotate, LeRobot 0.6.0 — TASK-179)
+  // ============================================================================
+
+  /**
+   * Get VLM-generated annotations (subtasks + VQA pairs) for a dataset.
+   */
+  async getAnnotations(datasetId: string): Promise<EpisodeAnnotation[]> {
+    const response = await apiClient.get<{ annotations: EpisodeAnnotation[] }>(
+      ENDPOINTS.datasetAnnotations(datasetId)
+    );
+    return response.data.annotations;
+  },
+
+  /**
+   * Queue a lerobot-annotate job (TrainingJob kind `annotate`) that auto-fills
+   * timestamped subtasks and VQA pairs for every episode of the dataset.
+   */
+  async startAnnotation(datasetId: string, episodes?: number[]): Promise<{ jobId: string }> {
+    const response = await apiClient.post<{ jobId: string }>(
+      ENDPOINTS.datasetAnnotate(datasetId),
+      episodes && episodes.length > 0 ? { episodes } : {}
     );
     return response.data;
   },

@@ -25,6 +25,7 @@ import type {
   PaginatedResult,
   LeRobotInfo,
   LeRobotStats,
+  EpisodeAnnotation,
 } from '../types/vla.types.js';
 import type {
   CreateDatasetDto,
@@ -188,6 +189,18 @@ export class DatasetService extends EventEmitter {
       return null;
     }
     return this.toResponse(dataset);
+  }
+
+  /**
+   * Get the VLM annotations of a dataset (lerobot-annotate, TASK-179 §4).
+   * Returns null when the dataset does not exist.
+   */
+  async getAnnotations(id: string): Promise<EpisodeAnnotation[] | null> {
+    const dataset = await datasetRepository.findById(id);
+    if (!dataset) {
+      return null;
+    }
+    return dataset.annotations ?? [];
   }
 
   /**

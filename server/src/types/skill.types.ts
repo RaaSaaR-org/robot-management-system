@@ -119,6 +119,16 @@ export const SkillExecutionStatuses = [
 export type SkillExecutionStatus = (typeof SkillExecutionStatuses)[number];
 
 /**
+ * Rollout strategy for a skill execution (lerobot-rollout, TASK-179 §5).
+ * Forwarded unchanged to the robot agent:
+ * - 'sentry': continuous sidecar recording for the rollout (hardware mode)
+ * - 'highlight': ring buffer of recent frames → incident clip on failure
+ * - 'dagger': tag human teleop overrides → InterventionEpisode on completion
+ */
+export const RolloutStrategies = ['default', 'sentry', 'highlight', 'dagger'] as const;
+export type RolloutStrategy = (typeof RolloutStrategies)[number];
+
+/**
  * Request to execute a single skill
  */
 export interface ExecuteSkillRequest {
@@ -127,6 +137,7 @@ export interface ExecuteSkillRequest {
   parameters?: Record<string, unknown>;
   skipPreconditions?: boolean;
   skipPostconditions?: boolean;
+  rolloutStrategy?: RolloutStrategy;
 }
 
 /**

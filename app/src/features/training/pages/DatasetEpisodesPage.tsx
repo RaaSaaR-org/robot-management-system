@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers, Gauge, MessageSquareText } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -18,8 +18,10 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { Spinner } from '@/shared/components/ui';
+import { evaluationApi } from '@/features/evaluation/api/evaluationApi';
+import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
 import { trainingApi } from '../api/trainingApi';
-import type { Dataset, EpisodeMeta, FrameData } from '../types';
+import type { Dataset, EpisodeMeta, FrameData, EpisodeAnnotation } from '../types';
 
 const JOINT_COLORS: Record<string, string> = {
   shoulder_pan: '#3b82f6',
@@ -31,6 +33,13 @@ const JOINT_COLORS: Record<string, string> = {
 };
 
 const SPEED_OPTIONS = [0.5, 1, 2] as const;
+
+/** Chip styling for a reward-model episode score (green > 0.7, orange > 0.4, red below). */
+function scoreChipCls(score: number): string {
+  if (score > 0.7) return 'text-green-400 bg-green-500/10';
+  if (score > 0.4) return 'text-orange-400 bg-orange-500/10';
+  return 'text-red-400 bg-red-500/10';
+}
 
 export function DatasetEpisodesPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
@@ -51,6 +60,11 @@ export function DatasetEpisodesPage() {
   const [trimEnd, setTrimEnd] = useState<number | ''>('');
   const [curating, setCurating] = useState(false);
   const [curationMsg, setCurationMsg] = useState<string | null>(null);
+  // Reward-model scores + VLM annotations (LeRobot 0.6.0, TASK-179)
+  const [rewardsByEpisode, setRewardsByEpisode] = useState<Record<number, EpisodeReward>>({});
+  const [annotations, setAnnotations] = useState<EpisodeAnnotation[]>([]);
+  const [annotating, setAnnotating] = useState(false);
+  const [annotationMsg, setAnnotationMsg] = useState<string | null>(null);
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
@@ -104,6 +118,35 @@ export function DatasetEpisodesPage() {
       })
       .catch(() => setEpisodes([]))
       .finally(() => setEpisodesLoading(false));
+  }, [datasetId]);
+
+  // Load reward-model episode scores once per dataset (absence is fine —
+  // chips/panels simply don't render). (TASK-179)
+  useEffect(() => {
+    if (!datasetId) return;
+    setRewardsByEpisode({});
+    evaluationApi.listRewards(datasetId)
+      .then((rewards) => {
+        const byEpisode: Record<number, EpisodeReward> = {};
+        for (const r of rewards) {
+          const existing = byEpisode[r.episodeIndex];
+          if (!existing || new Date(r.createdAt) > new Date(existing.createdAt)) {
+            byEpisode[r.episodeIndex] = r;
+          }
+        }
+        setRewardsByEpisode(byEpisode);
+      })
+      .catch(() => setRewardsByEpisode({}));
+  }, [datasetId]);
+
+  // Load VLM annotations once per dataset (TASK-179)
+  useEffect(() => {
+    if (!datasetId) return;
+    setAnnotations([]);
+    setAnnotationMsg(null);
+    trainingApi.getAnnotations(datasetId)
+      .then(setAnnotations)
+      .catch(() => setAnnotations([]));
   }, [datasetId]);
 
   // Load frames when episode selected
@@ -207,6 +250,37 @@ export function DatasetEpisodesPage() {
     }
   }, [datasetId, selectedEpisode, trimStart, trimEnd]);
 
+  const handleStartAnnotation = useCallback(async () => {
+    if (!datasetId) return;
+    setAnnotating(true);
+    setAnnotationMsg(null);
+    try {
+      const { jobId } = await trainingApi.startAnnotation(datasetId);
+      setAnnotationMsg(`Annotation job queued (${jobId}). Subtasks + VQA pairs appear here once the worker completes.`);
+    } catch (err) {
+      setAnnotationMsg(`Annotation failed to start: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setAnnotating(false);
+    }
+  }, [datasetId]);
+
+  // Reward curve + annotation for the selected episode (TASK-179)
+  const selectedReward = selectedEpisode !== null ? rewardsByEpisode[selectedEpisode] : undefined;
+  const rewardCurveData = useMemo(() => {
+    if (!selectedReward || selectedReward.curve.length < 2) return [];
+    // `fps` is the CURVE's sampling rate (curve points per second of episode
+    // time), not the video fps: the worker defines t(curve[j]) ≈ (j + 1) / fps.
+    const fps = selectedReward.fps ?? dataset?.fps ?? 30;
+    return selectedReward.curve.map((value, i) => ({
+      timestamp: +((i + 1) / fps).toFixed(3),
+      progress: value,
+    }));
+  }, [selectedReward, dataset]);
+  const selectedAnnotation = useMemo(
+    () => (selectedEpisode !== null ? annotations.find((a) => a.episodeIndex === selectedEpisode) : undefined),
+    [annotations, selectedEpisode]
+  );
+
   // Chart data
   const chartData = frames.map((frame) => {
     const point: Record<string, number> = { timestamp: frame.timestamp };
@@ -289,6 +363,7 @@ export function DatasetEpisodesPage() {
               {episodes.map((ep) => (
                 <option key={ep.index} value={ep.index}>
                   Ep {ep.index} — {ep.frameCount} frames
+                  {rewardsByEpisode[ep.index] ? ` · score ${rewardsByEpisode[ep.index].score.toFixed(2)}` : ''}
                 </option>
               ))}
             </select>
@@ -315,6 +390,7 @@ export function DatasetEpisodesPage() {
                 {episodes.map((ep) => {
                   const isActive = selectedEpisode === ep.index;
                   const isFlagged = flaggedMap[ep.index];
+                  const reward = rewardsByEpisode[ep.index];
                   return (
                     <div
                       key={ep.index}
@@ -329,8 +405,16 @@ export function DatasetEpisodesPage() {
                       } ${isFlagged ? 'bg-red-500/5' : ''}`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className={`text-sm font-medium ${isActive ? 'text-cobalt-400' : 'text-theme-primary'}`}>
+                        <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${isActive ? 'text-cobalt-400' : 'text-theme-primary'}`}>
                           Episode {ep.index}
+                          {reward && (
+                            <span
+                              className={`px-1 py-px rounded text-[10px] font-mono font-medium ${scoreChipCls(reward.score)}`}
+                              title={`${reward.rewardType} score`}
+                            >
+                              {reward.score.toFixed(2)}
+                            </span>
+                          )}
                         </span>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleFlagToggle(ep.index); }}
@@ -571,6 +655,134 @@ export function DatasetEpisodesPage() {
                   No trajectory data for this episode
                 </div>
               )}
+
+              {/* ── Reward-model progress curve (LeRobot 0.6.0, TASK-179) ── */}
+              {selectedReward && rewardCurveData.length > 0 && (
+                <div className="rounded-xl border border-white/[0.04] bg-[#1E1F24]/40 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-theme-primary flex items-center gap-2">
+                      <Gauge className="w-4 h-4 text-cobalt-400" />
+                      Task Progress ({selectedReward.rewardType})
+                    </h3>
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-mono font-medium ${scoreChipCls(selectedReward.score)}`}>
+                      score {selectedReward.score.toFixed(2)}
+                      {selectedReward.success !== null ? (selectedReward.success ? ' · success' : ' · failure') : ''}
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={140}>
+                    <LineChart data={rewardCurveData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                      <XAxis
+                        dataKey="timestamp"
+                        type="number"
+                        domain={['dataMin', 'dataMax']}
+                        tickFormatter={(v: number) => v.toFixed(1)}
+                        fontSize={10}
+                        stroke="#555"
+                        tick={{ fill: '#888' }}
+                      />
+                      <YAxis
+                        domain={[0, 1]}
+                        fontSize={10}
+                        stroke="#555"
+                        tick={{ fill: '#888' }}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          fontSize: 11,
+                          background: '#1E1F24',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 8,
+                          color: '#ccc',
+                        }}
+                        labelFormatter={(v: number) => `t = ${v.toFixed(2)}s`}
+                        formatter={(value) => [Number(value).toFixed(3), 'progress']}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="progress"
+                        stroke="#18E4C3"
+                        dot={false}
+                        strokeWidth={1.5}
+                        name="progress"
+                      />
+                      {currentTime > 0 && (
+                        <ReferenceLine x={currentTime} stroke="#2A5FFF" strokeWidth={1.5} />
+                      )}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* ── VLM Annotations (lerobot-annotate, TASK-179) ── */}
+              <div className="rounded-xl border border-white/[0.04] bg-[#1E1F24]/40 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-theme-primary flex items-center gap-2">
+                    <MessageSquareText className="w-4 h-4 text-cobalt-400" />
+                    Annotations
+                  </h3>
+                  <button
+                    data-testid="annotate-dataset"
+                    disabled={annotating}
+                    onClick={handleStartAnnotation}
+                    className="px-2.5 py-1 rounded text-[11px] font-medium bg-cobalt-500/15 hover:bg-cobalt-500/25 text-cobalt-400 disabled:opacity-50 transition-colors"
+                  >
+                    {annotating ? 'Queuing…' : 'Annotate dataset'}
+                  </button>
+                </div>
+
+                {selectedAnnotation ? (
+                  <div className="space-y-4">
+                    {/* Subtasks timeline */}
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-theme-tertiary mb-1.5">
+                        Subtasks
+                      </p>
+                      {selectedAnnotation.subtasks.length === 0 ? (
+                        <p className="text-xs text-theme-tertiary">No subtasks annotated.</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {selectedAnnotation.subtasks.map((st, i) => (
+                            <div key={i} className="flex items-baseline gap-2 text-xs">
+                              <span className="font-mono tabular-nums text-theme-tertiary shrink-0 w-[92px]">
+                                {st.startS.toFixed(1)}s – {st.endS.toFixed(1)}s
+                              </span>
+                              <span className="text-theme-secondary">{st.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* VQA pairs */}
+                    {selectedAnnotation.vqa && selectedAnnotation.vqa.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-theme-tertiary mb-1.5">
+                          VQA pairs
+                        </p>
+                        <div className="space-y-1.5">
+                          {selectedAnnotation.vqa.map((pair, i) => (
+                            <div key={i} className="text-xs">
+                              <p className="text-theme-secondary">Q: {pair.question}</p>
+                              <p className="text-theme-tertiary">A: {pair.answer}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-theme-tertiary">
+                    {annotations.length > 0
+                      ? 'No annotations for this episode yet.'
+                      : 'No annotations yet — run lerobot-annotate to auto-fill timestamped subtasks and VQA pairs for every episode.'}
+                  </p>
+                )}
+
+                {annotationMsg && (
+                  <p className="text-[11px] text-theme-tertiary mt-2">{annotationMsg}</p>
+                )}
+              </div>
             </>
           )}
         </div>

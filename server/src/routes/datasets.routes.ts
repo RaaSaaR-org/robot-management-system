@@ -339,6 +339,112 @@ datasetRoutes.post('/import/huggingface', async (req: Request, res: Response) =>
 });
 
 // ============================================================================
+// INTERVENTION EPISODES (lerobot-rollout 'dagger', TASK-179 §7)
+// NOTE: registered before the '/:id' routes so 'interventions' is not
+// swallowed as a dataset id.
+// ============================================================================
+
+// POST /api/datasets/interventions - Record a DAgger intervention episode
+datasetRoutes.post('/interventions', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as {
+      robotId?: string;
+      skillId?: string;
+      taskPrompt?: string;
+      strategy?: string;
+      startedAt?: string;
+      endedAt?: string;
+      steps?: Array<{ t: number; source: 'human' | 'policy'; action: number[] }>;
+    };
+
+    if (!body.robotId) {
+      return res.status(400).json({ error: 'robotId is required' });
+    }
+    if (!body.taskPrompt) {
+      return res.status(400).json({ error: 'taskPrompt is required' });
+    }
+    if (!body.startedAt || !body.endedAt) {
+      return res.status(400).json({ error: 'startedAt and endedAt are required' });
+    }
+    if (body.steps !== undefined && !Array.isArray(body.steps)) {
+      return res.status(400).json({ error: 'steps must be an array' });
+    }
+
+    const { interventionService } = await import('../services/InterventionService.js');
+    const episode = await interventionService.recordIntervention({
+      robotId: body.robotId,
+      skillId: body.skillId ?? null,
+      taskPrompt: body.taskPrompt,
+      strategy: body.strategy ?? 'dagger',
+      startedAt: body.startedAt,
+      endedAt: body.endedAt,
+      steps: body.steps,
+    });
+
+    res.status(201).json({ id: episode.id });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error recording intervention:', error);
+    const message = error instanceof Error ? error.message : 'Failed to record intervention';
+    res.status(400).json({ error: message });
+  }
+});
+
+// GET /api/datasets/interventions?robotId=<id> - List intervention episodes
+datasetRoutes.get('/interventions', async (req: Request, res: Response) => {
+  try {
+    const robotId = typeof req.query.robotId === 'string' ? req.query.robotId : undefined;
+    const { interventionService } = await import('../services/InterventionService.js');
+    const interventions = await interventionService.listInterventions(robotId);
+    res.json({ interventions });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error listing interventions:', error);
+    res.status(500).json({ error: 'Failed to list interventions' });
+  }
+});
+
+// ============================================================================
+// DATASET ANNOTATIONS (lerobot-annotate, TASK-179 §4)
+// ============================================================================
+
+// POST /api/datasets/:id/annotate - Queue a VLM annotation job for a dataset
+datasetRoutes.post('/:id/annotate', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const body = (req.body ?? {}) as { episodes?: number[] };
+    if (body.episodes !== undefined && !Array.isArray(body.episodes)) {
+      return res.status(400).json({ error: 'episodes must be an array of episode indices' });
+    }
+
+    const { trainingJobService } = await import('../services/TrainingJobService.js');
+    const job = await trainingJobService.submitAnnotateJob({
+      datasetId: id,
+      episodes: body.episodes,
+    });
+
+    res.status(201).json({ jobId: job.id });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error queueing annotate job:', error);
+    const message = error instanceof Error ? error.message : 'Failed to queue annotate job';
+    const status = message.includes('not found') ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+// GET /api/datasets/:id/annotations - Stored VLM annotations of a dataset
+datasetRoutes.get('/:id/annotations', async (req: Request, res: Response) => {
+  try {
+    const annotations = await datasetService.getAnnotations(req.params.id);
+    if (annotations === null) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+    res.json({ annotations });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error getting annotations:', error);
+    res.status(500).json({ error: 'Failed to get annotations' });
+  }
+});
+
+// ============================================================================
 // POST /api/datasets/:id/push-to-hub - Push dataset to HuggingFace Hub
 // ============================================================================
 

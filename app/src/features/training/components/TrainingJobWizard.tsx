@@ -63,6 +63,7 @@ const baseModels: { value: BaseModel; label: string; description: string }[] = [
   { value: 'pi0_6', label: 'Pi0.6', description: 'Pi0 version 0.6 with improved action heads' },
   { value: 'openvla', label: 'OpenVLA', description: 'Open Vision-Language-Action model' },
   { value: 'groot', label: 'GROOT', description: 'NVIDIA GROOT foundation model' },
+  { value: 'groot_n1_7', label: 'GR00T N1.7', description: 'NVIDIA GR00T N1.7 via native LeRobot (no Isaac-GR00T needed)' },
 ];
 
 const fineTuneMethods: { value: FineTuneMethod; label: string; description: string }[] = [

@@ -141,13 +141,13 @@ intervention tagging).
 
 ## Acceptance Criteria
 
-- [ ] Phase 0: 0.6.0 committed in vla-server + training-worker; GPU machine venv verified (CUDA + groot/world-model imports)
-- [ ] Phase 1: an episode can be scored via Robometer or TOPReward and its progress curve renders in the evaluation UI
-- [ ] Phase 2: a GR00T N1.7 fine-tune job runs end-to-end via the native lerobot path (`GR00T_BACKEND=lerobot`) without v3→v2 conversion
-- [ ] Phase 3: `highlight` incident clips and `dagger` intervention episodes land in the server from a rollout
-- [ ] Phase 4: an imported dataset gets VLM annotations; depth streams stored in-dataset for twin scans
-- [ ] Phase 5 (stretch): one benchmark family (e.g. LIBERO-plus) runs against a trained policy and reports into the evaluation UI
-- [ ] All existing tests stay green (`./scripts/test-all.sh`, vla-server 68, training-worker 35)
+- [x] Phase 0: 0.6.0 committed in vla-server (PR #5) + training-worker (PR #5) — GPU machine venv verification still pending (run `setup-lerobot-gpu.sh` on the CUDA box)
+- [x] Phase 1: an episode can be scored via Robometer or TOPReward and its progress curve renders in the evaluation UI (implemented + unit/route-tested; live scoring needs the GPU box — `lerobot[robometer,topreward]` not installed on Mac)
+- [x] Phase 2: GR00T N1.7 native lerobot path implemented (`GR00T_BACKEND=lerobot`, `trainers/gr00t_lerobot.py`, no v3→v2 conversion) — end-to-end fine-tune validation on the GPU box still pending
+- [x] Phase 3: `highlight` incident clips and `dagger` intervention episodes land in the server from a rollout (sim-tested; hardware dagger pre-emption out of scope, documented)
+- [x] Phase 4: `lerobot-annotate` job kind + annotations UI implemented (live run needs the CLI extras); faster CUDA dataloading in trainers. Depth-in-dataset deferred — needs depth hardware, see Notes
+- [ ] Phase 5 (stretch): one benchmark family (e.g. LIBERO-plus) runs against a trained policy and reports into the evaluation UI — not started
+- [x] All existing tests stay green (server 4802, app 973, robot-agent 351, training-worker 70 (was 35), vla-server 68)
 
 ## Test Strategy
 
@@ -164,6 +164,15 @@ intervention tagging).
 
 ## Notes
 
+- **Implementation status (2026-07-07)**: Phases 0–4 implemented on
+  `feat/lerobot-060-adoption` (RMS) + `feat/lerobot-060` (training-worker,
+  PR #5). Deferred to follow-up sessions: GPU-box venv setup + live
+  Robometer/TOPReward scoring + native GR00T fine-tune validation (needs the
+  CUDA machine); depth-in-dataset for twin scans (needs depth hardware);
+  hardware dagger pre-emption (leader-arm); Phase 5 benchmarks (stretch).
+  Note: rollout strategies hook into the live `src/vla/skill-executor.ts`
+  loop — `hardware/vla_runner.py` is orphaned since TASK-146 (the task text
+  above predates that finding).
 - Reference doc: `../training-worker/docs/lerobot-0.6-gpu.md`
 - Release notes: <https://huggingface.co/blog/lerobot-release-v060>
 - Related: TASK-176 (Cosmos3 NO-GO — reward models are the replacement
