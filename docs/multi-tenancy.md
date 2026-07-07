@@ -110,6 +110,7 @@ one shot is a large blast-radius migration. Instead, multi-tenancy rolls out in 
 - **Wave 3c** (shipped): `ModelVersion`, `Deployment`, `SimulationJob`, `SyntheticJob`.
 - **Wave 3d** (shipped): `Zone`, `Conversation`.
 - **Wave 3e** (shipped): `ApiToken`.
+- **Wave 3f** (shipped, TASK-179): `EpisodeReward`, `InterventionEpisode`.
 - **Not scoped** (by design): `Fleet` (no DB model), `Message` (implicit via `Conversation` FK).
 
 The allowlist is the single source of truth for "which models are tenant-scoped". Adding

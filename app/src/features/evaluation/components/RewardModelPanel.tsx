@@ -28,6 +28,9 @@ const EPISODE_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#8b5cf6', '
 
 const POLL_INTERVAL_MS = 3000;
 
+/** Consecutive failed polls after which polling gives up (~30s of silence). */
+const MAX_POLL_FAILURES = 10;
+
 const RUNNING_STATUSES = new Set(['pending', 'queued', 'running']);
 
 /**
@@ -108,12 +111,22 @@ export function RewardModelPanel() {
   // Clean up the poll interval on unmount
   useEffect(() => stopPolling, [stopPolling]);
 
+  const pollInFlightRef = useRef(false);
+  const pollFailuresRef = useRef(0);
+
   const pollJob = useCallback(
     (jobId: string) => {
       stopPolling();
+      pollInFlightRef.current = false;
+      pollFailuresRef.current = 0;
       pollRef.current = setInterval(async () => {
+        // Skip the tick while the previous request is still in flight so a
+        // slow server never accumulates overlapping polls.
+        if (pollInFlightRef.current) return;
+        pollInFlightRef.current = true;
         try {
           const res = await evaluationApi.getRewardModelEval(jobId);
+          pollFailuresRef.current = 0;
           setJob(res.job);
           if (res.rewards.length > 0) setRewards(res.rewards);
           if (!RUNNING_STATUSES.has(res.job.status)) {
@@ -123,7 +136,16 @@ export function RewardModelPanel() {
             }
           }
         } catch {
-          // transient poll error — keep trying until a terminal status arrives
+          // Transient poll errors are retried, but persistent failure (job
+          // deleted, server gone) must not poll forever.
+          pollFailuresRef.current += 1;
+          if (pollFailuresRef.current >= MAX_POLL_FAILURES) {
+            stopPolling();
+            setJob(null);
+            setError('Lost contact with the reward-model job — polling stopped.');
+          }
+        } finally {
+          pollInFlightRef.current = false;
         }
       }, POLL_INTERVAL_MS);
     },

@@ -121,12 +121,15 @@ export function DatasetEpisodesPage() {
   }, [datasetId]);
 
   // Load reward-model episode scores once per dataset (absence is fine —
-  // chips/panels simply don't render). (TASK-179)
+  // chips/panels simply don't render). Cancellation guard: a slow response
+  // for a previous dataset must not clobber the current one. (TASK-179)
   useEffect(() => {
     if (!datasetId) return;
+    let cancelled = false;
     setRewardsByEpisode({});
     evaluationApi.listRewards(datasetId)
       .then((rewards) => {
+        if (cancelled) return;
         const byEpisode: Record<number, EpisodeReward> = {};
         for (const r of rewards) {
           const existing = byEpisode[r.episodeIndex];
@@ -136,17 +139,30 @@ export function DatasetEpisodesPage() {
         }
         setRewardsByEpisode(byEpisode);
       })
-      .catch(() => setRewardsByEpisode({}));
+      .catch(() => {
+        if (!cancelled) setRewardsByEpisode({});
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [datasetId]);
 
   // Load VLM annotations once per dataset (TASK-179)
   useEffect(() => {
     if (!datasetId) return;
+    let cancelled = false;
     setAnnotations([]);
     setAnnotationMsg(null);
     trainingApi.getAnnotations(datasetId)
-      .then(setAnnotations)
-      .catch(() => setAnnotations([]));
+      .then((a) => {
+        if (!cancelled) setAnnotations(a);
+      })
+      .catch(() => {
+        if (!cancelled) setAnnotations([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [datasetId]);
 
   // Load frames when episode selected

@@ -18,6 +18,7 @@
  * Wave 3b: ProcessDefinition, ProcessInstance, ApprovalRequest, Event.
  * Wave 3c: ModelVersion, Deployment, SimulationJob, SyntheticJob.
  * Wave 3d: Zone, Conversation.
+ * Wave 3f: EpisodeReward, InterventionEpisode (TASK-179).
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -55,6 +56,9 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   'Conversation',
   // Wave 3e (TASK-165 service accounts)
   'ApiToken',
+  // Wave 3f (TASK-179 LeRobot 0.6.0 adoption)
+  'EpisodeReward',
+  'InterventionEpisode',
 ]);
 
 const globalForPrisma = globalThis as unknown as {

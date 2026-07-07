@@ -21,11 +21,13 @@ import {
 } from '../repositories/index.js';
 import { getJobQueue, natsClient } from '../messaging/index.js';
 import { trainingJobService } from './TrainingJobService.js';
+import { RewardTypes } from '../types/vla.types.js';
 import type {
   TrainingJob,
   TrainingMetrics,
   Hyperparameters,
   Dataset,
+  RewardType,
 } from '../types/vla.types.js';
 import type {
   WorkerProgressRequest,
@@ -666,20 +668,39 @@ export class TrainingOrchestrator extends EventEmitter {
     if (!job.datasetId) {
       console.error(`[TrainingOrchestrator] ${job.kind} job ${jobId} has no datasetId`);
     } else if (job.kind === 'reward_model') {
-      const rewards = Array.isArray(finalMetrics.rewards) ? finalMetrics.rewards : [];
-      // rewardType mirrors the job's baseModel; the explicit field wins.
-      const rewardType =
-        finalMetrics.rewardType ??
-        (job.baseModel === 'topreward' ? 'topreward' : 'robometer');
+      const rawRewards = Array.isArray(finalMetrics.rewards) ? finalMetrics.rewards : [];
+      // Drop malformed entries (worker bug) instead of throwing — a
+      // deterministic bad payload would 500 this route on every worker retry
+      // and leave the job stuck in 'running' forever.
+      const rewards = rawRewards.filter(
+        (r) =>
+          r != null &&
+          Number.isInteger(r.episodeIndex) &&
+          typeof r.score === 'number' &&
+          Number.isFinite(r.score)
+      );
+      if (rewards.length < rawRewards.length) {
+        console.warn(
+          `[TrainingOrchestrator] Skipped ${rawRewards.length - rewards.length} malformed reward entr(ies) (job=${jobId})`
+        );
+      }
+      // rewardType mirrors the job's baseModel; the explicit field wins when
+      // it is a known reward type.
+      const rewardType: RewardType =
+        finalMetrics.rewardType && (RewardTypes as readonly string[]).includes(finalMetrics.rewardType)
+          ? finalMetrics.rewardType
+          : job.baseModel === 'topreward'
+            ? 'topreward'
+            : 'robometer';
       await episodeRewardRepository.upsertMany(
         rewards.map((r) => ({
           datasetId: job.datasetId as string,
           episodeIndex: r.episodeIndex,
           rewardType,
           score: r.score,
-          success: r.success ?? null,
-          curve: Array.isArray(r.curve) ? r.curve : [],
-          fps: r.fps ?? null,
+          success: typeof r.success === 'boolean' ? r.success : null,
+          curve: Array.isArray(r.curve) ? r.curve.filter((v) => Number.isFinite(v)) : [],
+          fps: typeof r.fps === 'number' && Number.isFinite(r.fps) ? r.fps : null,
           jobId,
         }))
       );
