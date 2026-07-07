@@ -64,6 +64,7 @@ function dbIncidentToDomain(
     robotId: dbIncident.robotId,
     complianceLogIds: parseArr(dbIncident.complianceLogIds),
     alertIds: parseArr(dbIncident.alertIds),
+    clipKey: dbIncident.clipKey,
     systemSnapshot: dbIncident.systemSnapshot
       ? (JSON.parse(dbIncident.systemSnapshot) as SystemSnapshot)
       : null,
@@ -264,6 +265,22 @@ export class IncidentRepository {
           resolvedAt: input.resolvedAt,
           closedAt: input.closedAt,
         },
+        include: { notifications: true },
+      });
+      return dbIncidentToDomain(incident);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Set the highlight-clip storage key for an incident (TASK-179 §6)
+   */
+  async updateClipKey(id: string, clipKey: string): Promise<Incident | null> {
+    try {
+      const incident = await prisma.incident.update({
+        where: { id },
+        data: { clipKey },
         include: { notifications: true },
       });
       return dbIncidentToDomain(incident);

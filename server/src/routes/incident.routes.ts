@@ -8,10 +8,12 @@ import { Router, type Request, type Response } from 'express';
 import { incidentService } from '../services/IncidentService.js';
 import { breachAssessmentService } from '../services/BreachAssessmentService.js';
 import { notificationWorkflowService } from '../services/NotificationWorkflowService.js';
+import { SIZE_LIMITS } from '../storage/model-storage.js';
 import type {
   IncidentType,
   IncidentSeverity,
   IncidentStatus,
+  IncidentClipPayload,
 } from '../types/incident.types.js';
 
 export const incidentRoutes = Router();
@@ -505,6 +507,122 @@ incidentRoutes.post('/:id/snapshot', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error capturing snapshot:', error);
     res.status(500).json({ error: 'Failed to capture snapshot' });
+  }
+});
+
+// ============================================================================
+// HIGHLIGHT CLIPS (TASK-179 §6)
+// ============================================================================
+
+/** Max accepted clip upload size (~32MB of jpeg-frames JSON). */
+const MAX_CLIP_BYTES = SIZE_LIMITS.INCIDENT_CLIP;
+
+/**
+ * Validate + store collected clip bytes and respond. Shared by the raw-stream
+ * and the pre-parsed-JSON upload paths of PUT /:id/clip.
+ */
+async function storeClipAndRespond(incidentId: string, data: Buffer, res: Response): Promise<void> {
+  let payload: Partial<IncidentClipPayload>;
+  try {
+    payload = JSON.parse(data.toString('utf-8')) as Partial<IncidentClipPayload>;
+  } catch {
+    res.status(400).json({ error: 'Clip body must be valid JSON' });
+    return;
+  }
+  if (payload?.format !== 'jpeg-frames' || !Array.isArray(payload.frames)) {
+    res.status(400).json({ error: "Clip must have format 'jpeg-frames' and a frames array" });
+    return;
+  }
+
+  const result = await incidentService.storeClip(incidentId, data);
+  if (!result) {
+    res.status(404).json({ error: 'Incident not found' });
+    return;
+  }
+  res.json({ status: 'ok', clipKey: result.clipKey });
+}
+
+/**
+ * PUT /:id/clip - Upload a highlight clip as RAW BODY bytes (UTF-8 JSON,
+ * `{ format: 'jpeg-frames', fps, capturedAt, frames: string[] }`). Uses the
+ * twin.routes.ts raw-body pattern (req 'data' events) so uploads bypass the
+ * express.json 10mb limit; robot agents send Content-Type
+ * application/octet-stream. Small application/json bodies that the global
+ * parser already consumed are handled from req.body.
+ */
+incidentRoutes.put('/:id/clip', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // Body already consumed by express.json (application/json content type).
+    if (req.readableEnded) {
+      const body = req.body as unknown;
+      if (!body || typeof body !== 'object') {
+        return res.status(400).json({ error: 'Clip body must be valid JSON' });
+      }
+      const data = Buffer.from(JSON.stringify(body), 'utf-8');
+      if (data.length > MAX_CLIP_BYTES) {
+        return res.status(413).json({ error: 'Clip exceeds maximum size (32MB)' });
+      }
+      return void (await storeClipAndRespond(id, data, res));
+    }
+
+    // Raw stream path (twin.routes.ts artifact-upload pattern).
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let aborted = false;
+    req.on('data', (c: Buffer) => {
+      if (aborted) return;
+      received += c.length;
+      if (received > MAX_CLIP_BYTES) {
+        // Respond immediately and drain the rest of the stream without
+        // buffering (no req.destroy() — keeps the response deliverable).
+        aborted = true;
+        chunks.length = 0;
+        if (!res.headersSent) {
+          res.status(413).json({ error: 'Clip exceeds maximum size (32MB)' });
+        }
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', async () => {
+      if (aborted) return;
+      try {
+        await storeClipAndRespond(id, Buffer.concat(chunks), res);
+      } catch (err) {
+        console.error('Error storing incident clip:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Failed to store clip' });
+      }
+    });
+    req.on('error', () => {
+      if (!res.headersSent) res.status(400).json({ error: 'Upload stream error' });
+    });
+  } catch (error) {
+    console.error('Error uploading incident clip:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to store clip' });
+  }
+});
+
+/**
+ * GET /:id/clip - Stream the stored highlight clip JSON back.
+ */
+incidentRoutes.get('/:id/clip', async (req: Request, res: Response) => {
+  try {
+    const stream = await incidentService.getClipStream(req.params.id);
+    if (!stream) {
+      return res.status(404).json({ error: 'Clip not available' });
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `inline; filename="${req.params.id}-clip.json"`);
+    stream.on('error', () => {
+      if (!res.headersSent) res.status(502).json({ error: 'Failed to read clip bytes' });
+      else res.end();
+    });
+    stream.pipe(res);
+  } catch (error) {
+    console.error('Error streaming incident clip:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to stream clip' });
   }
 });
 

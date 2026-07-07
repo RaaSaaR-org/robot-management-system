@@ -9,8 +9,104 @@ import { evaluationService, type EvaluationPeriod } from '../services/Evaluation
 import { robotManager } from '../services/RobotManager.js';
 import { modelVersionRepository, skillDefinitionRepository } from '../repositories/index.js';
 import { HttpClient } from '../services/HttpClient.js';
+import { RewardTypes, type RewardType } from '../types/vla.types.js';
 
 export const evaluationRoutes = Router();
+
+// ============================================================================
+// POST /api/evaluation/reward-model - Start a reward-model evaluation
+// (LeRobot 0.6.0 Robometer/TOPReward, TASK-179 §3). Creates a TrainingJob of
+// kind `reward_model` claimed over HTTP by the training-worker.
+// ============================================================================
+
+evaluationRoutes.post('/reward-model', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as {
+      datasetId?: string;
+      rewardType?: string;
+      episodes?: number[];
+      task?: string;
+      imageKey?: string;
+      maxFrames?: number;
+    };
+
+    if (!body.datasetId) {
+      return res.status(400).json({ error: 'datasetId is required' });
+    }
+    if (!body.rewardType || !(RewardTypes as readonly string[]).includes(body.rewardType)) {
+      return res
+        .status(400)
+        .json({ error: `rewardType must be one of: ${RewardTypes.join(', ')}` });
+    }
+    if (body.episodes !== undefined && !Array.isArray(body.episodes)) {
+      return res.status(400).json({ error: 'episodes must be an array of episode indices' });
+    }
+
+    const { jobId } = await evaluationService.startRewardModelEvaluation({
+      datasetId: body.datasetId,
+      rewardType: body.rewardType as RewardType,
+      episodes: body.episodes,
+      task: body.task,
+      imageKey: body.imageKey,
+      maxFrames: body.maxFrames,
+    });
+
+    res.status(201).json({ jobId });
+  } catch (error) {
+    console.error('[EvaluationRoutes] Error starting reward-model evaluation:', error);
+    const message =
+      error instanceof Error ? error.message : 'Failed to start reward-model evaluation';
+    res.status(400).json({ error: message });
+  }
+});
+
+// ============================================================================
+// GET /api/evaluation/reward-model/:jobId - Reward job status + rewards
+// ============================================================================
+
+evaluationRoutes.get('/reward-model/:jobId', async (req: Request, res: Response) => {
+  try {
+    const result = await evaluationService.getRewardModelJob(req.params.jobId);
+    if (!result) {
+      return res.status(404).json({ error: 'Reward-model job not found' });
+    }
+    res.json(result);
+  } catch (error) {
+    console.error('[EvaluationRoutes] Error getting reward-model job:', error);
+    res.status(500).json({ error: 'Failed to get reward-model job' });
+  }
+});
+
+// ============================================================================
+// GET /api/evaluation/rewards?datasetId=<id> - Episode rewards for a dataset
+// (curves parsed to number[])
+// ============================================================================
+
+evaluationRoutes.get('/rewards', async (req: Request, res: Response) => {
+  try {
+    const { datasetId, rewardType } = req.query;
+    if (!datasetId || typeof datasetId !== 'string') {
+      return res.status(400).json({ error: 'datasetId query parameter is required' });
+    }
+    if (
+      rewardType !== undefined &&
+      !(RewardTypes as readonly string[]).includes(rewardType as string)
+    ) {
+      return res
+        .status(400)
+        .json({ error: `rewardType must be one of: ${RewardTypes.join(', ')}` });
+    }
+
+    const rewards = await evaluationService.getRewards(
+      datasetId,
+      rewardType as RewardType | undefined
+    );
+    res.json({ rewards });
+  } catch (error) {
+    console.error('[EvaluationRoutes] Error listing rewards:', error);
+    res.status(500).json({ error: 'Failed to list rewards' });
+  }
+});
 
 // ============================================================================
 // POST /api/evaluation/episodes - Record a new evaluation episode

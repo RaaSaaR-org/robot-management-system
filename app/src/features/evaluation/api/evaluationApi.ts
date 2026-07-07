@@ -13,6 +13,9 @@ import type {
   SuccessRateResult,
   ErrorBreakdownResponse,
   ModelComparisonResult,
+  CreateRewardModelEvalRequest,
+  RewardModelEvalResponse,
+  EpisodeReward,
 } from '../types';
 
 const ENDPOINTS = {
@@ -22,6 +25,9 @@ const ENDPOINTS = {
   errorBreakdown: '/evaluation/error-breakdown',
   compare: '/evaluation/compare',
   runHardware: '/evaluation/run-hardware',
+  rewardModel: '/evaluation/reward-model',
+  rewardModelJob: (jobId: string) => `/evaluation/reward-model/${jobId}`,
+  rewards: '/evaluation/rewards',
 } as const;
 
 export interface RunHardwareEvaluationRequest {
@@ -101,5 +107,40 @@ export const evaluationApi = {
       request
     );
     return response.data.summary;
+  },
+
+  // ==========================================================================
+  // REWARD-MODEL EVALUATION (LeRobot 0.6.0 Robometer / TOPReward, TASK-179)
+  // ==========================================================================
+
+  /**
+   * Start a reward-model evaluation job (TrainingJob kind `reward_model`)
+   * that scores every episode of a dataset with per-frame progress curves.
+   */
+  async createRewardModelEval(
+    request: CreateRewardModelEvalRequest
+  ): Promise<{ jobId: string }> {
+    const response = await apiClient.post<{ jobId: string }>(ENDPOINTS.rewardModel, request);
+    return response.data;
+  },
+
+  /**
+   * Poll a reward-model evaluation job: status + the rewards written so far.
+   */
+  async getRewardModelEval(jobId: string): Promise<RewardModelEvalResponse> {
+    const response = await apiClient.get<RewardModelEvalResponse>(
+      ENDPOINTS.rewardModelJob(jobId)
+    );
+    return response.data;
+  },
+
+  /**
+   * List stored per-episode rewards for a dataset.
+   */
+  async listRewards(datasetId: string): Promise<EpisodeReward[]> {
+    const response = await apiClient.get<{ rewards: EpisodeReward[] }>(ENDPOINTS.rewards, {
+      params: { datasetId },
+    });
+    return response.data.rewards;
   },
 };

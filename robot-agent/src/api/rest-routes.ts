@@ -17,6 +17,7 @@ import { config } from '../config/config.js';
 import type { DeviceIdentityManager } from '../security/device-identity.js';
 import type { SecureBootVerifier } from '../security/secure-boot.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
+import { RolloutStrategies, type RolloutStrategy } from '../vla/types.js';
 
 export function createRestRoutes(
   robotStateManager: RobotStateManager,
@@ -219,8 +220,12 @@ export function createRestRoutes(
   //      robot's currently-loaded model differs, switch the VLA adapter via
   //      vla-server `/load-adapter` (real, not simulated).
   //   2. Run the closed-loop SkillExecutor: observe → /predict → execute →
-  //      repeat. On hardware this delegates to VLARunner via the existing
-  //      sidecar. In sim it runs a TS-only loop with synthetic frames.
+  //      repeat. On hardware it drives the sidecar HTTP endpoints (snapshot /
+  //      state/fast / action). In sim it runs the same loop with synthetic
+  //      frames.
+  //   3. TASK-179: an optional `rolloutStrategy` body field selects a
+  //      LeRobot-0.6.0-style rollout strategy ('default' | 'sentry' |
+  //      'highlight' | 'dagger'); the result carries `output.rollout` metadata.
   //
   // The companion `POST /robots/:id/skills/abort` route below stops it.
   router.post('/robots/:id/skills/execute', async (req: Request, res: Response) => {
@@ -243,10 +248,21 @@ export function createRestRoutes(
       artifactUri?: string;
       taskPrompt?: string;
       maxSteps?: number;
+      rolloutStrategy?: string;
     };
 
     if (!body.skillId) {
       res.status(400).json({ status: 'failed', error: 'skillId is required' });
+      return;
+    }
+
+    // TASK-179: optional rollout strategy — defaults to 'default' (unchanged behavior).
+    const rolloutStrategy = (body.rolloutStrategy ?? 'default') as RolloutStrategy;
+    if (!RolloutStrategies.includes(rolloutStrategy)) {
+      res.status(400).json({
+        status: 'failed',
+        error: `Invalid rolloutStrategy '${body.rolloutStrategy}'. Must be one of: ${RolloutStrategies.join(', ')}`,
+      });
       return;
     }
 
@@ -287,7 +303,7 @@ export function createRestRoutes(
     const executor = new SkillExecutor(robotStateManager);
     skillExecutorRegistry.register(body.skillId, executor);
     console.log(
-      `[Skill] Running ${body.skillName ?? body.skillId} on robot ${robot.id} (maxSteps=${maxSteps}, timeoutMs=${timeoutMs})`
+      `[Skill] Running ${body.skillName ?? body.skillId} on robot ${robot.id} (maxSteps=${maxSteps}, timeoutMs=${timeoutMs}, strategy=${rolloutStrategy})`
     );
 
     let result;
@@ -297,6 +313,8 @@ export function createRestRoutes(
         taskPrompt: taskPrompt as string,
         maxSteps,
         timeoutMs,
+        rolloutStrategy,
+        robotId: robot.id,
       });
     } finally {
       skillExecutorRegistry.unregister(body.skillId);
@@ -310,7 +328,8 @@ export function createRestRoutes(
       res.status(result.status === 'timeout' ? 504 : 500).json({
         status: 'failed',
         error: result.error ?? result.message ?? result.status,
-        output: { steps: result.steps, durationMs: result.durationMs },
+        // rollout metadata matters most on failure (highlight → incidentId).
+        output: { steps: result.steps, durationMs: result.durationMs, rollout: result.rollout },
       });
       return;
     }
@@ -325,6 +344,7 @@ export function createRestRoutes(
         durationMs: result.durationMs,
         lastAction: result.lastAction,
         message: result.message,
+        rollout: result.rollout,
       },
     });
   });

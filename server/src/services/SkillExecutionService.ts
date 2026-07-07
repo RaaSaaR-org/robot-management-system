@@ -19,6 +19,7 @@ import type {
   SkillChain,
   ExecuteSkillRequest,
   ExecuteChainRequest,
+  RolloutStrategy,
   SkillExecutionResult,
   ChainExecutionResult,
   ConditionCheckResult,
@@ -184,7 +185,8 @@ export class SkillExecutionService extends EventEmitter {
       const executionResult = await this.executeSkillOnRobot(
         skill,
         request.robotId,
-        validationResult.coercedParameters ?? parameters
+        validationResult.coercedParameters ?? parameters,
+        request.rolloutStrategy
       );
 
       // Check if aborted
@@ -552,7 +554,8 @@ export class SkillExecutionService extends EventEmitter {
   private async executeSkillOnRobot(
     skill: SkillDefinition,
     robotId: string,
-    parameters: Record<string, unknown>
+    parameters: Record<string, unknown>,
+    rolloutStrategy?: RolloutStrategy
   ): Promise<{ success: boolean; output?: Record<string, unknown>; error?: string }> {
     try {
       const registeredRobot = await robotManager.getRegisteredRobot(robotId);
@@ -595,6 +598,8 @@ export class SkillExecutionService extends EventEmitter {
         timeout: skill.timeout,
         linkedModelVersionId: skill.linkedModelVersionId,
         artifactUri,
+        // lerobot-rollout strategy (TASK-179 §5) — forwarded unchanged.
+        rolloutStrategy,
       });
 
       if (response.status === 'completed' || response.status === 'success') {

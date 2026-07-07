@@ -144,10 +144,24 @@ export interface Incident {
   complianceLogIds: string[];
   alertIds: string[];
   systemSnapshot: SystemSnapshot | null;
+  /** Storage key of the uploaded rollout clip (highlight strategy, TASK-179). */
+  clipKey?: string | null;
   createdAt: string;
   updatedAt: string;
   createdBy: string | null;
   notifications?: IncidentNotification[];
+}
+
+/**
+ * Rollout clip captured by the `highlight` strategy on the robot agent —
+ * a short burst of base64 JPEG frames around the failure. (TASK-179)
+ */
+export interface IncidentClip {
+  format: 'jpeg-frames';
+  fps: number;
+  capturedAt: string;
+  /** Base64-encoded JPEG frames */
+  frames: string[];
 }
 
 export interface NotificationTemplate {

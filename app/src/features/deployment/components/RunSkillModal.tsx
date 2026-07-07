@@ -11,7 +11,18 @@ import { useNavigate } from 'react-router-dom';
 import { Modal, Button, Badge, Card } from '@/shared/components/ui';
 import { useRobots } from '@/features/robots/hooks/useRobots';
 import { deploymentApi } from '../api/deploymentApi';
-import type { SkillDefinition, SkillExecutionResult } from '../types';
+import type { SkillDefinition, SkillExecutionResult, RolloutStrategy } from '../types';
+
+/**
+ * Rollout strategy options (lerobot-rollout, TASK-179). Short descriptions
+ * inline in the <select> so the tradeoff is visible without leaving the modal.
+ */
+const ROLLOUT_STRATEGIES: { value: RolloutStrategy; label: string }[] = [
+  { value: 'default', label: 'Default — run the policy directly' },
+  { value: 'sentry', label: 'Sentry — record the rollout' },
+  { value: 'highlight', label: 'Highlight — capture incident clip on failure' },
+  { value: 'dagger', label: 'DAgger — tag human corrections' },
+];
 
 export interface RunSkillModalProps {
   isOpen: boolean;
@@ -23,6 +34,7 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
   const navigate = useNavigate();
   const { robots, fetchRobots } = useRobots();
   const [robotId, setRobotId] = useState<string>('');
+  const [rolloutStrategy, setRolloutStrategy] = useState<RolloutStrategy>('default');
   const [parametersJson, setParametersJson] = useState<string>('{}');
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<SkillExecutionResult | null>(null);
@@ -57,6 +69,7 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
   useEffect(() => {
     if (!isOpen) {
       setRobotId('');
+      setRolloutStrategy('default');
       setParametersJson('{}');
     }
   }, [isOpen]);
@@ -94,7 +107,7 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
     // the robot detail page can flip its status.
     setRunning(true);
     try {
-      const r = await deploymentApi.executeSkill(skill.id, { robotId, parameters });
+      const r = await deploymentApi.executeSkill(skill.id, { robotId, parameters, rolloutStrategy });
       window.dispatchEvent(
         new CustomEvent('skill:execution:result', {
           detail: { skillId: skill.id, robotId, result: r },
@@ -173,6 +186,23 @@ export function RunSkillModal({ isOpen, onClose, skill }: RunSkillModalProps) {
               ))}
             </select>
           )}
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-theme-secondary mb-1">
+            Rollout strategy
+          </label>
+          <select
+            value={rolloutStrategy}
+            onChange={(e) => setRolloutStrategy(e.target.value as RolloutStrategy)}
+            className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
+          >
+            {ROLLOUT_STRATEGIES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>

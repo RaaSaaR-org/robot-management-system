@@ -56,6 +56,51 @@ function _toVec3(v: unknown): [number, number, number] | null {
   return [a, b, c];
 }
 
+/** Options for starting a sidecar `lerobot-record` session (TASK-179 sentry). */
+export interface RecordingStartOptions {
+  /** LeRobot dataset repo id, e.g. `sentry/pick-cube-1751900000000`. */
+  repoId: string;
+  /** Natural-language task label stored with the dataset. */
+  task: string;
+  /** Number of episodes; a sentry rollout records one long episode. Default 1. */
+  numEpisodes?: number;
+  /** Per-episode wall clock budget in seconds. Default 60. */
+  episodeTimeS?: number;
+  /** Recording frame rate. Default 30. */
+  fps?: number;
+  /** Optional dataset root override on the sidecar host. */
+  datasetRoot?: string;
+  /** Inter-episode reset time in seconds. Default 5. */
+  resetTimeS?: number;
+}
+
+export interface RecordingStartResult {
+  ok: boolean;
+  error?: string;
+  /** True when the sidecar refused with 403 (G1 read-only mode). */
+  readOnly?: boolean;
+  repoId?: string;
+  datasetPath?: string;
+}
+
+export interface RecordingStopResult {
+  ok: boolean;
+  error?: string;
+  episodesRecorded?: number;
+  datasetPath?: string | null;
+  exitCode?: number | null;
+}
+
+export interface RecordingStatus {
+  running: boolean;
+  repoId: string | null;
+  datasetPath: string | null;
+  episodesDone: number;
+  elapsedS: number;
+  lastError: string | null;
+  uploadStatus: string | null;
+}
+
 const SIDECAR_URL = process.env.HARDWARE_SIDECAR_URL ?? 'http://localhost:8765';
 // Poll every 2s — avoids monopolizing /dev/ttyACM0 so other tools can use the arm.
 // Idle watchdog in the sidecar disconnects after 5s without requests, releasing the port.
@@ -372,6 +417,132 @@ export class HardwareClient {
     if (gyroVec) reading.gyro = gyroVec;
     if (accelVec) reading.accel = accelVec;
     return reading;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // TASK-179: sidecar dataset recording (lerobot-record wrapper).
+  // Used by the `sentry` rollout strategy to capture a real-hardware
+  // rollout as a LeRobot dataset. Both sidecars expose the same
+  // /record/start | /record/stop | /record/status surface
+  // (so101_sidecar.py / g1_sidecar.py → hardware/recorder.py).
+  // All three methods are best-effort and NEVER throw — a rollout must
+  // not die because its recording sidecar call failed.
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * Start a sidecar recording session. The sidecar wraps `lerobot-record`
+   * and takes exclusive ownership of the cameras (and, on SO-101, the
+   * follower serial port) for the duration.
+   *
+   * Returns `ok: false` with `readOnly: true` when the sidecar refuses with
+   * HTTP 403 (G1 stage-1 read-only mode, `G1_READ_ONLY=1`) — callers should
+   * continue un-recorded rather than fail the rollout.
+   */
+  async startRecording(opts: RecordingStartOptions): Promise<RecordingStartResult> {
+    if (!this.sidecarAvailable) {
+      return { ok: false, error: 'hardware sidecar unavailable' };
+    }
+    try {
+      const res = await fetch(`${SIDECAR_URL}/record/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo_id: opts.repoId,
+          task: opts.task,
+          num_episodes: opts.numEpisodes ?? 1,
+          episode_time_s: opts.episodeTimeS ?? 60,
+          fps: opts.fps ?? 30,
+          reset_time_s: opts.resetTimeS ?? 5,
+          ...(opts.datasetRoot ? { dataset_root: opts.datasetRoot } : {}),
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        repo_id?: string;
+        dataset_path?: string;
+      };
+      if (res.status === 403) {
+        return {
+          ok: false,
+          readOnly: true,
+          error: data.error ?? 'sidecar is read-only (G1_READ_ONLY) — recording refused',
+        };
+      }
+      if (!res.ok || data.ok === false) {
+        return { ok: false, error: data.error ?? `sidecar /record/start returned HTTP ${res.status}` };
+      }
+      return { ok: true, repoId: data.repo_id ?? opts.repoId, datasetPath: data.dataset_path };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Stop the active sidecar recording (SIGINT → clean episode finalization,
+   * then the sidecar auto-uploads the finished dataset to RustFS). The
+   * sidecar's stop path can block up to ~20s while lerobot-record finalizes,
+   * so the request timeout is generous.
+   */
+  async stopRecording(): Promise<RecordingStopResult> {
+    try {
+      const res = await fetch(`${SIDECAR_URL}/record/stop`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(30_000),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        episodes_recorded?: number;
+        dataset_path?: string | null;
+        exit_code?: number | null;
+      };
+      if (!res.ok || data.ok === false) {
+        return { ok: false, error: data.error ?? `sidecar /record/stop returned HTTP ${res.status}` };
+      }
+      return {
+        ok: true,
+        episodesRecorded: data.episodes_recorded ?? 0,
+        datasetPath: data.dataset_path ?? null,
+        exitCode: data.exit_code ?? null,
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Current recorder status (progress, dataset path, RustFS upload state).
+   * Returns null when the sidecar is unreachable.
+   */
+  async getRecordingStatus(): Promise<RecordingStatus | null> {
+    try {
+      const res = await fetch(`${SIDECAR_URL}/record/status`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        running?: boolean;
+        repo_id?: string | null;
+        dataset_path?: string | null;
+        episodes_done?: number;
+        elapsed_s?: number;
+        last_error?: string | null;
+        upload_status?: string | null;
+      };
+      return {
+        running: data.running ?? false,
+        repoId: data.repo_id ?? null,
+        datasetPath: data.dataset_path ?? null,
+        episodesDone: data.episodes_done ?? 0,
+        elapsedS: data.elapsed_s ?? 0,
+        lastError: data.last_error ?? null,
+        uploadStatus: data.upload_status ?? null,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**

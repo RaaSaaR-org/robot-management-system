@@ -1147,6 +1147,7 @@ model Incident {
   robotId          String?
   complianceLogIds String  @default("[]") // JSON: Links to ComplianceLog entries
   alertIds         String  @default("[]") // JSON: Links to Alert entries
+  clipKey          String? // Storage key of the uploaded highlight clip (jpeg-frames JSON, TASK-179)
 
   // System State Snapshot
   systemSnapshot String? // JSON: SystemSnapshot
@@ -2155,6 +2156,7 @@ model Dataset {
   statsJson          String   @default("{}") // JSON: LeRobot stats
   status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
   huggingFaceRepoId  String? // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
+  annotationsJson    String   @default("[]") // JSON: EpisodeAnnotation[] from lerobot-annotate jobs (TASK-179)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -2300,6 +2302,42 @@ model EvaluationEpisode {
   @@index([modelVersion])
   @@index([createdAt])
   @@index([success])
+}
+
+// EpisodeReward - Per-episode reward-model scores + progress curves
+// (LeRobot 0.6.0 Robometer/TOPReward, TASK-179)
+model EpisodeReward {
+  id           String   @id @default(uuid())
+  tenantId     String?
+  datasetId    String
+  episodeIndex Int
+  rewardType   String // "robometer" | "topreward"
+  score        Float
+  success      Boolean?
+  curve        String   @default("[]") // JSON number[] (per-frame progress)
+  fps          Float?
+  jobId        String? // TrainingJob (kind reward_model) that produced the row
+  createdAt    DateTime @default(now())
+
+  @@unique([datasetId, episodeIndex, rewardType])
+  @@index([datasetId])
+}
+
+// InterventionEpisode - DAgger-style human intervention during a rollout
+// (LeRobot 0.6.0 rollout strategies, TASK-179)
+model InterventionEpisode {
+  id         String   @id @default(uuid())
+  tenantId   String?
+  robotId    String
+  skillId    String?
+  taskPrompt String
+  strategy   String   @default("dagger")
+  startedAt  DateTime
+  endedAt    DateTime
+  stepsJson  String   @default("[]") // JSON: [{t, source: 'human'|'policy', action: number[]}]
+  createdAt  DateTime @default(now())
+
+  @@index([robotId])
 }
 
 // ============================================================================

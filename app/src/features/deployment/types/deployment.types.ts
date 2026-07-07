@@ -474,11 +474,23 @@ export interface ChainExecutionResult {
   error?: string;
 }
 
+/**
+ * Rollout strategy for a skill execution (lerobot-rollout, LeRobot 0.6.0 —
+ * TASK-179). NOT the fleet DeploymentStrategy (canary/blue_green) — this
+ * controls how a single rollout is recorded/monitored on the robot agent:
+ * - `default`: run the policy directly
+ * - `sentry`: record the whole rollout
+ * - `highlight`: ring-buffer recent frames, capture an incident clip on failure
+ * - `dagger`: tag human teleop corrections as intervention episodes
+ */
+export type RolloutStrategy = 'default' | 'sentry' | 'highlight' | 'dagger';
+
 export interface ExecuteSkillRequest {
   robotId: string;
   parameters?: Record<string, unknown>;
   skipPreconditions?: boolean;
   skipPostconditions?: boolean;
+  rolloutStrategy?: RolloutStrategy;
 }
 
 export interface ExecuteChainRequest {

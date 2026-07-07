@@ -861,6 +861,23 @@ describe('Skills Routes', () => {
       });
     });
 
+    it('forwards rolloutStrategy unchanged to the execution service (TASK-179 §5)', async () => {
+      mockSkillExecutionService.executeSkill.mockResolvedValue({ status: 'completed' });
+
+      const response = await request(app)
+        .post('/api/skills/skill-001/execute')
+        .send({ robotId: 'robot-1', rolloutStrategy: 'highlight' });
+
+      expect(response.status).toBe(200);
+      expect(mockSkillExecutionService.executeSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skillId: 'skill-001',
+          robotId: 'robot-1',
+          rolloutStrategy: 'highlight',
+        })
+      );
+    });
+
     it('returns 400 when execution status is not completed', async () => {
       mockSkillExecutionService.executeSkill.mockResolvedValue({ status: 'failed' });
 

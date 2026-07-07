@@ -15,6 +15,7 @@
  * Wave 3c scope: ModelVersion, Deployment, SimulationJob, SyntheticJob.
  * Wave 3d scope: Zone, Conversation.
  * Wave 3e scope: ApiToken.
+ * Wave 3f scope: EpisodeReward, InterventionEpisode (TASK-179).
  *
  * @feature multi-tenancy
  */
@@ -72,6 +73,9 @@ export async function seedDefaultTenant(): Promise<void> {
     backfill(prisma.conversation),
     // Wave 3e
     backfill(prisma.apiToken),
+    // Wave 3f (TASK-179)
+    backfill(prisma.episodeReward),
+    backfill(prisma.interventionEpisode),
   ]);
 
   const labels = [
@@ -81,6 +85,7 @@ export async function seedDefaultTenant(): Promise<void> {
     'modelVersions', 'deployments', 'simulationJobs', 'syntheticJobs',
     'zones', 'conversations',
     'apiTokens',
+    'episodeRewards', 'interventionEpisodes',
   ];
 
   const total = results.reduce((sum, r) => sum + r.count, 0);

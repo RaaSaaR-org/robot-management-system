@@ -33,7 +33,14 @@ import type {
   QueueStats,
   SubmitTrainingJobRequest,
   SubmitSimRlJobRequest,
+  SubmitRewardModelJobRequest,
+  SubmitAnnotateJobRequest,
 } from '../types/training.types.js';
+import type {
+  BaseModel,
+  RewardModelHyperparameters,
+  AnnotateHyperparameters,
+} from '../types/vla.types.js';
 
 // ============================================================================
 // DEFAULT VALUES
@@ -225,6 +232,87 @@ export class TrainingJobService extends EventEmitter {
     return job;
   }
 
+  /**
+   * Submit a reward_model job (TASK-179 §3). Scores dataset episodes with a
+   * LeRobot 0.6.0 reward model (Robometer/TOPReward). `baseModel` mirrors the
+   * rewardType; claimed over HTTP by workers whose `kinds` include
+   * 'reward_model' — no NATS enqueue, no ModelVersion on completion.
+   */
+  async submitRewardModelJob(request: SubmitRewardModelJobRequest): Promise<TrainingJob> {
+    const dataset = await datasetRepository.findById(request.datasetId);
+    if (!dataset) {
+      throw new Error(`Dataset not found: ${request.datasetId}`);
+    }
+    if (dataset.status !== 'ready') {
+      throw new Error(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
+    }
+
+    const hyperparameters: RewardModelHyperparameters = {
+      rewardType: request.rewardType,
+      ...(request.episodes !== undefined ? { episodes: request.episodes } : {}),
+      ...(request.task !== undefined ? { task: request.task } : {}),
+      ...(request.imageKey !== undefined ? { imageKey: request.imageKey } : {}),
+      ...(request.maxFrames !== undefined ? { maxFrames: request.maxFrames } : {}),
+    };
+
+    const job = await trainingJobRepository.create({
+      kind: 'reward_model',
+      datasetId: request.datasetId,
+      baseModel: request.rewardType,
+      hyperparameters,
+    });
+
+    this.emitJobEvent({
+      type: 'training:job:created',
+      jobId: job.id,
+      job,
+      timestamp: new Date().toISOString(),
+    });
+
+    console.log(
+      `[TrainingJobService] reward_model job submitted: ${job.id} (dataset=${request.datasetId}, rewardType=${request.rewardType})`,
+    );
+    return job;
+  }
+
+  /**
+   * Submit an annotate job (TASK-179 §4). Auto-fills timestamped subtasks /
+   * VQA pairs for a dataset via lerobot-annotate. Claimed over HTTP like
+   * reward_model jobs; results land on Dataset.annotationsJson.
+   */
+  async submitAnnotateJob(request: SubmitAnnotateJobRequest): Promise<TrainingJob> {
+    const dataset = await datasetRepository.findById(request.datasetId);
+    if (!dataset) {
+      throw new Error(`Dataset not found: ${request.datasetId}`);
+    }
+    if (dataset.status !== 'ready') {
+      throw new Error(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
+    }
+
+    const hyperparameters: AnnotateHyperparameters = {
+      ...(request.episodes !== undefined ? { episodes: request.episodes } : {}),
+    };
+
+    const job = await trainingJobRepository.create({
+      kind: 'annotate',
+      datasetId: request.datasetId,
+      baseModel: 'lerobot-annotate',
+      hyperparameters,
+    });
+
+    this.emitJobEvent({
+      type: 'training:job:created',
+      jobId: job.id,
+      job,
+      timestamp: new Date().toISOString(),
+    });
+
+    console.log(
+      `[TrainingJobService] annotate job submitted: ${job.id} (dataset=${request.datasetId})`,
+    );
+    return job;
+  }
+
   // ============================================================================
   // JOB LIFECYCLE
   // ============================================================================
@@ -314,12 +402,13 @@ export class TrainingJobService extends EventEmitter {
       completedAt: undefined,
     });
 
-    // sim_rl jobs (and any job missing the supervised fields) are re-claimed by
-    // their HTTP worker via status='pending'; they have no NATS finetune payload.
+    // Non-supervised jobs (sim_rl, reward_model, annotate — and any job
+    // missing the supervised fields) are re-claimed by their HTTP worker via
+    // status='pending'; they have no NATS finetune payload.
     if (
       !updatedJob ||
       !this.jobQueue ||
-      updatedJob.kind === 'sim_rl' ||
+      (updatedJob.kind ?? 'supervised') !== 'supervised' ||
       !updatedJob.datasetId ||
       !updatedJob.baseModel ||
       !updatedJob.fineTuneMethod
@@ -327,11 +416,11 @@ export class TrainingJobService extends EventEmitter {
       return updatedJob;
     }
 
-    // Re-add to queue
+    // Re-add to queue (supervised jobs only carry real base models)
     await this.jobQueue.addJob('finetune', {
       jobId: updatedJob.id,
       datasetId: updatedJob.datasetId,
-      baseModel: updatedJob.baseModel,
+      baseModel: updatedJob.baseModel as BaseModel,
       fineTuneMethod: updatedJob.fineTuneMethod,
       hyperparameters: updatedJob.hyperparameters,
       gpuRequirements: updatedJob.gpuRequirements,

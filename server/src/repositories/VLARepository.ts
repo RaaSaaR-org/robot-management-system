@@ -36,6 +36,7 @@ import type {
   CreateDatasetInput,
   UpdateDatasetInput,
   DatasetQueryParams,
+  EpisodeAnnotation,
   TrainingJob,
   CreateTrainingJobInput,
   UpdateTrainingJobInput,
@@ -183,9 +184,21 @@ function dbDatasetToDomain(db: PrismaDataset): Dataset {
     statsJson: JSON.parse(db.statsJson) as LeRobotStats,
     status: db.status as DatasetStatus,
     huggingFaceRepoId: db.huggingFaceRepoId ?? undefined,
+    annotations: parseAnnotations(db.annotationsJson),
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
+}
+
+/** Parse the annotationsJson column (TASK-179); tolerate legacy/invalid rows. */
+function parseAnnotations(val: string | null | undefined): EpisodeAnnotation[] {
+  if (!val) return [];
+  try {
+    const parsed = JSON.parse(val);
+    return Array.isArray(parsed) ? (parsed as EpisodeAnnotation[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 // ============================================================================
@@ -660,6 +673,7 @@ export class DatasetRepository {
       if (input.statsJson !== undefined) updateData.statsJson = JSON.stringify(input.statsJson);
       if (input.status !== undefined) updateData.status = input.status;
       if (input.huggingFaceRepoId !== undefined) updateData.huggingFaceRepoId = input.huggingFaceRepoId;
+      if (input.annotations !== undefined) updateData.annotationsJson = JSON.stringify(input.annotations);
 
       const dataset = await prisma.dataset.update({
         where: { id },

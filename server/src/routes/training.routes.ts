@@ -286,6 +286,9 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
     }
     // `kinds` lets the sim-trainer claim only sim_rl jobs and the classic
     // training-worker only supervised jobs (defaults to ['supervised']).
+    // TASK-179: workers may also claim 'reward_model' / 'annotate' jobs —
+    // those carry a datasetId, so they take the supervised response shape
+    // ({ job (incl. kind), dataset }) below.
     const claimKinds =
       Array.isArray(kinds) && kinds.length > 0 ? kinds : ['supervised'];
     const job = await trainingOrchestrator.claimNextPendingJob(

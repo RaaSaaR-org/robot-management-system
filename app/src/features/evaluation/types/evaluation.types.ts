@@ -57,6 +57,50 @@ export interface ModelComparisonResult {
 }
 
 // ============================================================================
+// REWARD-MODEL EVALUATION (LeRobot 0.6.0 — Robometer / TOPReward, TASK-179)
+// ============================================================================
+
+export type RewardType = 'robometer' | 'topreward';
+
+/**
+ * Per-episode reward as scored by a reward-model evaluation job.
+ * Mirrors the server's EpisodeRewardDto (curve is parsed to number[]).
+ */
+export interface EpisodeReward {
+  id: string;
+  datasetId: string;
+  episodeIndex: number;
+  rewardType: RewardType;
+  score: number;
+  success: boolean | null;
+  curve: number[];
+  fps: number | null;
+  jobId: string | null;
+  createdAt: string;
+}
+
+export interface CreateRewardModelEvalRequest {
+  datasetId: string;
+  rewardType: RewardType;
+  episodes?: number[];
+  task?: string;
+  imageKey?: string;
+  maxFrames?: number;
+}
+
+export interface RewardModelJobStatus {
+  id: string;
+  status: string;
+  progress: number;
+  error?: string;
+}
+
+export interface RewardModelEvalResponse {
+  job: RewardModelJobStatus;
+  rewards: EpisodeReward[];
+}
+
+// ============================================================================
 // API TYPES
 // ============================================================================
 

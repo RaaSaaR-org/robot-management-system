@@ -8,7 +8,7 @@
 // ENUMS & CONSTANTS
 // ============================================================================
 
-export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot', 'smolvla'] as const;
+export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot', 'groot_n1_7', 'smolvla'] as const;
 export type BaseModel = (typeof BaseModels)[number];
 
 export const FineTuneMethods = ['lora', 'full', 'frozen_backbone'] as const;
@@ -211,8 +211,11 @@ export interface DatasetQueryParams {
  * Training job kind. `supervised` is the classic VLA fine-tune (dataset +
  * baseModel + fineTuneMethod). `sim_rl` trains an RL navigation policy in a
  * twin-derived MuJoCo scene (sceneId; no dataset/model). (TASK-172.C)
+ * `reward_model` / `annotate` are auxiliary LeRobot 0.6.0 worker jobs
+ * (TASK-179) — created via the evaluation panel / dataset annotate action,
+ * never by the wizard, but they DO appear in GET /training/jobs responses.
  */
-export type TrainingJobKind = 'supervised' | 'sim_rl';
+export type TrainingJobKind = 'supervised' | 'sim_rl' | 'reward_model' | 'annotate';
 
 export interface TrainingJob {
   id: string;
@@ -435,6 +438,33 @@ export interface HFImportProgress {
   progress: number;
   currentFile?: string;
   error?: string;
+}
+
+// ============================================================================
+// DATASET ANNOTATIONS (lerobot-annotate, LeRobot 0.6.0 — TASK-179)
+// ============================================================================
+
+export interface AnnotationSubtask {
+  /** Subtask start, in seconds from episode start */
+  startS: number;
+  /** Subtask end, in seconds from episode start */
+  endS: number;
+  text: string;
+}
+
+export interface AnnotationVqaPair {
+  question: string;
+  answer: string;
+}
+
+/**
+ * VLM-generated annotations for one episode. Mirrors the server's
+ * AnnotationDto (GET /datasets/:id/annotations).
+ */
+export interface EpisodeAnnotation {
+  episodeIndex: number;
+  subtasks: AnnotationSubtask[];
+  vqa?: AnnotationVqaPair[];
 }
 
 // ============================================================================

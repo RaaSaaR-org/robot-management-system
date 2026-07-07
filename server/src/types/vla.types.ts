@@ -16,9 +16,21 @@
 // ENUMS & CONSTANTS
 // ============================================================================
 
-// Base VLA models for training
-export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot', 'smolvla'] as const;
+// Base VLA models for training. `groot_n1_7` is the LeRobot-native GR00T N1.7
+// trainer path (lerobot[groot], TASK-179).
+export const BaseModels = ['pi0', 'pi0_6', 'openvla', 'groot', 'groot_n1_7', 'smolvla'] as const;
 export type BaseModel = (typeof BaseModels)[number];
+
+// Reward models available via the unified lerobot.rewards API (TASK-179)
+export const RewardTypes = ['robometer', 'topreward'] as const;
+export type RewardType = (typeof RewardTypes)[number];
+
+/**
+ * `baseModel` values used by the auxiliary worker job kinds (TASK-179):
+ * reward_model jobs mirror their rewardType, annotate jobs use
+ * 'lerobot-annotate'. These never appear in the training wizard.
+ */
+export type AuxiliaryBaseModel = RewardType | 'lerobot-annotate';
 
 // Fine-tuning methods
 export const FineTuneMethods = ['lora', 'full', 'oft'] as const;
@@ -101,6 +113,8 @@ export interface Hyperparameters {
   max_steps?: number;
   lora_alpha?: number;
   lora_dropout?: number;
+  /** DataLoader workers used by the training-worker on CUDA (TASK-179 §9). */
+  dataloader_num_workers?: number;
 }
 
 /**
@@ -317,6 +331,29 @@ export interface SkillDefinitionQueryParams {
 // DOMAIN TYPES - Dataset
 // ============================================================================
 
+/** Timestamped subtask segment inside an episode (lerobot-annotate, TASK-179). */
+export interface AnnotationSubtask {
+  startS: number;
+  endS: number;
+  text: string;
+}
+
+/** VQA pair generated for an episode (lerobot-annotate, TASK-179). */
+export interface AnnotationVqaPair {
+  question: string;
+  answer: string;
+}
+
+/**
+ * Per-episode VLM annotation produced by an `annotate` job and stored on
+ * `Dataset.annotationsJson` (TASK-179 contract §4).
+ */
+export interface EpisodeAnnotation {
+  episodeIndex: number;
+  subtasks: AnnotationSubtask[];
+  vqa?: AnnotationVqaPair[];
+}
+
 /**
  * Training dataset in LeRobot v3 format
  */
@@ -337,6 +374,10 @@ export interface Dataset {
   statsJson: LeRobotStats;
   status: DatasetStatus;
   huggingFaceRepoId?: string;
+  // VLM annotations from lerobot-annotate jobs (TASK-179); parsed from
+  // annotationsJson. Optional so pre-existing fixtures/partials stay valid;
+  // the repository mapper always sets it ([] when none).
+  annotations?: EpisodeAnnotation[];
   createdAt: Date;
   updatedAt: Date;
 
@@ -372,6 +413,7 @@ export interface UpdateDatasetInput {
   statsJson?: LeRobotStats;
   status?: DatasetStatus;
   huggingFaceRepoId?: string;
+  annotations?: EpisodeAnnotation[];
 }
 
 export interface DatasetQueryParams {
@@ -391,8 +433,28 @@ export interface DatasetQueryParams {
  * Training job kind. `supervised` is the classic VLA fine-tune (datasetId +
  * baseModel + fineTuneMethod). `sim_rl` trains an RL navigation policy in a
  * twin-derived MuJoCo scene (sceneId; no dataset/baseModel). (TASK-172.C)
+ * `reward_model` scores dataset episodes via Robometer/TOPReward and
+ * `annotate` auto-fills subtask/VQA annotations (LeRobot 0.6.0, TASK-179) —
+ * both run on the training-worker but never produce a ModelVersion.
  */
-export type TrainingJobKind = 'supervised' | 'sim_rl';
+export type TrainingJobKind = 'supervised' | 'sim_rl' | 'reward_model' | 'annotate';
+
+/**
+ * Hyperparameters carried by a reward_model job (TASK-179 contract §1).
+ * `episodes` absent/empty = all episodes; `imageKey` default = first camera.
+ */
+export interface RewardModelHyperparameters {
+  rewardType: RewardType;
+  episodes?: number[];
+  task?: string;
+  imageKey?: string;
+  maxFrames?: number;
+}
+
+/** Hyperparameters carried by an annotate job (TASK-179 contract §1). */
+export interface AnnotateHyperparameters {
+  episodes?: number[];
+}
 
 /**
  * Training job queue entry
@@ -402,7 +464,8 @@ export interface TrainingJob {
   kind: TrainingJobKind;
   // null for sim_rl jobs (they carry sceneId/twinId instead)
   datasetId: string | null;
-  baseModel: BaseModel | null;
+  // AuxiliaryBaseModel for reward_model/annotate jobs (TASK-179)
+  baseModel: BaseModel | AuxiliaryBaseModel | null;
   fineTuneMethod: FineTuneMethod | null;
   // SimScene the RL policy trains in + its source twin (sim_rl only)
   sceneId: string | null;
@@ -433,11 +496,13 @@ export interface CreateTrainingJobInput {
   // Defaults to 'supervised' in the repository when omitted.
   kind?: TrainingJobKind;
   datasetId?: string | null;
-  baseModel?: BaseModel | null;
+  baseModel?: BaseModel | AuxiliaryBaseModel | null;
   fineTuneMethod?: FineTuneMethod | null;
   sceneId?: string | null;
   twinId?: string | null;
-  hyperparameters?: Hyperparameters;
+  // reward_model/annotate jobs carry their own hyperparameter shapes; the
+  // column is a JSON string so all variants serialize the same way.
+  hyperparameters?: Hyperparameters | RewardModelHyperparameters | AnnotateHyperparameters;
   gpuRequirements?: GpuRequirements;
   totalEpochs?: number;
 }

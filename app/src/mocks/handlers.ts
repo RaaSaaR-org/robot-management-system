@@ -211,6 +211,59 @@ export const handlers = [
   }),
 
   // ========================================================================
+  // Reward-model evaluation + annotations + incident clips (LeRobot 0.6.0,
+  // TASK-179) — demo data so the new panels render in demo mode
+  // ========================================================================
+
+  http.get('/api/evaluation/rewards', () => {
+    return HttpResponse.json({ rewards: DEMO_EPISODE_REWARDS });
+  }),
+
+  http.post('/api/evaluation/reward-model', () => {
+    return HttpResponse.json({ jobId: 'demo-reward-job-1' }, { status: 201 });
+  }),
+
+  http.get('/api/evaluation/reward-model/:jobId', ({ params }) => {
+    return HttpResponse.json({
+      job: { id: String(params.jobId), status: 'completed', progress: 100 },
+      rewards: DEMO_EPISODE_REWARDS,
+    });
+  }),
+
+  http.get('/api/datasets/:id/annotations', () => {
+    return HttpResponse.json({ annotations: DEMO_ANNOTATIONS });
+  }),
+
+  http.post('/api/datasets/:id/annotate', () => {
+    return HttpResponse.json({ jobId: 'demo-annotate-job-1' }, { status: 201 });
+  }),
+
+  http.get('/api/incidents/:id/clip', () => {
+    return HttpResponse.json({
+      format: 'jpeg-frames',
+      fps: 5,
+      capturedAt: '2026-07-04T12:00:00Z',
+      frames: Array.from({ length: 15 }, () => DEMO_JPEG_FRAME_B64),
+    });
+  }),
+
+  http.post('/api/skills/:id/execute', async ({ params, request }) => {
+    const body = (await request.json()) as { robotId?: string; parameters?: Record<string, unknown> };
+    const startedAt = new Date().toISOString();
+    return HttpResponse.json({
+      skillId: String(params.id),
+      robotId: body?.robotId ?? 'demo-h1-001',
+      status: 'completed',
+      startedAt,
+      completedAt: startedAt,
+      duration: 4200,
+      parameters: body?.parameters ?? {},
+      output: { note: 'demo execution' },
+      retryCount: 0,
+    });
+  }),
+
+  // ========================================================================
   // Marketplace (Skill & Data Marketplace demo data)
   // ========================================================================
 
@@ -508,3 +561,71 @@ const DEMO_EPISODES = [
   { index: 2, frameCount: 22, durationSeconds: 0.73, flagged: false },
   { index: 3, frameCount: 23, durationSeconds: 0.77, flagged: true },
 ];
+
+// ============================================================================
+// Reward-model / annotation / incident-clip demo data (TASK-179)
+// ============================================================================
+
+/** Smooth 0→target progress curve with a little noise, `n` samples. */
+function demoProgressCurve(n: number, target: number): number[] {
+  return Array.from({ length: n }, (_, i) => {
+    const t = i / (n - 1);
+    const sigmoid = 1 / (1 + Math.exp(-10 * (t - 0.5)));
+    const noise = 0.02 * Math.sin(i * 1.7);
+    return +Math.min(1, Math.max(0, target * sigmoid + noise)).toFixed(4);
+  });
+}
+
+const DEMO_EPISODE_REWARDS = [
+  {
+    id: 'demo-reward-ep0',
+    datasetId: 'demo-g1-edu',
+    episodeIndex: 0,
+    rewardType: 'robometer',
+    score: 0.87,
+    success: true,
+    curve: demoProgressCurve(20, 0.9),
+    fps: 30,
+    jobId: 'demo-reward-job-1',
+    createdAt: '2026-07-04T12:00:00Z',
+  },
+  {
+    id: 'demo-reward-ep1',
+    datasetId: 'demo-g1-edu',
+    episodeIndex: 1,
+    rewardType: 'robometer',
+    score: 0.34,
+    success: false,
+    curve: demoProgressCurve(21, 0.38),
+    fps: 30,
+    jobId: 'demo-reward-job-1',
+    createdAt: '2026-07-04T12:00:00Z',
+  },
+];
+
+const DEMO_ANNOTATIONS = [
+  {
+    episodeIndex: 0,
+    subtasks: [
+      { startS: 0.0, endS: 0.3, text: 'Reach toward the red cube' },
+      { startS: 0.3, endS: 0.5, text: 'Grasp the cube with the Dex3 hand' },
+      { startS: 0.5, endS: 0.67, text: 'Place the cube in the target bin' },
+    ],
+    vqa: [
+      { question: 'Which object is being manipulated?', answer: 'A red cube on the table.' },
+      { question: 'Did the grasp succeed?', answer: 'Yes, the cube is lifted cleanly.' },
+    ],
+  },
+  {
+    episodeIndex: 1,
+    subtasks: [
+      { startS: 0.0, endS: 0.4, text: 'Reach toward the red cube' },
+      { startS: 0.4, endS: 0.7, text: 'Attempt grasp — cube slips from the fingers' },
+    ],
+    vqa: [{ question: 'Did the grasp succeed?', answer: 'No, the cube slipped during closing.' }],
+  },
+];
+
+/** Minimal valid 1x1 JPEG (base64) reused for every demo clip frame. */
+const DEMO_JPEG_FRAME_B64 =
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigD//2Q==';

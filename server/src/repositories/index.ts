@@ -90,6 +90,21 @@ export {
   type ListingFilter,
 } from './MarketplaceRepository.js';
 
+// LeRobot 0.6.0 adoption (TASK-179)
+export {
+  episodeRewardRepository,
+  EpisodeRewardRepository,
+  type EpisodeReward,
+  type UpsertEpisodeRewardInput,
+} from './EpisodeRewardRepository.js';
+export {
+  interventionEpisodeRepository,
+  InterventionEpisodeRepository,
+  type InterventionEpisode,
+  type InterventionStep,
+  type CreateInterventionEpisodeInput,
+} from './InterventionEpisodeRepository.js';
+
 // VLA (Vision-Language-Action) Training Management
 export {
   robotTypeRepository,

@@ -5,10 +5,33 @@
  */
 
 import { prisma } from '../database/index.js';
+import { episodeRewardRepository, type EpisodeReward } from '../repositories/index.js';
+import type { RewardType } from '../types/vla.types.js';
+import type { SubmitRewardModelJobRequest } from '../types/training.types.js';
 
 // ============================================================================
 // TYPES
 // ============================================================================
+
+/**
+ * Wire shape of an EpisodeReward in API responses (TASK-179 contract §3) —
+ * `curve` is parsed to number[] by the repository.
+ */
+export type EpisodeRewardDto = EpisodeReward;
+
+/** Job summary embedded in GET /api/evaluation/reward-model/:jobId. */
+export interface RewardModelJobStatus {
+  id: string;
+  status: string;
+  progress: number;
+  error?: string;
+}
+
+/** Response of GET /api/evaluation/reward-model/:jobId. */
+export interface RewardModelJobResponse {
+  job: RewardModelJobStatus;
+  rewards: EpisodeRewardDto[];
+}
 
 export interface RecordEpisodeDto {
   robotId: string;
@@ -103,6 +126,52 @@ export class EvaluationService {
     }
     if (filters.success !== undefined) where.success = filters.success;
     return where;
+  }
+
+  // ==========================================================================
+  // REWARD-MODEL EVALUATION (LeRobot 0.6.0 Robometer/TOPReward, TASK-179 §3)
+  // ==========================================================================
+
+  /**
+   * Start a reward-model evaluation: creates a TrainingJob of kind
+   * `reward_model` (baseModel mirrors the rewardType) that a training-worker
+   * claims over HTTP. Returns the created job id.
+   */
+  async startRewardModelEvaluation(request: SubmitRewardModelJobRequest): Promise<{ jobId: string }> {
+    // Lazy import to keep this service's static dependency graph light (the
+    // training service pulls in NATS messaging).
+    const { trainingJobService } = await import('./TrainingJobService.js');
+    const job = await trainingJobService.submitRewardModelJob(request);
+    return { jobId: job.id };
+  }
+
+  /**
+   * Get a reward_model job's status plus the EpisodeReward rows it has
+   * produced so far. Returns null when the job does not exist.
+   */
+  async getRewardModelJob(jobId: string): Promise<RewardModelJobResponse | null> {
+    const { trainingJobService } = await import('./TrainingJobService.js');
+    const job = await trainingJobService.getJob(jobId);
+    if (!job) {
+      return null;
+    }
+    const rewards = await episodeRewardRepository.findByJob(jobId);
+    return {
+      job: {
+        id: job.id,
+        status: job.status,
+        progress: job.progress,
+        ...(job.errorMessage ? { error: job.errorMessage } : {}),
+      },
+      rewards,
+    };
+  }
+
+  /**
+   * List episode rewards for a dataset (curves parsed to number[]).
+   */
+  async getRewards(datasetId: string, rewardType?: RewardType): Promise<EpisodeRewardDto[]> {
+    return episodeRewardRepository.findByDataset(datasetId, rewardType);
   }
 
   /**

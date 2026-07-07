@@ -12,6 +12,8 @@ import type {
   Hyperparameters,
   GpuRequirements,
   TrainingMetrics,
+  RewardType,
+  EpisodeAnnotation,
 } from './vla.types.js';
 
 // ============================================================================
@@ -140,6 +142,29 @@ export interface SubmitSimRlJobRequest {
 }
 
 /**
+ * Request for submitting a reward_model job (TASK-179 contract §3). Created
+ * via POST /api/evaluation/reward-model; claimed over HTTP by the
+ * training-worker (kinds includes 'reward_model') — no NATS enqueue.
+ */
+export interface SubmitRewardModelJobRequest {
+  datasetId: string;
+  rewardType: RewardType;
+  episodes?: number[];
+  task?: string;
+  imageKey?: string;
+  maxFrames?: number;
+}
+
+/**
+ * Request for submitting an annotate job (TASK-179 contract §4). Created via
+ * POST /api/datasets/:id/annotate; claimed over HTTP like reward_model jobs.
+ */
+export interface SubmitAnnotateJobRequest {
+  datasetId: string;
+  episodes?: number[];
+}
+
+/**
  * Response for training job submission
  */
 export interface SubmitTrainingJobResponse {
@@ -231,21 +256,41 @@ export interface WorkerProgressResponse {
 }
 
 /**
+ * Per-episode reward result reported by a reward_model worker
+ * (TASK-179 contract §1).
+ */
+export interface WorkerEpisodeReward {
+  episodeIndex: number;
+  score: number;
+  success: boolean | null;
+  curve: number[];
+  fps: number | null;
+}
+
+/**
  * Worker completion request
  */
 export interface WorkerCompleteRequest {
   jobId: string;
   artifactUri: string;
   finalMetrics: {
-    finalLoss: number;
+    // Loss/epoch summary — present for supervised jobs; reward_model and
+    // annotate completions (TASK-179) carry only their result payloads.
+    finalLoss?: number;
     validationLoss?: number;
-    trainingTimeSeconds: number;
-    bestEpoch: number;
+    trainingTimeSeconds?: number;
+    bestEpoch?: number;
     // sim-RL quality summary (TASK-172.C); present only for `sim_rl` jobs.
     meanReward?: number;
     successRate?: number;
     totalTimesteps?: number;
     trainer?: string;
+    // reward_model results (TASK-179); present only for `reward_model` jobs.
+    kind?: string;
+    rewardType?: RewardType;
+    rewards?: WorkerEpisodeReward[];
+    // annotate results (TASK-179); present only for `annotate` jobs.
+    annotations?: EpisodeAnnotation[];
   };
 }
 
