@@ -80,9 +80,11 @@ export function DatasetEpisodesPage() {
   // Derive joint names from dataset features
   const jointNames = useMemo(() => {
     if (!dataset?.infoJson?.features) return Object.keys(JOINT_COLORS);
-    const actionFeature = (dataset.infoJson.features as Record<string, { names?: string[] }>)?.['action'];
+    const actionFeature = (dataset.infoJson.features as Record<string, { names?: unknown[] }>)?.['action'];
     if (actionFeature?.names?.length) {
-      return actionFeature.names.map((n: string) => n.replace('.pos', ''));
+      // Unitree-style datasets nest names as [["kLeftShoulderPitch", ...]] — flatten first
+      const flat = actionFeature.names.flat(2).filter((n): n is string => typeof n === 'string');
+      if (flat.length) return flat.map((n) => n.replace('.pos', ''));
     }
     return Object.keys(JOINT_COLORS);
   }, [dataset]);
