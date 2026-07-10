@@ -54,6 +54,15 @@ const fieldConfigs: FieldConfig[] = [
     helpText: 'Number of complete passes through the dataset',
   },
   {
+    name: 'max_steps',
+    label: 'Max Steps',
+    type: 'number',
+    min: 0,
+    max: 200000,
+    step: 100,
+    helpText: 'Hard cap on optimizer steps. GR00T trains for exactly this many steps (ignores epochs). Leave blank for the trainer default.',
+  },
+  {
     name: 'warmup_steps',
     label: 'Warmup Steps',
     type: 'number',
@@ -176,6 +185,15 @@ export function HyperparameterForm({
   disabled,
 }: HyperparameterFormProps) {
   const handleChange = (name: keyof HyperparametersInput, value: number) => {
+    // A cleared number input yields NaN — drop the key so optional fields
+    // (e.g. Max Steps) fall back to the trainer default instead of sending
+    // an invalid null that the server's Zod schema would reject.
+    if (Number.isNaN(value)) {
+      const next = { ...values };
+      delete next[name];
+      onChange(next);
+      return;
+    }
     onChange({ ...values, [name]: value });
   };
 

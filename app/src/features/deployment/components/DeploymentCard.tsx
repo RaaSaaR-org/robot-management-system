@@ -4,7 +4,7 @@
  * @feature deployment
  */
 
-import { Card } from '@/shared/components/ui';
+import { Card, Button } from '@/shared/components/ui';
 import { ProgressBar } from '@/shared/components/ui';
 import { cn } from '@/shared/utils';
 import type { Deployment } from '../types';
@@ -13,6 +13,8 @@ import { DeploymentStatusBadge } from './DeploymentStatusBadge';
 export interface DeploymentCardProps {
   deployment: Deployment;
   onClick?: () => void;
+  /** Secondary action: opens the rollback flow (rendered as an explicit button) */
+  onRollback?: () => void;
   selected?: boolean;
   className?: string;
 }
@@ -48,6 +50,7 @@ function formatRelativeTime(dateString: string | undefined): string {
 export function DeploymentCard({
   deployment,
   onClick,
+  onRollback,
   selected,
   className,
 }: DeploymentCardProps) {
@@ -105,9 +108,23 @@ export function DeploymentCard({
           )}
         </div>
 
-        {/* Timestamp */}
-        <div className="text-xs text-theme-tertiary">
-          {formatRelativeTime(deployment.startedAt || deployment.createdAt)}
+        {/* Timestamp + secondary actions */}
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-theme-tertiary">
+            {formatRelativeTime(deployment.startedAt || deployment.createdAt)}
+          </div>
+          {onRollback && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRollback();
+              }}
+            >
+              Rollback
+            </Button>
+          )}
         </div>
       </div>
     </Card>

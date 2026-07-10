@@ -21,6 +21,11 @@ import type { Cluster } from '../utils/markerClustering';
 const PADDING = 40;
 const SCALE = 10; // pixels per unit
 
+// Cluster count bubbles are lifted above the actual cluster point so they
+// don't sit on top of zone labels / markers at that spot; a thin stem and an
+// anchor dot keep the badge visually tied to its position.
+const CLUSTER_BADGE_OFFSET = 28;
+
 // Status colors for legend (matching futuristic theme)
 const STATUS_COLORS = {
   online: '#18E4C3',   // turquoise
@@ -519,10 +524,22 @@ export function FleetMap({
                       onMouseEnter={() => setHoveredCluster(cluster)}
                       onMouseLeave={() => setHoveredCluster(null)}
                     >
+                      {/* Anchor dot at the actual cluster point */}
+                      <circle cx="0" cy="0" r="2.5" fill="#18E4C3" opacity="0.9" />
+                      {/* Stem connecting the lifted badge to its point */}
+                      <line
+                        x1="0"
+                        y1="-3"
+                        x2="0"
+                        y2={-(CLUSTER_BADGE_OFFSET - 14)}
+                        stroke="#18E4C3"
+                        strokeWidth="1"
+                        opacity="0.6"
+                      />
                       {/* Outer glow ring */}
                       <circle
                         cx="0"
-                        cy="0"
+                        cy={-CLUSTER_BADGE_OFFSET}
                         r={isHovered ? 22 : 18}
                         fill="rgba(42, 95, 255, 0.15)"
                         stroke="#2A5FFF"
@@ -532,7 +549,7 @@ export function FleetMap({
                       {/* Inner circle */}
                       <circle
                         cx="0"
-                        cy="0"
+                        cy={-CLUSTER_BADGE_OFFSET}
                         r="14"
                         fill="rgba(15, 23, 42, 0.9)"
                         stroke="#18E4C3"
@@ -542,7 +559,7 @@ export function FleetMap({
                       {/* Count text */}
                       <text
                         x="0"
-                        y="1"
+                        y={1 - CLUSTER_BADGE_OFFSET}
                         textAnchor="middle"
                         dominantBaseline="middle"
                         fontSize="11"
@@ -555,7 +572,7 @@ export function FleetMap({
 
                       {/* Hover tooltip with robot names */}
                       {isHovered && (
-                        <g transform="translate(24, -10)">
+                        <g transform={`translate(24, ${-10 - CLUSTER_BADGE_OFFSET})`}>
                           <rect
                             x="0"
                             y="0"

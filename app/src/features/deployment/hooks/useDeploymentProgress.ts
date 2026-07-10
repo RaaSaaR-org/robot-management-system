@@ -38,6 +38,11 @@ export function useDeploymentProgress(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isConnectedRef = useRef(false);
+  // Set while we close the socket ourselves (unmount/disconnect): the ensuing
+  // onclose/onerror are expected — no error log, no auto-reconnect. Prevents
+  // StrictMode's mount→unmount→mount from logging an error pair per visit and
+  // from leaking a post-unmount reconnect socket.
+  const intentionalCloseRef = useRef(false);
 
   // Store onEvent in a ref to avoid re-creating callbacks
   const onEventRef = useRef(onEvent);
@@ -86,6 +91,7 @@ export function useDeploymentProgress(
       return;
     }
 
+    intentionalCloseRef.current = false;
     try {
       const ws = new WebSocket(url);
 
@@ -98,6 +104,9 @@ export function useDeploymentProgress(
 
       ws.onclose = () => {
         isConnectedRef.current = false;
+        if (intentionalCloseRef.current || wsRef.current !== ws) {
+          return; // deliberately closed or superseded — no reconnect, no noise
+        }
         console.debug('Deployment WebSocket closed');
 
         if (autoReconnect) {
@@ -108,6 +117,9 @@ export function useDeploymentProgress(
       };
 
       ws.onerror = (error) => {
+        if (intentionalCloseRef.current || wsRef.current !== ws) {
+          return;
+        }
         console.error('Deployment WebSocket error:', error);
       };
 
@@ -124,6 +136,7 @@ export function useDeploymentProgress(
     }
 
     if (wsRef.current) {
+      intentionalCloseRef.current = true;
       wsRef.current.close();
       wsRef.current = null;
     }

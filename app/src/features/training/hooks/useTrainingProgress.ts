@@ -35,6 +35,12 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  // Distinguishes our own close() (unmount / reconnect swap — expected, must
+  // not log an error or schedule a reconnect) from a genuine connection drop.
+  // Without it, React StrictMode's mount→unmount→mount logs a scary
+  // error+reconnect pair on every page visit, and the post-unmount reconnect
+  // leaks a socket nobody owns.
+  const intentionalCloseRef = useRef(false);
   const handleEvent = useTrainingStore((state) => state.handleTrainingEvent);
 
   const connect = useCallback(() => {
@@ -45,8 +51,10 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
 
     // Clean up existing connection
     if (wsRef.current) {
+      intentionalCloseRef.current = true;
       wsRef.current.close();
     }
+    intentionalCloseRef.current = false;
 
     try {
       const ws = new WebSocket(getWebSocketUrl());
@@ -72,6 +80,9 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
 
       ws.onclose = () => {
         setIsConnected(false);
+        if (intentionalCloseRef.current || wsRef.current !== ws) {
+          return; // deliberately closed or superseded — no reconnect, no noise
+        }
         console.log('[TrainingProgress] WebSocket disconnected');
 
         // Auto-reconnect after 5 seconds
@@ -81,6 +92,9 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
       };
 
       ws.onerror = (error) => {
+        if (intentionalCloseRef.current || wsRef.current !== ws) {
+          return;
+        }
         console.error('[TrainingProgress] WebSocket error:', error);
       };
     } catch (error) {
@@ -104,6 +118,7 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
+        intentionalCloseRef.current = true;
         wsRef.current.close();
       }
     };

@@ -64,6 +64,9 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isConnectedRef = useRef(false);
+  // Set when we close the socket ourselves (cleanup/unmount). A socket closed
+  // mid-handshake fires an error event — that's expected, not worth logging.
+  const intentionalCloseRef = useRef(false);
 
   // Get store actions
   const addRobot = useRobotsStore((s) => s.addRobot);
@@ -140,6 +143,8 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
       return;
     }
 
+    intentionalCloseRef.current = false;
+
     try {
       console.log('[RobotWebSocket] Connecting to', url);
       const ws = new WebSocket(url);
@@ -166,6 +171,9 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
       };
 
       ws.onerror = (error) => {
+        // A deliberately closed socket (cleanup/unmount or superseded
+        // connection) fires an error event — don't log noise for it.
+        if (intentionalCloseRef.current || wsRef.current !== ws) return;
         console.error('[RobotWebSocket] Error:', error);
       };
 
@@ -177,6 +185,8 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
+    intentionalCloseRef.current = true;
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;

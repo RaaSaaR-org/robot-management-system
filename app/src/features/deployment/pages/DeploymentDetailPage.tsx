@@ -388,7 +388,7 @@ export function DeploymentDetailPage() {
           )}
 
           {/* Target filters */}
-          {(deployment.targetRobotTypes?.length || deployment.targetZones?.length) && (
+          {!!(deployment.targetRobotTypes?.length || deployment.targetZones?.length) && (
             <Card className="p-4 space-y-4">
               <h4 className="font-medium text-theme-primary">Target Filters</h4>
               {deployment.targetRobotTypes && deployment.targetRobotTypes.length > 0 && (

@@ -59,6 +59,12 @@ export interface Hyperparameters {
   weight_decay?: number;
   gradient_accumulation_steps?: number;
   max_grad_norm?: number;
+  /**
+   * Hard cap on optimizer steps. Step-based trainers (GR00T-N1.7 via
+   * Isaac-GR00T) train for exactly this many steps and ignore `epochs`;
+   * when unset the trainer falls back to its own default (2000).
+   */
+  max_steps?: number;
 }
 
 /** Input type for hyperparameter form */
@@ -73,6 +79,8 @@ export interface HyperparametersInput {
   weight_decay?: number;
   gradient_accumulation_steps?: number;
   max_grad_norm?: number;
+  /** Hard cap on optimizer steps (GR00T step-based trainers). */
+  max_steps?: number;
 }
 
 export interface GpuRequirements {
@@ -471,11 +479,28 @@ export interface EpisodeAnnotation {
 // EPISODE VIEWER TYPES
 // ============================================================================
 
+/**
+ * Playback window of an episode inside a LeRobot v3.0 chunk video (v3.0
+ * concatenates all episodes of a chunk into one mp4 per camera).
+ */
+export interface EpisodeVideoWindow {
+  /** Episode start inside the chunk video (seconds) */
+  from: number;
+  /** Episode end inside the chunk video (seconds) */
+  to: number;
+  /** chunk-{chunk:03d} the episode's video lives in */
+  chunk: number;
+  /** file-{file:03d} within the chunk (multi-file chunks) */
+  file: number;
+}
+
 export interface EpisodeMeta {
   index: number;
   frameCount: number;
   durationSeconds: number;
   flagged: boolean;
+  /** v3.0 chunked datasets only: per-camera playback windows (short camera key) */
+  videoWindows?: Record<string, EpisodeVideoWindow>;
 }
 
 export interface FrameData {

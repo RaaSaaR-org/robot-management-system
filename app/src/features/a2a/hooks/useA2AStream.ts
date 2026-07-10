@@ -52,6 +52,9 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  // Set when we close the socket ourselves (cleanup/unmount). A socket closed
+  // mid-handshake fires an error event — that's expected, not worth logging.
+  const intentionalCloseRef = useRef(false);
 
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +96,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
     }
 
     setError(null);
+    intentionalCloseRef.current = false;
 
     try {
       const ws = new WebSocket(getWebSocketUrl());
@@ -155,6 +159,9 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
       };
 
       ws.onerror = (event) => {
+        // A deliberately closed socket (cleanup/unmount or superseded
+        // connection) fires an error event — don't log noise for it.
+        if (intentionalCloseRef.current || wsRef.current !== ws) return;
         console.error('A2A WebSocket error:', event);
         if (mountedRef.current) {
           setError('WebSocket connection error');
@@ -176,6 +183,8 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
   ]);
 
   const disconnect = useCallback(() => {
+    intentionalCloseRef.current = true;
+
     // Clear reconnect timeout
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -206,6 +215,8 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
     return () => {
       // Mark as unmounted first to prevent state updates
       mountedRef.current = false;
+      // The close below is deliberate — suppress the resulting error event log
+      intentionalCloseRef.current = true;
 
       // Clean up on unmount
       if (reconnectTimeoutRef.current) {

@@ -22,6 +22,7 @@ import type {
   UploadInitiateResponse,
   HFDataset,
   EpisodeMeta,
+  EpisodeVideoWindow,
   FrameData,
   CurationResult,
   EpisodeAnnotation,
@@ -184,11 +185,23 @@ export const trainingApi = {
   },
 
   /**
-   * Get video URL for an episode camera
+   * Get video URL for an episode camera.
+   *
+   * For v3.0 chunked datasets pass the episode's `videoWindows[camera]`: the
+   * chunk/file query selects the right concatenated mp4 server-side and the
+   * `#t=from,to` media fragment makes the browser play only this episode's
+   * slice of it.
    */
-  getEpisodeVideoUrl(datasetId: string, episodeIndex: number, camera: string): string {
+  getEpisodeVideoUrl(
+    datasetId: string,
+    episodeIndex: number,
+    camera: string,
+    window?: EpisodeVideoWindow
+  ): string {
     const baseUrl = apiClient.defaults.baseURL ?? '';
-    return `${baseUrl}/datasets/${datasetId}/episodes/${episodeIndex}/video/${camera}`;
+    const path = `${baseUrl}/datasets/${datasetId}/episodes/${episodeIndex}/video/${camera}`;
+    if (!window) return path;
+    return `${path}?chunk=${window.chunk}&file=${window.file}#t=${window.from},${window.to}`;
   },
 
   /**

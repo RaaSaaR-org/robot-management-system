@@ -76,8 +76,15 @@ export function TrainingProgressMonitor({
 }: TrainingProgressMonitorProps) {
   const status = statusConfig[job.status];
   const eta = calculateETA(job);
+  // For terminal jobs, "Elapsed" is the actual run duration (completedAt −
+  // startedAt), not wall-clock time since start — which keeps growing forever.
+  const isTerminal =
+    job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+  const elapsedEnd = isTerminal
+    ? new Date(job.completedAt ?? job.updatedAt).getTime()
+    : Date.now();
   const elapsed = job.startedAt
-    ? formatDuration(Date.now() - new Date(job.startedAt).getTime())
+    ? formatDuration(Math.max(0, elapsedEnd - new Date(job.startedAt).getTime()))
     : null;
 
   return (

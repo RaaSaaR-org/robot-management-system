@@ -6,6 +6,7 @@
 
 import type { Robot, RobotTelemetry, RobotCommand } from '../../types/robots.types';
 import type { Process } from '@/features/processes/types';
+import type { WebSocketStatus } from '@/shared/types/api.types';
 
 /**
  * Common props shared across all tab components
@@ -27,6 +28,10 @@ export interface TelemetryTabProps extends TabCommonProps {
   isTelemetryConnected: boolean;
   /** Last telemetry update timestamp */
   telemetryLastUpdate: Date | null;
+  /** Telemetry stream status (drives the unavailable/error state) */
+  telemetryStatus?: WebSocketStatus;
+  /** Retry the telemetry connection after an error */
+  onTelemetryRetry?: () => void;
 }
 
 /**

@@ -625,6 +625,11 @@ export function TrainingJobWizard({
                     <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
                       {form.kind === 'sim_rl' ? 'Iterations' : 'Epochs'}: {form.hyperparameters.epochs}
                     </span>
+                    {form.kind !== 'sim_rl' && form.hyperparameters.max_steps != null && (
+                      <span className="px-2 py-1 bg-theme-primary/5 rounded text-sm">
+                        Max Steps: {form.hyperparameters.max_steps}
+                      </span>
+                    )}
                     {form.kind !== 'sim_rl' &&
                       form.fineTuneMethod === 'lora' &&
                       form.hyperparameters.lora_rank && (
