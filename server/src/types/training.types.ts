@@ -96,8 +96,12 @@ export type TrainingJobEventCallback = (event: TrainingJobEvent) => void;
  */
 export interface QueueStats {
   pending: number;
+  /** Jobs in the `queued` state (populated by the DB-derived fallback). */
+  queued?: number;
   running: number;
   completed: number;
+  /** Completed within the last 24h (populated by the DB-derived fallback). */
+  completed_24h?: number;
   failed: number;
   streamInfo: {
     messages: number;

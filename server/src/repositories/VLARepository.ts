@@ -261,7 +261,17 @@ function dbModelVersionToDomain(db: PrismaModelVersion): ModelVersion {
 // HELPER FUNCTIONS - Deployment
 // ============================================================================
 
-function dbDeploymentToDomain(db: PrismaDeployment): Deployment {
+/** Prisma Deployment row with the optional modelVersion (+ skill) relation loaded */
+type PrismaDeploymentWithRelations = PrismaDeployment & {
+  modelVersion?: (PrismaModelVersion & { skill?: PrismaSkillDefinition | null }) | null;
+};
+
+/** Shared include so all deployment reads return the nested modelVersion + skill */
+const deploymentInclude = {
+  modelVersion: { include: { skill: true } },
+} as const;
+
+function dbDeploymentToDomain(db: PrismaDeploymentWithRelations): Deployment {
   return {
     id: db.id,
     modelVersionId: db.modelVersionId,
@@ -278,6 +288,14 @@ function dbDeploymentToDomain(db: PrismaDeployment): Deployment {
     completedAt: db.completedAt ?? undefined,
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
+    modelVersion: db.modelVersion
+      ? {
+          ...dbModelVersionToDomain(db.modelVersion),
+          skill: db.modelVersion.skill
+            ? dbSkillDefinitionToDomain(db.modelVersion.skill)
+            : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -1020,6 +1038,7 @@ export class DeploymentRepository {
           failureRate: 0.1,
         }),
       },
+      include: deploymentInclude,
     });
     return dbDeploymentToDomain(deployment);
   }
@@ -1027,6 +1046,7 @@ export class DeploymentRepository {
   async findById(id: string): Promise<Deployment | null> {
     const deployment = await prisma.deployment.findUnique({
       where: { id },
+      include: deploymentInclude,
     });
     return deployment ? dbDeploymentToDomain(deployment) : null;
   }
@@ -1044,6 +1064,7 @@ export class DeploymentRepository {
         orderBy: { createdAt: 'desc' },
         skip,
         take: pageSize,
+        include: deploymentInclude,
       }),
       prisma.deployment.count({ where }),
     ]);
@@ -1065,6 +1086,7 @@ export class DeploymentRepository {
         status: { in: ['deploying', 'canary', 'production'] },
       },
       orderBy: { createdAt: 'desc' },
+      include: deploymentInclude,
     });
     return deployments.map(dbDeploymentToDomain);
   }
@@ -1073,6 +1095,7 @@ export class DeploymentRepository {
     const deployments = await prisma.deployment.findMany({
       where: { modelVersionId },
       orderBy: { createdAt: 'desc' },
+      include: deploymentInclude,
     });
     return deployments.map(dbDeploymentToDomain);
   }
@@ -1081,6 +1104,7 @@ export class DeploymentRepository {
     const deployments = await prisma.deployment.findMany({
       where: { status },
       orderBy: { createdAt: 'desc' },
+      include: deploymentInclude,
     });
     return deployments.map(dbDeploymentToDomain);
   }
@@ -1101,6 +1125,7 @@ export class DeploymentRepository {
       const deployment = await prisma.deployment.update({
         where: { id },
         data: updateData,
+        include: deploymentInclude,
       });
       return dbDeploymentToDomain(deployment);
     } catch {

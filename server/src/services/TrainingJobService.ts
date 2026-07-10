@@ -470,10 +470,44 @@ export class TrainingJobService extends EventEmitter {
    * Get queue statistics
    */
   async getQueueStats(): Promise<QueueStats | null> {
-    if (!this.jobQueue) {
-      return null;
+    // Job-status counts always come from the DB: the HTTP claim worker drives
+    // the job lifecycle through the DB whether or not JetStream is connected
+    // (the NATS stream is only a delivery channel — its cursor counts are not
+    // job states, and its shape lacks queued/completed_24h, which left those
+    // stats blank in the UI whenever NATS was up). JetStream, when present,
+    // contributes only the stream diagnostics.
+    const [pending, queued, running, completed, failed] = await Promise.all([
+      trainingJobRepository.findByStatus('pending'),
+      trainingJobRepository.findByStatus('queued'),
+      trainingJobRepository.findByStatus('running'),
+      trainingJobRepository.findByStatus('completed'),
+      trainingJobRepository.findByStatus('failed'),
+    ]);
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const completed24h = completed.filter(
+      (j) => new Date(j.completedAt ?? j.updatedAt).getTime() >= dayAgo
+    ).length;
+
+    let streamInfo: QueueStats['streamInfo'] = {
+      messages: 0, bytes: 0, firstSeq: 0, lastSeq: 0, consumerCount: 0,
+    };
+    if (this.jobQueue) {
+      try {
+        streamInfo = (await this.jobQueue.getQueueStats()).streamInfo;
+      } catch {
+        // JetStream hiccup — keep the zeroed diagnostics, counts stay valid
+      }
     }
-    return await this.jobQueue.getQueueStats();
+
+    return {
+      pending: pending.length,
+      queued: queued.length,
+      running: running.length,
+      completed: completed.length,
+      completed_24h: completed24h,
+      failed: failed.length,
+      streamInfo,
+    };
   }
 
   // ============================================================================

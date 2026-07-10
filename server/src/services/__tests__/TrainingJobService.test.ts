@@ -29,6 +29,7 @@ vi.mock('../../repositories/index.js', () => ({
     create: vi.fn(),
     findById: vi.fn(),
     findAll: vi.fn(),
+    findByStatus: vi.fn(),
     update: vi.fn(),
   },
   datasetRepository: {
@@ -601,23 +602,54 @@ describe('getActiveJobs', () => {
 // ===========================================================================
 
 describe('getQueueStats', () => {
-  it('returns null when no queue is present', async () => {
+  // Counts always come from the DB — the HTTP claim worker drives the job
+  // lifecycle through the DB whether or not JetStream is connected; the queue
+  // (when present) contributes only stream diagnostics.
+  const mockStatusCounts = () => {
+    trainingJobRepository.findByStatus.mockImplementation(async (status: string) => {
+      const byStatus: Record<string, ReturnType<typeof makeJob>[]> = {
+        pending: [makeJob({ status: 'pending' })],
+        queued: [],
+        running: [makeJob({ status: 'running' }), makeJob({ status: 'running' })],
+        completed: [makeJob({ status: 'completed', completedAt: new Date().toISOString() })],
+        failed: [],
+      };
+      return byStatus[status] ?? [];
+    });
+  };
+
+  it('derives counts from the DB with zeroed streamInfo when no queue is present', async () => {
     setJobQueue(null);
-    await expect(trainingJobService.getQueueStats()).resolves.toBeNull();
+    mockStatusCounts();
+    const stats = await trainingJobService.getQueueStats();
+    expect(stats).toMatchObject({
+      pending: 1,
+      queued: 0,
+      running: 2,
+      completed: 1,
+      completed_24h: 1,
+      failed: 0,
+    });
+    expect(stats?.streamInfo).toEqual({
+      messages: 0, bytes: 0, firstSeq: 0, lastSeq: 0, consumerCount: 0,
+    });
   });
 
-  it('delegates to the queue when present', async () => {
+  it('keeps DB counts and takes only streamInfo from the queue when present', async () => {
     const queue = makeJobQueue();
     setJobQueue(queue);
-    const stats: QueueStats = {
-      pending: 1,
-      running: 2,
-      completed: 3,
-      failed: 0,
+    mockStatusCounts();
+    const queueStats: QueueStats = {
+      pending: 99, // must be ignored — JetStream cursors are not job states
+      running: 99,
+      completed: 99,
+      failed: 99,
       streamInfo: { messages: 6, bytes: 100, firstSeq: 1, lastSeq: 6, consumerCount: 1 },
     };
-    queue.getQueueStats.mockResolvedValue(stats);
-    await expect(trainingJobService.getQueueStats()).resolves.toBe(stats);
+    queue.getQueueStats.mockResolvedValue(queueStats);
+    const stats = await trainingJobService.getQueueStats();
+    expect(stats).toMatchObject({ pending: 1, running: 2, completed: 1, failed: 0 });
+    expect(stats?.streamInfo).toEqual(queueStats.streamInfo);
   });
 });
 

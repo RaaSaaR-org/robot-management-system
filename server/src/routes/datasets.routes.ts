@@ -843,11 +843,30 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
         while ((row = await cursor.next() as Record<string, unknown> | null)) {
           const frameCount = Number(row['length'] ?? row['num_frames'] ?? 0);
           const epIndex = Number(row['episode_index'] ?? episodes.length);
+
+          // v3.0 chunked video: per-camera playback windows so the client can
+          // play just this episode's slice of the concatenated chunk mp4
+          // (columns: videos/observation.images.<cam>/{from,to,chunk,file}).
+          const videoWindows: Record<string, { from: number; to: number; chunk: number; file: number }> = {};
+          for (const col of Object.keys(row)) {
+            const m = /^videos\/observation\.images\.(.+)\/from_timestamp$/.exec(col);
+            if (!m) continue;
+            const cam = m[1];
+            const base = `videos/observation.images.${cam}`;
+            videoWindows[cam] = {
+              from: Number(row[col] ?? 0),
+              to: Number(row[`${base}/to_timestamp`] ?? 0),
+              chunk: Number(row[`${base}/chunk_index`] ?? 0),
+              file: Number(row[`${base}/file_index`] ?? 0),
+            };
+          }
+
           episodes.push({
             index: epIndex,
             frameCount,
             durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
             flagged: false,
+            ...(Object.keys(videoWindows).length > 0 ? { videoWindows } : {}),
           });
         }
         await reader.close();
@@ -1009,11 +1028,27 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
       return res.status(404).json({ error: 'Video not found for synthetic dataset' });
     }
 
-    // LeRobot v3 video path: videos/observation.images.{camera}/chunk-{chunk:03d}/file-000.mp4
-    // One video file per chunk containing all episodes concatenated
+    // Optional exact chunk/file coordinates from the episodes API's
+    // videoWindows (v3.0 multi-file chunks, see #179); fall back to the
+    // legacy floor(ep/1000) guess when absent.
     const CHUNKS_SIZE = 1000;
-    const chunkIndex = Math.floor(episodeIndex / CHUNKS_SIZE);
-    const videoPath = `videos/observation.images.${camera}/chunk-${String(chunkIndex).padStart(3, '0')}/file-000.mp4`;
+    const chunkQ = parseInt(String(req.query.chunk ?? ''), 10);
+    const fileQ = parseInt(String(req.query.file ?? ''), 10);
+    const chunkIndex = Number.isFinite(chunkQ) ? chunkQ : Math.floor(episodeIndex / CHUNKS_SIZE);
+    const fileIndex = Number.isFinite(fileQ) ? fileQ : 0;
+    const pad3 = (n: number) => String(n).padStart(3, '0');
+
+    // LeRobot v2.x lays out one mp4 PER EPISODE:
+    //   videos/chunk-{chunk:03d}/observation.images.{camera}/episode_{ep:06d}.mp4
+    // LeRobot v3 concatenates all episodes of a chunk into one file per camera:
+    //   videos/observation.images.{camera}/chunk-{chunk:03d}/file-{file:03d}.mp4
+    // Try the layout matching the dataset's version first, then the other one
+    // as a fallback (imports occasionally mislabel the version).
+    const v2Path = `videos/chunk-${pad3(Math.floor(episodeIndex / CHUNKS_SIZE))}/observation.images.${camera}/episode_${String(episodeIndex).padStart(6, '0')}.mp4`;
+    const v3Path = `videos/observation.images.${camera}/chunk-${pad3(chunkIndex)}/file-${pad3(fileIndex)}.mp4`;
+    const isV2 = (dataset.lerobotVersion ?? '').toLowerCase().startsWith('v2');
+    const candidatePaths = isV2 ? [v2Path, v3Path] : [v3Path, v2Path];
+    const videoPath = candidatePaths[0];
 
     // Try to stream from RustFS if available
     // Check both 'training-datasets' and legacy 'datasets' bucket
@@ -1022,11 +1057,13 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
       if (isRustFSInitialized()) {
         const rustfs = getRustFSClient();
         const base = dataset.storagePath.endsWith('/') ? dataset.storagePath : `${dataset.storagePath}/`;
-        const videoKey = `${base}${videoPath}`;
 
-        for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
-          const exists = await rustfs.exists(bucket, videoKey);
-          if (exists) {
+        for (const candidate of candidatePaths) {
+          const videoKey = `${base}${candidate}`;
+          for (const bucket of [BUCKETS.TRAINING_DATASETS, 'datasets']) {
+            const exists = await rustfs.exists(bucket, videoKey);
+            if (!exists) continue;
+
             const metadata = await rustfs.getMetadata(bucket, videoKey);
             const fileSize = metadata.contentLength ?? 0;
 
