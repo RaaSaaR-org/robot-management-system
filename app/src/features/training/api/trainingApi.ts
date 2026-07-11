@@ -25,6 +25,7 @@ import type {
   EpisodeVideoWindow,
   FrameData,
   CurationResult,
+  CurationSuggestResponse,
   EpisodeAnnotation,
 } from '../types';
 
@@ -52,9 +53,10 @@ const ENDPOINTS = {
   datasetEpisodeFrames: (id: string, index: number) => `/datasets/${id}/episodes/${index}/frames`,
   datasetEpisodeFlag: (id: string, index: number) => `/datasets/${id}/episodes/${index}/flag`,
 
-  // Curation (interactive episode trim / delete)
+  // Curation (interactive episode trim / delete / AI suggestions)
   curationEpisodesDelete: (id: string) => `/curation/${id}/episodes/delete`,
   curationEpisodeTrim: (id: string, index: number) => `/curation/${id}/episodes/${index}/trim`,
+  curationSuggest: (id: string) => `/curation/${id}/suggest`,
 
   // Annotations (lerobot-annotate, TASK-179)
   datasetAnnotations: (id: string) => `/datasets/${id}/annotations`,
@@ -227,6 +229,19 @@ export const trainingApi = {
     const response = await apiClient.post<CurationResult>(
       ENDPOINTS.curationEpisodeTrim(datasetId, episodeIndex),
       { start, end }
+    );
+    return response.data;
+  },
+
+  /**
+   * AI curation suggestions ("video-use" Phase 2): motion heuristics over the
+   * dataset's action/state traces, optionally VLM-enriched server-side.
+   * Read-only — the operator reviews and applies each suggestion manually.
+   */
+  async suggestCuration(datasetId: string, episode?: number): Promise<CurationSuggestResponse> {
+    const response = await apiClient.post<CurationSuggestResponse>(
+      ENDPOINTS.curationSuggest(datasetId),
+      episode !== undefined ? { episode } : {}
     );
     return response.data;
   },

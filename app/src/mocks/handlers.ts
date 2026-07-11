@@ -191,22 +191,50 @@ export const handlers = [
     return HttpResponse.json({ frames, total: frames.length });
   }),
 
-  // Curation endpoints — echo a plausible revision summary
-  http.post('/api/curation/:id/episodes/delete', async ({ request }) => {
+  // Curation endpoints — echo a plausible revision summary incl. the newly
+  // registered dataset revision (matches the real response shape, TASK-168)
+  http.post('/api/curation/:id/episodes/delete', async ({ params, request }) => {
     const body = (await request.json()) as { episodes?: number[] };
     const removed = body?.episodes?.length ?? 1;
     return HttpResponse.json({
-      datasetId: 'demo', ok: true, operation: `delete episodes ${body?.episodes ?? []}`,
+      datasetId: String(params.id), ok: true, operation: `delete episodes ${body?.episodes ?? []}`,
       output: '/tmp/demo__del', total_episodes: DEMO_EPISODES.length - removed,
-      total_frames: 60, stats_recompute_required: true,
+      total_frames: 60, stats_recompute_required: false,
+      newDatasetId: 'demo-g1-edu-curated', newDatasetName: `${DEMO_DATASET.name} (curated)`,
     });
   }),
 
   http.post('/api/curation/:id/episodes/:index/trim', async ({ params }) => {
     return HttpResponse.json({
-      datasetId: 'demo', ok: true, operation: `trim episode ${params.index}`,
+      datasetId: String(params.id), ok: true, operation: `trim episode ${params.index}`,
       output: '/tmp/demo__trim', total_episodes: DEMO_EPISODES.length,
-      total_frames: 70, stats_recompute_required: true,
+      total_frames: 70, stats_recompute_required: false,
+      newDatasetId: 'demo-g1-edu-curated', newDatasetName: `${DEMO_DATASET.name} (curated)`,
+    });
+  }),
+
+  // AI curation suggestions (Phase-2 "video-use", TASK-168) — canned heuristics
+  http.post('/api/curation/:id/suggest', ({ params }) => {
+    return HttpResponse.json({
+      datasetId: String(params.id), ok: true, operation: 'suggest',
+      suggestions: [
+        {
+          episode: 1, kind: 'trim', start: 3, end: 18,
+          reason: 'idle padding: 3 leading / 3 trailing frames below motion threshold 1e-03',
+          confidence: 0.78,
+        },
+        {
+          episode: 3, kind: 'delete',
+          reason: 'near-zero motion over the whole episode (mean |delta| 4.20e-05 <= 1.00e-03)',
+          confidence: 0.9,
+        },
+        {
+          episode: 2, kind: 'trim', start: 0, end: 16,
+          reason: 'idle padding: 0 leading / 6 trailing frames below motion threshold 1e-03',
+          confidence: 0.77,
+        },
+      ],
+      vlmEnriched: false,
     });
   }),
 
