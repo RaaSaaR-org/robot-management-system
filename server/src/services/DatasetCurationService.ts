@@ -139,12 +139,17 @@ export class DatasetCurationService {
           ? `${source.dir}__${label}-${Date.now()}`
           : path.join(source.tmpRoot as string, 'out');
 
-      const summary =
-        op.type === 'delete'
-          ? await episodeCurationService.deleteEpisodes(source.dir, outDir, op.episodes, { backend })
-          : await episodeCurationService.trimEpisode(source.dir, outDir, op.episode, op.start, op.end, {
-              backend,
-            });
+      let summary: CurationResultSummary;
+      try {
+        summary =
+          op.type === 'delete'
+            ? await episodeCurationService.deleteEpisodes(source.dir, outDir, op.episodes, { backend })
+            : await episodeCurationService.trimEpisode(source.dir, outDir, op.episode, op.start, op.end, {
+                backend,
+              });
+      } catch (error) {
+        throw this.asCurationError(error);
+      }
 
       if (!dataset) {
         // No DB row to derive a revision from — plain path-mode edit.
@@ -179,7 +184,12 @@ export class DatasetCurationService {
       skipVideos: true,
     });
     try {
-      const result = await episodeCurationService.suggest(source.dir, opts?.episode);
+      let result: SuggestResultSummary;
+      try {
+        result = await episodeCurationService.suggest(source.dir, opts?.episode);
+      } catch (error) {
+        throw this.asCurationError(error);
+      }
       let suggestions = result.suggestions;
       let vlmEnriched = false;
       if (this.vlmEnabled() && suggestions.length > 0) {
@@ -194,6 +204,22 @@ export class DatasetCurationService {
     } finally {
       await source.cleanup();
     }
+  }
+
+  /**
+   * curate.py failures carry a machine-readable `code` (FFMPEG_MISSING,
+   * INVALID_EPISODES, EMPTY_SLICE, ...) that EpisodeCurationService attaches to
+   * a plain Error. Re-wrap those as CurationError so the routes map them to
+   * HTTP 400 with the code instead of an opaque 500.
+   */
+  private asCurationError(error: unknown): unknown {
+    if (error instanceof Error && !(error instanceof CurationError)) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === 'string' && code.length > 0) {
+        return new CurationError(error.message, code);
+      }
+    }
+    return error;
   }
 
   // --------------------------------------------------------------------------
@@ -262,8 +288,11 @@ export class DatasetCurationService {
   }
 
   /** Download every object under `prefix` in TRAINING_DATASETS to `destDir`. */
-  private async downloadPrefix(prefix: string, destDir: string, skipVideos: boolean): Promise<void> {
+  private async downloadPrefix(rawPrefix: string, destDir: string, skipVideos: boolean): Promise<void> {
     const client = getRustFSClient();
+    // Normalize to a directory-style prefix so "ds1" cannot bleed into a
+    // sibling prefix like "ds1-old/" (S3 listing is plain string-prefix based).
+    const prefix = rawPrefix.endsWith('/') ? rawPrefix : `${rawPrefix}/`;
     let count = 0;
     for await (const obj of client.listAll(BUCKETS.TRAINING_DATASETS, prefix)) {
       const rel = obj.key.slice(prefix.length).replace(/^\/+/, '');

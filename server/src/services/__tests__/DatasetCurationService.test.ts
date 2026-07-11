@@ -390,3 +390,73 @@ describe('DatasetCurationService — legacy path mode', () => {
     expect(result.ok).toBe(true);
   });
 });
+
+// ----------------------------------------------------------------------------
+// Structured error propagation (curate.py codes -> CurationError -> HTTP 400)
+// ----------------------------------------------------------------------------
+
+describe('DatasetCurationService — error propagation', () => {
+  it('re-wraps coded curate.py failures as CurationError (curate)', async () => {
+    const src = makeLocalSourceDir();
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: src }));
+    const failure = new Error(
+      'curate.py failed: dataset has videos but no ffmpeg is available',
+    ) as Error & { code?: string };
+    failure.code = 'FFMPEG_MISSING';
+    mockCuration.trimEpisode.mockRejectedValue(failure);
+
+    const promise = service.trimEpisode('ds1', 0, 2, 8);
+    await expect(promise).rejects.toBeInstanceOf(CurationError);
+    await expect(service.trimEpisode('ds1', 0, 2, 8)).rejects.toMatchObject({
+      code: 'FFMPEG_MISSING',
+    });
+    expect(mockRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('re-wraps coded curate.py failures as CurationError (suggest)', async () => {
+    const src = makeLocalSourceDir();
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: src }));
+    const failure = new Error('curate.py failed: episode 7 out of range') as Error & {
+      code?: string;
+    };
+    failure.code = 'INVALID_EPISODES';
+    mockCuration.suggest.mockRejectedValue(failure);
+
+    await expect(service.suggest('ds1', { episode: 7 })).rejects.toMatchObject({
+      name: 'CurationError',
+      code: 'INVALID_EPISODES',
+    });
+  });
+
+  it('leaves uncoded failures untouched (still a plain 500-path Error)', async () => {
+    const src = makeLocalSourceDir();
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: src }));
+    mockCuration.deleteEpisodes.mockRejectedValue(new Error('disk full'));
+
+    const promise = service.deleteEpisodes('ds1', [0]);
+    await expect(promise).rejects.toThrow('disk full');
+    await expect(service.deleteEpisodes('ds1', [0])).rejects.not.toBeInstanceOf(CurationError);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// RustFS prefix normalization
+// ----------------------------------------------------------------------------
+
+describe('DatasetCurationService — RustFS prefix normalization', () => {
+  it('lists with a directory-style prefix when storagePath has no trailing slash', async () => {
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: 'ds1' }));
+    stubListAll(['ds1/meta/info.json', 'ds1/data/chunk-000/episode_000000.parquet']);
+    mockCuration.deleteEpisodes.mockImplementation(async (src: string, out: string) => {
+      // relative paths must not carry a leading slash / stray prefix remainder
+      expect(existsSync(path.join(src, 'meta', 'info.json'))).toBe(true);
+      mkdirSync(path.join(out, 'meta'), { recursive: true });
+      writeFileSync(path.join(out, 'meta', 'info.json'), JSON.stringify(BASE_INFO));
+      return { ...SUMMARY, output: out };
+    });
+
+    await service.deleteEpisodes('ds1', [1]);
+
+    expect(mockClient.listAll).toHaveBeenCalledWith(expect.any(String), 'ds1/');
+  });
+});

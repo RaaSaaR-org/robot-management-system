@@ -34,6 +34,20 @@ const JOINT_COLORS: Record<string, string> = {
 
 const SPEED_OPTIONS = [0.5, 1, 2] as const;
 
+/**
+ * Extract a displayable message from a failed API call. The axios client
+ * rejects with a plain ApiError object ({ code, message, ... }), NOT an Error
+ * instance — an instanceof check alone would swallow the server's structured
+ * curation errors (e.g. V3_TRIM_UNSUPPORTED, FFMPEG_MISSING).
+ */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return 'unknown error';
+}
+
 /** Chip styling for a reward-model episode score (green > 0.7, orange > 0.4, red below). */
 function scoreChipCls(score: number): string {
   if (score > 0.7) return 'text-green-400 bg-green-500/10';
@@ -301,7 +315,7 @@ export function DatasetEpisodesPage() {
       recordCurationOutcome('Deleted', result);
       return true;
     } catch (err) {
-      setCurationMsg(`Delete failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setCurationMsg(`Delete failed: ${errText(err)}`);
       return false;
     } finally {
       setCurating(false);
@@ -317,7 +331,7 @@ export function DatasetEpisodesPage() {
       const result = await trainingApi.trimEpisode(datasetId, selectedEpisode, trimStart, end);
       recordCurationOutcome('Trimmed', result);
     } catch (err) {
-      setCurationMsg(`Trim failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setCurationMsg(`Trim failed: ${errText(err)}`);
     } finally {
       setCurating(false);
     }
@@ -336,7 +350,7 @@ export function DatasetEpisodesPage() {
       }
     } catch (err) {
       setSuggestions([]);
-      setSuggestMsg(`Suggest failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setSuggestMsg(`Suggest failed: ${errText(err)}`);
     } finally {
       setSuggesting(false);
     }
@@ -347,7 +361,7 @@ export function DatasetEpisodesPage() {
   }, []);
 
   /** Apply a suggestion: trims prefill the trim inputs, deletes run the (confirmed) delete flow. */
-  const applySuggestion = useCallback((suggestion: CurationSuggestion, index: number) => {
+  const applySuggestion = useCallback((suggestion: CurationSuggestion) => {
     setSelectedEpisode(suggestion.episode);
     if (suggestion.kind === 'trim') {
       setTrimStart(suggestion.start ?? 0);
@@ -355,10 +369,12 @@ export function DatasetEpisodesPage() {
       setSuggestMsg(`Trim range [${suggestion.start ?? 0}, ${suggestion.end ?? 'end'}) prefilled for episode ${suggestion.episode} — review and press "Trim range".`);
     } else {
       void handleDeleteEpisode(suggestion.episode).then((ok) => {
-        if (ok) dismissSuggestion(index);
+        // Remove by identity, not by index — the list may have shifted while
+        // the confirm dialog / API call was pending.
+        if (ok) setSuggestions((prev) => prev.filter((s) => s !== suggestion));
       });
     }
-  }, [handleDeleteEpisode, dismissSuggestion]);
+  }, [handleDeleteEpisode]);
 
   const handleStartAnnotation = useCallback(async () => {
     if (!datasetId) return;
@@ -721,7 +737,7 @@ export function DatasetEpisodesPage() {
                         <button
                           data-testid={`suggest-apply-${i}`}
                           disabled={curating}
-                          onClick={() => applySuggestion(s, i)}
+                          onClick={() => applySuggestion(s)}
                           className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-cobalt-500/15 hover:bg-cobalt-500/25 text-cobalt-400 disabled:opacity-50 transition-colors"
                         >
                           Apply

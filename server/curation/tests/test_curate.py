@@ -225,6 +225,39 @@ def test_no_recompute_stats_flag(tmp_path: Path) -> None:
     assert info["_curation"]["stats_recompute_required"] is True
 
 
+def test_stats_carry_over_video_features_from_source(tmp_path: Path) -> None:
+    """Image/video feature stats can't be recomputed from parquet — they must be
+    carried over from the source meta/stats.json, while parquet-backed features
+    (e.g. `action`) are recomputed and must NOT be carried over."""
+    src = tmp_path / "src"
+    make_dataset(src, episodes=3, frames=10)
+
+    image_stats = {
+        "mean": [[[0.48]], [[0.45]], [[0.41]]],
+        "std": [[[0.22]], [[0.23]], [[0.21]]],
+        "min": [[[0.0]], [[0.0]], [[0.0]]],
+        "max": [[[1.0]], [[1.0]], [[1.0]]],
+    }
+    stale_action_stats = {"mean": [999.0] * 6, "std": [999.0] * 6, "min": [999.0] * 6, "max": [999.0] * 6}
+    (src / "meta" / "stats.json").write_text(json.dumps({
+        "observation.images.top": image_stats,
+        "action": stale_action_stats,
+    }))
+
+    out = tmp_path / "out"
+    code, summary = run_curate(
+        "delete", "--dataset", str(src), "--output", str(out), "--episodes", "1",
+    )
+    assert code == 0
+    assert summary["stats_recompute_required"] is False
+
+    stats = json.loads((out / "meta" / "stats.json").read_text())
+    # video-feature stats survive the rebuild unchanged
+    assert stats["observation.images.top"] == image_stats
+    # parquet-backed features are freshly recomputed, not carried over
+    assert stats["action"]["mean"] != stale_action_stats["mean"]
+
+
 def test_trim_stats_match_trimmed_data(tmp_path: Path) -> None:
     src = tmp_path / "src"
     make_dataset(src, episodes=2, frames=12)

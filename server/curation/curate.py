@@ -131,7 +131,8 @@ def _compute_stats(dst: Path) -> dict:
     Mirrors the LeRobot ``meta/stats.json`` shape (per-dimension arrays for
     vector features, single-element arrays for scalars). Population std
     (ddof=0), like lerobot's own aggregation. Video features live in mp4s, not
-    parquet, so image stats are not recomputed here.
+    parquet, so image stats are not recomputed here — the caller carries them
+    over from the source ``meta/stats.json`` instead (see ``_rebuild``).
     """
     import numpy as np
 
@@ -286,6 +287,18 @@ def _rebuild(src: Path, dst: Path, plan: list[dict], note: str, recompute_stats:
     stats_recompute_required = True
     if recompute_stats:
         stats = _compute_stats(dst)
+        # Video/image feature stats live in mp4s and are not recomputable from
+        # parquet — carry them over from the source stats.json so the revision
+        # doesn't silently lose them (image normalization needs mean/std).
+        src_stats_path = src / "meta" / "stats.json"
+        if src_stats_path.exists():
+            try:
+                src_stats = json.loads(src_stats_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                src_stats = {}
+            for key, value in src_stats.items():
+                if key not in stats:
+                    stats[key] = value
         (dst / "meta" / "stats.json").write_text(json.dumps(stats, indent=2))
         stats_recompute_required = False
 
