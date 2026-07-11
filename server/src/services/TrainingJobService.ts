@@ -392,14 +392,19 @@ export class TrainingJobService extends EventEmitter {
       throw new Error(`Cannot retry job with status: ${job.status}`);
     }
 
-    // Reset job status
+    // Reset job status. Explicit nulls: the repository skips undefined
+    // fields, which used to leave the failed run's errorMessage and
+    // timestamps visible on the retried (pending/running) job.
     const updatedJob = await trainingJobRepository.update(id, {
       status: 'pending',
       progress: 0,
-      currentEpoch: undefined,
-      errorMessage: undefined,
-      startedAt: undefined,
-      completedAt: undefined,
+      currentEpoch: null,
+      errorMessage: null,
+      startedAt: null,
+      completedAt: null,
+      // Fresh metrics too — otherwise the retried run's loss curve is
+      // appended to the failed run's points and the chart shows both.
+      metrics: {},
     });
 
     // Non-supervised jobs (sim_rl, reward_model, annotate — and any job

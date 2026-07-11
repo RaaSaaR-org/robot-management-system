@@ -528,9 +528,19 @@ describe('retryJob', () => {
     const result = await trainingJobService.retryJob('job1');
 
     expect(result).toBe(updated);
+    // Explicit nulls: the repository skips undefined fields, so the stale
+    // errorMessage/timestamps of the failed run must be cleared with null.
     expect(trainingJobRepository.update).toHaveBeenCalledWith(
       'job1',
-      expect.objectContaining({ status: 'pending', progress: 0 })
+      expect.objectContaining({
+        status: 'pending',
+        progress: 0,
+        errorMessage: null,
+        startedAt: null,
+        completedAt: null,
+        currentEpoch: null,
+        metrics: {},
+      })
     );
     expect(queue.addJob).toHaveBeenCalledWith(
       'finetune',
@@ -611,7 +621,7 @@ describe('getQueueStats', () => {
         pending: [makeJob({ status: 'pending' })],
         queued: [],
         running: [makeJob({ status: 'running' }), makeJob({ status: 'running' })],
-        completed: [makeJob({ status: 'completed', completedAt: new Date().toISOString() })],
+        completed: [makeJob({ status: 'completed', completedAt: new Date() })],
         failed: [],
       };
       return byStatus[status] ?? [];

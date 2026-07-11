@@ -510,12 +510,13 @@ export interface CreateTrainingJobInput {
 export interface UpdateTrainingJobInput {
   status?: TrainingJobStatus;
   progress?: number;
-  currentEpoch?: number;
+  /** Pass null to clear (e.g. on retry); undefined leaves the field untouched. */
+  currentEpoch?: number | null;
   metrics?: TrainingMetrics;
   bullmqJobId?: string;
-  startedAt?: Date;
-  completedAt?: Date;
-  errorMessage?: string;
+  startedAt?: Date | null;
+  completedAt?: Date | null;
+  errorMessage?: string | null;
 }
 
 export interface TrainingJobQueryParams {
