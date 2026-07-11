@@ -175,6 +175,15 @@ def test_follow_up_allowed_inside_window() -> None:
     assert a2a.sent == ["wo bist du?", "und wie hoch ist dein Akku?"]
 
 
+def test_reset_command_works_after_wake_phrase() -> None:
+    pipeline, _, tts, a2a = _make_pipeline(wake_phrases=("hey g1",))
+    context_before = pipeline.session.peek()
+    asyncio.run(_turn(pipeline, "Hey G1, neues Gespräch"))
+    assert a2a.sent == []
+    assert tts.spoken == ["Okay, neues Gespräch."]
+    assert pipeline.session.peek() != context_before
+
+
 def test_window_expiry_requires_wake_again() -> None:
     pipeline, _, _, a2a = _make_pipeline(wake_phrases=("hey g1",), wake_window_s=0.0)
 

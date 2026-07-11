@@ -72,3 +72,38 @@ def test_runtime_patch_rejects_invalid_value() -> None:
     cfg = VoiceConfig.from_env(env={})
     with pytest.raises(ValueError):
         cfg.apply_patch({"vad_threshold": 3.0})
+
+
+def test_wake_env_parsing() -> None:
+    cfg = VoiceConfig.from_env(
+        env={"VOICE_WAKE_PHRASES": "Hey G1, Hallo G1", "VOICE_WAKE_WINDOW_S": "30"}
+    )
+    assert cfg.wake_phrases == ("hey g1", "hallo g1")
+    assert cfg.wake_window_s == 30.0
+
+
+def test_wake_disabled_by_default() -> None:
+    cfg = VoiceConfig.from_env(env={})
+    assert cfg.wake_phrases == ()
+
+
+def test_negative_wake_window_rejected() -> None:
+    with pytest.raises(ValueError, match="VOICE_WAKE_WINDOW_S"):
+        VoiceConfig.from_env(env={"VOICE_WAKE_WINDOW_S": "-1"})
+
+
+def test_runtime_patch_wake_phrases_accepts_json_list() -> None:
+    cfg = VoiceConfig.from_env(env={})
+    changed = cfg.apply_patch({"wake_phrases": ["Hey G1", "Hallo G1"]})
+    assert changed == {"wake_phrases": ("hey g1", "hallo g1")}
+    assert cfg.wake_phrases == ("hey g1", "hallo g1")
+
+
+def test_runtime_patch_wake_phrases_accepts_string_and_clears() -> None:
+    cfg = VoiceConfig.from_env(env={})
+    cfg.apply_patch({"wake_phrases": "hey g1,hallo g1"})
+    assert cfg.wake_phrases == ("hey g1", "hallo g1")
+    cfg.apply_patch({"wake_phrases": ""})
+    assert cfg.wake_phrases == ()
+    cfg.apply_patch({"wake_phrases": None})
+    assert cfg.wake_phrases == ()

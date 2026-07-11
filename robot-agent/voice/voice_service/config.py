@@ -145,6 +145,11 @@ class VoiceConfig:
         for key, value in patch.items():
             if key not in self.RUNTIME_MUTABLE:
                 raise ValueError(f"config key {key!r} is not runtime-mutable")
+            # JSON payloads may send lists for tuple fields and null to clear
+            if isinstance(value, (list, tuple)):
+                value = ",".join(str(v) for v in value)
+            elif value is None:
+                value = ""
             coerced = _coerce(key, str(value))
             setattr(self, key, coerced)
             changed[key] = coerced
