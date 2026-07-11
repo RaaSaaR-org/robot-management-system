@@ -4,7 +4,7 @@ aliases:
 - TASK-180
 title: Multi-task G1 Dex3 VLA — merge 13 Unitree datasets and finetune one language-conditioned checkpoint
 slug: multi-task-g1-dex3-vla-merge-13-unitree-datasets-finetune
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,8 +15,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-10
-updated: 2026-07-10
-status_note: 'Scoped from the single-task PickBottle proof (2000-step GR00T-N1.7 finetune, full-circle through training-worker + moto-S3 + Isaac sim eval). Next step: widen from 1 task to N via multi-task co-training. All 13 source datasets inventoried below.'
+updated: 2026-07-11
+status_note: 'DONE (Phase A, 2026-07-11, dz-226): 7 Pick* sets merged (1410 ep / 7 language tasks), 14k-step GR00T-N1.7 multi-task finetune through NeoDEM (job ad72e95e), open-loop A/B beats the 2000-step single-task ckpt on ALL tasks incl. PickBottle itself. Phase B (13-set expansion) remains a follow-up.'
 ---
 
 
@@ -91,6 +91,30 @@ Key gotchas — these are the real work:
 - Train: `C:\Unitree\training-worker` (`neodem-train` env); NeoDEM `app/src/features/training` + `server` training routes for UI-driven launch + visibility.
 - Eval: `C:\Unitree\_ft_out\eval_g1_sim_groot_rec.py`, `C:\Unitree\_ft_out\rollout\`.
 - Source datasets: HF `unitreerobotics/G1_Dex3_*` (table above).
+
+## Validation evidence (Phase A executed 2026-07-11 on dz-226)
+
+**Data prep (gotchas resolved differently than scoped — the HF table above was stale):**
+- All 7 `Pick*` repos now serve **LeRobot v3.0 on main** (Unitree migrated them) — no v2.0/v2.1 normalization needed. Each ships a distinct natural-language instruction already ("Put the apple/bottle/gum/snack/tissue paper/doll/charger into the plate.") — no label namespacing needed. All are 2-cam (`cam_left_high`/`cam_right_high`, the wrist cams were dropped in the migration), 28-dim, `Unitree_G1_Dex3`, 30 fps.
+- Merge: lerobot 0.6.0 `aggregate_datasets` (official; pyav concat, no re-encode) → `C:\Unitree\_ft_out\multitask\merged\G1_Dex3_Pick7_Merged`, **1,410 episodes / 1,196,995 frames / 7 tasks**, validated by loading frames across sources. Script: `C:\Unitree\_ft_out\multitask\merge_pick7.py`.
+- v3.0→v2.1 for GR00T: unmodified NVIDIA `convert_v3_to_v2.py` (groot env + lerobot_shim + staged ffmpeg, ~4 min) + hand-written 2-cam `meta/modality.json` (the proven PickBottle one — dataset-agnostic). 1,410 parquets + 2,820 mp4s, 7-entry `tasks.jsonl`, `task_index` spread verified.
+- Staged to RustFS `datasets/32708700-9f1d-4b6a-8de6-15f9fc855fd1/` (24.16 GB, 4,236 objects) + Dataset row `b58563f0-594e-4e25-aeda-a4a818c78ab4` ("G1_Dex3_Pick7_Merged (v2.1, GR00T multi-task)").
+
+**Training (through the platform):** TrainingJob `ad72e95e-c025-40fa-b6bf-1a2722139ad7` via `POST /api/training/jobs` — `groot_n1_7`, same recipe as the 2000-step baseline (global batch 1, lr 1e-4, warmup 500) scaled to **max_steps 14,000** = per-task sample parity (~2,000 samples/task). Worker `Gr00tTrainer` (Isaac backend) consumed the multi-task v2.1 set with zero code changes (`task_index` → `annotation.human.task_description` flows through). 8h49m wall, ~2.45 s/step, 31.9 GB VRAM, live loss 1.25→~1.09–1.16 in the UI, slim ~12 GB checkpoint artifact `gr00t_finetune.tar.gz` → RustFS, job completed.
+
+**Open-loop A/B (12 trajs each, Isaac open_loop_eval protocol, harness `_ft_out/ab_eval/lerobot_groot_openloop.py`, results in `_ft_out/ab_eval/results.json`):**
+
+| Eval dataset | multitask-14000 MSE/MAE | isaac-2000 MSE/MAE |
+|---|---|---|
+| PickBottle (baseline's own task) | **0.4036 / 0.4943** | 0.4258 / 0.5141 |
+| PickApple | **0.3936 / 0.4879** | 0.4474 / 0.5273 |
+| PickGum | **0.3795 / 0.4751** | 0.4484 / 0.5277 |
+
+The multi-task checkpoint **wins on every task including PickBottle itself** (test #4 "no regression" exceeded). Own-stats control (merged-dataset stats, bottle episodes): 0.4023 — no normalization artifact.
+
+**Closed-loop sim:** live Isaac PickPlace-Cylinder G129-Dex3 scene + multi-task ckpt served on :6555; rollouts recorded with the instruction as the only variable (bottle vs apple) → `_ft_out/rollout/sim_groot_closedloop_mt14000_{bottle,apple}.mp4`. Note: the sim scene only contains a cylinder, so per-task *object* appropriateness (test #3 as scoped) cannot be observed in sim; the quantitative per-task language-conditioned open-loop eval above is the multi-task selection evidence.
+
+**Open follow-ups:** Phase B (expand to all 13 sets — the 6 non-Pick sets are 4-cam, so the merge needs camera-key reconciliation or a 4-cam modality config); longer runs (per-task parity ≠ per-task optimum); closed-loop scenes with per-task objects.
 
 ## Test Strategy
 
