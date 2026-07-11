@@ -74,6 +74,38 @@ def test_runtime_patch_rejects_invalid_value() -> None:
         cfg.apply_patch({"vad_threshold": 3.0})
 
 
+def test_rejected_patch_leaves_config_unchanged() -> None:
+    # A rejected patch must not mutate the live config (issue #186): otherwise
+    # validate() would keep failing on the poisoned value and brick /config.
+    cfg = VoiceConfig.from_env(env={})
+    original = cfg.vad_threshold
+    with pytest.raises(ValueError):
+        cfg.apply_patch({"vad_threshold": 3.0})
+    assert cfg.vad_threshold == original
+
+
+def test_config_endpoint_survives_a_rejected_patch() -> None:
+    # After a rejected patch, valid patches must still apply — the endpoint is
+    # not bricked for the rest of the process.
+    cfg = VoiceConfig.from_env(env={})
+    with pytest.raises(ValueError):
+        cfg.apply_patch({"vad_threshold": 3.0})
+    changed = cfg.apply_patch({"vad_threshold": 0.65})
+    assert changed == {"vad_threshold": 0.65}
+    assert cfg.vad_threshold == 0.65
+
+
+def test_partial_patch_is_rolled_back_atomically() -> None:
+    # A multi-key patch where a LATER key is invalid must roll back the earlier
+    # keys too (all-or-nothing).
+    cfg = VoiceConfig.from_env(env={})
+    before_mode = cfg.mode
+    with pytest.raises(ValueError):
+        cfg.apply_patch({"mode": "ptt", "vad_threshold": 3.0})
+    assert cfg.mode == before_mode
+    assert cfg.vad_threshold == 0.5
+
+
 def test_wake_env_parsing() -> None:
     cfg = VoiceConfig.from_env(
         env={"VOICE_WAKE_PHRASES": "Hey G1, Hallo G1", "VOICE_WAKE_WINDOW_S": "30"}

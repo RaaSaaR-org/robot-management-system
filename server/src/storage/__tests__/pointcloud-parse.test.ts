@@ -143,6 +143,20 @@ describe('parsePointCloudFile', () => {
     );
     expect(() => parsePointCloudFile(buf, 'empty.ply')).toThrow(PointCloudParseError);
   });
+
+  it('rejects ASCII PLY with an element declared before vertex', () => {
+    // A pre-vertex element shifts the ascii body: the reader would consume the
+    // camera row as a vertex. The binary path already rejected this; ascii now
+    // does too (issue #186).
+    const buf = Buffer.from(
+      'ply\nformat ascii 1.0\n' +
+        'element camera 1\nproperty float view_px\n' +
+        'element vertex 2\nproperty float x\nproperty float y\nproperty float z\n' +
+        'end_header\n0.0\n1.0 2.0 3.0\n4.0 5.0 6.0\n',
+      'ascii',
+    );
+    expect(() => parsePointCloudFile(buf, 'cam.ply')).toThrow(/before vertex/);
+  });
 });
 
 describe('normalizeFloorToZero', () => {

@@ -76,6 +76,7 @@ function parsePly(buffer: Buffer): PointCloudLike {
   let vertexCount = 0;
   const vertexProps: PlyProperty[] = [];
   let inVertexElement = false;
+  let sawVertex = false;
   let sawElementAfterVertex = false;
 
   for (const rawLine of headerText.split('\n')) {
@@ -89,14 +90,17 @@ function parsePly(buffer: Buffer): PointCloudLike {
     } else if (parts[0] === 'element') {
       if (parts[1] === 'vertex') {
         inVertexElement = true;
+        sawVertex = true;
         vertexCount = parseInt(parts[2], 10);
       } else {
         if (inVertexElement) sawElementAfterVertex = true;
         inVertexElement = false;
-        // Elements BEFORE vertex would shift the binary offset unpredictably.
-        if (vertexCount === 0 && format === 'binary_little_endian') {
+        // An element declared BEFORE vertex shifts the body layout for BOTH
+        // formats: binary vertex offsets become unpredictable, and the ascii
+        // reader would consume that element's rows as vertices. Reject either.
+        if (!sawVertex) {
           throw new PointCloudParseError(
-            `Binary PLY with element "${parts[1]}" before vertex is not supported`,
+            `PLY with element "${parts[1]}" before vertex is not supported`,
           );
         }
       }

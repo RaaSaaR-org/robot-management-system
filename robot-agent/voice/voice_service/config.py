@@ -140,20 +140,36 @@ class VoiceConfig:
     )
 
     def apply_patch(self, patch: dict) -> dict:
-        """Apply a runtime config patch; returns the changed keys."""
+        """Apply a runtime config patch atomically; returns the changed keys.
+
+        The mutation is tentative: if coercion or validate() rejects any key,
+        every field is rolled back to its prior value before the error
+        propagates. Without this, a single bad patch (e.g. vad_threshold=5)
+        would leave the live config poisoned and brick POST /config for the
+        rest of the process, since validate() would then fail on every
+        subsequent patch too.
+        """
         changed: dict = {}
-        for key, value in patch.items():
-            if key not in self.RUNTIME_MUTABLE:
-                raise ValueError(f"config key {key!r} is not runtime-mutable")
-            # JSON payloads may send lists for tuple fields and null to clear
-            if isinstance(value, (list, tuple)):
-                value = ",".join(str(v) for v in value)
-            elif value is None:
-                value = ""
-            coerced = _coerce(key, str(value))
-            setattr(self, key, coerced)
-            changed[key] = coerced
-        self.validate()
+        snapshot: dict = {}
+        try:
+            for key, value in patch.items():
+                if key not in self.RUNTIME_MUTABLE:
+                    raise ValueError(f"config key {key!r} is not runtime-mutable")
+                # JSON payloads may send lists for tuple fields and null to clear
+                if isinstance(value, (list, tuple)):
+                    value = ",".join(str(v) for v in value)
+                elif value is None:
+                    value = ""
+                if key not in snapshot:
+                    snapshot[key] = getattr(self, key)
+                coerced = _coerce(key, str(value))
+                setattr(self, key, coerced)
+                changed[key] = coerced
+            self.validate()
+        except Exception:
+            for key, old in snapshot.items():
+                setattr(self, key, old)
+            raise
         return changed
 
 

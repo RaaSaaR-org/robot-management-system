@@ -159,10 +159,18 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
       ws.onclose = () => {
         console.log('[RobotWebSocket] Disconnected');
         isConnectedRef.current = false;
-        wsRef.current = null;
 
-        // Auto-reconnect
-        if (autoReconnect) {
+        // A superseded socket (a newer connect() already replaced wsRef) must
+        // not clear the live ref out from under the current connection.
+        const superseded = wsRef.current !== ws;
+        if (!superseded) {
+          wsRef.current = null;
+        }
+
+        // Don't reconnect on an intentional close (unmount/disconnect) or a
+        // superseded socket — otherwise disconnect() spawns a zombie reconnect
+        // loop that keeps reopening the connection after teardown.
+        if (autoReconnect && !intentionalCloseRef.current && !superseded) {
           reconnectTimeoutRef.current = setTimeout(() => {
             console.log('[RobotWebSocket] Attempting to reconnect...');
             connect();

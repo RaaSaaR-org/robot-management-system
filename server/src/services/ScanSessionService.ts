@@ -184,10 +184,15 @@ export class ScanSessionService extends EventEmitter {
       floorOffset = normalizeFloorToZero(cloud);
     }
 
+    // Create NON-claimable ('recording') first. The twin-builder sidecar polls
+    // for status:'processing' sessions every few seconds; creating this as
+    // 'processing' up front races that poller, which could claim the session
+    // before persistFrame runs and build an empty (frameless) job. We flip to
+    // 'processing' only after the frame is persisted (below).
     const session = await scanSessionRepository.create({
       robotId,
       twinId,
-      status: 'processing',
+      status: 'recording',
       startedAt: new Date(),
     });
 
@@ -224,7 +229,10 @@ export class ScanSessionService extends EventEmitter {
       throw err;
     }
 
+    // Frame is now persisted — flip to 'processing' so the sidecar claims a
+    // session that already has its frame (closes the empty-build race above).
     const updated = await scanSessionRepository.update(session.id, {
+      status: 'processing',
       frameCount: 1,
       endedAt: new Date(),
     });
