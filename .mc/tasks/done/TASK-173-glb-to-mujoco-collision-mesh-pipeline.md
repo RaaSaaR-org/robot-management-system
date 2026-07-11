@@ -4,7 +4,7 @@ aliases:
 - TASK-173
 title: Real-to-Sim — proper GLB→MuJoCo room collision pipeline (trimesh → obj2mjcf + CoACD)
 slug: glb-to-mujoco-collision-mesh-pipeline
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -19,7 +19,8 @@ depends_on:
 - "[[TASK-171]]"
 due_date: ''
 created: 2026-06-25
-updated: 2026-06-25
+updated: 2026-07-11
+status_note: 'DONE — GLB→trimesh→CoACD pipeline shipped on PR #164; re-verified 2026-07-11 on dz-226: full sim_evaluator pytest suite green (50 passed, 1 skipped, incl. the concavity regression) on native Windows (conda neodem-svc + trimesh/coacd/obj2mjcf). Remaining walk-into-real-scanned-room validation folds into TASK-172 §A (robot day).'
 ---
 
 # Real-to-Sim — proper GLB→MuJoCo room collision pipeline

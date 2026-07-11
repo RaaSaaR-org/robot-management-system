@@ -4,19 +4,21 @@ aliases:
 - TASK-177
 title: Cosmos 3 policy → Unitree G1 embodiment fine-tune + VLA Server backend
 slug: cosmos-3-policy-unitree-g1-embodiment-fine-tune-vla-server-backend
-status: backlog
+status: deferred
 priority: 3
 owner: ''
 projects: []
 customers: []
 tags:
 - extended
+- deferred
 sprint: ''
 depends_on:
 - '[[TASK-174]]'
 due_date: ''
 created: 2026-06-28
-updated: 2026-06-28
+updated: 2026-07-11
+status_note: 'DEFERRED 2026-07-11 — research ACs closed on paper, GPU ACs not worth the spend. AC#1 decided: custom 43-D joint-space head (29 body + 14 Dex3, Unitree_G1_Dex3 ordering), NOT egocentric 57D. AC#4 recorded in RES-001 §4.9: stick with GR00T-N1.7 (already proven multi-task on G1+Dex3 locally via TASK-180; GR00T ships the Cosmos-Reason backbone anyway; Cosmos3-policy has no humanoid embodiment and needs a rented ≥H100 for its first datapoint). AC#2/#3 (prototype finetune + latency) only if a revisit trigger in RES-001 §4.9 fires.'
 ---
 
 

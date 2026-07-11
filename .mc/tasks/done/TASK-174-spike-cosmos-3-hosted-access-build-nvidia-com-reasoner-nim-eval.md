@@ -4,7 +4,7 @@ aliases:
 - TASK-174
 title: 'Spike: Cosmos 3 hosted access — build.nvidia.com + Reasoner NIM eval'
 slug: spike-cosmos-3-hosted-access-build-nvidia-com-reasoner-nim-eval
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,7 +15,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-28
-updated: 2026-06-28
+updated: 2026-07-11
 status_note: DONE — all acceptance criteria met; live generation captured via free HF Space (anonymous, 25.3s)
 ---
 

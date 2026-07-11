@@ -19,7 +19,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-24
-updated: 2026-06-24
+updated: 2026-07-11
+status_note: 'Phases 0-5 software DONE (PR #164). Real-hardware progress since: standalone MID-360 capture (240k pts, 2026-07-07) imported → twin built by twin-builder → MuJoCo sim scene, all with REAL data (2026-07-11). Only genuinely open item: LIVE walked scan-session through the agent getPointCloudFrame hardware branch (robot day — see TASK-169 checklist item 3).'
 ---
 
 # Digital Twin — phases 2–5
@@ -43,6 +44,22 @@ scan→twin→real-to-sim loop, `dd80486` Phase 5 scan-session reaper + raw-fram
 prune); Playwright-validated. **Still open:** the Phase 5 **hardware** path —
 real MID-360 LiDAR capture + the real Open3D mesh/occupancy pipeline
 (`@status hardware-pending`); everything below it is software-done.
+
+## Status update (2026-07-11) — most of the Phase-5 hardware path is now proven
+
+- **Real MID-360 capture happened** (2026-07-07, dz-226): 240,480-point capture
+  from the real G1's LiDAR via DDS (read-only), durable copy at
+  `C:\Unitree\_data\g1_lidar\`.
+- **Real-data twin build proven end-to-end**: the capture was imported through
+  the point-cloud import endpoint (sensor-scans bucket), `../twin-builder`
+  built the twin (incl. the percentile-floor fix, twin-builder commit
+  `53cb4ea`), and the twin was converted to a MuJoCo sim scene the Simulation
+  page can launch. `pipelines/open3d_pipeline.py` exists in twin-builder.
+- **What actually remains (robot day):** the **live scan-session** path — the
+  G1 walking a sweep while the agent's `getPointCloudFrame` hardware branch
+  streams pose-stamped MID-360 frames into a server `ScanSession` (today the
+  real capture went through the standalone import path, not the live
+  walk-and-scan loop). See TASK-169 "Robot-day checklist" item 3.
 
 ## Current state (2026-06-24, historical — pre-Phase-2)
 
