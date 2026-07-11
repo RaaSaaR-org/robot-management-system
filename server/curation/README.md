@@ -1,15 +1,43 @@
-# Dataset Curation (episode trim / delete)
+# Dataset Curation (episode trim / delete / AI suggestions)
 
-Dependency-light tooling behind the in-app curation GUI (TASK-168). Edits
-LeRobot **v2.1** on-disk datasets **non-destructively** — every edit writes a new
-dataset revision directory and leaves the source untouched.
+Tooling behind the in-app curation GUI (TASK-168). Edits LeRobot on-disk
+datasets **non-destructively** — every edit writes a new dataset revision
+directory and leaves the source untouched.
 
 ## Files
 
-- `curate.py` — `delete` / `trim` subcommands. Reindexes episode/frame/global
-  indices and rewrites `meta/` exactly like lerobot's `delete_episodes`.
+- `curate.py` — `delete` / `trim` / `suggest` subcommands.
+  - **native backend** (default, pyarrow + pandas only): the v2.1
+    one-parquet-per-episode layout. Reindexes episode/frame/global indices and
+    rewrites `meta/` exactly like lerobot's `delete_episodes`, **copies and
+    renumbers the per-episode camera videos** for every camera key, **re-cuts
+    trimmed videos frame-accurately with ffmpeg** (`trim=start_frame:end_frame`
+    + libx264 re-encode — stream copy is not frame-accurate), and **recomputes
+    `meta/stats.json`** from the output parquets (per-dimension min/max/mean/std,
+    population std; `--no-recompute-stats` skips it and flags
+    `stats_recompute_required: true` instead).
+  - **lerobot backend** (`--backend lerobot`, needs lerobot >= 0.6): `delete`
+    for **v3.0** chunked/concatenated-video datasets via
+    `lerobot.datasets.dataset_tools.delete_episodes` (loads from `--dataset`,
+    writes the edited dataset to `--output`; source untouched). `trim` has no
+    lerobot equivalent yet → structured error `{code: "V3_TRIM_UNSUPPORTED"}`.
+  - `suggest --dataset <src> [--episode N]` — Phase-2 "video-use" heuristics:
+    deterministic motion analysis of the `action` (fallback
+    `observation.state`) column. Leading/trailing idle padding (mean |Δ| per
+    frame below `--idle-threshold`, run length >= `--min-idle-frames`) →
+    trim suggestion; near-zero total motion or fewer than `--min-frames`
+    frames → delete suggestion. Output:
+    `{ok, suggestions: [{episode, kind, start?, end?, reason, confidence}]}`.
 - `make_synthetic_dataset.py` — generates a tiny valid dataset for testing
-  without torch/lerobot (defaults to the G1 EDU 43-DOF action space).
+  without torch/lerobot (defaults to the G1 EDU 43-DOF action space). With
+  `--cameras top,wrist` it also emits tiny real mp4s (testsrc, one video frame
+  per data frame) via ffmpeg for the video-aware curation tests.
+- `tests/` — pytest suite: delete+video renumbering, frame-accurate trim
+  re-cut (counts decoded frames with the real ffmpeg), stats recompute vs
+  hand-computed values, suggest heuristics on crafted idle padding, and the
+  lerobot v3 backend (builds a real state-only v3 dataset; auto-skipped when
+  lerobot is missing). Run:
+  `cd server/curation && CURATION_FFMPEG=/path/to/ffmpeg python -m pytest tests/ -q`.
 - `cosmos3_synth.py` — **TASK-175**: real Cosmos 3 synthetic-data generation.
   Calls the HF ZeroGPU `nvidia/Cosmos3-Action-Viewer` (forward dynamics) to roll
   out action-conditioned video for the bridge/WidowX embodiment, then exports a
@@ -22,18 +50,25 @@ dataset revision directory and leaves the source untouched.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# make a synthetic dataset
+# make a synthetic dataset (add --cameras top to include tiny real videos)
 .venv/bin/python make_synthetic_dataset.py /tmp/g1_ds --episodes 4 --frames 20
 
-# delete episodes (writes a NEW dir)
+# delete episodes (writes a NEW dir; videos copied + renumbered, stats recomputed)
 .venv/bin/python curate.py delete --dataset /tmp/g1_ds --output /tmp/g1_ds_v2 --episodes 1,3
 
-# trim one episode to frames [5, 15)
+# trim one episode to frames [5, 15) (video re-cut frame-accurately via ffmpeg)
 .venv/bin/python curate.py trim --dataset /tmp/g1_ds --output /tmp/g1_ds_v3 --episode 2 --start 5 --end 15
+
+# v3.0 chunked dataset -> lerobot backend (interpreter needs lerobot >= 0.6)
+python curate.py delete --backend lerobot --dataset /data/v3_ds --output /data/v3_ds_v2 --episodes 1
+
+# heuristic curation suggestions (read-only)
+.venv/bin/python curate.py suggest --dataset /tmp/g1_ds
 ```
 
 Each command prints a JSON summary on stdout (parsed by
-`server/src/services/EpisodeCurationService.ts`).
+`server/src/services/EpisodeCurationService.ts`); failures print
+`{"ok": false, "error": ..., "code": ...}` and exit 1.
 
 ## Cosmos 3 synthetic data (`cosmos3_synth.py`, TASK-175)
 
@@ -143,21 +178,55 @@ a do-nothing policy. Full results + go/no-go in
 
 ## Server wiring
 
-`EpisodeCurationService` shells out to `curate.py` (`CURATION_PYTHON` selects the
-interpreter; it must have pyarrow/pandas). Routes:
+`EpisodeCurationService` shells out to `curate.py`; `DatasetCurationService`
+orchestrates per **dataset id**: it loads the Dataset row, picks the backend
+from `lerobotVersion` (`v3*` → lerobot backend), resolves the source
+(**local-disk** dataset dirs are curated in place from their absolute
+`storagePath`; **RustFS** datasets are downloaded from their `storagePath`
+prefix in the `training-datasets` bucket to a temp dir first), runs the edit,
+and registers the result as a **new Dataset revision row**
+(`<name> (curated)`, counter appended on repeats). RustFS results are uploaded
+under a fresh `<uuid>/` prefix and re-validated through the standard
+`validateAndUpdateDataset` path (fills infoJson/statsJson, flips to `ready`);
+local results are registered `ready` directly from the produced meta. The
+original dataset row/files are never touched. Lineage/audit info is persisted
+in `infoJson._curation` (`{parentDatasetId, operation, params, timestamp,
+tool}`) — the ComplianceLog service is robot-session-scoped and doesn't fit
+dataset edits, so the lineage record doubles as the audit trail.
+
+Routes (mounted at `/api/curation`):
 
 - `POST /api/curation/:id/episodes/delete`  `{ episodes: number[], datasetPath? }`
 - `POST /api/curation/:id/episodes/:index/trim`  `{ start, end?, datasetPath? }`
+- `POST /api/curation/:id/suggest`  `{ episode?, datasetPath? }` — AI suggestions
+  (heuristics; videos are not downloaded for RustFS datasets here)
 
-Dataset path resolves from `CURATION_DATASETS_ROOT/:id` unless `datasetPath` is
-passed (used for local/dev and tests).
+The edit endpoints respond with the curate.py summary plus
+`newDatasetId`/`newDatasetName` when a revision row was registered.
+`datasetPath` (or `CURATION_DATASETS_ROOT/:id` when the id has no DB row) keeps
+the legacy path-mode working for local/dev and tests — no row is created then.
+
+Env vars (see `server/.env.example`):
+
+- `CURATION_PYTHON` — interpreter for the native backend (pyarrow + pandas;
+  default `python3`)
+- `CURATION_LEROBOT_PYTHON` — interpreter with lerobot >= 0.6 for v3.0 datasets
+  (no default; v3 requests fail with a clear error when unset)
+- `CURATION_DATASETS_ROOT` — legacy path-mode root (default `/tmp/neodem-datasets`)
+- `CURATION_FFMPEG` — ffmpeg binary for video re-cuts (default: `ffmpeg` on PATH)
+- `CURATION_VLM` — set to `gemini` (with a real `GOOGLE_API_KEY`) to enrich
+  suggestions with a Gemini pass over sampled episode frames
+  (`CURATION_VLM_MODEL`, default `gemini-2.5-flash`)
 
 ## Caveats
 
-- **Stats are not recomputed** by this tool — results carry
-  `stats_recompute_required: true`; run the existing `stats_worker` afterward.
-- **v3 chunked / video datasets**: for multi-episode parquet chunks and
-  concatenated MP4, route through lerobot's own
-  `lerobot.datasets.dataset_tools.delete_episodes` (handles video re-encode)
-  instead of this on-disk editor. This tool targets the common
-  one-parquet-per-episode v2.1 layout.
+- **Stats**: the native backend recomputes `meta/stats.json` itself (parquet
+  features only — image/video stats are not recomputed) and sets
+  `stats_recompute_required: false`. With `--no-recompute-stats` the flag stays
+  `true`; run the stats worker afterward.
+- **v3 chunked / video datasets**: `delete` goes through lerobot's own
+  `delete_episodes` (handles chunk re-encode). `trim` and `suggest` are not
+  supported for v3 yet (`V3_TRIM_UNSUPPORTED` / `V3_SUGGEST_UNSUPPORTED`).
+- **VLM suggestion pass** (`CURATION_VLM=gemini`) is implemented but
+  **untested live** — no Gemini API key on this box. The heuristic path works
+  without it and is fully tested.
