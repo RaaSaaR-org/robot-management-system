@@ -319,17 +319,75 @@ export class SimulationEngine {
       return true;
     }
 
-    // Check critical battery
-    if (newState.batteryLevel < 5 && newState.status !== 'error') {
-      this.stateUpdater((s) => {
-        s.errors.push('Critical battery level');
-        s.status = 'error';
-        s.targetLocation = undefined;
-      });
-      return true;
+    // Low battery while idle: head to the charging station before it gets critical
+    if (
+      newState.batteryLevel < 20 &&
+      newState.status === 'online' &&
+      !newState.targetLocation &&
+      this.cachedChargingStation
+    ) {
+      return this.startReturnToCharger('Returning to charging station');
+    }
+
+    // Critical battery: emergency-dock instead of bricking the robot. Also
+    // recovers robots persisted in 'error' from the old brick-on-critical
+    // behavior (their errors[] contains 'Critical battery level').
+    if (newState.batteryLevel < 5 && !this.isEnRouteToCharger(newState)) {
+      const batteryError = newState.errors.includes('Critical battery level');
+      if (this.cachedChargingStation && (newState.status !== 'error' || batteryError)) {
+        return this.startReturnToCharger('Emergency: returning to charging station', true);
+      }
+      if (!this.cachedChargingStation && newState.status !== 'error') {
+        // No charging station known — nothing to dock to, report the failure
+        this.stateUpdater((s) => {
+          if (!s.errors.includes('Critical battery level')) {
+            s.errors.push('Critical battery level');
+          }
+          s.status = 'error';
+          s.targetLocation = undefined;
+        });
+        return true;
+      }
     }
 
     return false;
+  }
+
+  /**
+   * Send the robot to the cached charging station
+   * @returns true (state changed)
+   */
+  private startReturnToCharger(taskName: string, critical = false): boolean {
+    const charger = this.cachedChargingStation;
+    if (!charger) return false;
+
+    const state = this.stateGetter();
+    console.log(
+      `[SimulationEngine] ${state.name}: battery ${state.batteryLevel.toFixed(1)}% — ${taskName}`
+    );
+
+    this.stateUpdater((s) => {
+      if (critical && !s.errors.includes('Critical battery level')) {
+        s.errors.push('Critical battery level');
+      }
+      s.status = 'busy';
+      s.currentTaskName = taskName;
+      s.targetLocation = { ...charger };
+    });
+    return true;
+  }
+
+  /**
+   * Whether the robot is already moving towards the charging station
+   */
+  private isEnRouteToCharger(state: SimulatedRobotState): boolean {
+    if (!this.cachedChargingStation || !state.targetLocation || state.status !== 'busy') {
+      return false;
+    }
+    return (
+      Math.abs(state.targetLocation.x - this.cachedChargingStation.x) < 1 &&
+      Math.abs(state.targetLocation.y - this.cachedChargingStation.y) < 1
+    );
   }
 
   /**
@@ -349,6 +407,7 @@ export class SimulationEngine {
       this.stateUpdater((s) => {
         s.status = 'online';
         s.warnings = s.warnings.filter((w) => w !== 'Low battery');
+        s.errors = s.errors.filter((e) => e !== 'Critical battery level');
       });
       return true;
     }
