@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Protocol
@@ -25,6 +26,21 @@ from typing import Protocol
 from .events import EventBus
 
 SSE_HEARTBEAT_S = 15.0
+
+
+class _QuietHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that doesn't traceback-spam on client disconnects.
+
+    Pollers (curl, Invoke-RestMethod) drop keep-alive connections between
+    requests; on Windows that surfaces as ConnectionResetError (WinError
+    10054) inside handle_one_request — routine, not an error.
+    """
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class PipelineController(Protocol):
@@ -151,7 +167,7 @@ class VoiceHttpServer:
                 self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
                 self.wfile.flush()
 
-        self._server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        self._server = _QuietHTTPServer(("0.0.0.0", port), Handler)
         self._server.daemon_threads = True
         self._thread: threading.Thread | None = None
 
