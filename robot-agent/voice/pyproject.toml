@@ -1,0 +1,27 @@
+[project]
+name = "voice-service"
+version = "0.1.0"
+description = "Robot-agnostic local voice interaction service: mic -> VAD -> STT -> A2A agent -> TTS -> speaker"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "faster-whisper==1.2.1",
+    "ctranslate2>=4.7.1",       # sm_120/Blackwell fix landed in 4.7.0
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12==9.*",
+    "onnxruntime>=1.20",        # Silero VAD (vendored ONNX wrapper, no torch)
+    "piper-tts==1.4.2",         # GPL-3.0 — see README licence note
+    "sounddevice>=0.5.1",
+    "soxr>=0.5",
+    "numpy>=1.26",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false

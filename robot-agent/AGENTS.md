@@ -320,8 +320,25 @@ Parsers live in `src/robot/pointcloud-formats.ts`; replay/normalization in
 | `.env.heavy`  | TitanBot  | heavy-duty  | h1    | 41244 | 50kg    |
 | `.env.so101`  | ArmBot    | lightweight | SO101 | 41245 | 0.5kg   |
 
+## Voice Service (`voice/`)
+
+Standalone, robot-agnostic Python service for spoken interaction with any
+A2A agent: mic → Silero VAD → faster-whisper (CUDA) → A2A `message/send` →
+Piper TTS → speaker. Fully local (LLM via Ollama). Own uv venv (Python
+3.12), HTTP control API on `:8768` (health/status/config/say/events SSE).
+Audio backends: `local` (PC) and `g1` (Unitree G1 mic-multicast + speaker
+adapter on `:8766`). See `voice/README.md`; real-robot validation is
+TASK-181.
+
+```bash
+cd voice && uv sync && uv run python scripts/download_models.py
+uv run python -m voice_service          # talk to the g1-edu agent (:41244)
+uv run pytest                            # unit tests (no GPU/mic needed)
+```
+
 ## Related Documentation
 
+- `voice/README.md` - Voice interaction service
 - `../server/AGENTS.md` - Server documentation
 - `../app/AGENTS.md` - Frontend documentation
 - `../docs/architecture.md` - System architecture
