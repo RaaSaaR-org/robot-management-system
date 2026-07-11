@@ -1,9 +1,14 @@
 /**
  * @file EpisodeCurationService.ts
- * @description Interactive episode-level dataset curation (trim / delete) for the
- *   curation GUI. Shells out to the dependency-light Python tool
- *   `server/curation/curate.py`, which edits LeRobot v2.1 datasets non-destructively
- *   (always writes a new revision directory, never mutates the source).
+ * @description Interactive episode-level dataset curation (trim / delete / suggest)
+ *   for the curation GUI. Shells out to the Python tool `server/curation/curate.py`,
+ *   which edits LeRobot datasets non-destructively (always writes a new revision
+ *   directory, never mutates the source).
+ *
+ *   Two backends: `native` (dependency-light pyarrow/pandas path for the
+ *   one-parquet-per-episode v2.1 layout, interpreter from CURATION_PYTHON) and
+ *   `lerobot` (v3.0 chunked/concatenated-video datasets via lerobot's own
+ *   `dataset_tools.delete_episodes`, interpreter from CURATION_LEROBOT_PYTHON).
  * @feature datasets
  */
 
@@ -15,7 +20,8 @@ const CURATE_PY = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../curation/curate.py',
 );
-const PYTHON = process.env.CURATION_PYTHON ?? 'python3';
+
+export type CurationBackend = 'native' | 'lerobot';
 
 export interface CurationResultSummary {
   ok: boolean;
@@ -24,7 +30,49 @@ export interface CurationResultSummary {
   total_episodes: number;
   total_frames: number;
   stats_recompute_required: boolean;
+  backend?: CurationBackend;
   error?: string;
+  code?: string;
+}
+
+/** One heuristic (or VLM-refined) curation suggestion for an episode. */
+export interface CurationSuggestion {
+  episode: number;
+  kind: 'trim' | 'delete';
+  start?: number;
+  end?: number;
+  reason: string;
+  confidence: number;
+  /** Set when a VLM pass refined this suggestion (CURATION_VLM=gemini). */
+  vlm?: boolean;
+}
+
+export interface SuggestResultSummary {
+  ok: boolean;
+  operation: string;
+  suggestions: CurationSuggestion[];
+  params?: Record<string, number>;
+  error?: string;
+  code?: string;
+}
+
+export interface CurationRunOptions {
+  backend?: CurationBackend;
+}
+
+/** Resolve the Python interpreter for a curation backend (read at call time so tests/env changes apply). */
+function pythonFor(backend: CurationBackend): string {
+  if (backend === 'lerobot') {
+    const py = process.env.CURATION_LEROBOT_PYTHON;
+    if (!py) {
+      throw new Error(
+        'v3.0 datasets are curated via the lerobot backend, but CURATION_LEROBOT_PYTHON is not set. ' +
+          'Point it at a Python interpreter with lerobot>=0.6 installed.',
+      );
+    }
+    return py;
+  }
+  return process.env.CURATION_PYTHON ?? 'python3';
 }
 
 export class EpisodeCurationService {
@@ -42,16 +90,20 @@ export class EpisodeCurationService {
     datasetPath: string,
     outputPath: string,
     episodeIndices: number[],
+    options?: CurationRunOptions,
   ): Promise<CurationResultSummary> {
     if (episodeIndices.length === 0) {
       throw new Error('episodeIndices must not be empty');
     }
-    return this.run([
+    const backend = options?.backend ?? 'native';
+    const args = [
       'delete',
       '--dataset', datasetPath,
       '--output', outputPath,
       '--episodes', episodeIndices.join(','),
-    ]);
+    ];
+    if (backend === 'lerobot') args.push('--backend', 'lerobot');
+    return this.run<CurationResultSummary>(args, backend);
   }
 
   /** Trim a single episode to the frame range [start, end), new revision at `outputPath`. */
@@ -61,7 +113,9 @@ export class EpisodeCurationService {
     episodeIndex: number,
     start: number,
     end: number | null,
+    options?: CurationRunOptions,
   ): Promise<CurationResultSummary> {
+    const backend = options?.backend ?? 'native';
     const args = [
       'trim',
       '--dataset', datasetPath,
@@ -70,14 +124,26 @@ export class EpisodeCurationService {
       '--start', String(start),
     ];
     if (end != null) args.push('--end', String(end));
-    return this.run(args);
+    if (backend === 'lerobot') args.push('--backend', 'lerobot');
+    return this.run<CurationResultSummary>(args, backend);
   }
 
-  private run(args: string[]): Promise<CurationResultSummary> {
+  /** Heuristic trim/delete suggestions for a dataset (or a single episode). Read-only. */
+  async suggest(datasetPath: string, episodeIndex?: number): Promise<SuggestResultSummary> {
+    const args = ['suggest', '--dataset', datasetPath];
+    if (episodeIndex != null) args.push('--episode', String(episodeIndex));
+    return this.run<SuggestResultSummary>(args, 'native');
+  }
+
+  private run<T extends { ok: boolean; error?: string }>(
+    args: string[],
+    backend: CurationBackend,
+  ): Promise<T> {
+    const python = pythonFor(backend);
     return new Promise((resolve, reject) => {
-      execFile(PYTHON, [CURATE_PY, ...args], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile(python, [CURATE_PY, ...args], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
         const text = (stdout || '').trim();
-        let parsed: CurationResultSummary | null = null;
+        let parsed: T | null = null;
         if (text) {
           try {
             parsed = JSON.parse(text.split('\n').pop() as string);
@@ -87,7 +153,10 @@ export class EpisodeCurationService {
         }
         if (err) {
           const message = parsed?.error ?? stderr ?? err.message;
-          return reject(new Error(`curate.py failed: ${message}`));
+          const failure = new Error(`curate.py failed: ${message}`) as Error & { code?: string };
+          const parsedCode = (parsed as { code?: string } | null)?.code;
+          if (parsedCode) failure.code = parsedCode;
+          return reject(failure);
         }
         if (!parsed) {
           return reject(new Error(`curate.py produced no parseable output: ${stderr || text}`));

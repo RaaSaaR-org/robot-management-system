@@ -4,7 +4,7 @@ aliases:
 - TASK-168
 title: GUI for VLA Training-Data Curation (episode trim/delete) + AI-assisted editing via video-use
 slug: gui-vla-training-data-curation-trim-delete-ai-video-use
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,31 +17,58 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-21
-updated: 2026-06-21
+updated: 2026-07-11
 ---
 
 
 # GUI for VLA Training-Data Curation (episode trim/delete) + AI-assisted editing via video-use
 
-## Implementation Status (2026-06-21)
+## Implementation Status (2026-07-11 — shipped, `feat/task-168-curation-hardening`)
 
-Part of the "G1 full circle" build. Done and verified on Mac (no Docker):
+All remaining open items landed:
 
 - ✅ **Phase 1 — Curation core** (`server/curation/`): `curate.py` (trim/delete,
   non-destructive, reindexes episode/frame/global indices + meta) and
-  `make_synthetic_dataset.py`. **Verified**: delete ep 1,3 → renumbered, frames
-  86→42; trim ep2 [5,15) → 22→10 frames, 74 total; global index contiguous;
-  original untouched. Deps: pyarrow + pandas only.
+  `make_synthetic_dataset.py`. Deps: pyarrow + pandas only.
 - ✅ **Phase 1 — Server**: `EpisodeCurationService.ts` + routes
-  `POST /api/curation/:id/episodes/delete` and `.../:index/trim`. Typechecks.
+  `POST /api/curation/:id/episodes/delete` and `.../:index/trim`.
 - ✅ **Phase 1 — Frontend**: Curate panel (trim range + delete episode) in
-  `EpisodeViewerModal.tsx` + `trainingApi.deleteEpisodes/trimEpisode`. Typechecks.
-- ⬜ **Wire to RustFS** (download→edit→reupload as new dataset revision) — today
-  it edits a local path (`CURATION_DATASETS_ROOT` / explicit `datasetPath`).
-- ⬜ **Stats recompute** after edit (flagged via `stats_recompute_required`).
-- ⬜ **Phase 2 — AI "video-use"** auto-suggestions (not started).
-- ⬜ **v3 chunked/video datasets** → route through lerobot `delete_episodes`.
-- ⬜ **Playwright** coverage for the Curate panel.
+  `DatasetEpisodesPage.tsx` + `trainingApi.deleteEpisodes/trimEpisode`.
+- ✅ **Video-aware curate.py**: the previous version dropped the `videos/` tree
+  entirely (deleted/renumbered episodes left broken datasets). Now: videos are
+  copied + renumbered per camera key on delete, and trimmed episodes are re-cut
+  frame-accurately via ffmpeg (`CURATION_FFMPEG`, libx264/yuv420p/faststart;
+  clear `FFMPEG_MISSING` error when unavailable).
+- ✅ **Stats recompute** after every native edit (`meta/stats.json` per-feature
+  per-dimension min/max/mean/std from the output parquets;
+  `stats_recompute_required: false`; `--no-recompute-stats` escape hatch).
+- ✅ **Wire to RustFS** (`DatasetCurationService.ts`): dataset id → local dir or
+  RustFS download→edit→reupload; result registered as a NEW Dataset row
+  (`<name> (curated)`, lineage in `infoJson._curation`), re-validated via the
+  standard `validateAndUpdateDataset` path. Originals never touched. Responses
+  carry `newDatasetId`/`newDatasetName`.
+- ✅ **v3 chunked/video datasets** → `--backend lerobot` routes delete through
+  `lerobot.datasets.dataset_tools.delete_episodes` (lerobot 0.6, verified with
+  a real v3 dataset built in the pytest suite); v3 trim returns a structured
+  `V3_TRIM_UNSUPPORTED` error. Server picks the backend per `lerobotVersion`
+  (`CURATION_LEROBOT_PYTHON` interpreter).
+- ✅ **Phase 2 — AI "video-use"** suggestions: `curate.py suggest` (deterministic
+  motion heuristics: idle-padding trims, dead/short-episode deletes) +
+  `POST /api/curation/:id/suggest` + "AI suggest" panel in the episodes page
+  with per-suggestion Apply (prefills trim inputs / confirmed delete) and
+  Dismiss — human always in the loop. Optional Gemini VLM refinement behind
+  `CURATION_VLM=gemini`.
+- ✅ **Playwright** coverage: `app/e2e/curation.spec.ts` (7 tests — panel, trim,
+  delete incl. confirm/cancel, suggest/apply/dismiss, new-dataset navigation).
+- ✅ Tests: `server/curation/tests/` pytest (13 tests, real ffmpeg + real
+  lerobot v3), server vitest (EpisodeCurationService, DatasetCurationService,
+  curation routes), app tsc + build.
+
+Still open (minor): live validation of the Gemini VLM suggestion pass — no
+`GOOGLE_API_KEY` on the dev box; code path is env-gated (`CURATION_VLM=gemini`)
+and falls back to pure heuristics. Batch triage UI ("12 episodes flagged…")
+beyond the per-dataset suggestion list, and drag-handle timeline trimming,
+remain nice-to-haves.
 
 See `server/curation/README.md`.
 

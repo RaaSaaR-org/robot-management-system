@@ -611,7 +611,9 @@ export interface TrainingActions {
 
 /**
  * Result summary returned by the curation backend after a trim/delete edit.
- * Edits are non-destructive: a new dataset revision is written at `output`.
+ * Edits are non-destructive: a new dataset revision is written at `output`
+ * and (when the dataset lives in the DB) registered as a NEW Dataset row
+ * (`newDatasetId` / `newDatasetName`).
  */
 export interface CurationResult {
   datasetId: string;
@@ -621,7 +623,33 @@ export interface CurationResult {
   total_episodes: number;
   total_frames: number;
   stats_recompute_required: boolean;
+  newDatasetId?: string;
+  newDatasetName?: string;
   error?: string;
+  code?: string;
+}
+
+/** One AI curation suggestion (motion heuristics, optionally VLM-refined). */
+export interface CurationSuggestion {
+  episode: number;
+  kind: 'trim' | 'delete';
+  start?: number;
+  end?: number;
+  reason: string;
+  confidence: number;
+  /** True when a VLM pass (Gemini) refined this suggestion. */
+  vlm?: boolean;
+}
+
+/** Response of POST /api/curation/:id/suggest. */
+export interface CurationSuggestResponse {
+  datasetId: string;
+  ok: boolean;
+  operation: string;
+  suggestions: CurationSuggestion[];
+  vlmEnriched?: boolean;
+  error?: string;
+  code?: string;
 }
 
 // ============================================================================

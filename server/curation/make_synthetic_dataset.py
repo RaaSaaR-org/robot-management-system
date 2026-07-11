@@ -5,17 +5,26 @@ Produces the parquet + meta layout that ``curate.py`` operates on, without
 needing torch/lerobot. Useful for developing and testing the trim/delete
 curation tooling on a Mac with no real robot data.
 
-Layout produced (use_videos=False to stay light):
+Layout produced (videos optional to stay light):
   <root>/meta/info.json
   <root>/meta/episodes.jsonl
   <root>/meta/tasks.jsonl
   <root>/data/chunk-000/episode_000000.parquet ...
+  <root>/videos/chunk-000/observation.images.<cam>/episode_000000.mp4  (with --cameras)
+
+With ``--cameras`` a tiny real mp4 (testsrc pattern, one video frame per data
+frame) is emitted per episode and camera via ffmpeg (``CURATION_FFMPEG`` env
+var, falling back to ``ffmpeg`` on PATH) so the video-aware curation path can
+be exercised in tests.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pyarrow as pa
@@ -23,9 +32,38 @@ import pyarrow.parquet as pq
 
 CODEBASE_VERSION = "v2.1"
 CHUNK_SIZE = 1000
+VIDEO_PATH_TEMPLATE = "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
 
 
-def build(root: Path, num_episodes: int, frames: int, action_dim: int, fps: int, robot_type: str) -> None:
+def _find_ffmpeg() -> str:
+    ffmpeg = os.environ.get("CURATION_FFMPEG") or shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise SystemExit("--cameras requires ffmpeg: set CURATION_FFMPEG or put ffmpeg on PATH")
+    return ffmpeg
+
+
+def _write_video(ffmpeg: str, dst: Path, frames: int, fps: int) -> None:
+    """Emit a tiny mp4 with exactly ``frames`` frames (testsrc pattern)."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg, "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", f"testsrc=size=64x64:rate={fps}",
+        "-frames:v", str(frames),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        str(dst),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def build(
+    root: Path,
+    num_episodes: int,
+    frames: int,
+    action_dim: int,
+    fps: int,
+    robot_type: str,
+    cameras: list[str] | None = None,
+) -> None:
     data_dir = root / "data" / "chunk-000"
     meta_dir = root / "meta"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -35,6 +73,9 @@ def build(root: Path, num_episodes: int, frames: int, action_dim: int, fps: int,
     tasks = ["pick up the cube", "place the cube"]
     episodes_meta = []
     global_index = 0
+    cameras = cameras or []
+    ffmpeg = _find_ffmpeg() if cameras else None
+    total_videos = 0
 
     for ep in range(num_episodes):
         ep_len = frames + ep  # vary length slightly per episode
@@ -72,6 +113,24 @@ def build(root: Path, num_episodes: int, frames: int, action_dim: int, fps: int,
         pq.write_table(table, data_dir / f"episode_{ep:06d}.parquet")
         episodes_meta.append({"episode_index": ep, "tasks": [tasks[task_index]], "length": ep_len})
 
+        for cam in cameras:
+            assert ffmpeg is not None
+            rel = VIDEO_PATH_TEMPLATE.format(
+                episode_chunk=0, video_key=f"observation.images.{cam}", episode_index=ep
+            )
+            _write_video(ffmpeg, root / rel, ep_len, fps)
+            total_videos += 1
+
+    video_features = {
+        f"observation.images.{cam}": {
+            "dtype": "video",
+            "shape": [64, 64, 3],
+            "names": ["height", "width", "channel"],
+            "info": {"video.fps": fps, "video.codec": "h264", "video.pix_fmt": "yuv420p"},
+        }
+        for cam in cameras
+    }
+
     info = {
         "codebase_version": CODEBASE_VERSION,
         "robot_type": robot_type,
@@ -79,13 +138,14 @@ def build(root: Path, num_episodes: int, frames: int, action_dim: int, fps: int,
         "total_episodes": num_episodes,
         "total_frames": global_index,
         "total_tasks": len(tasks),
-        "total_videos": 0,
+        "total_videos": total_videos,
         "total_chunks": 1,
         "chunks_size": CHUNK_SIZE,
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
-        "video_path": None,
+        "video_path": VIDEO_PATH_TEMPLATE if cameras else None,
         "splits": {"train": f"0:{num_episodes}"},
         "features": {
+            **video_features,
             "observation.state": {"dtype": "float32", "shape": [state_dim], "names": None},
             "action": {"dtype": "float32", "shape": [action_dim], "names": None},
             "timestamp": {"dtype": "float32", "shape": [1], "names": None},
@@ -114,8 +174,14 @@ def main() -> None:
     ap.add_argument("--action-dim", type=int, default=43)  # G1 EDU + Dex3
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--robot-type", default="unitree_g1_edu_dex3")
+    ap.add_argument(
+        "--cameras",
+        default="",
+        help="comma-separated camera names; emits a tiny real mp4 per episode/camera via ffmpeg",
+    )
     args = ap.parse_args()
-    build(args.root, args.episodes, args.frames, args.action_dim, args.fps, args.robot_type)
+    cameras = [c.strip() for c in args.cameras.split(",") if c.strip()]
+    build(args.root, args.episodes, args.frames, args.action_dim, args.fps, args.robot_type, cameras)
 
 
 if __name__ == "__main__":

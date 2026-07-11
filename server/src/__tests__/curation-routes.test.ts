@@ -9,21 +9,33 @@ import express from 'express';
 import request from 'supertest';
 
 // Use vi.hoisted so mock objects are available before vi.mock hoisting
-const { mockDataCurationService, mockDataAugmentationService, mockEpisodeCurationService } =
-  vi.hoisted(() => ({
-    mockDataCurationService: {
-      getTaxonomy: vi.fn(),
-      categorizeTrajectory: vi.fn(),
-    },
-    mockDataAugmentationService: {
-      paraphraseInstruction: vi.fn(),
-      computeDiversityScore: vi.fn(),
-    },
-    mockEpisodeCurationService: {
-      deleteEpisodes: vi.fn(),
-      trimEpisode: vi.fn(),
-    },
-  }));
+const { mockDataCurationService, mockDataAugmentationService, mockDatasetCurationService, MockCurationError } =
+  vi.hoisted(() => {
+    class MockCurationError extends Error {
+      readonly code: string;
+      constructor(message: string, code: string) {
+        super(message);
+        this.name = 'CurationError';
+        this.code = code;
+      }
+    }
+    return {
+      mockDataCurationService: {
+        getTaxonomy: vi.fn(),
+        categorizeTrajectory: vi.fn(),
+      },
+      mockDataAugmentationService: {
+        paraphraseInstruction: vi.fn(),
+        computeDiversityScore: vi.fn(),
+      },
+      mockDatasetCurationService: {
+        deleteEpisodes: vi.fn(),
+        trimEpisode: vi.fn(),
+        suggest: vi.fn(),
+      },
+      MockCurationError,
+    };
+  });
 
 vi.mock('../services/DataCurationService.js', () => ({
   dataCurationService: mockDataCurationService,
@@ -33,8 +45,9 @@ vi.mock('../services/DataAugmentationService.js', () => ({
   dataAugmentationService: mockDataAugmentationService,
 }));
 
-vi.mock('../services/EpisodeCurationService.js', () => ({
-  episodeCurationService: mockEpisodeCurationService,
+vi.mock('../services/DatasetCurationService.js', () => ({
+  datasetCurationService: mockDatasetCurationService,
+  CurationError: MockCurationError,
 }));
 
 vi.mock('../middleware/auth.middleware.js', () => ({
@@ -470,10 +483,17 @@ describe('Curation Routes', () => {
   // --------------------------------------------------------------------------
 
   describe('POST /api/curation/:id/episodes/delete', () => {
-    it('deletes episodes and returns the service result', async () => {
-      mockEpisodeCurationService.deleteEpisodes.mockResolvedValue({
-        outputPath: '/tmp/ds-1__del-123',
-        deleted: 2,
+    it('deletes episodes and returns the service result incl. newDatasetId', async () => {
+      mockDatasetCurationService.deleteEpisodes.mockResolvedValue({
+        datasetId: 'ds-1',
+        ok: true,
+        operation: 'delete episodes [0, 1]',
+        output: '/tmp/ds-1__del-123',
+        total_episodes: 2,
+        total_frames: 42,
+        stats_recompute_required: false,
+        newDatasetId: 'ds-new',
+        newDatasetName: 'ds one (curated)',
       });
 
       const response = await request(app)
@@ -482,12 +502,14 @@ describe('Curation Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.datasetId).toBe('ds-1');
-      expect(response.body.deleted).toBe(2);
-      expect(response.body.outputPath).toBe('/tmp/ds-1__del-123');
-      expect(mockEpisodeCurationService.deleteEpisodes).toHaveBeenCalledTimes(1);
-      const [src, , episodes] = mockEpisodeCurationService.deleteEpisodes.mock.calls[0];
-      expect(src).toBe('/tmp/ds-1');
-      expect(episodes).toEqual([0, 1]);
+      expect(response.body.total_episodes).toBe(2);
+      expect(response.body.newDatasetId).toBe('ds-new');
+      expect(response.body.newDatasetName).toBe('ds one (curated)');
+      expect(mockDatasetCurationService.deleteEpisodes).toHaveBeenCalledWith(
+        'ds-1',
+        [0, 1],
+        '/tmp/ds-1'
+      );
     });
 
     it('returns 400 when episodes is missing or empty', async () => {
@@ -497,11 +519,11 @@ describe('Curation Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('episodes (non-empty number[]) is required');
-      expect(mockEpisodeCurationService.deleteEpisodes).not.toHaveBeenCalled();
+      expect(mockDatasetCurationService.deleteEpisodes).not.toHaveBeenCalled();
     });
 
     it('returns 500 with the service error message when the service rejects', async () => {
-      mockEpisodeCurationService.deleteEpisodes.mockRejectedValue(new Error('disk full'));
+      mockDatasetCurationService.deleteEpisodes.mockRejectedValue(new Error('disk full'));
 
       const response = await request(app)
         .post('/api/curation/ds-1/episodes/delete')
@@ -518,9 +540,15 @@ describe('Curation Routes', () => {
 
   describe('POST /api/curation/:id/episodes/:index/trim', () => {
     it('trims an episode and returns the service result', async () => {
-      mockEpisodeCurationService.trimEpisode.mockResolvedValue({
-        outputPath: '/tmp/ds-1__trim-123',
-        trimmedFrames: 10,
+      mockDatasetCurationService.trimEpisode.mockResolvedValue({
+        datasetId: 'ds-1',
+        ok: true,
+        operation: 'trim episode 2 to [5, 20)',
+        output: '/tmp/ds-1__trim-123',
+        total_episodes: 4,
+        total_frames: 70,
+        stats_recompute_required: false,
+        newDatasetId: 'ds-new-2',
       });
 
       const response = await request(app)
@@ -529,30 +557,31 @@ describe('Curation Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.datasetId).toBe('ds-1');
-      expect(response.body.trimmedFrames).toBe(10);
-      expect(mockEpisodeCurationService.trimEpisode).toHaveBeenCalledWith(
-        '/tmp/ds-1',
-        expect.any(String),
+      expect(response.body.total_frames).toBe(70);
+      expect(response.body.newDatasetId).toBe('ds-new-2');
+      expect(mockDatasetCurationService.trimEpisode).toHaveBeenCalledWith(
+        'ds-1',
         2,
         5,
-        20
+        20,
+        '/tmp/ds-1'
       );
     });
 
     it('passes null end when end is omitted', async () => {
-      mockEpisodeCurationService.trimEpisode.mockResolvedValue({ outputPath: 'x' });
+      mockDatasetCurationService.trimEpisode.mockResolvedValue({ datasetId: 'ds-1', ok: true });
 
       const response = await request(app)
         .post('/api/curation/ds-1/episodes/0/trim')
         .send({ start: 3, datasetPath: '/tmp/ds-1' });
 
       expect(response.status).toBe(200);
-      expect(mockEpisodeCurationService.trimEpisode).toHaveBeenCalledWith(
-        '/tmp/ds-1',
-        expect.any(String),
+      expect(mockDatasetCurationService.trimEpisode).toHaveBeenCalledWith(
+        'ds-1',
         0,
         3,
-        null
+        null,
+        '/tmp/ds-1'
       );
     });
 
@@ -563,7 +592,7 @@ describe('Curation Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('episode index must be a non-negative integer');
-      expect(mockEpisodeCurationService.trimEpisode).not.toHaveBeenCalled();
+      expect(mockDatasetCurationService.trimEpisode).not.toHaveBeenCalled();
     });
 
     it('returns 400 when start is missing or negative', async () => {
@@ -573,11 +602,25 @@ describe('Curation Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('start (>= 0) is required');
-      expect(mockEpisodeCurationService.trimEpisode).not.toHaveBeenCalled();
+      expect(mockDatasetCurationService.trimEpisode).not.toHaveBeenCalled();
+    });
+
+    it('maps CurationError to 400 with its code (v3 trim unsupported)', async () => {
+      mockDatasetCurationService.trimEpisode.mockRejectedValue(
+        new MockCurationError('trim not supported for v3.0 datasets yet', 'V3_TRIM_UNSUPPORTED')
+      );
+
+      const response = await request(app)
+        .post('/api/curation/ds-v3/episodes/0/trim')
+        .send({ start: 0, end: 10 });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('trim not supported for v3.0 datasets yet');
+      expect(response.body.code).toBe('V3_TRIM_UNSUPPORTED');
     });
 
     it('returns 500 with the service error message when the service rejects', async () => {
-      mockEpisodeCurationService.trimEpisode.mockRejectedValue(new Error('bad frames'));
+      mockDatasetCurationService.trimEpisode.mockRejectedValue(new Error('bad frames'));
 
       const response = await request(app)
         .post('/api/curation/ds-1/episodes/0/trim')
@@ -585,6 +628,85 @@ describe('Curation Routes', () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('bad frames');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/curation/:id/suggest
+  // --------------------------------------------------------------------------
+
+  describe('POST /api/curation/:id/suggest', () => {
+    it('returns the suggestion list from the service', async () => {
+      mockDatasetCurationService.suggest.mockResolvedValue({
+        datasetId: 'ds-1',
+        ok: true,
+        operation: 'suggest',
+        suggestions: [
+          { episode: 0, kind: 'trim', start: 10, end: 24, reason: 'idle padding', confidence: 0.85 },
+          { episode: 1, kind: 'delete', reason: 'near-zero motion', confidence: 0.9 },
+        ],
+        vlmEnriched: false,
+      });
+
+      const response = await request(app)
+        .post('/api/curation/ds-1/suggest')
+        .send({ datasetPath: '/tmp/ds-1' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.suggestions).toHaveLength(2);
+      expect(response.body.suggestions[0].kind).toBe('trim');
+      expect(mockDatasetCurationService.suggest).toHaveBeenCalledWith('ds-1', {
+        episode: undefined,
+        datasetPath: '/tmp/ds-1',
+      });
+    });
+
+    it('passes the episode filter through', async () => {
+      mockDatasetCurationService.suggest.mockResolvedValue({
+        datasetId: 'ds-1',
+        ok: true,
+        operation: 'suggest',
+        suggestions: [],
+      });
+
+      const response = await request(app)
+        .post('/api/curation/ds-1/suggest')
+        .send({ episode: 3 });
+
+      expect(response.status).toBe(200);
+      expect(mockDatasetCurationService.suggest).toHaveBeenCalledWith('ds-1', {
+        episode: 3,
+        datasetPath: undefined,
+      });
+    });
+
+    it('returns 400 for a negative episode', async () => {
+      const response = await request(app)
+        .post('/api/curation/ds-1/suggest')
+        .send({ episode: -2 });
+
+      expect(response.status).toBe(400);
+      expect(mockDatasetCurationService.suggest).not.toHaveBeenCalled();
+    });
+
+    it('maps CurationError codes to 400', async () => {
+      mockDatasetCurationService.suggest.mockRejectedValue(
+        new MockCurationError('suggestions not supported for v3.0 datasets yet', 'V3_SUGGEST_UNSUPPORTED')
+      );
+
+      const response = await request(app).post('/api/curation/ds-v3/suggest').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('V3_SUGGEST_UNSUPPORTED');
+    });
+
+    it('returns 500 for unexpected failures', async () => {
+      mockDatasetCurationService.suggest.mockRejectedValue(new Error('boom'));
+
+      const response = await request(app).post('/api/curation/ds-1/suggest').send({});
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('boom');
     });
   });
 });

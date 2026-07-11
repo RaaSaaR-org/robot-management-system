@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers, Gauge, MessageSquareText } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Flag, Film, Activity, Clock, Layers, Gauge, MessageSquareText, Sparkles, ArrowRight, X } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -21,7 +21,7 @@ import { Spinner } from '@/shared/components/ui';
 import { evaluationApi } from '@/features/evaluation/api/evaluationApi';
 import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
 import { trainingApi } from '../api/trainingApi';
-import type { Dataset, EpisodeMeta, FrameData, EpisodeAnnotation } from '../types';
+import type { Dataset, EpisodeMeta, FrameData, EpisodeAnnotation, CurationResult, CurationSuggestion } from '../types';
 
 const JOINT_COLORS: Record<string, string> = {
   shoulder_pan: '#3b82f6',
@@ -33,6 +33,20 @@ const JOINT_COLORS: Record<string, string> = {
 };
 
 const SPEED_OPTIONS = [0.5, 1, 2] as const;
+
+/**
+ * Extract a displayable message from a failed API call. The axios client
+ * rejects with a plain ApiError object ({ code, message, ... }), NOT an Error
+ * instance — an instanceof check alone would swallow the server's structured
+ * curation errors (e.g. V3_TRIM_UNSUPPORTED, FFMPEG_MISSING).
+ */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return 'unknown error';
+}
 
 /** Chip styling for a reward-model episode score (green > 0.7, orange > 0.4, red below). */
 function scoreChipCls(score: number): string {
@@ -60,6 +74,12 @@ export function DatasetEpisodesPage() {
   const [trimEnd, setTrimEnd] = useState<number | ''>('');
   const [curating, setCurating] = useState(false);
   const [curationMsg, setCurationMsg] = useState<string | null>(null);
+  // Outcome of the last successful curation edit: the new dataset revision
+  const [newDataset, setNewDataset] = useState<{ id: string; name?: string } | null>(null);
+  // AI curation suggestions (Phase-2 "video-use") — human reviews & applies
+  const [suggestions, setSuggestions] = useState<CurationSuggestion[]>([]);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestMsg, setSuggestMsg] = useState<string | null>(null);
   // Reward-model scores + VLM annotations (LeRobot 0.6.0, TASK-179)
   const [rewardsByEpisode, setRewardsByEpisode] = useState<Record<number, EpisodeReward>>({});
   const [annotations, setAnnotations] = useState<EpisodeAnnotation[]>([]);
@@ -275,22 +295,32 @@ export function DatasetEpisodesPage() {
     }
   }, [datasetId, flaggedMap]);
 
-  const handleDeleteEpisode = useCallback(async () => {
-    if (!datasetId || selectedEpisode === null) return;
-    if (!window.confirm(`Delete episode ${selectedEpisode}? A new dataset revision is written (the original is kept).`)) {
-      return;
+  /** Record the outcome of a successful curation edit (new dataset revision). */
+  const recordCurationOutcome = useCallback((verb: string, result: CurationResult) => {
+    const revision = result.newDatasetName ? `new dataset "${result.newDatasetName}"` : 'new revision';
+    setCurationMsg(`${verb} → ${revision}: ${result.total_episodes} episodes, ${result.total_frames} frames.`);
+    setNewDataset(result.newDatasetId ? { id: result.newDatasetId, name: result.newDatasetName } : null);
+  }, []);
+
+  const handleDeleteEpisode = useCallback(async (episodeIndex?: number): Promise<boolean> => {
+    const target = episodeIndex ?? selectedEpisode;
+    if (!datasetId || target === null) return false;
+    if (!window.confirm(`Delete episode ${target}? A new dataset revision is written (the original is kept).`)) {
+      return false;
     }
     setCurating(true);
     setCurationMsg(null);
     try {
-      const result = await trainingApi.deleteEpisodes(datasetId, [selectedEpisode]);
-      setCurationMsg(`Deleted → new revision: ${result.total_episodes} episodes, ${result.total_frames} frames.`);
+      const result = await trainingApi.deleteEpisodes(datasetId, [target]);
+      recordCurationOutcome('Deleted', result);
+      return true;
     } catch (err) {
-      setCurationMsg(`Delete failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setCurationMsg(`Delete failed: ${errText(err)}`);
+      return false;
     } finally {
       setCurating(false);
     }
-  }, [datasetId, selectedEpisode]);
+  }, [datasetId, selectedEpisode, recordCurationOutcome]);
 
   const handleTrimEpisode = useCallback(async () => {
     if (!datasetId || selectedEpisode === null) return;
@@ -299,13 +329,52 @@ export function DatasetEpisodesPage() {
     setCurationMsg(null);
     try {
       const result = await trainingApi.trimEpisode(datasetId, selectedEpisode, trimStart, end);
-      setCurationMsg(`Trimmed → new revision: ${result.total_episodes} episodes, ${result.total_frames} frames.`);
+      recordCurationOutcome('Trimmed', result);
     } catch (err) {
-      setCurationMsg(`Trim failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setCurationMsg(`Trim failed: ${errText(err)}`);
     } finally {
       setCurating(false);
     }
-  }, [datasetId, selectedEpisode, trimStart, trimEnd]);
+  }, [datasetId, selectedEpisode, trimStart, trimEnd, recordCurationOutcome]);
+
+  // AI suggestions ("video-use" Phase 2) — never auto-applied
+  const handleSuggest = useCallback(async () => {
+    if (!datasetId) return;
+    setSuggesting(true);
+    setSuggestMsg(null);
+    try {
+      const result = await trainingApi.suggestCuration(datasetId);
+      setSuggestions(result.suggestions);
+      if (result.suggestions.length === 0) {
+        setSuggestMsg('No curation suggestions — episodes look clean.');
+      }
+    } catch (err) {
+      setSuggestions([]);
+      setSuggestMsg(`Suggest failed: ${errText(err)}`);
+    } finally {
+      setSuggesting(false);
+    }
+  }, [datasetId]);
+
+  const dismissSuggestion = useCallback((index: number) => {
+    setSuggestions((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  /** Apply a suggestion: trims prefill the trim inputs, deletes run the (confirmed) delete flow. */
+  const applySuggestion = useCallback((suggestion: CurationSuggestion) => {
+    setSelectedEpisode(suggestion.episode);
+    if (suggestion.kind === 'trim') {
+      setTrimStart(suggestion.start ?? 0);
+      setTrimEnd(suggestion.end ?? '');
+      setSuggestMsg(`Trim range [${suggestion.start ?? 0}, ${suggestion.end ?? 'end'}) prefilled for episode ${suggestion.episode} — review and press "Trim range".`);
+    } else {
+      void handleDeleteEpisode(suggestion.episode).then((ok) => {
+        // Remove by identity, not by index — the list may have shifted while
+        // the confirm dialog / API call was pending.
+        if (ok) setSuggestions((prev) => prev.filter((s) => s !== suggestion));
+      });
+    }
+  }, [handleDeleteEpisode]);
 
   const handleStartAnnotation = useCallback(async () => {
     if (!datasetId) return;
@@ -603,13 +672,87 @@ export function DatasetEpisodesPage() {
                 <button
                   data-testid="curate-delete"
                   disabled={curating}
-                  onClick={handleDeleteEpisode}
+                  onClick={() => handleDeleteEpisode()}
                   className="px-2.5 py-1 rounded text-[11px] font-medium bg-red-500/15 hover:bg-red-500/25 text-red-400 disabled:opacity-50 transition-colors"
                 >
                   Delete episode
                 </button>
+                <button
+                  data-testid="curate-suggest"
+                  disabled={suggesting}
+                  onClick={handleSuggest}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-purple-500/15 hover:bg-purple-500/25 text-purple-400 disabled:opacity-50 transition-colors"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  {suggesting ? 'Analyzing…' : 'AI suggest'}
+                </button>
                 {curationMsg && (
-                  <span className="text-[11px] text-theme-tertiary basis-full">{curationMsg}</span>
+                  <span data-testid="curation-message" className="text-[11px] text-theme-tertiary basis-full">
+                    {curationMsg}
+                  </span>
+                )}
+                {newDataset && (
+                  <button
+                    data-testid="curate-open-new"
+                    onClick={() => {
+                      setNewDataset(null);
+                      setCurationMsg(null);
+                      setSuggestions([]);
+                      navigate(`/datasets/${newDataset.id}/episodes`);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 transition-colors"
+                  >
+                    Open curated dataset
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                )}
+                {suggestMsg && (
+                  <span data-testid="suggest-message" className="text-[11px] text-theme-tertiary basis-full">
+                    {suggestMsg}
+                  </span>
+                )}
+                {suggestions.length > 0 && (
+                  <div data-testid="curate-suggestions" className="basis-full space-y-1 pt-1 border-t border-white/[0.04]">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-theme-tertiary">
+                      AI suggestions — review before applying
+                    </p>
+                    {suggestions.map((s, i) => (
+                      <div
+                        key={`${s.episode}-${s.kind}-${i}`}
+                        data-testid={`curate-suggestion-${i}`}
+                        className="flex items-center gap-2 text-[11px] text-theme-secondary"
+                      >
+                        <span className={`px-1 py-px rounded text-[10px] font-medium ${
+                          s.kind === 'delete' ? 'text-red-400 bg-red-500/10' : 'text-cobalt-400 bg-cobalt-500/10'
+                        }`}>
+                          {s.kind}
+                        </span>
+                        <span className="font-mono tabular-nums shrink-0">
+                          Ep {s.episode}
+                          {s.kind === 'trim' && s.start !== undefined ? ` [${s.start}, ${s.end ?? 'end'})` : ''}
+                        </span>
+                        <span className="flex-1 min-w-0 truncate text-theme-tertiary" title={s.reason}>
+                          {s.reason}{s.vlm ? ' · VLM' : ''} · {(s.confidence * 100).toFixed(0)}%
+                        </span>
+                        <button
+                          data-testid={`suggest-apply-${i}`}
+                          disabled={curating}
+                          onClick={() => applySuggestion(s)}
+                          className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-cobalt-500/15 hover:bg-cobalt-500/25 text-cobalt-400 disabled:opacity-50 transition-colors"
+                        >
+                          Apply
+                        </button>
+                        <button
+                          data-testid={`suggest-dismiss-${i}`}
+                          onClick={() => dismissSuggestion(i)}
+                          className="p-0.5 rounded text-theme-tertiary/60 hover:text-theme-tertiary transition-colors"
+                          title="Dismiss suggestion"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
