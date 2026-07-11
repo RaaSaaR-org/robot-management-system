@@ -27,6 +27,7 @@ from .metrics import Metrics
 from .session import Session
 from .tts.normalize import tts_normalize
 from .vad.segmenter import SpeechEnd, SpeechStart, UtteranceSegmenter
+from .wake import match_wake
 
 LOW_CONFIDENCE_LOGPROB = -1.5
 
@@ -42,6 +43,10 @@ CANNED = {
     "thinking": {
         "de": "Einen Moment, bitte.",
         "en": "One moment, please.",
+    },
+    "wake_ack": {
+        "de": "Ja, bitte?",
+        "en": "Yes?",
     },
 }
 
@@ -84,6 +89,7 @@ class VoicePipeline:
 
         self._state = State.IDLE
         self._paused = config.mode == "ptt"  # ptt starts muted until toggled
+        self._wake_deadline = 0.0  # monotonic; follow-ups before this need no wake phrase
         self._models_loaded = {"stt": False, "tts": False}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
@@ -166,6 +172,7 @@ class VoicePipeline:
         self.segmenter.reset()
         self._set_state(State.THINKING)
         language = self.config.default_language
+        addressed = False  # wake gate passed -> refresh the follow-up window
         try:
             t0 = time.monotonic()
             async with self._gpu_lock:
@@ -194,6 +201,21 @@ class VoicePipeline:
             }
             self.bus.publish("transcript", text=text, language=language)
             print(f"[Voice] heard ({language}): {text}")
+
+            if self.config.wake_phrases:
+                remainder = match_wake(text, self.config.wake_phrases)
+                if remainder is None and time.monotonic() >= self._wake_deadline:
+                    self.bus.publish("wake_ignored", text=text, language=language)
+                    print(f"[Voice] not addressed to me, ignoring: {text}")
+                    return
+                addressed = True
+                if remainder is not None:
+                    text = remainder
+                if not text:  # bare "Hey G1" -> acknowledge, await the command
+                    await self._speak(
+                        CANNED["wake_ack"].get(language, CANNED["wake_ack"]["en"]), language
+                    )
+                    return
 
             if Session.is_reset_command(text):
                 self.session.reset()
@@ -234,6 +256,8 @@ class VoicePipeline:
             except Exception:  # noqa: BLE001
                 pass
         finally:
+            if addressed:
+                self._wake_deadline = time.monotonic() + self.config.wake_window_s
             await self._resume_listening()
 
     async def _thinking_filler(self, language: str, reply_arrived: asyncio.Event) -> None:
@@ -307,6 +331,12 @@ class VoicePipeline:
         return {
             "state": self._state.value,
             "paused": self._paused,
+            "wake": {
+                "enabled": bool(self.config.wake_phrases),
+                "windowOpenS": round(max(0.0, self._wake_deadline - time.monotonic()), 1)
+                if self.config.wake_phrases
+                else None,
+            },
             "contextId": self.session.peek(),
             "lastTranscript": self.last_transcript,
             "lastReply": self.last_reply,

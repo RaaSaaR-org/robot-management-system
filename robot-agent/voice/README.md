@@ -75,6 +75,25 @@ the robot speaks a short "Einen Moment, bitte." / "One moment, please." in the
 user's language so long LLM turns don't feel like dead air. The real reply
 never overlaps the filler — it queues behind it on the speak lock.
 
+## Wake phrase
+
+Dedicated wake-word engines are a licensing dead end (Porcupine free tier
+discontinued, openwakeword CC BY-NC-SA), so the wake phrase is software:
+Whisper transcribes everything anyway, and the pipeline only acts on
+utterances that start with one of `VOICE_WAKE_PHRASES` (comma-separated,
+e.g. `hey g1,hallo g1`; empty = open mic, the default). Matching ignores
+case, punctuation and spacing, so "Hey, G-1!" matches `hey g1`. Unaddressed
+speech is dropped silently (visible as `wake_ignored` on `/events`).
+
+- A bare "Hey G1" gets a "Ja, bitte?" / "Yes?" and the robot waits for the
+  command.
+- After the robot speaks, follow-ups within `VOICE_WAKE_WINDOW_S` (60 s)
+  need no wake phrase, so conversations flow naturally.
+- Both keys are runtime-mutable via `POST /config`; `GET /status` shows
+  whether the follow-up window is open.
+
+Recommended: off on the PC (lab use), `hey g1,hallo g1` on the real robot.
+
 ## Unitree G1 backends
 
 - **Mic:** the G1 multicasts its 4-mic array as 16 kHz mono s16le PCM on UDP

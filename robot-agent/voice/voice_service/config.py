@@ -60,6 +60,11 @@ class VoiceConfig:
     a2a_timeout_s: float = 90.0
     # spoken "one moment" if the agent is still thinking after this; 0 disables
     thinking_filler_s: float = 2.5
+    # software wake phrase(s), comma-separated ("hey g1,hallo g1");
+    # empty = every utterance is addressed to the robot (open mic)
+    wake_phrases: tuple[str, ...] = ()
+    # after the robot speaks, follow-ups within this window need no wake phrase
+    wake_window_s: float = 60.0
 
     g1_mcast_group: str = "239.168.123.161"
     g1_mcast_port: int = 5555
@@ -102,6 +107,8 @@ class VoiceConfig:
             )
         if not self.agent_url.startswith(("http://", "https://")):
             raise ValueError("VOICE_AGENT_URL must be an http(s) URL")
+        if self.wake_window_s < 0:
+            raise ValueError("VOICE_WAKE_WINDOW_S must be >= 0")
 
     def piper_voice_for(self, language: str) -> str:
         mapping = {"de": self.piper_voice_de, "en": self.piper_voice_en}
@@ -128,6 +135,8 @@ class VoiceConfig:
         "session_timeout_s",
         "default_language",
         "thinking_filler_s",
+        "wake_phrases",
+        "wake_window_s",
     )
 
     def apply_patch(self, patch: dict) -> dict:
@@ -150,12 +159,15 @@ def _coerce(name: str, raw: str) -> object:
         "vad_max_utterance_s", "vad_pre_roll_ms", "half_duplex_tail_ms",
         "session_timeout_s", "g1_mcast_port",
     }
-    float_fields = {"vad_threshold", "a2a_timeout_s", "language_min_prob", "thinking_filler_s"}
+    float_fields = {
+        "vad_threshold", "a2a_timeout_s", "language_min_prob",
+        "thinking_filler_s", "wake_window_s",
+    }
     if name in int_fields:
         return int(raw)
     if name in float_fields:
         return float(raw)
-    if name == "languages":
+    if name in ("languages", "wake_phrases"):
         return tuple(s.strip().lower() for s in raw.split(",") if s.strip())
     if name == "models_dir":
         return Path(raw)
