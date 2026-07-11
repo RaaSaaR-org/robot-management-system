@@ -4,7 +4,7 @@ aliases:
 - TASK-178
 title: Wire Cosmos 3 synthetic data into Training UI (generate wizard + tagged datasets + video preview)
 slug: wire-cosmos-3-synthetic-data-into-training-ui-generate-wizard-tagged-datasets-vi
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -16,8 +16,8 @@ depends_on:
 - '[[TASK-175]]'
 due_date: ''
 created: 2026-06-29
-updated: 2026-06-29
-status_note: 'DONE — full-stack feature built + Playwright-validated on feat/g1-pointcloud (uncommitted). Generate wizard, synthetic-tagged datasets, local-disk episode/video/frames serving, in-browser video + trajectory chart all working. All ACs met.'
+updated: 2026-07-11
+status_note: 'DONE — full-stack feature built + Playwright-validated. Code confirmed merged on main (2026-07-11: CosmosSyntheticService.ts, cosmos-synthetic.routes.ts, GenerateSyntheticModal.tsx all present). Generate wizard, synthetic-tagged datasets, local-disk episode/video/frames serving, in-browser video + trajectory chart all working. All ACs met.'
 ---
 
 

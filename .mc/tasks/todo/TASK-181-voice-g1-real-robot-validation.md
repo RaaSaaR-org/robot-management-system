@@ -18,6 +18,7 @@ depends_on: []
 due_date: ''
 created: 2026-07-11
 updated: 2026-07-11
+status_note: 'BLOCKED ON ROBOT — all PC-side prep done 2026-07-11: fresh adapter venv C:\Unitree\.venv-g1-audio created (py3.10.20 + cyclonedds 0.10.2 + numpy, uv-managed), adapter mock-smoke-tested (GET :8766/health ok, interface "Ethernet 3"), 79 voice unit tests green on main. Remaining: firewall rule (admin shell) + steps 2-8, all need the powered G1.'
 ---
 
 ## Description
@@ -46,17 +47,22 @@ this task is hardware bring-up, tuning, and sign-off.
     on `:8766`); tested with `G1_AUDIO_MOCK=1`.
 - Robot facts: G1 EDU on robot LAN `192.168.123.0/24`; dz-226 NIC
   "Ethernet 3" = `192.168.123.10`. DDS domain **0** = real robot.
-- ⚠ The old `C:\Unitree\.venv-g1-dds` venv is broken for user
-  `sebastian.heusser` (its base interpreter lives in another user's profile).
-  Create a fresh Python 3.10 venv for the adapter:
-  `uv venv --python 3.10 C:\Unitree\.venv-g1-audio`, then
-  `uv pip install cyclonedds==0.10.2 numpy` into it and run with
-  `PYTHONPATH=C:\Unitree\unitree_sdk2_python`.
+- ✅ **Adapter venv READY (2026-07-11):** `C:\Unitree\.venv-g1-audio` created
+  (uv-managed CPython 3.10.20, `cyclonedds==0.10.2`, `numpy`) — replaces the
+  broken `.venv-g1-dds`. Adapter smoke-tested from it in mock mode:
+  `G1_AUDIO_MOCK=1 PYTHONPATH=C:\Unitree\unitree_sdk2_python
+  C:\Unitree\.venv-g1-audio\Scripts\python.exe adapters\g1_audio_adapter.py`
+  → `GET :8766/health` = `{"status":"ok","mock":true,"interface":"Ethernet 3"}`.
+- ✅ Voice service test suite re-verified on main 2026-07-11: **79 passed**.
 
 ### Steps
 
-1. **Firewall**: allow inbound UDP 5555 for the voice venv's python.exe
-   (`robot-agent\voice\.venv\Scripts\python.exe`) on the robot LAN profile.
+1. **Firewall** *(needs an ADMIN shell — not possible from the unelevated
+   agent session, do this on robot day)*: allow inbound UDP 5555 for the voice
+   venv's python.exe on the robot LAN profile:
+   `New-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"
+   -Direction Inbound -Protocol UDP -LocalPort 5555 -Action Allow
+   -Program "C:\Unitree\robot-management-system\robot-agent\voice\.venv\Scripts\python.exe"`
 2. **Adapter bring-up**: start `g1_audio_adapter.py` in the 3.10 venv
    (`G1_NET_INTERFACE=Ethernet 3`, no mock). `GET :8766/health`, then
    `POST /play` with a known WAV (16 k mono s16le body) → audible from the

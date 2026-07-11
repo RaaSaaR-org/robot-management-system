@@ -4,7 +4,7 @@ aliases:
 - TASK-176
 title: Cosmos 3 world-model simulator for sim-RL policy evaluation
 slug: cosmos-3-world-model-simulator-for-sim-rl-policy-evaluation
-status: backlog
+status: done
 priority: 4
 owner: ''
 projects: []
@@ -16,7 +16,7 @@ depends_on:
 - '[[TASK-174]]'
 due_date: ''
 created: 2026-06-28
-updated: 2026-06-29
+updated: 2026-07-11
 status_note: 'DONE — feasibility study run on HF PRO (16 forward-dynamics rollouts, n=4). Verdict NO-GO: Cosmos 3 is action-conditioned & plausible but not a reliable policy-ranking simulator (real ranked #1 in 1/4; naive SSIM rewards a do-nothing policy). Go/no-go recorded in RES-001 §4.8. All 3 ACs met.'
 ---
 

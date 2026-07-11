@@ -20,7 +20,8 @@ depends_on:
 - "[[TASK-171]]"
 due_date: ''
 created: 2026-06-25
-updated: 2026-06-26
+updated: 2026-07-11
+status_note: 'Software-complete as of 2026-07-11. §A validated live on dz-226 (real migration confirmed; rl_policy sim rollout on the real-MID-360-scan twin scene completed through the server with frames+metrics; sim-only validation row persisted with null gap; deploy-gate logic 77/77 vitest). §B done. §C Phases 0-3 done; Phase-4 CUDA gait now SHIPPED via sim-trainer isaac_ppo.py (Isaac Lab + rsl_rl, Isaac-Velocity-Flat-G1-v0, PRs #1/#2 in ../sim-trainer). Remaining = 2 hardware bullets (real-G1 eval → measured domainGapScore) + runtime REQUIRE_SIM_VALIDATION flip on a deploy target; see TASK-169 robot-day checklist item 5. Also open (found 2026-07-11): stub vla-server is SO-101-only (6-dim) — G1 VLA rollouts need a real VLA server on :8000.'
 ---
 
 # Real-to-Sim follow-ups
@@ -36,24 +37,46 @@ hardware run, higher-fidelity room/robot geometry, and Phase 4 sim-RL training.
 
 ### A. Prove the full circle on hardware (runtime, not code)
 
-Code is in place but the loop has only been exercised up to the policy boundary
-in dev. To prove the **full circle**:
+**2026-07-11 runtime validation (dz-226, live dev stack):** everything
+software-side is now PROVEN through the live server; only the two real-robot
+bullets remain (see TASK-169 "Robot-day checklist" item 5).
 
-- [ ] Apply the schema wherever deployed: `cd server && npm run db:push` (or a
-      real migration) — `SimScene` + `DigitalTwin.simSceneKey/simSceneBackend` +
-      `SimToRealValidation` columns. *(Done in local dev 2026-06-25.)*
-- [ ] Start the **VLA server on :8000** (`../vla-server`). Without it every
-      rollout dies at `connect_backend` (`Cannot reach VLA server`).
-- [ ] Ensure the `sim_evaluator` uv env is present on the host that runs jobs.
-- [ ] **Sim rollout** to completion against a twin scene → head-camera frames
-      captured + played back in the Results tab.
+- [x] Apply the schema wherever deployed — **done as a real migration**:
+      `20260701120000_catch_up_db_push_column_drift` contains TrainingJob.kind/
+      sceneId/twinId + nullable dataset cols, ModelVersion.modelType,
+      SimToRealValidation nullable realSuccessRate/domainGapScore. Verified
+      2026-07-11; the "production Prisma migration" open item is closed.
+- [x] Start the **VLA server on :8000** — running in `--stub` mode on dz-226
+      (health: `stub:true`); rollouts no longer die at `connect_backend`.
+      ⚠ Stub emits 6-dim SO-101 sine actions → a **G1** VLA rollout fails with a
+      (6,)-vs-(29,) shape error (correctly surfaced via `failureReason`); G1
+      VLA rollouts need a real (non-stub) server or a 29-dim-aware stub.
+- [x] Ensure the `sim_evaluator` uv env is present on the host that runs jobs.
+      *(Created on dz-226 2026-07-11 via `uv sync`: mujoco 3.6.0, onnxruntime
+      1.27.0; imports + `evaluate_policy.py --help` verified.)*
+- [x] **Sim rollout** to completion against a twin scene — validated 2026-07-11
+      through the live server: rl_policy `7f7ebcb2` on twin scene "G1 Lab (real
+      MID-360 scan)" → job `d26ec900` **completed** (3 eps, metrics persisted:
+      successRate 0 / collisions 0 — the honest nav-not-gait scope boundary;
+      frames captured + served by `/frames/:filename`). VLA-vs-stub also
+      completed mechanically on `so101_tabletop` (job `3901b40a`, 42 frames,
+      garbage actions as expected from the sine stub).
 - [ ] **Real eval** — run the same policy on the real G1 in the same room;
       record `EvaluationEpisode`s so `realSuccessRate` is *derived*.
+      *(Still blocked on hardware.)*
 - [ ] **Gap** — `POST /validations` (no `realSuccessRate`) → confirm persisted
       `domainGapScore` = measured `sim − real`; "Sim vs Real" shows it.
+      *(Real-derived gap still needs the hardware run. The sim-only variant is
+      proven live 2026-07-11: validation `bb626921` for the rl_policy persisted
+      `realSuccessRate: null, domainGapScore: null`, `simOnly` auto-derived from
+      `modelType='rl_policy'`.)*
 - [ ] **Gate** — `REQUIRE_SIM_VALIDATION=true` (+ `SIM_REAL_GAP_THRESHOLD`):
-      deployment blocked when the gap is too large, permitted/overridden when
-      fine.
+      *(Gate logic verified 2026-07-11 via vitest — 77/77 incl. all 5 gate
+      branches: sim-only block/allow via `SIM_MIN_SUCCESS`, gap block,
+      off-by-default. Runtime flag flip not done — requires restarting the
+      protected live dev server; exercise it on a deploy target / robot day.
+      Note: the measured rl_policy `simSuccessRate=0` would correctly BLOCK at
+      the default `SIM_MIN_SUCCESS=0.6`.)*
 
 ### B. Geometry fidelity
 
@@ -231,7 +254,7 @@ build time; a claim-time selector cannot move it without re-running
 | ✅ **1 — Thin vertical slice (stub policy)** | `../sim-trainer` scaffold (poll loop copied) + `stub_rl.py`; claims a `sim_rl` job, rolls out `g1_empty_scene.xml`, uploads loadable `.zip`+`onnx`, posts `/complete` | `pytest` (mocked `ServerClient`, zip+onnx load) + worker glue test (claim→train→upload→complete, server+storage faked). *Live full-server smoke deferred (needs running server+RustFS).* |
 | ✅ **2 — Real PPO nav** | `g1_env.py` `obs_mode`; `nav_wrappers.py` (NavObs + alive-bonus ShapedReward + DR); `ppo_nav.py` (SubprocVecEnv + VecNormalize); SB3 callback → progress/heartbeat-cancel | `test_ppo_smoke`: `learn()` over SubprocVecEnv+VecNormalize; heartbeat `'stop'` aborts; `rgb_state` obs byte-identical. ⚠️ "beats random" is **xfail (non-strict)** — see review note: model-free PPO doesn't reliably beat random at CPU/single-env budget (real capability = MJX/CUDA, Phase 4) |
 | ✅ **3 — Gate consumability** | `policy_backend.py` + `evaluate_policy.py` + shared `nav_wrappers.py`; `SimulationService` `modelType` branch; sim-only `SimToRealValidation` row | Sim job runs `policy.onnx` in `G1Env` → `simSuccessRate` → validation → `DeploymentService` gates; train vs gate produce identical actions **and** identical normalization (real `VecNormalize` cross-checked) for a fixed obs |
-| **4 — Deferred** | Synthetic-traj export → `outputDatasetId`; `mjx_ppo.py` real CUDA/MJX gait; rl_policy serving | Out of v1 (needs a CUDA host) |
+| **4 — Deferred** | Synthetic-traj export → `outputDatasetId`; `mjx_ppo.py` real CUDA/MJX gait; rl_policy serving | Out of v1 (needs a CUDA host) — **UPDATE 2026-07-11: the real-gait CUDA path SHIPPED via Isaac Lab instead of MJX**: `../sim-trainer/trainers/isaac_ppo.py` (`TRAINER=isaac`, Isaac Lab + rsl_rl PPO, `Isaac-Velocity-Flat-G1-v0`, obs-dim build-time guard, sim-trainer PRs #1/#2); SIM-RL PPO jobs have run through the platform on dz-226. `mjx_ppo.py` stays a placeholder. |
 
 #### Implementation status (2026-06-26)
 

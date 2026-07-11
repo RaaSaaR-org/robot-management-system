@@ -18,7 +18,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-21
-updated: 2026-07-03
+updated: 2026-07-11
+status_note: 'BLOCKED ON HARDWARE ACCESS for all remaining gates. Software prerequisites are done (Stage 0-1 complete incl. live read-only telemetry; Stage-3 sim-eval wiring shipped via TASK-171/172; voice stack PC-validated, see TASK-181). Next robot session: work the "Robot-day checklist (2026-07-11)" section below.'
 ---
 
 # Lab bring-up — NeoDEM on a computer connected to a real Unitree G1 EDU
@@ -137,10 +138,18 @@ Real G1 EDU 4 is wired (PC2 `192.168.123.164`, ping 0 ms, SSH open).
       Datasets / Episode viewer, and curation (trim/delete) works on it.
 
 ### Stage 3 — Sim & policy (off the robot)
-- [ ] Wire G1 into the MuJoCo sim-eval pipeline (vendor `g1_with_hands.xml` +
+- [x] Wire G1 into the MuJoCo sim-eval pipeline (vendor `g1_with_hands.xml` +
       meshes into `robot-agent/hardware/sim_evaluator/mjcf/g1/`, add a G1 env,
       `--embodiment` flag, register in `SimulationService.ts`).
+      *(Shipped via TASK-171/172 on PR #164: real Unitree G1 meshes vendored
+      (`mjcf/g1/g1_29dof.xml`, 36 STLs), `envs/g1_env.py`, twin-derived
+      SimScenes selectable in the Simulation page (MuJoCo backend). Re-verified
+      2026-07-11: sim_evaluator pytest 50 passed / 1 skipped on dz-226.)*
 - [ ] Train a policy on the Stage-2 data; evaluate in sim. Define a success bar.
+      *(Blocked by Stage 2 — no real teleop dataset yet. Note: GR00T-N1.7
+      finetuning on G1+Dex3 data through the platform is already proven on this
+      box with public Unitree datasets (TASK-180), so once Stage-2 data exists
+      this bullet is routine.)*
 
 ### Stage 4 — Closed-loop AI on hardware (highest risk)
 - [ ] Only after Stage 3 passes. Robot on a **gantry/harness**, hardware e-stop,
@@ -149,6 +158,30 @@ Real G1 EDU 4 is wired (PC2 `192.168.123.164`, ping 0 ms, SSH open).
       *(Code exists since 2026-07: URDF-limit clamp + slew-rate ramp — but
       UNTESTED on hardware, and blocked by G1_READ_ONLY until this stage.)*
 - [ ] Start with tiny action scale; supervise continuously.
+
+## Robot-day checklist (2026-07-11) — consolidated next-session plan
+
+Everything solvable without the robot is done. When the G1 EDU is next
+available, work this list in order (it folds in the open hardware items from
+TASK-170, TASK-172 and TASK-181 too):
+
+1. **Safety first (this task, Stage 1 gate):** verify physical e-stop + Unitree
+   remote e-stop before any motion.
+2. **Voice validation (TASK-181):** adapter venv is ready
+   (`C:\Unitree\.venv-g1-audio`, mock-smoke-tested 2026-07-11); one admin step
+   remains — the UDP-5555 firewall rule (exact command in TASK-181).
+3. **Live scan session (TASK-170 Phase 5 hardware):** stream real MID-360
+   frames through the agent's `getPointCloudFrame` hardware branch during a
+   walked sweep (the import-path twin from a standalone capture is already
+   proven end-to-end).
+4. **Stage 2 teleop recording (this task):** record a small LeRobot dataset via
+   Unitree native teleop; import + curate it in the app (curation pipeline
+   hardened under TASK-168).
+5. **Full circle (TASK-172 §A):** run the same policy in sim and on the real
+   G1 in the scanned room, `POST /validations` → real `domainGapScore`, then
+   the `REQUIRE_SIM_VALIDATION` deploy gate with a measured gap.
+6. **TASK-173 tail:** walk the G1 into the CoACD-decomposed scanned-room
+   collision scene (already merged, sim-side tests green).
 
 ## Test strategy
 
