@@ -4,7 +4,7 @@
  * @feature robots
  */
 
-import { Card, Spinner, ProgressBar } from '@/shared/components/ui';
+import { Card, Spinner, ProgressBar, Button } from '@/shared/components/ui';
 import { formatTimeAgo, CPU_THRESHOLDS, MEMORY_THRESHOLDS, getResourceVariant } from '@/shared/utils';
 import { BatteryGauge } from '../BatteryGauge';
 import { SensorGrid } from '../SensorGrid';
@@ -27,6 +27,36 @@ const SensorIcon = (
   </svg>
 );
 
+const ErrorIcon = (
+  <svg className="h-8 w-8 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+  </svg>
+);
+
+/** Shown when the telemetry stream errored before any data arrived. */
+function TelemetryUnavailable({
+  label,
+  onRetry,
+}: {
+  label: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center py-8 text-center">
+      <div className="glass-subtle rounded-2xl p-4 mb-3">{ErrorIcon}</div>
+      <p className="text-theme-secondary font-medium">{label}</p>
+      <p className="text-sm text-gray-400 mt-1">
+        The telemetry stream could not be reached
+      </p>
+      {onRetry && (
+        <Button variant="outline" size="sm" className="mt-4" onClick={onRetry}>
+          Retry
+        </Button>
+      )}
+    </div>
+  );
+}
+
 // ============================================================================
 // COMPONENT
 // ============================================================================
@@ -36,8 +66,13 @@ export function TelemetryTab({
   telemetry,
   isTelemetryConnected,
   telemetryLastUpdate,
+  telemetryStatus,
+  onTelemetryRetry,
 }: TelemetryTabProps) {
   const isOffline = robot.status === 'offline';
+  // Telemetry never arrived and the stream is in an error state — show an
+  // explicit unavailable state instead of spinning forever.
+  const isTelemetryError = !telemetry && !isOffline && telemetryStatus === 'error';
 
   return (
     <div className="space-y-6">
@@ -123,6 +158,8 @@ export function TelemetryTab({
                 Last connected {formatTimeAgo(robot.lastSeen)}
               </p>
             </div>
+          ) : isTelemetryError ? (
+            <TelemetryUnavailable label="Telemetry unavailable" onRetry={onTelemetryRetry} />
           ) : (
             <div className="flex items-center justify-center py-8">
               <Spinner size="md" color="cobalt" label="Loading telemetry..." />
@@ -162,6 +199,8 @@ export function TelemetryTab({
                 Robot is currently offline
               </p>
             </div>
+          ) : isTelemetryError ? (
+            <TelemetryUnavailable label="Sensor data unavailable" onRetry={onTelemetryRetry} />
           ) : (
             <div className="flex items-center justify-center py-8">
               <Spinner size="md" color="cobalt" label="Loading sensors..." />

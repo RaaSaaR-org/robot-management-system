@@ -8,6 +8,8 @@ import { agentCardResolver } from './A2AClient.js';
 import { conversationManager } from './ConversationManager.js';
 import { robotRepository } from '../repositories/index.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
+// Safe to import directly: AlertService only depends on repositories (no service cycle)
+import { alertService } from './AlertService.js';
 
 // ============================================================================
 // TYPES
@@ -324,10 +326,27 @@ export class RobotManager {
   // ============================================================================
 
   /**
+   * Normalize robot status for presentation.
+   * Robots without a live, connected agent (e.g. DB-only rows with a2aEnabled=false)
+   * can carry a stale 'online'/'busy' status forever — present them as 'offline'
+   * instead. Does NOT write to the database; 'maintenance'/'charging'/'error'
+   * are left untouched.
+   */
+  private normalizePresentedStatus(robot: Robot): Robot {
+    const cached = this.robotCache.get(robot.id);
+    const isLive = cached !== undefined && cached.isConnected;
+    if (!isLive && (robot.status === 'online' || robot.status === 'busy')) {
+      return { ...robot, status: 'offline' };
+    }
+    return robot;
+  }
+
+  /**
    * Get all registered robots
    */
   async listRobots(): Promise<Robot[]> {
-    return robotRepository.findAll();
+    const robots = await robotRepository.findAll();
+    return robots.map((robot) => this.normalizePresentedStatus(robot));
   }
 
   /**
@@ -337,10 +356,11 @@ export class RobotManager {
     // Check cache first
     const cached = this.robotCache.get(robotId);
     if (cached) {
-      return cached.robot;
+      return this.normalizePresentedStatus(cached.robot);
     }
 
-    return (await robotRepository.findById(robotId)) ?? undefined;
+    const robot = await robotRepository.findById(robotId);
+    return robot ? this.normalizePresentedStatus(robot) : undefined;
   }
 
   /**
@@ -515,8 +535,40 @@ export class RobotManager {
         registered.robot.lastSeen = now;
 
         if (statusChanged) {
+          const previousStatus = registered.robot.status;
           registered.robot.status = healthData.robotStatus;
           registered.robot.updatedAt = now;
+
+          // Fire-and-forget alerts on status transitions (never fail the health check)
+          const robotName = registered.robot.name;
+          if (healthData.robotStatus === 'error') {
+            alertService
+              .createRobotAlert(
+                registered.robot.id,
+                'critical',
+                `Robot error: ${robotName}`,
+                `Robot "${robotName}" reported status 'error' (was '${previousStatus}').`
+              )
+              .catch((err) =>
+                console.error('[RobotManager] Failed to create robot error alert:', err)
+              );
+          } else if (
+            (previousStatus === 'error' || previousStatus === 'offline') &&
+            (healthData.robotStatus === 'online' ||
+              healthData.robotStatus === 'busy' ||
+              healthData.robotStatus === 'charging')
+          ) {
+            alertService
+              .createRobotAlert(
+                registered.robot.id,
+                'info',
+                `Robot recovered: ${robotName}`,
+                `Robot "${robotName}" recovered from '${previousStatus}' to '${healthData.robotStatus}'.`
+              )
+              .catch((err) =>
+                console.error('[RobotManager] Failed to create robot recovery alert:', err)
+              );
+          }
         }
 
         // Persist battery level and location to database
@@ -556,6 +608,18 @@ export class RobotManager {
 
           // Persist to database
           await robotRepository.updateHealthCheck(registered.robot.id, false, 'offline');
+
+          // Fire-and-forget alert on connectivity loss (never fail the health check)
+          alertService
+            .createRobotAlert(
+              registered.robot.id,
+              'warning',
+              `Robot offline: ${registered.robot.name}`,
+              `Robot "${registered.robot.name}" stopped responding to health checks and is now offline.`
+            )
+            .catch((err) =>
+              console.error('[RobotManager] Failed to create robot offline alert:', err)
+            );
 
           this.emitEvent({
             type: 'robot_status_changed',

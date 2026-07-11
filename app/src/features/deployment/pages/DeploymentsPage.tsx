@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Rocket, BookOpen } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Card, Button, Tabs } from '@/shared/components/ui';
@@ -36,6 +36,7 @@ export function DeploymentsPage() {
     );
   }
 
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<InnerTab>('active');
   const [showCanaryConfig, setShowCanaryConfig] = useState(false);
   const [rollbackDeployment, setRollbackDeployment] = useState<Deployment | null>(null);
@@ -298,7 +299,8 @@ export function DeploymentsPage() {
             <DeploymentCard
               key={deployment.id}
               deployment={deployment}
-              onClick={() => setRollbackDeployment(deployment)}
+              onClick={() => navigate(`/deployments/${deployment.id}`)}
+              onRollback={() => setRollbackDeployment(deployment)}
             />
           ))}
         </div>

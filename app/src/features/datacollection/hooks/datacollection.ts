@@ -349,7 +349,9 @@ export function useCollectionPriorities(
   );
 
   useEffect(() => {
-    fetchPriorities({ modelId });
+    if (modelId) {
+      fetchPriorities({ modelId });
+    }
   }, [fetchPriorities, modelId]);
 
   return useMemo(

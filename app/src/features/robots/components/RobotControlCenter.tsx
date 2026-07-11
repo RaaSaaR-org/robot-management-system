@@ -25,6 +25,7 @@ import {
 } from './tabs';
 import type { Robot, RobotTelemetry, RobotCommand } from '../types/robots.types';
 import type { Process } from '@/features/processes/types';
+import type { WebSocketStatus } from '@/shared/types/api.types';
 
 // ============================================================================
 // TYPES
@@ -38,6 +39,10 @@ export interface RobotControlCenterProps {
   telemetry: RobotTelemetry | null;
   isTelemetryConnected: boolean;
   telemetryLastUpdate: Date | null;
+  /** Telemetry stream status (drives the Telemetry tab's error state) */
+  telemetryStatus?: WebSocketStatus;
+  /** Retry the telemetry connection after an error */
+  onTelemetryRetry?: () => void;
   commandHistory: RobotCommand[];
   isCommandLoading: boolean;
   canExecuteCommands: boolean;
@@ -143,6 +148,8 @@ export const RobotControlCenter = memo(function RobotControlCenter({
   telemetry,
   isTelemetryConnected,
   telemetryLastUpdate,
+  telemetryStatus,
+  onTelemetryRetry,
   commandHistory,
   isCommandLoading,
   canExecuteCommands,
@@ -185,6 +192,8 @@ export const RobotControlCenter = memo(function RobotControlCenter({
             telemetry={telemetry}
             isTelemetryConnected={isTelemetryConnected}
             telemetryLastUpdate={telemetryLastUpdate}
+            telemetryStatus={telemetryStatus}
+            onTelemetryRetry={onTelemetryRetry}
           />
         );
       case 'commands':

@@ -47,8 +47,10 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
 
   const {
     telemetry,
+    status: telemetryStatus,
     isConnected: isTelemetryConnected,
     lastUpdate: telemetryLastUpdate,
+    connect: reconnectTelemetry,
   } = useTelemetryStream(robotId);
 
   const robotTasks = useTasksByRobotId(robotId);
@@ -147,6 +149,8 @@ export function RobotDetailPanel({ robotId, onBack, className }: RobotDetailPane
             telemetry={telemetry}
             isTelemetryConnected={isTelemetryConnected}
             telemetryLastUpdate={telemetryLastUpdate}
+            telemetryStatus={telemetryStatus}
+            onTelemetryRetry={reconnectTelemetry}
             commandHistory={commandHistory}
             isCommandLoading={isCommandLoading}
             canExecuteCommands={canExecuteCommands}

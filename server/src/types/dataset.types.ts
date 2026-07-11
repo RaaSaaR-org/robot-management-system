@@ -364,6 +364,23 @@ export type DatasetEventCallback = (event: DatasetEvent) => void;
 // ============================================================================
 
 /**
+ * Per-camera playback window of an episode inside a LeRobot v3.0 chunk video.
+ * v3.0 concatenates all episodes of a chunk into one mp4 per camera; the
+ * episodes parquet records where each episode lives
+ * (videos/observation.images.<cam>/{chunk_index,file_index,from,to}).
+ */
+export interface EpisodeVideoWindow {
+  /** Start of the episode inside the chunk video (seconds) */
+  from: number;
+  /** End of the episode inside the chunk video (seconds) */
+  to: number;
+  /** videos/<key>/chunk-{chunk:03d} the episode's video lives in */
+  chunk: number;
+  /** file-{file:03d} within the chunk (multi-file chunks, see #179) */
+  file: number;
+}
+
+/**
  * Episode metadata for the episode list
  */
 export interface EpisodeMeta {
@@ -371,6 +388,11 @@ export interface EpisodeMeta {
   frameCount: number;
   durationSeconds: number;
   flagged: boolean;
+  /**
+   * v3.0 chunked datasets only: playback window per camera (short key,
+   * e.g. "cam_left_high"). Absent for v2.x per-episode video files.
+   */
+  videoWindows?: Record<string, EpisodeVideoWindow>;
 }
 
 /**

@@ -28,6 +28,7 @@ import { conversationRoutes } from './routes/conversation.routes.js';
 import { messageRoutes } from './routes/message.routes.js';
 import { taskRoutes } from './routes/task.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
+import { eventsRoutes } from './routes/events.routes.js';
 import { robotRoutes } from './routes/robot.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
@@ -187,6 +188,7 @@ export function createApp(): Express {
   app.use('/api/a2a/message', authMiddleware, messageRoutes);
   app.use('/api/a2a/task', authMiddleware, taskRoutes);
   app.use('/api/a2a/agent', authMiddleware, agentRoutes);
+  app.use('/api/a2a/events', authMiddleware, eventsRoutes);
 
   // Robot routes (protected)
   app.use('/api/robots', authMiddleware, robotRoutes);

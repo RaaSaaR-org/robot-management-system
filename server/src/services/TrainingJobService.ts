@@ -392,14 +392,19 @@ export class TrainingJobService extends EventEmitter {
       throw new Error(`Cannot retry job with status: ${job.status}`);
     }
 
-    // Reset job status
+    // Reset job status. Explicit nulls: the repository skips undefined
+    // fields, which used to leave the failed run's errorMessage and
+    // timestamps visible on the retried (pending/running) job.
     const updatedJob = await trainingJobRepository.update(id, {
       status: 'pending',
       progress: 0,
-      currentEpoch: undefined,
-      errorMessage: undefined,
-      startedAt: undefined,
-      completedAt: undefined,
+      currentEpoch: null,
+      errorMessage: null,
+      startedAt: null,
+      completedAt: null,
+      // Fresh metrics too — otherwise the retried run's loss curve is
+      // appended to the failed run's points and the chart shows both.
+      metrics: {},
     });
 
     // Non-supervised jobs (sim_rl, reward_model, annotate — and any job
@@ -470,10 +475,44 @@ export class TrainingJobService extends EventEmitter {
    * Get queue statistics
    */
   async getQueueStats(): Promise<QueueStats | null> {
-    if (!this.jobQueue) {
-      return null;
+    // Job-status counts always come from the DB: the HTTP claim worker drives
+    // the job lifecycle through the DB whether or not JetStream is connected
+    // (the NATS stream is only a delivery channel — its cursor counts are not
+    // job states, and its shape lacks queued/completed_24h, which left those
+    // stats blank in the UI whenever NATS was up). JetStream, when present,
+    // contributes only the stream diagnostics.
+    const [pending, queued, running, completed, failed] = await Promise.all([
+      trainingJobRepository.findByStatus('pending'),
+      trainingJobRepository.findByStatus('queued'),
+      trainingJobRepository.findByStatus('running'),
+      trainingJobRepository.findByStatus('completed'),
+      trainingJobRepository.findByStatus('failed'),
+    ]);
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const completed24h = completed.filter(
+      (j) => new Date(j.completedAt ?? j.updatedAt).getTime() >= dayAgo
+    ).length;
+
+    let streamInfo: QueueStats['streamInfo'] = {
+      messages: 0, bytes: 0, firstSeq: 0, lastSeq: 0, consumerCount: 0,
+    };
+    if (this.jobQueue) {
+      try {
+        streamInfo = (await this.jobQueue.getQueueStats()).streamInfo;
+      } catch {
+        // JetStream hiccup — keep the zeroed diagnostics, counts stay valid
+      }
     }
-    return await this.jobQueue.getQueueStats();
+
+    return {
+      pending: pending.length,
+      queued: queued.length,
+      running: running.length,
+      completed: completed.length,
+      completed_24h: completed24h,
+      failed: failed.length,
+      streamInfo,
+    };
   }
 
   // ============================================================================

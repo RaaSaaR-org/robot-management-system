@@ -91,6 +91,20 @@ export function DatasetEpisodesPage() {
 
   const primaryCamera = cameraNames[0];
 
+  // v3.0 chunked datasets: playback window of the selected episode inside the
+  // concatenated chunk video, per camera (absent for v2.x per-episode files —
+  // there the whole file IS the episode and no offsetting is needed).
+  const selectedEpisodeMeta = useMemo(
+    () => episodes.find((e) => e.index === selectedEpisode) ?? null,
+    [episodes, selectedEpisode]
+  );
+  const videoWindows = selectedEpisodeMeta?.videoWindows;
+  const windowFor = useCallback(
+    (cam: string) => videoWindows?.[cam],
+    [videoWindows]
+  );
+  const primaryWindow = videoWindows?.[primaryCamera];
+
   // Fetch dataset
   useEffect(() => {
     if (!datasetId) return;
@@ -190,40 +204,65 @@ export function DatasetEpisodesPage() {
   const handleTimeUpdate = useCallback(() => {
     const primary = videoRefs.current[primaryCamera];
     if (!primary) return;
-    setCurrentTime(primary.currentTime);
+    const primaryWin = windowFor(primaryCamera);
+    const rel = primary.currentTime - (primaryWin?.from ?? 0);
+    setCurrentTime(rel);
+    // Media fragments (#t=from,to) pause at `to` in most browsers, but clamp
+    // manually too so a chunked episode never bleeds into the next episode.
+    if (primaryWin && primary.currentTime >= primaryWin.to - 0.05) {
+      for (const ref of Object.values(videoRefs.current)) ref?.pause();
+      setIsPlaying(false);
+      return;
+    }
     for (const [name, ref] of Object.entries(videoRefs.current)) {
-      if (ref && name !== primaryCamera && Math.abs(ref.currentTime - primary.currentTime) > 0.1) {
-        ref.currentTime = primary.currentTime;
+      if (!ref || name === primaryCamera) continue;
+      const target = (windowFor(name)?.from ?? 0) + rel;
+      if (Math.abs(ref.currentTime - target) > 0.1) {
+        ref.currentTime = target;
       }
     }
-  }, [primaryCamera]);
+  }, [primaryCamera, windowFor]);
 
   const handleLoadedMetadata = useCallback(() => {
+    // Chunked (v3.0) episode: duration is the episode's window, NOT the
+    // full chunk video's metadata duration (that one spans ~all episodes).
+    if (primaryWindow) {
+      setDuration(primaryWindow.to - primaryWindow.from);
+      return;
+    }
     const primary = videoRefs.current[primaryCamera];
     if (primary && isFinite(primary.duration)) {
       setDuration(primary.duration);
     }
-  }, [primaryCamera]);
+  }, [primaryCamera, primaryWindow]);
 
   const handlePlayPause = useCallback(() => {
-    const refs = Object.values(videoRefs.current).filter(Boolean) as HTMLVideoElement[];
-    if (refs.length === 0) return;
-    if (refs[0].paused) {
-      refs.forEach((v) => v.play());
+    const entries = Object.entries(videoRefs.current).filter(([, v]) => Boolean(v)) as [string, HTMLVideoElement][];
+    if (entries.length === 0) return;
+    const primary = videoRefs.current[primaryCamera] ?? entries[0][1];
+    if (primary.paused) {
+      // Replay from the episode's window start if we stopped at its end.
+      const primaryWin = windowFor(primaryCamera);
+      if (primaryWin && primary.currentTime >= primaryWin.to - 0.1) {
+        for (const [name, ref] of entries) {
+          ref.currentTime = windowFor(name)?.from ?? 0;
+        }
+      }
+      entries.forEach(([, v]) => v.play());
       setIsPlaying(true);
     } else {
-      refs.forEach((v) => v.pause());
+      entries.forEach(([, v]) => v.pause());
       setIsPlaying(false);
     }
-  }, []);
+  }, [primaryCamera, windowFor]);
 
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const time = parseFloat(e.target.value);
     setCurrentTime(time);
-    for (const ref of Object.values(videoRefs.current)) {
-      if (ref) ref.currentTime = time;
+    for (const [name, ref] of Object.entries(videoRefs.current)) {
+      if (ref) ref.currentTime = (windowFor(name)?.from ?? 0) + time;
     }
-  }, []);
+  }, [windowFor]);
 
   const handleFlagToggle = useCallback(async (episodeIndex: number) => {
     if (!datasetId) return;
@@ -473,7 +512,7 @@ export function DatasetEpisodesPage() {
                       </span>
                       <video
                         ref={(el) => { videoRefs.current[cam] = el; }}
-                        src={trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam)}
+                        src={trainingApi.getEpisodeVideoUrl(datasetId, selectedEpisode, cam, windowFor(cam))}
                         onTimeUpdate={cam === primaryCamera ? handleTimeUpdate : undefined}
                         onLoadedMetadata={cam === primaryCamera ? handleLoadedMetadata : undefined}
                         onEnded={cam === primaryCamera ? () => setIsPlaying(false) : undefined}

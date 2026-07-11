@@ -310,11 +310,32 @@ describe('unregisterRobot', () => {
 // ===========================================================================
 
 describe('listRobots', () => {
-  it('delegates to the repository findAll', async () => {
+  it('presents unregistered online robots as offline, manual states untouched', async () => {
     const mgr = new RobotManager();
-    const robots = [makeRobot({ id: 'a' }), makeRobot({ id: 'b' })];
+    // Neither robot is in the registered cache — a stored 'online' is stale
+    // (nothing can be health-checking it) and is presented as 'offline';
+    // manual states like 'maintenance' pass through untouched. No DB write.
+    const robots = [
+      makeRobot({ id: 'a', status: 'online' }),
+      makeRobot({ id: 'b', status: 'maintenance' }),
+    ];
     robotRepository.findAll.mockResolvedValue(robots);
-    await expect(mgr.listRobots()).resolves.toBe(robots);
+    const result = await mgr.listRobots();
+    expect(result.map((r) => ({ id: r.id, status: r.status }))).toEqual([
+      { id: 'a', status: 'offline' },
+      { id: 'b', status: 'maintenance' },
+    ]);
+    expect(robots[0].status).toBe('online'); // source object not mutated
+  });
+
+  it('keeps a registered, connected robot online', async () => {
+    const mgr = new RobotManager();
+    const registered = makeRegistered({ robot: makeRobot({ id: 'r1', status: 'online' }) });
+    robotRepository.getAllRegisteredRobots.mockResolvedValue([registered]);
+    await mgr.initialize();
+    robotRepository.findAll.mockResolvedValue([makeRobot({ id: 'r1', status: 'online' })]);
+    const result = await mgr.listRobots();
+    expect(result[0].status).toBe('online');
   });
 });
 
@@ -330,11 +351,12 @@ describe('getRobot', () => {
     expect(robotRepository.findById).not.toHaveBeenCalled();
   });
 
-  it('falls back to the repository on a cache miss', async () => {
+  it('falls back to the repository on a cache miss, normalizing stale online to offline', async () => {
     const mgr = new RobotManager();
-    const robot = makeRobot({ id: 'r2' });
+    const robot = makeRobot({ id: 'r2', status: 'online' });
     robotRepository.findById.mockResolvedValue(robot);
-    await expect(mgr.getRobot('r2')).resolves.toBe(robot);
+    // Not registered → the stored 'online' is stale and presented as offline.
+    await expect(mgr.getRobot('r2')).resolves.toMatchObject({ id: 'r2', status: 'offline' });
     expect(robotRepository.findById).toHaveBeenCalledWith('r2');
   });
 

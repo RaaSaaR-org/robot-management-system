@@ -54,6 +54,7 @@ import {
   LazyDocsPage,
   LazySitesGalleryPage,
   LazyTwinViewerPage,
+  LazyNotFoundPage,
 } from './routes/lazyPages';
 
 // ============================================================================
@@ -511,8 +512,8 @@ function App() {
             }
           />
 
-          {/* Fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Fallback — proper 404 page instead of a silent redirect */}
+          <Route path="*" element={<LazyNotFoundPage />} />
         </Routes>
       </Suspense>
     </AlertProvider>

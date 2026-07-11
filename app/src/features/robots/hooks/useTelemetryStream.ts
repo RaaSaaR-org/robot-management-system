@@ -56,6 +56,11 @@ async function fetchTelemetry(robotId: string): Promise<RobotTelemetry> {
   return robotsApi.getTelemetry(robotId);
 }
 
+// After this many consecutive failures: status → 'error', polling slows down.
+const FAILURE_BACKOFF_THRESHOLD = 3;
+// Slowed polling interval while in the error state.
+const FAILURE_BACKOFF_INTERVAL = 30_000;
+
 // ============================================================================
 // HOOK
 // ============================================================================
@@ -103,8 +108,14 @@ export function useTelemetryStream(
   const [devStatus, setDevStatus] = useState<WebSocketStatus>('disconnected');
   const [isDevConnected, setIsDevConnected] = useState(false);
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  // Per-connect generation token: any await inside startPolling re-checks this
+  // so a stale connect (unmounted or robot switched mid-flight) can never
+  // install a timer that polls the old robotId.
+  const generationRef = useRef(0);
+  // Consecutive fetch failures — drives error status + slowed polling.
+  const failureStreakRef = useRef(0);
 
   const updateTelemetry = useRobotsStore((state) => state.updateTelemetry);
 
@@ -155,9 +166,20 @@ export function useTelemetryStream(
   // Production WebSocket connection
   const ws = useWebSocket<RobotTelemetry>(wsUrl, wsOptions);
 
-  // Polling mode: fetch telemetry from server periodically
+  // Polling mode: fetch telemetry from server periodically.
+  // Uses a recursive setTimeout loop guarded by a generation token so a stale
+  // connect can never leave an orphaned timer behind, and so the delay can
+  // stretch to FAILURE_BACKOFF_INTERVAL after repeated failures.
   const startPolling = useCallback(async () => {
     if (!isDev) return;
+
+    // Invalidate any in-flight startPolling / poll loop, then take ownership.
+    const gen = ++generationRef.current;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    failureStreakRef.current = 0;
 
     setDevStatus('connecting');
     onStatusChange?.('connecting');
@@ -165,36 +187,55 @@ export function useTelemetryStream(
     // Short delay to show connecting state
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    if (!mountedRef.current) return;
+    if (gen !== generationRef.current || !mountedRef.current) return;
 
     setDevStatus('connected');
     setIsDevConnected(true);
     onStatusChange?.('connected');
 
-    // Fetch initial telemetry
-    try {
-      const initialTelemetry = await fetchTelemetry(robotId);
-      handleTelemetry(initialTelemetry);
-    } catch (error) {
-      console.error('Failed to fetch initial telemetry:', error);
-    }
-
-    // Start periodic updates
-    intervalRef.current = setInterval(async () => {
-      if (!mountedRef.current) return;
+    const poll = async () => {
       try {
         const newTelemetry = await fetchTelemetry(robotId);
+        if (gen !== generationRef.current || !mountedRef.current) return;
+        if (failureStreakRef.current >= FAILURE_BACKOFF_THRESHOLD) {
+          // Recovered from an error streak — restore live status + fast polling.
+          setDevStatus('connected');
+          setIsDevConnected(true);
+          onStatusChange?.('connected');
+        }
+        failureStreakRef.current = 0;
         handleTelemetry(newTelemetry);
       } catch (error) {
-        console.error('Failed to fetch telemetry:', error);
+        if (gen !== generationRef.current || !mountedRef.current) return;
+        failureStreakRef.current += 1;
+        if (failureStreakRef.current === 1) {
+          // Log once per failure streak instead of every tick.
+          console.error(`Telemetry fetch failed for robot ${robotId} (further failures muted until recovery):`, error);
+        }
+        if (failureStreakRef.current === FAILURE_BACKOFF_THRESHOLD) {
+          setDevStatus('error');
+          setIsDevConnected(false);
+          onStatusChange?.('error');
+        }
       }
-    }, updateInterval);
+
+      if (gen !== generationRef.current || !mountedRef.current) return;
+      const delay =
+        failureStreakRef.current >= FAILURE_BACKOFF_THRESHOLD
+          ? FAILURE_BACKOFF_INTERVAL
+          : updateInterval;
+      timerRef.current = setTimeout(poll, delay);
+    };
+
+    await poll();
   }, [isDev, robotId, handleTelemetry, updateInterval, onStatusChange]);
 
   const stopPolling = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    // Invalidate any in-flight startPolling so it can't install a timer later.
+    generationRef.current += 1;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
     setIsDevConnected(false);
     setDevStatus('disconnected');
@@ -235,9 +276,12 @@ export function useTelemetryStream(
     return () => {
       mountedRef.current = false;
       if (isDev) {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
+        // Invalidate any in-flight startPolling (it re-checks the generation
+        // after every await) and drop the pending timer.
+        generationRef.current += 1;
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
         }
       }
     };

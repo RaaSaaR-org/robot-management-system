@@ -1031,6 +1031,8 @@ describe('ModelVersionRepository', () => {
 
 describe('DeploymentRepository', () => {
   const repo = new DeploymentRepository();
+  /** Mirror of the repository's shared include: every deployment read/write loads modelVersion + skill */
+  const deploymentInclude = { modelVersion: { include: { skill: true } } };
 
   it('exports a singleton instance', () => {
     expect(deploymentRepository).toBeInstanceOf(DeploymentRepository);
@@ -1053,6 +1055,7 @@ describe('DeploymentRepository', () => {
         canaryConfig: JSON.stringify({ stages: [], successThreshold: 0.95 }),
         rollbackThresholds: JSON.stringify({ errorRate: 0.05, latencyP99: 1000, failureRate: 0.1 }),
       },
+      include: deploymentInclude,
     });
     expect(result.id).toBe('dp-1');
     expect(result.targetRobotTypes).toEqual(['rt-1']);
@@ -1064,8 +1067,33 @@ describe('DeploymentRepository', () => {
       makeDbDeployment({ deployedRobotIds: JSON.stringify(['r1', 'r2']) }),
     );
     const result = await repo.findById('dp-1');
-    expect(prismaMock.deployment.findUnique).toHaveBeenCalledWith({ where: { id: 'dp-1' } });
+    expect(prismaMock.deployment.findUnique).toHaveBeenCalledWith({
+      where: { id: 'dp-1' },
+      include: deploymentInclude,
+    });
     expect(result?.deployedRobotIds).toEqual(['r1', 'r2']);
+    // Row without the modelVersion relation loaded still maps fine
+    expect(result?.modelVersion).toBeUndefined();
+  });
+
+  it('findById() maps the nested modelVersion and skill when the relation is loaded', async () => {
+    prismaMock.deployment.findUnique.mockResolvedValue(
+      makeDbDeployment({ modelVersion: { ...makeDbModelVersion(), skill: makeDbSkill() } }),
+    );
+    const result = await repo.findById('dp-1');
+    expect(result?.modelVersion?.id).toBe('mv-1');
+    expect(result?.modelVersion?.trainingMetrics).toEqual({ final_loss: 0.1 });
+    expect(result?.modelVersion?.skill?.id).toBe('sk-1');
+    expect(result?.modelVersion?.skill?.name).toBe('pick_object');
+  });
+
+  it('findById() maps modelVersion without skill when skill relation is null', async () => {
+    prismaMock.deployment.findUnique.mockResolvedValue(
+      makeDbDeployment({ modelVersion: { ...makeDbModelVersion(), skill: null } }),
+    );
+    const result = await repo.findById('dp-1');
+    expect(result?.modelVersion?.id).toBe('mv-1');
+    expect(result?.modelVersion?.skill).toBeUndefined();
   });
 
   it('findById() returns null when missing', async () => {
@@ -1090,6 +1118,7 @@ describe('DeploymentRepository', () => {
       orderBy: { createdAt: 'desc' },
       skip: 0,
       take: 50,
+      include: deploymentInclude,
     });
     expect(result.pagination.total).toBe(1);
   });
@@ -1100,6 +1129,7 @@ describe('DeploymentRepository', () => {
     expect(prismaMock.deployment.findMany).toHaveBeenCalledWith({
       where: { status: { in: ['deploying', 'canary', 'production'] } },
       orderBy: { createdAt: 'desc' },
+      include: deploymentInclude,
     });
   });
 
@@ -1109,11 +1139,13 @@ describe('DeploymentRepository', () => {
     expect(prismaMock.deployment.findMany).toHaveBeenLastCalledWith({
       where: { modelVersionId: 'mv-1' },
       orderBy: { createdAt: 'desc' },
+      include: deploymentInclude,
     });
     await repo.findByStatus('rolled_back' as never);
     expect(prismaMock.deployment.findMany).toHaveBeenLastCalledWith({
       where: { status: 'rolled_back' },
       orderBy: { createdAt: 'desc' },
+      include: deploymentInclude,
     });
   });
 
@@ -1131,6 +1163,7 @@ describe('DeploymentRepository', () => {
         trafficPercentage: 100,
         deployedRobotIds: JSON.stringify(['r1']),
       },
+      include: deploymentInclude,
     });
     expect(result?.status).toBe('production');
   });

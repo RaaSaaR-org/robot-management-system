@@ -4,7 +4,7 @@ aliases:
 - TASK-179
 title: LeRobot 0.6.0 adoption — upgrade + integrate key features into RMS
 slug: lerobot-0-6-0-adoption-upgrade-integrate-key-features-into-rms
-status: in-progress
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -18,7 +18,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-07
-updated: 2026-07-07
+updated: 2026-07-11
 ---
 
 
@@ -141,13 +141,13 @@ intervention tagging).
 
 ## Acceptance Criteria
 
-- [x] Phase 0: 0.6.0 committed in vla-server (PR #5) + training-worker (PR #5) — GPU machine venv verification still pending (run `setup-lerobot-gpu.sh` on the CUDA box)
-- [x] Phase 1: an episode can be scored via Robometer or TOPReward and its progress curve renders in the evaluation UI (implemented + unit/route-tested; live scoring needs the GPU box — `lerobot[robometer,topreward]` not installed on Mac)
-- [x] Phase 2: GR00T N1.7 native lerobot path implemented (`GR00T_BACKEND=lerobot`, `trainers/gr00t_lerobot.py`, no v3→v2 conversion) — end-to-end fine-tune validation on the GPU box still pending
+- [x] Phase 0: 0.6.0 committed in vla-server (PR #5) + training-worker (PR #5). **GPU box verified 2026-07-11 (dz-226, RTX 5090):** `neodem-train` conda env upgraded to lerobot 0.6.0 with groot + robometer + topreward + annotations + vla-jepa + lingbot-va + fastwam + dataset/training/evaluation extras; all imports pass with CUDA (torch 2.11.0+cu128). The Linux `setup-lerobot-gpu.sh` was adapted in place (Windows box: conda env instead of uv venv; flash-attn skipped, sdpa attention).
+- [x] Phase 1: **validated LIVE 2026-07-11**: `POST /api/evaluation/reward-model` (Robometer, 5 episodes of the v3.0 PickBottle set) → RewardModelRunner in-process on cuda → 16-pt progress curves in EpisodeReward → curves + score table render in the evaluation UI. Caveat: Robometer scores ≈0.02–0.04 on our G1+Dex3 lab scenes (out-of-distribution for the Qwen3-VL judge) — pipeline validated, score quality on this domain is a research question.
+- [x] Phase 2: **validated end-to-end 2026-07-11**: `GR00T_BACKEND=lerobot` job 8676d309 trained 300 steps on the v3.0 202-ep PickBottle set **directly, no v3→v2 conversion**, live per-step loss in the UI (1.24 → 1.15), bf16 checkpoint → RustFS → ModelVersion v1783728372822. Open-loop A/B (12 held-out trajectories, Isaac open_loop_eval protocol): native-300 avg MSE 0.687 vs isaac-2000 avg MSE 0.426 in the same harness — sane curve, needs equal step count to compete; `isaac` stays the default backend.
 - [x] Phase 3: `highlight` incident clips and `dagger` intervention episodes land in the server from a rollout (sim-tested; hardware dagger pre-emption out of scope, documented)
 - [x] Phase 4: `lerobot-annotate` job kind + annotations UI implemented (live run needs the CLI extras); faster CUDA dataloading in trainers. Depth-in-dataset deferred — needs depth hardware, see Notes
-- [ ] Phase 5 (stretch): one benchmark family (e.g. LIBERO-plus) runs against a trained policy and reports into the evaluation UI — not started
-- [x] All existing tests stay green (server 4802, app 973, robot-agent 351, training-worker 70 (was 35), vla-server 68)
+- [ ] Phase 5 (stretch): one benchmark family (e.g. LIBERO-plus) runs against a trained policy and reports into the evaluation UI — not started (tracked as follow-up)
+- [x] All existing tests stay green (server 4805, app 973, robot-agent 351, training-worker 82 passing on Windows — 3 annotate-runner tests are Mac-only shebang fakes, documented; vla-server 68)
 
 ## Test Strategy
 
@@ -164,6 +164,18 @@ intervention tagging).
 
 ## Notes
 
+- **GPU-box validation (2026-07-11, dz-226)**: everything deferred to the CUDA
+  machine is done — env upgrade + imports (Phase 0), live Robometer scoring
+  through API + UI (Phase 1), native `GR00T_BACKEND=lerobot` fine-tune with
+  live loss + artifact + ModelVersion + open-loop A/B vs the 2000-step
+  Isaac checkpoint (Phase 2). Windows fixes found during validation (all in
+  training-worker PR #7): torchcodec→pyav `default_video_backend()` fallback
+  at every LeRobotDataset call site (lerobot 0.6.0 defaults to torchcodec,
+  which needs FFmpeg shared DLLs absent on Windows); native GR00T artifact
+  saved bf16 + gzip level 1 (fp32 + level 9 measured 1.2 MB/s ≈ 2.8 h for
+  12 GB). Server fix (RMS PR #184): job retry now clears
+  errorMessage/timestamps/metrics. A/B numbers in
+  `C:\Unitree\_ft_out\ab_eval\results.json`.
 - **Implementation status (2026-07-07)**: Phases 0–4 implemented on
   `feat/lerobot-060-adoption` (RMS) + `feat/lerobot-060` (training-worker,
   PR #5). Deferred to follow-up sessions: GPU-box venv setup + live

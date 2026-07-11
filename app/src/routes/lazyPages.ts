@@ -312,6 +312,13 @@ export const LazyLandingPage = lazy(() =>
 );
 
 /**
+ * Not-found page - 404 fallback for unknown routes
+ */
+export const LazyNotFoundPage = lazy(() =>
+  import('@/pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage }))
+);
+
+/**
  * Login page - Authentication
  */
 export const LazyLoginPage = lazy(() =>
