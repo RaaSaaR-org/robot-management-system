@@ -33,14 +33,14 @@ export type CommandType =
   | 'emergency_stop'
   | 'custom';
 
-/** Robot type for 3D visualization */
-export type RobotType = 'h1' | 'g1' | 'so101' | 'generic';
+/** Robot type for 3D visualization (g1_edu = G1 body + Dex3-1 three-finger hands) */
+export type RobotType = 'h1' | 'g1' | 'g1_edu' | 'so101' | 'generic';
 
-const ROBOT_TYPES: readonly RobotType[] = ['h1', 'g1', 'so101', 'generic'];
+const ROBOT_TYPES: readonly RobotType[] = ['h1', 'g1', 'g1_edu', 'so101', 'generic'];
 
-/** Reported types that render with an existing model (g1_edu = G1 body + Dex3 hands; hand joints absent from g1.urdf are ignored by the viewer) */
+/** Reported types that render with an existing model */
 const ROBOT_TYPE_ALIASES: Record<string, RobotType> = {
-  g1_edu: 'g1',
+  'g1-edu': 'g1_edu',
 };
 
 /** Normalize a backend-reported robot type (telemetry/metadata) to one the 3D viewer can render */

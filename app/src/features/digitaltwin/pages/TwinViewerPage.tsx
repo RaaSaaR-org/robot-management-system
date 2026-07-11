@@ -34,6 +34,7 @@ import { twinGridSize } from '../types/twin.types';
 
 function normalizeRobotType(raw?: string): RobotType {
   const t = (raw ?? 'g1').toLowerCase();
+  if (t.startsWith('g1_edu') || t.startsWith('g1-edu')) return 'g1_edu';
   if (t.startsWith('g1')) return 'g1';
   if (t.startsWith('h1')) return 'h1';
   if (t.startsWith('so101')) return 'so101';
