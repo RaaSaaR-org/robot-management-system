@@ -27,7 +27,7 @@ import type {
   UnflagTrajectoryRequest,
 } from '../types/data-quality.types.js';
 import { spawn } from 'child_process';
-import { resolve, dirname, join, sep } from 'path';
+import { resolve, dirname, join, sep, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { createReadStream, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
@@ -47,7 +47,9 @@ const pushJobs = new Map<string, PushToHubJobState>();
 // ============================================================================
 
 function isLocalDataset(storagePath: string): boolean {
-  return storagePath.startsWith('/') && existsSync(storagePath);
+  // POSIX ('/…') or Windows ('C:\…' / 'C:/…') absolute path; RustFS datasets
+  // use relative object-key prefixes (`<id>/`) and never match.
+  return (isAbsolute(storagePath) || storagePath.startsWith('/')) && existsSync(storagePath);
 }
 
 function padEpisode(index: number): string {
