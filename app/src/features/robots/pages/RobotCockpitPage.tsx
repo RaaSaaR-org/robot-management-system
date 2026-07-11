@@ -32,10 +32,19 @@ import {
 /** Map a robot's model/metadata to a viewer embodiment. */
 function resolveRobotType(robot: Robot | null): RobotType {
   const hint = `${robot?.model ?? ''} ${(robot?.metadata?.robotType as string) ?? ''}`.toLowerCase();
+  // G1 EDU (Dex3-1 three-finger hands) before the plain-G1 substring match
+  if (hint.includes('g1_edu') || hint.includes('g1-edu') || hint.includes('g1 edu') || hint.includes('dex3')) {
+    return 'g1_edu';
+  }
   if (hint.includes('g1')) return 'g1';
   if (hint.includes('h1')) return 'h1';
   if (hint.includes('so-101') || hint.includes('so101')) return 'so101';
   return 'generic';
+}
+
+/** True for the Unitree G1 family (plain G1 and G1 EDU). */
+function isG1Family(type: RobotType): boolean {
+  return type === 'g1' || type === 'g1_edu';
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -93,12 +102,12 @@ function RobotCockpitPageInner() {
     const byRecency = [...robots].sort((a, b) => (b.lastSeen ?? '').localeCompare(a.lastSeen ?? ''));
     const pool = byRecency.filter((r) => !skip.has(r.id));
     const fromPool = pool.length ? pool : byRecency;
-    return fromPool.find((r) => resolveRobotType(r) === 'g1') ?? fromPool[0];
+    return fromPool.find((r) => isG1Family(resolveRobotType(r))) ?? fromPool[0];
   }, [robots, id, skip]);
 
   const robotId = robot?.id ?? '';
   const robotType = resolveRobotType(robot);
-  const supportsPerception = robotType === 'g1' || robotType === 'h1';
+  const supportsPerception = isG1Family(robotType) || robotType === 'h1';
 
   const { telemetry, lastUpdate } = useTelemetryStream(robotId, {
     autoConnect: !!robotId,

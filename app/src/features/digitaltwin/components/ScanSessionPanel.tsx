@@ -7,7 +7,8 @@
  * @feature digitaltwin
  */
 
-import { memo } from 'react';
+import { memo, useRef } from 'react';
+import { Upload } from 'lucide-react';
 import { Button, Badge } from '@/shared/components/ui';
 import type { ScanStatus } from '../types/twin.types';
 
@@ -26,6 +27,10 @@ export interface ScanSessionPanelProps {
   isAuthoritative?: boolean;
   onStart: () => void;
   onStop: () => void;
+  /** Import a recorded .ply/.pcd file instead of sweeping. */
+  onImport?: (file: File) => void;
+  importing?: boolean;
+  importError?: string | null;
 }
 
 const STATUS_LABEL: Record<ScanStatus, string> = {
@@ -39,13 +44,15 @@ const STATUS_LABEL: Record<ScanStatus, string> = {
 export const ScanSessionPanel = memo(function ScanSessionPanel({
   robotName, status, framesCaptured, coveragePct, pointCount, isConnected,
   serverProgress = 0, serverStage, isAuthoritative, onStart, onStop,
+  onImport, importing = false, importError,
 }: ScanSessionPanelProps) {
   const scanning = status === 'scanning';
   const finalizing = status === 'finalizing';
   const busy = scanning || finalizing;
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-4 space-y-4">
+    <div className="rounded-lg border border-theme bg-theme-surface p-4 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold text-theme-primary">Room scan</h3>
@@ -70,7 +77,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
             <span>Coverage (est.)</span>
             <span>{coveragePct}%</span>
           </div>
-          <div className="h-2 rounded bg-surface-700 overflow-hidden">
+          <div className="h-2 rounded bg-theme-secondary/20 overflow-hidden">
             <div className="h-full bg-[#FF6700] transition-all" style={{ width: `${coveragePct}%` }} />
           </div>
         </div>
@@ -83,7 +90,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
             <span>Building twin{serverStage ? ` · ${serverStage}` : ''}</span>
             <span>{serverProgress}%</span>
           </div>
-          <div className="h-2 rounded bg-surface-700 overflow-hidden">
+          <div className="h-2 rounded bg-theme-secondary/20 overflow-hidden">
             <div className="h-full bg-[#18E4C3] transition-all" style={{ width: `${serverProgress}%` }} />
           </div>
         </div>
@@ -96,7 +103,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
 
       <div className="flex gap-2">
         {!scanning ? (
-          <Button variant="primary" size="sm" onClick={onStart} disabled={finalizing}>
+          <Button variant="primary" size="sm" onClick={onStart} disabled={finalizing || importing}>
             {status === 'done' ? 'Re-scan' : 'Start sweep'}
           </Button>
         ) : (
@@ -104,7 +111,45 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
             Stop &amp; build
           </Button>
         )}
+        {onImport && !scanning && (
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<Upload className="w-3.5 h-3.5" />}
+            disabled={finalizing || importing}
+            onClick={() => fileInputRef.current?.click()}
+            title="Import a recorded point cloud (.ply / .pcd) — e.g. a real LiDAR capture — and build the twin from it"
+          >
+            {importing ? 'Importing…' : 'Import scan'}
+          </Button>
+        )}
       </div>
+
+      {onImport && (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".ply,.pcd"
+            className="hidden"
+            data-testid="scan-import-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onImport(file);
+              e.target.value = '';
+            }}
+          />
+          {importError && (
+            <p className="text-xs text-red-400" role="alert">{importError}</p>
+          )}
+          {!scanning && !finalizing && (
+            <p className="text-[11px] text-theme-tertiary">
+              Have a recorded room scan? <span className="text-theme-secondary">Import scan</span> builds
+              the twin from a real .ply/.pcd capture — no sweep needed.
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 });

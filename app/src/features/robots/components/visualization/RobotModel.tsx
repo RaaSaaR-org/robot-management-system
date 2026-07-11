@@ -80,6 +80,8 @@ const SO101_LEROBOT_CALIBRATION: Record<string, So101Joint> = {
 const URDF_PATHS: Record<string, string> = {
   h1: `${import.meta.env.BASE_URL}assets/robots/h1/h1.urdf`,
   g1: `${import.meta.env.BASE_URL}assets/robots/g1/g1.urdf`,
+  // G1 body with Dex3-1 three-finger hands instead of the stock rubber hands (shares g1/meshes)
+  g1_edu: `${import.meta.env.BASE_URL}assets/robots/g1/g1_edu.urdf`,
   so101: `${import.meta.env.BASE_URL}assets/robots/so101/so101.urdf`,
 };
 

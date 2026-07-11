@@ -19,7 +19,12 @@ import {
   sensorScanRepository,
 } from '../repositories/index.js';
 import { scanSessionToDTO } from './twinDto.js';
-import type { SensorScanSummary } from '../types/pointcloud.types.js';
+import {
+  parsePointCloudFile,
+  normalizeFloorToZero,
+  PointCloudParseError,
+} from '../storage/pointcloud-parse.js';
+import type { PointCloudFrame, SensorScanSummary } from '../types/pointcloud.types.js';
 import type {
   ScanSessionRecord,
   ScanSessionDTO,
@@ -131,6 +136,105 @@ export class ScanSessionService extends EventEmitter {
       stage: null,
     });
     await digitalTwinRepository.update(session.twinId, { status: 'processing' });
+
+    const result = updated ?? session;
+    this.emitProgress(result);
+    return this.toDTO(result);
+  }
+
+  /**
+   * Import a recorded point-cloud file (PLY or PCD) as a complete one-frame
+   * sweep: parse the file, persist it as a single identity-pose SensorScan,
+   * and create a ScanSession directly in 'processing' so the twin-builder
+   * sidecar claims and builds it exactly like a live sweep. This is the
+   * ingestion path for real captures taken outside the platform (e.g. a
+   * Livox MID-360 dump from the real G1).
+   */
+  async importScan(input: {
+    twinId: string;
+    buffer: Buffer;
+    filename: string;
+    /** Robot to attribute the scan to; defaults to the twin's robot. */
+    robotId?: string;
+    /** Shift the cloud so the floor sits at z=0 (default true). */
+    normalizeFloor?: boolean;
+  }): Promise<ScanSessionDTO> {
+    const { twinId, buffer, filename } = input;
+
+    const twin = await digitalTwinRepository.findById(twinId);
+    if (!twin) {
+      throw new Error(`Digital twin ${twinId} not found`);
+    }
+    if (twin.status === 'recording' || twin.status === 'processing') {
+      throw new PointCloudParseError(
+        `Twin is ${twin.status} — wait for the current scan/build to finish before importing`,
+      );
+    }
+    const robotId = input.robotId ?? twin.robotId;
+    if (!robotId) {
+      throw new PointCloudParseError(
+        'No robot to attribute the scan to — pass robotId or assign one to the twin',
+      );
+    }
+
+    // Parse BEFORE creating any rows so a bad file leaves no residue.
+    const cloud = parsePointCloudFile(buffer, filename);
+    let floorOffset = 0;
+    if (input.normalizeFloor !== false) {
+      floorOffset = normalizeFloorToZero(cloud);
+    }
+
+    const session = await scanSessionRepository.create({
+      robotId,
+      twinId,
+      status: 'processing',
+      startedAt: new Date(),
+    });
+
+    try {
+      const frame: PointCloudFrame = {
+        robotId,
+        sensor: 'imported-file',
+        sensorType: 'lidar',
+        frame: 'sensor',
+        pointCount: cloud.pointCount,
+        positions: cloud.positions,
+        intensities: cloud.intensities,
+        hasIntensity: cloud.hasIntensity,
+        sequence: 0,
+        // The file is already one world-frame cloud — identity pose.
+        pose: { x: 0, y: 0, z: 0, yaw: 0 },
+        source: 'import',
+        sourceLabel: filename,
+        timestamp: new Date().toISOString(),
+      };
+      await sensorScanService.persistFrame({
+        robotId,
+        frame,
+        sessionId: session.id,
+        frameIndex: 0,
+        pose: frame.pose,
+      });
+    } catch (err) {
+      // Never leave a frameless 'processing' session for the sidecar to chew on.
+      await scanSessionRepository.failIfActive(
+        session.id,
+        `import failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
+
+    const updated = await scanSessionRepository.update(session.id, {
+      frameCount: 1,
+      endedAt: new Date(),
+    });
+    await digitalTwinRepository.update(twinId, { status: 'processing' });
+
+    console.log(
+      `[ScanSessionService] Imported ${cloud.format.toUpperCase()} "${filename}" ` +
+        `(${cloud.pointCount} points${floorOffset ? `, floor normalized by ${floorOffset.toFixed(3)}m` : ''}) ` +
+        `as session ${session.id} — queued for twin build`,
+    );
 
     const result = updated ?? session;
     this.emitProgress(result);

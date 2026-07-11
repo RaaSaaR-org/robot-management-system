@@ -59,7 +59,7 @@ export const TwinLifecycleStepper = memo(function TwinLifecycleStepper({
   const steps = deriveSteps(status, zoneCount, hasOccupancy);
 
   return (
-    <ol className="flex items-center gap-1 rounded-lg border border-surface-700 bg-surface-900/60 px-3 py-2">
+    <ol className="flex items-center gap-1 rounded-lg border border-theme bg-theme-surface px-3 py-2">
       {steps.map((step, i) => {
         const clickable = !!step.tab && !!onNavigate;
         return (
@@ -68,7 +68,7 @@ export const TwinLifecycleStepper = memo(function TwinLifecycleStepper({
               type="button"
               disabled={!clickable}
               onClick={() => step.tab && onNavigate?.(step.tab)}
-              className={`flex items-center gap-2 rounded px-1.5 py-0.5 ${clickable ? 'cursor-pointer hover:bg-surface-800' : 'cursor-default'}`}
+              className={`flex items-center gap-2 rounded px-1.5 py-0.5 ${clickable ? 'cursor-pointer hover:bg-theme-secondary/15' : 'cursor-default'}`}
             >
               <span className={`flex items-center justify-center w-5 h-5 rounded-full border text-[10px] font-bold ${DOT[step.state]}`}>
                 {step.state === 'done' ? '✓' : i + 1}

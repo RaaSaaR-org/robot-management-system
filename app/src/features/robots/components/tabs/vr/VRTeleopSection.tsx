@@ -21,7 +21,7 @@ import * as THREE from 'three';
 import { Card, Button, Modal } from '@/shared/components/ui';
 import { brandColors } from '@/brand';
 import { RobotModel } from '../../visualization/RobotModel';
-import type { RobotType, JointState } from '../../../types/robots.types';
+import { normalizeRobotType, type JointState } from '../../../types/robots.types';
 import type { TeleopTabProps } from '../types';
 import {
   buildJointMap,
@@ -272,8 +272,10 @@ function VRTeleopModalBody({ robot, vrSupported, onClose }: VRTeleopModalProps) 
   );
 
   // The WS `config` message carries the authoritative robot type; before connect
-  // we preview the G1 (the embodiment VR teleop currently targets).
-  const modelType = (robotType || 'g1').toLowerCase() as RobotType;
+  // we preview the robot's own embodiment (falling back to the G1).
+  const modelType = normalizeRobotType(
+    robotType || (robot.metadata?.robotType as string | undefined) || 'g1',
+  );
   const cameraPos: [number, number, number] = modelType === 'so101' ? [0.5, 0.4, 0.5] : [1.5, 1.0, 1.5];
 
   return (

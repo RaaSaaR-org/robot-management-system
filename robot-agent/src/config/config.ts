@@ -18,10 +18,12 @@ export interface Config {
   maxPayloadKg: number;
   robotDescription: string;
   geminiApiKey: string;
-  /** LLM provider: 'gemini' (default) or 'openrouter' */
-  llmProvider: 'gemini' | 'openrouter';
+  /** LLM provider: 'gemini' (default), 'openrouter' or 'ollama' (local) */
+  llmProvider: 'gemini' | 'openrouter' | 'ollama';
   /** OpenRouter API key (required when llmProvider is 'openrouter') */
   openrouterApiKey: string;
+  /** Base URL of the local Ollama OpenAI-compatible endpoint (when llmProvider is 'ollama') */
+  ollamaBaseUrl: string;
   /** Override default model name per provider */
   llmModel: string;
   initialLocation: {
@@ -63,8 +65,9 @@ export const config: Config = {
   maxPayloadKg: parseFloat(process.env.MAX_PAYLOAD_KG || '10'),
   robotDescription: process.env.ROBOT_DESCRIPTION || 'A versatile humanoid robot for general tasks',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
-  llmProvider: (process.env.LLM_PROVIDER as 'gemini' | 'openrouter') || 'gemini',
+  llmProvider: (process.env.LLM_PROVIDER as 'gemini' | 'openrouter' | 'ollama') || 'gemini',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
   llmModel: process.env.LLM_MODEL || '',
   initialLocation: {
     x: parseFloat(process.env.INITIAL_X || '10.0'),
@@ -88,11 +91,15 @@ export const config: Config = {
 /** Default model names per provider */
 export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 export const DEFAULT_OPENROUTER_MODEL = 'stepfun/step-3.5-flash:free';
+export const DEFAULT_OLLAMA_MODEL = 'gpt-oss:20b';
 
 /** Resolve the active model name based on provider config */
 export function getActiveModelName(): string {
   if (config.llmProvider === 'openrouter') {
     return config.llmModel || DEFAULT_OPENROUTER_MODEL;
+  }
+  if (config.llmProvider === 'ollama') {
+    return config.llmModel || DEFAULT_OLLAMA_MODEL;
   }
   return config.llmModel || DEFAULT_GEMINI_MODEL;
 }
@@ -102,6 +109,8 @@ export function validateConfig(): void {
     if (!config.openrouterApiKey) {
       console.warn('[Config] Warning: LLM_PROVIDER=openrouter but OPENROUTER_API_KEY not set. AI features will fail.');
     }
+  } else if (config.llmProvider === 'ollama') {
+    console.log(`[Config] Using local Ollama provider at ${config.ollamaBaseUrl}. Ensure the model is pulled (ollama pull ${getActiveModelName()}).`);
   } else if (!config.geminiApiKey) {
     console.warn('[Config] Warning: GEMINI_API_KEY not set. AI features will be limited.');
   }

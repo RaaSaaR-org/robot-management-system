@@ -64,7 +64,7 @@ export const ExportPanel = memo(function ExportPanel({
   }, [twinId, name]);
 
   return (
-    <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-4 space-y-3">
+    <div className="rounded-lg border border-theme bg-theme-surface p-4 space-y-3">
       <h3 className="text-sm font-semibold text-theme-primary">Export</h3>
       <p className="text-xs text-theme-tertiary">
         Generate deployment artifacts from this twin&apos;s occupancy grid and zones.
