@@ -70,7 +70,7 @@ bullets remain (see TASK-169 "Robot-day checklist" item 5).
       proven live 2026-07-11: validation `bb626921` for the rl_policy persisted
       `realSuccessRate: null, domainGapScore: null`, `simOnly` auto-derived from
       `modelType='rl_policy'`.)*
-- [x] **Gate** — `REQUIRE_SIM_VALIDATION=true` (+ `SIM_REAL_GAP_THRESHOLD`):
+- [ ] **Gate** — `REQUIRE_SIM_VALIDATION=true` (+ `SIM_REAL_GAP_THRESHOLD`):
       *(Gate logic verified 2026-07-11 via vitest — 77/77 incl. all 5 gate
       branches: sim-only block/allow via `SIM_MIN_SUCCESS`, gap block,
       off-by-default. Runtime flag flip not done — requires restarting the
