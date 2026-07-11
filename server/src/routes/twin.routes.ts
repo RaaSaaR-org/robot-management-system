@@ -8,8 +8,10 @@
  * @feature digitaltwin
  */
 
-import { Router, type Request, type Response } from 'express';
+import { Router, raw, type Request, type Response } from 'express';
 import { digitalTwinService } from '../services/DigitalTwinService.js';
+import { scanSessionService } from '../services/ScanSessionService.js';
+import { PointCloudParseError } from '../storage/pointcloud-parse.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { twinExportService } from '../services/TwinExportService.js';
 import { sensorScanService } from '../services/SensorScanService.js';
@@ -160,6 +162,9 @@ const ALLOWED_ARTIFACT_NAMES = new Set([
   'occupancy.pgm',
   'occupancy.yaml',
   'roadmap.json',
+  // Real→sim MJCF scene (TASK-171) — produced when the sidecar runs with
+  // ENABLE_SIM_SCENE=true; without this entry the local-backend handoff 400s.
+  'scene.mjcf.xml',
 ]);
 
 /**
@@ -253,6 +258,45 @@ digitalTwinRoutes.delete('/:id', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to delete digital twin' });
   }
 });
+
+/**
+ * POST /api/digital-twins/:id/import?filename=…&robotId=…&normalize=…
+ * Import a recorded point-cloud file (PLY or PCD, raw request body) as a
+ * one-frame scan session queued for the twin-builder sidecar. Responds 201
+ * with the created ScanSession DTO; the twin flips to 'processing' and the
+ * normal session:progress / twin:ready events drive the UI from there.
+ */
+digitalTwinRoutes.post(
+  '/:id/import',
+  raw({ type: () => true, limit: '256mb' }),
+  async (req: Request, res: Response) => {
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: 'Request body must be the raw point-cloud file bytes' });
+      }
+      const filename =
+        typeof req.query.filename === 'string' && req.query.filename ? req.query.filename : 'cloud.ply';
+      const robotId = typeof req.query.robotId === 'string' && req.query.robotId ? req.query.robotId : undefined;
+      const session = await scanSessionService.importScan({
+        twinId: req.params.id,
+        buffer: req.body,
+        filename,
+        robotId,
+        normalizeFloor: req.query.normalize !== 'false',
+      });
+      res.status(201).json(session);
+    } catch (error) {
+      if (error instanceof PointCloudParseError) {
+        return res.status(400).json({ error: error.message });
+      }
+      if (error instanceof Error && error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message });
+      }
+      console.error('[DigitalTwin] import error:', error);
+      res.status(500).json({ error: 'Failed to import point cloud' });
+    }
+  },
+);
 
 // ----------------------------------------------------------------------------
 // Built-artifact streaming

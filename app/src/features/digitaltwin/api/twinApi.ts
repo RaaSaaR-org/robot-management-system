@@ -33,6 +33,7 @@ const ENDPOINTS = {
   exportKeepoutPgm: (id: string) => `/digital-twins/${id}/export/nav2-keepout.pgm`,
   exportKeepoutYaml: (id: string) => `/digital-twins/${id}/export/nav2-keepout.yaml`,
   exportVda5050: (id: string) => `/digital-twins/${id}/export/vda5050.json`,
+  importScan: (id: string) => `/digital-twins/${id}/import`,
   sessions: '/scan-sessions',
   session: (id: string) => `/scan-sessions/${id}`,
   sessionStop: (id: string) => `/scan-sessions/${id}/stop`,
@@ -138,6 +139,22 @@ export const twinApi = {
 
   async downloadVda5050(twinId: string): Promise<Blob> {
     const res = await apiClient.get<Blob>(ENDPOINTS.exportVda5050(twinId), { responseType: 'blob' });
+    return res.data;
+  },
+
+  /**
+   * Import a recorded point-cloud file (.ply / .pcd) as a one-frame scan
+   * session — the server queues it for the twin-builder exactly like a live
+   * sweep. Returns the created session; twin flips to 'processing'.
+   */
+  async importScan(twinId: string, file: File, robotId?: string): Promise<ScanSessionDTO> {
+    const params = new URLSearchParams({ filename: file.name });
+    if (robotId) params.set('robotId', robotId);
+    const res = await apiClient.post<ScanSessionDTO>(
+      `${ENDPOINTS.importScan(twinId)}?${params.toString()}`,
+      file,
+      { headers: { 'Content-Type': 'application/octet-stream' } },
+    );
     return res.data;
   },
 

@@ -23,7 +23,7 @@ export interface SiteCardProps {
 }
 
 const STATUS_BADGE: Record<TwinStatus, { label: string; className: string }> = {
-  draft: { label: 'Empty', className: 'bg-surface-700 text-theme-tertiary' },
+  draft: { label: 'Empty', className: 'bg-theme-secondary/20 text-theme-tertiary' },
   recording: { label: 'Scanning', className: 'bg-[#18E4C3] text-black' },
   processing: { label: 'Building', className: 'bg-[#f97316] text-black' },
   ready: { label: 'Scanned', className: 'bg-[#FF6700] text-black' },
@@ -75,7 +75,7 @@ export const SiteCard = memo(function SiteCard({ site, robotName, buildProgress,
   const dims = twinDimensions(site.bounds);
 
   return (
-    <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-3 flex flex-col gap-3 hover:border-surface-600 transition-colors">
+    <div className="rounded-lg border border-theme bg-theme-surface p-3 flex flex-col gap-3 hover:border-[#FF6700]/50 transition-colors">
       <SiteThumbnail site={site} buildProgress={buildProgress} />
 
       <div className="flex items-start justify-between gap-2">

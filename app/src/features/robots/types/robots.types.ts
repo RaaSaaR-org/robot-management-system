@@ -69,8 +69,8 @@ export interface JointState {
 
 export type PointCloudSensorType = 'lidar' | 'depth_camera';
 
-/** Provenance of a point cloud: synthetic, live hardware, or a real recording. */
-export type PointCloudSource = 'sim' | 'hardware' | 'replay';
+/** Provenance of a point cloud: synthetic, live hardware, a real recording, or a user-imported file. */
+export type PointCloudSource = 'sim' | 'hardware' | 'replay' | 'import';
 
 /**
  * Robot/sensor world pose at capture time (world frame; `yaw` in radians).

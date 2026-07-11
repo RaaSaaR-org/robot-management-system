@@ -134,6 +134,33 @@ export function TwinViewerPage() {
     void stop();
   }, [stop]);
 
+  // Import a recorded .ply/.pcd capture as a one-frame sweep. The server flips
+  // the twin to 'processing'; session:progress / twin:ready events then drive
+  // the same build UI as a live sweep.
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const handleImport = useCallback(
+    async (file: File) => {
+      if (!twin) return;
+      setImporting(true);
+      setImportError(null);
+      try {
+        // Attribute the scan to the twin's robot, else any registered robot.
+        const attributedRobot = twin.robotId ?? robots[0]?.id;
+        await twinApi.importScan(twin.id, file, attributedRobot);
+        await fetchTwins();
+      } catch (err) {
+        const msg =
+          (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          (err instanceof Error ? err.message : 'Import failed');
+        setImportError(msg);
+      } finally {
+        setImporting(false);
+      }
+    },
+    [twin, robots, fetchTwins],
+  );
+
   // The authoritative point cloud is the richest room-scale backdrop, so it is
   // the default once a twin is built. The GLB `mesh` kind stays wired for the
   // Phase-5 Open3D surface reconstruction — the stub only emits a placeholder
@@ -199,7 +226,7 @@ export function TwinViewerPage() {
           )}
 
           {/* Tab switch */}
-          <div className="flex gap-1 rounded-lg border border-surface-700 p-1 bg-surface-900/60">
+          <div className="flex gap-1 rounded-lg border border-theme p-1 bg-theme-surface">
           <button
             onClick={() => setTab('scan')}
             className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'scan' ? 'bg-[#FF6700] text-black' : 'text-theme-tertiary hover:text-theme-secondary'}`}
@@ -259,6 +286,9 @@ export function TwinViewerPage() {
             isAuthoritative={isAuthoritative}
             onStart={handleStart}
             onStop={handleStop}
+            onImport={(file) => void handleImport(file)}
+            importing={importing}
+            importError={importError}
           />
         ) : (
           <div className="space-y-4">
@@ -305,7 +335,7 @@ function ZonePanel({ zoneMode, onDraw, zones, selectedZoneId, onSelect, onDelete
   const drawing = zoneMode === 'draw';
 
   return (
-    <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-4 space-y-3">
+    <div className="rounded-lg border border-theme bg-theme-surface p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-theme-primary">Zones</h3>
         <Button variant={drawing ? 'primary' : 'secondary'} size="sm" onClick={onDraw}>
@@ -341,7 +371,7 @@ function ZonePanel({ zoneMode, onDraw, zones, selectedZoneId, onSelect, onDelete
           {zones.map((z) => (
             <li
               key={z.id}
-              className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs cursor-pointer ${z.id === selectedZoneId ? 'bg-surface-700' : 'hover:bg-surface-800'}`}
+              className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs cursor-pointer ${z.id === selectedZoneId ? 'bg-theme-secondary/30' : 'hover:bg-theme-secondary/15'}`}
               onClick={() => onSelect(z.id)}
             >
               <span className="flex items-center gap-2 min-w-0">

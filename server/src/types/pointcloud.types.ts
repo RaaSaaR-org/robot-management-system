@@ -6,8 +6,8 @@
 
 export type PointCloudSensorType = 'lidar' | 'depth_camera';
 
-/** Provenance of a point cloud: synthetic, live hardware, or a real recording. */
-export type PointCloudSource = 'sim' | 'hardware' | 'replay';
+/** Provenance of a point cloud: synthetic, live hardware, a real recording, or a user-imported file. */
+export type PointCloudSource = 'sim' | 'hardware' | 'replay' | 'import';
 
 /**
  * A live point-cloud frame proxied from a robot agent. Mirrors the robot-agent
