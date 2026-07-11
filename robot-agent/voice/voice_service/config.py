@@ -58,6 +58,8 @@ class VoiceConfig:
     half_duplex_tail_ms: int = 250
     session_timeout_s: int = 300
     a2a_timeout_s: float = 90.0
+    # spoken "one moment" if the agent is still thinking after this; 0 disables
+    thinking_filler_s: float = 2.5
 
     g1_mcast_group: str = "239.168.123.161"
     g1_mcast_port: int = 5555
@@ -125,6 +127,7 @@ class VoiceConfig:
         "half_duplex_tail_ms",
         "session_timeout_s",
         "default_language",
+        "thinking_filler_s",
     )
 
     def apply_patch(self, patch: dict) -> dict:
@@ -147,7 +150,7 @@ def _coerce(name: str, raw: str) -> object:
         "vad_max_utterance_s", "vad_pre_roll_ms", "half_duplex_tail_ms",
         "session_timeout_s", "g1_mcast_port",
     }
-    float_fields = {"vad_threshold", "a2a_timeout_s", "language_min_prob"}
+    float_fields = {"vad_threshold", "a2a_timeout_s", "language_min_prob", "thinking_filler_s"}
     if name in int_fields:
         return int(raw)
     if name in float_fields:

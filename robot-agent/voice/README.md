@@ -70,6 +70,11 @@ playback-end + `VOICE_HALF_DUPLEX_TAIL_MS` (250 ms), so the robot never
 hears itself. Barge-in (interrupting the robot mid-answer) is a possible
 later upgrade (needs echo cancellation).
 
+If the agent takes longer than `VOICE_THINKING_FILLER_S` (2.5 s, 0 disables),
+the robot speaks a short "Einen Moment, bitte." / "One moment, please." in the
+user's language so long LLM turns don't feel like dead air. The real reply
+never overlaps the filler — it queues behind it on the speak lock.
+
 ## Unitree G1 backends
 
 - **Mic:** the G1 multicasts its 4-mic array as 16 kHz mono s16le PCM on UDP
