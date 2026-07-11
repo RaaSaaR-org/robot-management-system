@@ -87,22 +87,36 @@ function toNumberArray(value: unknown): number[] {
 }
 
 async function readLocalEpisodes(storagePath: string, fps: number): Promise<EpisodeMeta[] | null> {
+  // Cosmos-converter output ships meta/episodes.json (one JSON array);
+  // standard LeRobot v2.1 datasets ship meta/episodes.jsonl (JSON Lines).
+  let arr: Array<{ episode_index?: number; length?: number }> | null = null;
   try {
     const raw = await readFile(join(storagePath, 'meta', 'episodes.json'), 'utf8');
-    const arr = JSON.parse(raw) as Array<{ episode_index?: number; length?: number }>;
-    if (!Array.isArray(arr)) return null;
-    return arr.map((e, i) => {
-      const frameCount = Number(e.length ?? 0);
-      return {
-        index: Number(e.episode_index ?? i),
-        frameCount,
-        durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
-        flagged: false,
-      };
-    });
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) arr = parsed;
   } catch {
-    return null;
+    /* fall through to episodes.jsonl */
   }
+  if (!arr) {
+    try {
+      const raw = await readFile(join(storagePath, 'meta', 'episodes.jsonl'), 'utf8');
+      arr = raw
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as { episode_index?: number; length?: number });
+    } catch {
+      return null;
+    }
+  }
+  return arr.map((e, i) => {
+    const frameCount = Number(e.length ?? 0);
+    return {
+      index: Number(e.episode_index ?? i),
+      frameCount,
+      durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
+      flagged: false,
+    };
+  });
 }
 
 async function readLocalFrames(
@@ -155,19 +169,20 @@ function streamLocalVideo(
     return true;
   }
   const baseDir = resolve(storagePath);
-  const file = resolve(
-    baseDir,
-    'videos',
-    `observation.images.${camera}`,
-    'chunk-000',
-    `episode_${padEpisode(episodeIndex)}.mp4`,
-  );
+  const episodeFile = `episode_${padEpisode(episodeIndex)}.mp4`;
+  // Cosmos-converter layout: videos/<camera>/chunk-000/episode.mp4;
+  // standard LeRobot v2.1 layout: videos/chunk-000/<camera>/episode.mp4.
+  const candidates = [
+    resolve(baseDir, 'videos', `observation.images.${camera}`, 'chunk-000', episodeFile),
+    resolve(baseDir, 'videos', 'chunk-000', `observation.images.${camera}`, episodeFile),
+  ];
   // Defense in depth: the resolved file must stay within the dataset dir.
-  if (file !== baseDir && !file.startsWith(baseDir + sep)) {
+  if (candidates.some((f) => f !== baseDir && !f.startsWith(baseDir + sep))) {
     res.status(400).json({ error: 'Invalid path' });
     return true;
   }
-  if (!existsSync(file)) return false;
+  const file = candidates.find((f) => existsSync(f));
+  if (!file) return false;
 
   const { size } = statSync(file);
   res.setHeader('Content-Type', 'video/mp4');
