@@ -30,6 +30,8 @@ vi.mock('../../repositories/index.js', () => ({
     findById: vi.fn(),
     findAll: vi.fn(),
     findByStatus: vi.fn(),
+    countByStatus: vi.fn(),
+    countCompletedSince: vi.fn(),
     update: vi.fn(),
   },
   datasetRepository: {
@@ -616,16 +618,13 @@ describe('getQueueStats', () => {
   // lifecycle through the DB whether or not JetStream is connected; the queue
   // (when present) contributes only stream diagnostics.
   const mockStatusCounts = () => {
-    trainingJobRepository.findByStatus.mockImplementation(async (status: string) => {
-      const byStatus: Record<string, ReturnType<typeof makeJob>[]> = {
-        pending: [makeJob({ status: 'pending' })],
-        queued: [],
-        running: [makeJob({ status: 'running' }), makeJob({ status: 'running' })],
-        completed: [makeJob({ status: 'completed', completedAt: new Date() })],
-        failed: [],
+    trainingJobRepository.countByStatus.mockImplementation(async (status: string) => {
+      const byStatus: Record<string, number> = {
+        pending: 1, queued: 0, running: 2, completed: 1, failed: 0,
       };
-      return byStatus[status] ?? [];
+      return byStatus[status] ?? 0;
     });
+    trainingJobRepository.countCompletedSince.mockResolvedValue(1);
   };
 
   it('derives counts from the DB with zeroed streamInfo when no queue is present', async () => {

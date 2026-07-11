@@ -481,17 +481,17 @@ export class TrainingJobService extends EventEmitter {
     // job states, and its shape lacks queued/completed_24h, which left those
     // stats blank in the UI whenever NATS was up). JetStream, when present,
     // contributes only the stream diagnostics.
-    const [pending, queued, running, completed, failed] = await Promise.all([
-      trainingJobRepository.findByStatus('pending'),
-      trainingJobRepository.findByStatus('queued'),
-      trainingJobRepository.findByStatus('running'),
-      trainingJobRepository.findByStatus('completed'),
-      trainingJobRepository.findByStatus('failed'),
+    // COUNT queries only — never load/JSON-parse every completed & failed job
+    // (which grows unbounded and is polled frequently by the UI).
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [pending, queued, running, completed, failed, completed24h] = await Promise.all([
+      trainingJobRepository.countByStatus('pending'),
+      trainingJobRepository.countByStatus('queued'),
+      trainingJobRepository.countByStatus('running'),
+      trainingJobRepository.countByStatus('completed'),
+      trainingJobRepository.countByStatus('failed'),
+      trainingJobRepository.countCompletedSince(dayAgo),
     ]);
-    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const completed24h = completed.filter(
-      (j) => new Date(j.completedAt ?? j.updatedAt).getTime() >= dayAgo
-    ).length;
 
     let streamInfo: QueueStats['streamInfo'] = {
       messages: 0, bytes: 0, firstSeq: 0, lastSeq: 0, consumerCount: 0,
@@ -505,12 +505,12 @@ export class TrainingJobService extends EventEmitter {
     }
 
     return {
-      pending: pending.length,
-      queued: queued.length,
-      running: running.length,
-      completed: completed.length,
+      pending,
+      queued,
+      running,
+      completed,
       completed_24h: completed24h,
-      failed: failed.length,
+      failed,
       streamInfo,
     };
   }

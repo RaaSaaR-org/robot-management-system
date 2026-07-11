@@ -89,6 +89,10 @@ class VoicePipeline:
 
         self._state = State.IDLE
         self._paused = config.mode == "ptt"  # ptt starts muted until toggled
+        # Ref count of active speaking spans holding the mic muted (a VAD turn
+        # and/or one-or-more /say). The mic only re-opens when it hits 0, so an
+        # overlapping /say can't unmute mid-turn.
+        self._mic_holders = 0
         self._wake_deadline = 0.0  # monotonic; follow-ups before this need no wake phrase
         self._models_loaded = {"stt": False, "tts": False}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -168,8 +172,7 @@ class VoicePipeline:
 
     async def _handle_turn(self, speech: SpeechEnd) -> None:
         turn_start = time.monotonic()
-        self.audio_in.set_muted(True)  # half-duplex: deaf until we finish
-        self.segmenter.reset()
+        self._acquire_mic()  # half-duplex: deaf until we finish (ref-counted)
         self._set_state(State.THINKING)
         language = self.config.default_language
         addressed = False  # wake gate passed -> refresh the follow-up window
@@ -236,7 +239,13 @@ class VoicePipeline:
                 self.metrics.record("agent", time.monotonic() - t1)
             finally:
                 reply_arrived.set()
-                await filler  # if mid-sentence, finish before speaking the reply
+                try:
+                    await filler  # if mid-sentence, finish before the reply
+                except Exception as exc:  # noqa: BLE001
+                    # This runs in a finally after a2a.send may already have
+                    # succeeded; a filler TTS/playback glitch must NOT discard
+                    # an already-received reply. Log and speak the reply anyway.
+                    self.bus.publish("error", stage="filler", error=str(exc))
             self.session.touch()
 
             self.last_reply = {"text": reply.text, "state": reply.state, "ts": time.time()}
@@ -280,12 +289,42 @@ class VoicePipeline:
         await self._speak(CANNED["thinking"].get(language, CANNED["thinking"]["en"]), language)
         self._set_state(State.THINKING)
 
+    def _acquire_mic(self) -> None:
+        """Take exclusive (muted) mic access for a speaking span.
+
+        Ref-counted and paired with _resume_listening(): a /say that overlaps a
+        live VAD turn (or another /say) increments the count and can't unmute
+        the mic until every holder has released. Safe when audio_in/segmenter
+        are unwired (TTS-only / no-VAD builds) — the guards no-op.
+        """
+        if self.audio_in is not None:
+            self.audio_in.set_muted(True)
+        if self.segmenter is not None:
+            self.segmenter.reset()
+        # Increment last so a raising backend can't leave a leaked holder that
+        # would pin the mic muted forever.
+        self._mic_holders += 1
+
     async def _resume_listening(self) -> None:
+        """Release one mic holder; only the final release re-opens the mic."""
+        self._mic_holders = max(0, self._mic_holders - 1)
+        if self._mic_holders > 0:
+            return  # another speaking span still holds the mic muted
+        if self.audio_in is None:
+            self._set_state(State.IDLE)
+            return
         if self._paused:
             self._set_state(State.PAUSED)
             return
         await asyncio.sleep(self.config.half_duplex_tail_ms / 1000)
-        self.segmenter.reset()
+        # A new speaker may have re-acquired the mic DURING the tail sleep; if
+        # so it now owns the mute and will re-open on its own release. Re-check
+        # here — unmuting unconditionally would open the mic mid-/say and
+        # re-break half-duplex (the bug this ref count exists to prevent).
+        if self._mic_holders > 0:
+            return
+        if self.segmenter is not None:
+            self.segmenter.reset()
         self.audio_in.set_muted(False)
         self._set_state(State.LISTENING)
 
@@ -352,6 +391,16 @@ class VoicePipeline:
             self.session.timeout_s = int(changed["session_timeout_s"])
         if self.segmenter is not None and "vad_threshold" in changed:
             self.segmenter.threshold = float(changed["vad_threshold"])
+        if "mode" in changed:
+            # Re-gate only on an ACTUAL vad<->ptt transition: apply_patch echoes
+            # every patched key in `changed` (even unchanged ones), so a UI
+            # settings-resave carrying the same mode must NOT reset the segmenter
+            # or disturb a live turn. Hand off to the loop like toggle_listen.
+            new_paused = self.config.mode == "ptt"
+            if new_paused != self._paused:
+                self._paused = new_paused
+                if self._loop is not None:
+                    self._loop.call_soon_threadsafe(self._apply_pause, new_paused)
         self.bus.publish("config_changed", **changed)
         return changed
 
@@ -364,21 +413,18 @@ class VoicePipeline:
         asyncio.run_coroutine_threadsafe(self._say_task(text, lang), self._loop)
 
     async def _say_task(self, text: str, language: str) -> None:
-        interrupted_listening = False
-        if self.audio_in is not None and not self._paused:
-            self.audio_in.set_muted(True)
-            self.segmenter.reset()
-            interrupted_listening = True
+        # Ref-counted acquire/release keeps /say half-duplex-correct even when it
+        # overlaps a live VAD turn or another /say, guards a missing segmenter
+        # (VAD failed to load), and always restores the right resting state
+        # (LISTENING / PAUSED / IDLE) — including when the pipeline is paused.
+        self._acquire_mic()
         try:
             await self._speak(text, language)
         except Exception as exc:  # noqa: BLE001
             self.bus.publish("error", stage="say", error=str(exc))
             print(f"[Voice] /say failed: {exc}")
         finally:
-            if interrupted_listening:
-                await self._resume_listening()
-            elif self.audio_in is None:
-                self._set_state(State.IDLE)
+            await self._resume_listening()
 
     def toggle_listen(self) -> bool:
         self._paused = not self._paused

@@ -816,6 +816,28 @@ export class TrainingJobRepository {
     return jobs.map(dbTrainingJobToDomain);
   }
 
+  /** Count jobs in a status without loading/parsing every row (for queue stats). */
+  async countByStatus(status: TrainingJobStatus): Promise<number> {
+    return prisma.trainingJob.count({ where: { status } });
+  }
+
+  /**
+   * Count completed jobs finished on/after `since`. Mirrors the previous
+   * in-memory logic: prefer completedAt, fall back to updatedAt for older rows
+   * that predate the completedAt column being populated.
+   */
+  async countCompletedSince(since: Date): Promise<number> {
+    return prisma.trainingJob.count({
+      where: {
+        status: 'completed',
+        OR: [
+          { completedAt: { gte: since } },
+          { completedAt: null, updatedAt: { gte: since } },
+        ],
+      },
+    });
+  }
+
   async findRunning(): Promise<TrainingJob[]> {
     return this.findByStatus('running');
   }
