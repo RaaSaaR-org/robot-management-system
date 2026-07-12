@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client';
 import type {
   TeleoperationSession,
   TeleoperationFrame,
+  EpisodeSummary,
   CreateSessionDto,
   RecordFrameDto,
   BatchRecordFramesDto,
@@ -30,6 +31,12 @@ import { RustFSClient } from '../storage/rustfs-client.js';
 import { datasetRepository, robotTypeRepository } from '../repositories/index.js';
 import type { CreateDatasetInput } from '../types/vla.types.js';
 import type { FrameRow } from './LeRobotExportService.js';
+import {
+  SimFrameRecorder,
+  type RecordedFrame,
+  type RecorderProgress,
+  type RecorderTelemetry,
+} from './SimFrameRecorder.js';
 
 // ============================================================================
 // CONSTANTS
@@ -209,6 +216,17 @@ export class TeleoperationService extends EventEmitter {
    */
   async deleteSession(sessionId: string): Promise<boolean> {
     try {
+      // Stop any live recording machinery for this session first
+      const recorder = this.simRecorders.get(sessionId);
+      if (recorder) {
+        await recorder.stop();
+        this.simRecorders.delete(sessionId);
+      }
+      this.stopSidecarProgressPoller(sessionId);
+      this.lastQualityFeedback.delete(sessionId);
+      this.clientEpisodeIndex.delete(sessionId);
+      this.progressTicks.delete(sessionId);
+
       await this.prisma.teleoperationSession.delete({
         where: { id: sessionId },
       });
@@ -245,6 +263,7 @@ export class TeleoperationService extends EventEmitter {
     // Check if the robot has a hardware sidecar (real SO-101)
     const sidecarUrl = await this.resolveSidecarUrl(session.robotId);
     let sidecarDatasetPath: string | null = null;
+    let sidecarStarted = false;
 
     if (sidecarUrl) {
       const repoId = session.datasetRepoId ?? `robot0/session-${sessionId.slice(0, 8)}`;
@@ -268,6 +287,7 @@ export class TeleoperationService extends EventEmitter {
           throw new Error(result.error ?? 'Sidecar /record/start failed');
         }
         sidecarDatasetPath = result.dataset_path ?? null;
+        sidecarStarted = true;
         console.log(`[TeleoperationService] sidecar recording started → ${sidecarDatasetPath}`);
 
         // Start polling sidecar for progress
@@ -276,6 +296,13 @@ export class TeleoperationService extends EventEmitter {
         console.error(`[TeleoperationService] sidecar start failed:`, err);
         // Don't block — start session anyway, just without hardware recording
       }
+    }
+
+    // No hardware sidecar recording (sim robots, or sidecar unreachable):
+    // start the server-side SimFrameRecorder which samples the robot agent's
+    // telemetry at the session FPS and persists TeleoperationFrame rows.
+    if (!sidecarStarted && !session.sidecarDatasetPath) {
+      await this.startSimRecorder(session as TeleoperationSession);
     }
 
     const updated = await this.prisma.teleoperationSession.update({
@@ -315,6 +342,9 @@ export class TeleoperationService extends EventEmitter {
       );
     }
 
+    // Sim frame recorder: stop sampling while paused (no frames while paused)
+    this.simRecorders.get(sessionId)?.pause();
+
     const updated = await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
       data: { status: 'paused' },
@@ -346,6 +376,16 @@ export class TeleoperationService extends EventEmitter {
       throw new Error(
         `Cannot resume session in status: ${session.status}. Must be 'paused'.`
       );
+    }
+
+    // Sim frame recorder: resume sampling. If the recorder is gone (e.g. the
+    // server restarted mid-session) and this is a frame-based session,
+    // restart one initialized from the persisted frames.
+    const existingRecorder = this.simRecorders.get(sessionId);
+    if (existingRecorder) {
+      existingRecorder.resume();
+    } else if (!session.sidecarDatasetPath) {
+      await this.startSimRecorder(session as TeleoperationSession);
     }
 
     const updated = await this.prisma.teleoperationSession.update({
@@ -386,6 +426,16 @@ export class TeleoperationService extends EventEmitter {
     // Stop progress poller
     this.stopSidecarProgressPoller(sessionId);
 
+    // Stop the sim frame recorder (if any) and flush remaining frames
+    const recorder = this.simRecorders.get(sessionId);
+    if (recorder) {
+      await recorder.stop();
+      this.simRecorders.delete(sessionId);
+    }
+    this.lastQualityFeedback.delete(sessionId);
+    this.clientEpisodeIndex.delete(sessionId);
+    this.progressTicks.delete(sessionId);
+
     // Stop sidecar recording if it was started
     const sidecarUrl = await this.resolveSidecarUrl(session.robotId);
     let episodesRecorded = 0;
@@ -423,7 +473,7 @@ export class TeleoperationService extends EventEmitter {
     // Read actual frame count from sidecar (parsed from LeRobot's info.json)
     let totalFrames = 0;
     let totalEpisodes = episodesRecorded;
-    if (sidecarUrl) {
+    if (sidecarUrl && session.sidecarDatasetPath) {
       try {
         const statusResp = await fetch(`${sidecarUrl}/record/status`);
         const finalStatus = await statusResp.json() as {
@@ -433,6 +483,12 @@ export class TeleoperationService extends EventEmitter {
         totalEpisodes = finalStatus.total_episodes ?? finalStatus.episodes_done ?? episodesRecorded;
       } catch { /* use defaults */ }
     }
+
+    // Frame-based sessions: the DB is the source of truth for the frame count
+    const isFrameBased = !session.sidecarDatasetPath && !s3Path;
+    const dbFrameCount = isFrameBased
+      ? await this.prisma.teleoperationFrame.count({ where: { sessionId } })
+      : 0;
 
     // Auto-create Dataset record if upload succeeded
     let exportedDatasetId: string | null = null;
@@ -490,18 +546,45 @@ export class TeleoperationService extends EventEmitter {
       }
     }
 
-    const updated = await this.prisma.teleoperationSession.update({
+    // Zero-frame frame-based sessions: complete with a clear warning, no dataset
+    const zeroFrameWarning =
+      isFrameBased && dbFrameCount === 0
+        ? 'No frames were recorded — the robot agent produced no telemetry during the session. No dataset was created.'
+        : null;
+
+    let updated = await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
       data: {
         status: 'completed',
         endedAt,
         duration,
         qualityScore,
-        frameCount: totalFrames || episodesRecorded,
+        frameCount: isFrameBased ? dbFrameCount : (totalFrames || episodesRecorded),
         ...(exportedDatasetId ? { exportedDatasetId } : {}),
         ...(s3Path ? { sidecarDatasetPath: s3Path } : {}),
+        ...(zeroFrameWarning ? { errorMessage: zeroFrameWarning } : {}),
       },
     });
+
+    // Frame-based sessions with data: auto-export to LeRobot so the dataset
+    // appears immediately after the session ends (same UX as the sidecar path).
+    if (isFrameBased && dbFrameCount > 0) {
+      try {
+        await this.exportToLeRobot(sessionId, {});
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        console.error(`[TeleoperationService] Auto-export failed for ${sessionId}:`, err);
+        updated = await this.prisma.teleoperationSession.update({
+          where: { id: sessionId },
+          data: { errorMessage: `Auto-export to LeRobot failed: ${message}` },
+        });
+      }
+      // Re-read so the response carries exportedDatasetId set by the export
+      const refreshed = await this.prisma.teleoperationSession.findUnique({
+        where: { id: sessionId },
+      });
+      if (refreshed) updated = refreshed;
+    }
 
     this.emitEvent({
       type: 'session:completed',
@@ -511,6 +594,130 @@ export class TeleoperationService extends EventEmitter {
     });
 
     return this.toSessionResponse(updated as TeleoperationSession);
+  }
+
+  // ============================================================================
+  // EPISODES WITHIN A SESSION
+  // ============================================================================
+
+  /**
+   * Advance the session's recording to the next episode.
+   * Only valid while the session is recording.
+   */
+  async nextEpisode(sessionId: string): Promise<{ episodeIndex: number }> {
+    const session = await this.prisma.teleoperationSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    if (session.status !== 'recording') {
+      throw new Error(
+        `Cannot advance episode: session status is ${session.status}, expected 'recording'`
+      );
+    }
+    if (session.sidecarDatasetPath) {
+      throw new Error('Episodes are managed by the hardware sidecar for this session');
+    }
+
+    const recorder = this.simRecorders.get(sessionId);
+    let episodeIndex: number;
+    if (recorder) {
+      episodeIndex = recorder.nextEpisode();
+    } else {
+      // No live recorder (e.g. client-posted frames): derive from stored frames
+      const agg = await this.prisma.teleoperationFrame.aggregate({
+        where: { sessionId },
+        _max: { episodeIndex: true },
+      });
+      episodeIndex = (agg._max.episodeIndex ?? 0) + 1;
+      this.clientEpisodeIndex.set(sessionId, episodeIndex);
+    }
+
+    this.emitEvent({
+      type: 'session:progress',
+      sessionId,
+      recordingProgress: { currentEpisode: episodeIndex, running: true },
+      timestamp: new Date(),
+    });
+
+    return { episodeIndex };
+  }
+
+  /**
+   * Summarize the session's episodes from its persisted frames.
+   */
+  async listEpisodes(sessionId: string): Promise<EpisodeSummary[]> {
+    const session = await this.prisma.teleoperationSession.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const groups = await this.prisma.teleoperationFrame.groupBy({
+      by: ['episodeIndex'],
+      where: { sessionId },
+      _count: { _all: true },
+      _min: { timestamp: true },
+      _max: { timestamp: true },
+      orderBy: { episodeIndex: 'asc' },
+    });
+
+    return groups.map((g) => {
+      const startTime = g._min.timestamp ?? 0;
+      const endTime = g._max.timestamp ?? startTime;
+      return {
+        episodeIndex: g.episodeIndex,
+        frameCount: g._count._all,
+        startTime,
+        endTime,
+        durationS: Math.max(0, Math.round((endTime - startTime) * 100) / 100),
+      };
+    });
+  }
+
+  /**
+   * Discard an episode: delete its frames and update the session frame count.
+   * Only valid before export (created/recording/paused).
+   */
+  async discardEpisode(
+    sessionId: string,
+    episodeIndex: number
+  ): Promise<{ episodeIndex: number; deletedFrames: number; frameCount: number }> {
+    const session = await this.prisma.teleoperationSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    if (!['created', 'recording', 'paused'].includes(session.status)) {
+      throw new Error(
+        `Cannot discard episode: session status is ${session.status}. Episodes can only be discarded before the session is completed.`
+      );
+    }
+
+    // Drop any not-yet-persisted frames of this episode from the live recorder
+    // and wait for an in-flight persist batch, so no frame of this episode can
+    // land in the DB after the delete below.
+    const liveRecorder = this.simRecorders.get(sessionId);
+    if (liveRecorder) {
+      await liveRecorder.discardEpisode(episodeIndex);
+    }
+
+    const deleted = await this.prisma.teleoperationFrame.deleteMany({
+      where: { sessionId, episodeIndex },
+    });
+
+    const frameCount = await this.prisma.teleoperationFrame.count({ where: { sessionId } });
+    await this.prisma.teleoperationSession.update({
+      where: { id: sessionId },
+      data: { frameCount },
+    });
+
+    return { episodeIndex, deletedFrames: deleted.count, frameCount };
   }
 
   // ============================================================================
@@ -544,6 +751,7 @@ export class TeleoperationService extends EventEmitter {
       data: {
         sessionId,
         frameIndex,
+        episodeIndex: dto.episodeIndex ?? this.clientEpisodeIndex.get(sessionId) ?? 0,
         timestamp: dto.timestamp,
         jointPositions: dto.jointPositions,
         jointVelocities: dto.jointVelocities,
@@ -572,6 +780,7 @@ export class TeleoperationService extends EventEmitter {
       id: frame.id,
       sessionId: frame.sessionId,
       frameIndex: frame.frameIndex,
+      episodeIndex: frame.episodeIndex,
       timestamp: frame.timestamp,
       jointPositions: frame.jointPositions as number[],
       jointVelocities: frame.jointVelocities as number[] | null,
@@ -613,9 +822,11 @@ export class TeleoperationService extends EventEmitter {
 
     const firstIndex = session.frameCount;
 
+    const defaultEpisode = this.clientEpisodeIndex.get(sessionId) ?? 0;
     const frameData = dto.frames.map((f, i) => ({
       sessionId,
       frameIndex: firstIndex + i,
+      episodeIndex: f.episodeIndex ?? defaultEpisode,
       timestamp: f.timestamp,
       jointPositions: f.jointPositions,
       jointVelocities: f.jointVelocities,
@@ -665,6 +876,7 @@ export class TeleoperationService extends EventEmitter {
       id: f.id,
       sessionId: f.sessionId,
       frameIndex: f.frameIndex,
+      episodeIndex: f.episodeIndex,
       timestamp: f.timestamp,
       jointPositions: f.jointPositions as number[],
       jointVelocities: f.jointVelocities as number[] | null,
@@ -884,9 +1096,10 @@ export class TeleoperationService extends EventEmitter {
       throw new Error('Cannot export session with no frames');
     }
 
-    // Map DB rows → FrameRow for the export service
+    // Map DB rows → FrameRow for the export service (grouped by episodeIndex)
     const frames: FrameRow[] = dbFrames.map((f) => ({
       frameIndex: f.frameIndex,
+      episodeIndex: f.episodeIndex,
       timestamp: f.timestamp,
       jointPositions: f.jointPositions as number[],
       action: f.action as number[],
@@ -900,9 +1113,17 @@ export class TeleoperationService extends EventEmitter {
       secretAccessKey: process.env.RUSTFS_SECRET_KEY ?? 'rustfsadmin',
     });
 
+    // Robot type + joint names for the LeRobot metadata (joint names come from
+    // a live telemetry snapshot if the agent is reachable — best-effort).
+    const robot = await this.prisma.robot.findUnique({ where: { id: session.robotId } });
+    const jointNames = await this.resolveJointNames(session.robotId, robot?.a2aAgentUrl ?? null);
+
     const exportService = new LeRobotExportService(storage);
-    const { storagePath } = await exportService.exportSession(frames, {
+    const { storagePath, episodeCount } = await exportService.exportSession(frames, {
       sessionFps: session.fps,
+      robotType: robot?.model ?? undefined,
+      jointNames: jointNames ?? undefined,
+      task: session.languageInstr ?? undefined,
     });
 
     const datasetName = dto.datasetName ?? `teleop_${sessionId.slice(0, 8)}`;
@@ -913,17 +1134,25 @@ export class TeleoperationService extends EventEmitter {
     // Create a Dataset record so the export is visible in the UI
     const totalFrames = dbFrames.length;
     const totalDuration = session.duration ?? (totalFrames / session.fps);
+    const infoJson = exportService.buildInfo(frames, episodeCount, {
+      sessionFps: session.fps,
+      robotType: robot?.model ?? undefined,
+      jointNames: jointNames ?? undefined,
+      task: session.languageInstr ?? undefined,
+    });
     const datasetInput: CreateDatasetInput = {
       name: datasetName,
-      description: dto.description ?? `Teleoperation export from session ${sessionId}`,
+      description: dto.description ?? `Teleoperation: ${session.languageInstr ?? sessionId}`,
       robotTypeId,
       storagePath,
-      lerobotVersion: 'v2.0',
+      // The export writer emits the LeRobot v3.0 chunked layout
+      lerobotVersion: 'v3.0',
       fps: session.fps,
       totalFrames,
       totalDuration,
-      demonstrationCount: 1,
+      demonstrationCount: episodeCount,
       status: 'ready',
+      infoJson: infoJson as unknown as import('../types/vla.types.js').LeRobotInfo,
     };
     const dataset = await datasetRepository.create(datasetInput);
 
@@ -937,7 +1166,7 @@ export class TeleoperationService extends EventEmitter {
       sessionId,
       datasetId: dataset.id,
       datasetName,
-      trajectoryCount: 1,
+      trajectoryCount: episodeCount,
       totalFrames,
       storagePath,
     };
@@ -962,6 +1191,174 @@ export class TeleoperationService extends EventEmitter {
   /** Poller interval handles, keyed by sessionId. */
   private sidecarPollers = new Map<string, ReturnType<typeof setInterval>>();
 
+  /** Live sim frame recorders, keyed by sessionId. */
+  private simRecorders = new Map<string, SimFrameRecorder>();
+
+  /** Latest computed quality feedback per session (attached to progress events). */
+  private lastQualityFeedback = new Map<string, QualityFeedback>();
+
+  /** Current episode index for client-posted frame sessions (no live recorder). */
+  private clientEpisodeIndex = new Map<string, number>();
+
+  /** Progress ticks per session (quality is recomputed every few ticks). */
+  private progressTicks = new Map<string, number>();
+
+  // ============================================================================
+  // SIM FRAME RECORDER (frame-based sessions — sim robots without a sidecar)
+  // ============================================================================
+
+  /**
+   * Start a SimFrameRecorder for a frame-based session. The recorder samples
+   * robot-agent telemetry at the session FPS and persists batched frames.
+   * Never throws — a recorder that can't reach the agent starts degraded and
+   * keeps retrying.
+   */
+  private async startSimRecorder(session: TeleoperationSession): Promise<void> {
+    const sessionId = session.id;
+
+    // Idempotent: a paused session restarted via startSession resumes its recorder
+    const existing = this.simRecorders.get(sessionId);
+    if (existing) {
+      existing.resume();
+      return;
+    }
+
+    const robot = await this.prisma.robot.findUnique({ where: { id: session.robotId } });
+    const agentBase = robot?.a2aAgentUrl?.replace(/\/$/, '') ?? null;
+    const robotId = session.robotId;
+
+    const fetchTelemetry = async (): Promise<RecorderTelemetry> => {
+      // Prefer the RobotManager's registered-endpoint helper (lazy import to
+      // keep this service testable without the full manager graph).
+      try {
+        const { robotManager } = await import('./RobotManager.js');
+        return (await robotManager.getTelemetry(robotId)) as RecorderTelemetry;
+      } catch (err) {
+        if (!agentBase) {
+          throw err instanceof Error ? err : new Error('Telemetry fetch failed');
+        }
+      }
+      // Fallback: hit the agent's REST API directly via its a2aAgentUrl
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      try {
+        const resp = await fetch(`${agentBase}/api/v1/robots/${robotId}/telemetry`, {
+          signal: controller.signal,
+        });
+        if (!resp.ok) {
+          throw new Error(`Telemetry HTTP ${resp.status}`);
+        }
+        return (await resp.json()) as RecorderTelemetry;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const persistFrames = async (frames: RecordedFrame[]): Promise<void> => {
+      await this.prisma.teleoperationFrame.createMany({
+        data: frames.map((f) => ({
+          sessionId,
+          frameIndex: f.frameIndex,
+          episodeIndex: f.episodeIndex,
+          timestamp: f.timestamp,
+          jointPositions: f.jointPositions,
+          jointVelocities: f.jointVelocities ?? undefined,
+          action: f.action,
+          isIntervention: f.isIntervention,
+        })),
+      });
+      const frameCount = await this.prisma.teleoperationFrame.count({ where: { sessionId } });
+      await this.prisma.teleoperationSession.update({
+        where: { id: sessionId },
+        data: { frameCount },
+      });
+    };
+
+    // Resume support: continue frame/episode numbering from persisted frames
+    const agg = await this.prisma.teleoperationFrame.aggregate({
+      where: { sessionId },
+      _max: { frameIndex: true, episodeIndex: true },
+    });
+    const initialFrameIndex = agg._max.frameIndex !== null ? agg._max.frameIndex + 1 : 0;
+    const initialEpisodeIndex = agg._max.episodeIndex ?? 0;
+
+    const recorder = new SimFrameRecorder({
+      sessionId,
+      fps: session.fps,
+      initialFrameIndex,
+      initialEpisodeIndex,
+      fetchTelemetry,
+      persistFrames,
+      onProgress: (progress: RecorderProgress) => {
+        const ticks = (this.progressTicks.get(sessionId) ?? 0) + 1;
+        this.progressTicks.set(sessionId, ticks);
+        this.emitEvent({
+          type: 'session:progress',
+          sessionId,
+          recordingProgress: { ...progress },
+          qualityFeedback: this.lastQualityFeedback.get(sessionId),
+          timestamp: new Date(),
+        });
+        // Recompute quality feedback every ~3s (best-effort, async)
+        if (ticks % 3 === 0 && progress.running) {
+          void this.refreshQualityFeedback(sessionId);
+        }
+      },
+      onDegraded: (message: string) => {
+        this.emitEvent({
+          type: 'quality:warning',
+          sessionId,
+          qualityFeedback: {
+            sessionId,
+            currentSmoothnessScore: 0,
+            isJerky: false,
+            warningMessage: message,
+          },
+          timestamp: new Date(),
+        });
+      },
+    });
+
+    this.simRecorders.set(sessionId, recorder);
+    recorder.start();
+    console.log(
+      `[TeleoperationService] SimFrameRecorder started for session ${sessionId} @ ${session.fps} fps`
+    );
+  }
+
+  /**
+   * Recompute quality feedback from the most recent frames and emit a
+   * quality warning if the motion is jerky. Best-effort — never throws.
+   */
+  private async refreshQualityFeedback(sessionId: string): Promise<void> {
+    try {
+      const recent = await this.prisma.teleoperationFrame.findMany({
+        where: { sessionId },
+        orderBy: { frameIndex: 'desc' },
+        take: 1,
+      });
+      if (recent.length === 0) return;
+      const last = recent[0];
+      const feedback = await this.computeQualityFeedback(sessionId, {
+        timestamp: last.timestamp,
+        jointPositions: last.jointPositions as number[],
+        jointVelocities: (last.jointVelocities as number[] | null) ?? undefined,
+        action: last.action as number[],
+      });
+      this.lastQualityFeedback.set(sessionId, feedback);
+      if (feedback.isJerky || feedback.warningMessage) {
+        this.emitEvent({
+          type: 'quality:warning',
+          sessionId,
+          qualityFeedback: feedback,
+          timestamp: new Date(),
+        });
+      }
+    } catch {
+      /* quality feedback is best-effort */
+    }
+  }
+
   /**
    * Derive the sidecar URL from a robot's A2A agent URL.
    * Sidecar always runs on port 8765 on the same host as the agent.
@@ -975,6 +1372,33 @@ export class TeleoperationService extends EventEmitter {
       return `http://${url.hostname}:8765`;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Best-effort: fetch a telemetry snapshot to learn the robot's joint names
+   * for the LeRobot export metadata. Returns null if the agent is unreachable.
+   */
+  private async resolveJointNames(
+    robotId: string,
+    a2aAgentUrl: string | null
+  ): Promise<string[] | null> {
+    if (!a2aAgentUrl) return null;
+    const base = a2aAgentUrl.replace(/\/$/, '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const resp = await fetch(`${base}/api/v1/robots/${robotId}/telemetry`, {
+        signal: controller.signal,
+      });
+      if (!resp.ok) return null;
+      const telemetry = (await resp.json()) as RecorderTelemetry;
+      const names = (telemetry.jointStates ?? []).map((j) => j.name);
+      return names.length > 0 ? names : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -995,7 +1419,7 @@ export class TeleoperationService extends EventEmitter {
         };
 
         this.emitEvent({
-          type: 'session:progress' as TeleoperationEvent['type'],
+          type: 'session:progress',
           sessionId,
           timestamp: new Date(),
           recordingProgress: {
@@ -1004,7 +1428,7 @@ export class TeleoperationService extends EventEmitter {
             elapsedS: status.elapsed_s ?? 0,
             running: status.running ?? false,
           },
-        } as TeleoperationEvent);
+        });
 
         // Auto-stop polling if recording finished
         if (!status.running) {
@@ -1129,6 +1553,7 @@ export class TeleoperationService extends EventEmitter {
       qualityScore: session.qualityScore,
       exportedDatasetId: session.exportedDatasetId,
       errorMessage: session.errorMessage,
+      numEpisodes: session.numEpisodes ?? null,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
     };

@@ -1753,6 +1753,7 @@ model TeleoperationFrame {
   id              String  @id @default(uuid())
   sessionId       String
   frameIndex      Int // Sequential frame index
+  episodeIndex    Int     @default(0) // Episode within the session (multi-episode recording)
   timestamp       Float // seconds from session start
   jointPositions  Json // array of floats
   jointVelocities Json? // array of floats (optional)
@@ -1766,6 +1767,7 @@ model TeleoperationFrame {
 
   @@unique([sessionId, frameIndex])
   @@index([sessionId])
+  @@index([sessionId, episodeIndex])
   @@index([timestamp])
 }
 

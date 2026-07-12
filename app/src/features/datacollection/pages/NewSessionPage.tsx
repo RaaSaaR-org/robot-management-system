@@ -6,7 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader2, AlertCircle, Bot, Play } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertCircle, Bot, Play, Headset } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
@@ -45,8 +45,11 @@ export function NewSessionPage() {
   const [formData, setFormData] = useState<Partial<CreateSessionRequest>>({
     operatorId: 'current-user', // TODO: Get from auth
     fps: 10,
+    numEpisodes: 3,
   });
   const [formError, setFormError] = useState<string | null>(null);
+
+  const isVrType = formData.type === 'vr_quest' || formData.type === 'vr_vision_pro';
 
   const handleTypeChange = (type: TeleoperationType) => {
     setFormData((prev) => ({ ...prev, type }));
@@ -132,6 +135,35 @@ export function NewSessionPage() {
                 disabled={isLoading}
               />
             </div>
+
+            {/* VR prerequisites */}
+            {isVrType && (
+              <div
+                className="rounded-brand border border-cobalt-500/20 bg-cobalt-500/5 p-4"
+                data-testid="vr-prerequisites"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Headset className="w-4 h-4 text-cobalt-400" />
+                  <h3 className="text-sm font-semibold text-theme-primary">
+                    VR session prerequisites
+                  </h3>
+                </div>
+                <ol className="list-decimal list-inside space-y-1 text-sm text-theme-secondary">
+                  <li>Put the headset on the same network as this app.</li>
+                  <li>Open this app's URL in the headset browser and navigate to the session.</li>
+                  <li>
+                    Launch VR from the session page and press{' '}
+                    <span className="font-medium text-theme-primary">Enter VR</span> — grip a
+                    controller to move that arm.
+                  </li>
+                </ol>
+                <p className="mt-2 text-xs text-theme-muted">
+                  No headset handy? The session page offers a{' '}
+                  <span className="font-medium">"Simulate VR input"</span> toggle that streams
+                  synthetic motion so you can test the recording pipeline end-to-end.
+                </p>
+              </div>
+            )}
 
             {/* Robot Selection (dropdown) */}
             <div>
@@ -231,9 +263,9 @@ export function NewSessionPage() {
                   type="number"
                   min="1"
                   max="100"
-                  value={(formData as Record<string, unknown>).numEpisodes as number || 5}
+                  value={formData.numEpisodes ?? 3}
                   onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, numEpisodes: parseInt(e.target.value, 10) || 5 }))
+                    setFormData((prev) => ({ ...prev, numEpisodes: parseInt(e.target.value, 10) || 3 }))
                   }
                   disabled={isLoading}
                   className="w-full rounded-brand border border-theme bg-theme-card px-3 py-2.5 text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"

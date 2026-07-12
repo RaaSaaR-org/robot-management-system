@@ -21,6 +21,7 @@ import {
   Database,
   Folder,
   Loader2,
+  Film,
 } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -28,7 +29,11 @@ import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
 import { CameraStreamView } from '../components/CameraStreamView';
+import { SessionStepIndicator } from '../components/SessionStepIndicator';
+import { EpisodePanel } from '../components/EpisodePanel';
+import { VRSessionPanel } from '../components/VRSessionPanel';
 import { useSessionDetail } from '../hooks/datacollection';
+import { useTeleopEvents } from '../hooks/useTeleopEvents';
 import { useDataCollectionStore } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
 import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
@@ -57,12 +62,22 @@ export function SessionDetailPage() {
   const navigate = useNavigate();
 
   // Session data
-  const { session, isLoading, error, annotateSession, exportSession } = useSessionDetail(id!);
+  const { session, isLoading, error, annotateSession, exportSession, fetchSession } =
+    useSessionDetail(id!);
   const qualityFeedback = useDataCollectionStore((state) => state.qualityFeedback);
+  const episodes = useDataCollectionStore((state) => state.episodes);
+  const recordingProgress = useDataCollectionStore((state) => state.recordingProgress);
   const storeStartSession = useDataCollectionStore((state) => state.startSession);
   const storePauseSession = useDataCollectionStore((state) => state.pauseSession);
   const storeResumeSession = useDataCollectionStore((state) => state.resumeSession);
   const storeEndSession = useDataCollectionStore((state) => state.endSession);
+  const storeFetchEpisodes = useDataCollectionStore((state) => state.fetchEpisodes);
+  const storeNextEpisode = useDataCollectionStore((state) => state.nextEpisode);
+  const storeDiscardEpisode = useDataCollectionStore((state) => state.discardEpisode);
+
+  // Live progress via the app WebSocket (teleop:* events); REST polling backs
+  // it up while the socket is down.
+  const { isConnected: isWsConnected } = useTeleopEvents();
 
   // Robot data for live telemetry + keyboard teleop
   const robots = useRobotsStore((state) => state.robots);
@@ -109,6 +124,48 @@ export function SessionDetailPage() {
     const s = secs % 60;
     return `${m}:${s.toString().padStart(2, '0')}`;
   }, []);
+
+  // Episode summaries: fetch on load and poll (3s) while recording so frame
+  // counts tick up. After completion one final fetch covers the Review step.
+  const sessionStatus = session?.status;
+  useEffect(() => {
+    if (!id || !sessionStatus) return;
+    storeFetchEpisodes(id);
+    if (sessionStatus === 'recording') {
+      const timer = setInterval(() => storeFetchEpisodes(id), 3000);
+      return () => clearInterval(timer);
+    }
+  }, [id, sessionStatus, storeFetchEpisodes]);
+
+  // Fallback polling while the WebSocket is down: refresh the session (frame
+  // count, status) every 2.5s during recording.
+  useEffect(() => {
+    if (!id || isWsConnected || sessionStatus !== 'recording') return;
+    const timer = setInterval(() => fetchSession(), 2500);
+    return () => clearInterval(timer);
+  }, [id, isWsConnected, sessionStatus, fetchSession]);
+
+  const handleNextEpisode = useCallback(async () => {
+    if (!session || session.status !== 'recording') return;
+    try {
+      await storeNextEpisode(session.id);
+    } catch {
+      /* surfaced via store error */
+    }
+  }, [session, storeNextEpisode]);
+
+  const handleDiscardEpisode = useCallback(
+    async (episodeIndex: number) => {
+      if (!session) return;
+      try {
+        await storeDiscardEpisode(session.id, episodeIndex);
+        await fetchSession(); // refresh frameCount
+      } catch {
+        /* surfaced via store error */
+      }
+    },
+    [session, storeDiscardEpisode, fetchSession]
+  );
 
   const handleBack = () => navigate('/data-collection');
 
@@ -165,6 +222,11 @@ export function SessionDetailPage() {
         if (canEndSession(session)) {
           ev.preventDefault();
           handleEnd();
+        }
+      } else if (ev.key === 'n' || ev.key === 'N') {
+        if (session.status === 'recording') {
+          ev.preventDefault();
+          handleNextEpisode();
         }
       }
     };
@@ -245,6 +307,13 @@ export function SessionDetailPage() {
   const isPaused = session.status === 'paused';
   const isCompleted = session.status === 'completed';
   const isLive = isRecording || isPaused || session.status === 'created';
+  const isVrSession = session.type === 'vr_quest' || session.type === 'vr_vision_pro';
+  const canDiscardEpisodes = isLive; // created / recording / paused — before export
+  const liveFrameCount =
+    isRecording && typeof recordingProgress?.frameCount === 'number'
+      ? recordingProgress.frameCount
+      : session.frameCount;
+  const currentEpisode = recordingProgress?.currentEpisode ?? Math.max(0, episodes.length - 1);
 
   return (
     <div className="space-y-6 max-w-7xl">
@@ -320,12 +389,25 @@ export function SessionDetailPage() {
         </div>
       </div>
 
+      {/* Step indicator: Connect input → Record episodes → Review → Export */}
+      <SessionStepIndicator session={session} />
+
       {/* Quality Feedback (during recording) */}
       {(isRecording || isPaused) && (
         <QualityIndicator feedback={qualityFeedback} className="mb-0" />
       )}
 
-      {/* Stats Grid */}
+      {/* Recorder degraded warning */}
+      {isRecording && recordingProgress?.degraded && (
+        <Card variant="subtle" className="!bg-yellow-500/10 border border-yellow-500/20">
+          <div className="flex items-center gap-3 px-4 py-3 text-yellow-400 text-sm">
+            <AlertCircle size={16} className="shrink-0" />
+            Robot agent unreachable — frames are being missed. Retrying automatically.
+          </div>
+        </Card>
+      )}
+
+      {/* Stats Grid — live HUD while recording */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card className="!p-4">
           <div className="flex items-center gap-3">
@@ -335,10 +417,16 @@ export function SessionDetailPage() {
             <div>
               <div className="flex items-center gap-1.5">
                 <p className="text-sm text-theme-muted">Duration</p>
-                <InfoIcon content="Total recording time for this session, including pauses." size={12} />
+                <InfoIcon content="Total recording time for this session, excluding pauses when the live recorder reports it." size={12} />
               </div>
-              <p className="text-xl font-bold text-theme-primary">
-                {isRecording ? formatElapsed(elapsedSeconds) : formatDuration(session.duration)}
+              <p className="text-xl font-bold text-theme-primary" data-testid="hud-duration">
+                {isRecording
+                  ? formatElapsed(
+                      typeof recordingProgress?.elapsedS === 'number'
+                        ? Math.floor(recordingProgress.elapsedS)
+                        : elapsedSeconds
+                    )
+                  : formatDuration(session.duration)}
               </p>
             </div>
           </div>
@@ -351,8 +439,8 @@ export function SessionDetailPage() {
             </div>
             <div>
               <p className="text-sm text-theme-muted">Frames</p>
-              <p className="text-xl font-bold text-theme-primary">
-                {session.frameCount.toLocaleString()}
+              <p className="text-xl font-bold text-theme-primary" data-testid="hud-frames">
+                {liveFrameCount.toLocaleString()}
               </p>
             </div>
           </div>
@@ -366,31 +454,58 @@ export function SessionDetailPage() {
             <div>
               <div className="flex items-center gap-1.5">
                 <p className="text-sm text-theme-muted">FPS</p>
-                <InfoIcon content="Frames per second — the recording rate set when the session was created." size={12} />
+                <InfoIcon content="Target recording rate. While recording, the measured actual rate is shown next to it." size={12} />
               </div>
-              <p className="text-xl font-bold text-theme-primary">
+              <p className="text-xl font-bold text-theme-primary" data-testid="hud-fps">
                 {session.fps}
+                {isRecording && typeof recordingProgress?.fpsActual === 'number' && (
+                  <span className="ml-1.5 text-sm font-medium text-theme-muted">
+                    ({recordingProgress.fpsActual.toFixed(1)} actual)
+                  </span>
+                )}
               </p>
             </div>
           </div>
         </Card>
 
-        <Card className="!p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-brand bg-orange-500/10">
-              <Bot className="w-5 h-5 text-orange-400" />
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <p className="text-sm text-theme-muted">Quality</p>
-                <InfoIcon content="Overall quality score based on smoothness, jerkiness, and frame consistency. Higher is better." size={12} />
+        {isLive ? (
+          <Card className="!p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-brand bg-orange-500/10">
+                <Film className="w-5 h-5 text-orange-400" />
               </div>
-              <p className="text-xl font-bold text-theme-primary">
-                {session.qualityScore ? `${session.qualityScore}%` : '-'}
-              </p>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm text-theme-muted">Episode</p>
+                  <InfoIcon content="Episode currently being recorded. Press N to move to the next episode." size={12} />
+                </div>
+                <p className="text-xl font-bold text-theme-primary" data-testid="hud-episode">
+                  {currentEpisode + 1}
+                  {session.numEpisodes ? (
+                    <span className="text-sm font-medium text-theme-muted"> of {session.numEpisodes}</span>
+                  ) : null}
+                </p>
+              </div>
             </div>
-          </div>
-        </Card>
+          </Card>
+        ) : (
+          <Card className="!p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-brand bg-orange-500/10">
+                <Bot className="w-5 h-5 text-orange-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm text-theme-muted">Quality</p>
+                  <InfoIcon content="Overall quality score based on smoothness, jerkiness, and frame consistency. Higher is better." size={12} />
+                </div>
+                <p className="text-xl font-bold text-theme-primary">
+                  {session.qualityScore ? `${session.qualityScore}%` : '-'}
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* ================================================================ */}
@@ -424,7 +539,7 @@ export function SessionDetailPage() {
             </div>
           </div>
 
-          {/* Row 2: Joint States + Keyboard Controls */}
+          {/* Row 2: Joint States + Episodes */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Joint States */}
             <Card>
@@ -432,14 +547,31 @@ export function SessionDetailPage() {
               <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
             </Card>
 
-            {/*
+            {/* Episode controls: next episode, per-episode discard, target progress */}
+            <EpisodePanel
+              episodes={episodes}
+              currentEpisode={currentEpisode}
+              numEpisodes={session.numEpisodes ?? null}
+              isRecording={isRecording}
+              canDiscard={canDiscardEpisodes}
+              onNextEpisode={handleNextEpisode}
+              onDiscardEpisode={handleDiscardEpisode}
+            />
+          </div>
+
+          {/* Row 3: Input control surface */}
+          {isVrSession ? (
+            /* VR sessions: WebXR rig + synthetic-input toggle + collapsed keyboard fallback */
+            <VRSessionPanel robot={robot} />
+          ) : (
+            /*
               Keyboard / gamepad fallback for sessions where the operator
               has no leader-arm hardware. Always rendered for the keyboard
               and gamepad session types, and additionally surfaced for
               bilateral_aloha as a fallback if the leader USB is missing
               (TASK-117 — "Keyboard-Fallback ohne Leader Arm").
-            */}
-            {(session.type === 'keyboard_mouse'
+            */
+            (session.type === 'keyboard_mouse'
               || session.type === 'gamepad'
               || session.type === 'bilateral_aloha') && (
               <Card>
@@ -450,8 +582,8 @@ export function SessionDetailPage() {
                   <p className="text-sm text-theme-muted">Robot not connected</p>
                 )}
               </Card>
-            )}
-          </div>
+            )
+          )}
         </div>
       )}
 
@@ -460,6 +592,16 @@ export function SessionDetailPage() {
       {/* ================================================================ */}
       {isCompleted && (
         <div className="space-y-4">
+          {/* Session warnings (e.g. zero frames recorded, export failure) */}
+          {session.errorMessage && (
+            <Card variant="subtle" className="!bg-yellow-500/10 border border-yellow-500/20">
+              <div className="flex items-center gap-3 px-4 py-3 text-yellow-400 text-sm" data-testid="session-warning">
+                <AlertCircle size={16} className="shrink-0" />
+                {session.errorMessage}
+              </div>
+            </Card>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Recording Summary */}
             <Card>
@@ -506,7 +648,7 @@ export function SessionDetailPage() {
             <Card>
               <h2 className="font-semibold text-theme-primary mb-4">Dataset</h2>
               {session.exportedDatasetId ? (
-                <div className="space-y-3">
+                <div className="space-y-3" data-testid="dataset-card">
                   <div className="flex items-center gap-2 text-green-400 mb-3">
                     <Database size={18} />
                     <span className="font-medium">Exported successfully</span>
@@ -517,10 +659,15 @@ export function SessionDetailPage() {
                       <span className="font-mono text-xs">{session.exportedDatasetId}</span>
                     </div>
                   </div>
-                  <button onClick={() => navigate('/datasets')}
+                  <button onClick={() => navigate(`/datasets/${session.exportedDatasetId}/episodes`)}
+                    data-testid="open-dataset"
                     className="mt-4 w-full px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all">
-                    View in Datasets
+                    Open in Datasets
                   </button>
+                  <p className="text-xs text-theme-tertiary">
+                    Tip: use the episode viewer's curation tools (trim / delete / AI suggest) to
+                    clean the dataset before training.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -539,6 +686,39 @@ export function SessionDetailPage() {
               )}
             </Card>
           </div>
+
+          {/* Review: per-episode summary table */}
+          {episodes.length > 0 && (
+            <Card data-testid="review-episodes">
+              <h2 className="font-semibold text-theme-primary mb-4">Episodes</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-theme-muted border-b border-glass-subtle">
+                      <th className="pb-2 pr-4 font-medium">Episode</th>
+                      <th className="pb-2 pr-4 font-medium">Frames</th>
+                      <th className="pb-2 pr-4 font-medium">Duration</th>
+                      <th className="pb-2 font-medium">Start</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {episodes.map((ep) => (
+                      <tr key={ep.episodeIndex} className="border-b border-glass-subtle last:border-0">
+                        <td className="py-2 pr-4 font-mono font-semibold text-theme-primary">
+                          Ep {ep.episodeIndex}
+                        </td>
+                        <td className="py-2 pr-4 text-theme-secondary">
+                          {ep.frameCount.toLocaleString()}
+                        </td>
+                        <td className="py-2 pr-4 text-theme-secondary">{ep.durationS.toFixed(1)}s</td>
+                        <td className="py-2 text-theme-muted">{ep.startTime.toFixed(1)}s</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           {exportSuccess && (
             <Card variant="subtle" className="!bg-green-500/10 border border-green-500/20">

@@ -88,13 +88,16 @@ export function DatasetEpisodesPage() {
 
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
-  // Derive camera names from dataset features
+  // Derive camera names from dataset features. Datasets whose features carry
+  // no observation.images.* entries (e.g. state-only teleop exports) have NO
+  // camera streams — return [] so the viewer shows an empty state instead of
+  // broken <video> elements. The legacy wrist/top guess only applies when the
+  // dataset has no feature metadata at all.
   const cameraNames = useMemo(() => {
     if (!dataset?.infoJson?.features) return ['wrist', 'top'];
-    const names = Object.keys(dataset.infoJson.features as Record<string, unknown>)
+    return Object.keys(dataset.infoJson.features as Record<string, unknown>)
       .filter((k) => k.startsWith('observation.images.'))
       .map((k) => k.replace('observation.images.', ''));
-    return names.length > 0 ? names : ['wrist', 'top'];
   }, [dataset]);
 
   // Derive joint names from dataset features
@@ -572,6 +575,18 @@ export function DatasetEpisodesPage() {
           ) : (
             <>
               {/* ── Video Player ── */}
+              {cameraNames.length === 0 ? (
+                <div
+                  className="rounded-xl border border-white/[0.04] bg-[#0A0A0A] px-4 py-8 text-center"
+                  data-testid="no-cameras"
+                >
+                  <p className="text-sm text-theme-tertiary">No camera streams in this dataset</p>
+                  <p className="mt-1 text-xs text-theme-tertiary/70">
+                    This dataset contains joint states and actions only — inspect the trajectory
+                    charts below.
+                  </p>
+                </div>
+              ) : (
               <div className="rounded-xl overflow-hidden border border-white/[0.04] bg-[#0A0A0A]">
                 <div className={`grid gap-px bg-white/[0.02] ${cameraNames.length === 1 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
                   {cameraNames.map((cam) => (
@@ -633,6 +648,7 @@ export function DatasetEpisodesPage() {
                   </div>
                 </div>
               </div>
+              )}
 
               {/* ── Curate: trim / delete (non-destructive — writes a new revision) ── */}
               <div

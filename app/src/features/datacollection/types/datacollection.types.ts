@@ -48,6 +48,8 @@ export interface TeleoperationSession {
   qualityScore: number | null;
   exportedDatasetId: string | null;
   errorMessage: string | null;
+  /** Target episode count for the session (from creation) */
+  numEpisodes?: number | null;
   createdAt: string;
   updatedAt: string;
   operator?: {
@@ -70,6 +72,55 @@ export interface QualityFeedback {
   isJerky: boolean;
   warningMessage?: string;
   suggestions?: string[];
+}
+
+/**
+ * Per-episode summary derived from a session's frames
+ */
+export interface EpisodeSummary {
+  episodeIndex: number;
+  frameCount: number;
+  startTime: number;
+  endTime: number;
+  durationS: number;
+}
+
+/**
+ * Live recording progress (streamed over the app WebSocket as
+ * teleop:session:progress events)
+ */
+export interface TeleopRecordingProgress {
+  frameCount?: number;
+  currentEpisode?: number;
+  episodesDone?: number;
+  elapsedS?: number;
+  fpsActual?: number;
+  running?: boolean;
+  degraded?: boolean;
+}
+
+/**
+ * Teleoperation event as broadcast on the app WebSocket (/api/a2a/ws).
+ * Types are namespaced 'teleop:*' (see server/src/websocket/index.ts).
+ */
+export interface TeleopWsEvent {
+  type:
+    | 'teleop:session:progress'
+    | 'teleop:quality'
+    | 'teleop:session:completed'
+    | 'teleop:session:exported'
+    | 'teleop:session:started'
+    | 'teleop:session:paused'
+    | 'teleop:session:resumed'
+    | 'teleop:session:failed';
+  data: {
+    sessionId: string;
+    session?: TeleoperationSession;
+    recordingProgress?: TeleopRecordingProgress;
+    qualityFeedback?: QualityFeedback;
+    error?: string;
+  };
+  timestamp: number;
 }
 
 // ============================================================================
@@ -371,6 +422,8 @@ export interface DataCollectionState {
   selectedSession: TeleoperationSession | null;
   activeSession: TeleoperationSession | null;
   qualityFeedback: QualityFeedback | null;
+  episodes: EpisodeSummary[];
+  recordingProgress: TeleopRecordingProgress | null;
   sessionFilters: SessionFilters;
   sessionPagination: SessionPagination;
   // Active Learning
@@ -399,6 +452,12 @@ export interface DataCollectionActions {
   selectSession: (session: TeleoperationSession | null) => void;
   setActiveSession: (session: TeleoperationSession | null) => void;
   setQualityFeedback: (feedback: QualityFeedback | null) => void;
+  // Episodes
+  fetchEpisodes: (id: string) => Promise<void>;
+  nextEpisode: (id: string) => Promise<number>;
+  discardEpisode: (id: string, episodeIndex: number) => Promise<void>;
+  // WebSocket-driven updates
+  handleTeleopEvent: (event: TeleopWsEvent) => void;
   // Filters
   setSessionFilters: (filters: Partial<SessionFilters>) => void;
   clearSessionFilters: () => void;
