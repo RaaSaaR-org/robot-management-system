@@ -14,6 +14,8 @@ import type {
   RobotListParams,
   RobotListResponse,
   CommandListResponse,
+  TelemetryHistoryParams,
+  TelemetryHistoryResponse,
 } from '../types/robots.types';
 
 // ============================================================================
@@ -27,6 +29,7 @@ const ENDPOINTS = {
   get: (id: string) => `/robots/${id}`,
   command: (id: string) => `/robots/${id}/command`,
   telemetry: (id: string) => `/robots/${id}/telemetry`,
+  telemetryHistory: (id: string) => `/robots/${id}/telemetry/history`,
 } as const;
 
 // ============================================================================
@@ -142,6 +145,23 @@ export const robotsApi = {
   async getTelemetry(robotId: string): Promise<RobotTelemetry> {
     const response = await apiClient.get<RobotTelemetry>(ENDPOINTS.telemetry(robotId));
     return response.data;
+  },
+
+  /**
+   * Get persisted telemetry history for a robot (rows ascending by timestamp).
+   * @param robotId - Robot ID
+   * @param params - Time window and row limit
+   * @returns Telemetry rows in the requested window
+   */
+  async getTelemetryHistory(
+    robotId: string,
+    params?: TelemetryHistoryParams
+  ): Promise<RobotTelemetry[]> {
+    const response = await apiClient.get<TelemetryHistoryResponse>(
+      ENDPOINTS.telemetryHistory(robotId),
+      { params: { from: params?.from, to: params?.to, limit: params?.limit } }
+    );
+    return response.data.telemetry ?? [];
   },
 
   /**

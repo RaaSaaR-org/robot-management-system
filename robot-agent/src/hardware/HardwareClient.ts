@@ -11,11 +11,26 @@
  *              lets a G1 (29 DOF) / G1 EDU (43 DOF) be controlled without
  *              silently dropping its non-arm joints. Also exposes getImuNow() so
  *              the SafetyMonitor can read humanoid orientation for fall detection.
+ *
+ *              TASK-184 extends the 2s /state poll to the full contract §2
+ *              response: per-joint velocity/effort/temperature plus the
+ *              imu/touch/battery/odometry field groups (getImu/getTouch/
+ *              getBattery/getOdometry/getMotorTemperatures). The default
+ *              sidecar URL is embodiment-aware (G1 → :8767, else :8765).
  * @feature hardware
  * @status live
  */
 
-import type { JointState, PointCloudFrame, PointCloudSensorType } from '../robot/types.js';
+import type {
+  BatteryState,
+  HandTouch,
+  ImuTelemetry,
+  JointState,
+  OdometryState,
+  PointCloudFrame,
+  PointCloudSensorType,
+  TouchPad,
+} from '../robot/types.js';
 import { getJointConfig } from '../robot/joint-configs/index.js';
 import { config } from '../config/config.js';
 
@@ -54,6 +69,104 @@ function _toVec3(v: unknown): [number, number, number] | null {
   const c = Number(v[2]);
   if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return null;
   return [a, b, c];
+}
+
+/** Coerce to a finite number, or undefined. Wire fields are never trusted. */
+function _toNum(v: unknown): number | undefined {
+  const n = Number(v);
+  return typeof v === 'number' || typeof v === 'string' ? (Number.isFinite(n) ? n : undefined) : undefined;
+}
+
+/** Coerce to an array of finite numbers, or undefined (empty array = undefined). */
+function _toNumArray(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+  return out.length > 0 ? out : undefined;
+}
+
+// ────────────────────────────────────────────────────────────────
+// TASK-184: defensive parsers for the contract §2 /state field groups.
+// A malformed / absent group parses to null — NEVER a zero-filled value.
+// ────────────────────────────────────────────────────────────────
+
+function _parseImu(v: unknown): ImuTelemetry | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const rpy = _toVec3(o.rpy);
+  const gyro = _toVec3(o.gyro);
+  const accel = _toVec3(o.accel);
+  const temperature = _toNum(o.temperature);
+  if (!rpy && !gyro && !accel && temperature === undefined) return null;
+  const imu: ImuTelemetry = {};
+  if (rpy) imu.rpy = rpy;
+  if (gyro) imu.gyro = gyro;
+  if (accel) imu.accel = accel;
+  if (temperature !== undefined) imu.temperature = temperature;
+  return imu;
+}
+
+function _parseTouchPads(v: unknown): TouchPad[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const pads: TouchPad[] = [];
+  for (const entry of v) {
+    if (!entry || typeof entry !== 'object') continue;
+    const o = entry as Record<string, unknown>;
+    const pressure = _toNumArray(o.pressure);
+    if (!pressure) continue; // pressure is the payload — skip pads without it
+    const pad: TouchPad = { pressure };
+    const temperature = _toNumArray(o.temperature);
+    if (temperature) pad.temperature = temperature;
+    pads.push(pad);
+  }
+  return pads.length > 0 ? pads : undefined;
+}
+
+function _parseTouch(v: unknown): HandTouch | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const left = _parseTouchPads(o.left);
+  const right = _parseTouchPads(o.right);
+  if (!left && !right) return null;
+  const touch: HandTouch = {};
+  if (left) touch.left = left;
+  if (right) touch.right = right;
+  return touch;
+}
+
+function _parseBattery(v: unknown): BatteryState | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const soc = _toNum(o.soc);
+  if (soc === undefined) return null; // soc is the only required field
+  const battery: BatteryState = { soc };
+  const voltage = _toNum(o.voltage);
+  const current = _toNum(o.current);
+  const temperature = _toNum(o.temperature);
+  const soh = _toNum(o.soh);
+  const cycles = _toNum(o.cycles);
+  const cellVoltages = _toNumArray(o.cellVoltages);
+  if (voltage !== undefined) battery.voltage = voltage;
+  if (current !== undefined) battery.current = current;
+  if (temperature !== undefined) battery.temperature = temperature;
+  if (soh !== undefined) battery.soh = soh;
+  if (cycles !== undefined) battery.cycles = cycles;
+  if (cellVoltages) battery.cellVoltages = cellVoltages;
+  return battery;
+}
+
+function _parseOdometry(v: unknown): OdometryState | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const position = _toVec3(o.position);
+  if (!position) return null; // position is the only required field
+  const odom: OdometryState = { position };
+  const rpy = _toVec3(o.rpy);
+  const velocity = _toVec3(o.velocity);
+  const yawSpeed = _toNum(o.yawSpeed);
+  if (rpy) odom.rpy = rpy;
+  if (velocity) odom.velocity = velocity;
+  if (yawSpeed !== undefined) odom.yawSpeed = yawSpeed;
+  return odom;
 }
 
 /** Options for starting a sidecar `lerobot-record` session (TASK-179 sentry). */
@@ -101,7 +214,28 @@ export interface RecordingStatus {
   uploadStatus: string | null;
 }
 
-const SIDECAR_URL = process.env.HARDWARE_SIDECAR_URL ?? 'http://localhost:8765';
+/**
+ * Default sidecar port depends on the active embodiment: the G1 sidecar
+ * (g1_sidecar.py) listens on :8767, the SO-101 sidecar (so101_sidecar.py) on
+ * :8765. `HARDWARE_SIDECAR_URL` always wins. Resolved lazily (memoized) instead
+ * of at module load so the URL never depends on import order relative to
+ * config/env initialization.
+ */
+let _sidecarUrl: string | null = null;
+export function getSidecarUrl(): string {
+  if (_sidecarUrl === null) {
+    const fromEnv = process.env.HARDWARE_SIDECAR_URL;
+    if (fromEnv) {
+      _sidecarUrl = fromEnv;
+    } else if (config.robotType === 'g1' || config.robotType === 'g1_edu') {
+      _sidecarUrl = 'http://localhost:8767';
+    } else {
+      _sidecarUrl = 'http://localhost:8765';
+    }
+  }
+  return _sidecarUrl;
+}
+
 // Poll every 2s — avoids monopolizing /dev/ttyACM0 so other tools can use the arm.
 // Idle watchdog in the sidecar disconnects after 5s without requests, releasing the port.
 const POLL_INTERVAL_MS = 2000;
@@ -113,6 +247,13 @@ export class HardwareClient {
   private pollTimer: NodeJS.Timeout | null = null;
   /** Ordered joint names for the active embodiment; resolved lazily, then cached. */
   private jointOrder: string[] | null = null;
+  // TASK-184: latest contract §2 field groups from the 2s /state poll. A group
+  // the sidecar omitted (stale source) is null — consumers must treat null as
+  // "no fresh data", never substitute zeros.
+  private imu: ImuTelemetry | null = null;
+  private touch: HandTouch | null = null;
+  private battery: BatteryState | null = null;
+  private odometry: OdometryState | null = null;
 
   /**
    * Ordered list of joint names for the active embodiment (ROBOT_TYPE),
@@ -146,7 +287,7 @@ export class HardwareClient {
 
   private async _tryConnect(): Promise<boolean> {
     try {
-      const res = await fetch(`${SIDECAR_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(2000) });
       const data = (await res.json()) as { status: string; connected: boolean };
       this.sidecarAvailable = data.status === 'ok';
       this.connected = data.connected;
@@ -171,20 +312,35 @@ export class HardwareClient {
   private startPolling() {
     this.pollTimer = setInterval(async () => {
       try {
-        const res = await fetch(`${SIDECAR_URL}/state`, { signal: AbortSignal.timeout(500) });
-        const data = (await res.json()) as {
-          joints: Array<{ name: string; position: number; velocity: number; effort: number }>;
-          simulated: boolean;
-        };
-        this.connected = !data.simulated;
-        this.jointStates = data.joints.map((j) => ({
-          name: j.name,
-          position: j.position,
-          velocity: j.velocity,
-          effort: j.effort ?? 0,
-          temperature: 0,
-          current: 0,
-        }));
+        const res = await fetch(`${getSidecarUrl()}/state`, { signal: AbortSignal.timeout(500) });
+        const data = (await res.json()) as Record<string, unknown>;
+        // Contract §2 carries an explicit `connected`; older sidecars only send
+        // `simulated` — accept either, defensively.
+        this.connected =
+          typeof data.connected === 'boolean' ? data.connected : data.simulated === false;
+        // Joints: velocity/effort/temperature are OPTIONAL on the wire — carry
+        // them through only when present (never fabricate zeros).
+        const joints = Array.isArray(data.joints) ? data.joints : [];
+        this.jointStates = joints.flatMap((j: unknown): JointState[] => {
+          if (!j || typeof j !== 'object') return [];
+          const o = j as Record<string, unknown>;
+          const position = _toNum(o.position);
+          if (typeof o.name !== 'string' || position === undefined) return [];
+          const js: JointState = { name: o.name, position };
+          const velocity = _toNum(o.velocity);
+          const effort = _toNum(o.effort);
+          const temperature = _toNum(o.temperature);
+          if (velocity !== undefined) js.velocity = velocity;
+          if (effort !== undefined) js.effort = effort;
+          if (temperature !== undefined) js.temperature = temperature;
+          return [js];
+        });
+        // Field groups (TASK-184): the sidecar OMITS a group when its source is
+        // stale, so an absent/malformed group resets the cache to null.
+        this.imu = _parseImu(data.imu);
+        this.touch = _parseTouch(data.touch);
+        this.battery = _parseBattery(data.battery);
+        this.odometry = _parseOdometry(data.odometry);
       } catch {
         // sidecar went away — stop polling and schedule reconnect
         this.sidecarAvailable = false;
@@ -194,6 +350,12 @@ export class HardwareClient {
         this._scheduleRetry();
         // NOTE: jointStates kept intact so the 3D viewer shows last known pose
         //       instead of jumping to simulated defaults during brief reconnects.
+        //       The sensor groups are DROPPED instead — stale IMU/battery/touch
+        //       data must never keep driving telemetry or safety decisions.
+        this.imu = null;
+        this.touch = null;
+        this.battery = null;
+        this.odometry = null;
       }
     }, POLL_INTERVAL_MS);
   }
@@ -217,9 +379,53 @@ export class HardwareClient {
     return this.jointStates;
   }
 
+  // ────────────────────────────────────────────────────────────────
+  // TASK-184: cached field-group accessors (fed by the 2s /state poll).
+  // null = no fresh data from the sidecar — callers must fall back to
+  // their simulated value (and keep the group marked as simulated),
+  // never treat null as zeros.
+  // ────────────────────────────────────────────────────────────────
+
+  /** Latest base IMU sample from the poll, or null when the group is stale. */
+  getImu(): ImuTelemetry | null {
+    return this.imu;
+  }
+
+  /** Latest Dex3 touch-pad readings, or null (e.g. no hands / stale). */
+  getTouch(): HandTouch | null {
+    return this.touch;
+  }
+
+  /** Latest battery/BMS state, or null when the BMS topic is absent/stale. */
+  getBattery(): BatteryState | null {
+    return this.battery;
+  }
+
+  /** Latest odometry sample, or null when the odom topic is absent/stale. */
+  getOdometry(): OdometryState | null {
+    return this.odometry;
+  }
+
+  /**
+   * Joint-name → motor temperature (°C) map built from the polled joint states.
+   * Only joints that actually reported a temperature are included; null when
+   * none did (SO-101, or a G1 sidecar without fresh lowstate).
+   */
+  getMotorTemperatures(): Record<string, number> | null {
+    const out: Record<string, number> = {};
+    let any = false;
+    for (const j of this.jointStates) {
+      if (j.temperature !== undefined) {
+        out[j.name] = j.temperature;
+        any = true;
+      }
+    }
+    return any ? out : null;
+  }
+
   async sendAction(joints: Record<string, number>): Promise<void> {
     if (!this.sidecarAvailable) return;
-    await fetch(`${SIDECAR_URL}/action`, {
+    await fetch(`${getSidecarUrl()}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(joints),
@@ -239,7 +445,7 @@ export class HardwareClient {
    * the physical cameras.
    */
   async getCameras(): Promise<string[]> {
-    const res = await fetch(`${SIDECAR_URL}/cameras`, {
+    const res = await fetch(`${getSidecarUrl()}/cameras`, {
       signal: AbortSignal.timeout(2000),
     });
     if (!res.ok) {
@@ -254,7 +460,7 @@ export class HardwareClient {
    * closed loop when it needs fresh frames for `/predict`.
    */
   async snapshot(name: string): Promise<string> {
-    const res = await fetch(`${SIDECAR_URL}/cameras/${encodeURIComponent(name)}/snapshot`, {
+    const res = await fetch(`${getSidecarUrl()}/cameras/${encodeURIComponent(name)}/snapshot`, {
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) {
@@ -276,7 +482,7 @@ export class HardwareClient {
    * when a connected sidecar reports real sensors.
    */
   async getPointCloudSensors(): Promise<string[]> {
-    const res = await fetch(`${SIDECAR_URL}/pointcloud/sensors`, {
+    const res = await fetch(`${getSidecarUrl()}/pointcloud/sensors`, {
       signal: AbortSignal.timeout(2000),
     });
     if (!res.ok) {
@@ -294,7 +500,7 @@ export class HardwareClient {
    * robotId / sequence / timestamp.
    */
   async snapshotPointCloud(name: string): Promise<PointCloudFrame> {
-    const res = await fetch(`${SIDECAR_URL}/pointcloud/${encodeURIComponent(name)}/snapshot`, {
+    const res = await fetch(`${getSidecarUrl()}/pointcloud/${encodeURIComponent(name)}/snapshot`, {
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) {
@@ -335,7 +541,7 @@ export class HardwareClient {
    * Missing joints read as 0; an empty order (generic) yields [].
    */
   async getStateNow(): Promise<number[]> {
-    const res = await fetch(`${SIDECAR_URL}/state/fast`, {
+    const res = await fetch(`${getSidecarUrl()}/state/fast`, {
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) {
@@ -394,7 +600,7 @@ export class HardwareClient {
   async getImuNow(): Promise<ImuReading | null> {
     let data: { imu?: unknown };
     try {
-      const res = await fetch(`${SIDECAR_URL}/state`, {
+      const res = await fetch(`${getSidecarUrl()}/state`, {
         signal: AbortSignal.timeout(1500),
       });
       if (!res.ok) return null;
@@ -443,7 +649,7 @@ export class HardwareClient {
       return { ok: false, error: 'hardware sidecar unavailable' };
     }
     try {
-      const res = await fetch(`${SIDECAR_URL}/record/start`, {
+      const res = await fetch(`${getSidecarUrl()}/record/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -487,7 +693,7 @@ export class HardwareClient {
    */
   async stopRecording(): Promise<RecordingStopResult> {
     try {
-      const res = await fetch(`${SIDECAR_URL}/record/stop`, {
+      const res = await fetch(`${getSidecarUrl()}/record/stop`, {
         method: 'POST',
         signal: AbortSignal.timeout(30_000),
       });
@@ -518,7 +724,7 @@ export class HardwareClient {
    */
   async getRecordingStatus(): Promise<RecordingStatus | null> {
     try {
-      const res = await fetch(`${SIDECAR_URL}/record/status`, {
+      const res = await fetch(`${getSidecarUrl()}/record/status`, {
         signal: AbortSignal.timeout(2000),
       });
       if (!res.ok) return null;
@@ -556,7 +762,7 @@ export class HardwareClient {
    */
   async sendEstop(): Promise<void> {
     try {
-      await fetch(`${SIDECAR_URL}/estop`, {
+      await fetch(`${getSidecarUrl()}/estop`, {
         method: 'POST',
         signal: AbortSignal.timeout(1500),
       });

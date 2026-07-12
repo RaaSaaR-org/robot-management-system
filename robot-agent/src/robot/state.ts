@@ -19,6 +19,7 @@ import type {
   RobotType,
   PointCloudFrame,
   PointCloudPose,
+  TelemetryFieldGroup,
 } from './types.js';
 import { generateTelemetry } from './telemetry.js';
 import { generateSyntheticScan, LIVE_POINTS_PER_FRAME } from './pointcloud-sim.js';
@@ -29,7 +30,7 @@ import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
-import { skillExecutorRegistry } from '../vla/skill-executor.js';
+import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { SimulationEngine } from './SimulationEngine.js';
 import { TaskQueue } from './TaskQueue.js';
 import {
@@ -46,7 +47,7 @@ import {
   type ModelSwitchResult,
   type VLAInferenceMetrics,
 } from '../vla/vla-model-manager.js';
-import type { VLAStatus, VLAControllerConfig, Observation, VLASafetyStatus } from '../vla/types.js';
+import type { VLAStatus, VLAControllerConfig } from '../vla/types.js';
 import {
   EmbodimentLoader,
   JointMapper,
@@ -83,6 +84,21 @@ const SAFETY_CONFIG = {
   estopRequiresManualReset: true,
 };
 
+// Open-ended VLA control run (the /vla/start REST surface): generous bounds so
+// an operator-triggered run doesn't die early — stopVLAControl aborts anytime.
+const VLA_CONTROL_MAX_STEPS = 1000;
+const VLA_CONTROL_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Remove a field group from a telemetry frame's `simulated` list — called when
+ * real hardware data replaced that group's values (contract §3 semantics).
+ */
+function markGroupReal(telemetry: RobotTelemetry, group: TelemetryFieldGroup): void {
+  if (telemetry.simulated) {
+    telemetry.simulated = telemetry.simulated.filter((g) => g !== group);
+  }
+}
+
 // Humanoid fall/tilt poll cadence (ms). IMU/leg-joint state is read over HTTP
 // from the hardware sidecar, so this runs slower than the in-process 100Hz
 // safety tick. 20Hz is a reasonable detection cadence for a fall-NET; on real
@@ -104,9 +120,11 @@ export class RobotStateManager {
   private taskQueue: TaskQueue;
   private safetyMonitor: SafetyMonitor;
   private vlaModelManager: VLAModelManager;
-  // Local VLA state — used when delegating to sidecar instead of gRPC VLAController
+  // Local VLA state — a background SkillExecutor run started via /vla/start.
   private vlaActiveLocal = false;
   private vlaInstructionLocal = '';
+  /** Registry key of the active VLA-control SkillExecutor run (null = none). */
+  private vlaSkillId: string | null = null;
 
   // Keyboard teleop override — when active, the simulated joints follow operator
   // input instead of the idle/walk animation. Map of joint name -> position (rad).
@@ -359,14 +377,60 @@ export class RobotStateManager {
         velocity: 0,
       }));
     }
-    // Always prefer real joint states over simulated/teleop defaults.
-    // Even if the sidecar is temporarily unreachable, keep showing the last known
-    // real pose instead of snapping back to simulated defaults (avoids confusion).
+    // ── Real-over-sim override, PER FIELD GROUP (TASK-184) ──────────────────
+    // The sim generator marked every group it fabricated in `simulated`; here
+    // each group with fresh hardware data replaces the simulated values and is
+    // unmarked. Groups the sidecar has no fresh data for (getter null) keep
+    // their simulated values and stay marked — never zero-filled.
+    const hardwareConnected = hardwareClient.isConnected();
+    telemetry.hardwareConnected = hardwareConnected;
+
+    // Joints: even if the sidecar is temporarily unreachable, keep showing the
+    // last known real pose instead of snapping back to simulated defaults
+    // (avoids confusion) — but only unmark the group while actually connected.
     const realJoints = hardwareClient.getJointStates();
     if (realJoints.length > 0) {
       telemetry.jointStates = realJoints;
-      (telemetry as unknown as Record<string, unknown>).hardwareConnected = hardwareClient.isConnected();
+      if (hardwareConnected) markGroupReal(telemetry, 'joints');
     }
+
+    if (hardwareConnected) {
+      const imu = hardwareClient.getImu();
+      if (imu) {
+        telemetry.imu = imu;
+        markGroupReal(telemetry, 'imu');
+      }
+
+      const touch = hardwareClient.getTouch();
+      if (touch) {
+        telemetry.touch = touch;
+        markGroupReal(telemetry, 'touch');
+      }
+
+      const battery = hardwareClient.getBattery();
+      if (battery) {
+        telemetry.battery = battery;
+        // batteryLevel mirrors the real soc; powerSource stays 'battery'. The
+        // legacy top-level voltage/temperature follow the real values too.
+        telemetry.batteryLevel = Math.round(battery.soc);
+        if (battery.voltage !== undefined) telemetry.batteryVoltage = battery.voltage;
+        if (battery.temperature !== undefined) telemetry.batteryTemperature = battery.temperature;
+        markGroupReal(telemetry, 'battery');
+      }
+
+      const motorTemperatures = hardwareClient.getMotorTemperatures();
+      if (motorTemperatures) {
+        telemetry.motorTemperatures = motorTemperatures;
+        markGroupReal(telemetry, 'motorTemperatures');
+      }
+
+      const odometry = hardwareClient.getOdometry();
+      if (odometry) {
+        telemetry.odometry = odometry;
+        markGroupReal(telemetry, 'odometry');
+      }
+    }
+
     return telemetry;
   }
 
@@ -919,8 +983,16 @@ export class RobotStateManager {
   /**
    * Start VLA control mode with a language instruction.
    *
+   * TASK-184: this used to delegate to the Python sidecar's `/vla/start`
+   * (VLARunner) — that surface was removed with the orphaned vla_runner.py.
+   * The live VLA path is the TS-owned SkillExecutor closed loop (observe →
+   * vla-server /predict → execute), which resolves sim-vs-hardware itself via
+   * the hardware sidecar. The run executes in the background; completion (or
+   * failure) flips the active flag back and notifies listeners.
+   *
    * @param instruction Natural language task instruction
-   * @param config Optional VLA controller configuration overrides
+   * @param config Optional VLA controller configuration overrides (unused by
+   *               the closed-loop executor; kept for API compatibility)
    */
   async startVLAControl(
     instruction: string,
@@ -929,54 +1001,58 @@ export class RobotStateManager {
     if (this.vlaActiveLocal) {
       throw new Error('VLA control is already active');
     }
+    void config; // accepted for API compatibility; the closed loop is self-configuring
 
-    // Delegate to the Python sidecar which runs VLARunner.
-    // VLARunner handles real camera capture, joint reading, and HTTP inference
-    // against the consolidated vla-server.
-    const serverUrl = process.env.VLA_SERVER_URL ?? 'http://192.168.178.40:8000';
-    const robotPort = process.env.VLA_ROBOT_PORT ?? '/dev/ttyACM0';
-
-    console.log(`[RobotStateManager/VLA] Starting: instruction="${instruction}" server=${serverUrl}`);
-
-    let res: Response;
-    try {
-      res = await fetch('http://localhost:8765/vla/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction, serverUrl, robotPort }),
-        signal: AbortSignal.timeout(5000),
-      });
-    } catch (err) {
-      console.error(`[RobotStateManager/VLA] Sidecar call failed:`, err);
-      throw err;
-    }
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`[RobotStateManager/VLA] Start failed (HTTP ${res.status}): ${text}`);
-      throw new Error(`VLA start failed: ${text}`);
-    }
-
-    const body = await res.json() as { ok: boolean };
-    console.log(`[RobotStateManager/VLA] VLARunner started`);
+    const skillId = `vla-control-${Date.now()}`;
+    const executor = new SkillExecutor(this);
+    // Same registry as skill runs, so the safety loop's abortAll() halts this too.
+    skillExecutorRegistry.register(skillId, executor);
 
     this.vlaActiveLocal = true;
     this.vlaInstructionLocal = instruction;
+    this.vlaSkillId = skillId;
+    console.log(`[RobotStateManager/VLA] Starting closed loop: instruction="${instruction}"`);
+
+    void executor
+      .run({
+        skillId,
+        taskPrompt: instruction,
+        maxSteps: VLA_CONTROL_MAX_STEPS,
+        timeoutMs: VLA_CONTROL_TIMEOUT_MS,
+      })
+      .then((result) => {
+        console.log(
+          `[RobotStateManager/VLA] Loop finished: ${result.status} after ${result.steps} steps` +
+            (result.error ? ` (${result.error})` : ''),
+        );
+      })
+      .catch((err) => {
+        console.error('[RobotStateManager/VLA] Loop crashed:', err);
+      })
+      .finally(() => {
+        skillExecutorRegistry.unregister(skillId);
+        if (this.vlaSkillId === skillId) {
+          this.vlaActiveLocal = false;
+          this.vlaInstructionLocal = '';
+          this.vlaSkillId = null;
+          this.notifyListeners();
+        }
+      });
+
     this.notifyListeners();
   }
 
   /**
-   * Stop VLA control mode gracefully.
+   * Stop VLA control mode gracefully (aborts the background closed loop).
    */
   async stopVLAControl(): Promise<void> {
     console.log('[RobotStateManager/VLA] Stopping VLA control');
-    await fetch('http://localhost:8765/vla/stop', {
-      method: 'POST',
-      signal: AbortSignal.timeout(5000),
-    }).catch((err) => console.error('[RobotStateManager/VLA] Sidecar stop call failed:', err));
-
+    if (this.vlaSkillId) {
+      skillExecutorRegistry.abort(this.vlaSkillId);
+    }
     this.vlaActiveLocal = false;
     this.vlaInstructionLocal = '';
+    this.vlaSkillId = null;
     this.notifyListeners();
     console.log('[RobotStateManager/VLA] VLA control stopped');
   }
@@ -985,15 +1061,15 @@ export class RobotStateManager {
    * Pause VLA control (holds current position).
    */
   pauseVLAControl(): void {
-    // Pause not supported in sidecar-delegated mode — stop instead
-    console.warn('[RobotStateManager] VLA pause not supported in sidecar mode, use stop');
+    // The closed-loop executor has no pause state — stop instead.
+    console.warn('[RobotStateManager] VLA pause not supported by the closed-loop executor, use stop');
   }
 
   /**
    * Resume VLA control from paused state.
    */
   resumeVLAControl(): void {
-    console.warn('[RobotStateManager] VLA resume not supported in sidecar mode, use start');
+    console.warn('[RobotStateManager] VLA resume not supported by the closed-loop executor, use start');
   }
 
   /**
@@ -1019,51 +1095,10 @@ export class RobotStateManager {
     return this.vlaActiveLocal;
   }
 
-  /**
-   * Get VLA safety monitoring status from the hardware sidecar.
-   */
-  async getVLASafetyStatus(): Promise<VLASafetyStatus> {
-    try {
-      const res = await fetch('http://localhost:8765/safety/status', {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (!res.ok) {
-        throw new Error(`Sidecar returned HTTP ${res.status}`);
-      }
-      const data = await res.json() as Record<string, unknown>;
-      return {
-        validatorEnabled: data.validator_enabled as boolean,
-        rateLimiterEnabled: data.rate_limiter_enabled as boolean,
-        watchdogHealthy: data.watchdog_healthy as boolean,
-        lastLatencyMs: data.last_watchdog_latency_ms as number | null,
-        actionsValidated: data.actions_validated as number,
-        actionsRejected: data.actions_rejected as number,
-        actionsClipped: data.actions_clipped as number,
-        rateLimiterMaxDelta: data.rate_limiter_max_delta as number,
-        watchdogTimeoutMs: data.watchdog_timeout_ms as number,
-        degradationEvents: (data.degradation_events as Array<{
-          type: string;
-          reason: string;
-          timestamp: number;
-        }>) ?? [],
-      };
-    } catch (err) {
-      console.error('[RobotStateManager] Failed to fetch VLA safety status:', err);
-      // Return defaults when sidecar is unreachable
-      return {
-        validatorEnabled: true,
-        rateLimiterEnabled: true,
-        watchdogHealthy: true,
-        lastLatencyMs: null,
-        actionsValidated: 0,
-        actionsRejected: 0,
-        actionsClipped: 0,
-        rateLimiterMaxDelta: 10.0,
-        watchdogTimeoutMs: 100.0,
-        degradationEvents: [],
-      };
-    }
-  }
+  // NOTE (TASK-184): getVLASafetyStatus() was removed. It fetched the sidecar's
+  // `/safety/status` — the safety wrapper of the deleted VLARunner path — and
+  // had no live caller (nothing proxies GET /robots/:id/vla/safety). Closed-loop
+  // safety is now the TS SafetyMonitor + SkillExecutor delta clipping.
 
   // ============================================================================
   // VLA MODEL MANAGEMENT (Task 47)

@@ -16,8 +16,19 @@ import type {
   RobotLocation,
   RegisteredRobot,
   RobotEndpoints,
+  RobotTelemetry,
 } from '../services/RobotManager.js';
 import type { A2AAgentCard } from '../types/index.js';
+
+/** Parse a JSON column, returning `fallback` on null/undefined/corrupt data. */
+function parseJsonColumn<T>(value: string | null | undefined, fallback: T): T {
+  if (value === null || value === undefined) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
 
 export class RobotRepository {
   /**
@@ -311,6 +322,113 @@ export class RobotRepository {
     } catch {
       return false;
     }
+  }
+
+  // ==========================================================================
+  // TELEMETRY (TASK-184 real-data flow)
+  // ==========================================================================
+
+  /**
+   * Persist one telemetry frame. JSON-typed fields are serialized to string
+   * columns (same pattern as Robot.location/capabilities). Fields missing from
+   * old agents are stored as NULL / defaults — never fabricated.
+   */
+  async saveTelemetry(telemetry: RobotTelemetry): Promise<void> {
+    const timestamp = new Date(telemetry.timestamp);
+    await prisma.robotTelemetry.create({
+      data: {
+        robotId: telemetry.robotId,
+        batteryLevel:
+          telemetry.batteryLevel === null || telemetry.batteryLevel === undefined
+            ? null
+            : Math.round(telemetry.batteryLevel),
+        batteryVoltage: telemetry.batteryVoltage ?? null,
+        batteryTemperature: telemetry.batteryTemperature ?? null,
+        cpuUsage: telemetry.cpuUsage ?? 0,
+        memoryUsage: telemetry.memoryUsage ?? 0,
+        diskUsage: telemetry.diskUsage ?? null,
+        temperature: telemetry.temperature ?? 0,
+        humidity: telemetry.humidity ?? null,
+        speed: telemetry.speed ?? null,
+        sensors: JSON.stringify(telemetry.sensors ?? {}),
+        errors: JSON.stringify(telemetry.errors ?? []),
+        warnings: JSON.stringify(telemetry.warnings ?? []),
+        jointStates: telemetry.jointStates ? JSON.stringify(telemetry.jointStates) : null,
+        imu: telemetry.imu ? JSON.stringify(telemetry.imu) : null,
+        touch: telemetry.touch ? JSON.stringify(telemetry.touch) : null,
+        battery: telemetry.battery ? JSON.stringify(telemetry.battery) : null,
+        motorTemperatures: telemetry.motorTemperatures
+          ? JSON.stringify(telemetry.motorTemperatures)
+          : null,
+        odometry: telemetry.odometry ? JSON.stringify(telemetry.odometry) : null,
+        hardwareConnected: telemetry.hardwareConnected ?? false,
+        simulated: JSON.stringify(telemetry.simulated ?? []),
+        timestamp: Number.isNaN(timestamp.getTime()) ? new Date() : timestamp,
+      },
+    });
+  }
+
+  /**
+   * Query persisted telemetry for a robot, ascending by timestamp, JSON
+   * columns parsed back into RobotTelemetry-shaped objects.
+   */
+  async getTelemetryHistory(
+    robotId: string,
+    options: { from?: Date; to?: Date; limit: number }
+  ): Promise<RobotTelemetry[]> {
+    const rows = await prisma.robotTelemetry.findMany({
+      where: {
+        robotId,
+        ...(options.from || options.to
+          ? {
+              timestamp: {
+                ...(options.from && { gte: options.from }),
+                ...(options.to && { lte: options.to }),
+              },
+            }
+          : {}),
+      },
+      orderBy: { timestamp: 'asc' },
+      take: options.limit,
+    });
+
+    return rows.map((row) => ({
+      robotId: row.robotId,
+      batteryLevel: row.batteryLevel,
+      batteryVoltage: row.batteryVoltage ?? undefined,
+      batteryTemperature: row.batteryTemperature ?? undefined,
+      cpuUsage: row.cpuUsage,
+      memoryUsage: row.memoryUsage,
+      diskUsage: row.diskUsage ?? undefined,
+      temperature: row.temperature,
+      humidity: row.humidity ?? undefined,
+      speed: row.speed ?? undefined,
+      sensors: parseJsonColumn(row.sensors, {}),
+      errors: parseJsonColumn(row.errors, []),
+      warnings: parseJsonColumn(row.warnings, []),
+      jointStates: row.jointStates ? parseJsonColumn(row.jointStates, undefined) : undefined,
+      imu: row.imu ? parseJsonColumn(row.imu, undefined) : undefined,
+      touch: row.touch ? parseJsonColumn(row.touch, undefined) : undefined,
+      battery: row.battery ? parseJsonColumn(row.battery, undefined) : undefined,
+      motorTemperatures: row.motorTemperatures
+        ? parseJsonColumn(row.motorTemperatures, undefined)
+        : undefined,
+      odometry: row.odometry ? parseJsonColumn(row.odometry, undefined) : undefined,
+      hardwareConnected: row.hardwareConnected,
+      simulated: parseJsonColumn(row.simulated, []),
+      timestamp: row.timestamp.toISOString(),
+    }));
+  }
+
+  /**
+   * Delete telemetry rows older than the given cutoff (retention cleanup).
+   * Returns the number of deleted rows.
+   */
+  async deleteTelemetryBefore(cutoff: Date): Promise<number> {
+    const result = await prisma.robotTelemetry.deleteMany({
+      where: { timestamp: { lt: cutoff } },
+    });
+    return result.count;
   }
 }
 

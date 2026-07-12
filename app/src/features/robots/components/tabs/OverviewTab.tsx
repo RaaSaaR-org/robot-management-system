@@ -11,7 +11,9 @@ import { Suspense, lazy } from 'react';
 import { Card, Button, Badge } from '@/shared/components/ui';
 import { Robot3DViewerFallback } from '../visualization';
 import { VlaControlSection } from '../VlaControlSection';
+import { SimBadge } from '../SimBadge';
 import { isRobotAvailable, normalizeRobotType } from '../../types/robots.types';
+import type { OdometryState } from '../../types/robots.types';
 import type { OverviewTabProps } from './types';
 
 // Lazy-load the 3D viewer to keep it out of the initial bundle.
@@ -36,6 +38,22 @@ const HomeIcon = (
 );
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+/** Ground speed for an odometry frame: |velocity|, falling back to |yawSpeed|. */
+function odometrySpeed(odometry: OdometryState): { value: number; unit: string } | null {
+  if (odometry.velocity) {
+    const [vx, vy, vz] = odometry.velocity;
+    return { value: Math.sqrt(vx * vx + vy * vy + vz * vz), unit: 'm/s' };
+  }
+  if (odometry.yawSpeed != null) {
+    return { value: Math.abs(odometry.yawSpeed), unit: 'rad/s' };
+  }
+  return null;
+}
+
+// ============================================================================
 // COMPONENT
 // ============================================================================
 
@@ -52,6 +70,8 @@ export function OverviewTab({
   const reportedType =
     telemetry?.robotType ?? (robot.metadata?.robotType as string | undefined) ?? 'generic';
   const robotType = normalizeRobotType(reportedType);
+  const odometry = telemetry?.odometry ?? null;
+  const speed = odometry ? odometrySpeed(odometry) : null;
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_340px]">
@@ -119,6 +139,34 @@ export function OverviewTab({
             </p>
           )}
         </Card>
+
+        {/* Odometry (TASK-184) — only when the frame carries it */}
+        {odometry && (
+          <Card className="p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-theme-primary">Odometry</h3>
+              <SimBadge telemetry={telemetry} group="odometry" />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {(['x', 'y', 'z'] as const).map((axis, i) => (
+                <div key={axis} className="glass-subtle p-2 rounded-lg text-center">
+                  <span className="card-label">{axis}</span>
+                  <p className="font-mono text-sm font-semibold text-theme-primary">
+                    {odometry.position[i].toFixed(2)} m
+                  </p>
+                </div>
+              ))}
+            </div>
+            {speed && (
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span className="text-theme-secondary">Speed</span>
+                <span className="font-mono text-theme-primary">
+                  {speed.value.toFixed(2)} {speed.unit}
+                </span>
+              </div>
+            )}
+          </Card>
+        )}
       </div>
     </div>
   );

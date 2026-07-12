@@ -59,6 +59,7 @@ import {
   selectScenesLoading,
   selectScenesError,
 } from '../store';
+import { getSimBackendMode } from '../types';
 import type { SimJob, SimToRealComparison, SimScene } from '../types';
 
 // ============================================================================
@@ -112,6 +113,21 @@ const STATUS_BADGE_VARIANT: Record<SimJob['status'], 'warning' | 'cobalt' | 'suc
   completed: 'success',
   failed: 'error',
 };
+
+/**
+ * Backend honesty badge (TASK-184): warns when a job's results come from a
+ * mock backend rather than a real simulator run. Hidden on old servers that
+ * don't report the flag.
+ */
+function BackendModeBadge({ job }: { job: SimJob }) {
+  const mode = getSimBackendMode(job);
+  if (!mode) return null;
+  return mode === 'mock' ? (
+    <Badge variant="warning" size="sm">mock backend</Badge>
+  ) : (
+    <Badge variant="success" size="sm">real</Badge>
+  );
+}
 
 function successVariant(rate: number): 'success' | 'warning' | 'error' {
   if (rate >= 0.8) return 'success';
@@ -587,7 +603,10 @@ function JobCard({
           <h4 className="text-sm font-semibold text-theme-primary">{job.modelId}</h4>
           <div className="flex items-center gap-2 mt-1">
             <span className="text-xs text-theme-muted">{job.environment}</span>
-            <Badge variant="default" size="sm">{job.backend}</Badge>
+            {(job.backend === 'mujoco' || job.backend === 'isaac') && (
+              <Badge variant="default" size="sm">{job.backend}</Badge>
+            )}
+            <BackendModeBadge job={job} />
           </div>
         </div>
         <Badge
@@ -1076,7 +1095,12 @@ function ResultsTab({ job }: { job: SimJob | null }) {
           </div>
           <div>
             <span className="block text-xs text-theme-muted">Backend</span>
-            <Badge variant="default" size="sm">{job.backend}</Badge>
+            <span className="inline-flex items-center gap-1.5">
+              {(job.backend === 'mujoco' || job.backend === 'isaac') && (
+                <Badge variant="default" size="sm">{job.backend}</Badge>
+              )}
+              <BackendModeBadge job={job} />
+            </span>
           </div>
           <div>
             <span className="block text-xs text-theme-muted">Rollouts</span>

@@ -49,6 +49,7 @@ export interface JointState {
   position: number; // radians
   velocity?: number; // rad/s
   effort?: number; // torque
+  temperature?: number; // motor temperature °C (real hardware only — never fabricated)
 }
 
 // ============================================================================
@@ -91,6 +92,65 @@ export interface Robot {
 // TELEMETRY TYPES
 // ============================================================================
 
+// TASK-184 shared data contract (§3) — these shapes are mirrored verbatim in
+// server/src/types and the app. Never fabricate values: a field whose source
+// has no fresh data is left undefined/null, NOT zero-filled.
+
+/** Base IMU sample (rt/lowstate imu_state on the real G1). */
+export interface ImuTelemetry {
+  rpy?: [number, number, number] | null;
+  gyro?: [number, number, number] | null;
+  accel?: [number, number, number] | null;
+  temperature?: number | null;
+}
+
+/** One Dex3 pressure pad (press_sensor_state entry). */
+export interface TouchPad {
+  pressure: number[];
+  temperature?: number[];
+}
+
+/** Dex3 hand touch sensing, per hand (omitted hand = no fresh data). */
+export interface HandTouch {
+  left?: TouchPad[];
+  right?: TouchPad[];
+}
+
+/** Battery/BMS state (rt/lf/bmsstate on the real G1). All but soc optional. */
+export interface BatteryState {
+  soc: number; // 0-100
+  voltage?: number | null;
+  current?: number | null;
+  temperature?: number | null;
+  soh?: number | null;
+  cycles?: number | null;
+  cellVoltages?: number[] | null;
+}
+
+/** Odometry sample (rt/odommodestate SportModeState_). All but position optional. */
+export interface OdometryState {
+  position: [number, number, number];
+  rpy?: [number, number, number] | null;
+  velocity?: [number, number, number] | null;
+  yawSpeed?: number | null;
+}
+
+/**
+ * A telemetry field group that can independently be real or simulated.
+ * The sim generator marks every group it fabricates in `RobotTelemetry.simulated`;
+ * the real-over-sim override in state.ts removes a group when hardware data
+ * replaces it.
+ */
+export type TelemetryFieldGroup =
+  | 'joints'
+  | 'imu'
+  | 'touch'
+  | 'battery'
+  | 'motorTemperatures'
+  | 'odometry'
+  | 'position'
+  | 'sensors';
+
 export interface RobotTelemetry {
   robotId: string;
   robotType?: RobotType;
@@ -106,6 +166,17 @@ export interface RobotTelemetry {
   speed?: number;
   sensors: Record<string, number | boolean | string>;
   jointStates?: JointState[];
+  // TASK-184 field groups — undefined/null = no data (sim didn't fabricate it
+  // and hardware has nothing fresh); never zero-filled.
+  imu?: ImuTelemetry | null;
+  touch?: HandTouch | null;
+  battery?: BatteryState | null;
+  motorTemperatures?: Record<string, number> | null; // joint name → °C
+  odometry?: OdometryState | null;
+  /** True when the hardware sidecar reports a connected robot this frame. */
+  hardwareConnected?: boolean;
+  /** Field groups whose values are SIMULATED this frame (contract §3 semantics). */
+  simulated?: TelemetryFieldGroup[];
   errors?: string[];
   warnings?: string[];
   timestamp: string;

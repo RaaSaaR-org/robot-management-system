@@ -1,17 +1,39 @@
 /**
  * @file telemetry.ts
- * @description Telemetry and alert generation utilities
+ * @description Telemetry and alert generation utilities. TASK-184: simulates the
+ *              contract §3 field groups (imu/touch/battery/motorTemperatures/
+ *              odometry) for G1/G1-EDU dev mode and marks every fabricated group
+ *              in `telemetry.simulated` — state.ts unmarks groups it replaces
+ *              with real hardware data.
  * @status live
  */
 
 import os from 'os';
+import * as nodeFs from 'fs';
 import { readFileSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import type { RobotTelemetry, SimulatedRobotState, RobotAlert, AlertSeverity, JointState, RobotType } from './types.js';
+import type {
+  RobotTelemetry,
+  SimulatedRobotState,
+  RobotAlert,
+  AlertSeverity,
+  JointState,
+  RobotType,
+  ImuTelemetry,
+  HandTouch,
+  BatteryState,
+  OdometryState,
+  TelemetryFieldGroup,
+} from './types.js';
 import { getJointConfig } from './joint-configs/index.js';
 
 // Simulation time counter for joint animations
 let simulationTime = 0;
+
+// Simulated motor warmth 0..1 — integrates toward 1 while the robot moves and
+// cools back down when idle, so motor temperatures drift believably instead of
+// flickering with random noise.
+let motorWarmth = 0;
 
 // ============================================================================
 // REAL SYSTEM DATA HELPERS
@@ -41,21 +63,61 @@ function getRealMemoryUsage(): number {
   return Math.round(((total - free) / total) * 100 * 10) / 10;
 }
 
+/**
+ * Real disk usage % of the filesystem holding the working directory, via
+ * `fs.statfsSync` (Node ≥ 18.15). Returns undefined when unavailable (older
+ * Node, mocked fs in tests, or an exotic filesystem) — the field is then simply
+ * omitted rather than hardcoded.
+ */
+function getRealDiskUsage(): number | undefined {
+  try {
+    // Inside the try: on older Node the export is undefined, and mocked fs
+    // modules (tests) may throw on the property access itself.
+    const statfs = (nodeFs as { statfsSync?: (path: string) => { blocks: number; bavail: number } })
+      .statfsSync;
+    if (typeof statfs !== 'function') return undefined;
+    const s = statfs(process.cwd());
+    if (!s || !Number.isFinite(s.blocks) || s.blocks <= 0 || !Number.isFinite(s.bavail)) {
+      return undefined;
+    }
+    const used = 1 - s.bavail / s.blocks;
+    return Math.min(100, Math.max(0, Math.round(used * 1000) / 10));
+  } catch {
+    return undefined;
+  }
+}
+
 // ============================================================================
 // TELEMETRY GENERATION
 // ============================================================================
 
 /**
  * Generate telemetry data from robot state
+ *
+ * Every field group fabricated here is marked in `simulated` (contract §3):
+ * the real-over-sim override in state.ts replaces a group with hardware data
+ * and removes it from the list, so consumers can badge sim vs. real per group.
  */
 export function generateTelemetry(state: SimulatedRobotState): RobotTelemetry {
   // Increment simulation time for smooth animations
   simulationTime += 0.1;
 
   const isSO101 = state.robotType === 'so101';
+  const isG1 = state.robotType === 'g1' || state.robotType === 'g1_edu';
+  const isMoving = state.status === 'busy' && state.speed > 0;
   const piTemp = getPiTemperature();
 
-  return {
+  // Integrate motor warmth: heats up under motion, cools when idle.
+  motorWarmth = Math.min(1, Math.max(0, motorWarmth + (isMoving ? 0.02 : -0.005)));
+
+  // Joints + position always come from the simulation here; sensors only for
+  // non-G1 embodiments (the G1 has no sonars/bumpers/wheel motors — fabricating
+  // them would be dishonest, so the record is empty and unmarked).
+  const simulated: TelemetryFieldGroup[] = ['joints', 'position'];
+  const sensors = isG1 ? {} : generateSensorData(state);
+  if (!isG1) simulated.push('sensors');
+
+  const telemetry: RobotTelemetry = {
     robotId: state.id,
     robotType: state.robotType,
     // SO-101 has no battery — null signals "AC-powered"
@@ -66,15 +128,133 @@ export function generateTelemetry(state: SimulatedRobotState): RobotTelemetry {
     // Real system data
     cpuUsage: getRealCpuUsage(),
     memoryUsage: getRealMemoryUsage(),
-    diskUsage: 35,
+    diskUsage: getRealDiskUsage(),
     temperature: piTemp,
     humidity: isSO101 ? null : 45 + Math.random() * 10, // SO-101 has no humidity sensor
     speed: state.speed,
-    sensors: generateSensorData(state),
+    sensors,
     jointStates: generateJointStates(state.robotType, state, simulationTime),
     errors: state.errors,
     warnings: state.warnings,
     timestamp: new Date().toISOString(),
+  };
+
+  // The battery level itself is simulated on every battery-powered embodiment.
+  if (!isSO101) simulated.push('battery');
+
+  // TASK-184 field groups, simulated for G1/G1-EDU dev mode only. Real data
+  // replaces these (and unmarks the group) in RobotStateManager.getTelemetry.
+  if (isG1) {
+    telemetry.imu = simulateImu(simulationTime, isMoving);
+    simulated.push('imu');
+
+    telemetry.battery = simulateBattery(state, telemetry);
+    // 'battery' already marked above.
+
+    telemetry.motorTemperatures = simulateMotorTemperatures(telemetry.jointStates ?? []);
+    simulated.push('motorTemperatures');
+
+    telemetry.odometry = simulateOdometry(state);
+    simulated.push('odometry');
+
+    // Touch pads exist only on the Dex3 hands (G1 EDU) — a bare G1 has none,
+    // so the group stays absent there instead of being zero-filled.
+    if (state.robotType === 'g1_edu') {
+      telemetry.touch = simulateTouch(simulationTime, !!state.heldObject);
+      simulated.push('touch');
+    }
+  }
+
+  telemetry.simulated = simulated;
+  return telemetry;
+}
+
+// ============================================================================
+// TASK-184 FIELD-GROUP SIMULATION (G1 / G1-EDU dev mode)
+// ============================================================================
+
+/** Gentle IMU sway: a standing/walking humanoid is never perfectly still. */
+function simulateImu(time: number, isMoving: boolean): ImuTelemetry {
+  const sway = isMoving ? 0.03 : 0.012; // rad amplitude
+  const roll = Math.sin(time * 0.7) * sway;
+  const pitch = Math.sin(time * 0.53 + 1.3) * sway * 0.8;
+  const yaw = Math.sin(time * 0.11) * 0.01;
+  return {
+    rpy: [roll, pitch, yaw],
+    // Approximate derivatives of the sway (rad/s) — small, never tip-level.
+    gyro: [
+      Math.cos(time * 0.7) * sway * 0.7,
+      Math.cos(time * 0.53 + 1.3) * sway * 0.42,
+      Math.cos(time * 0.11) * 0.001,
+    ],
+    // Gravity plus a touch of motion noise.
+    accel: [
+      (isMoving ? 0.15 : 0.02) * Math.sin(time * 1.7),
+      (isMoving ? 0.1 : 0.02) * Math.sin(time * 1.3 + 0.5),
+      9.81 + Math.random() * 0.05,
+    ],
+    temperature: 32 + motorWarmth * 6,
+  };
+}
+
+/**
+ * Dex3 touch pads: firm pressure when grasping an object, otherwise a slow
+ * near-zero pulse (fingertips brushing). 3 pads × 4 cells per hand.
+ */
+function simulateTouch(time: number, isHolding: boolean): HandTouch {
+  const hand = (phase: number) => {
+    const pads = [];
+    for (let p = 0; p < 3; p++) {
+      const base = isHolding
+        ? 9 + Math.sin(time * 0.9 + phase + p) * 1.5 // grasp pressure with micro-adjustments
+        : Math.max(0, Math.sin(time * 0.2 + phase + p)) * 0.4; // slow idle pulses
+      pads.push({
+        pressure: Array.from({ length: 4 }, (_, c) => Math.max(0, base + Math.sin(c + phase) * 0.3)),
+        temperature: Array.from({ length: 4 }, () => 30 + motorWarmth * 4),
+      });
+    }
+    return pads;
+  };
+  return { left: hand(0), right: hand(2.1) };
+}
+
+/**
+ * Battery group reusing the existing battery sim values (soc = the state
+ * machine's drained/charged level, voltage/temperature = the same formulas as
+ * the top-level fields) so both representations stay consistent.
+ */
+function simulateBattery(state: SimulatedRobotState, telemetry: RobotTelemetry): BatteryState {
+  const charging = state.status === 'charging';
+  return {
+    soc: Math.round(state.batteryLevel),
+    voltage: telemetry.batteryVoltage ?? undefined,
+    // Sign convention: negative = discharging.
+    current: charging ? 8 + Math.random() : -(2 + (state.status === 'busy' ? 3 : 0) + Math.random()),
+    temperature: telemetry.batteryTemperature ?? undefined,
+  };
+}
+
+/** Motor temperatures warming toward ~45°C under motion, cooling to ~28°C idle. */
+function simulateMotorTemperatures(joints: JointState[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  // Legs work hardest while walking; give them a slight bias over arm/hand joints.
+  for (const j of joints) {
+    const legBias = /hip|knee|ankle/.test(j.name) ? 1.0 : 0.7;
+    const temp = 28 + motorWarmth * 17 * legBias + Math.random() * 0.6;
+    out[j.name] = Math.round(temp * 10) / 10;
+  }
+  return out;
+}
+
+/** Odometry derived from the simulated planar position and heading. */
+function simulateOdometry(state: SimulatedRobotState): OdometryState {
+  const headingRad = ((state.location.heading ?? 0) * Math.PI) / 180;
+  const speed = state.speed;
+  return {
+    position: [state.location.x, state.location.y, state.location.z ?? 0],
+    rpy: [0, 0, headingRad],
+    velocity: [speed * Math.cos(headingRad), speed * Math.sin(headingRad), 0],
+    yawSpeed: 0,
   };
 }
 
@@ -292,7 +472,9 @@ function simulateSO101Joint(jointName: string, time: number, isMoving: boolean, 
 }
 
 /**
- * Generate simulated sensor data (SO-101 only has gripper/arm — no sonars, bumpers, IMU)
+ * Generate simulated sensor data (SO-101 only has gripper/arm — no sonars, bumpers, IMU).
+ * NOT called for G1/G1-EDU: the G1 has none of these sensors, so fabricating the
+ * record would be dishonest — its real groups live in imu/touch/battery/odometry.
  */
 function generateSensorData(state: SimulatedRobotState): Record<string, number | boolean | string> {
   const isSO101 = state.robotType === 'so101';
@@ -306,7 +488,7 @@ function generateSensorData(state: SimulatedRobotState): Record<string, number |
     };
   }
 
-  // Generic/H1/G1: full sensor simulation
+  // Generic/H1: full sensor simulation
   const isMoving = state.status === 'busy' && state.speed > 0;
 
   return {

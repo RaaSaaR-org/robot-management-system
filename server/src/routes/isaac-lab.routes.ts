@@ -136,6 +136,8 @@ isaacLabRoutes.get('/health', async (_req: Request, res: Response) => {
       ...health,
       circuitBreaker,
       mockMode: isaacLabClient.isMockMode(),
+      // Honesty label (TASK-184 Phase 3): 'real' only when ISAAC_LAB_URL is configured
+      backend: isaacLabClient.isMockMode() ? 'mock' : 'real',
     });
   } catch (error) {
     console.error('[isaac-lab.routes] healthCheck error:', error);

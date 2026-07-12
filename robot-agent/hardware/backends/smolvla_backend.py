@@ -13,10 +13,11 @@ Usage:
     actions = backend.predict(images, state, "pick up the green object")
     backend.disconnect()
 
-@status orphaned
-    Only consumed by vla_runner.py, which TASK-146 final 20% orphaned.
-    The TS SkillExecutor now POSTs to vla-server /predict directly with
-    base64 JPEGs from the sidecar snapshot endpoint.
+@status support
+    Consumed by vla_runner.py (so101_sidecar.py /vla/* surface) and by
+    sim_evaluator/evaluate_vla.py (connect_backend). The TS SkillExecutor
+    POSTs to vla-server /predict directly and does not use this path,
+    but the sidecar-side consumers keep it alive — NOT orphaned.
 """
 
 import base64

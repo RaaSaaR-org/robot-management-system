@@ -16,7 +16,10 @@ serial).
 
 Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_URL):
   GET  /health        → {"status": "ok", "connected": true/false}
-  GET  /state         → {"joints": [...], "imu": {...}|null, "timestamp": ...}
+  GET  /state         → {"joints": [...], "imu": {...}, "touch": {...},
+                         "battery": {...}, "odometry": {...}, "timestamp": ...}
+                        (TASK-184 contract §2 — every group is OMITTED when its
+                        source DDS topic has no fresh data; never zero-filled)
   GET  /state/fast    → joint read that keeps motors enabled (closed loop)
   POST /action        → {"<joint>": value, ...} → RAMPED + CLAMPED, then sent
   POST /estop         → clears the action-ramp state (soft stop, see caveat)
@@ -63,6 +66,14 @@ NET_INTERFACE = os.environ.get("G1_NET_INTERFACE", "eth0")
 # Set G1_READ_ONLY=0 explicitly and deliberately to enable the command path.
 READ_ONLY = os.environ.get("G1_READ_ONLY", "1").strip() != "0"
 LOWSTATE_ENDPOINT = os.environ.get("G1_LOWSTATE_ENDPOINT", f"tcp://{ROBOT_IP}:6001")
+
+# TASK-184: extra READ-ONLY telemetry topics forwarded by the bridge over the
+# same ZMQ PUB socket. Names must match the bridge's DDS topic strings.
+TOPIC_LOWSTATE = "rt/lowstate"
+TOPIC_LEFT_HAND = "rt/dex3/left/state"
+TOPIC_RIGHT_HAND = "rt/dex3/right/state"
+TOPIC_BMS = os.environ.get("G1_BMS_TOPIC", "rt/lf/bmsstate")
+TOPIC_ODOM = os.environ.get("G1_ODOM_TOPIC", "rt/odommodestate")
 
 # Depth / LiDAR sensors on the G1. Names must match
 # robot-agent/src/embodiment/configs/g1*.yaml `depth_sensors`.
@@ -299,17 +310,23 @@ def _extract_imu(obs):
 
 
 class _LowStateReader:
-    """Subscribe-only LowState client for READ_ONLY mode.
+    """Subscribe-only multi-topic state client for READ_ONLY mode.
 
-    Holds the newest LowState dict published by the read-only bridge. No
-    command socket exists in this process while READ_ONLY is active — port
-    6000 (lowcmd) is never opened anywhere.
+    Caches the newest `{"topic": ..., "data": {...}}` message PER TOPIC as
+    published by the read-only bridge (rt/lowstate, rt/dex3/*/state, BMS,
+    odometry — all on one ZMQ PUB socket). Deliberately NO zmq.CONFLATE:
+    CONFLATE keeps only the newest message across ALL topics on the socket,
+    so a 50 Hz lowstate stream would starve the low-rate BMS/odom feeds.
+    Freshness is judged per topic (default 2 s window) — stale topics read
+    as None and their field groups are OMITTED, never fabricated.
+
+    No command socket exists in this process while READ_ONLY is active —
+    port 6000 (lowcmd) is never opened anywhere.
     """
 
     def __init__(self, endpoint: str) -> None:
         self.endpoint = endpoint
-        self._latest: dict | None = None
-        self._latest_ts = 0.0
+        self._cache: dict[str, tuple[dict, float]] = {}  # topic → (data, recv ts)
         self._lock = threading.Lock()
         self._started = False
 
@@ -324,11 +341,10 @@ class _LowStateReader:
         ctx = zmq.Context.instance()
         sock = ctx.socket(zmq.SUB)
         sock.setsockopt_string(zmq.SUBSCRIBE, "")
-        sock.setsockopt(zmq.CONFLATE, 1)  # keep only the newest sample
         sock.connect(self.endpoint)
         self._started = True
         threading.Thread(target=self._spin, args=(sock,), daemon=True).start()
-        print(f"[G1 Sidecar] read-only LowState subscriber → {self.endpoint}", flush=True)
+        print(f"[G1 Sidecar] read-only multi-topic subscriber → {self.endpoint}", flush=True)
         return True
 
     def _spin(self, sock) -> None:
@@ -336,53 +352,160 @@ class _LowStateReader:
             try:
                 payload = sock.recv()
                 msg = json.loads(payload.decode("utf-8"))
-                data = msg.get("data") if isinstance(msg, dict) else None
-                if isinstance(data, dict):
+                if not isinstance(msg, dict):
+                    continue
+                topic = msg.get("topic")
+                data = msg.get("data")
+                if isinstance(topic, str) and isinstance(data, dict):
                     with self._lock:
-                        self._latest = data
-                        self._latest_ts = time.time()
+                        self._cache[topic] = (data, time.time())
             except Exception as e:  # noqa: BLE001
-                print(f"[G1 Sidecar] lowstate recv error: {e}", flush=True)
+                print(f"[G1 Sidecar] telemetry recv error: {e}", flush=True)
                 time.sleep(1.0)
 
-    def latest(self, max_age_s: float = 2.0) -> dict | None:
-        """Newest LowState dict, or None if nothing fresh arrived."""
+    def latest(self, topic: str = TOPIC_LOWSTATE, max_age_s: float = 2.0) -> dict | None:
+        """Newest dict for `topic`, or None if nothing fresh arrived."""
         with self._lock:
-            if self._latest is None or time.time() - self._latest_ts > max_age_s:
+            entry = self._cache.get(topic)
+            if entry is None or time.time() - entry[1] > max_age_s:
                 return None
-            return self._latest
+            return entry[0]
 
 
 _lowstate_reader = _LowStateReader(LOWSTATE_ENDPOINT)
 
 
+def _opt_float(v):
+    """float(v) or None — for optional fields that must be OMITTED, not zeroed."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _motor_to_joint(name: str, motor: dict) -> dict:
+    """Bridge motor dict → contract joint entry. Only q is required; dq /
+    tau_est / temperature map to velocity / effort / temperature and are
+    included only when present (never zero-filled)."""
+    joint = {"name": name, "position": float(motor.get("q", 0.0))}
+    for src, dst in (("dq", "velocity"), ("tau_est", "effort"), ("temperature", "temperature")):
+        v = _opt_float(motor.get(src))
+        if v is not None:
+            joint[dst] = v
+    return joint
+
+
+def _touch_pads(hand_data: dict) -> list | None:
+    """press_sensor_state → contract touch pad list, or None when absent."""
+    pads_in = hand_data.get("press_sensor_state")
+    if not isinstance(pads_in, list):
+        return None
+    pads = []
+    for p in pads_in:
+        if not isinstance(p, dict):
+            continue
+        pad = {}
+        if isinstance(p.get("pressure"), list):
+            pad["pressure"] = p["pressure"]
+        if isinstance(p.get("temperature"), list):
+            pad["temperature"] = p["temperature"]
+        if pad:
+            pads.append(pad)
+    return pads or None
+
+
 def _get_state_readonly() -> dict:
-    """Build the /state response from the read-only bridge feed.
+    """Build the /state response from the read-only bridge feed (contract §2).
 
     DDS motor index i ↔ BODY_JOINTS[i] — verified against lerobot's
     G1_29_JointIndex enum (0-5 left leg, 6-11 right leg, 12-14 waist,
     15-21 left arm, 22-28 right arm). Dex3-1 hands live on separate DDS
-    topics, not in rt/lowstate, so hand joints are OMITTED here (never
-    fabricated as 0.0).
+    topics (rt/dex3/*/state): hand-joint entries (HAND_JOINTS order — left
+    thumb_0..middle_1, then right; motor_state index i ↔ i-th hand joint of
+    that side) are appended ONLY while the matching topic is fresh — never
+    fabricated as 0.0. Likewise touch / battery / odometry are whole-group
+    omitted when their source topic is stale.
     """
     if not _lowstate_reader.start():
         return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
-    data = _lowstate_reader.latest()
+    data = _lowstate_reader.latest(TOPIC_LOWSTATE)
     if data is None:
         return {"joints": [], "connected": False, "simulated": False, "timestamp": time.time()}
+
+    # --- 29 body joints from rt/lowstate --------------------------------------
     motors = data.get("motor_state") or []
     joints = []
     for i, name in enumerate(BODY_JOINTS):
         if i < len(motors) and isinstance(motors[i], dict):
-            joints.append({"name": name, "position": float(motors[i].get("q", 0.0))})
+            joints.append(_motor_to_joint(name, motors[i]))
+
+    # --- 14 hand joints + touch from rt/dex3/{left,right}/state ---------------
+    touch = {}
+    n_hand = len(HAND_JOINTS) // 2  # 7 per side
+    for side, topic, offset in (("left", TOPIC_LEFT_HAND, 0), ("right", TOPIC_RIGHT_HAND, n_hand)):
+        hand = _lowstate_reader.latest(topic)
+        if hand is None:
+            continue  # stale side → its 7 joints and touch pads are omitted
+        hand_motors = hand.get("motor_state") or []
+        for i in range(min(n_hand, len(hand_motors))):
+            if isinstance(hand_motors[i], dict):
+                joints.append(_motor_to_joint(HAND_JOINTS[offset + i], hand_motors[i]))
+        pads = _touch_pads(hand)
+        if pads:
+            touch[side] = pads
+
     result = {"joints": joints, "connected": True, "simulated": False, "timestamp": time.time()}
+    if touch:
+        result["touch"] = touch
+
+    # --- imu from rt/lowstate --------------------------------------------------
     imu_state = data.get("imu_state")
     if isinstance(imu_state, dict):
         rpy = _coerce3(imu_state.get("rpy"))
         gyro = _coerce3(imu_state.get("gyroscope"))
         accel = _coerce3(imu_state.get("accelerometer"))
         if rpy is not None or gyro is not None or accel is not None:
-            result["imu"] = {"rpy": rpy, "gyro": gyro, "accel": accel}
+            imu = {"rpy": rpy, "gyro": gyro, "accel": accel}
+            temp = _opt_float(imu_state.get("temperature"))
+            if temp is not None:
+                imu["temperature"] = temp
+            result["imu"] = imu
+
+    # --- battery from the BMS topic (soc required, rest optional) --------------
+    bms = _lowstate_reader.latest(TOPIC_BMS)
+    if isinstance(bms, dict):
+        soc = _opt_float(bms.get("soc"))
+        if soc is not None:
+            battery = {"soc": soc}
+            for key in ("voltage", "current", "temperature", "soh"):
+                v = _opt_float(bms.get(key))
+                if v is not None:
+                    battery[key] = v
+            if bms.get("cycle") is not None:
+                battery["cycles"] = int(bms["cycle"])
+            if isinstance(bms.get("cell_vol"), list):
+                battery["cellVoltages"] = bms["cell_vol"]
+            result["battery"] = battery
+
+    # --- odometry (position required, rest optional) ---------------------------
+    odom = _lowstate_reader.latest(TOPIC_ODOM)
+    if isinstance(odom, dict):
+        position = _coerce3(odom.get("position"))
+        if position is not None:
+            odometry = {"position": position}
+            rpy = _coerce3(odom.get("rpy"))
+            if rpy is not None:
+                odometry["rpy"] = rpy
+            velocity = _coerce3(odom.get("velocity"))
+            if velocity is not None:
+                odometry["velocity"] = velocity
+            yaw_speed = _opt_float(odom.get("yaw_speed"))
+            if yaw_speed is not None:
+                odometry["yawSpeed"] = yaw_speed
+            result["odometry"] = odometry
+
     return result
 
 

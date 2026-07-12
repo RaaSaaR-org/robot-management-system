@@ -12,7 +12,9 @@ import { seedZones } from './database/seedZones.js';
 import { seedDefaultTenant } from './database/seedTenant.js';
 import { conversationManager } from './services/ConversationManager.js';
 import { robotManager } from './services/RobotManager.js';
+import { telemetryIngestionService } from './services/TelemetryIngestionService.js';
 import { retentionCleanupJob } from './jobs/RetentionCleanupJob.js';
+import { telemetryCleanupJob } from './jobs/telemetry-cleanup.js';
 import { retentionPolicyService } from './services/RetentionPolicyService.js';
 import { ropaService } from './services/RopaService.js';
 import { providerDocumentationService } from './services/ProviderDocumentationService.js';
@@ -59,6 +61,11 @@ async function main() {
   await conversationManager.initialize();
   await robotManager.initialize();
 
+  // Start telemetry ingestion (TASK-184): WS-client connections to each
+  // registered robot agent's telemetry stream. Also hooks the registration/
+  // unregistration events so new robots start streaming immediately.
+  await telemetryIngestionService.initialize();
+
   // Initialize retention policies, RoPA, provider docs, and compliance tracker defaults
   await retentionPolicyService.initializeDefaults();
   await ropaService.initializeDefaults();
@@ -67,6 +74,9 @@ async function main() {
 
   // Start retention cleanup job (daily at 2 AM)
   retentionCleanupJob.startSchedule(24);
+
+  // Start telemetry retention cleanup (daily at 4 AM, TELEMETRY_RETENTION_DAYS)
+  telemetryCleanupJob.startSchedule(24);
 
   // Start process scheduler (TASK-143) — fires scheduled ProcessDefinitions
   processSchedulerService.start();
@@ -135,7 +145,9 @@ async function main() {
   const shutdown = async () => {
     logger.info('Shutting down...');
     processSchedulerService.stop();
+    telemetryIngestionService.stopAll();
     retentionCleanupJob.stopSchedule();
+    telemetryCleanupJob.stopSchedule();
     storageCleanupJob.stopSchedule();
     digitalTwinService.stopReaper();
     trainingJobService.stopAllWatchers();

@@ -608,6 +608,17 @@ export class SimulationService extends EventEmitter {
   }
 
   /**
+   * Honesty label for API payloads (TASK-184 Phase 3): whether jobs execute on
+   * the REAL MuJoCo evaluator subprocess or the mock metric generator. Named
+   * `executionBackend` internally because SimJob.backend already means the sim
+   * engine ('mujoco' | 'isaac'); routes surface it as `backend: 'mock' | 'real'`
+   * at the response-envelope level.
+   */
+  getExecutionBackend(): 'mock' | 'real' {
+    return this.canRunReal() ? 'real' : 'mock';
+  }
+
+  /**
    * Run a real MuJoCo evaluation via Python subprocess
    */
   private async startRealJobProgression(jobId: string): Promise<void> {

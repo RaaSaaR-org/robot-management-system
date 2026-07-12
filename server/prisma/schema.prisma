@@ -253,6 +253,15 @@ model RobotTelemetry {
   sensors            String   @default("{}") // JSON: Record<string, number | boolean | string>
   errors             String   @default("[]") // JSON: string[]
   warnings           String   @default("[]") // JSON: string[]
+  // TASK-184 real-data flow — rich per-frame hardware telemetry (JSON strings, same pattern as sensors)
+  jointStates        String? // JSON: JointState[] (name/position/velocity/effort/temperature)
+  imu                String? // JSON: ImuTelemetry (rpy/gyro/accel/temperature)
+  touch              String? // JSON: HandTouch ({ left: TouchPad[], right: TouchPad[] })
+  battery            String? // JSON: BatteryState (soc/voltage/current/temperature/soh/cycles/cellVoltages)
+  motorTemperatures  String? // JSON: Record<string, number> (joint name → °C)
+  odometry           String? // JSON: OdometryState (position/rpy/velocity/yawSpeed)
+  hardwareConnected  Boolean  @default(false) // true when the frame carried real hardware data
+  simulated          String   @default("[]") // JSON: TelemetryFieldGroup[] — field groups fabricated by the sim generator
   timestamp          DateTime @default(now())
 
   robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)

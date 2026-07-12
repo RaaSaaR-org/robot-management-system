@@ -6,6 +6,7 @@
 
 import { memo, useMemo } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { motorTempColor, motorTempTextClass } from '../../utils/temperature';
 import type { JointState } from '../../types/robots.types';
 
 // ============================================================================
@@ -84,15 +85,30 @@ const JointItem = memo(function JointItem({ joint }: JointItemProps) {
   return (
     <div className="glass-subtle p-3 rounded-lg space-y-2">
       {/* Joint name */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-theme-secondary truncate">
           {formatJointName(joint.name)}
         </span>
-        {joint.velocity !== undefined && Math.abs(joint.velocity) > 0.01 && (
-          <span className="text-[10px] text-theme-tertiary">
-            {joint.velocity > 0 ? '+' : ''}{joint.velocity.toFixed(2)} deg/s
-          </span>
-        )}
+        <span className="flex items-center gap-2 shrink-0">
+          {joint.velocity !== undefined && Math.abs(joint.velocity) > 0.01 && (
+            <span className="text-[10px] text-theme-tertiary">
+              {joint.velocity > 0 ? '+' : ''}{joint.velocity.toFixed(2)} deg/s
+            </span>
+          )}
+          {joint.temperature !== undefined && (
+            <span
+              className={cn('flex items-center gap-1 text-[10px] font-mono', motorTempTextClass(joint.temperature))}
+              title={`Motor temperature: ${joint.temperature.toFixed(1)}°C`}
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: motorTempColor(joint.temperature) }}
+                aria-hidden="true"
+              />
+              {joint.temperature.toFixed(0)}°C
+            </span>
+          )}
+        </span>
       </div>
 
       {/* Position bar */}
