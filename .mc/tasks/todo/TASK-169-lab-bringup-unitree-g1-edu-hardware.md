@@ -18,7 +18,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-21
-updated: 2026-07-11
+updated: 2026-07-12
 status_note: 'BLOCKED ON HARDWARE ACCESS for all remaining gates. Software prerequisites are done (Stage 0-1 complete incl. live read-only telemetry; Stage-3 sim-eval wiring shipped via TASK-171/172; voice stack PC-validated, see TASK-181). Next robot session: work the "Robot-day checklist (2026-07-11)" section below.'
 ---
 
@@ -175,8 +175,22 @@ TASK-170, TASK-172 and TASK-181 too):
    walked sweep (the import-path twin from a standalone capture is already
    proven end-to-end).
 4. **Stage 2 teleop recording (this task):** record a small LeRobot dataset via
-   Unitree native teleop; import + curate it in the app (curation pipeline
-   hardened under TASK-168).
+   VR teleop (Quest 3 + xr_teleoperate) or Unitree native teleop; import +
+   curate it in the app (curation pipeline hardened under TASK-168).
+   *(2026-07-12 headset-/robot-free dry-run PASSED the full data path: MuJoCo
+   `--no-quest` teleop with real G1_29 arm IK, synthetic xr_teleoperate episodes
+   → `convert_unitree_json_to_lerobot --robot-type Unitree_G1_Dex3` (v3.0) →
+   `convert_v3_to_v2.py` (v2.1) → registered + rendering in the app (dataset
+   "VR Teleop Pipeline Test (synthetic)"). Follow
+   `C:\Unitree\_data\vr_teleop_pipeline_test\ROBOT_DAY_RUNBOOK.md` and
+   `docs/vr-teleop-data-collection.md`. Environment caveat: WSL is GONE from
+   dz-226 — use the NATIVE conda envs `tv` (teleop) and `unitree_lerobot`
+   (conversion), created 2026-07-12. Must-fix before the session: (a) generate
+   WebXR TLS certs (cert.pem/key.pem) — Quest cannot connect without them;
+   (b) local-dir dataset registration is script-only (`POST /api/datasets` has
+   no storagePath) — use the register script from the runbook; (c) the v2.1
+   conversion step is mandatory for local rendering; (d) real-robot teleop
+   additionally needs cyclonedds + unitree_sdk2py installed natively in `tv`.)*
 5. **Full circle (TASK-172 §A):** run the same policy in sim and on the real
    G1 in the scanned room, `POST /validations` → real `domainGapScore`, then
    the `REQUIRE_SIM_VALIDATION` deploy gate with a measured gap.
