@@ -415,7 +415,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
           set((state) => {
             if (state.selectedSession?.id === sessionId || state.activeSession?.id === sessionId) {
               state.recordingProgress = recordingProgress ?? state.recordingProgress;
-              if (qualityFeedback) state.qualityFeedback = qualityFeedback;
+              if (qualityFeedback) state.qualityFeedback = normalizeQualityFeedback(qualityFeedback);
               // Keep the visible frame count in sync with the live recorder
               if (
                 state.selectedSession?.id === sessionId &&
@@ -430,7 +430,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
         case 'teleop:quality':
           set((state) => {
             if (state.selectedSession?.id === sessionId || state.activeSession?.id === sessionId) {
-              if (qualityFeedback) state.qualityFeedback = qualityFeedback;
+              if (qualityFeedback) state.qualityFeedback = normalizeQualityFeedback(qualityFeedback);
             }
           });
           break;
@@ -586,6 +586,13 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+// The server emits currentSmoothnessScore on a 0–100 scale; the UI renders 0–1.
+function normalizeQualityFeedback(fb: QualityFeedback): QualityFeedback {
+  return fb.currentSmoothnessScore > 1
+    ? { ...fb, currentSmoothnessScore: fb.currentSmoothnessScore / 100 }
+    : fb;
+}
 
 function updateSessionInList(
   state: DataCollectionStore,

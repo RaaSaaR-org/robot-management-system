@@ -974,11 +974,10 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
           const rowEpisode = Number(row['episode_index'] ?? 0);
           if (rowEpisode !== episodeIndex) continue;
 
-          // Extract nested list values: {list: [{element: float}, ...]}
-          const obsRaw = row['observation.state'] as { list?: Array<{ element?: number }> } | undefined;
-          const actRaw = row['action'] as { list?: Array<{ element?: number }> } | undefined;
-          const observationState = obsRaw?.list?.map(item => item.element ?? 0) ?? [];
-          const action = actRaw?.list?.map(item => item.element ?? 0) ?? [];
+          // Columns may be pyarrow LIST ({list: [{element}]}) or parquetjs
+          // repeated fields (plain arrays) — toNumberArray handles both.
+          const observationState = toNumberArray(row['observation.state']);
+          const action = toNumberArray(row['action']);
 
           allFrames.push({
             frameIndex: Number(row['frame_index'] ?? allFrames.length),
