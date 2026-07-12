@@ -349,6 +349,77 @@ teleoperationRoutes.get('/sessions/:id/frames', async (req: Request, res: Respon
 });
 
 // ============================================================================
+// POST /api/teleoperation/sessions/:id/episodes/next - Advance to next episode
+// ============================================================================
+
+teleoperationRoutes.post('/sessions/:id/episodes/next', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const result = await teleoperationService.nextEpisode(id);
+
+    res.json({
+      ...result,
+      message: `Recording episode ${result.episodeIndex}`,
+    });
+  } catch (error) {
+    console.error('[TeleoperationRoutes] Error advancing episode:', error);
+    const message = error instanceof Error ? error.message : 'Failed to advance episode';
+    const status = message.includes('not found') ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+// ============================================================================
+// GET /api/teleoperation/sessions/:id/episodes - List episode summaries
+// ============================================================================
+
+teleoperationRoutes.get('/sessions/:id/episodes', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const episodes = await teleoperationService.listEpisodes(id);
+
+    res.json({ sessionId: id, episodes });
+  } catch (error) {
+    console.error('[TeleoperationRoutes] Error listing episodes:', error);
+    const message = error instanceof Error ? error.message : 'Failed to list episodes';
+    const status = message.includes('not found') ? 404 : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+// ============================================================================
+// DELETE /api/teleoperation/sessions/:id/episodes/:episodeIndex - Discard episode
+// ============================================================================
+
+teleoperationRoutes.delete(
+  '/sessions/:id/episodes/:episodeIndex',
+  async (req: Request, res: Response) => {
+    try {
+      const { id, episodeIndex } = req.params;
+      const parsedIndex = parseInt(episodeIndex, 10);
+
+      if (Number.isNaN(parsedIndex) || parsedIndex < 0) {
+        return res.status(400).json({ error: 'Invalid episode index' });
+      }
+
+      const result = await teleoperationService.discardEpisode(id, parsedIndex);
+
+      res.json({
+        ...result,
+        message: `Discarded episode ${parsedIndex} (${result.deletedFrames} frames)`,
+      });
+    } catch (error) {
+      console.error('[TeleoperationRoutes] Error discarding episode:', error);
+      const message = error instanceof Error ? error.message : 'Failed to discard episode';
+      const status = message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: message });
+    }
+  }
+);
+
+// ============================================================================
 // POST /api/teleoperation/sessions/:id/annotate - Add language instruction
 // ============================================================================
 

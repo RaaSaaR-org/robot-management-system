@@ -24,3 +24,12 @@ export type { PriorityDashboardProps } from './PriorityDashboard';
 
 export { UncertaintyHeatmap } from './UncertaintyHeatmap';
 export type { UncertaintyHeatmapProps } from './UncertaintyHeatmap';
+
+export { SessionStepIndicator, getActiveStep } from './SessionStepIndicator';
+export type { SessionStepIndicatorProps } from './SessionStepIndicator';
+
+export { EpisodePanel } from './EpisodePanel';
+export type { EpisodePanelProps } from './EpisodePanel';
+
+export { VRSessionPanel } from './VRSessionPanel';
+export type { VRSessionPanelProps } from './VRSessionPanel';

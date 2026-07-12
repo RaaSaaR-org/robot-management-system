@@ -16,6 +16,9 @@ import type {
   CollectionPriority,
   CollectionTarget,
   QualityFeedback,
+  EpisodeSummary,
+  TeleopRecordingProgress,
+  TeleopWsEvent,
   SessionFilters,
   SessionPagination,
   DataCollectionErrorCode,
@@ -37,6 +40,8 @@ const initialState = {
   selectedSession: null as TeleoperationSession | null,
   activeSession: null as TeleoperationSession | null,
   qualityFeedback: null as QualityFeedback | null,
+  episodes: [] as EpisodeSummary[],
+  recordingProgress: null as TeleopRecordingProgress | null,
   sessionFilters: {} as SessionFilters,
   sessionPagination: { ...DEFAULT_SESSION_PAGINATION } as SessionPagination,
   // Active Learning
@@ -254,6 +259,7 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
           }
           state.selectedSession = session;
           state.qualityFeedback = null;
+          state.recordingProgress = null;
           updateSessionInList(state, session);
         });
       } catch (error) {
@@ -349,6 +355,112 @@ export const useDataCollectionStore = createStore<DataCollectionStore>(
       set((state) => {
         state.qualityFeedback = feedback;
       });
+    },
+
+    // --------------------------------------------------------------------------
+    // Episodes
+    // --------------------------------------------------------------------------
+    fetchEpisodes: async (id: string) => {
+      try {
+        const episodes = await datacollectionApi.listEpisodes(id);
+        set((state) => {
+          state.episodes = episodes;
+        });
+      } catch {
+        // Episode summaries are auxiliary — keep the last known list on error
+      }
+    },
+
+    nextEpisode: async (id: string) => {
+      try {
+        const episodeIndex = await datacollectionApi.nextEpisode(id);
+        set((state) => {
+          state.recordingProgress = {
+            ...(state.recordingProgress ?? {}),
+            currentEpisode: episodeIndex,
+          };
+        });
+        await get().fetchEpisodes(id);
+        return episodeIndex;
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    discardEpisode: async (id: string, episodeIndex: number) => {
+      try {
+        await datacollectionApi.discardEpisode(id, episodeIndex);
+        await get().fetchEpisodes(id);
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        set((state) => {
+          state.error = errorMessage;
+        });
+        throw new Error(errorMessage);
+      }
+    },
+
+    // --------------------------------------------------------------------------
+    // WebSocket-driven updates (teleop:* events from /api/a2a/ws)
+    // --------------------------------------------------------------------------
+    handleTeleopEvent: (event: TeleopWsEvent) => {
+      const { sessionId, session, recordingProgress, qualityFeedback } = event.data;
+
+      switch (event.type) {
+        case 'teleop:session:progress':
+          set((state) => {
+            if (state.selectedSession?.id === sessionId || state.activeSession?.id === sessionId) {
+              state.recordingProgress = recordingProgress ?? state.recordingProgress;
+              if (qualityFeedback) state.qualityFeedback = qualityFeedback;
+              // Keep the visible frame count in sync with the live recorder
+              if (
+                state.selectedSession?.id === sessionId &&
+                typeof recordingProgress?.frameCount === 'number'
+              ) {
+                state.selectedSession.frameCount = recordingProgress.frameCount;
+              }
+            }
+          });
+          break;
+
+        case 'teleop:quality':
+          set((state) => {
+            if (state.selectedSession?.id === sessionId || state.activeSession?.id === sessionId) {
+              if (qualityFeedback) state.qualityFeedback = qualityFeedback;
+            }
+          });
+          break;
+
+        case 'teleop:session:completed':
+        case 'teleop:session:started':
+        case 'teleop:session:paused':
+        case 'teleop:session:resumed':
+        case 'teleop:session:failed':
+          if (session) {
+            set((state) => {
+              if (state.selectedSession?.id === sessionId) state.selectedSession = session;
+              if (state.activeSession?.id === sessionId) {
+                state.activeSession = session.status === 'completed' ? null : session;
+              }
+              if (event.type === 'teleop:session:completed') {
+                state.recordingProgress = null;
+              }
+              updateSessionInList(state, session);
+            });
+          }
+          break;
+
+        case 'teleop:session:exported':
+          // Export carries no session payload — refetch to pick up exportedDatasetId
+          if (get().selectedSession?.id === sessionId) {
+            void get().fetchSession(sessionId);
+          }
+          break;
+      }
     },
 
     // --------------------------------------------------------------------------
@@ -514,6 +626,8 @@ export const selectSessions = (state: DataCollectionStore) => state.sessions;
 export const selectSelectedSession = (state: DataCollectionStore) => state.selectedSession;
 export const selectActiveSession = (state: DataCollectionStore) => state.activeSession;
 export const selectQualityFeedback = (state: DataCollectionStore) => state.qualityFeedback;
+export const selectEpisodes = (state: DataCollectionStore) => state.episodes;
+export const selectRecordingProgress = (state: DataCollectionStore) => state.recordingProgress;
 export const selectSessionFilters = (state: DataCollectionStore) => state.sessionFilters;
 export const selectSessionPagination = (state: DataCollectionStore) => state.sessionPagination;
 export const selectUncertaintyAnalysis = (state: DataCollectionStore) => state.uncertaintyAnalysis;

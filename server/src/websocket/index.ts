@@ -16,6 +16,7 @@ import { incidentService } from '../services/IncidentService.js';
 import { trainingJobService } from '../services/TrainingJobService.js';
 import { datasetService } from '../services/DatasetService.js';
 import { deploymentService } from '../services/DeploymentService.js';
+import { teleoperationService } from '../services/TeleoperationService.js';
 import { sensorScanService } from '../services/SensorScanService.js';
 import { scanSessionService } from '../services/ScanSessionService.js';
 import { digitalTwinService } from '../services/DigitalTwinService.js';
@@ -29,6 +30,7 @@ import type { ProcessEvent } from '../types/process.types.js';
 import type { TaskEvent } from '../types/robotTask.types.js';
 import type { TrainingJobEvent } from '../types/training.types.js';
 import type { DatasetEvent } from '../types/dataset.types.js';
+import type { TeleoperationEvent } from '../types/teleoperation.types.js';
 
 // Configuration
 const MAX_CLIENTS = 1000;
@@ -339,6 +341,37 @@ export function setupWebSocket(server: Server): void {
       zone: 'zone' in event ? event.zone : undefined,
       zoneId: 'zoneId' in event ? event.zoneId : undefined,
       timestamp: event.timestamp,
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to teleoperation (data collection) events and broadcast to all
+  // clients. Event types are namespaced 'teleop:*' so feature clients can
+  // filter with a simple prefix check (mirrors 'training:job:*').
+  teleoperationService.on('teleoperation:event', (event: TeleoperationEvent) => {
+    const typeMap: Record<string, string> = {
+      'session:progress': 'teleop:session:progress',
+      'quality:warning': 'teleop:quality',
+      'session:completed': 'teleop:session:completed',
+      'session:exported': 'teleop:session:exported',
+      'session:started': 'teleop:session:started',
+      'session:paused': 'teleop:session:paused',
+      'session:resumed': 'teleop:session:resumed',
+      'session:failed': 'teleop:session:failed',
+    };
+    const mappedType = typeMap[event.type];
+    if (!mappedType) return; // created / frame-level events are not broadcast
+
+    const message = JSON.stringify({
+      type: mappedType,
+      data: {
+        sessionId: event.sessionId,
+        session: event.session,
+        recordingProgress: event.recordingProgress,
+        qualityFeedback: event.qualityFeedback,
+        error: event.error,
+      },
+      timestamp: Date.now(),
     });
     broadcast(clients, message);
   });

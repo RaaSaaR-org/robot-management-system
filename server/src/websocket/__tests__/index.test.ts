@@ -68,6 +68,8 @@ const services = vi.hoisted(() => {
     deployment: make(), // deploymentService.onDeploymentEvent
     // taskDistributor.on('robot:work_assigned' | 'robot:work_cancelled')
     distributorOn: {} as Record<string, (data: unknown) => void>,
+    // teleoperationService.on('teleoperation:event')
+    teleopOn: {} as Record<string, (event: unknown) => void>,
   };
 });
 
@@ -125,6 +127,11 @@ vi.mock('../../services/DatasetService.js', () => ({
 vi.mock('../../services/DeploymentService.js', () => ({
   deploymentService: {
     onDeploymentEvent: vi.fn((cb: (e: unknown) => void) => { services.deployment.cb = cb; return () => {}; }),
+  },
+}));
+vi.mock('../../services/TeleoperationService.js', () => ({
+  teleoperationService: {
+    on: vi.fn((event: string, cb: (e: unknown) => void) => { services.teleopOn[event] = cb; }),
   },
 }));
 
@@ -525,6 +532,69 @@ describe('setupWebSocket', () => {
       expect(msg.type).toBe('dataset:imported');
       expect(msg.datasetId).toBe('d1');
       expect(msg.importProgress).toBe(80);
+    });
+
+    it('broadcasts teleop progress events under teleop:session:progress', () => {
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+      services.teleopOn['teleoperation:event']?.({
+        type: 'session:progress',
+        sessionId: 's1',
+        recordingProgress: { frameCount: 42, currentEpisode: 1, elapsedS: 4.2, running: true },
+        timestamp: new Date(),
+      });
+      const msg = JSON.parse(client.sent[0]);
+      expect(msg.type).toBe('teleop:session:progress');
+      expect(msg.data.sessionId).toBe('s1');
+      expect(msg.data.recordingProgress).toMatchObject({ frameCount: 42, currentEpisode: 1 });
+    });
+
+    it('broadcasts teleop quality warnings under teleop:quality', () => {
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+      services.teleopOn['teleoperation:event']?.({
+        type: 'quality:warning',
+        sessionId: 's1',
+        qualityFeedback: { sessionId: 's1', currentSmoothnessScore: 40, isJerky: true },
+        timestamp: new Date(),
+      });
+      const msg = JSON.parse(client.sent[0]);
+      expect(msg.type).toBe('teleop:quality');
+      expect(msg.data.qualityFeedback.isJerky).toBe(true);
+    });
+
+    it('broadcasts teleop completion and export events', () => {
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+      services.teleopOn['teleoperation:event']?.({
+        type: 'session:completed',
+        sessionId: 's1',
+        session: { id: 's1', status: 'completed' },
+        timestamp: new Date(),
+      });
+      services.teleopOn['teleoperation:event']?.({
+        type: 'session:exported',
+        sessionId: 's1',
+        timestamp: new Date(),
+      });
+      expect(JSON.parse(client.sent[0]).type).toBe('teleop:session:completed');
+      expect(JSON.parse(client.sent[0]).data.session.status).toBe('completed');
+      expect(JSON.parse(client.sent[1]).type).toBe('teleop:session:exported');
+    });
+
+    it('does not broadcast teleop session:created events', () => {
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+      services.teleopOn['teleoperation:event']?.({
+        type: 'session:created',
+        sessionId: 's1',
+        timestamp: new Date(),
+      });
+      expect(client.send).not.toHaveBeenCalled();
     });
 
     it('broadcasts deployment events with all fields', () => {

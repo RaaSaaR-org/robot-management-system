@@ -15,6 +15,7 @@ import type {
   AnnotateSessionRequest,
   ExportSessionRequest,
   ExportResultResponse,
+  EpisodeSummary,
   LogPredictionRequest,
   GetUncertaintyParams,
   GetPrioritiesParams,
@@ -35,6 +36,10 @@ const ENDPOINTS = {
   sessionEnd: (id: string) => `/teleoperation/sessions/${id}/end`,
   sessionAnnotate: (id: string) => `/teleoperation/sessions/${id}/annotate`,
   sessionExport: (id: string) => `/teleoperation/sessions/${id}/export`,
+  sessionEpisodes: (id: string) => `/teleoperation/sessions/${id}/episodes`,
+  sessionEpisodesNext: (id: string) => `/teleoperation/sessions/${id}/episodes/next`,
+  sessionEpisode: (id: string, episodeIndex: number) =>
+    `/teleoperation/sessions/${id}/episodes/${episodeIndex}`,
   // Active Learning
   predictions: '/active-learning/predictions',
   uncertainty: '/active-learning/uncertainty',
@@ -165,6 +170,51 @@ export const datacollectionApi = {
       ENDPOINTS.sessionExport(id),
       data
     );
+    return response.data;
+  },
+
+  // --------------------------------------------------------------------------
+  // Episodes
+  // --------------------------------------------------------------------------
+
+  /**
+   * List episode summaries for a session
+   * @param id - Session ID
+   * @returns Episode summaries derived from recorded frames
+   */
+  async listEpisodes(id: string): Promise<EpisodeSummary[]> {
+    const response = await apiClient.get<{ sessionId: string; episodes: EpisodeSummary[] }>(
+      ENDPOINTS.sessionEpisodes(id)
+    );
+    return response.data.episodes;
+  },
+
+  /**
+   * Advance the recording to the next episode
+   * @param id - Session ID
+   * @returns The new episode index
+   */
+  async nextEpisode(id: string): Promise<number> {
+    const response = await apiClient.post<{ episodeIndex: number }>(
+      ENDPOINTS.sessionEpisodesNext(id)
+    );
+    return response.data.episodeIndex;
+  },
+
+  /**
+   * Discard an episode (delete its frames)
+   * @param id - Session ID
+   * @param episodeIndex - Episode to discard
+   */
+  async discardEpisode(
+    id: string,
+    episodeIndex: number
+  ): Promise<{ episodeIndex: number; deletedFrames: number; frameCount: number }> {
+    const response = await apiClient.delete<{
+      episodeIndex: number;
+      deletedFrames: number;
+      frameCount: number;
+    }>(ENDPOINTS.sessionEpisode(id, episodeIndex));
     return response.data;
   },
 

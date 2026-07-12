@@ -14,6 +14,8 @@ export {
   selectSelectedSession,
   selectActiveSession,
   selectQualityFeedback,
+  selectEpisodes,
+  selectRecordingProgress,
   selectSessionFilters,
   selectSessionPagination,
   selectUncertaintyAnalysis,
@@ -43,6 +45,10 @@ export type {
   UseCollectionPrioritiesReturn,
   UseUncertaintyAnalysisReturn,
 } from './hooks/datacollection';
+export { useTeleopEvents } from './hooks/useTeleopEvents';
+export type { UseTeleopEventsReturn } from './hooks/useTeleopEvents';
+export { useSimulatedVrInput } from './hooks/useSimulatedVrInput';
+export type { SimInputStatus } from './hooks/useSimulatedVrInput';
 
 // Components
 export {
@@ -53,6 +59,9 @@ export {
   QualityIndicator,
   PriorityDashboard,
   UncertaintyHeatmap,
+  SessionStepIndicator,
+  EpisodePanel,
+  VRSessionPanel,
 } from './components';
 export type {
   SessionStatusBadgeProps,
@@ -62,6 +71,9 @@ export type {
   QualityIndicatorProps,
   PriorityDashboardProps,
   UncertaintyHeatmapProps,
+  SessionStepIndicatorProps,
+  EpisodePanelProps,
+  VRSessionPanelProps,
 } from './components';
 
 // Pages

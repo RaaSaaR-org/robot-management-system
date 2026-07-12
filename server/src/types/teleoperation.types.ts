@@ -47,6 +47,8 @@ export interface TeleoperationSession {
   qualityScore: number | null;
   exportedDatasetId: string | null;
   errorMessage: string | null;
+  /** Target episode count (hardware sidecar or UI progress display) */
+  numEpisodes?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -58,6 +60,7 @@ export interface TeleoperationFrame {
   id: string;
   sessionId: string;
   frameIndex: number;
+  episodeIndex: number;
   timestamp: number;
   jointPositions: number[];
   jointVelocities: number[] | null;
@@ -65,6 +68,17 @@ export interface TeleoperationFrame {
   imagePath: string | null;
   depthImagePath: string | null;
   isIntervention: boolean;
+}
+
+/**
+ * Per-episode summary derived from a session's frames
+ */
+export interface EpisodeSummary {
+  episodeIndex: number;
+  frameCount: number;
+  startTime: number;
+  endTime: number;
+  durationS: number;
 }
 
 // ============================================================================
@@ -97,6 +111,8 @@ export interface RecordFrameDto {
   jointVelocities?: number[];
   action: number[];
   isIntervention?: boolean;
+  /** Episode within the session this frame belongs to (default 0) */
+  episodeIndex?: number;
 }
 
 /**
@@ -362,8 +378,29 @@ export type TeleoperationEventType =
   | 'session:completed'
   | 'session:failed'
   | 'session:exported'
+  | 'session:progress'
   | 'frame:recorded'
   | 'quality:warning';
+
+/**
+ * Live recording progress payload (sim frame recorder + sidecar poller)
+ */
+export interface RecordingProgress {
+  /** Frames captured so far (buffered + persisted) */
+  frameCount?: number;
+  /** Current episode index being recorded */
+  currentEpisode?: number;
+  /** Episodes finished (sidecar path) */
+  episodesDone?: number;
+  /** Elapsed recording time in seconds (pauses excluded) */
+  elapsedS?: number;
+  /** Actual measured sampling rate (frames/second) */
+  fpsActual?: number;
+  /** True while the recorder is actively sampling */
+  running?: boolean;
+  /** True when the robot agent is unreachable and frames are being missed */
+  degraded?: boolean;
+}
 
 /**
  * Teleoperation event
@@ -374,6 +411,7 @@ export interface TeleoperationEvent {
   session?: SessionResponse;
   frameIndex?: number;
   qualityFeedback?: QualityFeedback;
+  recordingProgress?: RecordingProgress;
   error?: string;
   timestamp: Date;
 }
