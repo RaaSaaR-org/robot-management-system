@@ -4,6 +4,13 @@
  */
 
 import type { A2AAgentCard } from '../types/index.js';
+import type {
+  ImuTelemetry,
+  HandTouch,
+  BatteryState,
+  OdometryState,
+  TelemetryFieldGroup,
+} from '../types/telemetry.types.js';
 import { agentCardResolver } from './A2AClient.js';
 import { conversationManager } from './ConversationManager.js';
 import { robotRepository } from '../repositories/index.js';
@@ -47,6 +54,7 @@ export interface JointState {
   position: number;
   velocity?: number;
   effort?: number;
+  temperature?: number;
 }
 
 /** Robot location in the facility */
@@ -98,6 +106,16 @@ export interface RobotTelemetry {
   jointStates?: JointState[];
   errors?: string[];
   warnings?: string[];
+  // TASK-184 real-data flow — rich hardware fields (shared contract, see
+  // types/telemetry.types.ts). Undefined when the agent has no fresh data.
+  imu?: ImuTelemetry | null;
+  touch?: HandTouch | null;
+  battery?: BatteryState | null;
+  motorTemperatures?: Record<string, number> | null; // joint name → °C
+  odometry?: OdometryState | null;
+  hardwareConnected?: boolean;
+  /** Field groups whose values are SIMULATED this frame. */
+  simulated?: TelemetryFieldGroup[];
   timestamp: string;
 }
 
@@ -637,6 +655,20 @@ export class RobotManager {
   // ============================================================================
   // EVENTS
   // ============================================================================
+
+  /**
+   * Emit a `robot_telemetry` event for a live telemetry frame (TASK-184).
+   * Used by TelemetryIngestionService so frames reach app clients through the
+   * exact same envelope/broadcast mechanism as `robot_status_changed`.
+   */
+  emitTelemetry(robotId: string, telemetry: RobotTelemetry): void {
+    this.emitEvent({
+      type: 'robot_telemetry',
+      robotId,
+      telemetry,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   /**
    * Subscribe to robot events

@@ -45,6 +45,9 @@ simulationRoutes.post('/jobs', async (req: Request, res: Response) => {
 
     res.status(201).json({
       job,
+      // Honesty label (TASK-184 Phase 3): 'real' = MuJoCo evaluator subprocess,
+      // 'mock' = generated metrics. NOT the sim engine (that is job.backend).
+      backend: simulationService.getExecutionBackend(),
       message: 'Simulation job submitted successfully',
     });
   } catch (error) {
@@ -74,7 +77,7 @@ simulationRoutes.get('/jobs', async (req: Request, res: Response) => {
 
     const jobs = simulationService.listJobs(filter);
 
-    res.json({ jobs });
+    res.json({ jobs, backend: simulationService.getExecutionBackend() });
   } catch (error) {
     console.error('[SimulationRoutes] Error listing jobs:', error);
     const message = error instanceof Error ? error.message : 'Failed to list simulation jobs';
@@ -94,7 +97,7 @@ simulationRoutes.get('/jobs/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Simulation job not found' });
     }
 
-    res.json({ job });
+    res.json({ job, backend: simulationService.getExecutionBackend() });
   } catch (error) {
     console.error('[SimulationRoutes] Error getting job:', error);
     const message = error instanceof Error ? error.message : 'Failed to get simulation job';
@@ -112,6 +115,7 @@ simulationRoutes.delete('/jobs/:id', async (req: Request, res: Response) => {
 
     res.json({
       job,
+      backend: simulationService.getExecutionBackend(),
       message: 'Simulation job cancelled',
     });
   } catch (error) {

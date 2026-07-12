@@ -7,6 +7,7 @@ import { Router, type Request, type Response } from 'express';
 import { robotManager } from '../services/RobotManager.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClient.js';
 import { sensorScanService } from '../services/SensorScanService.js';
+import { robotRepository } from '../repositories/index.js';
 import { prisma } from '../database/index.js';
 
 export const robotRoutes = Router();
@@ -159,6 +160,54 @@ robotRoutes.get('/:id/telemetry', async (req: Request, res: Response) => {
     }
 
     res.status(500).json({ error: 'Failed to get telemetry' });
+  }
+});
+
+/**
+ * GET /:id/telemetry/history — Persisted telemetry rows (TASK-184)
+ * Query params: from=<ISO>, to=<ISO>, limit=<n, max 2000, default 500>.
+ * Rows are ascending by timestamp with JSON columns parsed back to objects.
+ */
+robotRoutes.get('/:id/telemetry/history', async (req: Request, res: Response) => {
+  try {
+    const robot = await robotManager.getRobot(req.params.id);
+    if (!robot) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+
+    let from: Date | undefined;
+    let to: Date | undefined;
+    if (req.query.from !== undefined) {
+      from = new Date(String(req.query.from));
+      if (Number.isNaN(from.getTime())) {
+        return res.status(400).json({ error: 'from must be a valid ISO timestamp' });
+      }
+    }
+    if (req.query.to !== undefined) {
+      to = new Date(String(req.query.to));
+      if (Number.isNaN(to.getTime())) {
+        return res.status(400).json({ error: 'to must be a valid ISO timestamp' });
+      }
+    }
+
+    let limit = 500;
+    if (req.query.limit !== undefined) {
+      limit = Number(req.query.limit);
+      if (!Number.isInteger(limit) || limit < 1) {
+        return res.status(400).json({ error: 'limit must be a positive integer' });
+      }
+      limit = Math.min(limit, 2000);
+    }
+
+    const telemetry = await robotRepository.getTelemetryHistory(req.params.id, {
+      from,
+      to,
+      limit,
+    });
+    res.json({ telemetry });
+  } catch (error) {
+    console.error('Error getting telemetry history:', error);
+    res.status(500).json({ error: 'Failed to get telemetry history' });
   }
 });
 

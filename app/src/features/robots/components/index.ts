@@ -17,6 +17,8 @@ export * from './RobotOfflineBanner';
 export * from './RobotErrorBanner';
 export * from './BatteryGauge';
 export * from './SensorGrid';
+export * from './SimBadge';
+export * from './telemetry';
 export * from './EmergencyStopButton';
 export * from './AddRobotDialog';
 export * from './visualization';

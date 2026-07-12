@@ -41,16 +41,26 @@ const ENDPOINTS = {
 // API MODULE
 // ============================================================================
 
+/**
+ * The server reports the TASK-184 execution-honesty flag at the response-envelope
+ * level ({ job, backend } / { jobs, backend }) because SimJob.backend already
+ * means the physics engine. Stamp it onto each job as `backendMode` so
+ * getSimBackendMode() and the UI badges read one shape.
+ */
+function stampBackendMode(job: SimJob, mode?: 'mock' | 'real'): SimJob {
+  return mode ? { ...job, backendMode: mode } : job;
+}
+
 export const simulationApi = {
   /**
    * Submit a new simulation job
    */
   async submitJob(input: SubmitSimJobInput): Promise<SimJob> {
-    const response = await apiClient.post<{ job: SimJob; message: string }>(
+    const response = await apiClient.post<{ job: SimJob; message: string; backend?: 'mock' | 'real' }>(
       ENDPOINTS.jobs,
       input
     );
-    return response.data.job;
+    return stampBackendMode(response.data.job, response.data.backend);
   },
 
   /**
@@ -66,28 +76,31 @@ export const simulationApi = {
     if (params?.environment) queryParams.environment = params.environment;
     if (params?.status) queryParams.status = params.status;
 
-    const response = await apiClient.get<{ jobs: SimJob[] }>(ENDPOINTS.jobs, {
-      params: queryParams,
-    });
-    return response.data.jobs;
+    const response = await apiClient.get<{ jobs: SimJob[]; backend?: 'mock' | 'real' }>(
+      ENDPOINTS.jobs,
+      { params: queryParams }
+    );
+    return response.data.jobs.map((j) => stampBackendMode(j, response.data.backend));
   },
 
   /**
    * Get a specific simulation job by ID
    */
   async getJob(jobId: string): Promise<SimJob> {
-    const response = await apiClient.get<{ job: SimJob }>(ENDPOINTS.job(jobId));
-    return response.data.job;
+    const response = await apiClient.get<{ job: SimJob; backend?: 'mock' | 'real' }>(
+      ENDPOINTS.job(jobId)
+    );
+    return stampBackendMode(response.data.job, response.data.backend);
   },
 
   /**
    * Cancel a simulation job
    */
   async cancelJob(jobId: string): Promise<SimJob> {
-    const response = await apiClient.delete<{ job: SimJob; message: string }>(
+    const response = await apiClient.delete<{ job: SimJob; message: string; backend?: 'mock' | 'real' }>(
       ENDPOINTS.job(jobId)
     );
-    return response.data.job;
+    return stampBackendMode(response.data.job, response.data.backend);
   },
 
   /**

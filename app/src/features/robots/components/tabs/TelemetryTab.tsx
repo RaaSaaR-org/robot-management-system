@@ -8,7 +8,14 @@ import { Card, Spinner, ProgressBar, Button } from '@/shared/components/ui';
 import { formatTimeAgo, CPU_THRESHOLDS, MEMORY_THRESHOLDS, getResourceVariant } from '@/shared/utils';
 import { BatteryGauge } from '../BatteryGauge';
 import { SensorGrid } from '../SensorGrid';
-import { JointStateGrid } from '../visualization';
+import { SimBadge } from '../SimBadge';
+import {
+  ImuCard,
+  BatteryHealthCard,
+  MotorTemperatureStrip,
+  TelemetryHistorySparklines,
+} from '../telemetry';
+import { JointStateGrid, HandTouchPads } from '../visualization';
 import type { TelemetryTabProps } from './types';
 
 // ============================================================================
@@ -168,11 +175,42 @@ export function TelemetryTab({
         </Card.Body>
       </Card>
 
+      {/* Battery health + IMU (TASK-184 — rendered only when the frame has data) */}
+      {telemetry && (telemetry.battery || telemetry.imu?.rpy) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {telemetry.battery && (
+            <BatteryHealthCard telemetry={telemetry} charging={robot.status === 'charging'} />
+          )}
+          {telemetry.imu?.rpy && <ImuCard telemetry={telemetry} />}
+        </div>
+      )}
+
+      {/* Motor temperature heatmap strip */}
+      {telemetry && <MotorTemperatureStrip telemetry={telemetry} />}
+
+      {/* Battery SOC + max motor temp over the last hour */}
+      <TelemetryHistorySparklines robotId={robot.id} />
+
+      {/* Dex3-1 hand touch pads */}
+      {telemetry?.touch && (
+        <Card>
+          <Card.Header>
+            <h2 className="text-lg font-semibold text-theme-primary">Hand Touch</h2>
+          </Card.Header>
+          <Card.Body>
+            <HandTouchPads telemetry={telemetry} />
+          </Card.Body>
+        </Card>
+      )}
+
       {/* Sensor Diagnostics */}
       <Card>
         <Card.Header>
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-theme-primary">Sensor Diagnostics</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-theme-primary">Sensor Diagnostics</h2>
+              <SimBadge telemetry={telemetry} group="sensors" />
+            </div>
             {isOffline ? (
               <div className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-full bg-gray-500" />
@@ -213,7 +251,10 @@ export function TelemetryTab({
       <Card>
         <Card.Header>
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-theme-primary">Joint States</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-theme-primary">Joint States</h2>
+              <SimBadge telemetry={telemetry} group="joints" />
+            </div>
             {isTelemetryConnected && telemetry?.jointStates ? (
               <div className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />

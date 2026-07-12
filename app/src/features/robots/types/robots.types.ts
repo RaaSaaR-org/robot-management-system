@@ -61,6 +61,8 @@ export interface JointState {
   position: number;
   velocity?: number;
   effort?: number;
+  /** Motor temperature in °C (TASK-184, present when hardware reports it) */
+  temperature?: number;
 }
 
 // ============================================================================
@@ -179,6 +181,56 @@ export interface Robot {
 // TELEMETRY TYPES
 // ============================================================================
 
+/** IMU readings from the robot base (rpy/gyro in the robot's native units) */
+export interface ImuTelemetry {
+  rpy?: [number, number, number] | null;
+  gyro?: [number, number, number] | null;
+  accel?: [number, number, number] | null;
+  temperature?: number | null;
+}
+
+/** One pressure-sensor pad (e.g. a Dex3-1 fingertip region) */
+export interface TouchPad {
+  pressure: number[];
+  temperature?: number[];
+}
+
+/** Touch/pressure pads for both hands (pad order = sensor order) */
+export interface HandTouch {
+  left?: TouchPad[];
+  right?: TouchPad[];
+}
+
+/** Battery management system state (all but soc optional) */
+export interface BatteryState {
+  soc: number; // 0-100
+  voltage?: number | null;
+  current?: number | null;
+  temperature?: number | null;
+  soh?: number | null;
+  cycles?: number | null;
+  cellVoltages?: number[] | null;
+}
+
+/** Base odometry (world frame, meters / m/s / rad) */
+export interface OdometryState {
+  position: [number, number, number];
+  rpy?: [number, number, number] | null;
+  velocity?: [number, number, number] | null;
+  yawSpeed?: number | null;
+}
+
+/** Telemetry field groups that can be marked as simulated per frame */
+export type TelemetryFieldGroup =
+  | 'joints'
+  | 'imu'
+  | 'touch'
+  | 'battery'
+  | 'motorTemperatures'
+  | 'odometry'
+  | 'position'
+  | 'sensors';
+
 /** Real-time robot telemetry data */
 export interface RobotTelemetry {
   robotId: string;
@@ -195,9 +247,38 @@ export interface RobotTelemetry {
   speed?: number;
   sensors: Record<string, number | boolean | string>;
   jointStates?: JointState[];
+  /** Base IMU (TASK-184) */
+  imu?: ImuTelemetry | null;
+  /** Dex3-1 hand pressure pads (TASK-184) */
+  touch?: HandTouch | null;
+  /** BMS battery health (TASK-184) */
+  battery?: BatteryState | null;
+  /** Per-joint motor temperatures, joint name → °C (TASK-184) */
+  motorTemperatures?: Record<string, number> | null;
+  /** Base odometry (TASK-184) */
+  odometry?: OdometryState | null;
+  /** True when a hardware source is connected for this frame (TASK-184) */
+  hardwareConnected?: boolean;
+  /** Field groups whose values are SIMULATED this frame (TASK-184) */
+  simulated?: TelemetryFieldGroup[];
   errors?: string[];
   warnings?: string[];
   timestamp: string;
+}
+
+/** Query params for GET /robots/:id/telemetry/history */
+export interface TelemetryHistoryParams {
+  /** ISO timestamp lower bound */
+  from?: string;
+  /** ISO timestamp upper bound */
+  to?: string;
+  /** Max rows (server caps at 2000) */
+  limit?: number;
+}
+
+/** Response for the telemetry history endpoint (rows ascending by timestamp) */
+export interface TelemetryHistoryResponse {
+  telemetry: RobotTelemetry[];
 }
 
 // ============================================================================

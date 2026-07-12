@@ -7,6 +7,7 @@
 import { memo, type ReactNode } from 'react';
 import { cn } from '@/shared/utils';
 import { brandColors } from '@/brand';
+import { SimBadge } from './SimBadge';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 
 // ============================================================================
@@ -59,9 +60,11 @@ interface StatPillProps {
   value: string;
   color: string;
   icon: ReactNode;
+  /** Optional marker rendered after the label (e.g. a SIM badge) */
+  badge?: ReactNode;
 }
 
-function StatPill({ label, value, color, icon }: StatPillProps) {
+function StatPill({ label, value, color, icon, badge }: StatPillProps) {
   return (
     <div
       className={cn(
@@ -75,6 +78,7 @@ function StatPill({ label, value, color, icon }: StatPillProps) {
       <div>
         <p className="text-[10px] text-theme-tertiary uppercase tracking-wide leading-none mb-0.5">
           {label}
+          {badge}
         </p>
         <p className="font-mono text-sm font-semibold leading-none" style={{ color }}>
           {value}
@@ -110,6 +114,13 @@ const TempIcon = (
 const SpeedIcon = (
   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+  </svg>
+);
+
+const PositionIcon = (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
   </svg>
 );
 
@@ -161,8 +172,23 @@ export const RobotQuickStats = memo(function RobotQuickStats({
   const tempValue = offline ? na : (telemetry?.temperature !== undefined ? `${telemetry.temperature.toFixed(0)}°C` : na);
   const tempColor = offline ? 'rgba(107,114,128,0.7)' : getColor(telemetry?.temperature, 'temp');
 
-  const speedValue = telemetry?.speed !== undefined ? `${telemetry.speed.toFixed(1)} m/s` : na;
-  const speedColor = telemetry?.speed !== undefined ? brandColors().accent : 'rgba(107,114,128,0.7)';
+  // Odometry (TASK-184): prefer real base velocity for the speed pill and show
+  // the world position when the frame carries odometry.
+  const odometry = telemetry?.odometry ?? null;
+  const odomSpeed = odometry?.velocity
+    ? Math.sqrt(
+        odometry.velocity[0] ** 2 + odometry.velocity[1] ** 2 + odometry.velocity[2] ** 2
+      )
+    : null;
+  const speedSource = odomSpeed ?? telemetry?.speed;
+  const speedValue = speedSource !== undefined && speedSource !== null ? `${speedSource.toFixed(1)} m/s` : na;
+  const speedColor = speedSource !== undefined && speedSource !== null ? brandColors().accent : 'rgba(107,114,128,0.7)';
+
+  const positionValue = odometry
+    ? `${odometry.position[0].toFixed(1)}, ${odometry.position[1].toFixed(1)}, ${odometry.position[2].toFixed(1)} m`
+    : null;
+
+  const odomBadge = <SimBadge telemetry={telemetry} group="odometry" className="ml-1 align-middle" />;
 
   const taskColor = taskCount > 0 ? '#FF6700' : 'rgba(184,187,194,0.7)';
 
@@ -177,7 +203,22 @@ export const RobotQuickStats = memo(function RobotQuickStats({
       <StatPill label="CPU" value={cpuValue} color={cpuColor} icon={CpuIcon} />
       <StatPill label="Memory" value={memValue} color={memColor} icon={MemIcon} />
       <StatPill label="Temp" value={tempValue} color={tempColor} icon={TempIcon} />
-      <StatPill label="Speed" value={speedValue} color={speedColor} icon={SpeedIcon} />
+      <StatPill
+        label="Speed"
+        value={speedValue}
+        color={speedColor}
+        icon={SpeedIcon}
+        badge={odomSpeed !== null ? odomBadge : undefined}
+      />
+      {positionValue && (
+        <StatPill
+          label="Position"
+          value={positionValue}
+          color={brandColors().accent}
+          icon={PositionIcon}
+          badge={odomBadge}
+        />
+      )}
       <StatPill label="Tasks" value={String(taskCount)} color={taskColor} icon={TaskIcon} />
     </div>
   );

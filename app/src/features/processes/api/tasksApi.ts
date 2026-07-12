@@ -18,18 +18,6 @@ import type {
   ProcessActionResponse as TaskActionResponse,
   CreateProcessRequest as CreateTaskRequest,
 } from '../types';
-import {
-  getMockTaskList,
-  getMockTask,
-  createMockTask,
-  executeMockTaskAction,
-  mockDelay,
-} from '@/mocks/taskMockData';
-
-// Feature flag to control mock data usage
-// Set to false to use real API in development
-const USE_MOCK_DATA = false;
-
 // ============================================================================
 // ENDPOINTS
 // ============================================================================
@@ -84,12 +72,6 @@ export const tasksApi = {
    * @returns Paginated list of processes
    */
   async listTasks(params?: TaskListParams): Promise<TaskListResponse> {
-    // Use mock data if feature flag is enabled
-    if (USE_MOCK_DATA) {
-      await mockDelay();
-      return getMockTaskList(params);
-    }
-
     const response = await apiClient.get<{ data: Record<string, unknown>[]; pagination: unknown }>(ENDPOINTS.instances, {
       params: {
         status: Array.isArray(params?.status) ? params.status.join(',') : params?.status,
@@ -111,16 +93,6 @@ export const tasksApi = {
    * @returns Process details
    */
   async getTask(id: string): Promise<Task> {
-    // Use mock data if feature flag is enabled
-    if (USE_MOCK_DATA) {
-      await mockDelay();
-      const task = getMockTask(id);
-      if (!task) {
-        throw new Error(`Process ${id} not found`);
-      }
-      return task;
-    }
-
     const response = await apiClient.get<Record<string, unknown>>(ENDPOINTS.getInstance(id));
     return transformServerToFrontend(response.data);
   },
@@ -132,12 +104,6 @@ export const tasksApi = {
    * @returns Created process instance
    */
   async createTask(data: CreateTaskRequest): Promise<Task> {
-    // Use mock data if feature flag is enabled
-    if (USE_MOCK_DATA) {
-      await mockDelay(500);
-      return createMockTask(data);
-    }
-
     // First create the process definition
     // Server requires at least 1 step - create default if none provided
     const stepTemplates = data.steps && data.steps.length > 0
@@ -184,12 +150,6 @@ export const tasksApi = {
    * @returns Updated process
    */
   async executeAction(taskId: string, action: TaskActionRequest): Promise<TaskActionResponse> {
-    // Use mock data if feature flag is enabled
-    if (USE_MOCK_DATA) {
-      await mockDelay(300);
-      return executeMockTaskAction(taskId, action);
-    }
-
     // Map action to endpoint
     let endpoint: string;
     switch (action.action) {

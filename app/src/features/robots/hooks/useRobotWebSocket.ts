@@ -7,7 +7,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useRobotsStore } from '../store/robotsStore';
 import { useSafetyStore } from '@/features/safety';
-import type { Robot } from '../types/robots.types';
+import type { Robot, RobotTelemetry } from '../types/robots.types';
 import type { EStopEvent } from '@/features/safety/types/safety.types';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 
@@ -26,6 +26,10 @@ interface RobotWebSocketEvent {
     | 'safety:estop';
   robotId?: string;
   robot?: Robot;
+  /** Full telemetry frame on `robot_telemetry` events (TASK-184) */
+  telemetry?: RobotTelemetry;
+  /** Alternate envelope key some emitters use for the telemetry frame */
+  payload?: RobotTelemetry;
   event?: EStopEvent;
   timestamp?: string;
 }
@@ -102,13 +106,16 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
             }
             break;
 
-          case 'robot_telemetry':
-            // Telemetry updates come with robotId and telemetry data
-            // For now, we just log them
-            if (data.robotId) {
-              console.log('[RobotWebSocket] Telemetry update:', data.robotId);
+          case 'robot_telemetry': {
+            // Full telemetry frame broadcast by the server (TASK-184). Cache it
+            // in the store — useTelemetryStream picks it up as its live source.
+            const frame = data.telemetry ?? data.payload;
+            const robotId = data.robotId ?? frame?.robotId;
+            if (frame && robotId) {
+              updateTelemetry(robotId, frame);
             }
             break;
+          }
 
           case 'connected':
             console.log('[RobotWebSocket] Connected to server');

@@ -23,6 +23,7 @@ import type {
 import { DEFAULT_SAFETY_CONFIG } from './types.js';
 import type { SimulatedRobotState, RobotType } from '../robot/types.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
+import { hardwareClient } from '../hardware/HardwareClient.js';
 
 // ============================================================================
 // TYPES
@@ -491,13 +492,52 @@ export class SafetyMonitor {
   }
 
   /**
-   * Check force limits (simulated force in this implementation)
+   * Check force limits. TASK-184: when the hardware sidecar is connected and
+   * reports real joint efforts (tau_est), the safety input is derived from
+   * those instead of the random simulation; the simulation stays the fallback
+   * so the check never goes dark.
    */
   private checkForceLimits(): void {
-    // In simulation, we generate synthetic force readings
-    // In real hardware, this would read from sensors
-    const simulatedForce = this.generateSimulatedForce();
-    this.processForceReading(simulatedForce);
+    const realForce = this.readRealForce();
+    this.processForceReading(realForce ?? this.generateSimulatedForce());
+  }
+
+  /**
+   * Derive a force/torque safety reading from REAL joint efforts.
+   *
+   * The robot has no wrist F/T sensor, so this is a documented PROXY mapping:
+   * `magnitude` = the peak |tau_est| (N·m) across all reporting joints, read
+   * 1:1 as Newtons (i.e. an assumed 1 m lever arm). Peak — not a norm over all
+   * joints — because a biped's legs carry tens of N·m just standing; a sum/norm
+   * would sit near the 140 N limit permanently, while an external collision
+   * shows up as a spike on individual joints. fx/fy/fz carry the magnitude
+   * split evenly (direction is unknown without a real F/T sensor); torque
+   * components are left 0 rather than fabricated.
+   *
+   * Returns null (→ simulation fallback) when the sidecar is disconnected or
+   * no joint reported an effort — absence of data must not read as "no force".
+   */
+  private readRealForce(): ForceReading | null {
+    if (!hardwareClient.isConnected()) return null;
+    let peak: number | null = null;
+    for (const joint of hardwareClient.getJointStates()) {
+      if (joint.effort !== undefined && Number.isFinite(joint.effort)) {
+        const abs = Math.abs(joint.effort);
+        if (peak === null || abs > peak) peak = abs;
+      }
+    }
+    if (peak === null) return null;
+    const component = peak / Math.sqrt(3);
+    return {
+      fx: component,
+      fy: component,
+      fz: component,
+      tx: 0,
+      ty: 0,
+      tz: 0,
+      magnitude: peak,
+      timestamp: Date.now(),
+    };
   }
 
   /**
