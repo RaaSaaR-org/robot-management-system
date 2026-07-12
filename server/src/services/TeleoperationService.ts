@@ -700,7 +700,12 @@ export class TeleoperationService extends EventEmitter {
     }
 
     // Drop any not-yet-persisted frames of this episode from the live recorder
-    this.simRecorders.get(sessionId)?.discardBufferedEpisode(episodeIndex);
+    // and wait for an in-flight persist batch, so no frame of this episode can
+    // land in the DB after the delete below.
+    const liveRecorder = this.simRecorders.get(sessionId);
+    if (liveRecorder) {
+      await liveRecorder.discardEpisode(episodeIndex);
+    }
 
     const deleted = await this.prisma.teleoperationFrame.deleteMany({
       where: { sessionId, episodeIndex },

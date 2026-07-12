@@ -222,6 +222,56 @@ describe('SimFrameRecorder', () => {
     expect(persisted.every((f) => f.episodeIndex === 1)).toBe(true);
   });
 
+  it('discardEpisode waits for an in-flight persist batch before resolving', async () => {
+    let releasePersist: (() => void) | null = null;
+    const persisted: RecordedFrame[] = [];
+    const persistFrames = vi.fn().mockImplementation(async (frames: RecordedFrame[]) => {
+      // Block the first flush until the test releases it
+      if (!releasePersist) {
+        await new Promise<void>((resolve) => {
+          releasePersist = resolve;
+        });
+      }
+      persisted.push(...frames);
+    });
+    const { recorder } = makeRecorder({ persistFrames, flushIntervalMs: 300 });
+    recorder.start();
+
+    await advance(400); // first flush is now in flight (blocked in persistFrames)
+    expect(persistFrames).toHaveBeenCalledTimes(1);
+
+    // Discard episode 0 while its batch is mid-persist: must not resolve
+    // until the in-flight persist has settled (so the caller's DB delete
+    // runs strictly after the write).
+    let discardDone = false;
+    const discardPromise = recorder.discardEpisode(0).then(() => {
+      discardDone = true;
+    });
+    await advance(50);
+    expect(discardDone).toBe(false);
+
+    releasePersist!();
+    await discardPromise;
+    expect(discardDone).toBe(true);
+
+    await recorder.stop();
+  });
+
+  it('discardEpisode drops re-buffered frames of a failed flush', async () => {
+    const { recorder, persisted, persistFrames } = makeRecorder({ flushIntervalMs: 300 });
+    persistFrames.mockRejectedValueOnce(new Error('db down'));
+    recorder.start();
+
+    await advance(350); // first flush fails → batch re-buffered
+    recorder.nextEpisode();
+    await advance(100);
+
+    await recorder.discardEpisode(0);
+    await recorder.stop();
+
+    expect(persisted.every((f) => f.episodeIndex === 1)).toBe(true);
+  });
+
   // --------------------------------------------------------------------------
   // DEGRADED AGENT
   // --------------------------------------------------------------------------

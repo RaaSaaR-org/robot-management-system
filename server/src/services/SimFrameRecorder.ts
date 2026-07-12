@@ -196,6 +196,20 @@ export class SimFrameRecorder {
     this.buffer = this.buffer.filter((f) => f.episodeIndex !== episodeIndex);
   }
 
+  /**
+   * Discard an episode safely with respect to the flush pipeline: drops
+   * buffered frames, then waits for any in-flight persist batch so frames of
+   * the discarded episode cannot land in the DB *after* the caller's delete.
+   * (A failed flush re-buffers its batch, hence the second filter.)
+   */
+  async discardEpisode(episodeIndex: number): Promise<void> {
+    this.discardBufferedEpisode(episodeIndex);
+    if (this.flushPromise) {
+      await this.flushPromise.catch(() => {});
+      this.discardBufferedEpisode(episodeIndex);
+    }
+  }
+
   // --------------------------------------------------------------------------
   // STATE
   // --------------------------------------------------------------------------
@@ -258,6 +272,10 @@ export class SimFrameRecorder {
     this.fetchInFlight = true;
     try {
       const telemetry = await this.options.fetchTelemetry();
+      // The recorder may have been stopped/paused while the fetch was in
+      // flight — do not buffer a frame that would never be flushed (stop's
+      // final flush has already run by now).
+      if (this.paused || this.stopped) return;
       const joints = telemetry.jointStates ?? [];
       if (joints.length === 0) {
         this.registerFailure('Robot agent returned no joint states');
