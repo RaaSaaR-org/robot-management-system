@@ -147,7 +147,12 @@ export function GenerateSyntheticModal({
       label: MODE_UI[id].title,
       embodiment: fb.embodiment,
       maxEpisodes: id === 'forward-dynamics' ? config?.maxEpisodes ?? fb.maxEpisodes : fb.maxEpisodes,
-      available: id === 'forward-dynamics' ? config?.available ?? fb.available : fb.available,
+      // Only forward-dynamics has a legacy top-level `available`; neural-trajectory
+      // is known-available *only* when the server explicitly reports it in `modes`
+      // (handled by the fromServer early-return above). If we reach this fallback
+      // for neural (config not loaded, or a pre-TASK-182 server), treat it as
+      // unavailable so Generate stays disabled rather than POSTing to a 400.
+      available: id === 'forward-dynamics' ? config?.available ?? fb.available : false,
       requiresToken: fb.requiresToken,
       hasToken: config?.hasToken ?? false,
     };

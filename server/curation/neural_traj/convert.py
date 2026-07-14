@@ -83,6 +83,8 @@ def convert_dataset(out_root: Path) -> int:
                 raise ValueError(f"trajectory length mismatch in {jobdir}")
             if any(len(row) != STATE_DIM for row in states):
                 raise ValueError(f"state rows are not {STATE_DIM}-dim in {jobdir}")
+            if any(len(row) != ACTION_DIM for row in actions):
+                raise ValueError(f"action rows are not {ACTION_DIM}-dim in {jobdir}")
             if vid_w is None:
                 vid_w, vid_h = int(m["width"]), int(m["height"])
 

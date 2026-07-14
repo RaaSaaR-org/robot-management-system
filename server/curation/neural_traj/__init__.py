@@ -11,8 +11,10 @@ Backends:
          random-walk trajectories) so the whole RMS job pipeline
          (generate -> convert -> register -> dataset visible) is testable
          today without a GPU.
-  wsl    Invocation-shape stub for the real GR00T-dreams pipeline running in
-         WSL2 (raises until the TASK-182 stages 1-3 spike lands).
+  wsl    Real GR00T-dreams pipeline in WSL2 (TASK-182 stages 1-3): one episode
+         per invocation of ``76_dreams_one_episode.sh`` (Cosmos-Predict2-2B LoRA
+         + IDM). Needs the GPU stack + post-trained checkpoints, so it is
+         unavailable on the mock-only dev box.
 
 Run as a module with cwd = server/curation:
   python -m neural_traj --out OUT --backend mock generate --episodes 2

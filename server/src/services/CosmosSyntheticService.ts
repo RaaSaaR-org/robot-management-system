@@ -88,6 +88,12 @@ export interface SyntheticModeConfig {
   datasetSubdir: string;
   maxEpisodes: number;
   embodiment: string;
+  /**
+   * Canonical RobotType row name to find-or-create for this embodiment. Must
+   * match the app-standard name (see seed-robot-types.ts) so synthetic datasets
+   * group with real recordings under one RobotType instead of a divergent row.
+   */
+  robotTypeName: string;
   /** Whether an HF PRO token is required to run this mode. */
   requiresToken: boolean;
   /** Fallback `_generator` tag when the produced info.json lacks one. */
@@ -111,6 +117,7 @@ export const MODE_CONFIGS: Record<SyntheticGeneratorMode, SyntheticModeConfig> =
     datasetSubdir: DATASET_SUBDIR,
     maxEpisodes: MAX_EPISODES,
     embodiment: EMBODIMENT,
+    robotTypeName: EMBODIMENT,
     requiresToken: true,
     generatorTag: 'NVIDIA Cosmos 3 (forward dynamics) via Cosmos3-Action-Viewer',
     robotType: {
@@ -129,6 +136,9 @@ export const MODE_CONFIGS: Record<SyntheticGeneratorMode, SyntheticModeConfig> =
     datasetSubdir: NEURAL_DATASET_SUBDIR,
     maxEpisodes: NEURAL_MAX_EPISODES,
     embodiment: NEURAL_EMBODIMENT,
+    // Canonical G1 RobotType name — matches seed-robot-types.ts / HuggingFaceImportService
+    // / TeleoperationService, so synthetic G1 datasets group with real teleop recordings.
+    robotTypeName: 'Unitree G1 + Dex3',
     requiresToken: false,
     generatorTag: 'GR00T-Dreams/Cosmos-Predict2-2B neural-trajectory',
     robotType: {
@@ -682,7 +692,7 @@ class CosmosSyntheticService extends EventEmitter {
     info: { features?: Record<string, unknown> },
     cfg: SyntheticModeConfig,
   ) {
-    const existing = await robotTypeRepository.findByName(cfg.embodiment);
+    const existing = await robotTypeRepository.findByName(cfg.robotTypeName);
     if (existing) return existing;
     const features = info.features ?? {};
     const cameras = Object.keys(features)
@@ -693,7 +703,7 @@ class CosmosSyntheticService extends EventEmitter {
         fov: 60,
       }));
     return robotTypeRepository.create({
-      name: cfg.embodiment,
+      name: cfg.robotTypeName,
       manufacturer: cfg.robotType.manufacturer,
       model: cfg.robotType.model,
       actionDim: cfg.robotType.actionDim,

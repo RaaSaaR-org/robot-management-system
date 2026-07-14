@@ -7,8 +7,8 @@
  * @feature training
  *
  * Usage: npx tsx src/scripts/register-neural-synthetic.ts <path-to-dataset-root>
- *   where the dir holds a LeRobot v3.0 layout (meta/info.json, meta/provenance.json,
- *   plus per-episode viewer-compat files).
+ *   where the dir holds a LeRobot v3.0 layout (meta/info.json — which carries the
+ *   embedded _provenance written by convert.py — plus per-episode viewer-compat files).
  */
 import { PrismaClient } from '@prisma/client';
 import { existsSync, readFileSync } from 'fs';
@@ -54,14 +54,18 @@ async function main() {
   } catch {
     /* optional */
   }
-  let provenance: Record<string, unknown> | null = null;
+  // convert.py embeds provenance in info.json (info._provenance); a sidecar
+  // meta/provenance.json is only present for out-of-band dreams runs.
+  let provenance: Record<string, unknown> | null = info._provenance ?? null;
   try {
     provenance = JSON.parse(readFileSync(join(ROOT, 'meta/provenance.json'), 'utf8'));
   } catch {
-    /* optional */
+    /* optional sidecar — info._provenance already applied above */
   }
 
-  const typeName = info.robot_type ?? 'Unitree_G1_Dex3';
+  // Canonical G1 RobotType name (matches CosmosSyntheticService / seed-robot-types),
+  // so synthetic datasets group with real teleop recordings rather than a divergent row.
+  const typeName = 'Unitree G1 + Dex3';
   let rt = await prisma.robotType.findUnique({ where: { name: typeName } });
   if (!rt) {
     rt = await prisma.robotType.create({
