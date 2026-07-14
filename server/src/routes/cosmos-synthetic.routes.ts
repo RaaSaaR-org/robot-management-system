@@ -10,6 +10,7 @@ import { Router, type Request, type Response } from 'express';
 import {
   cosmosSyntheticService,
   ServiceError,
+  type SyntheticGeneratorMode,
 } from '../services/CosmosSyntheticService.js';
 
 export const cosmosSyntheticRoutes = Router();
@@ -35,15 +36,22 @@ cosmosSyntheticRoutes.get('/config', (_req: Request, res: Response) => {
 
 /**
  * POST /api/synthetic-cosmos/generate
- * Body: { episodes: number, prompt?: string }
+ * Body: { episodes: number, prompt?: string, mode?: 'forward-dynamics' | 'neural-trajectory' }
  * Starts a job; returns the initial job record (poll GET /jobs/:id).
+ * An unknown mode is rejected by the service with a 400 `invalid` error.
  */
 cosmosSyntheticRoutes.post('/generate', (req: Request, res: Response) => {
   try {
-    const { episodes, prompt } = req.body as { episodes?: number; prompt?: string };
+    const { episodes, prompt, mode } = req.body as {
+      episodes?: number;
+      prompt?: string;
+      mode?: string;
+    };
     const job = cosmosSyntheticService.generate({
       episodes: Number(episodes),
       prompt: typeof prompt === 'string' ? prompt : undefined,
+      // Validated inside the service (unknown value -> ServiceError 'invalid').
+      mode: typeof mode === 'string' ? (mode as SyntheticGeneratorMode) : undefined,
     });
     res.status(202).json({ job });
   } catch (error) {
