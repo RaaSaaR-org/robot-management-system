@@ -1,7 +1,7 @@
 ---
 id: TASK-089
 title: LeRobot v0.5.0 — Pi0-FAST Backend in vla-server
-status: todo
+status: done
 priority: medium
 tags:
 - vla
@@ -12,7 +12,8 @@ owner: ''
 depends_on:
 - TASK-088
 created: 2026-03-11
-updated: 2026-04-11
+updated: 2026-07-12
+status_note: 'RETIRED 2026-07-12 — obsolete, nothing salvaged. Motivation (autoregressive-vs-flow benchmark for SO-101, second base model for Mac MPS) is gone: GR00T-N1.7 is the proven production model on the G1 (TASK-180), pi0.5 already serves as a backend, and the Mac/cloud-burst feasibility table is invalidated by the dz-226 RTX 5090. Pi0-FAST (early 2025) is not requested by anything in the current stack. Revisit only on explicit customer demand for backend comparisons.'
 ---
 
 # TASK-089 — LeRobot v0.5.0: Pi0-FAST Backend

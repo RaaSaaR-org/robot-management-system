@@ -667,10 +667,27 @@ export const CosmosJobStatuses = [
 ] as const;
 export type CosmosJobStatus = (typeof CosmosJobStatuses)[number];
 
+/** Generator recipe: Cosmos 3 forward dynamics or GR00T-Dreams neural trajectories (TASK-182). */
+export type SyntheticGeneratorMode = 'forward-dynamics' | 'neural-trajectory';
+
+/** Per-mode generator capabilities reported by GET /synthetic-cosmos/config. */
+export interface SyntheticModeInfo {
+  id: SyntheticGeneratorMode;
+  label: string;
+  embodiment: string;
+  maxEpisodes: number;
+  /** Whether this mode's generator is installed on the server. */
+  available: boolean;
+  requiresToken: boolean;
+  hasToken: boolean;
+}
+
 /** A Cosmos 3 synthetic-episode generation job (in-memory on the server). */
 export interface CosmosSyntheticJob {
   id: string;
   status: CosmosJobStatus;
+  /** Generator mode (absent on jobs from pre-TASK-182 servers). */
+  mode?: SyntheticGeneratorMode;
   /** Short human-readable phase label. */
   phase: string;
   /** 0-100. */
@@ -700,9 +717,13 @@ export interface CosmosSyntheticConfig {
   python: string;
   scriptPath: string;
   outRoot: string;
+  /** Per-mode capabilities (TASK-182); absent on pre-TASK-182 servers. */
+  modes?: SyntheticModeInfo[];
 }
 
 export interface GenerateSyntheticInput {
   episodes: number;
   prompt?: string;
+  /** Defaults to 'forward-dynamics' on the server (backward compatible). */
+  mode?: SyntheticGeneratorMode;
 }

@@ -2,3 +2,5 @@
 __pycache__/
 cosmos3_out/
 wm_out/
+.venv*/
+neural_traj_out/

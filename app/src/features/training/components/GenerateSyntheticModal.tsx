@@ -1,8 +1,10 @@
 /**
  * @file GenerateSyntheticModal.tsx
- * @description Wizard to generate action-conditioned synthetic episodes with
- *   NVIDIA Cosmos 3 and register them as a training-ready dataset. Three views:
- *   configure → live progress → result (with video preview). (TASK-178)
+ * @description Wizard to generate synthetic episodes and register them as a
+ *   training-ready dataset. Two generator modes (TASK-178 / TASK-182):
+ *   forward dynamics (NVIDIA Cosmos 3, WidowX bridge) and neural trajectory
+ *   (GR00T-Dreams DreamGen recipe, Unitree G1 + Dex3). Three views:
+ *   configure → live progress → result (with video preview).
  * @feature training
  */
 
@@ -24,7 +26,7 @@ import { Modal, Button, Badge, ProgressBar } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
 import { useSyntheticGeneration } from '../hooks/useSyntheticGeneration';
-import type { CosmosJobStatus } from '../types';
+import type { CosmosJobStatus, SyntheticGeneratorMode, SyntheticModeInfo } from '../types';
 
 export interface GenerateSyntheticModalProps {
   isOpen: boolean;
@@ -45,22 +47,67 @@ const STATUS_VARIANT: Record<CosmosJobStatus, 'info' | 'warning' | 'success' | '
   cancelled: 'warning',
 };
 
-const PROMPT_PLACEHOLDER = 'A WidowX robot arm picks up an object from the tabletop.';
+const MODE_IDS: SyntheticGeneratorMode[] = ['forward-dynamics', 'neural-trajectory'];
 
-const PROMPT_PRESETS = [
-  'Pick up the object and place it into the bowl',
-  'Stack the blocks on top of each other',
-  'Push the object to the left',
-  'Open the drawer',
-  'Wipe the table with the cloth',
-];
-
-function estimate(episodes: number): string {
-  const lo = episodes * 10;
-  const hi = episodes * 35;
-  const fmt = (s: number) => (s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`);
-  return `~${fmt(lo)}–${fmt(hi)}`;
+/** Static per-mode UI copy + fallbacks for servers without `config.modes`. */
+interface ModeUi {
+  title: string;
+  subtitle: string;
+  /** Provenance banner: model + method line. */
+  model: string;
+  method: string;
+  placeholder: string;
+  presets: string[];
+  /** Fallbacks when the server config has no modes array yet. */
+  fallback: Pick<SyntheticModeInfo, 'embodiment' | 'maxEpisodes' | 'requiresToken' | 'available'>;
+  estimate: (episodes: number) => string;
+  estimateNote: string;
 }
+
+const fmtSeconds = (s: number) => (s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`);
+
+const MODE_UI: Record<SyntheticGeneratorMode, ModeUi> = {
+  'forward-dynamics': {
+    title: 'Forward dynamics',
+    subtitle: 'Cosmos 3 · WidowX bridge',
+    model: 'NVIDIA Cosmos 3',
+    method: 'Forward dynamics · action-conditioned video exported as a LeRobot dataset.',
+    placeholder: 'A WidowX robot arm picks up an object from the tabletop.',
+    presets: [
+      'Pick up the object and place it into the bowl',
+      'Stack the blocks on top of each other',
+      'Push the object to the left',
+      'Open the drawer',
+      'Wipe the table with the cloth',
+    ],
+    fallback: { embodiment: 'widowx_bridge', maxEpisodes: 8, requiresToken: true, available: true },
+    estimate: (n) => `~${fmtSeconds(n * 10)}–${fmtSeconds(n * 35)}`,
+    estimateNote: 'on ZeroGPU (daily PRO quota)',
+  },
+  'neural-trajectory': {
+    title: 'Neural trajectory',
+    subtitle: 'GR00T-Dreams · Unitree G1',
+    model: 'GR00T-Dreams (Cosmos-Predict2-2B)',
+    method:
+      'Neural trajectories · language-prompted world-model rollouts with IDM pseudo-labels (28-dim G1 + Dex3).',
+    placeholder: 'Pick up the red cube and place it in the box.',
+    presets: [
+      'Pick up the red cube and place it in the box',
+      'Grasp the bottle and hand it over to the other hand',
+      'Open the drawer and take out the tool',
+      'Stack the green block on the blue block',
+      'Press the button on the control panel',
+    ],
+    fallback: {
+      embodiment: 'Unitree_G1_Dex3',
+      maxEpisodes: 50,
+      requiresToken: false,
+      available: true,
+    },
+    estimate: (n) => `~${fmtSeconds(Math.max(2, n * 2))}–${fmtSeconds(n * 5)}`,
+    estimateNote: 'locally (mock backend, no GPU)',
+  },
+};
 
 export function GenerateSyntheticModal({
   isOpen,
@@ -81,6 +128,7 @@ export function GenerateSyntheticModal({
     refreshConfig,
   } = useSyntheticGeneration();
 
+  const [mode, setMode] = useState<SyntheticGeneratorMode>('forward-dynamics');
   const [episodes, setEpisodes] = useState(3);
   const [prompt, setPrompt] = useState('');
   // Track the last dataset we notified about by identity, so generating a second
@@ -88,7 +136,33 @@ export function GenerateSyntheticModal({
   // modal-open would suppress every success after the first).
   const lastNotifiedRef = useRef<string | null>(null);
 
-  const maxEpisodes = config?.maxEpisodes ?? 8;
+  // Per-mode server capabilities, with static fallbacks for older servers
+  // whose /config response has no `modes` array.
+  const modeInfo = (id: SyntheticGeneratorMode): SyntheticModeInfo => {
+    const fromServer = config?.modes?.find((m) => m.id === id);
+    if (fromServer) return fromServer;
+    const fb = MODE_UI[id].fallback;
+    return {
+      id,
+      label: MODE_UI[id].title,
+      embodiment: fb.embodiment,
+      maxEpisodes: id === 'forward-dynamics' ? config?.maxEpisodes ?? fb.maxEpisodes : fb.maxEpisodes,
+      // Only forward-dynamics has a legacy top-level `available`; neural-trajectory
+      // is known-available *only* when the server explicitly reports it in `modes`
+      // (handled by the fromServer early-return above). If we reach this fallback
+      // for neural (config not loaded, or a pre-TASK-182 server), treat it as
+      // unavailable so Generate stays disabled rather than POSTing to a 400.
+      available: id === 'forward-dynamics' ? config?.available ?? fb.available : false,
+      requiresToken: fb.requiresToken,
+      hasToken: config?.hasToken ?? false,
+    };
+  };
+  const selected = modeInfo(mode);
+  const selectedUi = MODE_UI[mode];
+  const maxEpisodes = selected.maxEpisodes;
+  // Banner reflects the running/finished job's mode once one exists.
+  const bannerMode: SyntheticGeneratorMode = job?.mode ?? mode;
+  const bannerUi = MODE_UI[bannerMode];
 
   // Refresh config each time the modal opens (token may have been added).
   useEffect(() => {
@@ -105,14 +179,14 @@ export function GenerateSyntheticModal({
 
   const clampEpisodes = (n: number) => Math.max(1, Math.min(maxEpisodes, n));
 
-  // Re-clamp the episode count once the server-reported cap arrives — the
-  // initial default (3) may exceed a smaller maxEpisodes.
+  // Re-clamp the episode count once the server-reported cap arrives (or the
+  // mode changes) — the current value may exceed the new maxEpisodes.
   useEffect(() => {
     setEpisodes((n) => Math.max(1, Math.min(maxEpisodes, n)));
   }, [maxEpisodes]);
 
   const handleStart = async () => {
-    await start({ episodes, prompt: prompt.trim() || undefined });
+    await start({ episodes, prompt: prompt.trim() || undefined, mode });
   };
 
   const handleClose = () => {
@@ -120,7 +194,7 @@ export function GenerateSyntheticModal({
     onClose();
   };
 
-  const blocked = !config?.available || !config?.hasToken;
+  const blocked = !selected.available || (selected.requiresToken && !selected.hasToken);
   const showResult = job && !isGenerating;
 
   return (
@@ -140,28 +214,29 @@ export function GenerateSyntheticModal({
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <p className="truncate text-sm font-medium text-theme-primary">
-                NVIDIA Cosmos 3
+                {bannerUi.model}
               </p>
               <Badge variant="purple" className="shrink-0">
-                {config?.embodiment ?? 'widowx_bridge'}
+                {job?.embodiment ?? modeInfo(bannerMode).embodiment}
               </Badge>
             </div>
-            <p className="mt-0.5 text-xs text-theme-tertiary">
-              Forward dynamics · action-conditioned video exported as a LeRobot
-              dataset.
-            </p>
+            <p className="mt-0.5 text-xs text-theme-tertiary">{bannerUi.method}</p>
           </div>
         </div>
 
         {/* ---------------- CONFIGURE ---------------- */}
         {!job && (
           <ConfigureView
+            mode={mode}
+            setMode={setMode}
+            modeInfo={modeInfo}
             episodes={episodes}
             setEpisodes={(n) => setEpisodes(clampEpisodes(n))}
             maxEpisodes={maxEpisodes}
             prompt={prompt}
             setPrompt={setPrompt}
-            config={config}
+            selected={selected}
+            selectedUi={selectedUi}
             configLoading={configLoading}
             error={error}
           />
@@ -176,6 +251,7 @@ export function GenerateSyntheticModal({
             datasetId={job.datasetId}
             datasetName={job.datasetName}
             episodes={job.episodes}
+            camera={bannerMode === 'neural-trajectory' ? 'cam_right_high' : 'image_0'}
           />
         )}
         {showResult && (job.status === 'failed' || job.status === 'cancelled') && (
@@ -195,6 +271,7 @@ export function GenerateSyntheticModal({
                 loadingText="Starting…"
                 disabled={blocked}
                 leftIcon={<Sparkles className="h-4 w-4" />}
+                data-testid="start-generation"
               >
                 Generate {episodes} episode{episodes > 1 ? 's' : ''}
               </Button>
@@ -248,28 +325,90 @@ export function GenerateSyntheticModal({
 // ============================================================================
 
 interface ConfigureViewProps {
+  mode: SyntheticGeneratorMode;
+  setMode: (m: SyntheticGeneratorMode) => void;
+  modeInfo: (id: SyntheticGeneratorMode) => SyntheticModeInfo;
   episodes: number;
   setEpisodes: (n: number) => void;
   maxEpisodes: number;
   prompt: string;
   setPrompt: (s: string) => void;
-  config: ReturnType<typeof useSyntheticGeneration>['config'];
+  selected: SyntheticModeInfo;
+  selectedUi: ModeUi;
   configLoading: boolean;
   error: string | null;
 }
 
 function ConfigureView({
+  mode,
+  setMode,
+  modeInfo,
   episodes,
   setEpisodes,
   maxEpisodes,
   prompt,
   setPrompt,
-  config,
+  selected,
+  selectedUi,
   configLoading,
   error,
 }: ConfigureViewProps) {
   return (
     <div className="space-y-5">
+      {/* Generator mode */}
+      <div>
+        <label className="mb-2 block text-sm font-medium text-theme-primary">
+          Generator mode
+        </label>
+        <div role="radiogroup" aria-label="Generator mode" className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {MODE_IDS.map((id) => {
+            const ui = MODE_UI[id];
+            const info = modeInfo(id);
+            const active = mode === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-testid={`generator-mode-${id}`}
+                onClick={() => setMode(id)}
+                className={cn(
+                  'rounded-lg border p-3 text-left transition-colors',
+                  active
+                    ? 'border-cobalt-500/60 bg-cobalt-500/10'
+                    : 'border-theme-secondary/30 hover:border-cobalt-500/40',
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={cn(
+                      'text-sm font-medium',
+                      active ? 'text-theme-primary' : 'text-theme-secondary',
+                    )}
+                  >
+                    {ui.title}
+                  </span>
+                  <span
+                    className={cn(
+                      'h-3.5 w-3.5 shrink-0 rounded-full border',
+                      active
+                        ? 'border-cobalt-400 bg-cobalt-500'
+                        : 'border-theme-secondary/40',
+                    )}
+                  />
+                </div>
+                <p className="mt-0.5 text-xs text-theme-tertiary">{ui.subtitle}</p>
+                <p className="mt-1 truncate text-[11px] text-theme-tertiary">
+                  {info.embodiment} · max {info.maxEpisodes} ep
+                  {info.requiresToken ? ' · HF token' : ''}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Episode count */}
       <div>
         <label className="mb-2 block text-sm font-medium text-theme-primary">
@@ -308,7 +447,7 @@ function ConfigureView({
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-xs text-theme-tertiary">
           <Cpu className="h-3.5 w-3.5" />
-          Est. {estimate(episodes)} on ZeroGPU · max {maxEpisodes}/run (daily PRO quota)
+          Est. {selectedUi.estimate(episodes)} {selectedUi.estimateNote} · max {maxEpisodes}/run
         </div>
       </div>
 
@@ -320,13 +459,13 @@ function ConfigureView({
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder={PROMPT_PLACEHOLDER}
+          placeholder={selectedUi.placeholder}
           rows={2}
           maxLength={2000}
           className="w-full resize-none rounded-lg border border-theme-secondary/30 bg-theme-primary px-3 py-2 text-sm text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
         />
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {PROMPT_PRESETS.map((preset) => {
+          {selectedUi.presets.map((preset) => {
             const active = prompt.trim() === preset;
             return (
               <button
@@ -351,14 +490,19 @@ function ConfigureView({
         </p>
       </div>
 
-      {/* Config warnings */}
-      {!configLoading && config && !config.available && (
+      {/* Config warnings (for the selected mode) */}
+      {!configLoading && !selected.available && (
         <Notice tone="error" icon={<AlertTriangle className="h-4 w-4" />}>
-          Generator script not found on the server. Check
-          <code className="mx-1 rounded bg-black/30 px-1">server/curation/cosmos3_synth.py</code>.
+          Generator not found on the server. Check
+          <code className="mx-1 rounded bg-black/30 px-1">
+            {mode === 'forward-dynamics'
+              ? 'server/curation/cosmos3_synth.py'
+              : 'server/curation/neural_traj/'}
+          </code>
+          .
         </Notice>
       )}
-      {!configLoading && config && config.available && !config.hasToken && (
+      {!configLoading && selected.available && selected.requiresToken && !selected.hasToken && (
         <Notice tone="warning" icon={<KeyRound className="h-4 w-4" />}>
           No Hugging Face PRO token configured. Set
           <code className="mx-1 rounded bg-black/30 px-1">HF_TOKEN</code> on the
@@ -500,12 +644,15 @@ function ResultView({
   datasetId,
   datasetName,
   episodes,
+  camera,
 }: {
   datasetId: string;
   datasetName?: string;
   episodes: number;
+  /** Video key suffix of the dataset's camera (mode-dependent). */
+  camera: string;
 }) {
-  const videoUrl = trainingApi.getEpisodeVideoUrl(datasetId, 0, 'image_0');
+  const videoUrl = trainingApi.getEpisodeVideoUrl(datasetId, 0, camera);
   const [videoFailed, setVideoFailed] = useState(false);
   return (
     <div className="space-y-4">

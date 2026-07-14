@@ -2,7 +2,7 @@
 id: TASK-090
 title: Pi0 LoRA trainer in training-worker (LeRobot v0.5.0 PEFT)
 slug: pi0-lora-trainer-training-worker
-status: todo
+status: done
 priority: medium
 tags:
 - vla
@@ -14,7 +14,8 @@ owner: ''
 depends_on:
 - TASK-088
 created: 2026-03-11
-updated: 2026-04-11
+updated: 2026-07-12
+status_note: 'RETIRED 2026-07-12 — orchestration concerns all solved since (TASK-179: 0.6.0 everywhere, native GR00T-N1.7 lerobot trainer validated end-to-end on dz-226, wizard supports multiple trainers). The surviving idea — a pi-family LoRA base-model option in training-worker via lerobot PEFT flags — would today target pi0.5 on 0.6.0, is low priority (GR00T-N1.7 covers the capable-model need; vla-training on dz-226 already does pi0.5+LoRA standalone), and deserves a fresh small task if ever wanted. Do not implement as written (targets pi0 on 0.5.0, Mac-era hardware assumptions).'
 ---
 
 # TASK-090 — Pi0 LoRA trainer in training-worker

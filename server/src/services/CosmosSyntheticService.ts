@@ -1,16 +1,24 @@
 /**
  * @file CosmosSyntheticService.ts
- * @description Generate action-conditioned synthetic episodes via NVIDIA Cosmos 3
- *   (forward dynamics) and register the result as a real, training-ready Dataset.
+ * @description Generate synthetic episodes and register the result as a real,
+ *   training-ready Dataset. Two generator modes:
  *
- *   Runs the TASK-175 pipeline `server/curation/cosmos3_synth.py`:
- *     1. `generate` — roll out N action-conditioned clips on the HF ZeroGPU Space.
+ *   - `forward-dynamics` (TASK-175/178): action-conditioned rollouts via NVIDIA
+ *     Cosmos 3 on the HF ZeroGPU Space (`server/curation/cosmos3_synth.py`,
+ *     WidowX bridge embodiment, HF PRO token required).
+ *   - `neural-trajectory` (TASK-182): DreamGen-style language-prompted neural
+ *     trajectories for the Unitree G1 + Dex3 embodiment
+ *     (`python -m neural_traj` in `server/curation`, mock or wsl backend,
+ *     no token required).
+ *
+ *   Both modes share the same pipeline:
+ *     1. `generate` — produce N episode clips + trajectories.
  *     2. `convert`  — export a LeRobot v2.1 on-disk dataset.
  *     3. register   — create a `ready` Dataset row pointing at the local dataset
  *                     dir, tagged synthetic via `infoJson._synthetic`.
  *
- *   Jobs are tracked in-memory (one at a time — ZeroGPU quota is the bottleneck)
- *   with streamed progress parsed from the script's stdout. (TASK-178)
+ *   Jobs are tracked in-memory (one at a time across all modes) with streamed
+ *   progress parsed from the generator's stdout.
  * @feature training
  */
 
@@ -39,6 +47,12 @@ const MAX_PROMPT_LEN = 2000; // bound the user string that flows into subprocess
 const LOG_TAIL = 80;
 const EMBODIMENT = 'widowx_bridge';
 
+// Neural-trajectory mode (TASK-182): `python -m neural_traj` run in CURATION_DIR.
+const NEURAL_ENTRY_CHECK = path.join(CURATION_DIR, 'neural_traj', '__main__.py');
+const NEURAL_DATASET_SUBDIR = 'lerobot_neural_g1'; // matches neural_traj DATASET_SUBDIR
+const NEURAL_MAX_EPISODES = 50; // mock backend is ~seconds/episode, no GPU quota
+const NEURAL_EMBODIMENT = 'Unitree_G1_Dex3';
+
 const ACTIVE_STATUSES = ['queued', 'generating', 'converting', 'registering'] as const;
 // Registration writes the Dataset row from local disk and is fast; once it
 // begins, cancelling would orphan a half-written row, so it is non-cancellable.
@@ -52,6 +66,133 @@ const EXEC_TIMEOUT_MS = Number(process.env.COSMOS_SYNTH_TIMEOUT_MS) || 30 * 60 *
 const KILL_GRACE_MS = 5000;
 /** Combined stdout+stderr ring buffer used for failure tails. */
 const TAIL_BUFFER = 60;
+
+// ============================================================================
+// GENERATOR MODES
+// ============================================================================
+
+export type SyntheticGeneratorMode = 'forward-dynamics' | 'neural-trajectory';
+
+export interface SyntheticModeConfig {
+  id: SyntheticGeneratorMode;
+  label: string;
+  /**
+   * Python argv prefix: a script path for forward-dynamics, `['-m',
+   * 'neural_traj']` for neural-trajectory (the package lives in CURATION_DIR,
+   * which is the spawn cwd for both modes).
+   */
+  entry: string[];
+  /** Path whose existence marks this generator as installed/available. */
+  checkPath: string;
+  /** Dataset dir name the generator's `convert` writes under the job dir. */
+  datasetSubdir: string;
+  maxEpisodes: number;
+  embodiment: string;
+  /**
+   * Canonical RobotType row name to find-or-create for this embodiment. Must
+   * match the app-standard name (see seed-robot-types.ts) so synthetic datasets
+   * group with real recordings under one RobotType instead of a divergent row.
+   */
+  robotTypeName: string;
+  /** Whether an HF PRO token is required to run this mode. */
+  requiresToken: boolean;
+  /** Fallback `_generator` tag when the produced info.json lacks one. */
+  generatorTag: string;
+  /** Seed values for the find-or-create RobotType row of this embodiment. */
+  robotType: {
+    manufacturer: string;
+    model: string;
+    actionDim: number;
+    proprioceptionDim: number;
+    defaultCamera: string;
+  };
+}
+
+export const MODE_CONFIGS: Record<SyntheticGeneratorMode, SyntheticModeConfig> = {
+  'forward-dynamics': {
+    id: 'forward-dynamics',
+    label: 'Forward dynamics (Cosmos 3, WidowX bridge)',
+    entry: [SCRIPT_PATH],
+    checkPath: SCRIPT_PATH,
+    datasetSubdir: DATASET_SUBDIR,
+    maxEpisodes: MAX_EPISODES,
+    embodiment: EMBODIMENT,
+    robotTypeName: EMBODIMENT,
+    requiresToken: true,
+    generatorTag: 'NVIDIA Cosmos 3 (forward dynamics) via Cosmos3-Action-Viewer',
+    robotType: {
+      manufacturer: 'Trossen Robotics',
+      model: 'WidowX 250 (bridge)',
+      actionDim: 7,
+      proprioceptionDim: 7,
+      defaultCamera: 'image_0',
+    },
+  },
+  'neural-trajectory': {
+    id: 'neural-trajectory',
+    label: 'Neural trajectory (GR00T-Dreams, Unitree G1)',
+    entry: ['-m', 'neural_traj'],
+    checkPath: NEURAL_ENTRY_CHECK,
+    datasetSubdir: NEURAL_DATASET_SUBDIR,
+    maxEpisodes: NEURAL_MAX_EPISODES,
+    embodiment: NEURAL_EMBODIMENT,
+    // Canonical G1 RobotType name — matches seed-robot-types.ts / HuggingFaceImportService
+    // / TeleoperationService, so synthetic G1 datasets group with real teleop recordings.
+    robotTypeName: 'Unitree G1 + Dex3',
+    requiresToken: false,
+    generatorTag: 'GR00T-Dreams/Cosmos-Predict2-2B neural-trajectory',
+    robotType: {
+      manufacturer: 'Unitree',
+      model: 'G1 EDU (29 DoF) + Dex3-1 hands',
+      actionDim: 28, // 14 arm + 14 hand joints
+      proprioceptionDim: 28,
+      defaultCamera: 'cam_right_high',
+    },
+  },
+};
+
+/** Backend for neural-trajectory generation (`mock` today, `wsl` post-spike). */
+export function neuralTrajBackend(): string {
+  return process.env.NEURAL_TRAJ_BACKEND || 'mock';
+}
+
+/**
+ * Build the full python argv (everything after the python binary) for the
+ * `generate` phase. Pure so mode/arg wiring is unit-testable without spawning.
+ */
+export function buildGenerateArgs(
+  mode: SyntheticGeneratorMode,
+  opts: { jobDir: string; episodes: number; prompt?: string; backend?: string },
+): string[] {
+  const cfg = MODE_CONFIGS[mode];
+  const args = [...cfg.entry, '--out', opts.jobDir];
+  if (mode === 'neural-trajectory') {
+    args.push('--backend', opts.backend ?? neuralTrajBackend());
+  }
+  args.push('generate', '--episodes', String(opts.episodes));
+  if (opts.prompt) args.push('--prompt', opts.prompt);
+  return args;
+}
+
+/** Build the full python argv for the `convert` phase (see buildGenerateArgs). */
+export function buildConvertArgs(
+  mode: SyntheticGeneratorMode,
+  opts: { jobDir: string; backend?: string },
+): string[] {
+  const cfg = MODE_CONFIGS[mode];
+  const args = [...cfg.entry, '--out', opts.jobDir];
+  if (mode === 'neural-trajectory') {
+    args.push('--backend', opts.backend ?? neuralTrajBackend());
+  }
+  args.push('convert');
+  return args;
+}
+
+/**
+ * Episode-start stdout lines of both generators (drive the progress bar):
+ * `-- task175-bridge-00: ...` (forward-dynamics) / `-- neural-traj-00: ...`.
+ */
+const EPISODE_START_RE = /^--\s+(?:task175-bridge|neural-traj)-\d+/;
 
 // ============================================================================
 // TYPES
@@ -69,6 +210,8 @@ export type CosmosJobStatus =
 export interface CosmosSyntheticJob {
   id: string;
   status: CosmosJobStatus;
+  /** Generator mode this job runs. */
+  mode: SyntheticGeneratorMode;
   /** Short human-readable phase label for the UI. */
   phase: string;
   /** 0-100. */
@@ -92,8 +235,20 @@ export interface CosmosSyntheticJob {
   completedAt?: string;
 }
 
+export interface SyntheticModeInfo {
+  id: SyntheticGeneratorMode;
+  label: string;
+  embodiment: string;
+  maxEpisodes: number;
+  /** Whether this mode's generator is installed on the server. */
+  available: boolean;
+  requiresToken: boolean;
+  /** Whether an HF PRO token is configured server-side (mode-relevant only if requiresToken). */
+  hasToken: boolean;
+}
+
 export interface CosmosSyntheticConfig {
-  /** Whether the generator can run (script present). */
+  /** Whether the (default, forward-dynamics) generator can run (script present). */
   available: boolean;
   /** Whether an HF PRO token is configured server-side. */
   hasToken: boolean;
@@ -102,6 +257,8 @@ export interface CosmosSyntheticConfig {
   python: string;
   scriptPath: string;
   outRoot: string;
+  /** Per-mode capabilities (TASK-182). Top-level fields above stay untouched for back-compat. */
+  modes: SyntheticModeInfo[];
 }
 
 // ============================================================================
@@ -128,7 +285,11 @@ class CosmosSyntheticService extends EventEmitter {
   private get pythonBin(): string {
     if (process.env.COSMOS_SYNTH_PYTHON) return process.env.COSMOS_SYNTH_PYTHON;
     const venv = path.join(CURATION_DIR, '.venv', 'bin', 'python');
-    return existsSync(venv) ? venv : 'python3';
+    if (existsSync(venv)) return venv;
+    // Windows dev box: uv venv created for the neural-trajectory mock backend.
+    const venvWin = path.join(CURATION_DIR, '.venv-win', 'Scripts', 'python.exe');
+    if (existsSync(venvWin)) return venvWin;
+    return 'python3';
   }
 
   private get outRoot(): string {
@@ -162,14 +323,24 @@ class CosmosSyntheticService extends EventEmitter {
   }
 
   getConfig(): CosmosSyntheticConfig {
+    const hasToken = !!this.resolveToken();
     return {
       available: existsSync(SCRIPT_PATH),
-      hasToken: !!this.resolveToken(),
+      hasToken,
       embodiment: EMBODIMENT,
       maxEpisodes: MAX_EPISODES,
       python: this.pythonBin,
       scriptPath: SCRIPT_PATH,
       outRoot: this.outRoot,
+      modes: Object.values(MODE_CONFIGS).map((cfg) => ({
+        id: cfg.id,
+        label: cfg.label,
+        embodiment: cfg.embodiment,
+        maxEpisodes: cfg.maxEpisodes,
+        available: existsSync(cfg.checkPath),
+        requiresToken: cfg.requiresToken,
+        hasToken,
+      })),
     };
   }
 
@@ -198,22 +369,34 @@ class CosmosSyntheticService extends EventEmitter {
    * in-memory job record (poll `getJob`). Throws on bad input / missing token /
    * a job already running (callers map these to 4xx).
    */
-  generate(input: { episodes: number; prompt?: string }): CosmosSyntheticJob {
-    if (!existsSync(SCRIPT_PATH)) {
-      throw new ServiceError('unavailable', 'Cosmos generator script not found');
-    }
-    const episodes = Math.floor(input.episodes);
-    if (!Number.isFinite(episodes) || episodes < 1 || episodes > MAX_EPISODES) {
+  generate(input: {
+    episodes: number;
+    prompt?: string;
+    mode?: SyntheticGeneratorMode;
+  }): CosmosSyntheticJob {
+    const mode = input.mode ?? 'forward-dynamics';
+    const cfg = MODE_CONFIGS[mode];
+    if (!cfg) {
       throw new ServiceError(
         'invalid',
-        `episodes must be between 1 and ${MAX_EPISODES}`,
+        `unknown generator mode '${String(input.mode)}' (expected 'forward-dynamics' or 'neural-trajectory')`,
+      );
+    }
+    if (!existsSync(cfg.checkPath)) {
+      throw new ServiceError('unavailable', `${cfg.label} generator not found on the server`);
+    }
+    const episodes = Math.floor(input.episodes);
+    if (!Number.isFinite(episodes) || episodes < 1 || episodes > cfg.maxEpisodes) {
+      throw new ServiceError(
+        'invalid',
+        `episodes must be between 1 and ${cfg.maxEpisodes}`,
       );
     }
     const prompt = input.prompt?.trim() || undefined;
     if (prompt && prompt.length > MAX_PROMPT_LEN) {
       throw new ServiceError('invalid', `prompt must be ${MAX_PROMPT_LEN} characters or fewer`);
     }
-    if (!this.resolveToken()) {
+    if (cfg.requiresToken && !this.resolveToken()) {
       throw new ServiceError(
         'no_token',
         'No HF PRO token configured (set HF_TOKEN or scratch/cosmos3/.env)',
@@ -222,7 +405,7 @@ class CosmosSyntheticService extends EventEmitter {
     if (this.hasActiveJob()) {
       throw new ServiceError(
         'busy',
-        'A synthetic generation job is already running (ZeroGPU quota is serial)',
+        'A synthetic generation job is already running (generation is serial)',
       );
     }
 
@@ -231,11 +414,12 @@ class CosmosSyntheticService extends EventEmitter {
     const job: CosmosSyntheticJob = {
       id: uuidv4(),
       status: 'queued',
+      mode,
       phase: 'Queued',
       progress: 0,
       episodes,
       prompt,
-      embodiment: EMBODIMENT,
+      embodiment: cfg.embodiment,
       generatedCount: 0,
       log: [],
       createdAt: now,
@@ -303,6 +487,7 @@ class CosmosSyntheticService extends EventEmitter {
   // -------------------------------------------------------------------------
 
   private async run(job: CosmosSyntheticJob): Promise<void> {
+    const cfg = MODE_CONFIGS[job.mode];
     const token = this.resolveToken();
     const jobDir = path.join(this.outRoot, job.id);
     this.update(job, {
@@ -313,13 +498,16 @@ class CosmosSyntheticService extends EventEmitter {
     });
 
     // --- 1. generate ---------------------------------------------------------
-    const genArgs = ['--out', jobDir, 'generate', '--episodes', String(job.episodes)];
-    if (job.prompt) genArgs.push('--prompt', job.prompt);
+    const genArgs = buildGenerateArgs(job.mode, {
+      jobDir,
+      episodes: job.episodes,
+      prompt: job.prompt,
+    });
     let okCount = -1;
     let attempts = 0;
     const gen = await this.exec(job, genArgs, token, (line) => {
       // Attempt-start lines drive the progress bar (earliest feedback)...
-      if (/^--\s+task175-bridge-\d+/.test(line)) {
+      if (EPISODE_START_RE.test(line)) {
         attempts = Math.min(attempts + 1, job.episodes);
         this.update(job, {
           progress: Math.min(56, 2 + Math.round((attempts / job.episodes) * 53)),
@@ -348,7 +536,8 @@ class CosmosSyntheticService extends EventEmitter {
     // --- 2. convert ----------------------------------------------------------
     this.update(job, { status: 'converting', phase: 'Converting to LeRobot', progress: 60 });
     let converted = 0;
-    const conv = await this.exec(job, ['--out', jobDir, 'convert'], token, (line) => {
+    const convArgs = buildConvertArgs(job.mode, { jobDir });
+    const conv = await this.exec(job, convArgs, token, (line) => {
       if (/^\s*ep\d+:/.test(line)) {
         converted += 1;
         this.update(job, {
@@ -363,7 +552,7 @@ class CosmosSyntheticService extends EventEmitter {
 
     // --- 3. register as a Dataset -------------------------------------------
     this.update(job, { status: 'registering', phase: 'Registering dataset', progress: 92 });
-    const datasetDir = path.join(jobDir, DATASET_SUBDIR);
+    const datasetDir = path.join(jobDir, cfg.datasetSubdir);
     const dataset = await this.registerDataset(job, datasetDir);
     this.update(job, {
       status: 'completed',
@@ -375,7 +564,12 @@ class CosmosSyntheticService extends EventEmitter {
     });
   }
 
-  /** Spawn the python script, stream lines, resolve with exit code + stderr tail. */
+  /**
+   * Spawn the python generator, stream lines, resolve with exit code + tail.
+   * `args` is the full python argv (script path or `-m` module included) as
+   * produced by buildGenerateArgs/buildConvertArgs; cwd stays CURATION_DIR so
+   * the `-m neural_traj` form resolves the package.
+   */
   private exec(
     job: CosmosSyntheticJob,
     args: string[],
@@ -383,7 +577,7 @@ class CosmosSyntheticService extends EventEmitter {
     onLine: (line: string) => void,
   ): Promise<{ code: number | null; tail: string }> {
     return new Promise((resolve) => {
-      const child = spawn(this.pythonBin, [SCRIPT_PATH, ...args], {
+      const child = spawn(this.pythonBin, args, {
         cwd: CURATION_DIR,
         env: { ...process.env, ...(token ? { HF_TOKEN: token } : {}) },
       });
@@ -467,23 +661,18 @@ class CosmosSyntheticService extends EventEmitter {
     if (!info.features || Object.keys(info.features).length === 0) {
       throw new Error('generated dataset metadata missing feature definitions');
     }
-    const robotType = await this.ensureRobotType(info);
+    const cfg = MODE_CONFIGS[job.mode];
+    const robotType = await this.ensureRobotType(info, cfg);
 
     const infoJson: LeRobotInfo = {
       ...info,
       _synthetic: true,
-      _generator:
-        info._generator ??
-        'NVIDIA Cosmos 3 (forward dynamics) via Cosmos3-Action-Viewer',
+      _generator: info._generator ?? cfg.generatorTag,
     };
 
     const input: CreateDatasetInput = {
       name: this.datasetName(job),
-      description:
-        `Synthetic ${EMBODIMENT} episodes generated with NVIDIA Cosmos 3 ` +
-        `forward dynamics (${totalEpisodes} episodes` +
-        (job.prompt ? `, prompt: "${job.prompt}"` : '') +
-        ').',
+      description: this.datasetDescription(job, totalEpisodes),
       robotTypeId: robotType.id,
       storagePath: datasetDir.endsWith('/') ? datasetDir : `${datasetDir}/`,
       lerobotVersion: info.codebase_version ?? 'v2.1',
@@ -498,9 +687,12 @@ class CosmosSyntheticService extends EventEmitter {
     return datasetRepository.create(input);
   }
 
-  /** Find-or-create the bridge/WidowX robot type used by the generator. */
-  private async ensureRobotType(info: { features?: Record<string, unknown> }) {
-    const existing = await robotTypeRepository.findByName(EMBODIMENT);
+  /** Find-or-create the robot type of the job's target embodiment. */
+  private async ensureRobotType(
+    info: { features?: Record<string, unknown> },
+    cfg: SyntheticModeConfig,
+  ) {
+    const existing = await robotTypeRepository.findByName(cfg.robotTypeName);
     if (existing) return existing;
     const features = info.features ?? {};
     const cameras = Object.keys(features)
@@ -511,19 +703,39 @@ class CosmosSyntheticService extends EventEmitter {
         fov: 60,
       }));
     return robotTypeRepository.create({
-      name: EMBODIMENT,
-      manufacturer: 'Trossen Robotics',
-      model: 'WidowX 250 (bridge)',
-      actionDim: 7,
-      proprioceptionDim: 7,
-      cameras: cameras.length ? cameras : [{ name: 'image_0', resolution: { width: 640, height: 480 }, fov: 60 }],
+      name: cfg.robotTypeName,
+      manufacturer: cfg.robotType.manufacturer,
+      model: cfg.robotType.model,
+      actionDim: cfg.robotType.actionDim,
+      proprioceptionDim: cfg.robotType.proprioceptionDim,
+      cameras: cameras.length
+        ? cameras
+        : [{ name: cfg.robotType.defaultCamera, resolution: { width: 640, height: 480 }, fov: 60 }],
       capabilities: ['manipulation', 'synthetic'],
     });
   }
 
   private datasetName(job: CosmosSyntheticJob): string {
     const stamp = job.createdAt.slice(0, 16).replace('T', ' ');
+    if (job.mode === 'neural-trajectory') {
+      return `neural-g1-synthetic-${job.createdAt.slice(0, 10)} (${job.episodes} ep, ${stamp.slice(11)})`;
+    }
     return `Cosmos Synthetic — ${EMBODIMENT} (${job.episodes} ep, ${stamp})`;
+  }
+
+  private datasetDescription(job: CosmosSyntheticJob, totalEpisodes: number): string {
+    const promptPart = job.prompt ? `, prompt: "${job.prompt}"` : '';
+    if (job.mode === 'neural-trajectory') {
+      return (
+        `Synthetic ${NEURAL_EMBODIMENT} episodes — GR00T-Dreams neural trajectories ` +
+        `(DreamGen recipe: post-trained video world model + IDM pseudo-labels, ` +
+        `${neuralTrajBackend()} backend, ${totalEpisodes} episodes${promptPart}).`
+      );
+    }
+    return (
+      `Synthetic ${EMBODIMENT} episodes generated with NVIDIA Cosmos 3 ` +
+      `forward dynamics (${totalEpisodes} episodes${promptPart}).`
+    );
   }
 
   // -------------------------------------------------------------------------

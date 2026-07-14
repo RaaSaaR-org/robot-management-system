@@ -76,3 +76,15 @@ robot-agent/data/update-backups/
 # White-label brand config (only _template is committed)
 /brand/*
 !/brand/_template/
+
+# Local Claude Code settings
+**/.claude/
+
+# Playwright live-run outputs
+app/e2e/report-live/
+app/e2e/test-results-live/
+
+# Throwaway visual-regression captures & scratch snapshots (root)
+/*.png
+/_sweep/
+/training-page.md

@@ -1,7 +1,7 @@
 ---
 id: TASK-088
 title: LeRobot v0.5.0 — SO-101 Migration + Real-Time Chunking (RTC)
-status: todo
+status: done
 priority: high
 tags:
 - vla
@@ -12,7 +12,8 @@ tags:
 owner: ''
 depends_on: []
 created: 2026-03-11
-updated: 2026-04-11
+updated: 2026-07-12
+status_note: 'RETIRED 2026-07-12 — superseded. The v0.5.0 migration half was overtaken by TASK-179 (LeRobot 0.6.0 adopted everywhere; sidecars verified unaffected). The hardware context (Pi + Mac, "no GPU server") pre-dates the G1 pivot and the dz-226 RTX 5090 box. The one living kernel — Real-Time Chunking — was extracted into [[TASK-183]], retargeted at the live loop robot-agent/src/vla/skill-executor.ts (vla_runner.py is orphaned since TASK-146). Do not implement as written.'
 ---
 
 # TASK-088 — LeRobot v0.5.0: SO-101 Migration + RTC
