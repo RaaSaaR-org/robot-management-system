@@ -3,6 +3,35 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.07.17] - 2026-07-17
+
+### Added
+
+- robot-day tooling for TASK-181 + real-robot speaker validation (#197)
+- neural-trajectory synthetic generator mode (TASK-182) (#196)
+- whole-RMS real-data flow — all G1 EDU + Dex3 sensors end-to-end, telemetry persistence, SIM-honesty labels (TASK-184) (#195)
+- VR teleop sessions record in simulation — sim frame recorder, episodes, live progress (#193)
+- TASK-168 - RustFS dataset revisions, video-aware trim/delete, stats recompute, v3 lerobot backend, AI suggestions, Playwright coverage (#189)
+- thinking filler, quiet HTTP disconnects, software wake phrase (#187)
+- platform hardening, twin point-cloud import, local Ollama LLM, voice interaction service (#185)
+- LeRobot 0.6.0 adoption — reward models, rollout strategies, annotations, GR00T N1.7 (TASK-179) (#182)
+- lab bringup for real G1 EDU + Dex3 hardware (TASK-169) (#181)
+
+### Fixed
+
+- serve standard LeRobot v2.1 layouts from local-disk datasets (#192)
+- recognize Windows absolute paths in isLocalDataset (#191)
+- resolve 9 bugs from #186 review + filler reply-drop from #187 (#188)
+- platform hardening from production-like full-stack E2E sweep (RustFS+NATS, real GR00T training) (#184)
+- handle nested Unitree action.names in DatasetEpisodesPage (#183)
+- import all files in multi-file LeRobot v3.0 chunks (#179)
+
+### Maintenance
+
+- VR teleop data-collection guide + TASK-169 robot-day update (#194)
+- task triage + runtime-validation notes, 2026-07-11 dz-226 session (#190)
+
+
 ## [v2026.07.04] - 2026-07-04
 
 ### Added
