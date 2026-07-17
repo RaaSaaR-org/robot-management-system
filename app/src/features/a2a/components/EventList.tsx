@@ -41,10 +41,10 @@ export const EventList = memo(function EventList({
     return (
       <div className={cn('flex flex-col items-center justify-center py-20', className)}>
         <div className="glass-subtle w-16 h-16 rounded-full flex items-center justify-center mb-4">
-          <EventIcon className="w-8 h-8 text-gray-400" />
+          <EventIcon className="w-8 h-8 text-theme-muted" />
         </div>
-        <p className="text-gray-600 dark:text-gray-400 text-sm font-medium">No events recorded</p>
-        <p className="text-gray-500 dark:text-gray-500 text-xs mt-1">Events will appear when agents communicate</p>
+        <p className="text-theme-secondary text-sm font-medium">No events recorded</p>
+        <p className="text-theme-tertiary text-xs mt-1">Events will appear when agents communicate</p>
       </div>
     );
   }
@@ -55,22 +55,22 @@ export const EventList = memo(function EventList({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-glass-subtle text-left">
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
                 Time
               </th>
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
                 Conversation
               </th>
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
                 Actor
               </th>
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
                 Role
               </th>
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
                 ID
               </th>
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">
+              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary">
                 Content
               </th>
             </tr>
@@ -116,15 +116,15 @@ function EventRow({ event, onClick }: EventRowProps) {
       )}
       onClick={() => onClick?.(event)}
     >
-      <td className="px-4 py-3 whitespace-nowrap text-gray-500 dark:text-gray-400">
+      <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-theme-tertiary">
         {formattedTime}
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
-        <span className="font-mono text-xs glass-subtle px-2 py-0.5 rounded text-gray-600 dark:text-gray-300">
+        <span className="font-mono text-xs glass-subtle px-2 py-0.5 rounded text-theme-secondary">
           {content.contextId ? content.contextId.slice(0, 8) : '-'}
         </span>
       </td>
-      <td className="px-4 py-3 whitespace-nowrap text-gray-900 dark:text-gray-100">
+      <td className="px-4 py-3 whitespace-nowrap text-theme-primary">
         {actor}
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
@@ -138,13 +138,13 @@ function EventRow({ event, onClick }: EventRowProps) {
         </span>
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
-        <span className="font-mono text-xs glass-subtle px-2 py-0.5 rounded text-gray-600 dark:text-gray-300">
+        <span className="font-mono text-xs glass-subtle px-2 py-0.5 rounded text-theme-secondary">
           {id.slice(0, 8)}
         </span>
       </td>
-      <td className="px-4 py-3 text-gray-700 dark:text-gray-300">
+      <td className="px-4 py-3 text-theme-secondary">
         {truncatedContent || (
-          <span className="text-gray-400 italic">
+          <span className="text-theme-muted italic">
             {content.parts.length > 0 ? `[${content.parts[0].kind} content]` : 'No content'}
           </span>
         )}

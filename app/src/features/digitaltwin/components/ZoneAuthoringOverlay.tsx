@@ -169,7 +169,7 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, closeDraft, cancelDraft, popDraftPoint]);
 
-  const zoneColor = (z: TwinZoneDTO) => z.color || TWIN_ZONE_COLORS[z.type] || '#FF6700';
+  const zoneColor = (z: TwinZoneDTO) => z.color || TWIN_ZONE_COLORS[z.type] || '#2A5FFF';
 
   const draftScreen = draftPoints.map(transform.worldToScreen);
   const draftPath =
@@ -236,7 +236,7 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
                 startEditingZone(z);
               }}
             />
-            <text x={centroid.x} y={centroid.y} fontSize={12} fontFamily="monospace" fill={color} textAnchor="middle" pointerEvents="none">
+            <text x={centroid.x} y={centroid.y} fontSize={12} fill={color} textAnchor="middle" pointerEvents="none">
               {z.name}
             </text>
           </g>
@@ -246,16 +246,16 @@ export function ZoneAuthoringOverlay({ twin, cloud, occupancyImageUrl }: ZoneAut
       {/* Active draft polygon */}
       {draftScreen.length > 0 && (
         <g pointerEvents="none">
-          {draftPath && <path d={draftPath} fill="rgba(255,103,0,0.12)" stroke="#FF6700" strokeWidth={2} strokeDasharray="5,4" />}
+          {draftPath && <path d={draftPath} fill="rgba(42,95,255,0.12)" stroke="#2A5FFF" strokeWidth={2} strokeDasharray="5,4" />}
           {draftScreen.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={4} fill="#FF6700" stroke="#fff" strokeWidth={1} />
+            <circle key={i} cx={p.x} cy={p.y} r={4} fill="#2A5FFF" stroke="#fff" strokeWidth={1} />
           ))}
         </g>
       )}
 
       {/* Draw-mode hint */}
       {mode === 'draw' && (
-        <text x={PADDING} y={PADDING} fontSize={11} fontFamily="monospace" fill="#FF6700" opacity={0.85} pointerEvents="none">
+        <text x={PADDING} y={PADDING} fontSize={11} fill="#7593FF" opacity={0.85} pointerEvents="none">
           Click to add vertices · double-click / Enter to close · Backspace undo · Esc cancel
         </text>
       )}

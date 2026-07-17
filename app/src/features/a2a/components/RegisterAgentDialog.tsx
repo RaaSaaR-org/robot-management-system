@@ -64,7 +64,7 @@ export const RegisterAgentDialog = memo(function RegisterAgentDialog({
         <div>
           <label
             htmlFor="agent-url"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            className="block text-sm font-medium text-theme-secondary mb-1"
           >
             Agent URL
           </label>
@@ -77,7 +77,7 @@ export const RegisterAgentDialog = memo(function RegisterAgentDialog({
             disabled={isLoading}
             className="w-full"
           />
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-xs text-theme-tertiary mt-1">
             Enter the base URL of the A2A agent. The agent card will be fetched from
             /.well-known/a2a/agent_card.json
           </p>

@@ -135,10 +135,10 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            <h3 className="text-lg font-semibold text-theme-primary">
               Technical Documentation
             </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-theme-secondary">
               Manage technical documentation per EU AI Act Annex IV, Machinery Regulation Annex IV,
               and Cyber Resilience Act Annex V.
             </p>
@@ -147,7 +147,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
         </div>
 
         {/* Provider summary */}
-        <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <div className="flex items-center gap-2 text-sm text-theme-secondary mb-4">
           <span>{providers.length} providers</span>
           <span>•</span>
           <span>{providerDocs.length} documents</span>
@@ -206,7 +206,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
       {/* Documents list */}
       {!isLoadingProviders && filteredDocs.length === 0 && (
         <Card className="p-8 text-center">
-          <p className="text-gray-500 dark:text-gray-400">
+          <p className="text-theme-tertiary">
             {providerDocs.length === 0
               ? 'No documentation found. Add your first document.'
               : 'No documents match the selected filters.'}
@@ -224,15 +224,15 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
                     <span className="px-2 py-0.5 text-xs font-medium rounded bg-cobalt/10 text-cobalt dark:bg-cobalt/20">
                       {DocumentTypeLabels[doc.documentType as DocumentType] || doc.documentType}
                     </span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                    <span className="text-xs text-theme-tertiary">
                       {doc.providerName} v{doc.modelVersion}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">
+                  <p className="text-sm text-theme-secondary line-clamp-2">
                     {doc.content.substring(0, 200)}
                     {doc.content.length > 200 ? '...' : ''}
                   </p>
-                  <div className="mt-2 flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+                  <div className="mt-2 flex items-center gap-4 text-xs text-theme-tertiary">
                     <span>Valid from: {formatDate(doc.validFrom)}</span>
                     {doc.validTo && <span>Valid to: {formatDate(doc.validTo)}</span>}
                     <span>Updated: {formatDate(doc.updatedAt)}</span>
@@ -269,20 +269,20 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="font-medium text-gray-700 dark:text-gray-300">Provider:</span>
-                <p className="text-gray-600 dark:text-gray-400">{selectedDoc.providerName}</p>
+                <span className="font-medium text-theme-secondary">Provider:</span>
+                <p className="text-theme-secondary">{selectedDoc.providerName}</p>
               </div>
               <div>
-                <span className="font-medium text-gray-700 dark:text-gray-300">Version:</span>
-                <p className="text-gray-600 dark:text-gray-400">{selectedDoc.modelVersion}</p>
+                <span className="font-medium text-theme-secondary">Version:</span>
+                <p className="text-theme-secondary">{selectedDoc.modelVersion}</p>
               </div>
               <div>
-                <span className="font-medium text-gray-700 dark:text-gray-300">Valid From:</span>
-                <p className="text-gray-600 dark:text-gray-400">{formatDate(selectedDoc.validFrom)}</p>
+                <span className="font-medium text-theme-secondary">Valid From:</span>
+                <p className="text-theme-secondary">{formatDate(selectedDoc.validFrom)}</p>
               </div>
               <div>
-                <span className="font-medium text-gray-700 dark:text-gray-300">Valid To:</span>
-                <p className="text-gray-600 dark:text-gray-400">
+                <span className="font-medium text-theme-secondary">Valid To:</span>
+                <p className="text-theme-secondary">
                   {selectedDoc.validTo ? formatDate(selectedDoc.validTo) : 'No expiry'}
                 </p>
               </div>
@@ -290,7 +290,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
 
             {selectedDoc.documentUrl && (
               <div>
-                <span className="font-medium text-gray-700 dark:text-gray-300">URL:</span>
+                <span className="font-medium text-theme-secondary">URL:</span>
                 <a
                   href={selectedDoc.documentUrl}
                   target="_blank"
@@ -303,7 +303,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
             )}
 
             <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Content:</span>
+              <span className="font-medium text-theme-secondary">Content:</span>
               <div className="mt-2 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg whitespace-pre-wrap text-sm font-mono overflow-auto max-h-96">
                 {selectedDoc.content}
               </div>
@@ -343,13 +343,13 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-theme-secondary mb-1">
               Document Type
             </label>
             <select
               value={formData.documentType}
               onChange={(e) => handleInputChange('documentType', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-cobalt"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-theme-primary focus:ring-2 focus:ring-cobalt"
             >
               {Object.entries(DocumentTypeLabels).map(([value, label]) => (
                 <option key={value} value={value}>
@@ -383,7 +383,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-theme-secondary mb-1">
               Content
             </label>
             <textarea
@@ -391,7 +391,7 @@ export function ProviderDocsTab({ className }: ProviderDocsTabProps) {
               onChange={(e) => handleInputChange('content', e.target.value)}
               placeholder="Enter document content..."
               rows={8}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-cobalt font-mono text-sm"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-theme-primary focus:ring-2 focus:ring-cobalt font-mono text-sm"
               required
             />
           </div>

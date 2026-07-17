@@ -77,7 +77,7 @@ export const SidebarDrawer = memo(function SidebarDrawer({
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-glass-subtle">
-          <h2 className="font-semibold text-gray-900 dark:text-gray-100">
+          <h2 className="font-semibold text-theme-primary">
             A2A Communications
           </h2>
           <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close sidebar">
@@ -92,7 +92,7 @@ export const SidebarDrawer = memo(function SidebarDrawer({
               'flex-1 px-4 py-2.5 text-sm font-medium transition-all duration-200',
               tab === 'conversations'
                 ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-500 bg-primary-50/50 dark:bg-primary-900/20'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                : 'text-theme-tertiary hover:text-theme-primary hover:bg-gray-50 dark:hover:bg-gray-800/50'
             )}
             onClick={() => onTabChange('conversations')}
           >
@@ -103,7 +103,7 @@ export const SidebarDrawer = memo(function SidebarDrawer({
               'flex-1 px-4 py-2.5 text-sm font-medium transition-all duration-200',
               tab === 'agents'
                 ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-500 bg-primary-50/50 dark:bg-primary-900/20'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                : 'text-theme-tertiary hover:text-theme-primary hover:bg-gray-50 dark:hover:bg-gray-800/50'
             )}
             onClick={() => onTabChange('agents')}
           >

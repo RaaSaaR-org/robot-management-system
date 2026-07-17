@@ -30,7 +30,7 @@ function parseSettings(raw: string): TenantSettings {
 }
 
 const PRESET_COLORS = [
-  '#FF6700', // EmAI orange
+  '#2A5FFF', // EmAI orange
   '#3B82F6', // Blue
   '#10B981', // Green
   '#8B5CF6', // Purple
@@ -143,7 +143,7 @@ export function EditOrganizationModal({ organization, isOpen, onClose, onSaved }
             <div>
               <label className="block text-sm font-medium text-theme-secondary mb-1">Brand color</label>
               <div className="flex items-center gap-2">
-                <Input value={brandColor} onChange={(e) => setBrandColor(e.target.value)} placeholder="#FF6700" className="w-32 font-mono" />
+                <Input value={brandColor} onChange={(e) => setBrandColor(e.target.value)} placeholder="#2A5FFF" className="w-32 font-mono" />
                 {brandColor && (
                   <div className="w-8 h-8 rounded-brand border border-theme" style={{ backgroundColor: brandColor }} />
                 )}

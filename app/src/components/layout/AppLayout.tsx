@@ -10,6 +10,7 @@ import { cn } from '@/shared/utils/cn';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { useIsMobile } from '@/shared/hooks/useMediaQuery';
 import { useRobotWebSocket } from '@/features/robots/hooks/useRobotWebSocket';
+import { AlertBanner } from '@/features/alerts/components/AlertBanner';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { MobileNav } from './MobileNav';
@@ -74,7 +75,9 @@ export function AppLayout({ children }: AppLayoutProps) {
               : 'md:pl-56'
         )}
       >
-        <div className="p-6">
+        <div className="p-6 space-y-6">
+          {/* In-flow alert banner: pushes content down instead of covering it */}
+          <AlertBanner />
           {children}
         </div>
       </main>

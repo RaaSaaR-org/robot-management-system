@@ -190,7 +190,7 @@ export const RobotQuickStats = memo(function RobotQuickStats({
 
   const odomBadge = <SimBadge telemetry={telemetry} group="odometry" className="ml-1 align-middle" />;
 
-  const taskColor = taskCount > 0 ? '#FF6700' : 'rgba(184,187,194,0.7)';
+  const taskColor = taskCount > 0 ? '#2A5FFF' : 'rgba(184,187,194,0.7)';
 
   return (
     <div

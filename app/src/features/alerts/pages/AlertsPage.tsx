@@ -9,6 +9,7 @@ import { useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { Tabs } from '@/shared/components/ui/Tabs';
 import { useAlertHistory, useAlertCounts, useAlerts } from '../hooks/useAlerts';
 import { AlertList } from '../components/AlertList';
@@ -116,29 +117,25 @@ export function AlertsPage({ className }: AlertsPageProps) {
   return (
     <div className={cn('min-h-screen', className)}>
       <div className="mx-auto max-w-6xl px-4 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-theme-primary">
-                Alerts
-                {unacknowledgedCount > 0 && (
-                  <span className="ml-3 text-sm font-normal text-theme-secondary">
-                    ({unacknowledgedCount} active)
-                  </span>
-                )}
-              </h1>
-              <p className="mt-1 text-sm text-theme-secondary">
-                Monitor and manage system alerts
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={handleRefresh}>
-                Refresh
-              </Button>
-            </div>
-          </div>
-        </div>
+        {/* Header — the chip counts UNACKNOWLEDGED alerts; the "Active Alerts"
+            tab counts all active ones (incl. acknowledged), so label precisely. */}
+        <PageHeader
+          className="mb-8"
+          title="Alerts"
+          meta={
+            unacknowledgedCount > 0 && (
+              <span className="text-sm font-normal text-theme-secondary">
+                ({unacknowledgedCount} unacknowledged)
+              </span>
+            )
+          }
+          subtitle="Monitor and manage system alerts"
+          actions={
+            <Button variant="secondary" size="sm" onClick={handleRefresh}>
+              Refresh
+            </Button>
+          }
+        />
 
         {/* Stats Cards */}
         <div className="grid grid-cols-4 gap-4 mb-8">

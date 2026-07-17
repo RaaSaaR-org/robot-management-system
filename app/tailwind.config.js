@@ -1,5 +1,33 @@
 import typography from '@tailwindcss/typography';
 
+const cobalt = {
+  DEFAULT: '#2A5FFF',
+  50: '#E8EDFF',
+  100: '#D1DBFF',
+  200: '#A3B7FF',
+  300: '#7593FF',
+  400: '#476FFF',
+  500: '#2A5FFF',
+  600: '#0042E6',
+  700: '#0032B3',
+  800: '#002280',
+  900: '#00124D',
+};
+
+const turquoise = {
+  DEFAULT: '#18E4C3',
+  50: '#E6FCF8',
+  100: '#CCF9F1',
+  200: '#99F3E3',
+  300: '#66EDD5',
+  400: '#33E7C7',
+  500: '#18E4C3',
+  600: '#12B89C',
+  700: '#0D8B76',
+  800: '#095E4F',
+  900: '#043129',
+};
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -10,32 +38,13 @@ export default {
     extend: {
       colors: {
         // Primary Palette (from brand.md)
-        'cobalt': {
-          DEFAULT: '#2A5FFF',
-          50: '#E8EDFF',
-          100: '#D1DBFF',
-          200: '#A3B7FF',
-          300: '#7593FF',
-          400: '#476FFF',
-          500: '#2A5FFF',
-          600: '#0042E6',
-          700: '#0032B3',
-          800: '#002280',
-          900: '#00124D',
-        },
-        'turquoise': {
-          DEFAULT: '#18E4C3',
-          50: '#E6FCF8',
-          100: '#CCF9F1',
-          200: '#99F3E3',
-          300: '#66EDD5',
-          400: '#33E7C7',
-          500: '#18E4C3',
-          600: '#12B89C',
-          700: '#0D8B76',
-          800: '#095E4F',
-          900: '#043129',
-        },
+        'cobalt': cobalt,
+        'turquoise': turquoise,
+        // Semantic aliases — dozens of components use primary-*/accent-*
+        // classes (they silently rendered nothing before these existed).
+        // Keep in sync with the --color-primary/--color-accent vars in index.css.
+        'primary': cobalt,
+        'accent': turquoise,
         'slate-gray': '#1E1F24',
         'soft-white': '#F7F9FB',
         // Secondary Palette

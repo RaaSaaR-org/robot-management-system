@@ -14,7 +14,7 @@ export interface RobotPathTrailProps {
   color?: string;
 }
 
-export const RobotPathTrail = memo(function RobotPathTrail({ path, color = '#FF6700' }: RobotPathTrailProps) {
+export const RobotPathTrail = memo(function RobotPathTrail({ path, color = '#2A5FFF' }: RobotPathTrailProps) {
   const line = useMemo(() => {
     const pts = path.map((p) => new THREE.Vector3(p.x, p.y, 0.04));
     const geom = new THREE.BufferGeometry().setFromPoints(pts);

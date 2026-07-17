@@ -6,9 +6,9 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Database, Sparkles } from 'lucide-react';
+import { Database, Plus, Sparkles } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button, Modal } from '@/shared/components/ui';
+import { Button, Modal, PageHeader } from '@/shared/components/ui';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { DatasetList } from '../components/DatasetList';
 import { DatasetUploadModal } from '../components/DatasetUploadModal';
@@ -97,43 +97,28 @@ export function DatasetsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Datasets</h1>
-          <p className="text-theme-secondary mt-1">
-            Manage training datasets for VLA models
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <PipelineBreadcrumb stage="dataset" />
-          <Button variant="ghost" onClick={() => setIsHFBrowserOpen(true)}>
-            Import from Hub
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => setIsGenerateOpen(true)}
-            leftIcon={<Sparkles className="h-4 w-4" />}
-          >
-            Generate Synthetic
-          </Button>
-          <Button onClick={() => setIsUploadModalOpen(true)}>
-            <svg
-              className="w-4 h-4 mr-2"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
+      <PageHeader
+        title="Datasets"
+        subtitle="Manage training datasets for VLA models"
+        actions={
+          <>
+            <PipelineBreadcrumb stage="dataset" />
+            <Button variant="ghost" onClick={() => setIsHFBrowserOpen(true)}>
+              Import from Hub
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setIsGenerateOpen(true)}
+              leftIcon={<Sparkles className="h-4 w-4" />}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
-            Upload Dataset
-          </Button>
-        </div>
-      </header>
+              Generate Synthetic
+            </Button>
+            <Button onClick={() => setIsUploadModalOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
+              Upload Dataset
+            </Button>
+          </>
+        }
+      />
 
       {/* Error state */}
       {error && (
@@ -155,7 +140,7 @@ export function DatasetsPage() {
         <select
           value={filters.robotTypeId || ''}
           onChange={(e) => handleFilterChange('robotTypeId', e.target.value)}
-          className="px-3 py-2 rounded-lg border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          className="px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-cobalt-500"
         >
           <option value="">All Robot Types</option>
           <option value="humanoid">Humanoid</option>
@@ -165,7 +150,7 @@ export function DatasetsPage() {
         <select
           value={filters.skillId || ''}
           onChange={(e) => handleFilterChange('skillId', e.target.value)}
-          className="px-3 py-2 rounded-lg border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          className="px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-cobalt-500"
         >
           <option value="">All Skills</option>
           <option value="pick_and_place">Pick and Place</option>
@@ -175,7 +160,7 @@ export function DatasetsPage() {
         {(syntheticCount > 0 || showSyntheticOnly) && (
           <button
             onClick={() => setShowSyntheticOnly((v) => !v)}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+            className={`flex items-center gap-1.5 rounded-brand border px-3 py-2 text-sm transition-colors ${
               showSyntheticOnly
                 ? 'border-purple-500/50 bg-purple-500/10 text-purple-300'
                 : 'border-theme-secondary/30 text-theme-secondary hover:border-purple-500/40'

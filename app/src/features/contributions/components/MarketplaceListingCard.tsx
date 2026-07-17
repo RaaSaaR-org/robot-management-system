@@ -25,8 +25,8 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
       onClick={onClick}
       className={cn(
         'w-full text-left rounded-xl border transition-all duration-200',
-        'bg-[#1a1b1f] border-white/10 hover:border-[#FF6700]/50',
-        'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#FF6700]/5',
+        'bg-theme-card border-theme hover:border-cobalt-500/50',
+        'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-cobalt-500/5',
         'flex flex-col'
       )}
     >
@@ -37,7 +37,7 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
             className={cn(
               'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium',
               isSkill
-                ? 'bg-[#FF6700]/15 text-[#FF6700]'
+                ? 'bg-cobalt-500/10 text-cobalt-500 dark:text-cobalt-300'
                 : 'bg-teal-500/15 text-teal-400'
             )}
           >
@@ -55,21 +55,21 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
         </div>
 
         {/* Title & Description */}
-        <h3 className="text-sm font-semibold text-white line-clamp-2 mb-1.5">
+        <h3 className="text-sm font-semibold text-theme-primary line-clamp-2 mb-1.5">
           {listing.title}
         </h3>
-        <p className="text-xs text-gray-400 line-clamp-2 mb-3">
+        <p className="text-xs text-theme-secondary line-clamp-2 mb-3">
           {listing.shortDescription}
         </p>
 
         {/* Tags */}
         <div className="flex items-center gap-1.5 mb-3 flex-wrap">
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 text-xs text-gray-300">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-theme-elevated text-xs text-theme-secondary">
             <Cpu size={10} />
             {listing.robotType}
           </span>
           {listing.baseModel !== 'None' && (
-            <span className="px-2 py-0.5 rounded bg-white/5 text-xs text-gray-300">
+            <span className="px-2 py-0.5 rounded bg-theme-elevated text-xs text-theme-secondary">
               {listing.baseModel}
             </span>
           )}
@@ -79,7 +79,7 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
             </span>
           )}
           {!isSkill && listing.episodeCount && (
-            <span className="px-2 py-0.5 rounded bg-white/5 text-xs text-gray-300">
+            <span className="px-2 py-0.5 rounded bg-theme-elevated text-xs text-theme-secondary">
               {listing.episodeCount} episodes
             </span>
           )}
@@ -88,7 +88,7 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
 
       {/* Rating & Downloads */}
       <div className="px-4 mb-3">
-        <div className="flex items-center gap-3 text-xs text-gray-400">
+        <div className="flex items-center gap-3 text-xs text-theme-secondary">
           <MarketplaceStarRating rating={listing.rating} size="sm" />
           <span>({listing.reviewCount})</span>
           <span className="inline-flex items-center gap-1">
@@ -101,22 +101,22 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
       {/* Seller */}
       <div className="px-4 mb-3">
         <div className="flex items-center gap-2">
-          <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold text-gray-300">
+          <span className="w-6 h-6 rounded-full bg-theme-elevated flex items-center justify-center text-[10px] font-bold text-theme-secondary">
             {listing.seller.avatarInitials}
           </span>
-          <span className="text-xs text-gray-300 truncate">{listing.seller.displayName}</span>
+          <span className="text-xs text-theme-secondary truncate">{listing.seller.displayName}</span>
           <TierBadge tier={listing.seller.tier} size="sm" showLabel={false} />
         </div>
       </div>
 
       {/* Footer */}
-      <div className="mt-auto px-4 py-3 border-t border-white/5 flex items-center justify-between">
+      <div className="mt-auto px-4 py-3 border-t border-theme flex items-center justify-between">
         <div>
-          <span className="text-xs text-gray-500">from</span>{' '}
-          <span className="text-sm font-bold text-white">{formatCredits(listing.lowestPriceCredits)}</span>{' '}
-          <span className="text-xs text-gray-500">credits</span>
+          <span className="text-xs text-theme-tertiary">from</span>{' '}
+          <span className="text-sm font-bold text-theme-primary">{formatCredits(listing.lowestPriceCredits)}</span>{' '}
+          <span className="text-xs text-theme-tertiary">credits</span>
         </div>
-        <span className="px-3 py-1.5 rounded-lg bg-[#FF6700] text-white text-xs font-medium hover:bg-[#e05d00] transition-colors">
+        <span className="px-3 py-1.5 rounded-brand bg-cobalt-500 text-white text-xs font-medium hover:bg-cobalt-600 transition-colors">
           View
         </span>
       </div>

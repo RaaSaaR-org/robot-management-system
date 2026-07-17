@@ -67,7 +67,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
       <p className="text-xs text-theme-tertiary">
         Sweeping with <span className="text-theme-secondary font-medium">{robotName}</span>. On Start the server
         captures pose-stamped frames while the robot walks a loop and the LiDAR map fills in.
-        {isAuthoritative && <span className="text-[#18E4C3]"> Showing the server-built cloud.</span>}
+        {isAuthoritative && <span className="text-turquoise"> Showing the server-built cloud.</span>}
       </p>
 
       {/* Coverage (scanning) */}
@@ -78,7 +78,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
             <span>{coveragePct}%</span>
           </div>
           <div className="h-2 rounded bg-theme-secondary/20 overflow-hidden">
-            <div className="h-full bg-[#FF6700] transition-all" style={{ width: `${coveragePct}%` }} />
+            <div className="h-full bg-cobalt transition-all" style={{ width: `${coveragePct}%` }} />
           </div>
         </div>
       )}
@@ -91,7 +91,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
             <span>{serverProgress}%</span>
           </div>
           <div className="h-2 rounded bg-theme-secondary/20 overflow-hidden">
-            <div className="h-full bg-[#18E4C3] transition-all" style={{ width: `${serverProgress}%` }} />
+            <div className="h-full bg-turquoise transition-all" style={{ width: `${serverProgress}%` }} />
           </div>
         </div>
       )}

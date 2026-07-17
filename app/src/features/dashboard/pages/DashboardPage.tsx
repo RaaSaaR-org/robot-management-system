@@ -8,13 +8,13 @@
 
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { MessageSquare, X } from 'lucide-react';
+import { MessageSquare, RefreshCw, X } from 'lucide-react';
 import { useFleetStatus, useZones, FleetStats, FleetMap } from '@/features/fleet';
 import { FleetEmergencyStopButton } from '@/features/safety';
 import { CommandBar } from '@/features/command/components/CommandBar';
 import { Button } from '@/shared/components/ui/Button';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { Spinner } from '@/shared/components/ui/Spinner';
-import { useCountUp } from '@/shared/hooks';
 import { OrchestratorChatPage } from '@/features/a2a/pages/OrchestratorChatPage';
 
 // ============================================================================
@@ -52,11 +52,6 @@ export function DashboardPage() {
     setSearchParams(next, { replace: true });
   };
 
-  // Animated counters for hero header
-  const animatedTotal = useCountUp(status.totalRobots, 800, 200);
-  const animatedOnline = useCountUp(status.robotsByStatus.online || 0, 800, 350);
-  const animatedAlerts = useCountUp(status.totalUnacknowledgedAlerts, 800, 500);
-
   // Handle robot click on map
   const handleRobotClick = (robotId: string) => {
     navigate(`/robots/${robotId}`);
@@ -83,74 +78,29 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Gradient Hero Header */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-cobalt-600 via-cobalt-700 to-cobalt-900 p-6 text-white">
-        {/* Animated background blobs */}
-        <div className="absolute inset-0 opacity-10 pointer-events-none">
-          <div className="absolute top-0 left-0 w-72 h-72 bg-white rounded-full filter blur-3xl animate-pulse" />
-          <div className="absolute bottom-0 right-0 w-96 h-96 bg-cobalt-300 rounded-full filter blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
-        </div>
-        <div className="relative">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-            <div>
-              <h1 className="text-2xl font-bold">Fleet Dashboard</h1>
-              <p className="text-white/70 text-sm mt-1">Real-time fleet monitoring and control</p>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* E-Stop always visible — safety-critical, must be accessible on all viewports */}
-              <FleetEmergencyStopButton size="md" />
-              <Button
-                variant="outline"
-                onClick={openChat}
-                className="!border-white/30 !text-white hover:!bg-white/10"
-              >
-                <MessageSquare className="w-4 h-4 mr-2" />
-                Chat
-              </Button>
-              <Button variant="outline" onClick={refresh} disabled={isLoading} className="!border-white/30 !text-white hover:!bg-white/10">
-                {isLoading ? (
-                  <>
-                    <Spinner size="sm" className="mr-2" />
-                    Refreshing...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Refresh
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {/* Quick stats in hero */}
-          <div className="flex gap-6 sm:gap-10 mt-2">
-            <div>
-              <div className="text-3xl font-bold">{animatedTotal}</div>
-              <div className="text-xs text-blue-200 uppercase tracking-wide">Robots</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-green-300 flex items-center gap-2">
-                {animatedOnline}
-                {/* Pulsing live indicator */}
-                <span className="relative flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500" />
-                </span>
-              </div>
-              <div className="text-xs text-blue-200 uppercase tracking-wide">Online</div>
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-yellow-300">{animatedAlerts}</div>
-              <div className="text-xs text-blue-200 uppercase tracking-wide">Alerts</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Critical Alert Banner is rendered by AlertProvider in App.tsx */}
+      <PageHeader
+        title="Fleet Dashboard"
+        subtitle="Real-time fleet monitoring and control"
+        actions={
+          <>
+            {/* E-Stop always visible — safety-critical, must be accessible on all viewports */}
+            <FleetEmergencyStopButton size="md" />
+            <Button size="sm" variant="outline" onClick={openChat} leftIcon={<MessageSquare className="w-4 h-4" />}>
+              Chat
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={refresh}
+              isLoading={isLoading}
+              loadingText="Refreshing…"
+              leftIcon={<RefreshCw className="w-4 h-4" />}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {/* Fleet Statistics with entrance animation */}
       <FleetStats status={status} isLoading={isLoading} />

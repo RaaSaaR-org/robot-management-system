@@ -36,7 +36,7 @@ export const AgentList = memo(function AgentList({
     <div className={cn('flex flex-col h-full', className)}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+        <h3 className="font-semibold text-theme-primary">
           Registered Agents
         </h3>
         {onRegister && (
@@ -49,7 +49,7 @@ export const AgentList = memo(function AgentList({
       {/* List */}
       <div className="flex-1 overflow-y-auto p-4">
         {agents.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
+          <div className="flex items-center justify-center h-full text-theme-muted">
             <div className="text-center">
               <p className="mb-2">No agents registered</p>
               {onRegister && (

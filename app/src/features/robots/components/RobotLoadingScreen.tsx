@@ -132,7 +132,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
               key={i}
               points={hexPoints(cx, cy, hexR - 2)}
               fill="none"
-              stroke="#FF6700"
+              stroke="#2A5FFF"
               strokeWidth="0.8"
               filter="url(#ls-hexGlow)"
               style={{
@@ -149,7 +149,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
         <div
           className="absolute left-0 right-0 h-px"
           style={{
-            background: 'linear-gradient(90deg, transparent 0%, #FF6700 30%, #FF6700 70%, transparent 100%)',
+            background: 'linear-gradient(90deg, transparent 0%, #2A5FFF 30%, #2A5FFF 70%, transparent 100%)',
             opacity: 0.6,
             animation: 'hexScan 2s ease-in-out infinite',
             top: 0,
@@ -166,7 +166,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
           <div
             className="absolute inset-0 blur-3xl"
             style={{
-              background: 'radial-gradient(circle, rgba(255,103,0,0.35) 0%, transparent 70%)',
+              background: 'radial-gradient(circle, rgba(42,95,255,0.35) 0%, transparent 70%)',
               animation: 'hexGlow 2s ease-in-out infinite',
             }}
           />
@@ -188,7 +188,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
             {/* Outer ring */}
             <circle
               cx="60" cy="60" r="52"
-              stroke="#FF6700"
+              stroke="#2A5FFF"
               strokeWidth="0.8"
               strokeDasharray="8 6"
               opacity="0.4"
@@ -200,7 +200,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
             {/* Outer hex */}
             <polygon
               points={hexPoints(60, 60, 46)}
-              stroke="#FF6700"
+              stroke="#2A5FFF"
               strokeWidth="1.5"
               opacity="0.5"
               filter="url(#ls-coreGlow)"
@@ -208,16 +208,16 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
             {/* Inner hex */}
             <polygon
               points={hexPoints(60, 60, 30)}
-              stroke="#FF6700"
+              stroke="#2A5FFF"
               strokeWidth="2"
-              fill="rgba(255,103,0,0.08)"
+              fill="rgba(42,95,255,0.08)"
               filter="url(#ls-coreGlow)"
               style={{ animation: 'hexGlow 2s ease-in-out infinite' }}
             />
             {/* Core dot */}
             <circle
               cx="60" cy="60" r="8"
-              fill="#FF6700"
+              fill="#2A5FFF"
               filter="url(#ls-coreGlow)"
               style={{ animation: 'hexGlow 1.5s ease-in-out infinite' }}
             />
@@ -233,7 +233,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
                   key={i}
                   x1={x1.toFixed(2)} y1={y1.toFixed(2)}
                   x2={x2.toFixed(2)} y2={y2.toFixed(2)}
-                  stroke="#FF6700"
+                  stroke="#2A5FFF"
                   strokeWidth="2"
                   opacity="0.7"
                 />
@@ -246,7 +246,7 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
         <div className="text-center space-y-2">
           <p
             className="font-mono text-xs tracking-[0.3em] uppercase"
-            style={{ color: '#FF6700', animation: 'hexGlow 2s ease-in-out infinite' }}
+            style={{ color: '#2A5FFF', animation: 'hexGlow 2s ease-in-out infinite' }}
           >
             INITIALIZING SYSTEMS...
           </p>
@@ -263,12 +263,12 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
         {/* Progress bar */}
         <div
           className="w-48 h-px rounded-full overflow-hidden"
-          style={{ background: 'rgba(255,103,0,0.15)' }}
+          style={{ background: 'rgba(42,95,255,0.15)' }}
         >
           <div
             className="h-full rounded-full"
             style={{
-              background: 'linear-gradient(90deg, transparent, #FF6700, transparent)',
+              background: 'linear-gradient(90deg, transparent, #2A5FFF, transparent)',
               animation: 'hexScan 1.5s ease-in-out infinite',
               width: '60%',
             }}
@@ -283,10 +283,10 @@ export const RobotLoadingScreen = memo(function RobotLoadingScreen({
         preserveAspectRatio="none"
         fill="none"
       >
-        <path d="M2 10 L2 2 L10 2" stroke="#FF6700" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
-        <path d="M90 2 L98 2 L98 10" stroke="#FF6700" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
-        <path d="M2 90 L2 98 L10 98" stroke="#FF6700" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
-        <path d="M90 98 L98 98 L98 90" stroke="#FF6700" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
+        <path d="M2 10 L2 2 L10 2" stroke="#2A5FFF" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
+        <path d="M90 2 L98 2 L98 10" stroke="#2A5FFF" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
+        <path d="M2 90 L2 98 L10 98" stroke="#2A5FFF" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
+        <path d="M90 98 L98 98 L98 90" stroke="#2A5FFF" strokeWidth="0.5" opacity="0.5" vectorEffect="non-scaling-stroke" />
       </svg>
     </div>
   );

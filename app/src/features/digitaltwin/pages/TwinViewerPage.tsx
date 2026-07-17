@@ -229,13 +229,13 @@ export function TwinViewerPage() {
           <div className="flex gap-1 rounded-lg border border-theme p-1 bg-theme-surface">
           <button
             onClick={() => setTab('scan')}
-            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'scan' ? 'bg-[#FF6700] text-black' : 'text-theme-tertiary hover:text-theme-secondary'}`}
+            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'scan' ? 'bg-cobalt text-white' : 'text-theme-tertiary hover:text-theme-secondary'}`}
           >
             Scan
           </button>
           <button
             onClick={() => setTab('zones')}
-            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'zones' ? 'bg-[#FF6700] text-black' : 'text-theme-tertiary hover:text-theme-secondary'}`}
+            className={`px-3 py-1.5 text-xs font-medium rounded ${tab === 'zones' ? 'bg-cobalt text-white' : 'text-theme-tertiary hover:text-theme-secondary'}`}
           >
             Zones
           </button>
@@ -346,7 +346,7 @@ function ZonePanel({ zoneMode, onDraw, zones, selectedZoneId, onSelect, onDelete
       <ZoneLegend />
 
       {drawing ? (
-        <div className="rounded-md border border-[#FF6700]/40 bg-[#FF6700]/5 p-2.5 space-y-2">
+        <div className="rounded-md border border-cobalt/40 bg-cobalt/5 p-2.5 space-y-2">
           <p className="text-xs text-theme-secondary">
             Click vertices in the editor. <span className="font-mono">{draftPoints.length}</span> placed —
             {draftPoints.length >= 3 ? ' ready to close.' : ' need at least 3.'}
@@ -375,7 +375,7 @@ function ZonePanel({ zoneMode, onDraw, zones, selectedZoneId, onSelect, onDelete
               onClick={() => onSelect(z.id)}
             >
               <span className="flex items-center gap-2 min-w-0">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: z.color || '#FF6700' }} />
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: z.color || '#2A5FFF' }} />
                 <span className="truncate text-theme-secondary">{z.name}</span>
                 <span className="text-theme-tertiary uppercase text-[10px]">{z.type}</span>
               </span>

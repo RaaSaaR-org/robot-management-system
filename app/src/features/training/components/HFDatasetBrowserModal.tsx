@@ -524,7 +524,7 @@ function FeaturedDatasetCard({ dataset, imported, onImport, disabled }: Featured
           <p className="font-semibold text-theme-primary text-sm">
             {dataset.displayName}
           </p>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-cobalt-500/15 text-cobalt-400">
             {dataset.robotType}
           </span>
           {imported && (

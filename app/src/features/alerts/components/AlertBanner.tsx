@@ -1,6 +1,8 @@
 /**
  * @file AlertBanner.tsx
- * @description Fixed banner displaying the most critical unacknowledged alert
+ * @description Banner displaying the most critical unacknowledged alert. Rendered
+ *              by AppLayout in normal flow (sticky below the TopBar) so it never
+ *              overlaps page content.
  * @feature alerts
  * @dependencies @/shared/utils/cn, @/features/alerts/hooks
  */
@@ -8,6 +10,7 @@
 import { useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
+import { Button } from '@/shared/components/ui/Button';
 import { useAlerts } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
@@ -56,7 +59,9 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 sm:py-3">
       <div className="flex items-center gap-2 min-w-0 sm:gap-3">
-        <AlertSeverityBadge severity={alert.severity} showDot />
+        {/* On the solid red critical banner the severity chip is red-on-red —
+            the banner color already says "critical", so skip the chip there. */}
+        {!isCritical && <AlertSeverityBadge severity={alert.severity} showDot />}
         <div className="min-w-0 truncate">
           <span className="font-medium">{alert.title}</span>
           <span className="mx-1 sm:mx-2">-</span>
@@ -66,26 +71,14 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
 
       <div className="flex items-center gap-2 flex-shrink-0">
         {isCritical ? (
-          <button
-            onClick={onAcknowledge}
-            className={cn(
-              'px-3 py-1.5 text-sm font-medium rounded-md border transition-colors',
-              buttonStyle
-            )}
-          >
+          <Button size="sm" variant="ghost" onClick={onAcknowledge} className={cn('border', buttonStyle)}>
             Acknowledge
-          </button>
+          </Button>
         ) : (
           alert.dismissable && (
-            <button
-              onClick={onDismiss}
-              className={cn(
-                'px-3 py-1.5 text-sm font-medium rounded-md border transition-colors',
-                buttonStyle
-              )}
-            >
+            <Button size="sm" variant="ghost" onClick={onDismiss} className={cn('border', buttonStyle)}>
               Dismiss
-            </button>
+            </Button>
           )
         )}
       </div>
@@ -144,12 +137,14 @@ export function AlertBanner({ className }: AlertBannerProps) {
     return null;
   }
 
+  // In normal layout flow (rendered by AppLayout above the page content) so it
+  // never overlaps page titles; sticks below the 56px TopBar while scrolling.
   return (
     <div
       role="alert"
       aria-live="assertive"
       className={cn(
-        'fixed top-14 left-0 right-0 z-30 border-b transition-all duration-300 animate-in slide-in-from-top sm:left-56',
+        'sticky top-14 z-30 border rounded-brand transition-all duration-300 animate-fade-in',
         SEVERITY_STYLES[mostCriticalAlert.severity],
         className
       )}

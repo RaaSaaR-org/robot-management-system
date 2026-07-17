@@ -6,6 +6,8 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import { PackageSearch } from 'lucide-react';
+import { PageHeader, EmptyState } from '@/shared/components/ui';
 import { useUpdatesStore, selectPackages, selectIsLoading, selectError } from '../store/updatesStore';
 import { UpdateCard } from '../components/UpdateCard';
 import { ApproveUpdateModal } from '../components/ApproveUpdateModal';
@@ -52,20 +54,19 @@ export function UpdatesPage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Secure Updates</h1>
-          <p className="text-sm text-theme-tertiary mt-1">
-            OTA update management with Ed25519 signing (CRA Art. 13, MR Art. 10)
-          </p>
-        </div>
-        <button
-          onClick={() => fetchPackages()}
-          className="px-4 py-2 text-sm font-medium text-theme-secondary border border-theme rounded-brand hover:bg-theme-hover transition-colors"
-        >
-          Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Secure Updates"
+        subtitle="OTA update management with Ed25519 signing (CRA Art. 13, MR Art. 10)"
+        actions={
+          <button
+            onClick={() => fetchPackages()}
+            className="px-4 py-2 text-sm font-medium text-theme-secondary border border-theme rounded-brand hover:bg-theme-hover transition-colors"
+          >
+            Refresh
+          </button>
+        }
+        className="mb-6"
+      />
 
       {error && (
         <div className="mb-4 p-3 text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-brand">
@@ -76,9 +77,11 @@ export function UpdatesPage() {
       {isLoading && packages.length === 0 ? (
         <div className="text-center py-12 text-theme-tertiary">Loading updates...</div>
       ) : packages.length === 0 ? (
-        <div className="text-center py-12 text-theme-tertiary">
-          No update packages found.
-        </div>
+        <EmptyState
+          icon={<PackageSearch className="w-10 h-10" />}
+          title="No update packages yet"
+          description="Packages appear here once they are uploaded and published via the server. From there you can approve, deploy, and roll back updates across your fleet."
+        />
       ) : (
         <div className="space-y-4">
           {packages.map((pkg) => (

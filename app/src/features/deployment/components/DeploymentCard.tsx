@@ -96,7 +96,10 @@ export function DeploymentCard({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span>{deployment.deployedRobotIds.length} deployed</span>
+            <span title="Robots that have received this model version so far">
+              {deployment.deployedRobotIds.length}{' '}
+              {deployment.deployedRobotIds.length === 1 ? 'robot' : 'robots'} updated
+            </span>
           </div>
           {deployment.failedRobotIds.length > 0 && (
             <div className="flex items-center gap-1 text-red-500">

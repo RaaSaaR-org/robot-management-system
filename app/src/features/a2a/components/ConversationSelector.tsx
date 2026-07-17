@@ -89,11 +89,11 @@ export const ConversationSelector = memo(function ConversationSelector({
           'max-w-[180px]'
         )}
       >
-        <ChatIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
-        <span className="truncate text-gray-900 dark:text-gray-100">
+        <ChatIcon className="w-4 h-4 text-theme-muted flex-shrink-0" />
+        <span className="truncate text-theme-primary">
           {current?.name || 'No conversation'}
         </span>
-        <ChevronDownIcon className={cn('w-4 h-4 flex-shrink-0 text-gray-400 transition-transform duration-200', isOpen && 'rotate-180')} />
+        <ChevronDownIcon className={cn('w-4 h-4 flex-shrink-0 text-theme-muted transition-transform duration-200', isOpen && 'rotate-180')} />
       </button>
 
       {isOpen && (
@@ -127,7 +127,7 @@ export const ConversationSelector = memo(function ConversationSelector({
 
           {/* Conversations list */}
           {conversations.length === 0 ? (
-            <div className="px-3 py-4 text-center text-sm text-gray-500 dark:text-gray-400">
+            <div className="px-3 py-4 text-center text-sm text-theme-tertiary">
               No conversations yet
             </div>
           ) : (
@@ -148,10 +148,10 @@ export const ConversationSelector = memo(function ConversationSelector({
                       'bg-primary-50/50 dark:bg-primary-900/20'
                   )}
                 >
-                  <div className="font-medium truncate text-gray-900 dark:text-gray-100">
+                  <div className="font-medium truncate text-theme-primary">
                     {conv.name}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                  <div className="flex items-center gap-2 text-xs text-theme-muted mt-0.5">
                     <span>{conv.messages?.length || 0} messages</span>
                     <span>·</span>
                     <span>

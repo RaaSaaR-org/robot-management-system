@@ -25,7 +25,7 @@ function getStatusStyles(state: string): { bg: string; text: string; dot: string
   const styles = {
     default: {
       bg: 'glass-subtle',
-      text: 'text-gray-600 dark:text-gray-400',
+      text: 'text-theme-secondary',
       dot: 'bg-gray-400',
     },
     info: {
@@ -100,28 +100,28 @@ export const TaskStatusCard = memo(function TaskStatusCard({
         </div>
 
         {/* Task ID */}
-        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono glass-subtle px-2 py-0.5 rounded">
+        <span className="text-xs text-theme-muted font-mono glass-subtle px-2 py-0.5 rounded">
           {task.id.slice(0, 8)}
         </span>
       </div>
 
       {/* Status message preview */}
       {task.status.message && (
-        <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2 mb-3">
+        <p className="text-sm text-theme-secondary line-clamp-2 mb-3">
           {getMessageText(task.status.message)}
         </p>
       )}
 
       {/* Artifacts count */}
       {task.artifacts && task.artifacts.length > 0 && (
-        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+        <div className="flex items-center gap-2 text-xs text-theme-tertiary">
           <span className="uppercase tracking-wider">Artifacts</span>
           <span className="font-medium glass-subtle px-2 py-0.5 rounded-full">{task.artifacts.length}</span>
         </div>
       )}
 
       {/* Timestamps */}
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-glass-subtle text-xs text-gray-400 dark:text-gray-500">
+      <div className="flex items-center justify-between mt-3 pt-3 border-t border-glass-subtle text-xs text-theme-muted">
         {task.createdAt && (
           <span>Created: {new Date(task.createdAt).toLocaleTimeString()}</span>
         )}

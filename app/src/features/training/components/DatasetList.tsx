@@ -89,7 +89,7 @@ export function DatasetList({
                 onClick={() => setStatusFilter(option.value)}
                 className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
                   statusFilter === option.value
-                    ? 'bg-primary-500 text-white'
+                    ? 'bg-cobalt-500 text-white'
                     : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
                 }`}
               >

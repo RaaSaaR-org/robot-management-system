@@ -192,8 +192,14 @@
     @apply border-2 border-cobalt text-cobalt px-6 py-3 rounded-brand font-medium transition-all duration-200 hover:bg-cobalt hover:text-white;
   }
 
+  /* Legacy name — now theme-aware: white-on-light was unreadable in light theme */
   .btn-outline-white {
-    @apply border-2 border-white/60 text-white px-6 py-3 rounded-brand font-medium transition-all duration-200 hover:bg-white/10 hover:border-white/80;
+    @apply border-2 px-6 py-3 rounded-brand font-medium transition-all duration-200;
+    border-color: var(--border-color-strong);
+    color: var(--text-primary);
+  }
+  .btn-outline-white:hover {
+    background-color: var(--bg-elevated);
   }
 
   /* Theme-aware glass effect (legacy) */

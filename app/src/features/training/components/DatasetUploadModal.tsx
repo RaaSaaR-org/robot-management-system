@@ -180,7 +180,7 @@ export function DatasetUploadModal({
                 className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
                   step === s
-                    ? 'bg-primary-500 text-white'
+                    ? 'bg-cobalt-500 text-white'
                     : i < ['metadata', 'upload', 'validating', 'complete'].indexOf(step)
                       ? 'bg-green-500 text-white'
                       : 'bg-theme-secondary/20 text-theme-secondary'
@@ -215,7 +215,7 @@ export function DatasetUploadModal({
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
                 placeholder="Describe the dataset..."
-                className="w-full px-3 py-2 rounded-lg border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-primary-500"
+                className="w-full px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
                 rows={3}
               />
             </div>
@@ -227,7 +227,7 @@ export function DatasetUploadModal({
               <select
                 value={form.robotTypeId}
                 onChange={(e) => setForm({ ...form, robotTypeId: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-primary-500"
+                className="w-full px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
               >
                 <option value="">Select robot type...</option>
                 {robotTypes.map((rt) => (
@@ -250,8 +250,8 @@ export function DatasetUploadModal({
               className={cn(
                 'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
                 isDragging
-                  ? 'border-primary-500 bg-primary-500/10'
-                  : 'border-theme-secondary/30 hover:border-primary-500/50'
+                  ? 'border-cobalt-500 bg-cobalt-500/10'
+                  : 'border-theme-secondary/30 hover:border-cobalt-500/50'
               )}
             >
               <input

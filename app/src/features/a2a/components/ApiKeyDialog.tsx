@@ -74,7 +74,7 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
         <div>
           <label
             htmlFor="api-key"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            className="block text-sm font-medium text-theme-secondary mb-1"
           >
             OpenRouter API Key
           </label>
@@ -90,12 +90,12 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
             <button
               type="button"
               onClick={() => setShowKey(!showKey)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-theme-tertiary hover:text-theme-primary transition-colors px-2 py-1"
             >
               {showKey ? 'Hide' : 'Show'}
             </button>
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-xs text-theme-tertiary mt-1">
             Required for LLM-powered orchestration. Uses free model (Step 3.5 Flash). Get your key from{' '}
             <a
               href="https://openrouter.ai/keys"
@@ -109,10 +109,10 @@ export const ApiKeyDialog = memo(function ApiKeyDialog({
         </div>
 
         <div className="glass-subtle rounded-lg p-3">
-          <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          <h4 className="text-sm font-medium text-theme-secondary mb-2">
             How it works
           </h4>
-          <ul className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
+          <ul className="text-xs text-theme-tertiary space-y-1">
             <li>• In Orchestration mode, the LLM analyzes your message</li>
             <li>• It reads agent descriptions and capabilities</li>
             <li>• Automatically selects the best agent for your task</li>

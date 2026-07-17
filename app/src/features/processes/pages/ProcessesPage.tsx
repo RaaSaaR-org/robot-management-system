@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { GitBranch } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
+import { PageHeader } from '@/shared/components/ui';
 import { TaskList as ProcessList } from '../components/TaskList';
 import { CreateProcessModal } from '../components/CreateProcessModal';
 
@@ -64,13 +65,15 @@ function ProcessesPageInner() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold text-theme-primary">Automations</h1>
-        <p className="text-theme-secondary mt-1">
-          Run skills on your robots — once, on a schedule, or chained together. Pick from the{' '}
-          <a href="/skills" className="text-cobalt-400 hover:underline">Skill Library</a>.
-        </p>
-      </header>
+      <PageHeader
+        title="Automations"
+        subtitle={
+          <>
+            Run skills on your robots — once, on a schedule, or chained together. Pick from the{' '}
+            <a href="/skills" className="text-cobalt-400 hover:underline">Skill Library</a>.
+          </>
+        }
+      />
 
       <ProcessList
         onSelectTask={handleSelectProcess}

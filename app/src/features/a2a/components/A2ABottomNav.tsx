@@ -64,7 +64,7 @@ export const A2ABottomNav = memo(function A2ABottomNav({
                 'transition-colors',
                 isActive
                   ? 'text-primary-500'
-                  : 'text-gray-500 dark:text-gray-400'
+                  : 'text-theme-tertiary'
               )
             }
           >

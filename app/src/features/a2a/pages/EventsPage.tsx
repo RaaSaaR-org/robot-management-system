@@ -9,6 +9,7 @@ import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Badge } from '@/shared/components/ui/Badge';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { EventList } from '../components/EventList';
 import { A2ALayout } from '../components/A2ALayout';
 import { useA2AStore } from '../store';
@@ -53,35 +54,35 @@ function EventDetail({ event, onClose }: EventDetailProps) {
       {/* Modal */}
       <div className="relative glass-elevated rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-glass-subtle">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          <h2 className="text-lg font-semibold text-theme-primary">
             Event Details
           </h2>
           <button
             onClick={onClose}
             className="p-2 rounded-lg hover:bg-gray-100/50 dark:hover:bg-gray-700/50 transition-colors"
           >
-            <XIcon className="w-5 h-5 text-gray-500" />
+            <XIcon className="w-5 h-5 text-theme-tertiary" />
           </button>
         </div>
 
         <div className="p-6 overflow-y-auto max-h-[calc(80vh-80px)]">
           <dl className="space-y-4">
             <div>
-              <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Event ID</dt>
-              <dd className="mt-1 font-mono text-sm text-gray-900 dark:text-gray-100">{event.id}</dd>
+              <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Event ID</dt>
+              <dd className="mt-1 font-mono text-sm text-theme-primary">{event.id}</dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Timestamp</dt>
-              <dd className="mt-1 text-sm text-gray-900 dark:text-gray-100">
+              <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Timestamp</dt>
+              <dd className="mt-1 text-sm text-theme-primary">
                 {new Date(event.timestamp).toLocaleString()}
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Actor</dt>
-              <dd className="mt-1 text-sm text-gray-900 dark:text-gray-100">{event.actor}</dd>
+              <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Actor</dt>
+              <dd className="mt-1 text-sm text-theme-primary">{event.actor}</dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Role</dt>
+              <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Role</dt>
               <dd className="mt-1">
                 <span className={cn(
                   'inline-flex px-2.5 py-1 rounded-full text-xs font-medium',
@@ -94,31 +95,31 @@ function EventDetail({ event, onClose }: EventDetailProps) {
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Message ID</dt>
-              <dd className="mt-1 font-mono text-sm text-gray-900 dark:text-gray-100">
+              <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Message ID</dt>
+              <dd className="mt-1 font-mono text-sm text-theme-primary">
                 {event.content.messageId}
               </dd>
             </div>
             {event.content.contextId && (
               <div>
-                <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Context ID</dt>
-                <dd className="mt-1 font-mono text-sm text-gray-900 dark:text-gray-100">
+                <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Context ID</dt>
+                <dd className="mt-1 font-mono text-sm text-theme-primary">
                   {event.content.contextId}
                 </dd>
               </div>
             )}
             {event.content.taskId && (
               <div>
-                <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Task ID</dt>
-                <dd className="mt-1 font-mono text-sm text-gray-900 dark:text-gray-100">
+                <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Task ID</dt>
+                <dd className="mt-1 font-mono text-sm text-theme-primary">
                   {event.content.taskId}
                 </dd>
               </div>
             )}
             <div>
-              <dt className="text-xs uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400">Content</dt>
+              <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Content</dt>
               <dd className="mt-1">
-                <pre className="p-3 glass-subtle rounded-lg text-xs overflow-x-auto text-gray-700 dark:text-gray-300">
+                <pre className="p-3 glass-subtle rounded-lg text-xs overflow-x-auto font-mono text-theme-secondary">
                   {JSON.stringify(event.content.parts, null, 2)}
                 </pre>
               </dd>
@@ -166,27 +167,28 @@ export const EventsPage = memo(function EventsPage() {
     <A2ALayout>
       <div className="flex flex-col h-full overflow-hidden">
         {/* Header */}
-        <header className="flex-shrink-0 flex items-center justify-between h-14 px-4 md:px-6 border-b border-glass-subtle glass-elevated">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Events
-            </h1>
-            <Badge variant="default" size="sm">
-              {events.length}
-            </Badge>
-          </div>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="gap-1.5"
-          >
-            <RefreshIcon className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-        </header>
+        <div className="flex-shrink-0 px-4 md:px-6 py-4 border-b border-glass-subtle">
+          <PageHeader
+            title="Events"
+            meta={
+              <Badge variant="default" size="sm">
+                {events.length}
+              </Badge>
+            }
+            actions={
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="gap-1.5"
+              >
+                <RefreshIcon className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+            }
+          />
+        </div>
 
         {/* Content */}
         <div className="flex-1 overflow-auto">

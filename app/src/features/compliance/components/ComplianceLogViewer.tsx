@@ -19,7 +19,7 @@ const EVENT_TYPE_LABELS: Record<ComplianceEventType, string> = {
 
 // Severity colors
 const SEVERITY_COLORS: Record<ComplianceSeverity, string> = {
-  debug: 'text-gray-400 bg-gray-500/20',
+  debug: 'text-theme-tertiary bg-gray-500/20',
   info: 'text-blue-400 bg-blue-500/20',
   warning: 'text-yellow-400 bg-yellow-500/20',
   error: 'text-red-400 bg-red-500/20',

@@ -6,9 +6,9 @@
 
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Brain, BarChart3, FlaskConical, Wrench } from 'lucide-react';
+import { Brain, BarChart3, FlaskConical, Plus, Wrench } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button, Tabs } from '@/shared/components/ui';
+import { Button, EmptyState, PageHeader, Tabs } from '@/shared/components/ui';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { TrainingJobList } from '../components/TrainingJobList';
 import { TrainingJobWizard } from '../components/TrainingJobWizard';
@@ -80,6 +80,10 @@ export function TrainingPage() {
   const activeJobs = jobs.filter((j) => ['pending', 'queued', 'running'].includes(j.status));
   const historyJobs = jobs.filter((j) => ['completed', 'failed', 'cancelled'].includes(j.status));
 
+  // When the Active tab shows its empty state (with its own "Start Training"
+  // CTA), hide the header CTA so there is exactly one primary action visible.
+  const showJobsEmptyState = !jobsLoading && activeJobs.length === 0 && activeTab === 'active';
+
   const handleSelectJob = (job: TrainingJob) => {
     setSelectedJob(job);
   };
@@ -121,35 +125,20 @@ export function TrainingPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Training</h1>
-          <p className="text-theme-secondary mt-1">
-            Fine-tune VLA models on your robot datasets
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <PipelineBreadcrumb stage="train" />
-          {outerTab === 'jobs' && (
-            <Button onClick={() => setIsWizardOpen(true)}>
-              <svg
-                className="w-4 h-4 mr-2"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
-              New Training Job
-            </Button>
-          )}
-        </div>
-      </header>
+      <PageHeader
+        title="Training"
+        subtitle="Fine-tune VLA models on your robot datasets"
+        actions={
+          <>
+            <PipelineBreadcrumb stage="train" />
+            {outerTab === 'jobs' && !showJobsEmptyState && (
+              <Button onClick={() => setIsWizardOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
+                New Training Job
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <Tabs
         activeTab={outerTab}
@@ -197,6 +186,7 @@ export function TrainingPage() {
                   <TrainingJobList
                     jobs={activeJobs}
                     isLoading={jobsLoading}
+                    hideEmpty
                     selectedId={selectedJob?.id}
                     onSelect={handleSelectJob}
                     onCancel={handleCancelJob}
@@ -221,31 +211,18 @@ export function TrainingPage() {
             ]}
           />
 
-          {activeJobs.length === 0 && activeTab === 'active' && !jobsLoading && (
-            <div className="text-center py-12 bg-theme-secondary/10 rounded-lg">
-              <svg
-                className="w-12 h-12 mx-auto text-theme-tertiary"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                />
-              </svg>
-              <h3 className="mt-4 text-lg font-medium text-theme-primary">
-                No Active Training Jobs
-              </h3>
-              <p className="mt-2 text-theme-secondary">
-                Start a new training job to fine-tune a VLA model on your dataset.
-              </p>
-              <Button className="mt-4" onClick={() => setIsWizardOpen(true)}>
-                Start Training
-              </Button>
-            </div>
+          {showJobsEmptyState && (
+            <EmptyState
+              className="bg-theme-secondary/10 rounded-lg"
+              icon={<Brain className="w-10 h-10" />}
+              title="No Active Training Jobs"
+              description="Start a new training job to fine-tune a VLA model on your dataset."
+              action={
+                <Button onClick={() => setIsWizardOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
+                  Start Training
+                </Button>
+              }
+            />
           )}
         </div>
 

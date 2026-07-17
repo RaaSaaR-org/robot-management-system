@@ -2,13 +2,14 @@
  * @file TopBar.tsx
  * @description Top navigation bar with mobile menu and sidebar toggle
  * @feature layout
- * @dependencies @/components/common/Logo, @/features/auth, @/features/settings, @/shared/components/ui/MenuButton
+ * @dependencies @/components/common/Logo, @/features/auth, @/features/settings, @/shared/components/ui/MenuButton, @/shared/hooks/useMediaQuery
  */
 
 import { Logo } from '@/components/common/Logo';
 import { useThemeStore } from '@/features/settings';
 import { useUIStore } from '@/features/settings/store/uiStore';
 import { MenuButton } from '@/shared/components/ui/MenuButton';
+import { useMediaQuery } from '@/shared/hooks/useMediaQuery';
 import { OrganizationSwitcher } from './OrganizationSwitcher';
 import { UserMenu } from './UserMenu';
 
@@ -53,13 +54,16 @@ export function TopBar() {
   const sidebarCollapsed = useUIStore((state) => state.sidebarCollapsed);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
 
-  // Toggle between light and dark
-  const toggleTheme = () => {
-    setTheme(theme === 'light' ? 'dark' : 'light');
-  };
+  // Resolve the theme actually applied: 'system' follows the OS preference
+  // (same media query ThemeProvider uses), so the toggle's icon/label always
+  // reflect what the user currently sees — not the stored preference.
+  const systemPrefersDark = useMediaQuery('(prefers-color-scheme: dark)');
+  const isDark = theme === 'system' ? systemPrefersDark : theme === 'dark';
 
-  // Show sun in dark mode (click to go light), moon in light mode (click to go dark)
-  const isDark = theme === 'dark' || theme === 'system';
+  // Toggle away from the currently resolved theme
+  const toggleTheme = () => {
+    setTheme(isDark ? 'light' : 'dark');
+  };
 
   return (
     <header className="fixed top-0 left-0 right-0 h-14 glass border-b border-theme z-40">

@@ -157,7 +157,7 @@ export function HFPushModal({
                   name="visibility"
                   checked={!isPrivate}
                   onChange={() => setIsPrivate(false)}
-                  className="text-primary-500"
+                  className="text-cobalt-500"
                 />
                 <span className="text-sm text-theme-primary">Public</span>
               </label>
@@ -167,7 +167,7 @@ export function HFPushModal({
                   name="visibility"
                   checked={isPrivate}
                   onChange={() => setIsPrivate(true)}
-                  className="text-primary-500"
+                  className="text-cobalt-500"
                 />
                 <span className="text-sm text-theme-primary">Private</span>
               </label>
@@ -189,7 +189,7 @@ export function HFPushModal({
 
         {pushState === 'pushing' && (
           <div className="text-center py-6 space-y-4">
-            <div className="animate-spin h-8 w-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto" />
+            <div className="animate-spin h-8 w-8 border-4 border-cobalt-500 border-t-transparent rounded-full mx-auto" />
             <p className="text-sm text-theme-secondary">{progress}</p>
             <p className="text-xs text-theme-tertiary">This may take a few minutes for large datasets.</p>
           </div>
@@ -204,7 +204,7 @@ export function HFPushModal({
                 href={resultUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary-500 hover:underline text-sm"
+                className="text-cobalt-500 hover:underline text-sm"
               >
                 {resultUrl}
               </a>

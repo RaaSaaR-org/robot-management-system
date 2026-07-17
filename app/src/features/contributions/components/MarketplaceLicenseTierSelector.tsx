@@ -34,36 +34,36 @@ export function MarketplaceLicenseTierSelector({
             type="button"
             onClick={() => onChange(tier.tier)}
             className={cn(
-              'relative w-full text-left rounded-lg border p-3 transition-all',
+              'relative w-full text-left rounded-brand border p-3 transition-all',
               isSelected
-                ? 'border-[#FF6700] bg-[#FF6700]/10'
+                ? 'border-cobalt-500 bg-cobalt-500/10'
                 : canAfford
-                  ? 'border-white/10 bg-white/5 hover:border-white/20'
-                  : 'border-white/5 bg-white/[0.02] opacity-50'
+                  ? 'border-theme bg-theme-elevated hover:border-theme-strong'
+                  : 'border-theme bg-theme-elevated opacity-50'
             )}
           >
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
                 {isSelected ? (
-                  <div className="w-4 h-4 rounded-full bg-[#FF6700] flex items-center justify-center">
+                  <div className="w-4 h-4 rounded-full bg-cobalt-500 flex items-center justify-center">
                     <Check size={10} className="text-white" />
                   </div>
                 ) : (
-                  <div className="w-4 h-4 rounded-full border border-white/20" />
+                  <div className="w-4 h-4 rounded-full border border-theme-strong" />
                 )}
-                <span className="text-sm font-medium text-white">{tier.label}</span>
+                <span className="text-sm font-medium text-theme-primary">{tier.label}</span>
               </div>
               <div className="flex items-center gap-1">
-                {!canAfford && <Lock size={10} className="text-gray-500" />}
+                {!canAfford && <Lock size={10} className="text-theme-tertiary" />}
                 <span className={cn(
                   'text-sm font-bold',
-                  isSelected ? 'text-[#FF6700]' : 'text-white'
+                  isSelected ? 'text-cobalt-500 dark:text-cobalt-300' : 'text-theme-primary'
                 )}>
                   {formatCredits(tier.priceCredits)} cr
                 </span>
               </div>
             </div>
-            <p className="text-xs text-gray-400 ml-6">{tier.description}</p>
+            <p className="text-xs text-theme-secondary ml-6">{tier.description}</p>
             {!canAfford && (
               <p className="text-xs text-red-400/70 ml-6 mt-1">
                 Need {formatCredits(tier.priceCredits - userCredits)} more credits

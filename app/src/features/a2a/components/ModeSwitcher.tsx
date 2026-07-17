@@ -27,7 +27,7 @@ export const ModeSwitcher = memo(function ModeSwitcher({
   return (
     <div
       className={cn(
-        'flex items-center gap-0.5 p-0.5 rounded-lg glass-subtle',
+        'flex items-center gap-0.5 p-0.5 rounded-brand glass-subtle',
         disabled && 'opacity-50 pointer-events-none'
       )}
     >
@@ -35,10 +35,10 @@ export const ModeSwitcher = memo(function ModeSwitcher({
         onClick={() => onChange('direct')}
         disabled={disabled}
         className={cn(
-          'px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200',
+          'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200',
           mode === 'direct'
-            ? 'bg-primary-500 text-white shadow-sm'
-            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100/50 dark:hover:bg-gray-700/50'
+            ? 'bg-cobalt-500 text-white shadow-sm'
+            : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
         )}
         title="Direct mode: Chat with one selected agent"
       >
@@ -48,10 +48,10 @@ export const ModeSwitcher = memo(function ModeSwitcher({
         onClick={() => onChange('orchestration')}
         disabled={disabled}
         className={cn(
-          'px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200',
+          'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200',
           mode === 'orchestration'
-            ? 'bg-accent-500 text-white shadow-sm'
-            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100/50 dark:hover:bg-gray-700/50'
+            ? 'bg-cobalt-500 text-white shadow-sm'
+            : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
         )}
         title="Orchestration mode: AI routes to all registered agents"
       >

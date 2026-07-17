@@ -44,11 +44,11 @@ export const AgentCard = memo(function AgentCard({
       {/* Header */}
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1">
-          <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+          <h3 className="font-semibold text-theme-primary">
             {agent.name}
           </h3>
           {agent.provider && (
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-theme-tertiary">
               by {agent.provider.organization}
             </p>
           )}
@@ -56,14 +56,14 @@ export const AgentCard = memo(function AgentCard({
 
         {/* Version badge */}
         {agent.version && (
-          <span className="text-xs glass-subtle px-2 py-0.5 rounded-full text-gray-600 dark:text-gray-400">
+          <span className="text-xs glass-subtle px-2 py-0.5 rounded-full text-theme-secondary">
             v{agent.version}
           </span>
         )}
       </div>
 
       {/* Description */}
-      <p className="text-sm text-gray-600 dark:text-gray-300 mb-3 line-clamp-2">
+      <p className="text-sm text-theme-secondary mb-3 line-clamp-2">
         {agent.description}
       </p>
 
@@ -91,19 +91,19 @@ export const AgentCard = memo(function AgentCard({
       {/* Skills */}
       {agent.skills && agent.skills.length > 0 && (
         <div className="mb-3">
-          <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">Skills</p>
+          <p className="text-xs uppercase tracking-wider text-theme-tertiary mb-1.5">Skills</p>
           <div className="flex flex-wrap gap-1.5">
             {agent.skills.slice(0, 3).map((skill) => (
               <span
                 key={skill.id}
-                className="text-xs glass-subtle text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full"
+                className="text-xs glass-subtle text-theme-secondary px-2 py-0.5 rounded-full"
                 title={skill.description}
               >
                 {skill.name}
               </span>
             ))}
             {agent.skills.length > 3 && (
-              <span className="text-xs text-gray-400 dark:text-gray-500">
+              <span className="text-xs text-theme-muted">
                 +{agent.skills.length - 3} more
               </span>
             )}
@@ -112,7 +112,7 @@ export const AgentCard = memo(function AgentCard({
       )}
 
       {/* URL */}
-      <p className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate mb-3">
+      <p className="text-xs text-theme-muted font-mono truncate mb-3">
         {agent.url}
       </p>
 
@@ -163,7 +163,7 @@ export const AgentListItem = memo(function AgentListItem({
           'w-10 h-10 rounded-full flex items-center justify-center text-lg font-medium',
           isSelected
             ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-            : 'glass-subtle text-gray-600 dark:text-gray-400'
+            : 'glass-subtle text-theme-secondary'
         )}
       >
         {agent.name.charAt(0).toUpperCase()}
@@ -171,10 +171,10 @@ export const AgentListItem = memo(function AgentListItem({
 
       {/* Info */}
       <div className="flex-1 min-w-0">
-        <p className="font-medium text-gray-900 dark:text-gray-100 truncate">
+        <p className="font-medium text-theme-primary truncate">
           {agent.name}
         </p>
-        <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+        <p className="text-sm text-theme-tertiary truncate">
           {agent.description}
         </p>
       </div>

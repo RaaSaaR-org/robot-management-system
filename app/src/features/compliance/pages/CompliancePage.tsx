@@ -10,6 +10,8 @@ import { Shield } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
 import { Tabs } from '@/shared/components/ui/Tabs';
 import { Button } from '@/shared/components/ui/Button';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { SegmentedControl } from '@/shared/components/ui/SegmentedControl';
 import { ComplianceLogList } from '../components/ComplianceLogList';
 import { ComplianceLogViewer } from '../components/ComplianceLogViewer';
 import { IntegrityStatus } from '../components/IntegrityStatus';
@@ -345,7 +347,7 @@ function CompliancePageInner() {
   const settingsContent = (
     <div className="space-y-8">
       <RetentionSettings />
-      <div className="border-t border-gray-700/50 pt-8">
+      <div className="border-t border-theme pt-8">
         <LegalHoldManager />
       </div>
     </div>
@@ -359,30 +361,21 @@ function CompliancePageInner() {
   const dashboardContent = (
     <div className="space-y-4">
       {/* Sub-navigation */}
-      <div className="flex gap-2 flex-wrap">
-        {[
-          { id: 'overview', label: 'Overview' },
-          { id: 'deadlines', label: 'Deadlines' },
-          { id: 'gaps', label: 'Gap Analysis' },
-          { id: 'documents', label: 'Documents' },
-          { id: 'training', label: 'Training' },
-          { id: 'inspections', label: 'Inspections' },
-          { id: 'risk', label: 'Risk Assessments' },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-              dashboardSubTab === tab.id
-                ? 'bg-primary-500 text-white'
-                : 'bg-gray-800 text-theme-secondary hover:bg-gray-700'
-            }`}
-            onClick={() => setDashboardSubTab(tab.id as typeof dashboardSubTab)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        label="Compliance dashboard sections"
+        className="flex-wrap"
+        options={[
+          { value: 'overview', label: 'Overview' },
+          { value: 'deadlines', label: 'Deadlines' },
+          { value: 'gaps', label: 'Gap Analysis' },
+          { value: 'documents', label: 'Documents' },
+          { value: 'training', label: 'Training' },
+          { value: 'inspections', label: 'Inspections' },
+          { value: 'risk', label: 'Risk Assessments' },
+        ]}
+        value={dashboardSubTab}
+        onChange={(v) => setDashboardSubTab(v)}
+      />
 
       {/* Sub-tab content */}
       <div className="overflow-y-auto">
@@ -459,12 +452,12 @@ function CompliancePageInner() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <header className="flex-shrink-0 px-6 py-4 border-b border-gray-700/50">
-        <h1 className="text-2xl font-bold text-theme-primary">Compliance Logging</h1>
-        <p className="text-theme-secondary mt-1">
-          Tamper-evident audit trail per EU AI Act Art. 12 and GDPR Art. 30
-        </p>
-      </header>
+      <div className="flex-shrink-0 px-6 py-4 border-b border-glass-subtle">
+        <PageHeader
+          title="Compliance Logging"
+          subtitle="Tamper-evident audit trail per EU AI Act Art. 12 and GDPR Art. 30"
+        />
+      </div>
 
       {/* Info Box */}
       <div className="flex-shrink-0 px-6 pt-4">
@@ -483,13 +476,18 @@ function CompliancePageInner() {
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-hidden p-6">
+      {/* Content — the Tabs header scrolls horizontally (scrollbar hidden);
+          the gradient hints that more tabs are available off-screen. */}
+      <div className="flex-1 overflow-hidden p-6 relative">
         <Tabs
           tabs={tabs}
           activeTab={activeTab}
           onTabChange={setActiveTab}
           className="h-full"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-6 right-6 h-10 w-12 bg-gradient-to-r from-transparent to-[var(--bg-primary)]"
         />
       </div>
 

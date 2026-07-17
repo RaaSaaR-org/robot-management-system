@@ -122,7 +122,7 @@ function FloorSelector({
           key={floor}
           onClick={() => onFloorChange(floor)}
           className={cn(
-            'px-3 py-1 text-xs font-mono rounded transition-all',
+            'px-3 py-1 text-xs font-medium rounded-brand transition-all',
             selectedFloor === floor
               ? 'bg-cobalt text-white'
               : 'bg-surface-700/50 text-theme-tertiary hover:bg-surface-600/50 hover:text-theme-secondary'
@@ -138,15 +138,15 @@ function FloorSelector({
 /** Map legend with futuristic styling */
 function MapLegend() {
   const statuses = [
-    { status: 'online', label: 'ONLINE' },
-    { status: 'busy', label: 'BUSY' },
-    { status: 'charging', label: 'CHARGING' },
-    { status: 'error', label: 'ERROR' },
-    { status: 'offline', label: 'OFFLINE' },
+    { status: 'online', label: 'Online' },
+    { status: 'busy', label: 'Busy' },
+    { status: 'charging', label: 'Charging' },
+    { status: 'error', label: 'Error' },
+    { status: 'offline', label: 'Offline' },
   ] as const;
 
   return (
-    <div className="flex flex-wrap gap-3 text-xs font-mono">
+    <div className="flex flex-wrap gap-3 text-xs">
       {statuses.map(({ status, label }) => (
         <div key={status} className="flex items-center gap-1.5">
           <div
@@ -428,14 +428,14 @@ export function FleetMap({
       {/* Header */}
       <div className="p-4 border-b border-cobalt/10 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          <h3 className="text-lg font-semibold text-theme-primary font-mono">FLEET MAP</h3>
+          <h3 className="text-lg font-semibold text-theme-primary">Fleet Map</h3>
           {/* Live indicator */}
           <div className="flex items-center gap-2">
             <div className="relative">
               <div className="w-2 h-2 rounded-full bg-turquoise" />
               <div className="absolute inset-0 w-2 h-2 rounded-full bg-turquoise animate-ping" />
             </div>
-            <span className="text-turquoise text-xs font-mono">LIVE</span>
+            <span className="text-turquoise text-xs font-medium uppercase tracking-wide">Live</span>
           </div>
           {floors.length > 1 && (
             <FloorSelector
@@ -615,21 +615,21 @@ export function FleetMap({
             </svg>
 
             {/* Data overlay - bottom left */}
-            <div className="absolute bottom-3 left-3 flex flex-col gap-1 font-mono text-xs">
+            <div className="absolute bottom-3 left-3 flex flex-col gap-1 text-xs tabular-nums">
               <div className="flex items-center gap-2">
-                <span className="text-theme-muted">UNITS:</span>
-                <span className="text-turquoise">{filteredRobots.length}</span>
+                <span className="text-theme-muted">Units</span>
+                <span className="text-turquoise font-medium">{filteredRobots.length}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-theme-muted">ACTIVE:</span>
-                <span className="text-cobalt-300">{statusCounts['busy'] || 0}</span>
+                <span className="text-theme-muted">Active</span>
+                <span className="text-cobalt-300 font-medium">{statusCounts['busy'] || 0}</span>
               </div>
             </div>
 
             {/* Floor indicator - bottom right */}
-            <div className="absolute bottom-3 right-3 font-mono text-xs">
-              <span className="text-theme-muted">FLOOR </span>
-              <span className="text-turquoise font-bold">{selectedFloor}</span>
+            <div className="absolute bottom-3 right-3 text-xs">
+              <span className="text-theme-muted">Floor </span>
+              <span className="text-turquoise font-medium">{selectedFloor}</span>
             </div>
           </div>
         </div>

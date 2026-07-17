@@ -64,8 +64,8 @@ export const ComplianceStatusConfig: Record<
   in_progress: { label: 'In Progress', color: 'text-blue-600', bgColor: 'bg-blue-900/20', textColor: 'text-blue-400' },
   at_risk: { label: 'At Risk', color: 'text-amber-600', bgColor: 'bg-amber-900/20', textColor: 'text-amber-400' },
   overdue: { label: 'Overdue', color: 'text-red-600', bgColor: 'bg-red-900/20', textColor: 'text-red-400' },
-  not_started: { label: 'Not Started', color: 'text-gray-600', bgColor: 'bg-gray-800/50', textColor: 'text-gray-400' },
-  not_applicable: { label: 'N/A', color: 'text-gray-400', bgColor: 'bg-gray-800/30', textColor: 'text-gray-500' },
+  not_started: { label: 'Not Started', color: 'text-theme-muted', bgColor: 'bg-gray-800/50', textColor: 'text-theme-tertiary' },
+  not_applicable: { label: 'N/A', color: 'text-theme-muted', bgColor: 'bg-gray-800/30', textColor: 'text-theme-muted' },
 };
 
 // Alias for backwards compatibility

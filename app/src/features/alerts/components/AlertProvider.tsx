@@ -1,13 +1,13 @@
 /**
  * @file AlertProvider.tsx
- * @description Provider component that handles auto-dismiss timers and renders AlertBanner
+ * @description Provider component that handles auto-dismiss timers for alerts.
+ *              The banner itself is rendered by AppLayout (in normal flow).
  * @feature alerts
- * @dependencies @/features/alerts/hooks, @/features/alerts/components/AlertBanner
+ * @dependencies @/features/alerts/hooks
  */
 
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useAlertsStore, selectAlerts } from '../store/alertsStore';
-import { AlertBanner } from './AlertBanner';
 
 // ============================================================================
 // TYPES
@@ -16,8 +16,6 @@ import { AlertBanner } from './AlertBanner';
 export interface AlertProviderProps {
   /** Child components */
   children: ReactNode;
-  /** Whether to show the banner */
-  showBanner?: boolean;
 }
 
 // ============================================================================
@@ -25,9 +23,7 @@ export interface AlertProviderProps {
 // ============================================================================
 
 /**
- * Provider component that wraps the app to:
- * 1. Handle auto-dismiss timers for alerts
- * 2. Render the AlertBanner at the top
+ * Provider component that wraps the app to handle auto-dismiss timers for alerts.
  *
  * @example
  * ```tsx
@@ -42,7 +38,7 @@ export interface AlertProviderProps {
  * }
  * ```
  */
-export function AlertProvider({ children, showBanner = true }: AlertProviderProps) {
+export function AlertProvider({ children }: AlertProviderProps) {
   const alerts = useAlertsStore(selectAlerts);
   const removeAlert = useAlertsStore((state) => state.removeAlert);
 
@@ -89,10 +85,5 @@ export function AlertProvider({ children, showBanner = true }: AlertProviderProp
     };
   }, [alerts, removeAlert]);
 
-  return (
-    <>
-      {showBanner && <AlertBanner />}
-      {children}
-    </>
-  );
+  return <>{children}</>;
 }

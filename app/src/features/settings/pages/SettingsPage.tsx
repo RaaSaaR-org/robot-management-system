@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { PageHeader } from '@/shared/components/ui';
 import { useBrand } from '@/brand';
 import { useSettings } from '../hooks/useSettings';
 import { useCurrentUser } from '@/features/auth';
@@ -91,19 +92,19 @@ export function SettingsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Settings</h1>
-          <p className="text-theme-secondary mt-1">Configure your {brand.name} preferences</p>
-        </div>
-        <button
-          onClick={resetSettings}
-          disabled={isLoading}
-          className="text-sm px-4 py-2 rounded-brand border border-theme text-theme-secondary hover:text-theme-primary hover:border-theme-strong transition-colors disabled:opacity-50"
-        >
-          Reset to Defaults
-        </button>
-      </header>
+      <PageHeader
+        title="Settings"
+        subtitle={`Configure your ${brand.name} preferences`}
+        actions={
+          <button
+            onClick={resetSettings}
+            disabled={isLoading}
+            className="text-sm px-4 py-2 rounded-brand border border-theme text-theme-secondary hover:text-theme-primary hover:border-theme-strong transition-colors disabled:opacity-50"
+          >
+            Reset to Defaults
+          </button>
+        }
+      />
 
       {/* Error banner */}
       {error && (
