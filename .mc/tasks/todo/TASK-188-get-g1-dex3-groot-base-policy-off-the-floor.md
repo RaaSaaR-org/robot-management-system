@@ -1,0 +1,94 @@
+---
+id: TASK-188
+aliases:
+- TASK-188
+title: Get the G1+Dex3 GR00T base policy off the floor (2-cam, 14k steps, exec-horizon tuning)
+slug: get-g1-dex3-groot-base-policy-off-the-floor
+status: backlog
+priority: 2
+owner: ''
+projects: []
+customers: []
+tags:
+- extended
+- vla
+sprint: ''
+depends_on:
+- '[[TASK-185]]'
+due_date: ''
+created: 2026-07-17
+updated: 2026-07-17
+status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
+  trained task only 2/10, so every ablation runs into a floor effect and can detect
+  nothing. Fix absolute policy quality before testing any data-augmentation idea
+  (dreams, Cosmos 3, …).'
+---
+
+## Description
+
+Train a GR00T-N1.7 policy on the **real** `G1_Dex3` pick-place data that can actually do its own
+task — target **≥ 6/10 closed-loop** on `Isaac-PickPlace-Cylinder-G129-Dex3-Joint`, up from
+today's **2/10**. This is the prerequisite for every downstream experiment: while both arms of an
+ablation sit at 0–2/10 the comparison is a floor effect and cannot detect anything ([[TASK-185]]).
+
+No synthetic data is involved here. This is purely "can we get a competent policy out of the
+182 real teleop episodes we already have".
+
+## Details
+
+**Current state (measured in [[TASK-185]], 2026-07-17):**
+- Best real-only policy: **2/10** closed-loop; offline 0.3811 rad / 25.6 % on the real holdout.
+- A trivial **hold-current-state** policy scores **0.081 rad** — 3–5× *better* offline than any
+  policy we have trained. Offline MAE ranks inertness on this data, so it must never be the
+  headline metric; always report the hold-state baseline beside it.
+- Dataset `unitree_g1_train`: **182 episodes / 157,151 frames / 30 fps**, and **two cameras**:
+  `observation.images.cam_left_high` + `observation.images.cam_right_high` (480×640, head stereo).
+
+**Three concrete levers, in order of expected payoff:**
+
+1. **Use both cameras (we are currently throwing one away).** TASK-185 trained single-camera on
+   purpose — the dreams are single-view and both ablation arms had to match — which handicapped
+   the real policy too. TASK-180's working 2-cam setup is the reference. Needs a **2-cam modality
+   config built the same way as the 1-cam one**: copy `g1_dex3_1cam_modality_config.py` and add
+   `cam_left_high`. ⚠ Do **not** reuse `vla-training/groot/g1_dex3_modality_config.py` as-is — it
+   uses **dotted** modality keys (`"state.arms"`, `"video.cam_left_high"`) which raise
+   `KeyError: 'state.arms'` in `get_dataset_statistics` and mis-map video keys by position (see
+   `_ft_out/g1_dex3_modality_config_fixed.py`). N1.7 wants short keys (`arms`, `cam_right_high`).
+   The dataset's `meta/modality.json` must list both cameras to match.
+2. **Train long enough.** TASK-185 ran 3000 × batch 8 = 24k samples ≈ **0.15 epochs** — the loss
+   was still descending smoothly (1.40 → 0.78). Use TASK-180's proven **14,000 steps** (~2.5 h at
+   ~1.55 it/s). Expect only ~5 % on open-loop MSE (TASK-180: 0.4036 @14k vs 0.4258 @2k) — the
+   point is closed-loop competence, which nobody has measured across step counts.
+3. **Tune the execution horizon.** The bridge predicts 16-step chunks and executes the first 8 at
+   15 Hz with a 0.2 rad/step clip. Nobody has swept this. Try exec_horizon ∈ {4, 8, 16} and
+   hz ∈ {15, 30}; the real data is 30 fps, so 15 Hz may be halving the intended speed.
+   [[TASK-183]] (real-time chunking) is the principled version of this knob.
+
+**Key files:**
+- `vla-training/groot/g1_dex3_1cam_modality_config.py` + `modality_g1_dex3_1cam.json` — the working
+  pattern to copy for 2-cam (short keys, `arms` 0–14 / `hands` 14–28).
+- `~/unitree/task185/task185_finetune.py` (WSL `g1-eval`) — finetune runner; env levers
+  `TASK185_OPTIM=paged_adamw_8bit` (stock `adamw_torch` OOMs at 31.9/32 GB even at batch 1) and
+  `TASK185_GRAD_CHECKPOINTING`. Keep `unset HF_HUB_OFFLINE` (the gated Cosmos-Reason2-2B backbone
+  needs an online token-authed `model_info()` call).
+- `C:\Unitree\_data\task185_run_ablation_n17.sh` — training driver (change `STEPS`, modality path).
+- `C:\Unitree\_data\task185_serve_n17.sh` — serve a checkpoint from WSL; sim on native Windows
+  reaches it over `127.0.0.1:<port>` via WSL2 localhost-forwarding (no need to copy 15 GB).
+- `C:\Unitree\_data\task185\eval_g1_sim_groot_success.py` — closed-loop harness. It already sends
+  **both** `cam_right_high` and `cam_left_high` (currently the same head frame — for a real 2-cam
+  policy, wire the sim's second view properly rather than duplicating).
+- Sim: `C:\Unitree\unitree_sim_isaaclab\start_sim_pickplace_dex3.bat` (DDS **domain 1**).
+
+**Trap (cost TASK-185 a full round):** `G1_29_ArmController` runs a `while True` thread writing
+`rt/lowcmd` and `Dex3_1_Controller` spawns non-daemon children, so a "finished" eval keeps
+commanding the robot and fights the next run — every cell read 0/10 until stale PIDs were killed.
+Verify no `eval_g1_sim_groot_success` process survives between runs.
+
+## Test Strategy
+
+Closed-loop success from the sim's `rt/rewards_state` (reward 1.0 = cylinder in the target post
+area), **≥ 20 reset-isolated rollouts** on "Put the bottle into the plate." — n=10 is too few to
+tell 2/10 from 5/10 (see [[TASK-189]]). Baseline to beat: **2/10**. Report the hold-state offline
+baseline (0.081 rad) alongside any MAE so the metric's degeneracy stays visible.
+Ablate the three levers one at a time (2-cam @3k vs 1-cam @3k; then 14k; then the horizon sweep)
+so we learn which one actually buys the competence — not just that the bundle helped.

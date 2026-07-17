@@ -40,6 +40,7 @@ import { useTelemetryStream } from '../../robots/hooks/useTelemetryStream';
 import { JointStateGrid } from '../../robots/components/visualization';
 import { KeyboardTeleopSection } from '../../robots/components/tabs/TeleopTab';
 import { useGamepadJoints } from '../hooks/useGamepadJoints';
+import { jointPositionUnit } from '../../robots/types/robots.types';
 import type { RobotType } from '../../robots/types/robots.types';
 import {
   TELEOPERATION_TYPE_LABELS,
@@ -544,7 +545,13 @@ export function SessionDetailPage() {
             {/* Joint States */}
             <Card>
               <h3 className="text-sm font-medium text-theme-secondary mb-3">Joint States</h3>
-              <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
+              <JointStateGrid
+                jointStates={telemetry?.jointStates ?? []}
+                columns={2}
+                positionUnit={jointPositionUnit(
+                  telemetry?.robotType ?? (robot?.metadata as Record<string, unknown> | undefined)?.robotType
+                )}
+              />
             </Card>
 
             {/* Episode controls: next episode, per-episode discard, target progress */}

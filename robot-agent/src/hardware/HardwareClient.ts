@@ -532,6 +532,26 @@ export class HardwareClient {
   }
 
   /**
+   * Toggle the G1's head LiDAR via the sidecar (rt/utlidar/switch). A pure
+   * sensor enable — commands no robot motion; the single authorized write
+   * while the read-only stage is active. Timeout is generous because the
+   * sidecar repeats the DDS write for ~3 s to ride out discovery.
+   */
+  async setLidarSwitch(on: boolean): Promise<{ ok: boolean; lidar?: string; error?: string }> {
+    const res = await fetch(`${getSidecarUrl()}/pointcloud/lidar/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = (await res.json()) as { ok?: boolean; lidar?: string; error?: string };
+    if (!res.ok || !data.ok) {
+      return { ok: false, error: data.error ?? `Sidecar LiDAR switch returned HTTP ${res.status}` };
+    }
+    return { ok: true, lidar: data.lidar };
+  }
+
+  /**
    * Synchronous joint read (unlike the 2s `jointStates` poll). Uses the
    * sidecar's /state/fast endpoint, which skips the between-read torque
    * disable so the robot holds position during a closed-loop run.

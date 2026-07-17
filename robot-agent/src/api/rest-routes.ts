@@ -115,6 +115,24 @@ export function createRestRoutes(
     }
   });
 
+  // POST /robots/:id/pointcloud/lidar/switch — toggle the physical LiDAR via
+  // the hardware sidecar (rt/utlidar/switch: a sensor enable, no motion).
+  // Body: {on: boolean}. Always 200 with {ok, lidar?, error?} unless the
+  // request itself is malformed — transport problems surface as ok:false.
+  router.post('/robots/:id/pointcloud/lidar/switch', async (req: Request, res: Response) => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id !== robot.id) {
+      res.status(404).json({ code: 'ROBOT_NOT_FOUND', message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}` });
+      return;
+    }
+    const on = req.body?.on;
+    if (typeof on !== 'boolean') {
+      res.status(400).json({ ok: false, error: 'body must be {on: boolean}' });
+      return;
+    }
+    res.json(await robotStateManager.setLidarSwitch(on));
+  });
+
   // Scan sessions (digital-twin sweep): start/stop/status. While a session is
   // active the /pointcloud endpoint returns pose-dependent slices of one fixed
   // world room, so accumulated frames reconstruct the room as the robot walks.

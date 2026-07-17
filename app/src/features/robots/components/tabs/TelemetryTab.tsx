@@ -16,6 +16,7 @@ import {
   TelemetryHistorySparklines,
 } from '../telemetry';
 import { JointStateGrid, HandTouchPads } from '../visualization';
+import { jointPositionUnit } from '../../types/robots.types';
 import type { TelemetryTabProps } from './types';
 
 // ============================================================================
@@ -80,11 +81,32 @@ export function TelemetryTab({
   // Telemetry never arrived and the stream is in an error state — show an
   // explicit unavailable state instead of spinning forever.
   const isTelemetryError = !telemetry && !isOffline && telemetryStatus === 'error';
+  // Live-frame field groups (each absent on robots without the hardware)
+  const hasBatteryHealth = !!telemetry?.battery;
+  const hasImu = !!telemetry?.imu?.rpy;
+  const hasTouch = !!telemetry?.touch;
+  // Real G1 frames carry no legacy `sensors` record — hide the card instead of
+  // rendering a permanent empty state. Loading/offline/error states keep it.
+  const hasSensors = !!telemetry?.sensors && Object.keys(telemetry.sensors).length > 0;
+
+  const liveIndicator = isOffline ? (
+    <div className="flex items-center gap-2">
+      <div className="w-2 h-2 rounded-full bg-gray-500" />
+      <span className="text-xs text-gray-400 font-medium">Offline</span>
+    </div>
+  ) : isTelemetryConnected ? (
+    <div className="flex items-center gap-2">
+      <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+      <span className="text-xs text-green-500 font-medium">Live</span>
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-6">
-      {/* System Metrics */}
-      <Card>
+      {/* Snapshot cards: system metrics + battery health + IMU + hand touch */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      {/* System Metrics (full row when it's the only snapshot card) */}
+      <Card className={hasBatteryHealth || hasImu || hasTouch ? undefined : 'lg:col-span-2'}>
         <Card.Header>
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-theme-primary">System Metrics</h2>
@@ -109,25 +131,29 @@ export function TelemetryTab({
         <Card.Body>
           {telemetry ? (
             <div className="space-y-4">
-              <div className="flex items-center gap-6 p-4 rounded-xl glass-subtle">
-                <BatteryGauge
-                  level={telemetry.batteryLevel}
-                  voltage={telemetry.batteryVoltage}
-                  temperature={telemetry.batteryTemperature}
-                  charging={robot?.status === 'charging'}
-                  powerSource={telemetry.powerSource}
-                  size="lg"
-                  showDetails
-                />
-                <div className="flex-1">
-                  <div className="text-sm text-theme-secondary mb-1">Power Status</div>
-                  <div className="text-lg font-semibold text-theme-primary">
-                    {telemetry.batteryLevel === null || telemetry.powerSource === 'ac_powered'
-                      ? 'AC Powered'
-                      : `${telemetry.batteryLevel.toFixed(0)}%`}
+              {/* The BMS card next door already covers power on robots that
+                  report battery health — skip the duplicate gauge there. */}
+              {!hasBatteryHealth && (
+                <div className="flex items-center gap-6 p-4 rounded-xl glass-subtle">
+                  <BatteryGauge
+                    level={telemetry.batteryLevel}
+                    voltage={telemetry.batteryVoltage}
+                    temperature={telemetry.batteryTemperature}
+                    charging={robot?.status === 'charging'}
+                    powerSource={telemetry.powerSource}
+                    size="lg"
+                    showDetails
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm text-theme-secondary mb-1">Power Status</div>
+                    <div className="text-lg font-semibold text-theme-primary">
+                      {telemetry.batteryLevel === null || telemetry.powerSource === 'ac_powered'
+                        ? 'AC Powered'
+                        : `${telemetry.batteryLevel.toFixed(0)}%`}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               <ProgressBar
                 label="CPU Usage"
@@ -176,34 +202,62 @@ export function TelemetryTab({
       </Card>
 
       {/* Battery health + IMU (TASK-184 — rendered only when the frame has data) */}
-      {telemetry && (telemetry.battery || telemetry.imu?.rpy) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-          {telemetry.battery && (
-            <BatteryHealthCard telemetry={telemetry} charging={robot.status === 'charging'} />
-          )}
-          {telemetry.imu?.rpy && <ImuCard telemetry={telemetry} />}
-        </div>
+      {telemetry && hasBatteryHealth && (
+        <BatteryHealthCard telemetry={telemetry} charging={robot.status === 'charging'} />
       )}
-
-      {/* Motor temperature heatmap strip */}
-      {telemetry && <MotorTemperatureStrip telemetry={telemetry} />}
-
-      {/* Battery SOC + max motor temp over the last hour */}
-      <TelemetryHistorySparklines robotId={robot.id} />
+      {telemetry && hasImu && <ImuCard telemetry={telemetry} />}
 
       {/* Dex3-1 hand touch pads */}
-      {telemetry?.touch && (
+      {telemetry && hasTouch && (
         <Card>
           <Card.Header>
-            <h2 className="text-lg font-semibold text-theme-primary">Hand Touch</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-theme-primary">Hand Touch</h2>
+              {liveIndicator}
+            </div>
           </Card.Header>
           <Card.Body>
             <HandTouchPads telemetry={telemetry} />
           </Card.Body>
         </Card>
       )}
+      </div>
 
-      {/* Sensor Diagnostics */}
+      {/* Motor temperature heatmap strip */}
+      {telemetry && <MotorTemperatureStrip telemetry={telemetry} />}
+
+      {/* Joint States */}
+      <Card>
+        <Card.Header>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-theme-primary">Joint States</h2>
+              <SimBadge telemetry={telemetry} group="joints" />
+            </div>
+            {isTelemetryConnected && telemetry?.jointStates ? (
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-xs text-green-500">Live</span>
+              </div>
+            ) : isOffline ? (
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-gray-500" />
+                <span className="text-xs text-gray-400">Offline</span>
+              </div>
+            ) : null}
+          </div>
+        </Card.Header>
+        <Card.Body>
+          <JointStateGrid
+            jointStates={telemetry?.jointStates ?? []}
+            variant="compact"
+            positionUnit={jointPositionUnit(telemetry?.robotType ?? robot.metadata?.robotType)}
+          />
+        </Card.Body>
+      </Card>
+
+      {/* Sensor Diagnostics (legacy `sensors` record — absent on real G1 frames) */}
+      {(!telemetry || hasSensors) && (
       <Card>
         <Card.Header>
           <div className="flex items-center justify-between">
@@ -246,32 +300,10 @@ export function TelemetryTab({
           )}
         </Card.Body>
       </Card>
+      )}
 
-      {/* Joint States */}
-      <Card>
-        <Card.Header>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-theme-primary">Joint States</h2>
-              <SimBadge telemetry={telemetry} group="joints" />
-            </div>
-            {isTelemetryConnected && telemetry?.jointStates ? (
-              <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-xs text-green-500">Live</span>
-              </div>
-            ) : isOffline ? (
-              <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-gray-500" />
-                <span className="text-xs text-gray-400">Offline</span>
-              </div>
-            ) : null}
-          </div>
-        </Card.Header>
-        <Card.Body className="max-h-[320px] overflow-y-auto">
-          <JointStateGrid jointStates={telemetry?.jointStates ?? []} columns={2} />
-        </Card.Body>
-      </Card>
+      {/* Battery SOC + max motor temp over the last hour */}
+      <TelemetryHistorySparklines robotId={robot.id} />
     </div>
   );
 }

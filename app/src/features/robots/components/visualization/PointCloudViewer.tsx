@@ -34,7 +34,45 @@ export interface PointCloudViewerProps {
   colorMode?: PointCloudColorMode;
   /** Point size in world units (default 0.025) */
   pointSize?: number;
+  /**
+   * Clip the cloud to the room band (default false). A head-mounted MID-360
+   * (−7°…+52° vertical FOV) sees mostly the ceiling — a dense slab hovering
+   * over an almost empty floor that reads as "upside down". Clipping points
+   * above {@link CEILING_CUTOFF_M} and below-floor reflections reveals the
+   * walls and obstacles at robot height instead.
+   */
+  hideCeiling?: boolean;
   className?: string;
+}
+
+/** Room-band clip: everything above this height is treated as ceiling. */
+const CEILING_CUTOFF_M = 2.2;
+/** Points below this are through-window / reflection noise, not floor. */
+const FLOOR_NOISE_CUTOFF_M = -0.3;
+
+/** Drop ceiling + below-floor points; returns the frame unchanged when empty. */
+function clipRoomBand(frame: PointCloudFrame): PointCloudFrame {
+  const n = frame.pointCount;
+  const src = frame.positions instanceof Float32Array ? frame.positions : new Float32Array(frame.positions);
+  const positions = new Float32Array(n * 3);
+  const intensities = frame.hasIntensity ? new Float32Array(n) : null;
+  let m = 0;
+  for (let i = 0; i < n; i++) {
+    const z = src[i * 3 + 2];
+    if (z > CEILING_CUTOFF_M || z < FLOOR_NOISE_CUTOFF_M) continue;
+    positions[m * 3] = src[i * 3];
+    positions[m * 3 + 1] = src[i * 3 + 1];
+    positions[m * 3 + 2] = z;
+    if (intensities) intensities[m] = Number(frame.intensities[i] ?? 0);
+    m++;
+  }
+  if (m === n) return frame;
+  return {
+    ...frame,
+    pointCount: m,
+    positions: positions.subarray(0, m * 3),
+    intensities: intensities ? intensities.subarray(0, m) : frame.intensities,
+  };
 }
 
 // ============================================================================
@@ -84,23 +122,22 @@ function PointCloudPoints({ frame, colorMode, pointSize, floorY }: PointCloudPoi
     const positions = src instanceof Float32Array ? src : new Float32Array(src);
     const colors = new Float32Array(n * 3);
 
-    // Height range (robotics z = positions[i*3+2]) for the height colormap.
-    let minZ = Infinity, maxZ = -Infinity;
+    // Robust 2–98 percentile range so a handful of outliers (long-range
+    // returns, reflections) don't compress the whole ramp into one hue.
+    // Raw LiDAR intensities are NOT 0..1 (MID-360 reports ~0..255), so
+    // intensity mode needs the same normalization as height.
+    const useIntensity = colorMode === 'intensity' && frame.hasIntensity;
+    const values = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      const z = positions[i * 3 + 2];
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
+      values[i] = useIntensity ? Number(frame.intensities[i] ?? 0) : positions[i * 3 + 2];
     }
-    const zSpan = maxZ - minZ || 1;
+    const sorted = values.slice().sort();
+    const lo = sorted[Math.floor(0.02 * (n - 1))];
+    const hi = sorted[Math.ceil(0.98 * (n - 1))];
+    const span = hi - lo || 1;
 
     for (let i = 0; i < n; i++) {
-      let t: number;
-      if (colorMode === 'intensity' && frame.hasIntensity) {
-        t = frame.intensities[i] ?? 0;
-      } else {
-        t = (positions[i * 3 + 2] - minZ) / zSpan;
-      }
-      const [r, g, b] = turbo(t);
+      const [r, g, b] = turbo((values[i] - lo) / span);
       colors[i * 3] = r;
       colors[i * 3 + 1] = g;
       colors[i * 3 + 2] = b;
@@ -143,10 +180,19 @@ export const PointCloudViewer = memo(function PointCloudViewer({
   showRobotModel = true,
   colorMode = 'height',
   pointSize = 0.025,
+  hideCeiling = false,
   className,
 }: PointCloudViewerProps) {
   const colors = brandColors();
   const floorY = showRobotModel ? -0.75 : 0;
+
+  const displayFrame = useMemo(() => {
+    // Tiny frames are idle heartbeats, not scans — clipping them away would
+    // just turn "1 pt" into a misleading "0 of 1 pts".
+    if (!frame || !hideCeiling || frame.pointCount < 50) return frame;
+    return clipRoomBand(frame);
+  }, [frame, hideCeiling]);
+  const clippedCount = frame && displayFrame ? frame.pointCount - displayFrame.pointCount : 0;
 
   return (
     <div className={cn('relative w-full h-full min-h-[300px] rounded-lg overflow-hidden', className)}>
@@ -162,8 +208,8 @@ export const PointCloudViewer = memo(function PointCloudViewer({
           <directionalLight position={[5, 10, 5]} intensity={1.4} color="#ffffff" />
           <pointLight position={[-3, 3, -3]} intensity={0.8} color={colors.accent} distance={14} />
 
-          {frame && frame.pointCount > 0 && (
-            <PointCloudPoints frame={frame} colorMode={colorMode} pointSize={pointSize} floorY={floorY} />
+          {displayFrame && displayFrame.pointCount > 0 && (
+            <PointCloudPoints frame={displayFrame} colorMode={colorMode} pointSize={pointSize} floorY={floorY} />
           )}
 
           {showRobotModel && (
@@ -197,8 +243,12 @@ export const PointCloudViewer = memo(function PointCloudViewer({
 
       {/* Overlay info */}
       <div className="absolute bottom-2 left-2 text-xs text-theme-tertiary bg-surface-900/80 px-2 py-1 rounded font-mono">
-        {frame
-          ? `${frame.sensor.replace(/_/g, ' ').toUpperCase()} · ${frame.pointCount.toLocaleString()} pts`
+        {frame && displayFrame
+          ? `${frame.sensor.replace(/_/g, ' ').toUpperCase()} · ${
+              clippedCount > 0
+                ? `${displayFrame.pointCount.toLocaleString()} of ${frame.pointCount.toLocaleString()} pts · clipped`
+                : `${frame.pointCount.toLocaleString()} pts`
+            }`
           : 'Awaiting scan…'}
       </div>
 

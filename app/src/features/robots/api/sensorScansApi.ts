@@ -12,6 +12,7 @@ import type { PointCloudFrame, SensorScanSummary } from '../types/robots.types';
 const ENDPOINTS = {
   snapshot: (robotId: string) => `/robots/${robotId}/pointcloud/snapshot`,
   capture: (robotId: string) => `/robots/${robotId}/pointcloud/capture`,
+  lidarSwitch: (robotId: string) => `/robots/${robotId}/pointcloud/lidar/switch`,
   list: '/sensor-scans',
   download: (id: string) => `/sensor-scans/${id}/download`,
   delete: (id: string) => `/sensor-scans/${id}`,
@@ -33,6 +34,22 @@ export const sensorScansApi = {
    */
   async captureScan(robotId: string, sensor?: string): Promise<SensorScanSummary> {
     const response = await apiClient.post<SensorScanSummary>(ENDPOINTS.capture(robotId), { sensor });
+    return response.data;
+  },
+
+  /**
+   * Toggle the robot's physical LiDAR (hardware only — a sensor enable that
+   * commands no motion). Resolves with {ok:false, error} rather than throwing
+   * when the switch can't be performed.
+   */
+  async setLidarSwitch(
+    robotId: string,
+    on: boolean,
+  ): Promise<{ ok: boolean; lidar?: string; error?: string }> {
+    const response = await apiClient.post<{ ok: boolean; lidar?: string; error?: string }>(
+      ENDPOINTS.lidarSwitch(robotId),
+      { on },
+    );
     return response.data;
   },
 

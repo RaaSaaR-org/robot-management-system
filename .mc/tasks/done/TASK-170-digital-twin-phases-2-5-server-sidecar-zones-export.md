@@ -4,7 +4,7 @@ aliases:
 - TASK-170
 title: Digital Twin — phases 2–5 (server of-record, sidecar build, zone authoring, Nav2/VDA5050 export)
 slug: digital-twin-phases-2-5-server-sidecar-zones-export
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -19,8 +19,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-24
-updated: 2026-07-11
-status_note: 'Phases 0-5 software DONE (PR #164). Real-hardware progress since: standalone MID-360 capture (240k pts, 2026-07-07) imported → twin built by twin-builder → MuJoCo sim scene, all with REAL data (2026-07-11). Only genuinely open item: LIVE walked scan-session through the agent getPointCloudFrame hardware branch (robot day — see TASK-169 checklist item 3).'
+updated: 2026-07-17
+status_note: 'DONE 2026-07-17: the last open item — the LIVE scan-session through the agent getPointCloudFrame hardware branch — ran against the powered G1: LiDAR enabled (authorized switch write), 42 real MID-360 frames (20k pts each) streamed robot→DDS→sidecar(dds source)→agent→server ScanSession, twin-builder built twin 7d3cfc3e (111,448 pts, cloud+occupancy+mesh+MuJoCo scene, status ready), verified rendering on /sites. LiDAR switched back OFF afterwards. Caveat kept honest: the robot stood still (read-only stage — no walking); a true walked sweep with real localization is future Stage-2+ quality work, tracked in TASK-169. Earlier same day: `dds` sidecar LiDAR source implemented + loopback-proven, both DDS venvs rebuilt (see progress sections).'
 ---
 
 # Digital Twin — phases 2–5
@@ -60,6 +60,37 @@ real MID-360 LiDAR capture + the real Open3D mesh/occupancy pipeline
   streams pose-stamped MID-360 frames into a server `ScanSession` (today the
   real capture went through the standalone import path, not the live
   walk-and-scan loop). See TASK-169 "Robot-day checklist" item 3.
+
+## Status update (2026-07-17) — live LiDAR path made runnable + loopback-proven
+
+The live scan-session path would have SILENTLY produced empty frames on robot
+day: the sidecar's only live MID-360 source was ROS2 (`rclpy`/`livox_ros_driver2`
+— not installed on dz-226), and both DDS venvs (`.venv-g1-dds`, `.venv-g1-sidecar`)
+were broken (created under another user's uv Python). Fixed PC-side:
+
+- **New `dds` LiDAR source in `g1_sidecar.py`** (`G1_LIDAR_SOURCE=dds`, in the
+  `auto` chain before livox): subscribes `rt/utlidar/cloud_livox_mid360` via
+  unitree_sdk2py — the same proven path as the 2026-07-07 real capture, zero
+  ROS2. Env: `G1_LIDAR_DDS_TOPIC/_DOMAIN/_IFACE/_TIMEOUT_S` (domain default 0;
+  iface falls back to `G1_NET_INTERFACE`). Subscribe-only — the LiDAR-enable
+  write (`rt/utlidar/switch=ON`) stays outside the sidecar
+  (`C:\Unitree\_data\g1_lidar\g1_lidar_capture.py`, `--off` to disable).
+- **Venvs rebuilt** (uv, py3.10.20, cyclonedds 0.10.2 + pyzmq + numpy):
+  `.venv-g1-dds` (bridge + capture scripts; old broken one parked as
+  `.venv-g1-dds.broken-marco`) and `.venv-g1-sidecar` (sidecar).
+  ⚠ Sidecar MUST run with `PYTHONUTF8=1` (cp1252 console crashes on its
+  emoji/arrow prints — hit during the test) + `PYTHONPATH=C:\Unitree\unitree_sdk2_python`.
+- **Restored `C:\Unitree\_data\g1_lidar\pointcloud_common.py`** (the capture
+  script's import — was never copied from the capture-day scratchpad) and added
+  `g1_lidar_dds_replayer.py` (publishes the real 240k-pt capture as
+  PointCloud2_ frames on DDS domain 1).
+- **Loopback proof (robot-free):** replayer (domain 1) → sidecar `dds` source →
+  `GET :8767/pointcloud/mid360_lidar/snapshot` returned 24,000 real points,
+  `source:"dds"`, bbox matching the capture, first-100-points exact-match ✔.
+  The Node agent consumes exactly this endpoint via
+  `hardwareClient.snapshotPointCloud('mid360_lidar')` when `isConnected()`
+  (i.e. once the lowstate bridge runs on robot day) — no agent/server changes
+  needed.
 
 ## Current state (2026-06-24, historical — pre-Phase-2)
 

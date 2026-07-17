@@ -495,6 +495,22 @@ export class RobotStateManager {
   }
 
   /**
+   * Toggle the physical LiDAR via the hardware sidecar. Hardware-only: in
+   * sim/replay there is nothing to switch, so this reports that honestly
+   * instead of pretending success.
+   */
+  async setLidarSwitch(on: boolean): Promise<{ ok: boolean; lidar?: string; error?: string }> {
+    if (!hardwareClient.isConnected()) {
+      return { ok: false, error: 'No hardware sidecar connected — the LiDAR switch only exists on the real robot' };
+    }
+    try {
+      return await hardwareClient.setLidarSwitch(on);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
    * Robot pose in the twin's world frame: position relative to the scan origin
    * (where scanning started), heading in radians. This is the ONLY place the
    * simulator's degree heading is converted to radians — keep it here to avoid a

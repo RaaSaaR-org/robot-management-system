@@ -18,8 +18,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-06-21
-updated: 2026-07-12
-status_note: 'BLOCKED ON HARDWARE ACCESS for all remaining gates. Software prerequisites are done (Stage 0-1 complete incl. live read-only telemetry; Stage-3 sim-eval wiring shipped via TASK-171/172; voice stack PC-validated, see TASK-181). Next robot session: work the "Robot-day checklist (2026-07-11)" section below.'
+updated: 2026-07-17
+status_note: 'BLOCKED ON HARDWARE ACCESS for all remaining gates. Software prerequisites are done (Stage 0-1 complete incl. live read-only telemetry; Stage-3 sim-eval wiring shipped via TASK-171/172; voice stack PC-validated, see TASK-181). PC-side prep sweep 2026-07-17 closed the last pre-robot gaps (WebXR certs, tv DDS deps, register script) — see "Prep completed" note in the robot-day checklist. Only manual step left: the admin firewall rule (voice/scripts/add_mic_firewall_rule.ps1). Next robot session: work the "Robot-day checklist (2026-07-11)" section below.'
 ---
 
 # Lab bring-up — NeoDEM on a computer connected to a real Unitree G1 EDU
@@ -165,15 +165,38 @@ Everything solvable without the robot is done. When the G1 EDU is next
 available, work this list in order (it folds in the open hardware items from
 TASK-170, TASK-172 and TASK-181 too):
 
+> **Prep completed 2026-07-17 (final PC-side sweep):**
+> (a) WebXR TLS certs generated in `%USERPROFILE%\.config\xr_teleoperate\`
+> (CN=quest-teleop, SAN localhost/127.0.0.1/192.168.123.10, valid to 2036;
+> televuer path resolution verified) — VR-teleop cert blocker gone.
+> (b) `tv` conda env now has cyclonedds 0.10.2 + unitree_sdk2py 1.0.1 (-e) +
+> teleimager 1.5.0 (-e); `ChannelFactoryInitialize(1)` OK, existing pins untouched
+> — real-robot `teleop_hand_and_arm.py` (DDS domain 0) is now runnable.
+> (c) `server/src/scripts/register-local-dataset.ts` staged (parameterized
+> `--dir`/`--name`, refuses v3.0, smoke-tested against dev.db) — no file editing
+> needed to register the robot-day dataset. Server typecheck green.
+> (d) Voice preflight re-run: only robot-gated checks red (robot ping, mic
+> multicast, adapter, A2A agent — all expected off); NIC/Ollama/models/GPU green.
+> **Remaining manual admin step:** UDP-5555 firewall rule — run
+> `robot-agent/voice/scripts/add_mic_firewall_rule.ps1` in an elevated shell
+> (UAC elevation was declined on 2026-07-17). For the Wi-Fi (non-USB) Quest
+> variant additionally `quest-sim-teleop/windows/firewall_8012.ps1` (also admin);
+> the USB `adb reverse` route needs neither.
+
 1. **Safety first (this task, Stage 1 gate):** verify physical e-stop + Unitree
    remote e-stop before any motion.
 2. **Voice validation (TASK-181):** adapter venv is ready
    (`C:\Unitree\.venv-g1-audio`, mock-smoke-tested 2026-07-11); one admin step
    remains — the UDP-5555 firewall rule (exact command in TASK-181).
-3. **Live scan session (TASK-170 Phase 5 hardware):** stream real MID-360
-   frames through the agent's `getPointCloudFrame` hardware branch during a
-   walked sweep (the import-path twin from a standalone capture is already
-   proven end-to-end).
+3. ~~**Live scan session (TASK-170 Phase 5 hardware)**~~ ✅ DONE 2026-07-17
+   against the powered G1: LiDAR enabled (authorized switch write), 42 real
+   MID-360 frames streamed robot→DDS→sidecar(`dds` source)→agent hardware
+   branch→server `ScanSession`, twin-builder built twin `7d3cfc3e` (111,448
+   pts, cloud+occupancy+mesh+MuJoCo scene, ready, renders on /sites). LiDAR
+   switched OFF again. TASK-170 closed. Remaining quality upgrade (NOT a
+   gate): a true *walked* sweep with real localization once the robot may
+   move under supervision (Stage 2+) — today's sweep was stationary and
+   pose-stamping used the sim pose (position is honestly SIM-labeled).
 4. **Stage 2 teleop recording (this task):** record a small LeRobot dataset via
    VR teleop (Quest 3 + xr_teleoperate) or Unitree native teleop; import +
    curate it in the app (curation pipeline hardened under TASK-168).
