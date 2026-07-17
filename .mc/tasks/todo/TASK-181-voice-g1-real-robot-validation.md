@@ -18,7 +18,7 @@ depends_on: []
 due_date: ''
 created: 2026-07-11
 updated: 2026-07-17
-status_note: 'BLOCKED ON ROBOT — PC-side prep re-verified 2026-07-17: venvs intact (.venv-g1-audio py3.10.20 + cyclonedds; voice .venv py3.12.13), 79 voice unit tests green, Ollama serving gpt-oss:20b, NIC "Ethernet 3" = 192.168.123.10 up, Piper+Silero models on disk. Robot-day tooling added and loopback-tested: scripts/g1_preflight.py (one-shot prerequisite check), scripts/g1_mic_dump.py (step 3 capture+level report), scripts/run_g1_adapter.ps1 (adapter launcher), .env.voice.g1 (ready config), ROBOT_DAY.md (run sheet). Remaining: the admin firewall rule (step 1, one command, see ROBOT_DAY.md §0) + steps 2-8, all of which need the powered G1.'
+status_note: 'PARTIAL ON REAL ROBOT (2026-07-17) — SPEAKER LEG VALIDATED, MIC BLOCKED ON ADMIN FIREWALL. With the G1 powered and on 192.168.123.164: adapter came up mock=false on DDS domain 0; GetVolume returned 100 (real DDS round-trip); scripts/g1_say.py spoke DE + EN phrases out of the robot speaker (Piper->resample->/play); /stop cut a long clip at exactly 2.0s (cancelled=true). Step 2 output leg = DONE. Steps 3-8 (mic in, full conversation) still BLOCKED: the inbound UDP 5555 firewall rule needs an ADMIN shell and none was available this session (UAC declined; user has no admin rights atm) — g1_mic_dump.py confirmed the IGMP join succeeds but zero mic packets arrive, the exact firewall signature. Robot-agent A2A on :41244 up (gpt-oss:20b). New tooling: scripts/g1_say.py (speaker CLI, real-robot-validated), scripts/add_mic_firewall_rule.ps1 (elevated helper). Remaining: run the firewall rule from an admin shell, then steps 3-8.'
 ---
 
 ## Description
@@ -64,6 +64,10 @@ this task is hardware bring-up, tuning, and sign-off.
     as the first suspect when nothing arrives. Loopback-tested via the replayer.
   - `scripts/run_g1_adapter.ps1` — starts the adapter in the 3.10 venv with the
     right `PYTHONPATH`/interface, refusing to start if the robot LAN NIC is down.
+  - `scripts/g1_say.py` — step-2 speaker CLI (Piper → resample → `/play`); auto
+    de/en, `--stop-after` to verify the cut, warns on mock mode. **Validated on
+    the real robot 2026-07-17.**
+  - `scripts/add_mic_firewall_rule.ps1` — idempotent elevated helper for step 1.
   - `.env.voice.g1` — ready config (g1 in/out, agent :41244, wake phrases on).
 
 ### Steps

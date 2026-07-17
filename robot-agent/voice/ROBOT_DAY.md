@@ -42,7 +42,7 @@ Verify: `Get-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"`.
 | # | What | Command / check |
 |---|---|---|
 | 1 | Firewall | see step 0 above |
-| 2 | Adapter bring-up | `.\scripts\run_g1_adapter.ps1`; `GET :8766/health` shows `"mock": false`; `POST /play` a WAV → audible; `/volume`, `/stop` mid-playback |
+| 2 | Adapter bring-up | `.\scripts\run_g1_adapter.ps1`; `GET :8766/health` shows `"mock": false`; then `scripts/g1_say.py` (below) for audible speech, `/volume`, `/stop` |
 | 3 | Mic capture | `uv run python scripts/g1_mic_dump.py --seconds 15` → WAV + level/clipping report |
 | 4 | Full round trip | `uv run python -m voice_service --env-file .env.voice.g1`, then speak DE + EN from 1–3 m, multi-turn |
 | 5 | Half-duplex | robot must not re-trigger on its own voice; tune via `POST :8768/config` |
@@ -50,7 +50,25 @@ Verify: `Get-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"`.
 | 7 | Conflicts | Unitree's built-in `vui` assistant must not hold the speaker; the lowstate DDS bridge must survive (same domain 0) |
 | 8 | LEDs (optional) | `POST :8766/led` — listening=green, thinking=blue, speaking=white |
 
-### Step 2 — play a known WAV
+### Step 2 — speak out of the robot
+
+`g1_say.py` is the quick way: Piper → resample → `POST /play`, the same output
+leg the voice service uses, so a pass proves the speaker path on its own (no
+mic, no LLM). It warns if the adapter is in mock mode instead of silently
+"succeeding".
+
+```powershell
+uv run python scripts/g1_say.py "Hallo, ich bin ein Roboter."   # auto de/en
+uv run python scripts/g1_say.py "Hello Florian" --lang en
+uv run python scripts/g1_say.py "Eins zwei drei vier ..." --stop-after 2  # verify /stop cuts
+uv run python scripts/g1_say.py --volume 60                     # set speaker level
+```
+
+`/play` returns when the SDK *drained* the audio, which is not proof it was
+audible — trust your ears. If it reports 200 but nothing comes out, that is the
+`vui` conflict (step 7).
+
+Lower-level fallback (raw WAV body):
 
 ```powershell
 uv run python scripts/smoke_tts.py          # writes out/smoke_tts_de.wav
