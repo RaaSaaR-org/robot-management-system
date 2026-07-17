@@ -55,3 +55,15 @@ export type { NextStepBannerProps } from './NextStepBanner';
 // PipelineBreadcrumb
 export { PipelineBreadcrumb } from './PipelineBreadcrumb';
 export type { PipelineBreadcrumbProps, PipelineStage } from './PipelineBreadcrumb';
+
+// PageHeader
+export { PageHeader } from './PageHeader';
+export type { PageHeaderProps } from './PageHeader';
+
+// EmptyState
+export { EmptyState } from './EmptyState';
+export type { EmptyStateProps } from './EmptyState';
+
+// SegmentedControl / ToggleChip
+export { SegmentedControl, ToggleChip } from './SegmentedControl';
+export type { SegmentedControlProps, SegmentedOption, ToggleChipProps } from './SegmentedControl';
