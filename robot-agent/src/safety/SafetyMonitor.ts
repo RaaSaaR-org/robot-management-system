@@ -754,6 +754,19 @@ export class SafetyMonitor {
    */
   resetEmergencyStop(): boolean {
     if (this.estopState.status !== 'triggered') {
+      // E-stop state is not persisted, but robot warnings are: after a restart
+      // the estop boots 'armed' while a "Protective stop"/"Emergency stop"
+      // warning restored from persisted state would otherwise be uncleareable.
+      const state = this.stateGetter();
+      if (state.warnings.some((w) => w.includes('Emergency stop') || w.includes('Protective stop'))) {
+        this.stateUpdater((s) => {
+          s.warnings = s.warnings.filter(
+            (w) => !w.includes('Emergency stop') && !w.includes('Protective stop')
+          );
+          s.updatedAt = new Date().toISOString();
+        });
+        this.changeNotifier();
+      }
       return true; // Already reset
     }
 

@@ -51,6 +51,16 @@ export function normalizeRobotType(value: unknown): RobotType {
   return ROBOT_TYPE_ALIASES[lower] ?? 'generic';
 }
 
+/**
+ * Unit of `JointState.position` as reported by each embodiment: the Unitree
+ * humanoids (DDS lowstate / URDF convention, consumed as-is by the 3D viewer)
+ * report radians; SO-101 (LeRobot convention) and the legacy sims report degrees.
+ */
+export function jointPositionUnit(robotType: unknown): 'rad' | 'deg' {
+  const t = normalizeRobotType(robotType);
+  return t === 'h1' || t === 'g1' || t === 'g1_edu' ? 'rad' : 'deg';
+}
+
 // ============================================================================
 // JOINT TYPES (for 3D visualization)
 // ============================================================================
