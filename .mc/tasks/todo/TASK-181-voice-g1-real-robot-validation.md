@@ -17,8 +17,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-11
-updated: 2026-07-11
-status_note: 'BLOCKED ON ROBOT — all PC-side prep done 2026-07-11: fresh adapter venv C:\Unitree\.venv-g1-audio created (py3.10.20 + cyclonedds 0.10.2 + numpy, uv-managed), adapter mock-smoke-tested (GET :8766/health ok, interface "Ethernet 3"), 79 voice unit tests green on main. Remaining: firewall rule (admin shell) + steps 2-8, all need the powered G1.'
+updated: 2026-07-17
+status_note: 'BLOCKED ON ROBOT — PC-side prep re-verified 2026-07-17: venvs intact (.venv-g1-audio py3.10.20 + cyclonedds; voice .venv py3.12.13), 79 voice unit tests green, Ollama serving gpt-oss:20b, NIC "Ethernet 3" = 192.168.123.10 up, Piper+Silero models on disk. Robot-day tooling added and loopback-tested: scripts/g1_preflight.py (one-shot prerequisite check), scripts/g1_mic_dump.py (step 3 capture+level report), scripts/run_g1_adapter.ps1 (adapter launcher), .env.voice.g1 (ready config), ROBOT_DAY.md (run sheet). Remaining: the admin firewall rule (step 1, one command, see ROBOT_DAY.md §0) + steps 2-8, all of which need the powered G1.'
 ---
 
 ## Description
@@ -53,9 +53,22 @@ this task is hardware bring-up, tuning, and sign-off.
   `G1_AUDIO_MOCK=1 PYTHONPATH=C:\Unitree\unitree_sdk2_python
   C:\Unitree\.venv-g1-audio\Scripts\python.exe adapters\g1_audio_adapter.py`
   → `GET :8766/health` = `{"status":"ok","mock":true,"interface":"Ethernet 3"}`.
-- ✅ Voice service test suite re-verified on main 2026-07-11: **79 passed**.
+- ✅ Voice service test suite re-verified on main 2026-07-11: **79 passed**
+  (again 2026-07-17).
+- ✅ **Robot-day tooling ready (2026-07-17)** — `robot-agent/voice/ROBOT_DAY.md`
+  is the run sheet; it supersedes the bare step list below for execution order:
+  - `scripts/g1_preflight.py` — checks NIC, robot ping, mic multicast, adapter
+    (and flags mock mode), A2A agent, Ollama, models, CUDA in one shot.
+  - `scripts/g1_mic_dump.py` — step 3: dumps the multicast to WAV + reports
+    packet rate, RMS/peak dBFS, clipping, mid-stream gaps; names the firewall
+    as the first suspect when nothing arrives. Loopback-tested via the replayer.
+  - `scripts/run_g1_adapter.ps1` — starts the adapter in the 3.10 venv with the
+    right `PYTHONPATH`/interface, refusing to start if the robot LAN NIC is down.
+  - `.env.voice.g1` — ready config (g1 in/out, agent :41244, wake phrases on).
 
 ### Steps
+
+> Execution order, commands and troubleshooting: `robot-agent/voice/ROBOT_DAY.md`.
 
 1. **Firewall** *(needs an ADMIN shell — not possible from the unelevated
    agent session, do this on robot day)*: allow inbound UDP 5555 for the voice
@@ -67,10 +80,10 @@ this task is hardware bring-up, tuning, and sign-off.
    (`G1_NET_INTERFACE=Ethernet 3`, no mock). `GET :8766/health`, then
    `POST /play` with a known WAV (16 k mono s16le body) → audible from the
    robot speaker; test `/volume` and `/stop` (mid-playback cut).
-3. **Mic capture check**: with the robot on, dump the multicast to WAV
-   (small script or `VOICE_INPUT_BACKEND=g1` + watch `GET /events` SSE for
-   transcripts) and assess noise/echo. Verify IGMP join works on
-   "Ethernet 3" (`VOICE_G1_LOCAL_IP=192.168.123.10`).
+3. **Mic capture check**: `uv run python scripts/g1_mic_dump.py --seconds 15`
+   → WAV + level/clipping/gap report; assess noise/echo by listening back.
+   Verifies the IGMP join on "Ethernet 3" (`VOICE_G1_LOCAL_IP=192.168.123.10`)
+   as a side effect.
 4. **Full round trip**: `VOICE_INPUT_BACKEND=g1 VOICE_OUTPUT_BACKEND=g1
    uv run python -m voice_service` — speak to the robot from 1–3 m, German
    and English, multi-turn (follow-up question referencing the prior answer).

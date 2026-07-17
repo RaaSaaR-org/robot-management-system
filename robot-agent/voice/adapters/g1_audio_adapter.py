@@ -14,8 +14,8 @@ service talks to it via G1Speaker (voice_service/audio/g1_speaker.py).
 Env: G1_AUDIO_ADAPTER_PORT (8766), G1_NET_INTERFACE ("Ethernet 3"),
      G1_AUDIO_MOCK=1 for robot-less testing (no SDK import).
 
-Run (real robot, from C:\\Unitree):
-    .venv-g1-dds\\Scripts\\python.exe  robot-management-system\\robot-agent\\voice\\adapters\\g1_audio_adapter.py
+Run (real robot): scripts/run_g1_adapter.ps1 — or by hand from C:\\Unitree:
+    .venv-g1-audio\\Scripts\\python.exe  robot-management-system\\robot-agent\\voice\\adapters\\g1_audio_adapter.py
     (with PYTHONPATH=C:\\Unitree\\unitree_sdk2_python)
 
 We deliberately use PlayStream only — TtsMaker is Chinese/English-only and
