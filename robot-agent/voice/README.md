@@ -109,7 +109,19 @@ Recommended: off on the PC (lab use), `hey g1,hallo g1` on the real robot.
 - Robot-less end-to-end test: `scripts/g1_mcast_replayer.py` replays a WAV
   the way the robot multicasts mic audio (see the script header).
 
-Real-robot validation is tracked in MissionControl task **TASK-181**.
+Robot-day tooling:
+
+```powershell
+.\scripts\run_g1_adapter.ps1                      # adapter in the 3.10 DDS venv (-Mock to fake it)
+uv run python scripts/g1_preflight.py             # every prerequisite in one shot
+uv run python scripts/g1_say.py "Hallo Roboter"   # speak a phrase out of the robot (de/en auto)
+uv run python scripts/g1_mic_dump.py --seconds 15 # multicast -> WAV + level/clipping report
+uv run python -m voice_service --env-file .env.voice.g1
+```
+
+Real-robot validation is tracked in MissionControl task **TASK-181**;
+**`ROBOT_DAY.md`** is the run sheet (power-up order, the eight steps,
+sign-off checklist, troubleshooting).
 
 ## Testing
 

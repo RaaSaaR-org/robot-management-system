@@ -17,8 +17,8 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-11
-updated: 2026-07-11
-status_note: 'BLOCKED ON ROBOT — all PC-side prep done 2026-07-11: fresh adapter venv C:\Unitree\.venv-g1-audio created (py3.10.20 + cyclonedds 0.10.2 + numpy, uv-managed), adapter mock-smoke-tested (GET :8766/health ok, interface "Ethernet 3"), 79 voice unit tests green on main. Remaining: firewall rule (admin shell) + steps 2-8, all need the powered G1.'
+updated: 2026-07-17
+status_note: 'PARTIAL ON REAL ROBOT (2026-07-17) — SPEAKER LEG VALIDATED, MIC BLOCKED ON ADMIN FIREWALL. With the G1 powered and on 192.168.123.164: adapter came up mock=false on DDS domain 0; GetVolume returned 100 (real DDS round-trip); scripts/g1_say.py spoke DE + EN phrases out of the robot speaker (Piper->resample->/play); /stop cut a long clip at exactly 2.0s (cancelled=true). Step 2 output leg = DONE. Steps 3-8 (mic in, full conversation) still BLOCKED: the inbound UDP 5555 firewall rule needs an ADMIN shell and none was available this session (UAC declined; user has no admin rights atm) — g1_mic_dump.py confirmed the IGMP join succeeds but zero mic packets arrive, the exact firewall signature. Robot-agent A2A on :41244 up (gpt-oss:20b). New tooling: scripts/g1_say.py (speaker CLI, real-robot-validated), scripts/add_mic_firewall_rule.ps1 (elevated helper). Remaining: run the firewall rule from an admin shell, then steps 3-8.'
 ---
 
 ## Description
@@ -53,9 +53,26 @@ this task is hardware bring-up, tuning, and sign-off.
   `G1_AUDIO_MOCK=1 PYTHONPATH=C:\Unitree\unitree_sdk2_python
   C:\Unitree\.venv-g1-audio\Scripts\python.exe adapters\g1_audio_adapter.py`
   → `GET :8766/health` = `{"status":"ok","mock":true,"interface":"Ethernet 3"}`.
-- ✅ Voice service test suite re-verified on main 2026-07-11: **79 passed**.
+- ✅ Voice service test suite re-verified on main 2026-07-11: **79 passed**
+  (again 2026-07-17).
+- ✅ **Robot-day tooling ready (2026-07-17)** — `robot-agent/voice/ROBOT_DAY.md`
+  is the run sheet; it supersedes the bare step list below for execution order:
+  - `scripts/g1_preflight.py` — checks NIC, robot ping, mic multicast, adapter
+    (and flags mock mode), A2A agent, Ollama, models, CUDA in one shot.
+  - `scripts/g1_mic_dump.py` — step 3: dumps the multicast to WAV + reports
+    packet rate, RMS/peak dBFS, clipping, mid-stream gaps; names the firewall
+    as the first suspect when nothing arrives. Loopback-tested via the replayer.
+  - `scripts/run_g1_adapter.ps1` — starts the adapter in the 3.10 venv with the
+    right `PYTHONPATH`/interface, refusing to start if the robot LAN NIC is down.
+  - `scripts/g1_say.py` — step-2 speaker CLI (Piper → resample → `/play`); auto
+    de/en, `--stop-after` to verify the cut, warns on mock mode. **Validated on
+    the real robot 2026-07-17.**
+  - `scripts/add_mic_firewall_rule.ps1` — idempotent elevated helper for step 1.
+  - `.env.voice.g1` — ready config (g1 in/out, agent :41244, wake phrases on).
 
 ### Steps
+
+> Execution order, commands and troubleshooting: `robot-agent/voice/ROBOT_DAY.md`.
 
 1. **Firewall** *(needs an ADMIN shell — not possible from the unelevated
    agent session, do this on robot day)*: allow inbound UDP 5555 for the voice
@@ -67,10 +84,10 @@ this task is hardware bring-up, tuning, and sign-off.
    (`G1_NET_INTERFACE=Ethernet 3`, no mock). `GET :8766/health`, then
    `POST /play` with a known WAV (16 k mono s16le body) → audible from the
    robot speaker; test `/volume` and `/stop` (mid-playback cut).
-3. **Mic capture check**: with the robot on, dump the multicast to WAV
-   (small script or `VOICE_INPUT_BACKEND=g1` + watch `GET /events` SSE for
-   transcripts) and assess noise/echo. Verify IGMP join works on
-   "Ethernet 3" (`VOICE_G1_LOCAL_IP=192.168.123.10`).
+3. **Mic capture check**: `uv run python scripts/g1_mic_dump.py --seconds 15`
+   → WAV + level/clipping/gap report; assess noise/echo by listening back.
+   Verifies the IGMP join on "Ethernet 3" (`VOICE_G1_LOCAL_IP=192.168.123.10`)
+   as a side effect.
 4. **Full round trip**: `VOICE_INPUT_BACKEND=g1 VOICE_OUTPUT_BACKEND=g1
    uv run python -m voice_service` — speak to the robot from 1–3 m, German
    and English, multi-turn (follow-up question referencing the prior answer).
