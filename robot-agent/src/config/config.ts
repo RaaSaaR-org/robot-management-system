@@ -53,6 +53,13 @@ export interface Config {
     /** Whether VLA inference is enabled */
     enabled: boolean;
   };
+  /** Telemetry push cadence (TASK-191 fast/slow channel split) */
+  telemetry: {
+    /** High-rate channel interval in ms (joints/imu/odometry only). 0 disables the fast channel. */
+    fastIntervalMs: number;
+    /** Full-frame interval in ms (temperatures, battery, touch, sensors, ...) */
+    fullIntervalMs: number;
+  };
 }
 
 export const config: Config = {
@@ -85,6 +92,10 @@ export const config: Config = {
     timeoutMs: parseInt(process.env.VLA_TIMEOUT_MS || '5000', 10),
     restFallbackUrl: process.env.VLA_REST_FALLBACK_URL || undefined,
     enabled: process.env.VLA_ENABLED === 'true',
+  },
+  telemetry: {
+    fastIntervalMs: parseInt(process.env.TELEMETRY_FAST_INTERVAL_MS || '100', 10),
+    fullIntervalMs: parseInt(process.env.TELEMETRY_FULL_INTERVAL_MS || '2000', 10),
   },
 };
 

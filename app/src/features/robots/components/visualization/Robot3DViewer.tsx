@@ -23,6 +23,12 @@ export interface Robot3DViewerProps {
   jointStates?: JointState[];
   /** Whether to show animation when idle */
   isAnimating?: boolean;
+  /**
+   * Robot id enabling the high-rate telemetry channel (TASK-191): the model
+   * then reads ~10 Hz fast frames imperatively in its render loop instead of
+   * waiting for the 2 s `jointStates` prop.
+   */
+  robotId?: string;
   /** Additional CSS classes */
   className?: string;
 }
@@ -48,6 +54,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
   robotType: rawRobotType,
   jointStates,
   isAnimating = true,
+  robotId,
   className,
 }: Robot3DViewerProps) {
   const robotType = normalizeRobotType(rawRobotType);
@@ -94,6 +101,7 @@ export const Robot3DViewer = memo(function Robot3DViewer({
               robotType={robotType}
               jointStates={jointStates}
               isAnimating={isAnimating}
+              robotId={robotId}
             />
           </Center>
 

@@ -28,6 +28,8 @@ export interface PointCloudViewerProps {
   robotType?: RobotType;
   /** Joint states to pose the embedded model */
   jointStates?: JointState[];
+  /** Robot id for the high-rate telemetry channel (TASK-191) */
+  robotId?: string;
   /** Render the robot model standing inside the cloud (default true) */
   showRobotModel?: boolean;
   /** Color the points by height or intensity (default 'height') */
@@ -177,6 +179,7 @@ export const PointCloudViewer = memo(function PointCloudViewer({
   frame,
   robotType = 'generic',
   jointStates,
+  robotId,
   showRobotModel = true,
   colorMode = 'height',
   pointSize = 0.025,
@@ -214,7 +217,7 @@ export const PointCloudViewer = memo(function PointCloudViewer({
 
           {showRobotModel && (
             <Center>
-              <RobotModel robotType={robotType} jointStates={jointStates} isAnimating={!!frame} />
+              <RobotModel robotType={robotType} jointStates={jointStates} isAnimating={!!frame} robotId={robotId} />
             </Center>
           )}
 

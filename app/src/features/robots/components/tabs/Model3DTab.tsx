@@ -42,6 +42,7 @@ export function Model3DTab({ robot, telemetry, isTelemetryConnected }: Model3DTa
               robotType={normalizeRobotType(telemetry?.robotType ?? robot.metadata?.robotType)}
               jointStates={telemetry?.jointStates}
               isAnimating={isTelemetryConnected}
+              robotId={robot.id}
             />
           </Suspense>
         </Card.Body>

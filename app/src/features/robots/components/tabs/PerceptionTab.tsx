@@ -240,6 +240,7 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
               frame={frame}
               robotType={robotType}
               jointStates={telemetry?.jointStates}
+              robotId={robotId}
               showRobotModel={showRobotModel}
               colorMode={colorMode}
               pointSize={pointSize}

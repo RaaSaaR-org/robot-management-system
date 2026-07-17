@@ -97,6 +97,7 @@ export function OverviewTab({
               robotType={robotType}
               jointStates={telemetry?.jointStates}
               isAnimating={isTelemetryConnected}
+              robotId={robotId}
             />
           </Suspense>
         </div>

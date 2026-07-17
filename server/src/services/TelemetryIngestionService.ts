@@ -12,13 +12,22 @@
  * (default 10000) per robot, plus an immediate row whenever errors/warnings
  * transition to non-empty.
  *
+ * TASK-191: agents may additionally push `telemetry_fast` subset frames
+ * (joints/imu/odometry, ~10 Hz). Those are relayed as `robot_telemetry_fast`
+ * broadcast events and are never persisted.
+ *
  * Lifecycle wiring: `initialize()` starts connections for all already-
  * registered robots and subscribes to RobotManager's registration events so
  * connections start on `robot_registered` and stop on `robot_unregistered`.
  */
 
 import WebSocket from 'ws';
-import { robotManager, type RegisteredRobot, type RobotTelemetry } from './RobotManager.js';
+import {
+  robotManager,
+  type RegisteredRobot,
+  type RobotTelemetry,
+  type RobotTelemetryFast,
+} from './RobotManager.js';
 import { robotRepository } from '../repositories/index.js';
 
 // ============================================================================
@@ -56,7 +65,7 @@ interface AgentConnection {
 /** Agent WS message envelope (robot-agent/src/robot/telemetry.ts). */
 interface AgentWsMessage {
   type?: string;
-  payload?: RobotTelemetry;
+  payload?: RobotTelemetry | RobotTelemetryFast;
 }
 
 // ============================================================================
@@ -276,13 +285,28 @@ export class TelemetryIngestionService {
       return; // ignore malformed frames
     }
 
+    // High-rate subset frames (TASK-191): relay straight to the broadcast path
+    // as a distinct event and NEVER persist — the ≥PERSIST_INTERVAL_MS
+    // downsampling below stays keyed off full frames only.
+    if (message.type === 'telemetry_fast' && message.payload) {
+      const fast: RobotTelemetryFast = {
+        ...(message.payload as RobotTelemetryFast),
+        robotId: conn.robotId,
+      };
+      robotManager.emitTelemetryFast(conn.robotId, fast);
+      return;
+    }
+
     // Agents also push 'alert' and 'pong' messages on this socket.
     if (message.type !== 'telemetry' || !message.payload) {
       return;
     }
 
     // Canonicalize: the registry's robot id wins over whatever the frame says.
-    const telemetry: RobotTelemetry = { ...message.payload, robotId: conn.robotId };
+    const telemetry: RobotTelemetry = {
+      ...(message.payload as RobotTelemetry),
+      robotId: conn.robotId,
+    };
 
     // (a) Broadcast EVERY frame to app clients via RobotManager's event bus —
     // websocket/index.ts turns it into the same envelope as robot_status_changed.

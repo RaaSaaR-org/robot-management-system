@@ -6,13 +6,13 @@
 
 import { WebSocketServer, WebSocket } from 'ws';
 import type { RobotStateManager } from '../robot/state.js';
+import { config } from '../config/config.js';
 import {
   formatTelemetryMessage,
+  formatFastTelemetryMessage,
   generateAlerts,
   formatAlertMessage,
 } from '../robot/telemetry.js';
-
-const TELEMETRY_INTERVAL_MS = 2000;
 
 export function createTelemetryWebSocket(
   robotStateManager: RobotStateManager
@@ -22,7 +22,18 @@ export function createTelemetryWebSocket(
   // multiple {server}-bound ws servers makes the first one 400 every other path.
   const wss = new WebSocketServer({ noServer: true });
 
-  console.log(`[TelemetryWS] WebSocket server ready on path: /ws/telemetry/${robotId}`);
+  const fullIntervalMs = config.telemetry.fullIntervalMs;
+  // The fast channel only makes sense when it is actually faster than the full
+  // frame; 0 (or any non-positive value) disables it entirely.
+  const fastIntervalMs =
+    config.telemetry.fastIntervalMs > 0 && config.telemetry.fastIntervalMs < fullIntervalMs
+      ? config.telemetry.fastIntervalMs
+      : 0;
+
+  console.log(
+    `[TelemetryWS] WebSocket server ready on path: /ws/telemetry/${robotId} ` +
+      `(full ${fullIntervalMs}ms, fast ${fastIntervalMs > 0 ? `${fastIntervalMs}ms` : 'disabled'})`
+  );
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('[TelemetryWS] Client connected');
@@ -43,13 +54,27 @@ export function createTelemetryWebSocket(
       }
     });
 
-    // Set up periodic telemetry updates (single source of telemetry to avoid duplicates)
-    const interval = setInterval(() => {
+    // Full frames on the regular cadence (single source of full telemetry to
+    // avoid duplicates).
+    const fullInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         const telemetry = robotStateManager.getTelemetry();
         ws.send(formatTelemetryMessage(telemetry));
       }
-    }, TELEMETRY_INTERVAL_MS);
+    }, fullIntervalMs);
+
+    // High-rate channel (TASK-191): joints/imu/odometry subset at the
+    // SimulationEngine tick rate so the 3D viewer animates smoothly. Consumers
+    // that don't opt in keep seeing only the full frames above.
+    const fastInterval =
+      fastIntervalMs > 0
+        ? setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              const telemetry = robotStateManager.getTelemetry();
+              ws.send(formatFastTelemetryMessage(telemetry));
+            }
+          }, fastIntervalMs)
+        : null;
 
     // Handle incoming messages (for potential future commands)
     ws.on('message', (data: Buffer) => {
@@ -66,16 +91,20 @@ export function createTelemetryWebSocket(
       }
     });
 
+    const cleanup = () => {
+      unsubscribe();
+      clearInterval(fullInterval);
+      if (fastInterval) clearInterval(fastInterval);
+    };
+
     ws.on('close', () => {
       console.log('[TelemetryWS] Client disconnected');
-      unsubscribe();
-      clearInterval(interval);
+      cleanup();
     });
 
     ws.on('error', (error) => {
       console.error('[TelemetryWS] WebSocket error:', error);
-      unsubscribe();
-      clearInterval(interval);
+      cleanup();
     });
   });
 

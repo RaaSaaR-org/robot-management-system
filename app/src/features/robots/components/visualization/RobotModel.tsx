@@ -9,6 +9,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import URDFLoader, { URDFRobot } from 'urdf-loader';
 import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
+import { getFastTelemetry } from '../../store/telemetryLive';
 import { brandColors } from '@/brand';
 
 // ============================================================================
@@ -22,7 +23,25 @@ export interface RobotModelProps {
   jointStates?: JointState[];
   /** Whether to show idle animation */
   isAnimating?: boolean;
+  /**
+   * Robot id for the high-rate telemetry channel (TASK-191). When set, the
+   * model reads ~10 Hz `robot_telemetry_fast` frames imperatively inside
+   * useFrame; without it (or when no fast frame arrived within ~2 s) it falls
+   * back to the `jointStates` prop from the regular 2 s telemetry cadence.
+   */
+  robotId?: string;
 }
+
+// ============================================================================
+// JOINT INTERPOLATION (TASK-191)
+// ============================================================================
+
+/**
+ * Exponential damping factor for joint motion (THREE.MathUtils.damp lambda).
+ * ~6 converges in a few hundred ms — smooth at 10 Hz fast-channel input while
+ * still visibly tracking 2 s-cadence fallback frames.
+ */
+const JOINT_DAMP_LAMBDA = 6;
 
 // ============================================================================
 // PER-JOINT CORRECTION CONFIG (empirical calibration)
@@ -73,6 +92,33 @@ const SO101_LEROBOT_CALIBRATION: Record<string, So101Joint> = {
   gripper:       { halfRangeDeg:  59.84, sign: -1, offsetDeg: -25 },
 };
 
+/**
+ * Convert a telemetry joint position to the URDF-frame target angle in radians.
+ *
+ * Joints without a LeRobot calibration entry (e.g. G1 humanoid joints) already
+ * report URDF-frame radians (keyboard / VR teleop, sim telemetry) and pass
+ * through unchanged. SO-101 joints report LeRobot degrees where 0° == mid of
+ * the calibrated range == URDF mid; those are mapped linearly onto the URDF
+ * [lower, upper] limits (see the calibration notes above).
+ */
+function toUrdfRadians(
+  joint: URDFRobot['joints'][string],
+  name: string,
+  position: number
+): number {
+  const calib = SO101_LEROBOT_CALIBRATION[name];
+  if (!calib) return position;
+
+  const lower = joint.limit?.lower ?? -Math.PI;
+  const upper = joint.limit?.upper ?? Math.PI;
+  const urdfMid = (lower + upper) / 2;
+  const urdfHalfRange = (upper - lower) / 2;
+
+  const normalized = Math.max(-1, Math.min(1, position / calib.halfRangeDeg));
+  const offsetRad = ((calib.offsetDeg ?? 0) * Math.PI) / 180;
+  return urdfMid + calib.sign * normalized * urdfHalfRange + offsetRad;
+}
+
 // ============================================================================
 // URDF MODEL PATHS
 // ============================================================================
@@ -122,12 +168,17 @@ const GENERIC_JOINTS: JointDefinition[] = [
 function URDFModel({
   robotType,
   jointStates,
-  isAnimating
+  isAnimating,
+  robotId
 }: RobotModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const [robot, setRobot] = useState<URDFRobot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const timeRef = useRef(0);
+  // Latest slow-path (props) joint states, read inside useFrame without
+  // re-arming any effect — the fast path bypasses props entirely.
+  const propJointStatesRef = useRef<JointState[] | undefined>(jointStates);
+  propJointStatesRef.current = jointStates;
 
   // Load URDF model (don't apply materials here - DAE loads async)
   useEffect(() => {
@@ -170,44 +221,30 @@ function URDFModel({
     };
   }, [robotType]);
 
-  // Apply joint states from telemetry
-  useEffect(() => {
-    if (!robot || !jointStates) return;
-
-    jointStates.forEach(({ name, position }) => {
-      const joint = robot.joints[name];
-      if (!joint) return;
-
-      const calib = SO101_LEROBOT_CALIBRATION[name];
-      if (!calib) {
-        // No LeRobot calibration entry (e.g. G1 humanoid joints): the position is
-        // already a URDF-frame angle in radians (keyboard / VR teleop, sim
-        // telemetry), so drive the joint directly. This lets non-SO-101 robots
-        // reflect joint motion instead of rendering statically.
-        robot.setJointValue(name, position);
-        return;
-      }
-
-      // LeRobot 0° == mid of joint's calibrated range == URDF mid.
-      // Map LeRobot's [-halfRangeDeg, +halfRangeDeg] linearly onto URDF [lower, upper].
-      const lower = joint.limit?.lower ?? -Math.PI;
-      const upper = joint.limit?.upper ?? Math.PI;
-      const urdfMid = (lower + upper) / 2;
-      const urdfHalfRange = (upper - lower) / 2;
-
-      const normalized = Math.max(-1, Math.min(1, position / calib.halfRangeDeg));
-      const offsetRad = ((calib.offsetDeg ?? 0) * Math.PI) / 180;
-      const radians = urdfMid + calib.sign * normalized * urdfHalfRange + offsetRad;
-
-      robot.setJointValue(name, radians);
-    });
-  }, [robot, jointStates]);
-
-  // Apply materials in useFrame (keep checking for 3 seconds to catch async DAE loads)
-  // and handle idle animation
+  // Apply materials in useFrame (keep checking for 3 seconds to catch async DAE loads),
+  // drive joints toward their telemetry targets with damping, and handle idle animation
   useFrame((_, delta) => {
     timeRef.current += delta;
     const time = timeRef.current;
+
+    // Joint targets: prefer a fresh ~10 Hz fast-channel frame, fall back to the
+    // regular 2 s telemetry from props (older agents / fast channel disabled).
+    const fastFrame = robotId ? getFastTelemetry(robotId)?.frame : null;
+    const activeJointStates = fastFrame?.jointStates ?? propJointStatesRef.current;
+
+    if (robot && activeJointStates) {
+      for (const { name, position } of activeJointStates) {
+        const joint = robot.joints[name];
+        if (!joint) continue;
+
+        const target = toUrdfRadians(joint, name, position);
+        const rawAngle = joint.angle;
+        const current = typeof rawAngle === 'number' ? rawAngle : Number(rawAngle) || 0;
+        // Exponential damping instead of a hard snap: poses glide between
+        // telemetry frames rather than teleporting on arrival.
+        robot.setJointValue(name, THREE.MathUtils.damp(current, target, JOINT_DAMP_LAMBDA, delta));
+      }
+    }
 
     // Keep applying materials for first 3 seconds after robot loads (DAE meshes load async)
     if (robot && time < 3) {
@@ -237,7 +274,7 @@ function URDFModel({
     }
 
     // Idle animation when no telemetry
-    if (!isAnimating || jointStates || !groupRef.current) return;
+    if (!isAnimating || activeJointStates || !groupRef.current) return;
 
     // Subtle breathing motion
     groupRef.current.position.y = Math.sin(time * 0.5) * 0.01;
@@ -282,11 +319,14 @@ function URDFModel({
 function ProceduralModel({
   robotType,
   jointStates,
-  isAnimating
+  isAnimating,
+  robotId
 }: RobotModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const jointRefs = useRef<Map<string, THREE.Mesh>>(new Map());
   const timeRef = useRef(0);
+  const propJointStatesRef = useRef<JointState[] | undefined>(jointStates);
+  propJointStatesRef.current = jointStates;
 
   const joints = useMemo(() => {
     switch (robotType) {
@@ -297,21 +337,26 @@ function ProceduralModel({
     }
   }, [robotType]);
 
-  // Apply joint states from telemetry
-  useEffect(() => {
-    if (!jointStates) return;
-
-    jointStates.forEach((state) => {
-      const mesh = jointRefs.current.get(state.name);
-      if (mesh) {
-        mesh.rotation.z = state.position;
-      }
-    });
-  }, [jointStates]);
-
-  // Idle animation when no telemetry
+  // Drive joints toward telemetry targets with damping; idle-animate otherwise
   useFrame((_, delta) => {
-    if (!isAnimating || jointStates) return;
+    const fastFrame = robotId ? getFastTelemetry(robotId)?.frame : null;
+    const activeJointStates = fastFrame?.jointStates ?? propJointStatesRef.current;
+
+    if (activeJointStates) {
+      for (const state of activeJointStates) {
+        const mesh = jointRefs.current.get(state.name);
+        if (mesh) {
+          mesh.rotation.z = THREE.MathUtils.damp(
+            mesh.rotation.z,
+            state.position,
+            JOINT_DAMP_LAMBDA,
+            delta
+          );
+        }
+      }
+    }
+
+    if (!isAnimating || activeJointStates) return;
 
     timeRef.current += delta;
     const time = timeRef.current;
