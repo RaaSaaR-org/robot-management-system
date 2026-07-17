@@ -297,6 +297,34 @@ robotRoutes.post('/:id/pointcloud/capture', async (req: Request, res: Response) 
   }
 });
 
+/**
+ * POST /:id/pointcloud/lidar/switch — Toggle the robot's physical LiDAR.
+ * Thin proxy to the agent → hardware sidecar (rt/utlidar/switch — a sensor
+ * enable that commands no robot motion). Body: {on: boolean}; the agent
+ * answers 200 with {ok, lidar?, error?}.
+ */
+robotRoutes.post('/:id/pointcloud/lidar/switch', async (req: Request, res: Response) => {
+  try {
+    const on = req.body?.on;
+    if (typeof on !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'body must be {on: boolean}' });
+    }
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) return res.status(404).json({ ok: false, error: 'Robot not found' });
+    // LONG: the agent's sidecar call publishes the DDS switch for ~3 s and its
+    // own timeout is 10 s — MEDIUM (also 10 s) would race it.
+    const httpClient = new HttpClient(registered.baseUrl, HTTP_TIMEOUTS.LONG);
+    const data = await httpClient.post(`/api/v1/robots/${req.params.id}/pointcloud/lidar/switch`, { on });
+    res.json(data);
+  } catch (error) {
+    if (error instanceof HttpClientError && error.isNetworkError()) {
+      return res.status(502).json({ ok: false, error: 'Unable to communicate with robot agent' });
+    }
+    console.error('[PointCloud] LiDAR switch error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to switch LiDAR' });
+  }
+});
+
 // ----------------------------------------------------------------------------
 // Scan sessions (digital-twin sweep) — thin proxy to the agent. The agent holds
 // the session + fixed world room; the server forwards start/stop/status so the

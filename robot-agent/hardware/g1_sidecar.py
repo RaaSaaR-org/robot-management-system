@@ -27,6 +27,8 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
   GET  /cameras/<name>/snapshot → one-shot base64 JPEG
   GET  /pointcloud/sensors → list available depth/LiDAR sensor names
   GET  /pointcloud/<name>/snapshot → one-shot point cloud (flat XYZ + intensity)
+  POST /pointcloud/lidar/switch → {"on": true|false} → rt/utlidar/switch
+                        (sensor enable — the single authorized write, no motion)
   POST /record/start  → spawn lerobot-record (G1 teleop + dataset)
   POST /record/stop   → SIGINT the recording subprocess
   GET  /record/status → recording progress / dataset path
@@ -78,6 +80,24 @@ TOPIC_ODOM = os.environ.get("G1_ODOM_TOPIC", "rt/odommodestate")
 # Depth / LiDAR sensors on the G1. Names must match
 # robot-agent/src/embodiment/configs/g1*.yaml `depth_sensors`.
 DEPTH_SENSORS = ["mid360_lidar", "d435i_depth"]
+
+# The head MID-360 is mounted INVERTED (looking down — a walking robot needs
+# ground vision; effective FOV −52°…+7°, sensor ~1.3 m above the floor on a
+# standing G1). The raw cloud on rt/utlidar/cloud_livox_mid360 (frame_id
+# 'livox_frame') is sensor-centric with +z pointing physically DOWN: the
+# floor appears as a dense plane ABOVE the origin at z≈+1.3, and near-range
+# returns cut off exactly at sensor height + 7°. Established empirically
+# 2026-07-18 across the 2026-07-07 capture and fresh frames (a first
+# 2026-07-17 reading called that plane a "ceiling at 2.66 m room height" —
+# wrong; an upright mount could never see the floor densely at 1–6 m as the
+# frames do once the blob below is removed). Additionally ~50 % of every raw
+# frame is a SELF-RETURN blob at the origin (the sensor seeing its own
+# housing, 3D range < 0.3 m) that must be filtered before any geometry.
+# `_normalize_mid360_frame` drops the blob, detects the frame convention per
+# frame (robust in case a robot-side utlidar/SLAM mode ever publishes
+# already-gravity-aligned clouds), and brings frames into the NeoDEM contract
+# frame (z-up, floor at z=0, matching the sim generator). Replay recordings
+# and RealSense frames stay untouched.
 
 # 43 DOF: 29 G1 body + 14 Dex3-1 (7 per hand). Must match
 # robot-agent/src/embodiment/configs/g1_edu.yaml and g1-edu.config.ts.
@@ -876,20 +896,253 @@ def _livox_pointcloud(target_count: int):
         return None
 
 
+# --- Livox MID-360 via Unitree DDS (rt/utlidar/cloud_livox_mid360) -----------
+# The G1's onboard bridge republishes the MID-360 as a sensor_msgs/PointCloud2
+# over Unitree DDS — no ROS2 needed (the proven path of the 2026-07-07 real
+# capture, see C:\Unitree\_data\g1_lidar\g1_lidar_capture.py). The cloud path
+# is subscribe-only; the ONE write this file performs is the LiDAR enable
+# switch below (set_lidar_switch) — see its docstring for the authorization.
+_dds_lidar_source = None
+_dds_lidar_lock = threading.Lock()
+_dds_lidar_failed = False
+
+_dds_factory_ready = False
+_dds_factory_lock = threading.Lock()
+
+
+def _ensure_dds_factory() -> None:
+    """Process-global CycloneDDS factory init, shared by the LiDAR cloud
+    subscriber and the switch publisher — ChannelFactoryInitialize can only run
+    once per process, so both paths funnel through here. Raises on failure."""
+    global _dds_factory_ready
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore
+
+    with _dds_factory_lock:
+        if _dds_factory_ready:
+            return
+        domain = int(os.environ.get("G1_LIDAR_DDS_DOMAIN", "0"))  # 0 = real robot
+        iface = os.environ.get("G1_LIDAR_DDS_IFACE", os.environ.get("G1_NET_INTERFACE", "")).strip()
+        if iface:
+            ChannelFactoryInitialize(domain, iface)
+        else:
+            ChannelFactoryInitialize(domain)
+        _dds_factory_ready = True
+
+
+class _UnitreeDdsLidarSource:
+    """Caches the latest PointCloud2_ from Unitree DDS via a subscriber callback.
+
+    The unitree_sdk2py IDL mirrors sensor_msgs/PointCloud2 attribute-for-
+    attribute (fields/offset/datatype, point_step, data, ...), so the cached
+    message goes through the same `_parse_pointcloud2` as the ROS2 source.
+    """
+
+    def __init__(self, topic: str, domain: int, iface: str):
+        self.topic = topic
+        self.domain = domain
+        self.iface = iface
+        self._latest = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        from unitree_sdk2py.core.channel import ChannelSubscriber  # type: ignore
+        from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_  # type: ignore
+
+        _ensure_dds_factory()
+        sub = ChannelSubscriber(self.topic, PointCloud2_)
+        sub.Init(self._cb, 8)
+        print(
+            f"[G1 Sidecar] ✅ Unitree-DDS LiDAR subscriber on {self.topic} "
+            f"(domain {self.domain}, iface '{self.iface or 'default'}')",
+            flush=True,
+        )
+
+    def _cb(self, msg) -> None:
+        with self._lock:
+            self._latest = msg
+
+    def latest(self, timeout_s: float):
+        end = time.time() + timeout_s
+        while time.time() < end:
+            with self._lock:
+                if self._latest is not None:
+                    return self._latest
+            time.sleep(0.02)
+        with self._lock:
+            return self._latest
+
+
+def _dds_pointcloud(target_count: int):
+    """Latest MID-360 frame via Unitree DDS. Returns (positions, intensities,
+    has_intensity, "dds") or None when unitree_sdk2py is unavailable, DDS
+    init failed once before, or no cloud arrives within the timeout."""
+    global _dds_lidar_source, _dds_lidar_failed
+    if _dds_lidar_failed:
+        return None
+    try:
+        import unitree_sdk2py  # type: ignore  # noqa: F401  (availability check only)
+    except ImportError:
+        return None
+    try:
+        with _dds_lidar_lock:
+            if _dds_lidar_source is None:
+                _dds_lidar_source = _UnitreeDdsLidarSource(
+                    topic=os.environ.get("G1_LIDAR_DDS_TOPIC", "rt/utlidar/cloud_livox_mid360"),
+                    domain=int(os.environ.get("G1_LIDAR_DDS_DOMAIN", "0")),
+                    iface=os.environ.get("G1_LIDAR_DDS_IFACE", os.environ.get("G1_NET_INTERFACE", "")).strip(),
+                )
+                _dds_lidar_source.start()
+        msg = _dds_lidar_source.latest(float(os.environ.get("G1_LIDAR_DDS_TIMEOUT_S", "2.0")))
+        if msg is None:
+            return None
+        positions, intensities = _parse_pointcloud2(msg, target_count)
+        if not positions:
+            return None
+        return positions, intensities, bool(intensities), "dds"
+    except Exception as e:  # noqa: BLE001
+        # DDS init is process-global and not retryable — remember the failure
+        # so auto mode doesn't pay the init cost on every snapshot.
+        _dds_lidar_failed = True
+        print(f"[G1 Sidecar] Unitree-DDS LiDAR ingest failed ({e})", flush=True)
+        return None
+
+
+# --- LiDAR power switch (rt/utlidar/switch) ----------------------------------
+# THE single authorized write while stage 1 (read-only) is active — explicitly
+# user-authorized 2026-07-07 and re-used by g1_lidar_capture.py: publishing
+# "ON"/"OFF" to rt/utlidar/switch is a sensor enable. It commands NO robot
+# motion and opens no rt/lowcmd / MotionSwitcher path. It is therefore allowed
+# even when G1_READ_ONLY is set; set G1_ALLOW_LIDAR_SWITCH=0 to remove this
+# write path entirely.
+LIDAR_SWITCH_ALLOWED = os.environ.get("G1_ALLOW_LIDAR_SWITCH", "1").strip() != "0"
+
+_lidar_switch_lock = threading.Lock()
+
+
+def set_lidar_switch(on: bool) -> dict:
+    """Publish ON/OFF to rt/utlidar/switch (see authorization note above).
+
+    The write is repeated 15× over ~3 s — the proven pattern from
+    g1_lidar_capture.py. A shorter burst (5×/1 s) was observed to get lost on a
+    freshly created publisher: DDS discovery to the robot's utlidar node had
+    not completed and every write was dropped (2026-07-17 live test).
+
+    A FRESH publisher is created for every request and closed afterwards:
+    a publisher cached across requests went stale after the robot restarted
+    its utlidar node — 6 bursts published into the void while a fresh
+    publisher (capture script) switched the sensor instantly (2026-07-18
+    live test). The 3 s discovery burst already dominates the cost, so a
+    per-request publisher loses nothing.
+    Returns {"ok": True, "lidar": "ON"|"OFF"} or {"ok": False, "error": ...};
+    never raises.
+    """
+    if not LIDAR_SWITCH_ALLOWED:
+        return {"ok": False, "error": "G1_ALLOW_LIDAR_SWITCH=0 — LiDAR switch write disabled"}
+    try:
+        from unitree_sdk2py.core.channel import ChannelPublisher  # type: ignore
+        from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_  # type: ignore
+        from unitree_sdk2py.idl.default import std_msgs_msg_dds__String_  # type: ignore
+    except ImportError:
+        return {"ok": False, "error": "unitree_sdk2py not installed — cannot reach rt/utlidar/switch"}
+    try:
+        with _lidar_switch_lock:
+            _ensure_dds_factory()
+            pub = ChannelPublisher("rt/utlidar/switch", String_)
+            pub.Init()
+            try:
+                cmd = std_msgs_msg_dds__String_()
+                cmd.data = "ON" if on else "OFF"
+                for _ in range(15):
+                    pub.Write(cmd)
+                    time.sleep(0.2)
+            finally:
+                try:
+                    pub.Close()
+                except Exception:  # noqa: BLE001
+                    pass  # never let cleanup mask the write result
+        print(
+            f"[G1 Sidecar] LiDAR switch → {cmd.data} (rt/utlidar/switch — sensor enable, no motion)",
+            flush=True,
+        )
+        return {"ok": True, "lidar": cmd.data}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"LiDAR switch failed: {e}"}
+
+
+_last_mid360_frame_note = None
+
+
+def _normalize_mid360_frame(positions: list, intensities: list) -> tuple[list, list]:
+    """Bring a live MID-360 frame into the contract frame (z-up, floor z=0).
+
+    See the frame-convention note above DEPTH_SENSORS. Steps:
+      1. Drop the self-return blob (3D range < 0.3 m — the sensor seeing its
+         own housing, ~50 % of a raw frame); intensities are filtered in
+         lockstep so per-point data stays aligned.
+      2. Find the dominant horizontal plane within 8 m of the robot:
+         • plane near/below z≈0.5 → the frame is already gravity-aligned and
+           floor-anchored; snap the floor to exactly 0.
+         • plane clearly ABOVE the origin → raw frame of the inverted head
+           MID-360 (+z physically down); the plane IS the floor, so flip
+           (y, z) — 180° about x, keeping x=forward and right-handedness —
+           and anchor the floor at 0. (Which horizontal axis mirrors is an
+           assumption; only left/right in the viewer depends on it.)
+         • no dominant plane (sparse frame, open space) → orientation kept.
+    """
+    global _last_mid360_frame_note
+    n = len(positions) // 3
+    if n < 200:
+        return positions, intensities  # heartbeat / too sparse to detect anything
+    try:
+        import numpy as np
+    except ImportError:
+        return positions, intensities
+    a = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
+
+    keep = np.linalg.norm(a, axis=1) >= 0.3
+    if int(keep.sum()) < 200:
+        return positions, intensities
+    a = a[keep]
+    if len(intensities) == n:
+        intensities = [v for v, k in zip(intensities, keep.tolist()) if k]
+
+    r = np.hypot(a[:, 0], a[:, 1])
+    near_z = a[(r < 8.0), 2]
+    note = "raw (no dominant plane)"
+    if len(near_z) >= 200 and float(near_z.max() - near_z.min()) > 0.3:
+        hist, edges = np.histogram(near_z, bins=np.arange(near_z.min(), near_z.max() + 0.1, 0.1))
+        k = int(hist.argmax())
+        if hist[k] >= max(150, 0.06 * len(near_z)):
+            plane_z = float(edges[k]) + 0.05
+            if plane_z <= 0.5:
+                a[:, 2] -= plane_z
+                note = f"floor-anchored (floor snapped from {plane_z:+.2f})"
+            else:
+                a[:, 1] = -a[:, 1]
+                a[:, 2] = plane_z - a[:, 2]
+                note = f"inverted raw (floor was at +{plane_z:.2f})"
+    if note != _last_mid360_frame_note:
+        _last_mid360_frame_note = note
+        print(f"[G1 Sidecar] MID-360 frame convention: {note}", flush=True)
+    return a.reshape(-1).tolist(), intensities
+
+
 def get_point_cloud(name: str) -> dict:
     """Read one point-cloud frame from a depth / LiDAR sensor.
 
-    Source is chosen by G1_LIDAR_SOURCE ∈ {auto|livox|realsense|replay}
+    Source is chosen by G1_LIDAR_SOURCE ∈ {auto|dds|livox|realsense|replay}
     (default auto). Fallback chain — never crashes, always returns the flat
     contract below:
 
       • replay  : decode a real recording (KITTI .bin / PCD) via
                   pointcloud_replay when G1_POINTCLOUD_REPLAY is set.
+      • dds     : latest rt/utlidar/cloud_livox_mid360 PointCloud2 over
+                  Unitree DDS (MID-360, no ROS2 — the native-Windows path).
       • livox   : latest /livox/lidar PointCloud2 over ROS2 (MID-360).
       • realsense: deproject a RealSense depth frame (pyrealsense2 + numpy).
       • empty   : last resort — empty frame so the seam stays alive.
 
-    auto order:  replay (if configured) → [lidar: livox → realsense] /
+    auto order:  replay (if configured) → [lidar: dds → livox → realsense] /
                  [depth: realsense] → empty.
     Explicit selectors force a single live source (then fall back to empty).
 
@@ -935,13 +1188,19 @@ def get_point_cloud(name: str) -> dict:
             live = _realsense_pointcloud(target)
         elif source == "livox":
             live = _livox_pointcloud(target)
+        elif source == "dds":
+            live = _dds_pointcloud(target)
         else:  # auto
-            live = _livox_pointcloud(target) or _realsense_pointcloud(target)
+            live = _dds_pointcloud(target) or _livox_pointcloud(target) or _realsense_pointcloud(target)
     else:  # d435i_depth → RealSense
         live = _realsense_pointcloud(target)
 
     if live:
         positions, intensities, has_i, label = live
+        # Bring live MID-360 frames into the contract frame (floor at z=0) so
+        # the robot model stands correctly inside its own scan.
+        if name == "mid360_lidar" and label in ("dds", "livox"):
+            positions, intensities = _normalize_mid360_frame(positions, intensities)
         return {
             "ok": True,
             "sensor": name,
@@ -1047,6 +1306,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, send_action(body))
         elif self.path == "/estop":
             self._send(200, reset_ramp_state())
+        elif self.path == "/pointcloud/lidar/switch":
+            # Deliberately NOT behind the READ_ONLY guard — the LiDAR enable is
+            # the single authorized write (sensor only, no motion). See the
+            # authorization note above set_lidar_switch.
+            on = body.get("on")
+            if not isinstance(on, bool):
+                self._send(400, {"ok": False, "error": 'body must be {"on": true|false}'})
+                return
+            self._send(200, set_lidar_switch(on))
         elif self.path == "/record/start":
             if READ_ONLY:
                 # lerobot-record spawns a G1 teleoperator — that DRIVES the robot.
