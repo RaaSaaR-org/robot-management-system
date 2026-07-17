@@ -84,7 +84,7 @@ export function HardwareTestPanel({ onComplete }: HardwareTestPanelProps) {
             <select
               value={skillId}
               onChange={(e) => setSkillId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
+              className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
             >
               <option value="">Pick a skill…</option>
               {skills.map((s) => (
@@ -100,7 +100,7 @@ export function HardwareTestPanel({ onComplete }: HardwareTestPanelProps) {
             <select
               value={robotId}
               onChange={(e) => setRobotId(e.target.value)}
-              className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
+              className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
             >
               <option value="">Pick a robot…</option>
               {onlineRobots.map((r) => (
@@ -119,7 +119,7 @@ export function HardwareTestPanel({ onComplete }: HardwareTestPanelProps) {
               max={50}
               value={episodes}
               onChange={(e) => setEpisodes(parseInt(e.target.value, 10) || 1)}
-              className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
+              className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
             />
           </div>
 
@@ -143,7 +143,7 @@ export function HardwareTestPanel({ onComplete }: HardwareTestPanelProps) {
             value={taskPrompt}
             onChange={(e) => setTaskPrompt(e.target.value)}
             placeholder="Pick up the red cube and place it in the box."
-            className="w-full px-3 py-2 text-sm rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-theme-primary"
+            className="w-full px-3 py-2 text-sm rounded-brand border border-theme bg-theme-card text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500 focus:border-transparent"
           />
         </div>
 

@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
+import { PageHeader, EmptyState } from '@/shared/components/ui';
 import {
   Network,
   Plus,
@@ -95,35 +96,30 @@ export function FleetLearningPage() {
   return (
     <div className="container mx-auto px-4 py-6 max-w-7xl">
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <Network className="w-7 h-7 text-primary-600" />
-            Fleet Learning
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Federated learning across your robot fleet
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {activeRounds.length > 0 && (
+      <PageHeader
+        className="mb-6"
+        title="Fleet Learning"
+        subtitle="Federated learning across your robot fleet"
+        meta={
+          activeRounds.length > 0 ? (
             <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-sm font-medium">
               {activeRounds.length} active
             </span>
-          )}
+          ) : undefined
+        }
+        actions={
           <button
             onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600 transition-colors"
           >
             <Plus size={18} />
             New Round
           </button>
-        </div>
-      </div>
+        }
+      />
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
+      <div className="border-b border-theme mb-6">
         <nav className="flex gap-4">
           {tabs.map((tab) => (
             <button
@@ -132,14 +128,14 @@ export function FleetLearningPage() {
               className={cn(
                 'flex items-center gap-2 px-4 py-3 border-b-2 font-medium text-sm transition-colors',
                 activeTab === tab.id
-                  ? 'border-primary-600 text-primary-600 dark:text-primary-400'
-                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                  ? 'border-cobalt text-cobalt'
+                  : 'border-transparent text-theme-secondary hover:text-theme-primary'
               )}
             >
               <tab.icon size={18} />
               {tab.label}
               {tab.count !== undefined && (
-                <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded-full text-xs">
+                <span className="px-2 py-0.5 bg-theme-hover rounded-full text-xs">
                   {tab.count}
                 </span>
               )}
@@ -155,11 +151,11 @@ export function FleetLearningPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-gray-400" />
+                <Filter className="w-4 h-4 text-theme-muted" />
                 <select
                   value={statusFilter}
                   onChange={(e) => handleStatusFilterChange(e.target.value as FederatedRoundStatus | '')}
-                  className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300"
+                  className="px-3 py-1.5 border border-theme rounded-brand section-secondary text-sm text-theme-secondary"
                 >
                   <option value="">All Statuses</option>
                   <option value="created">Created</option>
@@ -175,7 +171,7 @@ export function FleetLearningPage() {
             <button
               onClick={fetchRounds}
               disabled={roundsLoading}
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-theme-secondary hover:text-theme-primary transition-colors"
             >
               <RefreshCw size={16} className={roundsLoading ? 'animate-spin' : ''} />
               Refresh
@@ -199,22 +195,20 @@ export function FleetLearningPage() {
 
           {/* Empty State */}
           {!roundsLoading && rounds.length === 0 && (
-            <div className="text-center py-12">
-              <Network className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
-                No Federated Rounds
-              </h3>
-              <p className="text-gray-500 dark:text-gray-400 mb-4">
-                Start your first federated learning round to improve your models with fleet data.
-              </p>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-              >
-                <Plus size={18} />
-                Create First Round
-              </button>
-            </div>
+            <EmptyState
+              icon={<Network className="w-10 h-10" />}
+              title="No Federated Rounds"
+              description="Start your first federated learning round to improve your models with fleet data."
+              action={
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-cobalt text-white rounded-brand hover:bg-cobalt-600 transition-colors"
+                >
+                  <Plus size={18} />
+                  Create First Round
+                </button>
+              }
+            />
           )}
 
           {/* Rounds Grid */}
@@ -236,18 +230,18 @@ export function FleetLearningPage() {
               <button
                 onClick={() => setPage(Math.max(0, pagination.offset - pagination.limit))}
                 disabled={pagination.offset === 0}
-                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm disabled:opacity-50"
+                className="px-3 py-1.5 border border-theme rounded-brand text-sm text-theme-secondary disabled:opacity-50"
               >
                 Previous
               </button>
-              <span className="text-sm text-gray-500 dark:text-gray-400">
+              <span className="text-sm text-theme-tertiary">
                 {pagination.offset + 1}-{Math.min(pagination.offset + pagination.limit, pagination.total)} of{' '}
                 {pagination.total}
               </span>
               <button
                 onClick={() => setPage(pagination.offset + pagination.limit)}
                 disabled={pagination.offset + pagination.limit >= pagination.total}
-                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm disabled:opacity-50"
+                className="px-3 py-1.5 border border-theme rounded-brand text-sm text-theme-secondary disabled:opacity-50"
               >
                 Next
               </button>

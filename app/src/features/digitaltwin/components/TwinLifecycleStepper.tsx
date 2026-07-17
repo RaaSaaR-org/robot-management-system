@@ -42,14 +42,14 @@ function deriveSteps(status: TwinStatus, zoneCount: number, hasOccupancy: boolea
 }
 
 const DOT: Record<StepState, string> = {
-  done: 'bg-[#FF6700] text-black border-[#FF6700]',
-  active: 'bg-transparent text-[#FF6700] border-[#FF6700]',
+  done: 'bg-cobalt text-white border-cobalt',
+  active: 'bg-transparent text-cobalt border-cobalt',
   todo: 'bg-transparent text-theme-tertiary border-surface-600',
 };
 
 const LABEL: Record<StepState, string> = {
   done: 'text-theme-secondary',
-  active: 'text-[#FF6700] font-medium',
+  active: 'text-cobalt font-medium',
   todo: 'text-theme-tertiary',
 };
 
@@ -76,7 +76,7 @@ export const TwinLifecycleStepper = memo(function TwinLifecycleStepper({
               <span className={`text-xs ${LABEL[step.state]}`}>{step.label}</span>
             </button>
             {i < steps.length - 1 && (
-              <span className={`w-6 h-px ${step.state === 'done' ? 'bg-[#FF6700]/60' : 'bg-surface-600'}`} />
+              <span className={`w-6 h-px ${step.state === 'done' ? 'bg-cobalt/60' : 'bg-surface-600'}`} />
             )}
           </li>
         );

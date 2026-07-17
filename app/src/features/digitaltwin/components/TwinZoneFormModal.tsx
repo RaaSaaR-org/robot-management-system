@@ -93,13 +93,13 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
     [form, editingZone, pendingPolygon, createZone, updateZone],
   );
 
-  const previewColor = form.color || TWIN_ZONE_COLORS[form.type] || '#FF6700';
+  const previewColor = form.color || TWIN_ZONE_COLORS[form.type] || '#2A5FFF';
 
   return (
     <Modal isOpen={showFormModal} onClose={closeFormModal} title={editingZone ? 'Edit zone' : 'New zone'}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Name</label>
+          <label className="block text-sm font-medium text-theme-secondary mb-1">Name</label>
           <Input
             value={form.name}
             onChange={(e) => {
@@ -112,11 +112,11 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Type</label>
+          <label className="block text-sm font-medium text-theme-secondary mb-1">Type</label>
           <select
             value={form.type}
             onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as TwinZoneType }))}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-gray-200 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="w-full px-3 py-2 section-secondary border border-theme rounded-brand text-theme-primary focus:border-cobalt focus:outline-none focus:ring-1 focus:ring-cobalt"
           >
             {TYPE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -126,7 +126,7 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Floor Z (m)</label>
+            <label className="block text-sm font-medium text-theme-secondary mb-1">Floor Z (m)</label>
             <Input
               type="number"
               step="0.1"
@@ -135,7 +135,7 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Ceiling Z (m)</label>
+            <label className="block text-sm font-medium text-theme-secondary mb-1">Ceiling Z (m)</label>
             <Input
               type="number"
               step="0.1"
@@ -146,13 +146,13 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">Color</label>
+          <label className="block text-sm font-medium text-theme-secondary mb-1">Color</label>
           <div className="flex items-center gap-3">
             <input
               type="color"
               value={previewColor}
               onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))}
-              className="h-9 w-12 rounded border border-gray-600 bg-gray-800"
+              className="h-9 w-12 rounded-brand border border-theme section-secondary"
               aria-label="Zone color"
             />
             <span className="text-xs text-theme-tertiary">Defaults to the type color when unset.</span>

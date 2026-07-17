@@ -17,6 +17,8 @@ export interface TrainingJobListProps {
   onCancel?: (id: string) => void;
   onRetry?: (id: string) => void;
   showFilters?: boolean;
+  /** Render nothing when there are no jobs at all (parent shows its own EmptyState) */
+  hideEmpty?: boolean;
 }
 
 const statusOptions: { value: TrainingJobStatus | 'all'; label: string }[] = [
@@ -39,6 +41,7 @@ export function TrainingJobList({
   onCancel,
   onRetry,
   showFilters = true,
+  hideEmpty = false,
 }: TrainingJobListProps) {
   const [statusFilter, setStatusFilter] = useState<TrainingJobStatus | 'all'>('all');
   const [modelFilter, setModelFilter] = useState<BaseModel | 'all'>('all');
@@ -61,6 +64,10 @@ export function TrainingJobList({
     );
   }
 
+  if (hideEmpty && jobs.length === 0) {
+    return null;
+  }
+
   return (
     <div className="space-y-4">
       {showFilters && (
@@ -72,7 +79,7 @@ export function TrainingJobList({
                 onClick={() => setStatusFilter(option.value)}
                 className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
                   statusFilter === option.value
-                    ? 'bg-primary-500 text-white'
+                    ? 'bg-cobalt-500 text-white'
                     : 'bg-theme-secondary/20 text-theme-secondary hover:bg-theme-secondary/30'
                 }`}
               >

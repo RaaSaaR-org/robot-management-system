@@ -50,9 +50,9 @@ export const A2ASideNav = memo(function A2ASideNav({
   return (
     <aside
       className={cn(
-        // Base styles
-        'flex flex-col h-full',
-        'glass-elevated border-r border-glass-subtle',
+        // Base styles: in-flow left rail, flat edges (no floating-card radius)
+        'flex flex-col h-full shrink-0',
+        'glass-elevated rounded-none border-r border-glass-subtle',
         'transition-[width] duration-200 ease-in-out',
         // Dynamic width
         collapsed ? 'w-16' : 'w-56'
@@ -63,9 +63,9 @@ export const A2ASideNav = memo(function A2ASideNav({
         <button
           onClick={onToggleCollapse}
           className={cn(
-            'flex items-center gap-2 w-full rounded-lg px-3 py-2',
-            'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100',
-            'hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors',
+            'flex items-center gap-2 w-full rounded-brand px-3 py-2',
+            'text-theme-secondary hover:text-theme-primary',
+            'hover:bg-theme-hover transition-colors',
             collapsed && 'justify-center px-2'
           )}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -97,11 +97,11 @@ export const A2ASideNav = memo(function A2ASideNav({
               title={collapsed ? item.label : undefined}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 rounded-lg transition-colors relative',
+                  'flex items-center gap-3 rounded-brand transition-colors relative',
                   collapsed ? 'px-2.5 py-2.5 justify-center' : 'px-3 py-2.5',
                   isActive
-                    ? 'bg-primary-500 text-white'
-                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800'
+                    ? 'bg-cobalt-500 text-white'
+                    : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
                 )
               }
             >
@@ -129,10 +129,10 @@ export const A2ASideNav = memo(function A2ASideNav({
           onClick={onSettingsClick}
           title={collapsed ? 'Settings' : undefined}
           className={cn(
-            'flex items-center gap-3 w-full rounded-lg transition-colors',
+            'flex items-center gap-3 w-full rounded-brand transition-colors',
             collapsed ? 'px-2.5 py-2.5 justify-center' : 'px-3 py-2.5',
-            'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100',
-            'hover:bg-gray-100 dark:hover:bg-gray-800'
+            'text-theme-secondary hover:text-theme-primary',
+            'hover:bg-theme-hover'
           )}
         >
           <SettingsIcon className="w-5 h-5 shrink-0" />

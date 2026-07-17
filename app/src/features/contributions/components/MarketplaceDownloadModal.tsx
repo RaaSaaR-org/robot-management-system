@@ -58,23 +58,23 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
         role="dialog"
         aria-modal="true"
         aria-label={`Download ${listing.title}`}
-        className="relative w-full max-w-lg rounded-2xl bg-[#1a1b1f] border border-white/10 shadow-2xl"
+        className="relative w-full max-w-lg rounded-2xl bg-theme-card border border-theme shadow-2xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-white/10">
+        <div className="flex items-center justify-between p-5 border-b border-theme">
           <div className="flex items-center gap-3">
             <div className={cn(
               'w-10 h-10 rounded-lg flex items-center justify-center',
-              isSkill ? 'bg-[#FF6700]/15' : 'bg-teal-500/15'
+              isSkill ? 'bg-cobalt-500/10' : 'bg-teal-500/15'
             )}>
-              <Download size={20} className={isSkill ? 'text-[#FF6700]' : 'text-teal-400'} />
+              <Download size={20} className={isSkill ? 'text-cobalt-500 dark:text-cobalt-300' : 'text-teal-400'} />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-white">Download {isSkill ? 'Skill Adapter' : 'Dataset'}</h2>
-              <p className="text-xs text-gray-500">{listing.title}</p>
+              <h2 className="text-base font-semibold text-theme-primary">Download {isSkill ? 'Skill Adapter' : 'Dataset'}</h2>
+              <p className="text-xs text-theme-tertiary">{listing.title}</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-brand hover:bg-theme-hover text-theme-secondary hover:text-theme-primary transition-colors">
             <X size={18} />
           </button>
         </div>
@@ -82,47 +82,47 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
         {/* Body */}
         <div className="p-5 space-y-4">
           {/* File info */}
-          <div className="rounded-lg bg-white/5 border border-white/10 p-4 space-y-3">
+          <div className="rounded-lg bg-theme-elevated border border-theme p-4 space-y-3">
             <div className="flex items-center gap-3">
-              <FileText size={16} className="text-gray-400 shrink-0" />
+              <FileText size={16} className="text-theme-muted shrink-0" />
               <div className="flex-1 min-w-0">
                 {fileName ? (
                   <>
-                    <p className="text-sm font-mono text-white truncate">{fileName}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
+                    <p className="text-sm font-mono text-theme-primary truncate">{fileName}</p>
+                    <p className="text-xs text-theme-tertiary mt-0.5">
                       {fileSize} &middot; {formatArtifactFormat(info?.format, isSkill)}
                     </p>
                   </>
                 ) : (
                   <div className="animate-pulse">
-                    <div className="h-4 w-2/3 rounded bg-white/10 mb-1.5" />
-                    <div className="h-3 w-1/3 rounded bg-white/5" />
+                    <div className="h-4 w-2/3 rounded bg-theme-hover mb-1.5" />
+                    <div className="h-3 w-1/3 rounded bg-theme-hover" />
                   </div>
                 )}
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              <Cpu size={16} className="text-gray-400 shrink-0" />
-              <div className="text-xs text-gray-400">
-                <span className="text-gray-300">{listing.robotType}</span>
+              <Cpu size={16} className="text-theme-muted shrink-0" />
+              <div className="text-xs text-theme-tertiary">
+                <span className="text-theme-secondary">{listing.robotType}</span>
                 {listing.baseModel !== 'None' && (
-                  <> &middot; Base model: <span className="text-gray-300">{listing.baseModel}</span></>
+                  <> &middot; Base model: <span className="text-theme-secondary">{listing.baseModel}</span></>
                 )}
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              <Lock size={16} className="text-gray-400 shrink-0" />
+              <Lock size={16} className="text-theme-muted shrink-0" />
               {checksum ? (
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <span className="text-xs font-mono text-gray-500 truncate">{checksum}</span>
-                  <button type="button" onClick={handleCopy} className="shrink-0 p-1 rounded hover:bg-white/10 transition-colors">
-                    {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} className="text-gray-500" />}
+                  <span className="text-xs font-mono text-theme-tertiary truncate">{checksum}</span>
+                  <button type="button" onClick={handleCopy} className="shrink-0 p-1 rounded hover:bg-theme-hover transition-colors">
+                    {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} className="text-theme-tertiary" />}
                   </button>
                 </div>
               ) : (
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-theme-tertiary">
                   {info ? 'Checksum not available' : 'Verifying checksum...'}
                 </span>
               )}
@@ -130,8 +130,8 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
           </div>
 
           {/* Deployment info */}
-          <div className="rounded-lg bg-white/5 border border-white/10 p-4">
-            <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wide mb-2">After Download</h3>
+          <div className="rounded-lg bg-theme-elevated border border-theme p-4">
+            <h3 className="text-xs font-semibold text-theme-secondary uppercase tracking-wide mb-2">After Download</h3>
             <div className="space-y-2">
               {isSkill ? (
                 <>
@@ -150,11 +150,11 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
           </div>
 
           {/* Sovereignty banner */}
-          <div className="rounded-lg bg-[#FF6700]/5 border border-[#FF6700]/20 p-3 flex items-start gap-2.5">
-            <Shield size={16} className="text-[#FF6700] mt-0.5 shrink-0" />
+          <div className="rounded-lg bg-cobalt-500/5 border border-cobalt-500/20 p-3 flex items-start gap-2.5">
+            <Shield size={16} className="text-cobalt-500 dark:text-cobalt-300 mt-0.5 shrink-0" />
             <div>
-              <p className="text-xs font-medium text-[#FF6700] mb-0.5">Your Infrastructure, Your Data</p>
-              <p className="text-xs text-gray-400">
+              <p className="text-xs font-medium text-cobalt-500 dark:text-cobalt-300 mb-0.5">Your Infrastructure, Your Data</p>
+              <p className="text-xs text-theme-secondary">
                 This file runs entirely on your hardware. No telemetry, no cloud calls, no expiration. Full sovereignty over your robot intelligence.
               </p>
             </div>
@@ -167,10 +167,10 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
               onClick={() => start()}
               disabled={!info}
               className={cn(
-                'w-full py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2',
+                'w-full py-3 rounded-brand text-sm font-medium transition-colors flex items-center justify-center gap-2',
                 info
-                  ? 'bg-[#FF6700] text-white hover:bg-[#e05d00]'
-                  : 'bg-white/10 text-gray-500 cursor-not-allowed'
+                  ? 'bg-cobalt-500 text-white hover:bg-cobalt-600'
+                  : 'bg-theme-elevated text-theme-muted cursor-not-allowed'
               )}
             >
               {info ? (
@@ -189,17 +189,17 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
 
           {state === 'downloading' && (
             <div>
-              <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+              <div className="flex items-center justify-between text-xs text-theme-secondary mb-2">
                 <span>Downloading...</span>
                 <span>{Math.round(progress)}%</span>
               </div>
-              <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
+              <div className="w-full h-2 rounded-full bg-theme-elevated overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-[#FF6700] transition-all duration-300"
+                  className="h-full rounded-full bg-cobalt-500 transition-all duration-300"
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <p className="text-xs text-gray-500 mt-2 text-center">
+              <p className="text-xs text-theme-tertiary mt-2 text-center">
                 Downloading from secure storage...
               </p>
             </div>
@@ -211,7 +211,7 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
                 <CheckCircle size={20} />
                 <span className="text-sm font-medium">Download Complete</span>
               </div>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-theme-tertiary">
                 {fileName} saved to your downloads folder
               </p>
             </div>
@@ -227,7 +227,7 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
                 <button
                   type="button"
                   onClick={() => start()}
-                  className="text-xs text-[#FF6700] hover:underline"
+                  className="text-xs text-cobalt-500 dark:text-cobalt-300 hover:underline"
                 >
                   Try again
                 </button>
@@ -237,7 +237,7 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
         </div>
 
         {/* Footer stats */}
-        <div className="px-5 py-3 border-t border-white/10 flex items-center justify-between text-xs text-gray-500">
+        <div className="px-5 py-3 border-t border-theme flex items-center justify-between text-xs text-theme-tertiary">
           <span>{formatCredits(listing.downloadCount)} total downloads</span>
           <span>v{info?.version ?? '1.0.0'} &middot; Published {formatDate(listing.createdAt)}</span>
         </div>
@@ -249,8 +249,8 @@ export function MarketplaceDownloadModal({ listing, open, onClose }: Marketplace
 function StepRow({ icon: Icon, text }: { icon: typeof HardDrive; text: string }) {
   return (
     <div className="flex items-start gap-2">
-      <Icon size={14} className="text-[#FF6700] mt-0.5 shrink-0" />
-      <p className="text-xs text-gray-400">{text}</p>
+      <Icon size={14} className="text-cobalt-500 dark:text-cobalt-300 mt-0.5 shrink-0" />
+      <p className="text-xs text-theme-secondary">{text}</p>
     </div>
   );
 }

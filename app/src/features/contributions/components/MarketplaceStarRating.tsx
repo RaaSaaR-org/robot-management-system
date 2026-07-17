@@ -33,14 +33,14 @@ export function MarketplaceStarRating({
           size={iconSize}
           className={cn(
             i <= filled
-              ? 'text-[#FF6700] fill-[#FF6700]'
-              : 'text-gray-400 dark:text-gray-600'
+              ? 'text-cobalt-500 dark:text-cobalt-300 fill-current'
+              : 'text-theme-muted'
           )}
         />
       ))}
       {showNumber && (
         <span className={cn(
-          'ml-1 font-medium text-gray-700 dark:text-gray-300',
+          'ml-1 font-medium text-theme-secondary',
           size === 'sm' ? 'text-xs' : 'text-sm'
         )}>
           {rating.toFixed(1)}

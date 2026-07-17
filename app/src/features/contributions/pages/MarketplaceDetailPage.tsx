@@ -11,6 +11,8 @@ import {
   CheckCircle, Shield, Play, FileText, Clock, Loader2, AlertTriangle, Star, MessageSquarePlus,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { TierBadge } from '../components/TierBadge';
 import { MarketplaceStarRating } from '../components/MarketplaceStarRating';
 import { MarketplaceLicenseTierSelector } from '../components/MarketplaceLicenseTierSelector';
@@ -48,17 +50,22 @@ export function MarketplaceDetailPage() {
   // Not found / load error
   if (!listing) {
     return (
-      <div className="min-h-screen bg-[#0f1012] flex items-center justify-center">
-        <div className="text-center">
-          <AlertTriangle size={32} className="mx-auto text-gray-600 mb-3" />
-          <p className="text-gray-300 font-medium mb-1">Listing not found</p>
-          {error && error.toLowerCase() !== 'listing not found' && (
-            <p className="text-sm text-gray-500 mb-3">{error}</p>
-          )}
-          <button type="button" onClick={() => navigate('/marketplace')} className="text-[#FF6700] hover:underline">
-            Back to Marketplace
-          </button>
-        </div>
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <EmptyState
+          size="lg"
+          icon={<AlertTriangle className="w-8 h-8" />}
+          title="Listing not found"
+          description={error && error.toLowerCase() !== 'listing not found' ? error : undefined}
+          action={
+            <button
+              type="button"
+              onClick={() => navigate('/marketplace')}
+              className="text-sm text-cobalt-500 dark:text-cobalt-300 hover:underline"
+            >
+              Back to Marketplace
+            </button>
+          }
+        />
       </div>
     );
   }
@@ -80,270 +87,274 @@ export function MarketplaceDetailPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0f1012]">
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        {/* Back */}
-        <button
-          type="button"
-          onClick={() => navigate('/marketplace')}
-          className="flex items-center gap-2 text-sm text-gray-400 hover:text-white mb-6 transition-colors"
-        >
-          <ArrowLeft size={16} />
-          Back to Marketplace
-        </button>
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      {/* Back */}
+      <button
+        type="button"
+        onClick={() => navigate('/marketplace')}
+        className="flex items-center gap-2 text-sm text-theme-secondary hover:text-theme-primary mb-6 transition-colors"
+      >
+        <ArrowLeft size={16} />
+        Back to Marketplace
+      </button>
 
-        <div className="flex flex-col lg:flex-row gap-8">
-          {/* Left column */}
-          <div className="flex-1 min-w-0">
-            {/* Header */}
-            <div className="flex items-center gap-2 mb-3">
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium',
-                  isSkill ? 'bg-[#FF6700]/15 text-[#FF6700]' : 'bg-teal-500/15 text-teal-400'
-                )}
-              >
-                {isSkill ? <Brain size={12} /> : <Database size={12} />}
-                {isSkill ? 'Skill' : 'Dataset'}
-              </span>
-              {listing.isTrending && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400">
-                  <TrendingUp size={10} />
-                  Trending
+      <div className="flex flex-col lg:flex-row gap-8">
+        {/* Left column */}
+        <div className="flex-1 min-w-0">
+          {/* Header */}
+          <PageHeader
+            title={listing.title}
+            subtitle={listing.shortDescription}
+            meta={
+              <>
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium',
+                    isSkill
+                      ? 'bg-cobalt-500/10 text-cobalt-500 dark:text-cobalt-300'
+                      : 'bg-teal-500/15 text-teal-400'
+                  )}
+                >
+                  {isSkill ? <Brain size={12} /> : <Database size={12} />}
+                  {isSkill ? 'Skill' : 'Dataset'}
                 </span>
-              )}
-            </div>
-
-            <h1 className="text-2xl font-bold text-white mb-2">{listing.title}</h1>
-            <p className="text-gray-400 mb-4">{listing.shortDescription}</p>
-
-            {/* Seller */}
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5 border border-white/10 mb-6">
-              <span className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-sm font-bold text-gray-300">
-                {listing.seller.avatarInitials}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-white">{listing.seller.displayName}</span>
-                  <TierBadge tier={listing.seller.tier} size="sm" />
-                </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
-                  <MarketplaceStarRating rating={listing.seller.rating} size="sm" />
-                  <span>{listing.seller.totalSales} sales</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="mb-6">
-              <h2 className="text-sm font-semibold text-white mb-2">Description</h2>
-              <div className="text-sm text-gray-400 whitespace-pre-line leading-relaxed">
-                {listing.fullDescription}
-              </div>
-            </div>
-
-            {/* Preview / Stats */}
-            {isSkill ? (
-              <div className="mb-6">
-                <h2 className="text-sm font-semibold text-white mb-3">Skill Preview</h2>
-                <div className="rounded-lg bg-white/5 border border-white/10 aspect-video flex items-center justify-center mb-4">
-                  <div className="text-center">
-                    <Play size={40} className="mx-auto text-gray-600 mb-2" />
-                    <p className="text-sm text-gray-500">Demo video coming soon</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <StatCard label="Success Rate" value={`${listing.successRate ?? 0}%`} />
-                  <StatCard label="Adapter Size" value={`${listing.adapterSizeMB ?? 0} MB`} />
-                  <StatCard label="Robot Type" value={listing.robotType} />
-                  <StatCard label="Base Model" value={listing.baseModel} />
-                </div>
-              </div>
-            ) : (
-              <div className="mb-6">
-                <h2 className="text-sm font-semibold text-white mb-3">Dataset Info</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <StatCard label="Episodes" value={(listing.episodeCount ?? 0).toLocaleString()} />
-                  <StatCard label="Frames" value={(listing.frameCount ?? 0).toLocaleString()} />
-                  <StatCard label="Size" value={`${listing.datasetSizeGB ?? 0} GB`} />
-                  <StatCard label="Collection" value={listing.collectionMethod ?? 'N/A'} />
-                </div>
-              </div>
-            )}
-
-            {/* Tags */}
-            <div className="mb-6">
-              <h2 className="text-sm font-semibold text-white mb-2">Tags</h2>
-              <div className="flex flex-wrap gap-2">
-                {listing.tags.map((tag) => (
-                  <span key={tag} className="px-2.5 py-1 rounded-full bg-white/5 text-xs text-gray-300 border border-white/5">
-                    {tag}
+                {listing.isTrending && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400">
+                    <TrendingUp size={10} />
+                    Trending
                   </span>
-                ))}
-              </div>
-            </div>
-
-            {/* Technical Specs */}
-            <div className="mb-6">
-              <h2 className="text-sm font-semibold text-white mb-3">Technical Specs</h2>
-              <div className="rounded-lg border border-white/10 overflow-hidden">
-                <table className="w-full text-sm">
-                  <tbody>
-                    <SpecRow label="Type" value={isSkill ? 'LoRA Adapter (.safetensors)' : 'Dataset (LeRobot v3)'} />
-                    <SpecRow label="Robot" value={listing.robotType} />
-                    {listing.baseModel !== 'None' && <SpecRow label="Base Model" value={listing.baseModel} />}
-                    <SpecRow label="Downloads" value={listing.downloadCount.toLocaleString()} />
-                    <SpecRow label="Published" value={formatDate(listing.createdAt)} />
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Write a review */}
-            {purchased && !hasReviewed && (
-              <ReviewForm
-                isSubmitting={isSubmittingReview}
-                onSubmit={async (rating, body) => {
-                  await submitReview({ rating, body, robotType: listing.robotType });
-                  setHasReviewed(true);
-                }}
-              />
-            )}
-
-            {/* Reviews */}
-            <div className="mb-6">
-              <h2 className="text-sm font-semibold text-white mb-3">
-                Reviews ({listing.reviewCount})
-              </h2>
-              <div className="space-y-3">
-                {listing.reviews.map((review) => (
-                  <div key={review.id} className="p-4 rounded-lg bg-white/5 border border-white/10">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-white">{review.authorName}</span>
-                        <TierBadge tier={review.authorTier} size="sm" showLabel={false} />
-                        <span className="text-xs text-gray-500 flex items-center gap-1">
-                          <Cpu size={10} />
-                          {review.robotType}
-                        </span>
-                      </div>
-                      <span className="text-xs text-gray-500 flex items-center gap-1">
-                        <Clock size={10} />
-                        {formatDate(review.createdAt)}
-                      </span>
-                    </div>
-                    <MarketplaceStarRating rating={review.rating} size="sm" className="mb-2" />
-                    <p className="text-sm text-gray-300">{review.body}</p>
-                  </div>
-                ))}
-                {listing.reviews.length === 0 && (
-                  <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-500">
-                    No reviews yet.
-                  </div>
                 )}
+              </>
+            }
+            className="mb-4"
+          />
+
+          {/* Seller */}
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-theme-card border border-theme mb-6">
+            <span className="w-10 h-10 rounded-full bg-theme-elevated flex items-center justify-center text-sm font-bold text-theme-secondary">
+              {listing.seller.avatarInitials}
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-theme-primary">{listing.seller.displayName}</span>
+                <TierBadge tier={listing.seller.tier} size="sm" />
+              </div>
+              <div className="flex items-center gap-3 text-xs text-theme-tertiary">
+                <MarketplaceStarRating rating={listing.seller.rating} size="sm" />
+                <span>{listing.seller.totalSales} sales</span>
               </div>
             </div>
           </div>
 
-          {/* Right sidebar */}
-          <div className="w-full lg:w-80 shrink-0">
-            <div className="lg:sticky lg:top-6 rounded-xl bg-[#1a1b1f] border border-white/10 p-5">
-              {purchased ? (
-                <div className="text-center py-4">
-                  <CheckCircle size={40} className="mx-auto text-emerald-400 mb-3" />
-                  <h3 className="text-lg font-semibold text-white mb-1">
-                    {justPurchased ? 'Purchase Complete!' : 'Already Purchased'}
-                  </h3>
-                  <p className="text-sm text-gray-400 mb-4">
-                    {justPurchased
-                      ? 'Your download is ready.'
-                      : 'You already own a license for this item.'}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowDownloadModal(true)}
-                    className="w-full py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Download size={16} />
-                    Download {isSkill ? 'Adapter' : 'Dataset'}
-                  </button>
+          {/* Description */}
+          <div className="mb-6">
+            <h2 className="text-sm font-semibold text-theme-primary mb-2">Description</h2>
+            <div className="text-sm text-theme-secondary whitespace-pre-line leading-relaxed">
+              {listing.fullDescription}
+            </div>
+          </div>
+
+          {/* Preview / Stats */}
+          {isSkill ? (
+            <div className="mb-6">
+              <h2 className="text-sm font-semibold text-theme-primary mb-3">Skill Preview</h2>
+              <div className="rounded-lg bg-theme-card border border-theme aspect-video flex items-center justify-center mb-4">
+                <div className="text-center">
+                  <Play size={40} className="mx-auto text-theme-muted mb-2" />
+                  <p className="text-sm text-theme-tertiary">Demo video coming soon</p>
                 </div>
-              ) : (
-                <>
-                  <h3 className="text-base font-semibold text-white mb-4">Purchase License</h3>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <StatCard label="Success Rate" value={`${listing.successRate ?? 0}%`} />
+                <StatCard label="Adapter Size" value={`${listing.adapterSizeMB ?? 0} MB`} />
+                <StatCard label="Robot Type" value={listing.robotType} />
+                <StatCard label="Base Model" value={listing.baseModel} />
+              </div>
+            </div>
+          ) : (
+            <div className="mb-6">
+              <h2 className="text-sm font-semibold text-theme-primary mb-3">Dataset Info</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <StatCard label="Episodes" value={(listing.episodeCount ?? 0).toLocaleString()} />
+                <StatCard label="Frames" value={(listing.frameCount ?? 0).toLocaleString()} />
+                <StatCard label="Size" value={`${listing.datasetSizeGB ?? 0} GB`} />
+                <StatCard label="Collection" value={listing.collectionMethod ?? 'N/A'} />
+              </div>
+            </div>
+          )}
 
-                  <MarketplaceLicenseTierSelector
-                    tiers={listing.priceTiers}
-                    selected={selectedTier}
-                    onChange={setSelectedTier}
-                    userCredits={balance}
-                  />
+          {/* Tags */}
+          <div className="mb-6">
+            <h2 className="text-sm font-semibold text-theme-primary mb-2">Tags</h2>
+            <div className="flex flex-wrap gap-2">
+              {listing.tags.map((tag) => (
+                <span key={tag} className="px-2.5 py-1 rounded-full bg-theme-elevated text-xs text-theme-secondary border border-theme">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
 
-                  <button
-                    type="button"
-                    disabled={!canPurchase}
-                    onClick={handlePurchase}
-                    className={cn(
-                      'w-full mt-4 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2',
-                      canPurchase
-                        ? 'bg-[#FF6700] text-white hover:bg-[#e05d00]'
-                        : 'bg-white/10 text-gray-500 cursor-not-allowed'
-                    )}
-                  >
-                    {isPurchasing ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        Processing purchase...
-                      </>
-                    ) : (
-                      <>
-                        <FileText size={16} />
-                        {selectedTier
-                          ? `Purchase — ${formatCredits(selectedPrice)} credits`
-                          : 'Select a license tier'}
-                      </>
-                    )}
-                  </button>
+          {/* Technical Specs */}
+          <div className="mb-6">
+            <h2 className="text-sm font-semibold text-theme-primary mb-3">Technical Specs</h2>
+            <div className="rounded-lg border border-theme overflow-hidden">
+              <table className="w-full text-sm">
+                <tbody>
+                  <SpecRow label="Type" value={isSkill ? 'LoRA Adapter (.safetensors)' : 'Dataset (LeRobot v3)'} />
+                  <SpecRow label="Robot" value={listing.robotType} />
+                  {listing.baseModel !== 'None' && <SpecRow label="Base Model" value={listing.baseModel} />}
+                  <SpecRow label="Downloads" value={listing.downloadCount.toLocaleString()} />
+                  <SpecRow label="Published" value={formatDate(listing.createdAt)} />
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-                  {purchaseError && (
-                    <div className="mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
-                      <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
-                      <p className="text-xs text-red-400">{purchaseError}</p>
+          {/* Write a review */}
+          {purchased && !hasReviewed && (
+            <ReviewForm
+              isSubmitting={isSubmittingReview}
+              onSubmit={async (rating, body) => {
+                await submitReview({ rating, body, robotType: listing.robotType });
+                setHasReviewed(true);
+              }}
+            />
+          )}
+
+          {/* Reviews */}
+          <div className="mb-6">
+            <h2 className="text-sm font-semibold text-theme-primary mb-3">
+              Reviews ({listing.reviewCount})
+            </h2>
+            <div className="space-y-3">
+              {listing.reviews.map((review) => (
+                <div key={review.id} className="p-4 rounded-lg bg-theme-card border border-theme">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-theme-primary">{review.authorName}</span>
+                      <TierBadge tier={review.authorTier} size="sm" showLabel={false} />
+                      <span className="text-xs text-theme-tertiary flex items-center gap-1">
+                        <Cpu size={10} />
+                        {review.robotType}
+                      </span>
                     </div>
-                  )}
-
-                  <div className="mt-4 pt-4 border-t border-white/10">
-                    <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-                      <span>Your balance</span>
-                      <span className="text-white font-medium">{formatCredits(balance)} credits</span>
-                    </div>
+                    <span className="text-xs text-theme-tertiary flex items-center gap-1">
+                      <Clock size={10} />
+                      {formatDate(review.createdAt)}
+                    </span>
                   </div>
-                </>
+                  <MarketplaceStarRating rating={review.rating} size="sm" className="mb-2" />
+                  <p className="text-sm text-theme-secondary">{review.body}</p>
+                </div>
+              ))}
+              {listing.reviews.length === 0 && (
+                <div className="p-4 rounded-lg bg-theme-card border border-theme text-sm text-theme-tertiary">
+                  No reviews yet.
+                </div>
               )}
+            </div>
+          </div>
+        </div>
 
-              {/* Sovereignty note */}
-              <div className="mt-4 p-3 rounded-lg bg-[#FF6700]/5 border border-[#FF6700]/20">
-                <div className="flex items-start gap-2">
-                  <Shield size={14} className="text-[#FF6700] mt-0.5 shrink-0" />
-                  <div>
-                    <p className="text-xs font-medium text-[#FF6700] mb-0.5">Data Sovereignty</p>
-                    <p className="text-xs text-gray-400">
-                      Files are downloaded to your infrastructure. No cloud dependency, no phone-home. Run on your own hardware.
-                    </p>
+        {/* Right sidebar */}
+        <div className="w-full lg:w-80 shrink-0">
+          <div className="lg:sticky lg:top-6 rounded-xl bg-theme-card border border-theme p-5">
+            {purchased ? (
+              <div className="text-center py-4">
+                <CheckCircle size={40} className="mx-auto text-emerald-400 mb-3" />
+                <h3 className="text-lg font-semibold text-theme-primary mb-1">
+                  {justPurchased ? 'Purchase Complete!' : 'Already Purchased'}
+                </h3>
+                <p className="text-sm text-theme-secondary mb-4">
+                  {justPurchased
+                    ? 'Your download is ready.'
+                    : 'You already own a license for this item.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowDownloadModal(true)}
+                  className="w-full py-2.5 rounded-brand bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Download size={16} />
+                  Download {isSkill ? 'Adapter' : 'Dataset'}
+                </button>
+              </div>
+            ) : (
+              <>
+                <h3 className="text-base font-semibold text-theme-primary mb-4">Purchase License</h3>
+
+                <MarketplaceLicenseTierSelector
+                  tiers={listing.priceTiers}
+                  selected={selectedTier}
+                  onChange={setSelectedTier}
+                  userCredits={balance}
+                />
+
+                <button
+                  type="button"
+                  disabled={!canPurchase}
+                  onClick={handlePurchase}
+                  className={cn(
+                    'w-full mt-4 py-2.5 rounded-brand text-sm font-medium transition-colors flex items-center justify-center gap-2',
+                    canPurchase
+                      ? 'bg-cobalt-500 text-white hover:bg-cobalt-600'
+                      : 'bg-theme-elevated text-theme-muted cursor-not-allowed'
+                  )}
+                >
+                  {isPurchasing ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Processing purchase...
+                    </>
+                  ) : (
+                    <>
+                      <FileText size={16} />
+                      {selectedTier
+                        ? `Purchase — ${formatCredits(selectedPrice)} credits`
+                        : 'Select a license tier'}
+                    </>
+                  )}
+                </button>
+
+                {purchaseError && (
+                  <div className="mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+                    <AlertTriangle size={14} className="text-red-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-red-400">{purchaseError}</p>
                   </div>
+                )}
+
+                <div className="mt-4 pt-4 border-t border-theme">
+                  <div className="flex items-center justify-between text-xs text-theme-tertiary mb-3">
+                    <span>Your balance</span>
+                    <span className="text-theme-primary font-medium">{formatCredits(balance)} credits</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Sovereignty note */}
+            <div className="mt-4 p-3 rounded-lg bg-cobalt-500/5 border border-cobalt-500/20">
+              <div className="flex items-start gap-2">
+                <Shield size={14} className="text-cobalt-500 dark:text-cobalt-300 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-xs font-medium text-cobalt-500 dark:text-cobalt-300 mb-0.5">Data Sovereignty</p>
+                  <p className="text-xs text-theme-secondary">
+                    Files are downloaded to your infrastructure. No cloud dependency, no phone-home. Run on your own hardware.
+                  </p>
                 </div>
               </div>
             </div>
           </div>
         </div>
-
-        {/* Download Modal */}
-        <MarketplaceDownloadModal
-          listing={listing}
-          open={showDownloadModal}
-          onClose={() => setShowDownloadModal(false)}
-        />
       </div>
+
+      {/* Download Modal */}
+      <MarketplaceDownloadModal
+        listing={listing}
+        open={showDownloadModal}
+        onClose={() => setShowDownloadModal(false)}
+      />
     </div>
   );
 }
@@ -359,18 +370,18 @@ function formatDate(iso: string): string {
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="p-3 rounded-lg bg-white/5 border border-white/10">
-      <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-      <p className="text-sm font-semibold text-white">{value}</p>
+    <div className="p-3 rounded-lg bg-theme-card border border-theme">
+      <p className="text-xs text-theme-tertiary mb-0.5">{label}</p>
+      <p className="text-sm font-semibold text-theme-primary">{value}</p>
     </div>
   );
 }
 
 function SpecRow({ label, value }: { label: string; value: string }) {
   return (
-    <tr className="border-b border-white/5 last:border-0">
-      <td className="px-4 py-2.5 text-gray-500 font-medium">{label}</td>
-      <td className="px-4 py-2.5 text-white text-right">{value}</td>
+    <tr className="border-b border-theme last:border-0">
+      <td className="px-4 py-2.5 text-theme-tertiary font-medium">{label}</td>
+      <td className="px-4 py-2.5 text-theme-primary text-right">{value}</td>
     </tr>
   );
 }
@@ -422,9 +433,9 @@ function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
   const displayRating = hoverRating || rating;
 
   return (
-    <div className="mb-6 p-4 rounded-lg bg-white/5 border border-white/10">
-      <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-        <MessageSquarePlus size={14} className="text-[#FF6700]" />
+    <div className="mb-6 p-4 rounded-lg bg-theme-card border border-theme">
+      <h2 className="text-sm font-semibold text-theme-primary mb-3 flex items-center gap-2">
+        <MessageSquarePlus size={14} className="text-cobalt-500 dark:text-cobalt-300" />
         Write a review
       </h2>
       <div className="flex items-center gap-1 mb-3" role="radiogroup" aria-label="Rating">
@@ -444,7 +455,9 @@ function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
               size={20}
               className={cn(
                 'transition-colors',
-                star <= displayRating ? 'text-[#FF6700] fill-[#FF6700]' : 'text-gray-600'
+                star <= displayRating
+                  ? 'text-cobalt-500 dark:text-cobalt-300 fill-current'
+                  : 'text-theme-muted'
               )}
             />
           </button>
@@ -455,7 +468,7 @@ function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
         onChange={(e) => setBody(e.target.value)}
         rows={3}
         placeholder="How did this perform on your robot?"
-        className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FF6700]/50 resize-none mb-3"
+        className="w-full px-3 py-2 rounded-brand bg-theme-elevated border border-theme text-sm text-theme-primary placeholder:text-theme-tertiary focus:outline-none focus:border-cobalt-500/50 resize-none mb-3"
       />
       {formError && (
         <div className="mb-3 p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
@@ -468,10 +481,10 @@ function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
         disabled={isSubmitting}
         onClick={handleSubmit}
         className={cn(
-          'px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2',
+          'px-4 py-2 rounded-brand text-sm font-medium transition-colors flex items-center gap-2',
           isSubmitting
-            ? 'bg-white/10 text-gray-500 cursor-not-allowed'
-            : 'bg-[#FF6700] text-white hover:bg-[#e05d00]'
+            ? 'bg-theme-elevated text-theme-muted cursor-not-allowed'
+            : 'bg-cobalt-500 text-white hover:bg-cobalt-600'
         )}
       >
         {isSubmitting && <Loader2 size={14} className="animate-spin" />}
@@ -487,44 +500,42 @@ function ReviewForm({ isSubmitting, onSubmit }: ReviewFormProps) {
 
 function DetailSkeleton({ onBack }: { onBack: () => void }) {
   return (
-    <div className="min-h-screen bg-[#0f1012]">
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-2 text-sm text-gray-400 hover:text-white mb-6 transition-colors"
-        >
-          <ArrowLeft size={16} />
-          Back to Marketplace
-        </button>
-        <div className="flex flex-col lg:flex-row gap-8 animate-pulse" aria-busy="true" aria-label="Loading listing">
-          <div className="flex-1 min-w-0">
-            <div className="h-5 w-20 rounded-full bg-white/10 mb-4" />
-            <div className="h-7 w-2/3 rounded bg-white/10 mb-3" />
-            <div className="h-4 w-full rounded bg-white/5 mb-6" />
-            <div className="h-16 rounded-lg bg-white/5 border border-white/10 mb-6" />
-            <div className="space-y-2 mb-6">
-              <div className="h-3 w-full rounded bg-white/5" />
-              <div className="h-3 w-5/6 rounded bg-white/5" />
-              <div className="h-3 w-4/6 rounded bg-white/5" />
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex items-center gap-2 text-sm text-theme-secondary hover:text-theme-primary mb-6 transition-colors"
+      >
+        <ArrowLeft size={16} />
+        Back to Marketplace
+      </button>
+      <div className="flex flex-col lg:flex-row gap-8 animate-pulse" aria-busy="true" aria-label="Loading listing">
+        <div className="flex-1 min-w-0">
+          <div className="h-5 w-20 rounded-full bg-theme-elevated mb-4" />
+          <div className="h-7 w-2/3 rounded bg-theme-elevated mb-3" />
+          <div className="h-4 w-full rounded bg-theme-elevated mb-6" />
+          <div className="h-16 rounded-lg bg-theme-card border border-theme mb-6" />
+          <div className="space-y-2 mb-6">
+            <div className="h-3 w-full rounded bg-theme-elevated" />
+            <div className="h-3 w-5/6 rounded bg-theme-elevated" />
+            <div className="h-3 w-4/6 rounded bg-theme-elevated" />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-16 rounded-lg bg-theme-card border border-theme" />
+            ))}
+          </div>
+          <div className="h-40 rounded-lg bg-theme-card border border-theme" />
+        </div>
+        <div className="w-full lg:w-80 shrink-0">
+          <div className="rounded-xl bg-theme-card border border-theme p-5">
+            <div className="h-5 w-32 rounded bg-theme-elevated mb-4" />
+            <div className="space-y-3">
               {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-16 rounded-lg bg-white/5 border border-white/10" />
+                <div key={i} className="h-14 rounded-lg bg-theme-elevated border border-theme" />
               ))}
             </div>
-            <div className="h-40 rounded-lg bg-white/5 border border-white/10" />
-          </div>
-          <div className="w-full lg:w-80 shrink-0">
-            <div className="rounded-xl bg-[#1a1b1f] border border-white/10 p-5">
-              <div className="h-5 w-32 rounded bg-white/10 mb-4" />
-              <div className="space-y-3">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="h-14 rounded-lg bg-white/5 border border-white/10" />
-                ))}
-              </div>
-              <div className="h-10 rounded-lg bg-[#FF6700]/20 mt-4" />
-            </div>
+            <div className="h-10 rounded-brand bg-cobalt-500/20 mt-4" />
           </div>
         </div>
       </div>

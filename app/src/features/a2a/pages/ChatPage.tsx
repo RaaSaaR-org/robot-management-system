@@ -77,12 +77,12 @@ const ConversationDrawer = memo(function ConversationDrawer({
       {/* Drawer */}
       <div className="fixed inset-y-0 left-0 w-[85vw] max-w-xs z-50 glass-elevated animate-in slide-in-from-left duration-200">
         <div className="flex items-center justify-between p-4 border-b border-glass-subtle">
-          <h2 className="font-semibold text-gray-900 dark:text-gray-100">Conversations</h2>
+          <h2 className="font-semibold text-theme-primary">Conversations</h2>
           <button
             onClick={onClose}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            className="p-2 rounded-brand hover:bg-theme-hover transition-colors"
           >
-            <CloseIcon className="w-5 h-5 text-gray-500" />
+            <CloseIcon className="w-5 h-5 text-theme-tertiary" />
           </button>
         </div>
         <div className="overflow-y-auto h-[calc(100%-65px)]">
@@ -228,7 +228,7 @@ const ChatPageInner = memo(function ChatPageInner() {
                   isConnected ? 'bg-accent-500' : 'bg-gray-400'
                 )}
               />
-              <span className="text-xs text-gray-600 dark:text-gray-400 hidden sm:inline">
+              <span className="text-xs text-theme-secondary hidden sm:inline">
                 {isConnected ? 'Connected' : 'Disconnected'}
               </span>
             </div>

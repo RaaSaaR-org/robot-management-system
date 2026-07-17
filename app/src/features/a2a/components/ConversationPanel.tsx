@@ -226,12 +226,12 @@ export const ConversationPanel = memo(function ConversationPanel({
       <div className={cn('flex flex-col items-center justify-center h-full p-8', className)}>
         <div className="text-center max-w-md">
           <div className="glass-subtle w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center">
-            <ChatIcon className="w-8 h-8 text-gray-400" />
+            <ChatIcon className="w-8 h-8 text-theme-muted" />
           </div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+          <h2 className="text-xl font-semibold text-theme-primary mb-2">
             No conversation selected
           </h2>
-          <p className="text-gray-500 dark:text-gray-400 mb-6">
+          <p className="text-theme-tertiary mb-6">
             Start a new conversation to begin chatting
           </p>
           {onNewConversation && (
@@ -255,17 +255,17 @@ export const ConversationPanel = memo(function ConversationPanel({
         <div className="px-3 py-4">
           {isLoading && messages.length === 0 ? (
             <div className="flex items-center justify-center py-8">
-              <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
+              <div className="flex items-center gap-2 text-theme-muted">
                 <div className="flex gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
                 <span className="text-xs">Loading...</span>
               </div>
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-gray-400 dark:text-gray-500">
+            <div className="flex flex-col items-center justify-center py-8 text-theme-muted">
               <ChatIcon className="w-8 h-8 mb-2 opacity-50" />
               <p className="text-xs">No messages yet</p>
               <p className="text-[10px] mt-0.5 opacity-70">Send a message to start the conversation</p>
@@ -295,12 +295,12 @@ export const ConversationPanel = memo(function ConversationPanel({
               {isSending && chatMode !== 'orchestration' && (
                 <div className="flex justify-start">
                   <div className="glass-card rounded-2xl rounded-bl-md px-4 py-3">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Agent</div>
+                    <div className="text-xs text-theme-tertiary mb-1">Agent</div>
                     <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 rounded-full bg-[#FF6700] animate-bounce" style={{ animationDelay: '300ms' }} />
-                      <span className="text-xs text-gray-400 dark:text-gray-500 ml-1.5">Thinking...</span>
+                      <span className="w-2 h-2 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-cobalt-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="text-xs text-theme-muted ml-1.5">Thinking...</span>
                     </div>
                   </div>
                 </div>
@@ -315,12 +315,12 @@ export const ConversationPanel = memo(function ConversationPanel({
         {/* Active tasks inline */}
         {activeTasks.length > 0 && (
           <div className="flex items-center gap-2 px-3 py-1.5 overflow-x-auto border-b border-gray-100 dark:border-gray-700/50">
-            <span className="text-[10px] text-gray-400 flex-shrink-0">Active:</span>
+            <span className="text-[10px] text-theme-muted flex-shrink-0">Active:</span>
             {activeTasks.slice(0, 3).map((task) => (
               <TaskBadge key={task.id} state={task.status.state} />
             ))}
             {activeTasks.length > 3 && (
-              <span className="text-[10px] text-gray-400">+{activeTasks.length - 3}</span>
+              <span className="text-[10px] text-theme-muted">+{activeTasks.length - 3}</span>
             )}
           </div>
         )}
@@ -355,9 +355,9 @@ export const ConversationPanel = memo(function ConversationPanel({
                 className={cn(
                   'w-full resize-none rounded-xl border border-glass-subtle',
                   'glass-subtle px-3 py-2.5 text-sm',
-                  'focus:ring-2 focus:ring-[#FF6700]/40 focus:border-[#FF6700]/50 focus:outline-none',
+                  'focus:ring-2 focus:ring-cobalt-500/40 focus:border-cobalt-500/50 focus:outline-none',
                   'placeholder:text-gray-400 dark:placeholder:text-gray-500',
-                  'text-gray-900 dark:text-gray-100',
+                  'text-theme-primary',
                   'transition-all duration-200',
                   'min-h-[40px] max-h-20 overflow-y-auto',
                   !canSend && 'opacity-50 cursor-not-allowed'
@@ -372,10 +372,10 @@ export const ConversationPanel = memo(function ConversationPanel({
                 'h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0',
                 'transition-all duration-150',
                 inputValue.trim() && canSend && !isSending
-                  ? 'bg-[#FF6700] hover:bg-[#e55900] text-white shadow-md shadow-[#FF6700]/25 active:scale-95'
+                  ? 'bg-cobalt-500 hover:bg-cobalt-600 text-white shadow-md shadow-cobalt-500/25 active:scale-95'
                   : isSending
-                    ? 'bg-[#FF6700]/60 text-white'
-                    : 'bg-gray-200 dark:bg-gray-700 text-gray-400'
+                    ? 'bg-cobalt-500/60 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-theme-muted'
               )}
             >
               {isSending ? (

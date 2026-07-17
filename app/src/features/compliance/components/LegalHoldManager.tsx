@@ -260,7 +260,7 @@ export function LegalHoldManager({ className }: LegalHoldManagerProps) {
               </div>
               <div>
                 <label className="text-xs text-theme-tertiary">Status</label>
-                <p className={selectedHold.isActive ? 'text-amber-400' : 'text-gray-400'}>
+                <p className={selectedHold.isActive ? 'text-amber-400' : 'text-theme-tertiary'}>
                   {selectedHold.isActive ? 'Active' : 'Released'}
                 </p>
               </div>

@@ -5,7 +5,7 @@
  */
 
 import { useRef, useState } from 'react';
-import { Play, Trash2, Sparkles } from 'lucide-react';
+import { Database, Play, Trash2, Sparkles } from 'lucide-react';
 import { Card, Badge, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
@@ -53,11 +53,14 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
       interactive={!!onClick}
       className={cn(
         'cursor-pointer overflow-hidden transition-all',
-        selected && 'ring-2 ring-primary-500',
+        selected && 'ring-2 ring-cobalt-500',
         className
       )}
     >
-      {showThumb && <SyntheticThumb datasetId={dataset.id} />}
+      {/* Media slot — every card gets the same-height area so grid rows align.
+          Synthetic datasets show a video preview; everything else a neutral
+          placeholder. */}
+      {showThumb ? <SyntheticThumb datasetId={dataset.id} /> : <PlaceholderThumb />}
       <Card.Body>
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
@@ -75,7 +78,7 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
                 Synthetic
               </Badge>
             )}
-            <Badge className={statusColors[dataset.status] ?? 'bg-gray-100 text-gray-600'}>
+            <Badge className={statusColors[dataset.status] ?? 'bg-theme-elevated text-theme-secondary'}>
               {statusLabels[dataset.status] ?? dataset.status ?? 'Unknown'}
             </Badge>
           </div>
@@ -166,6 +169,18 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
         </div>
       </Card.Body>
     </Card>
+  );
+}
+
+/**
+ * Neutral media placeholder for datasets without a video preview. Keeps every
+ * card's media slot the same height so grid rows stay aligned.
+ */
+function PlaceholderThumb() {
+  return (
+    <div className="flex aspect-video w-full items-center justify-center overflow-hidden bg-theme-elevated">
+      <Database className="h-7 w-7 text-theme-muted" />
+    </div>
   );
 }
 

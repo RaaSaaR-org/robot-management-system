@@ -33,7 +33,7 @@ export const ConversationList = memo(function ConversationList({
     <div className={cn('flex flex-col h-full', className)}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+        <h3 className="font-semibold text-theme-primary">
           Conversations
         </h3>
         {onNew && (
@@ -46,7 +46,7 @@ export const ConversationList = memo(function ConversationList({
       {/* List */}
       <div className="flex-1 overflow-y-auto">
         {conversations.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500 p-4">
+          <div className="flex items-center justify-center h-full text-theme-muted p-4">
             <p className="text-center text-sm">
               No conversations yet.
               {onNew && (
@@ -110,14 +110,14 @@ const ConversationListItem = memo(function ConversationListItem({
             'font-medium truncate',
             isSelected
               ? 'text-primary-600 dark:text-primary-400'
-              : 'text-gray-900 dark:text-gray-100'
+              : 'text-theme-primary'
           )}>
             {conversation.name}
           </p>
 
           {/* Last message preview */}
           {lastMessage && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 truncate mt-0.5">
+            <p className="text-sm text-theme-tertiary truncate mt-0.5">
               {lastMessage.parts
                 .filter((p) => p.kind === 'text')
                 .map((p) => (p as { kind: 'text'; text: string }).text)
@@ -126,7 +126,7 @@ const ConversationListItem = memo(function ConversationListItem({
           )}
 
           {/* Meta info */}
-          <div className="flex items-center gap-2 mt-1 text-xs text-gray-400 dark:text-gray-500">
+          <div className="flex items-center gap-2 mt-1 text-xs text-theme-muted">
             <span>{messageCount} message{messageCount !== 1 ? 's' : ''}</span>
             <span>·</span>
             <span>{new Date(conversation.updatedAt).toLocaleDateString()}</span>
@@ -140,7 +140,7 @@ const ConversationListItem = memo(function ConversationListItem({
               e.stopPropagation();
               onDelete();
             }}
-            className="p-1 text-gray-400 hover:text-red-500 rounded"
+            className="p-1 text-theme-muted hover:text-red-500 rounded"
             title="Delete conversation"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -14,7 +14,7 @@ import type { TwinZoneDTO } from '../types/twin.types';
 import { TWIN_ZONE_COLORS } from '../store/twinZoneStore';
 
 function zoneColor(zone: TwinZoneDTO): string {
-  return zone.color || TWIN_ZONE_COLORS[zone.type] || '#FF6700';
+  return zone.color || TWIN_ZONE_COLORS[zone.type] || '#2A5FFF';
 }
 
 const ZoneVolume = memo(function ZoneVolume({

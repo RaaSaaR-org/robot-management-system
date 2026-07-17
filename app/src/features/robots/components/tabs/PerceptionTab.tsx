@@ -7,7 +7,7 @@
  */
 
 import { Suspense, lazy, useEffect, useState, useCallback } from 'react';
-import { Card, Badge, Button } from '@/shared/components/ui';
+import { Card, Badge, Button, ToggleChip } from '@/shared/components/ui';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
 import { Robot3DViewerFallback } from '../visualization';
 import { PointCloudGallery } from '../PointCloudGallery';
@@ -194,25 +194,22 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
                   </Button>
                 </Tooltip>
               )}
-              <button
-                onClick={() => setShowRobotModel((v) => !v)}
-                className={controlBtn(showRobotModel)}
-              >
+              <ToggleChip active={showRobotModel} onClick={() => setShowRobotModel((v) => !v)}>
                 Robot model
-              </button>
+              </ToggleChip>
               {frame?.sensorType === 'lidar' && (
                 <Tooltip content="Clip points above 2.2 m and below-floor reflections — keeps the view focused on walls and obstacles at robot height.">
-                  <button onClick={() => setHideCeiling((v) => !v)} className={controlBtn(hideCeiling)}>
+                  <ToggleChip active={hideCeiling} onClick={() => setHideCeiling((v) => !v)}>
                     Clip room
-                  </button>
+                  </ToggleChip>
                 </Tooltip>
               )}
-              <button
+              <ToggleChip
+                active={false}
                 onClick={() => setColorMode((m) => (m === 'height' ? 'intensity' : 'height'))}
-                className={controlBtn(false)}
               >
                 Color: {colorMode === 'height' ? 'Height' : 'Intensity'}
-              </button>
+              </ToggleChip>
               <label className="flex items-center gap-1.5 text-xs text-theme-tertiary">
                 Size
                 <input
@@ -222,7 +219,7 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
                   step={0.005}
                   value={pointSize}
                   onChange={(e) => setPointSize(parseFloat(e.target.value))}
-                  className="w-20 accent-[#FF6700]"
+                  className="w-20 accent-cobalt-500"
                 />
               </label>
               <Button size="sm" variant="ghost" onClick={handleDownloadLive} disabled={!frame}>
@@ -269,13 +266,4 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
       </Card>
     </div>
   );
-}
-
-function controlBtn(active: boolean): string {
-  return [
-    'px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150',
-    active
-      ? 'text-[#FF6700] bg-[rgba(255,103,0,0.12)] border border-[rgba(255,103,0,0.25)]'
-      : 'text-theme-tertiary hover:text-theme-secondary hover:bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)]',
-  ].join(' ');
 }

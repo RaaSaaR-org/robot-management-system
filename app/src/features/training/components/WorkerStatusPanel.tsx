@@ -41,7 +41,7 @@ export function WorkerStatusPanel({
           {onRefresh && (
             <button
               onClick={onRefresh}
-              className="mt-2 text-sm text-primary-500 hover:text-primary-600"
+              className="mt-2 text-sm text-cobalt-500 hover:text-cobalt-600"
             >
               Retry
             </button>
@@ -59,7 +59,7 @@ export function WorkerStatusPanel({
           {onRefresh && (
             <button
               onClick={onRefresh}
-              className="text-sm text-primary-500 hover:text-primary-600"
+              className="text-sm text-cobalt-500 hover:text-cobalt-600"
             >
               Refresh
             </button>

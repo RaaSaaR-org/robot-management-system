@@ -81,7 +81,7 @@ export const TaskDrawer = memo(function TaskDrawer({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-glass-subtle">
           <div className="flex items-center gap-3">
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+            <h3 className="font-semibold text-theme-primary">
               Tasks
             </h3>
             {activeTasks.length > 0 && (
@@ -98,7 +98,7 @@ export const TaskDrawer = memo(function TaskDrawer({
         {/* Tasks list */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {tasks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
+            <div className="flex flex-col items-center justify-center py-12 text-theme-muted">
               <div className="glass-subtle rounded-full p-4 mb-4">
                 <svg
                   className="w-8 h-8"
@@ -114,7 +114,7 @@ export const TaskDrawer = memo(function TaskDrawer({
                   />
                 </svg>
               </div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">No tasks yet</p>
+              <p className="text-sm font-medium text-theme-secondary">No tasks yet</p>
               <p className="text-xs mt-1">Tasks will appear when you send messages</p>
             </div>
           ) : (

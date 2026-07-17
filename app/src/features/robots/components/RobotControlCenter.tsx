@@ -246,7 +246,7 @@ export const RobotControlCenter = memo(function RobotControlCenter({
                   'flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium',
                   'transition-all duration-150 flex-1 justify-center whitespace-nowrap',
                   isActive
-                    ? 'text-[#FF6700] bg-[rgba(255,103,0,0.12)] border border-[rgba(255,103,0,0.25)]'
+                    ? 'text-[#2A5FFF] bg-[rgba(42,95,255,0.12)] border border-[rgba(42,95,255,0.25)]'
                     : 'text-theme-tertiary hover:text-theme-secondary hover:bg-[rgba(255,255,255,0.04)]'
                 )}
               >
@@ -299,7 +299,7 @@ export const RobotControlCenter = memo(function RobotControlCenter({
               className={cn(
                 'flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg',
                 'text-[10px] font-medium transition-colors duration-150',
-                isActive ? 'text-[#FF6700]' : 'text-theme-tertiary'
+                isActive ? 'text-[#2A5FFF]' : 'text-theme-tertiary'
               )}
             >
               {view.icon}
@@ -318,8 +318,8 @@ export const RobotControlCenter = memo(function RobotControlCenter({
           'text-white shadow-lg transition-transform duration-150 active:scale-95'
         )}
         style={{
-          background: 'linear-gradient(135deg, #FF6700, #e55900)',
-          boxShadow: '0 4px 20px rgba(255,103,0,0.4)',
+          background: 'linear-gradient(135deg, #2A5FFF, #0042E6)',
+          boxShadow: '0 4px 20px rgba(42,95,255,0.4)',
         }}
         onClick={() => setIsChatOpen(true)}
         aria-label="Open chat"

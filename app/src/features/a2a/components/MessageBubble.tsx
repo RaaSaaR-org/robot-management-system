@@ -75,7 +75,7 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
     // Non-image file
     return (
       <div className="flex items-center gap-2 p-3 glass-subtle rounded-lg mt-2">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
+        <span className="text-sm text-theme-secondary">
           {file.name || 'File'} ({file.mimeType})
         </span>
         {!isFileWithBytes(file) && (
@@ -118,7 +118,7 @@ function MessagePart({ part, messageId, taskId }: MessagePartProps) {
 
     // Regular data - show as JSON
     return (
-      <pre className="glass-subtle p-3 rounded-lg text-sm overflow-x-auto mt-2 text-gray-700 dark:text-gray-300">
+      <pre className="glass-subtle p-3 rounded-lg text-sm overflow-x-auto mt-2 text-theme-secondary">
         {JSON.stringify(part.data, null, 2)}
       </pre>
     );
@@ -192,8 +192,8 @@ export const MessageBubble = memo(function MessageBubble({
           isUser
             ? 'bg-primary-500 text-white rounded-br-md shadow-md'
             : isOrchestrated
-              ? 'glass-card border border-accent-200 dark:border-accent-800/50 text-gray-900 dark:text-gray-100 rounded-bl-md'
-              : 'glass-card text-gray-900 dark:text-gray-100 rounded-bl-md',
+              ? 'glass-card border border-accent-200 dark:border-accent-800/50 text-theme-primary rounded-bl-md'
+              : 'glass-card text-theme-primary rounded-bl-md',
           pendingStatus === 'pending' && 'opacity-70',
           'transition-all duration-300'
         )}
@@ -204,7 +204,7 @@ export const MessageBubble = memo(function MessageBubble({
             'text-xs mb-1 flex items-center gap-1.5',
             isUser
               ? 'text-primary-100'
-              : 'text-gray-500 dark:text-gray-400'
+              : 'text-theme-tertiary'
           )}
         >
           {isUser ? (
@@ -245,7 +245,7 @@ export const MessageBubble = memo(function MessageBubble({
               'text-xs mt-1',
               isUser
                 ? 'text-primary-200'
-                : 'text-gray-400 dark:text-gray-500'
+                : 'text-theme-muted'
             )}
           >
             {new Date(message.timestamp).toLocaleTimeString()}

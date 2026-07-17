@@ -112,7 +112,7 @@ interface StatItemProps {
 
 function StatItem({ label, value, color }: StatItemProps) {
   const colorClasses: Record<string, string> = {
-    gray: 'text-gray-600',
+    gray: 'text-theme-secondary',
     blue: 'text-blue-600',
     yellow: 'text-yellow-600',
     green: 'text-green-600',
@@ -140,7 +140,7 @@ function CountBadge({ count, color, label }: CountBadgeProps) {
     yellow: 'bg-yellow-100 text-yellow-800',
     blue: 'bg-blue-100 text-blue-800',
     green: 'bg-green-100 text-green-800',
-    gray: 'bg-gray-100 text-gray-800',
+    gray: 'bg-theme-elevated text-theme-secondary',
   };
 
   return (
@@ -160,13 +160,13 @@ function PriorityItem({ label, count, color }: PriorityItemProps) {
   const bgClasses: Record<string, string> = {
     red: 'bg-red-50',
     blue: 'bg-blue-50',
-    gray: 'bg-gray-50',
+    gray: 'bg-theme-elevated',
   };
 
   const textClasses: Record<string, string> = {
     red: 'text-red-700',
     blue: 'text-blue-700',
-    gray: 'text-gray-700',
+    gray: 'text-theme-secondary',
   };
 
   return (

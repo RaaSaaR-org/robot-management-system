@@ -81,12 +81,12 @@ export const AgentSelector = memo(function AgentSelector({
         {selected ? (
           <>
             <span className="w-2 h-2 rounded-full bg-accent-500 flex-shrink-0" />
-            <span className="truncate text-gray-900 dark:text-gray-100">{selected.name}</span>
+            <span className="truncate text-theme-primary">{selected.name}</span>
           </>
         ) : (
-          <span className="text-gray-500 dark:text-gray-400">Select Agent</span>
+          <span className="text-theme-tertiary">Select Agent</span>
         )}
-        <ChevronDownIcon className={cn('w-4 h-4 flex-shrink-0 text-gray-400 transition-transform duration-200', isOpen && 'rotate-180')} />
+        <ChevronDownIcon className={cn('w-4 h-4 flex-shrink-0 text-theme-muted transition-transform duration-200', isOpen && 'rotate-180')} />
       </button>
 
       {isOpen && (
@@ -99,7 +99,7 @@ export const AgentSelector = memo(function AgentSelector({
           )}
         >
           {agents.length === 0 ? (
-            <div className="px-3 py-4 text-center text-sm text-gray-500 dark:text-gray-400">
+            <div className="px-3 py-4 text-center text-sm text-theme-tertiary">
               No agents registered
             </div>
           ) : (
@@ -121,9 +121,9 @@ export const AgentSelector = memo(function AgentSelector({
                 >
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-accent-500 flex-shrink-0" />
-                    <span className="font-medium truncate text-gray-900 dark:text-gray-100">{agent.name}</span>
+                    <span className="font-medium truncate text-theme-primary">{agent.name}</span>
                   </div>
-                  <p className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5 pl-4">
+                  <p className="text-xs text-theme-muted truncate mt-0.5 pl-4">
                     {agent.description}
                   </p>
                 </button>

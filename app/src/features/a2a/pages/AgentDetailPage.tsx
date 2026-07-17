@@ -10,6 +10,7 @@ import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Badge } from '@/shared/components/ui/Badge';
 import { Card } from '@/shared/components/ui/Card';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { A2ALayout } from '../components/A2ALayout';
 import { useA2AStore } from '../store';
 import type { A2ASkill } from '../types';
@@ -112,17 +113,17 @@ const SkillCard = memo(function SkillCard({ skill }: SkillCardProps) {
             <BoltIcon className="w-4 h-4 text-accent-600 dark:text-accent-400" />
           </div>
           <div className="min-w-0">
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">
+            <h4 className="font-medium text-theme-primary">
               {skill.name}
             </h4>
-            <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+            <p className="text-sm text-theme-secondary line-clamp-2">
               {skill.description || 'No description available'}
             </p>
           </div>
         </div>
         <svg
           className={cn(
-            'w-5 h-5 text-gray-400 flex-shrink-0 transition-transform',
+            'w-5 h-5 text-theme-muted flex-shrink-0 transition-transform',
             expanded && 'rotate-180'
           )}
           fill="none"
@@ -138,7 +139,7 @@ const SkillCard = memo(function SkillCard({ skill }: SkillCardProps) {
         <div className="mt-4 pl-11 space-y-3">
           {skill.tags && skill.tags.length > 0 && (
             <div>
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1.5">
+              <p className="text-xs font-medium text-theme-tertiary uppercase tracking-wide mb-1.5">
                 Tags
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -153,14 +154,14 @@ const SkillCard = memo(function SkillCard({ skill }: SkillCardProps) {
 
           {skill.examples && skill.examples.length > 0 && (
             <div>
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1.5">
+              <p className="text-xs font-medium text-theme-tertiary uppercase tracking-wide mb-1.5">
                 Examples
               </p>
               <ul className="space-y-1">
                 {skill.examples.map((example, i) => (
                   <li
                     key={i}
-                    className="text-sm text-gray-600 dark:text-gray-400 pl-3 border-l-2 border-gray-200 dark:border-gray-700"
+                    className="text-sm text-theme-secondary pl-3 border-l-2 border-gray-200 dark:border-gray-700"
                   >
                     "{example}"
                   </li>
@@ -173,20 +174,20 @@ const SkillCard = memo(function SkillCard({ skill }: SkillCardProps) {
             <div className="flex gap-6">
               {skill.inputModes && skill.inputModes.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                  <p className="text-xs font-medium text-theme-tertiary uppercase tracking-wide mb-1">
                     Input
                   </p>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                  <p className="text-sm text-theme-secondary">
                     {skill.inputModes.join(', ')}
                   </p>
                 </div>
               )}
               {skill.outputModes && skill.outputModes.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                  <p className="text-xs font-medium text-theme-tertiary uppercase tracking-wide mb-1">
                     Output
                   </p>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                  <p className="text-sm text-theme-secondary">
                     {skill.outputModes.join(', ')}
                   </p>
                 </div>
@@ -207,12 +208,12 @@ const NotFoundState = memo(function NotFoundState() {
   return (
     <div className="flex flex-col items-center justify-center h-full py-20 px-4">
       <div className="glass-subtle rounded-full p-6 mb-4">
-        <RobotIcon className="h-10 w-10 text-gray-400" />
+        <RobotIcon className="h-10 w-10 text-theme-muted" />
       </div>
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+      <h3 className="text-lg font-semibold text-theme-primary mb-2">
         Agent not found
       </h3>
-      <p className="text-gray-500 dark:text-gray-400 text-center max-w-sm mb-6">
+      <p className="text-theme-tertiary text-center max-w-sm mb-6">
         This agent may have been unregistered or the URL is incorrect.
       </p>
       <Link to="/a2a/agents">
@@ -290,30 +291,32 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
     <A2ALayout>
       <div className="flex flex-col h-full overflow-hidden">
         {/* Header */}
-        <header className="flex-shrink-0 flex items-center justify-between h-14 px-4 md:px-6 border-b border-glass-subtle glass-elevated">
-          <div className="flex items-center gap-3">
+        <div className="flex-shrink-0 px-4 md:px-6 py-4 border-b border-glass-subtle">
+          <div className="flex items-start gap-2">
             <Link
               to="/a2a/agents"
-              className="p-2 -ml-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              className="p-2 -ml-2 mt-0.5 rounded-brand hover:bg-theme-hover transition-colors"
             >
-              <ArrowLeftIcon className="w-5 h-5 text-gray-500" />
+              <ArrowLeftIcon className="w-5 h-5 text-theme-tertiary" />
             </Link>
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
-              {agent.name}
-            </h1>
+            <PageHeader
+              className="flex-1 min-w-0"
+              title={agent.name}
+              actions={
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleStartChat}
+                  className="gap-1.5"
+                >
+                  <ChatIcon className="w-4 h-4" />
+                  <span className="hidden sm:inline">Start Chat</span>
+                  <span className="sm:hidden">Chat</span>
+                </Button>
+              }
+            />
           </div>
-
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleStartChat}
-            className="gap-1.5"
-          >
-            <ChatIcon className="w-4 h-4" />
-            <span className="hidden sm:inline">Start Chat</span>
-            <span className="sm:hidden">Chat</span>
-          </Button>
-        </header>
+        </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
@@ -321,12 +324,12 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
             {/* Agent Info Card */}
             <Card variant="glass" className="p-6">
               <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-14 h-14 rounded-xl bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
-                  <RobotIcon className="w-7 h-7 text-primary-600 dark:text-primary-400" />
+                <div className="flex-shrink-0 w-14 h-14 rounded-brand bg-cobalt-100 dark:bg-cobalt-900/30 flex items-center justify-center">
+                  <RobotIcon className="w-7 h-7 text-cobalt-600 dark:text-cobalt-400" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+                    <h2 className="text-xl font-bold text-theme-primary">
                       {agent.name}
                     </h2>
                     {agent.version && (
@@ -334,11 +337,11 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
                     )}
                   </div>
                   {agent.provider?.organization && (
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                    <p className="text-sm text-theme-tertiary mt-0.5">
                       by {agent.provider.organization}
                     </p>
                   )}
-                  <p className="text-gray-600 dark:text-gray-400 mt-3">
+                  <p className="text-theme-secondary mt-3">
                     {agent.description}
                   </p>
                 </div>
@@ -346,11 +349,11 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
 
               {/* URL */}
               <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700/50">
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+                <p className="text-xs font-medium text-theme-tertiary uppercase tracking-wide mb-2">
                   Agent URL
                 </p>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 text-sm font-mono text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 px-3 py-2 rounded-lg truncate">
+                  <code className="flex-1 text-sm font-mono text-theme-secondary bg-gray-50 dark:bg-gray-800/50 px-3 py-2 rounded-brand truncate">
                     {agent.url}
                   </code>
                   <Button
@@ -371,7 +374,7 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
 
             {/* Capabilities */}
             <div>
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wide mb-3">
+              <h3 className="text-sm font-semibold text-theme-primary uppercase tracking-wide mb-3">
                 Capabilities
               </h3>
               <div className="flex flex-wrap gap-2">
@@ -401,7 +404,7 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
               <div className="grid gap-4 sm:grid-cols-2">
                 {agent.defaultInputModes && agent.defaultInputModes.length > 0 && (
                   <Card variant="glass" className="p-4">
-                    <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+                    <h4 className="text-xs font-semibold text-theme-tertiary uppercase tracking-wide mb-2">
                       Input Modes
                     </h4>
                     <div className="flex flex-wrap gap-1.5">
@@ -415,7 +418,7 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
                 )}
                 {agent.defaultOutputModes && agent.defaultOutputModes.length > 0 && (
                   <Card variant="glass" className="p-4">
-                    <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+                    <h4 className="text-xs font-semibold text-theme-tertiary uppercase tracking-wide mb-2">
                       Output Modes
                     </h4>
                     <div className="flex flex-wrap gap-1.5">
@@ -433,7 +436,7 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
             {/* Skills */}
             {skills.length > 0 && (
               <div>
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wide mb-3">
+                <h3 className="text-sm font-semibold text-theme-primary uppercase tracking-wide mb-3">
                   Skills ({skills.length})
                 </h3>
                 <div className="space-y-3">
@@ -447,14 +450,14 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
             {/* Documentation Link */}
             {agent.documentationUrl && (
               <div>
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wide mb-3">
+                <h3 className="text-sm font-semibold text-theme-primary uppercase tracking-wide mb-3">
                   Documentation
                 </h3>
                 <a
                   href={agent.documentationUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-primary-600 dark:text-primary-400 hover:underline text-sm"
+                  className="text-cobalt-600 dark:text-cobalt-400 hover:underline text-sm"
                 >
                   {agent.documentationUrl}
                 </a>

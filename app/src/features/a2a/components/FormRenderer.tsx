@@ -57,7 +57,7 @@ export const CompletedFormCard = memo(function CompletedFormCard({
         variant="glass"
         className={cn('p-4', className)}
       >
-        <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+        <p className="text-sm text-theme-tertiary italic">
           Form canceled
         </p>
       </Card>
@@ -72,10 +72,10 @@ export const CompletedFormCard = memo(function CompletedFormCard({
       <div className="space-y-1">
         {Object.entries(data).map(([key, value]) => (
           <div key={key} className="text-sm">
-            <span className="font-medium text-gray-700 dark:text-gray-300">
+            <span className="font-medium text-theme-secondary">
               {key}:
             </span>{' '}
-            <span className="text-gray-600 dark:text-gray-400">{value}</span>
+            <span className="text-theme-secondary">{value}</span>
           </div>
         ))}
       </div>
@@ -167,7 +167,7 @@ export const FormRenderer = memo(function FormRenderer({
     if (options && options.length > 0) {
       return (
         <div key={name} className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label className="text-sm font-medium text-theme-secondary">
             {label}
             {required && <span className="text-red-500 ml-1">*</span>}
           </label>
@@ -177,7 +177,7 @@ export const FormRenderer = memo(function FormRenderer({
             disabled={isSubmitting}
             className={cn(
               'w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2.5',
-              'text-gray-900 dark:text-gray-100',
+              'text-theme-primary',
               'transition-colors duration-200',
               'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent',
               error ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'
@@ -196,7 +196,7 @@ export const FormRenderer = memo(function FormRenderer({
             </p>
           )}
           {description && !error && (
-            <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>
+            <p className="text-sm text-theme-tertiary">{description}</p>
           )}
         </div>
       );
@@ -216,7 +216,7 @@ export const FormRenderer = memo(function FormRenderer({
           />
           <label
             htmlFor={`${messageId}-${name}`}
-            className="text-sm text-gray-900 dark:text-gray-100"
+            className="text-sm text-theme-primary"
           >
             {label}
             {required && <span className="text-red-500 ml-1">*</span>}
@@ -252,7 +252,7 @@ export const FormRenderer = memo(function FormRenderer({
     >
       {/* Instructions */}
       {instructions && (
-        <h4 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <h4 className="text-base font-semibold text-theme-primary mb-4">
           {instructions}
         </h4>
       )}

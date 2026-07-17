@@ -204,24 +204,24 @@ export function MarketplacePublishDialog({
         role="dialog"
         aria-modal="true"
         aria-label="List a Skill or Dataset"
-        className="relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-[#1a1b1f] border border-white/10 shadow-2xl"
+        className="relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-theme-card border border-theme shadow-2xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-white/10 shrink-0">
+        <div className="flex items-center justify-between p-5 border-b border-theme shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[#FF6700]/15 flex items-center justify-center">
-              <Plus size={20} className="text-[#FF6700]" />
+            <div className="w-10 h-10 rounded-lg bg-cobalt-500/10 flex items-center justify-center">
+              <Plus size={20} className="text-cobalt-500 dark:text-cobalt-300" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-white">List a Skill or Dataset</h2>
-              <p className="text-xs text-gray-500">Publish to the marketplace and earn credits</p>
+              <h2 className="text-base font-semibold text-theme-primary">List a Skill or Dataset</h2>
+              <p className="text-xs text-theme-tertiary">Publish to the marketplace and earn credits</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+            className="p-1.5 rounded-brand hover:bg-theme-hover text-theme-secondary hover:text-theme-primary transition-colors"
           >
             <X size={18} />
           </button>
@@ -230,7 +230,7 @@ export function MarketplacePublishDialog({
         {/* Body */}
         <div className="p-5 space-y-4 overflow-y-auto">
           {/* Type toggle */}
-          <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1 w-fit">
+          <div className="flex items-center gap-1 bg-theme-elevated rounded-brand p-1 w-fit">
             {([
               { value: 'skill', label: 'Skill', icon: Brain },
               { value: 'dataset', label: 'Dataset', icon: Database },
@@ -241,7 +241,7 @@ export function MarketplacePublishDialog({
                 onClick={() => setType(option.value)}
                 className={cn(
                   'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                  type === option.value ? 'bg-[#FF6700] text-white' : 'text-gray-400 hover:text-white'
+                  type === option.value ? 'bg-cobalt-500 text-white' : 'text-theme-secondary hover:text-theme-primary'
                 )}
               >
                 <option.icon size={14} />
@@ -315,14 +315,14 @@ export function MarketplacePublishDialog({
               {tags.map((tag) => (
                 <span
                   key={tag}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/5 text-xs text-gray-300 border border-white/5"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-theme-elevated text-xs text-theme-secondary border border-theme"
                 >
-                  <Tag size={10} className="text-gray-500" />
+                  <Tag size={10} className="text-theme-tertiary" />
                   {tag}
                   <button
                     type="button"
                     onClick={() => removeTag(tag)}
-                    className="text-gray-500 hover:text-white transition-colors"
+                    className="text-theme-tertiary hover:text-theme-primary transition-colors"
                     aria-label={`Remove tag ${tag}`}
                   >
                     <X size={10} />
@@ -422,19 +422,19 @@ export function MarketplacePublishDialog({
 
           {/* Pricing */}
           <div>
-            <p className="text-xs font-medium text-gray-400 mb-2">
-              License tiers <span className="text-[#FF6700]">*</span>
-              <span className="text-gray-600 font-normal ml-1">(enable at least one)</span>
+            <p className="text-xs font-medium text-theme-secondary mb-2">
+              License tiers <span className="text-cobalt-500 dark:text-cobalt-300">*</span>
+              <span className="text-theme-muted font-normal ml-1">(enable at least one)</span>
             </p>
             <div className="space-y-2">
               {LICENSE_TIERS.map((tier) => (
                 <div
                   key={tier}
                   className={cn(
-                    'flex items-center gap-3 p-3 rounded-lg border transition-colors',
+                    'flex items-center gap-3 p-3 rounded-brand border transition-colors',
                     tiers[tier].enabled
-                      ? 'bg-[#FF6700]/5 border-[#FF6700]/30'
-                      : 'bg-white/5 border-white/10'
+                      ? 'bg-cobalt-500/5 border-cobalt-500/30'
+                      : 'bg-theme-elevated border-theme'
                   )}
                 >
                   <input
@@ -442,11 +442,11 @@ export function MarketplacePublishDialog({
                     id={`tier-${tier}`}
                     checked={tiers[tier].enabled}
                     onChange={(e) => setTier(tier, { enabled: e.target.checked })}
-                    className="accent-[#FF6700]"
+                    className="accent-cobalt-500"
                   />
                   <label htmlFor={`tier-${tier}`} className="flex-1 min-w-0 cursor-pointer">
-                    <span className="block text-sm font-medium text-white">{LICENSE_TIER_LABELS[tier]}</span>
-                    <span className="block text-xs text-gray-500">{TIER_DESCRIPTIONS[tier]}</span>
+                    <span className="block text-sm font-medium text-theme-primary">{LICENSE_TIER_LABELS[tier]}</span>
+                    <span className="block text-xs text-theme-tertiary">{TIER_DESCRIPTIONS[tier]}</span>
                   </label>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <input
@@ -457,12 +457,12 @@ export function MarketplacePublishDialog({
                       disabled={!tiers[tier].enabled}
                       placeholder="0"
                       className={cn(
-                        'w-24 px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-sm text-white text-right',
-                        'placeholder-gray-600 focus:outline-none focus:border-[#FF6700]/50',
+                        'w-24 px-2 py-1.5 rounded-brand bg-theme-elevated border border-theme text-sm text-theme-primary text-right',
+                        'placeholder:text-theme-muted focus:outline-none focus:border-cobalt-500/50',
                         !tiers[tier].enabled && 'opacity-40 cursor-not-allowed'
                       )}
                     />
-                    <span className="text-xs text-gray-500">credits</span>
+                    <span className="text-xs text-theme-tertiary">credits</span>
                   </div>
                 </div>
               ))}
@@ -483,11 +483,11 @@ export function MarketplacePublishDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-5 border-t border-white/10 shrink-0">
+        <div className="flex items-center justify-end gap-3 p-5 border-t border-theme shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-gray-300 hover:text-white hover:border-white/20 transition-colors"
+            className="px-4 py-2 rounded-brand bg-theme-elevated border border-theme text-sm text-theme-secondary hover:text-theme-primary transition-colors"
           >
             Cancel
           </button>
@@ -496,10 +496,10 @@ export function MarketplacePublishDialog({
             disabled={isSubmitting}
             onClick={handleSubmit}
             className={cn(
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2',
+              'px-4 py-2 rounded-brand text-sm font-medium transition-colors flex items-center gap-2',
               isSubmitting
-                ? 'bg-white/10 text-gray-500 cursor-not-allowed'
-                : 'bg-[#FF6700] text-white hover:bg-[#e05d00]'
+                ? 'bg-theme-elevated text-theme-muted cursor-not-allowed'
+                : 'bg-cobalt-500 text-white hover:bg-cobalt-600'
             )}
           >
             {isSubmitting && <Loader2 size={14} className="animate-spin" />}
@@ -516,7 +516,7 @@ export function MarketplacePublishDialog({
 // ============================================================================
 
 const inputClass =
-  'w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-[#FF6700]/50';
+  'w-full px-3 py-2 rounded-brand bg-theme-elevated border border-theme text-sm text-theme-primary placeholder:text-theme-muted focus:outline-none focus:border-cobalt-500/50';
 
 function Field({
   label,
@@ -529,8 +529,8 @@ function Field({
 }) {
   return (
     <div>
-      <p className="text-xs font-medium text-gray-400 mb-1.5">
-        {label} {required && <span className="text-[#FF6700]">*</span>}
+      <p className="text-xs font-medium text-theme-secondary mb-1.5">
+        {label} {required && <span className="text-cobalt-500 dark:text-cobalt-300">*</span>}
       </p>
       {children}
     </div>

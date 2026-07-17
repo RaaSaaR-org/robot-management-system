@@ -8,6 +8,7 @@ import { memo, useState, useMemo } from 'react';
 import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Badge } from '@/shared/components/ui/Badge';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { TaskStatusCard } from '../components/TaskStatusCard';
 import { A2ALayout } from '../components/A2ALayout';
 import { useA2A } from '../hooks/useA2A';
@@ -66,16 +67,16 @@ const FilterBar = memo(function FilterBar({ current, onChange, counts }: FilterB
   ];
 
   return (
-    <div className="flex gap-1 p-1 glass-subtle rounded-lg w-fit">
+    <div className="flex gap-1 p-1 glass-subtle rounded-brand w-fit">
       {filters.map((filter) => (
         <button
           key={filter.id}
           onClick={() => onChange(filter.id)}
           className={cn(
-            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5',
+            'px-3 py-1.5 text-sm font-medium rounded-brand transition-colors flex items-center gap-1.5',
             current === filter.id
-              ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-              : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+              ? 'bg-cobalt-500/10 border border-cobalt-500/30 text-cobalt-500 dark:text-cobalt-300'
+              : 'border border-transparent text-theme-secondary hover:text-theme-primary'
           )}
         >
           {filter.label}
@@ -84,8 +85,8 @@ const FilterBar = memo(function FilterBar({ current, onChange, counts }: FilterB
               className={cn(
                 'min-w-[1.25rem] h-5 px-1.5 rounded-full text-xs flex items-center justify-center',
                 current === filter.id
-                  ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
-                  : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  ? 'bg-cobalt-100 dark:bg-cobalt-900/50 text-cobalt-700 dark:text-cobalt-300'
+                  : 'bg-gray-200 dark:bg-gray-700 text-theme-secondary'
               )}
             >
               {counts[filter.id]}
@@ -126,12 +127,12 @@ const EmptyState = memo(function EmptyState({ filter }: { filter: TaskFilter }) 
   return (
     <div className="flex flex-col items-center justify-center py-20 px-4">
       <div className="glass-subtle rounded-full p-6 mb-4">
-        <ClipboardIcon className="h-10 w-10 text-gray-400" />
+        <ClipboardIcon className="h-10 w-10 text-theme-muted" />
       </div>
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+      <h3 className="text-lg font-semibold text-theme-primary mb-2">
         {title}
       </h3>
-      <p className="text-gray-500 dark:text-gray-400 text-center max-w-sm">
+      <p className="text-theme-tertiary text-center max-w-sm">
         {description}
       </p>
     </div>
@@ -203,29 +204,30 @@ export const TaskListPage = memo(function TaskListPage() {
     <A2ALayout>
       <div className="flex flex-col h-full overflow-hidden">
         {/* Header */}
-        <header className="flex-shrink-0 flex items-center justify-between h-14 px-4 md:px-6 border-b border-glass-subtle glass-elevated">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Tasks
-            </h1>
-            <Badge variant="default" size="sm">
-              {tasks.length}
-            </Badge>
-          </div>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="gap-1.5"
-          >
-            <RefreshIcon
-              className={cn('w-4 h-4', isRefreshing && 'animate-spin')}
-            />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-        </header>
+        <div className="flex-shrink-0 px-4 md:px-6 py-4 border-b border-glass-subtle">
+          <PageHeader
+            title="Tasks"
+            meta={
+              <Badge variant="default" size="sm">
+                {tasks.length}
+              </Badge>
+            }
+            actions={
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="gap-1.5"
+              >
+                <RefreshIcon
+                  className={cn('w-4 h-4', isRefreshing && 'animate-spin')}
+                />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+            }
+          />
+        </div>
 
         {/* Filter Bar */}
         <div className="flex-shrink-0 px-4 md:px-6 py-3 border-b border-glass-subtle overflow-x-auto">

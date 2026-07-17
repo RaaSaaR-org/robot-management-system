@@ -203,8 +203,10 @@ export function TaskList({
           </div>
 
           {/* Create button + View toggle */}
+          {/* Toolbar create button is hidden while the list is empty — the
+              empty state below carries the single primary "Create Process" CTA. */}
           <div className="flex items-center gap-4">
-            {showCreateButton && onCreateTask && (
+            {showCreateButton && onCreateTask && tasks.length > 0 && (
               <Button variant="primary" size="sm" onClick={onCreateTask}>
                 <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path

@@ -151,7 +151,7 @@ export const A2APage = memo(function A2APage() {
                 isConnected ? 'bg-accent-500' : 'bg-gray-400'
               )}
             />
-            <span className="text-xs text-gray-600 dark:text-gray-400 hidden sm:inline">
+            <span className="text-xs text-theme-secondary hidden sm:inline">
               {isConnected ? 'Connected' : 'Disconnected'}
             </span>
           </div>

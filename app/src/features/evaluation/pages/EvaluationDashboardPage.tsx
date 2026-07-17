@@ -162,10 +162,11 @@ export function EvaluationDashboardPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
+      {/* Section header — this page renders as a tab inside /training, so it
+          uses the standard section-heading style instead of a page h1. */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Evaluation Dashboard</h1>
+          <h2 className="text-lg font-semibold text-theme-primary">Evaluation Dashboard</h2>
           <p className="text-sm text-theme-secondary mt-1">
             Track VLA model performance across evaluation rollouts
           </p>

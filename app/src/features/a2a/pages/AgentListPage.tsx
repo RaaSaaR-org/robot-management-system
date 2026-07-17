@@ -10,6 +10,7 @@ import { cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Badge } from '@/shared/components/ui/Badge';
 import { Card } from '@/shared/components/ui/Card';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { RegisterAgentDialog } from '../components/RegisterAgentDialog';
 import { A2ALayout } from '../components/A2ALayout';
 import { useA2A } from '../hooks/useA2A';
@@ -74,25 +75,25 @@ const AgentGridCard = memo(function AgentGridCard({ agent, onClick }: AgentGridC
         {/* Header */}
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
-              <RobotIcon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <div className="flex-shrink-0 w-10 h-10 rounded-brand bg-cobalt-100 dark:bg-cobalt-900/30 flex items-center justify-center">
+              <RobotIcon className="w-5 h-5 text-cobalt-600 dark:text-cobalt-400" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-semibold text-gray-900 dark:text-gray-100 truncate">
+              <h3 className="font-semibold text-theme-primary truncate">
                 {agent.name}
               </h3>
               {agent.provider?.organization && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                <p className="text-xs text-theme-tertiary truncate">
                   {agent.provider.organization}
                 </p>
               )}
             </div>
           </div>
-          <ChevronRightIcon className="w-5 h-5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 flex-shrink-0 transition-colors" />
+          <ChevronRightIcon className="w-5 h-5 text-theme-muted group-hover:text-theme-secondary flex-shrink-0 transition-colors" />
         </div>
 
         {/* Description */}
-        <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2 mb-3 min-h-[2.5rem]">
+        <p className="text-sm text-theme-secondary line-clamp-2 mb-3 min-h-[2.5rem]">
           {agent.description}
         </p>
 
@@ -116,7 +117,7 @@ const AgentGridCard = memo(function AgentGridCard({ agent, onClick }: AgentGridC
 
         {/* Version */}
         {agent.version && (
-          <p className="text-xs text-gray-400 mt-3">v{agent.version}</p>
+          <p className="text-xs text-theme-muted mt-3">v{agent.version}</p>
         )}
       </div>
     </Card>
@@ -131,12 +132,12 @@ const EmptyState = memo(function EmptyState({ onRegister }: { onRegister: () => 
   return (
     <div className="flex flex-col items-center justify-center py-20 px-4">
       <div className="glass-subtle rounded-full p-6 mb-4">
-        <RobotIcon className="h-10 w-10 text-gray-400" />
+        <RobotIcon className="h-10 w-10 text-theme-muted" />
       </div>
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+      <h3 className="text-lg font-semibold text-theme-primary mb-2">
         No agents registered
       </h3>
-      <p className="text-gray-500 dark:text-gray-400 text-center max-w-sm mb-6">
+      <p className="text-theme-tertiary text-center max-w-sm mb-6">
         Register an A2A agent to start communicating. Agents can be hosted locally or remotely.
       </p>
       <Button variant="primary" onClick={onRegister} className="gap-2">
@@ -178,27 +179,28 @@ export const AgentListPage = memo(function AgentListPage() {
     <A2ALayout>
       <div className="flex flex-col h-full overflow-hidden">
         {/* Header */}
-        <header className="flex-shrink-0 flex items-center justify-between h-14 px-4 md:px-6 border-b border-glass-subtle glass-elevated">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Agents
-            </h1>
-            <Badge variant="default" size="sm">
-              {registeredAgents.length}
-            </Badge>
-          </div>
-
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setShowRegisterDialog(true)}
-            className="gap-1.5"
-          >
-            <PlusIcon className="w-4 h-4" />
-            <span className="hidden sm:inline">Register Agent</span>
-            <span className="sm:hidden">Add</span>
-          </Button>
-        </header>
+        <div className="flex-shrink-0 px-4 md:px-6 py-4 border-b border-glass-subtle">
+          <PageHeader
+            title="Agents"
+            meta={
+              <Badge variant="default" size="sm">
+                {registeredAgents.length}
+              </Badge>
+            }
+            actions={
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setShowRegisterDialog(true)}
+                className="gap-1.5"
+              >
+                <PlusIcon className="w-4 h-4" />
+                <span className="hidden sm:inline">Register Agent</span>
+                <span className="sm:hidden">Add</span>
+              </Button>
+            }
+          />
+        </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">

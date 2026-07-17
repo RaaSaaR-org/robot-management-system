@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Button } from '@/shared/components/ui';
+import { Card, Button, PageHeader } from '@/shared/components/ui';
 import { useScanCapableRobots } from '../hooks/useScanCapableRobots';
 import { useTwinStore, selectTwins } from '../store/twinStore';
 import { twinToSite } from '../types/twin.types';
@@ -71,12 +71,10 @@ export function SitesGalleryPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-theme-primary">Digital Twin</h1>
-        <p className="text-sm text-theme-tertiary mt-1">
-          Scan a room with a robot to build a 3D digital twin of your workzone.
-        </p>
-      </div>
+      <PageHeader
+        title="Digital Twin"
+        subtitle="Scan a room with a robot to build a 3D digital twin of your workzone."
+      />
 
       {/* Robots ready to scan */}
       <Card>
