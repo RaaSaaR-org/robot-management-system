@@ -57,6 +57,7 @@ import { skillsRoutes } from './routes/skills.routes.js';
 import { embodimentsRoutes } from './routes/embodiments.routes.js';
 import { teleoperationRoutes } from './routes/teleoperation.routes.js';
 import { sensorScanRoutes } from './routes/sensorscan.routes.js';
+import { motionClipRoutes } from './routes/motionclip.routes.js';
 import { scanSessionRoutes } from './routes/scansession.routes.js';
 import { twinWorkerRoutes, digitalTwinRoutes } from './routes/twin.routes.js';
 import { trainingDocsRoutes } from './routes/training-docs.routes.js';
@@ -277,6 +278,9 @@ export function createApp(): Express {
   // Sensor scan routes (protected) - recorded point-cloud scans
   app.use('/api/sensor-scans', authMiddleware, sensorScanRoutes);
 
+  // Motion clip routes (protected) - TASK-193 retargeted video-to-motion clips
+  app.use('/api/motion-clips', authMiddleware, motionClipRoutes);
+
   // Digital twin scan-session routes (protected) - TASK-170 sweep lifecycle
   app.use('/api/scan-sessions', authMiddleware, scanSessionRoutes);
 
@@ -375,6 +379,16 @@ export function createApp(): Express {
 
   // Error handler
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+    // Body-parser failures are client errors with a known cause; reporting them as
+    // "Internal server error" sends the user hunting for a server bug when the fix
+    // is on their side (e.g. importing a >10 MB motion clip, or truncated JSON).
+    const bodyParserType = (err as { type?: string }).type;
+    if (bodyParserType === 'entity.too.large') {
+      return res.status(413).json({ error: 'Request body too large' });
+    }
+    if (bodyParserType === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'Request body is not valid JSON' });
+    }
     logger.error({ err, reqId: (req as unknown as Record<string, unknown>).id }, 'Unhandled server error');
     res.status(500).json({
       error: 'Internal server error',

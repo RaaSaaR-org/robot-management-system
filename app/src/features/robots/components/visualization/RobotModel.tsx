@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import URDFLoader, { URDFRobot } from 'urdf-loader';
 import { normalizeRobotType, type RobotType, type JointState } from '../../types/robots.types';
 import { getFastTelemetry } from '../../store/telemetryLive';
+import { tickMotion, isFollowingRoot } from '../../motion/motionPlayback';
 import { brandColors } from '@/brand';
 
 // ============================================================================
@@ -227,10 +228,14 @@ function URDFModel({
     timeRef.current += delta;
     const time = timeRef.current;
 
-    // Joint targets: prefer a fresh ~10 Hz fast-channel frame, fall back to the
-    // regular 2 s telemetry from props (older agents / fast channel disabled).
-    const fastFrame = robotId ? getFastTelemetry(robotId)?.frame : null;
-    const activeJointStates = fastFrame?.jointStates ?? propJointStatesRef.current;
+    // Joint targets, in priority order (TASK-193 adds the first):
+    //   1. a loaded motion clip — deliberately outranks live telemetry. A tab showing playback
+    //      must not have the robot's real pose fighting it for the same joints.
+    //   2. a fresh ~10 Hz fast-channel frame (TASK-191)
+    //   3. the regular 2 s telemetry from props (older agents / fast channel disabled)
+    const motion = tickMotion();
+    const fastFrame = !motion && robotId ? getFastTelemetry(robotId)?.frame : null;
+    const activeJointStates = motion?.jointStates ?? fastFrame?.jointStates ?? propJointStatesRef.current;
 
     if (robot && activeJointStates) {
       for (const { name, position } of activeJointStates) {
@@ -238,11 +243,34 @@ function URDFModel({
         if (!joint) continue;
 
         const target = toUrdfRadians(joint, name, position);
+        if (motion) {
+          // No damping during playback. sampleClip already interpolates between clip frames, so
+          // the target signal is continuous — damping on top of it would only lag and smear the
+          // fast limb movements that are the whole point of watching a retargeted clip.
+          robot.setJointValue(name, target);
+          continue;
+        }
         const rawAngle = joint.angle;
         const current = typeof rawAngle === 'number' ? rawAngle : Number(rawAngle) || 0;
         // Exponential damping instead of a hard snap: poses glide between
         // telemetry frames rather than teleporting on arrival.
         robot.setJointValue(name, THREE.MathUtils.damp(current, target, JOINT_DAMP_LAMBDA, delta));
+      }
+    }
+
+    if (robot) {
+      // Root pose. A MotionSample is always Z-up and always xyzw whatever the clip declared —
+      // sampleClip resolves `upAxis` and `rootRotOrder` so this site has exactly one convention
+      // to handle. The parent group's -90° X rotation below converts that Z-up pose into three's
+      // Y-up world, so both position and quaternion are applied raw here.
+      if (motion && isFollowingRoot()) {
+        robot.position.set(motion.rootPos[0], motion.rootPos[1], motion.rootPos[2]);
+        robot.quaternion.set(motion.rootRot[0], motion.rootRot[1], motion.rootRot[2], motion.rootRot[3]);
+      } else if (robot.position.lengthSq() !== 0 || robot.quaternion.w !== 1) {
+        // Leaving playback (or turning root-follow off) must put the body back at the origin,
+        // otherwise the live view inherits wherever the clip left it.
+        robot.position.set(0, 0, 0);
+        robot.quaternion.identity();
       }
     }
 

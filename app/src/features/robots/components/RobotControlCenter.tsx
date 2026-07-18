@@ -22,6 +22,7 @@ import {
   InfoTab,
   TeleopTab,
   PerceptionTab,
+  MotionTab,
   VoiceTab,
 } from './tabs';
 import type { Robot, RobotTelemetry, RobotCommand } from '../types/robots.types';
@@ -35,6 +36,7 @@ import type { WebSocketStatus } from '@/shared/types/api.types';
 type ViewId =
   | 'overview'
   | 'telemetry'
+  | 'motion'
   | 'perception'
   | 'voice'
   | 'commands'
@@ -87,6 +89,15 @@ const VIEWS: ViewConfig[] = [
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'motion',
+    label: 'Motion',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75l4.5 2.25-4.5 2.25v-4.5z" />
       </svg>
     ),
   },
@@ -179,16 +190,16 @@ export const RobotControlCenter = memo(function RobotControlCenter({
   const [activeView, setActiveView] = useState<ViewId>('overview');
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  // The Perception (point-cloud) and Voice tabs are only meaningful for robots
-  // with the matching hardware (depth/LiDAR, mic array + speaker) — currently
-  // the Unitree G1 family.
+  // The Perception (point-cloud), Voice and Motion tabs are only meaningful for
+  // robots with the matching hardware (depth/LiDAR, mic array + speaker) or body
+  // — motion clips are retargeted onto a G1 skeleton. Currently the G1 family.
   const robotDescriptor = `${telemetry?.robotType ?? ''} ${
     (robot.metadata?.robotType as string | undefined) ?? ''
   } ${robot.model ?? ''}`.toLowerCase();
   const isG1Family = robotDescriptor.includes('g1');
   const visibleViews = isG1Family
     ? VIEWS
-    : VIEWS.filter((v) => v.id !== 'perception' && v.id !== 'voice');
+    : VIEWS.filter((v) => v.id !== 'perception' && v.id !== 'voice' && v.id !== 'motion');
 
   const renderView = () => {
     switch (activeView) {
@@ -231,6 +242,8 @@ export const RobotControlCenter = memo(function RobotControlCenter({
         );
       case 'perception':
         return <PerceptionTab robot={robot} robotId={robotId} telemetry={telemetry} />;
+      case 'motion':
+        return <MotionTab robot={robot} robotId={robotId} telemetry={telemetry} />;
       case 'voice':
         return <VoiceTab robot={robot} robotId={robotId} />;
       case 'tasks':
@@ -308,7 +321,9 @@ export const RobotControlCenter = memo(function RobotControlCenter({
       <nav
         className={cn(
           'lg:hidden fixed bottom-0 left-0 right-0 z-20',
-          'flex items-center justify-around px-2 py-2',
+          // 9 items for the G1 family overflow 375px viewports. Mirror the desktop
+          // strip: scroll horizontally instead of wrapping/crushing the labels.
+          'flex items-center justify-around gap-1 px-2 py-2 overflow-x-auto scrollbar-hide',
           'glass-elevated border-t border-[rgba(255,255,255,0.06)]'
         )}
         aria-label="Mobile view navigation"
@@ -321,6 +336,7 @@ export const RobotControlCenter = memo(function RobotControlCenter({
               onClick={() => setActiveView(view.id)}
               className={cn(
                 'flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg',
+                'shrink-0 whitespace-nowrap',
                 'text-[10px] font-medium transition-colors duration-150',
                 isActive ? 'text-[#2A5FFF]' : 'text-theme-tertiary'
               )}

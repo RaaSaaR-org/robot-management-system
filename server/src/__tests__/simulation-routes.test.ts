@@ -22,6 +22,7 @@ const { mockSimulationService, mockSimToRealValidationService, mockModelVersionR
       getFramesDir: vi.fn(),
       getEnvironmentPreview: vi.fn(),
       generateSceneFromTwin: vi.fn(),
+      getExecutionBackend: vi.fn(() => 'mock'),
     },
     mockSimToRealValidationService: {
       createValidation: vi.fn(),
