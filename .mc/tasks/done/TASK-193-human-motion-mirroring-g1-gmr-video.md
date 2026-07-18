@@ -4,7 +4,7 @@ aliases:
 - TASK-193
 title: "\"Person moves, G1 mirrors them\" — video → GMR retargeting → G1 playback demo"
 slug: human-motion-mirroring-g1-gmr-video
-status: review
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -19,7 +19,8 @@ depends_on: []
 due_date: ''
 created: 2026-07-18
 updated: 2026-07-18
-status_note: 'PHASE 1 + PHASE 2 DONE 2026-07-18. The SMPL-X gate is cleared (model registered
+status_note: 'MERGED to main as PR #205 (fb468ba) on 2026-07-18, after a multi-agent
+  review-hardening pass (see the Review & hardening section below). PHASE 1 + PHASE 2 DONE 2026-07-18. The SMPL-X gate is cleared (model registered
   and installed) and the whole video→G1 pipeline ran end-to-end on this box. Deliverable:
   _data\presentation\05_motion_mirroring\demo_moonwalk_g1.mp4 — 7.4 s, 221 frames, source dancer
   beside the retargeted G1, pose-for-pose. Reproduction recipe and every verified defect are in
