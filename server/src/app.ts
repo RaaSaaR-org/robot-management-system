@@ -57,6 +57,7 @@ import { skillsRoutes } from './routes/skills.routes.js';
 import { embodimentsRoutes } from './routes/embodiments.routes.js';
 import { teleoperationRoutes } from './routes/teleoperation.routes.js';
 import { sensorScanRoutes } from './routes/sensorscan.routes.js';
+import { motionClipRoutes } from './routes/motionclip.routes.js';
 import { scanSessionRoutes } from './routes/scansession.routes.js';
 import { twinWorkerRoutes, digitalTwinRoutes } from './routes/twin.routes.js';
 import { trainingDocsRoutes } from './routes/training-docs.routes.js';
@@ -276,6 +277,9 @@ export function createApp(): Express {
 
   // Sensor scan routes (protected) - recorded point-cloud scans
   app.use('/api/sensor-scans', authMiddleware, sensorScanRoutes);
+
+  // Motion clip routes (protected) - TASK-193 retargeted video-to-motion clips
+  app.use('/api/motion-clips', authMiddleware, motionClipRoutes);
 
   // Digital twin scan-session routes (protected) - TASK-170 sweep lifecycle
   app.use('/api/scan-sessions', authMiddleware, scanSessionRoutes);

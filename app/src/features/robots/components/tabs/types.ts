@@ -111,6 +111,14 @@ export interface ChatTabProps extends TabCommonProps {}
 export interface VoiceTabProps extends TabCommonProps {}
 
 /**
+ * Props for the MotionTab component (retargeted motion clip library + playback)
+ */
+export interface MotionTabProps extends TabCommonProps {
+  /** Live telemetry — only read for the robot type that picks the 3D model */
+  telemetry: RobotTelemetry | null;
+}
+
+/**
  * Props for the TeleopTab component
  */
 export interface TeleopTabProps extends TabCommonProps {}

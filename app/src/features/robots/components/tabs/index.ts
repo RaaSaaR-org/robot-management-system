@@ -11,6 +11,7 @@ export { TasksTab } from './TasksTab';
 export { InfoTab } from './InfoTab';
 export { Model3DTab } from './Model3DTab';
 export { PerceptionTab } from './PerceptionTab';
+export { MotionTab } from './MotionTab';
 export { TeleopTab } from './TeleopTab';
 export { ChatTab } from './ChatTab';
 export { VoiceTab } from './VoiceTab';

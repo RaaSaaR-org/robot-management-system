@@ -114,6 +114,38 @@ model SensorScan {
 }
 
 // ============================================================================
+// MOTION CLIPS (TASK-193) — retargeted poses from the offline GVHMR→GMR
+// video-to-motion pipeline, played back on the 3D robot viewer.
+// ============================================================================
+
+model MotionClip {
+  id           String   @id @default(uuid())
+  name         String
+  source       String   @default("gmr") // 'gmr' | 'recorded' | 'synthetic'
+  robotType    String   @default("unitree_g1_29dof")
+  // Float, not Int: the source is always video, and NTSC rates (29.97, 59.94) are
+  // non-integer. Rounding 29.97→29 would drift a 20-minute clip by ~40 s.
+  fps          Float
+  // Derived server-side from frames.length / fps — never trusted from the client.
+  frameCount   Int
+  durationSec  Float
+  jointNames   String   @default("[]") // JSON: string[] — dofPos order
+  rootRotOrder String   @default("xyzw") // 'xyzw' | 'wxyz'
+  upAxis       String   @default("z") // 'y' | 'z'
+  warnings     String   @default("[]") // JSON: string[]
+  metadata     String? // JSON: Record<string, unknown>
+  // JSON: MotionFrame[]. Inlined rather than pushed to object storage (as
+  // SensorScan does) because a clip is ~66 KB where a point cloud is megabytes
+  // — the storage-backend machinery would be unearned complexity here. The cost
+  // is that this column MUST NEVER be selected by the list query; see
+  // MotionClipRepository.listAll().
+  frames       String
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ============================================================================
 // DIGITAL TWIN (TASK-170) — G1 walks a workzone, frames accumulate into one
 // world-frame twin; user paints semantic zones; export Nav2 mask + VDA5050.
 // ============================================================================
