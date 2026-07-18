@@ -12,10 +12,15 @@ export const motionClipRoutes = Router();
 
 /**
  * GET /api/motion-clips — list clips (newest first), without frame data.
+ * Optional ?limit=N (clamped to 1..1000) for callers that want fewer.
  */
-motionClipRoutes.get('/', async (_req: Request, res: Response) => {
+motionClipRoutes.get('/', async (req: Request, res: Response) => {
   try {
-    const clips = await motionClipService.listClips();
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit)
+      ? Math.min(1000, Math.max(1, Math.floor(rawLimit)))
+      : undefined;
+    const clips = await motionClipService.listClips(limit);
     res.json({ clips });
   } catch (error) {
     console.error('[MotionClip] list error:', error);

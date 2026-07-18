@@ -252,6 +252,21 @@ export function seekMotion(seconds: number): void {
   emit();
 }
 
+/**
+ * The playhead's frame index — the single definition shared by stepping and the transport
+ * readout, so a step always moves exactly one *displayed* frame.
+ *
+ * floor() with an epsilon rather than round() or plain floor(): round() disagrees with the
+ * floor()-based display for mid-frame times (paused at 12.6 frames the readout shows 12,
+ * but round() says 13 — so "+1" skipped a frame and "−1" appeared dead), while plain
+ * floor() mis-buckets exact frame times at fractional fps (61/29.97*29.97 is 60.999… in
+ * doubles → frame 60). The epsilon is far above accumulated double error (~1e-11 at 36k
+ * frames) and far below any genuine sub-frame offset.
+ */
+function frameIndexAt(time: number, fps: number): number {
+  return Math.floor(time * fps + 1e-9);
+}
+
 /** Step exactly one frame. Used by the arrow keys — the way you check a single pose. */
 export function stepMotion(frames: number): void {
   const { clip } = state;
@@ -259,7 +274,7 @@ export function stepMotion(frames: number): void {
   state.playing = false;
   state.lastTickMs = null;
   const fps = clip.fps > 0 ? clip.fps : 30;
-  const idx = Math.round(state.time * fps) + frames;
+  const idx = frameIndexAt(state.time, fps) + frames;
   state.time = Math.min(clip.durationSec, Math.max(0, idx / fps));
   emit();
 }
@@ -301,7 +316,7 @@ export function getMotionTransport(): MotionTransportState {
     playing: state.playing,
     time: state.time,
     duration: clip?.durationSec ?? 0,
-    frameIndex: clip ? Math.min(clip.frameCount - 1, Math.floor(state.time * fps)) : 0,
+    frameIndex: clip ? Math.min(clip.frameCount - 1, frameIndexAt(state.time, fps)) : 0,
     frameCount: clip?.frameCount ?? 0,
     speed: state.speed,
     loop: state.loop,

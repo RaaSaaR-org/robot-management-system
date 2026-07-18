@@ -379,6 +379,16 @@ export function createApp(): Express {
 
   // Error handler
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+    // Body-parser failures are client errors with a known cause; reporting them as
+    // "Internal server error" sends the user hunting for a server bug when the fix
+    // is on their side (e.g. importing a >10 MB motion clip, or truncated JSON).
+    const bodyParserType = (err as { type?: string }).type;
+    if (bodyParserType === 'entity.too.large') {
+      return res.status(413).json({ error: 'Request body too large' });
+    }
+    if (bodyParserType === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'Request body is not valid JSON' });
+    }
     logger.error({ err, reqId: (req as unknown as Record<string, unknown>).id }, 'Unhandled server error');
     res.status(500).json({
       error: 'Internal server error',

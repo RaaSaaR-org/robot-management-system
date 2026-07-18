@@ -23,6 +23,7 @@ import {
   useMotionPlayback,
 } from '../../motion';
 import { normalizeRobotType } from '../../types/robots.types';
+import { MAX_CLIP_FRAMES } from '../../types/motion.types';
 import type { CreateMotionClipInput, MotionClipSummary } from '../../types/motion.types';
 import type { MotionTabProps } from './types';
 
@@ -95,6 +96,24 @@ function parseClipFile(raw: unknown, fallbackName: string): CreateMotionClipInpu
   if (!Array.isArray(frames) || frames.length === 0) {
     return 'Missing "frames" — this file contains no poses.';
   }
+  // Mirrors the server's MAX_CLIP_FRAMES cap (which itself fits under the 10 MB request
+  // limit) — naming the real constraint here beats a wire-level "request too large".
+  if (frames.length > MAX_CLIP_FRAMES) {
+    return `This clip has ${frames.length} frames — more than the ${MAX_CLIP_FRAMES} maximum. Trim or split it before importing.`;
+  }
+
+  // Present-but-unrecognised orientation metadata must fail loudly, not fall back to the
+  // server defaults: a wxyz clip persisted as xyzw plays back as a valid-looking but wrong
+  // orientation that nothing downstream can detect (see motion.types.ts). These fields
+  // exist precisely so the renderer never guesses.
+  const rootRotOrder = clip.rootRotOrder === 'wxyz' ? 'wxyz' : clip.rootRotOrder === 'xyzw' ? 'xyzw' : undefined;
+  if (rootRotOrder === undefined && clip.rootRotOrder !== undefined) {
+    return `"rootRotOrder" must be "xyzw" or "wxyz" (got ${JSON.stringify(clip.rootRotOrder)}).`;
+  }
+  const upAxis = clip.upAxis === 'y' ? 'y' : clip.upAxis === 'z' ? 'z' : undefined;
+  if (upAxis === undefined && clip.upAxis !== undefined) {
+    return `"upAxis" must be "y" or "z" (got ${JSON.stringify(clip.upAxis)}).`;
+  }
 
   const fps = typeof clip.fps === 'number' ? clip.fps : NaN;
   if (!Number.isFinite(fps) || fps <= 0) {
@@ -129,8 +148,8 @@ function parseClipFile(raw: unknown, fallbackName: string): CreateMotionClipInpu
     robotType: typeof clip.robotType === 'string' ? clip.robotType : undefined,
     fps,
     jointNames: jointNames as string[],
-    rootRotOrder: clip.rootRotOrder === 'wxyz' ? 'wxyz' : clip.rootRotOrder === 'xyzw' ? 'xyzw' : undefined,
-    upAxis: clip.upAxis === 'y' ? 'y' : clip.upAxis === 'z' ? 'z' : undefined,
+    rootRotOrder,
+    upAxis,
     warnings: Array.isArray(clip.warnings) ? clip.warnings.filter((w): w is string => typeof w === 'string') : undefined,
     metadata: typeof clip.metadata === 'object' && clip.metadata !== null ? (clip.metadata as Record<string, unknown>) : undefined,
     frames: frames as CreateMotionClipInput['frames'],
@@ -164,6 +183,13 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Guards the async clip fetch. A response that lands after this tab unmounted (or after
+  // a newer selection) must not reach loadClip: the playback module is a singleton that
+  // every mounted 3D viewer reads, so a late loadClip with no MotionTab mounted would pin
+  // the Overview/cockpit viewers at the clip's frame-0 pose — outranking live telemetry —
+  // with no UI left to clear it.
+  const loadSeqRef = useRef(0);
+
   const robotType = normalizeRobotType(
     (telemetry?.robotType as string | undefined) ?? (robot.metadata?.robotType as string | undefined) ?? robot.model,
   );
@@ -187,7 +213,15 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
   }, [refresh]);
 
   // Leaving the tab must stop the clock — the playback module outlives this component.
-  useEffect(() => resetMotion, []);
+  // Bumping the sequence first invalidates any clip fetch still in flight, so it cannot
+  // re-arm the clock after this cleanup has run.
+  useEffect(
+    () => () => {
+      loadSeqRef.current += 1;
+      resetMotion();
+    },
+    [],
+  );
 
   const handleSelect = useCallback(async (summary: MotionClipSummary) => {
     // Re-selecting the loaded clip is a no-op rather than a reload. A clip-list row is a real
@@ -195,19 +229,25 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
     // right after picking a clip would refetch and jump the playhead back to 0 instead of
     // starting playback, which is what the tab's own keyboard hint promises.
     if (summary.id === selectedRef.current?.id) return;
+    const seq = ++loadSeqRef.current;
     setConfirmDeleteId(null);
     setSelected(summary);
     setLoadingClipId(summary.id);
     setActionError(null);
     try {
-      loadClip(await getClip(summary.id));
+      const clip = await getClip(summary.id);
+      // Stale response: the tab unmounted, or the user picked another clip while this
+      // one was downloading. The newer request (if any) owns all state from here.
+      if (seq !== loadSeqRef.current) return;
+      loadClip(clip);
     } catch (error) {
+      if (seq !== loadSeqRef.current) return;
       setSelected(null);
       // Beside the list, not instead of it — one bad clip must not cost the user
       // the library they were browsing.
       setActionError(apiErrorMessage(error, `Could not load "${summary.name}".`));
     } finally {
-      setLoadingClipId(null);
+      if (seq === loadSeqRef.current) setLoadingClipId(null);
     }
   }, []);
 
@@ -222,6 +262,7 @@ export const MotionTab = memo(function MotionTab({ robot, telemetry }: MotionTab
         return;
       }
       if (selected?.id === summary.id) {
+        loadSeqRef.current += 1; // a fetch for this clip may still be in flight
         setSelected(null);
         resetMotion();
       }

@@ -353,6 +353,50 @@ checkpoints to the daemon (426 s of build-context transfer) and baked them into 
 worth remembering that a rebuild **wipes any `docker commit` patch layer** — fix 5 was lost that
 way once and had to be re-applied, which is why all five fixes now live in the Dockerfile.
 
+## Review & hardening pass (2026-07-18, after Phase 2)
+
+A 41-agent review workflow (5 dimensions, every finding adversarially verified by 2
+independent refuters) plus a live Playwright pass over the Phase 2 code. 11 findings
+confirmed, 3 refuted, 4 uncertain (of which the mobile-nav clipping concern was tested
+in a real browser and did not reproduce — `space-around` falls back to *safe* center in
+scroll containers). All confirmed findings fixed on this branch:
+
+- **Viewer-hijack race (major):** an in-flight `getClip` resolving after MotionTab
+  unmounted (or after selecting another clip / deleting the selected clip) re-armed the
+  module clock with no UI mounted to clear it — freezing every other 3D viewer at the
+  clip's frame-0 pose over live telemetry. Fixed with a `loadSeqRef` sequence token,
+  bumped on unmount/supersede/delete and checked after the await.
+- **Silent orientation coercion (major):** import mapped invalid `rootRotOrder`/`upAxis`
+  (`"WXYZ"`, `"Y"`) to `undefined`, so the server defaults applied and the clip played
+  with a wrong-but-valid-looking quaternion — unreachable server validation. Now rejected
+  client-side with a named-field message.
+- **Long clips died as generic 500 (major):** no explicit frame cap meant >10 MB clips
+  hit body-parser and the global handler swallowed the 413. Now: `MAX_CLIP_FRAMES = 30000`
+  enforced with an actionable message on both client (motion.types.ts) and server
+  (MotionClipService), and app.ts maps body-parser errors to honest 413/400 responses.
+- **stepMotion round-vs-floor (minor):** stepping derived the frame with `round()` while
+  the readout and sampling use `floor()`, so the first step after a mid-frame pause
+  skipped or no-op'd. Both now share `frameIndexAt` = floor with a 1e-9 epsilon — plain
+  floor would mis-bucket exact frame times at fractional fps (61/29.97·29.97 = 60.999…).
+- **List cap (minor):** `GET /api/motion-clips` grew `?limit` (clamped 1..1000), default
+  raised 100 → 500 — the client renders the response as the complete library, so a low
+  silent cap would strand older clips with no UI path to select or delete them.
+- **Zero server tests (minor):** added `motionclip-routes.test.ts` (15) +
+  `MotionClipService.test.ts` (32) following the sensorscan/supertest convention, incl.
+  SUMMARY_SELECT-shaped mocks, NTSC durationSec (221 @ 29.97 → 7.374), every validate()
+  branch, and the new 413/400 body-parser mapping. App-side gaps (speed untested,
+  no fractional-fps fixture, reseed/seam sampling) covered in motionPlayback.test.ts.
+
+Playwright verdict on the live app (desktop 1280×800 + mobile 375×844): PASS on all
+checks — G1 gating (tab absent on a temporary SO-101), frames-free list payload,
+real-time playback (frame counter matches wall clock), scrub/step/speed/loop semantics,
+loop-off stops on the last frame, tab-switch recovery, delete confirm flow, no
+horizontal overflow, no feature-attributable console errors.
+
+Known pre-existing, unrelated: `server/src/__tests__/simulation-routes.test.ts` fails
+5 tests on this branch AND with all TASK-193 changes stashed (stale mock —
+`simSceneRepository.upsertBuiltin is not a function`). Not touched here.
+
 ## Acceptance Criteria
 
 - [x] GMR installed on this box and verified standalone on a LAFAN1 clip — a **uv venv** at

@@ -6,6 +6,14 @@
  */
 
 /**
+ * Hard cap on frames per clip — mirrors the server's MAX_CLIP_FRAMES
+ * (server/src/services/MotionClipService.ts). A frame serialises to ~300 bytes, so
+ * 30k frames ≈ 9 MB, just under the server's 10 MB JSON body limit; checking here
+ * names the real constraint instead of surfacing a wire-level "request too large".
+ */
+export const MAX_CLIP_FRAMES = 30_000;
+
+/**
  * One retargeted pose.
  *
  * Frames are stored as bare tuples rather than named fields because a clip is thousands of them

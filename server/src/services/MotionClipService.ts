@@ -27,6 +27,15 @@ export interface CreateMotionClipRequest {
   frames: MotionFrame[];
 }
 
+/**
+ * Hard cap on frames per clip. A frame serialises to ~300 bytes (the exporter rounds to
+ * 4 decimals), so 30k frames ≈ 9 MB — just under the app-wide 10 MB JSON body limit.
+ * Without this cap, longer clips die in body-parser as an unexplained 413 before
+ * validation can name the problem; with it, clips near the wire limit get a message
+ * that says what to do instead. 30k frames is ~16.7 min at 30 fps.
+ */
+export const MAX_CLIP_FRAMES = 30_000;
+
 // Takes `unknown` deliberately: the request body is typed as MotionFrame[] but that is a
 // claim, not a fact, so narrowing on the declared type would defeat the check.
 function isFiniteNumberArray(value: unknown, length: number): boolean {
@@ -53,8 +62,14 @@ export class MotionClipService {
   // QUERY
   // ==========================================================================
 
-  /** Summaries only — the library view never needs frame data. */
-  async listClips(limit = 100): Promise<MotionClipSummary[]> {
+  /**
+   * Summaries only — the library view never needs frame data.
+   *
+   * The default is deliberately far above any realistic library size: the client renders
+   * the response as the *complete* library (select/delete are only reachable through it),
+   * so a low cap would silently strand older clips in the DB with no UI path to them.
+   */
+  async listClips(limit = 500): Promise<MotionClipSummary[]> {
     return motionClipRepository.listAll(limit);
   }
 
@@ -138,6 +153,12 @@ export class MotionClipService {
     }
     if (!Array.isArray(input.frames) || input.frames.length === 0) {
       throw new BadRequestError('frames must be a non-empty array');
+    }
+    if (input.frames.length > MAX_CLIP_FRAMES) {
+      throw new BadRequestError(
+        `clip has ${input.frames.length} frames, more than the ${MAX_CLIP_FRAMES} maximum — ` +
+          'trim or split the clip before importing',
+      );
     }
 
     const dof = input.jointNames.length;
