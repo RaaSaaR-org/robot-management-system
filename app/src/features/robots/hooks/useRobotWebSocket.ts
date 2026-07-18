@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useRobotsStore } from '../store/robotsStore';
+import { pushFastTelemetry } from '../store/telemetryLive';
 import { useSafetyStore } from '@/features/safety';
 import type { Robot, RobotTelemetry } from '../types/robots.types';
 import type { EStopEvent } from '@/features/safety/types/safety.types';
@@ -21,6 +22,7 @@ interface RobotWebSocketEvent {
     | 'robot_unregistered'
     | 'robot_status_changed'
     | 'robot_telemetry'
+    | 'robot_telemetry_fast'
     | 'connected'
     | 'task_event'
     | 'safety:estop';
@@ -113,6 +115,19 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
             const robotId = data.robotId ?? frame?.robotId;
             if (frame && robotId) {
               updateTelemetry(robotId, frame);
+            }
+            break;
+          }
+
+          case 'robot_telemetry_fast': {
+            // High-rate subset frame (TASK-191, ~10 Hz joints/imu/odometry).
+            // Goes into the transient map only — the 3D viewer reads it inside
+            // its render loop; routing it through the store would re-render the
+            // Canvas subtree on every frame.
+            const frame = data.telemetry ?? data.payload;
+            const robotId = data.robotId ?? frame?.robotId;
+            if (frame && robotId) {
+              pushFastTelemetry(robotId, frame);
             }
             break;
           }

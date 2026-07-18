@@ -21,7 +21,7 @@ vi.mock('../joint-configs/index.js', () => ({
 }));
 
 // Import after mocking
-const { generateTelemetry, generateAlerts, formatTelemetryMessage, clearAlertTracking } = await import('../telemetry.js');
+const { generateTelemetry, generateAlerts, formatTelemetryMessage, formatFastTelemetryMessage, clearAlertTracking } = await import('../telemetry.js');
 
 function createMockState(overrides: Partial<SimulatedRobotState> = {}): SimulatedRobotState {
   return {
@@ -117,6 +117,70 @@ describe('generateTelemetry', () => {
     // SO-101 should only have gripper sensors
     expect(telemetry.sensors.gripperClosed).toBeDefined();
     expect(telemetry.sensors.frontSonar).toBeUndefined();
+  });
+});
+
+describe('simulation phase (TASK-191)', () => {
+  const jointPosition = (state: SimulatedRobotState, name: string) =>
+    generateTelemetry(state).jointStates!.find((j) => j.name === name)!.position;
+
+  it('does not advance with call count — interleaved consumers see the same pose', () => {
+    // h1 + busy + speed: elbow_flex follows the walk-cycle phase.
+    const state = createMockState({ robotType: 'h1', status: 'busy', speed: 1 });
+    vi.useFakeTimers();
+    try {
+      const a = jointPosition(state, 'elbow_flex');
+      // Simulate many interleaved consumers (fast channel + full frames + REST
+      // polls) sampling at the same instant — phase must not move.
+      for (let i = 0; i < 25; i++) {
+        generateTelemetry(state);
+      }
+      const b = jointPosition(state, 'elbow_flex');
+      expect(b).toBe(a);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('advances with wall-clock time', () => {
+    const state = createMockState({ robotType: 'h1', status: 'busy', speed: 1 });
+    vi.useFakeTimers();
+    try {
+      const a = jointPosition(state, 'elbow_flex');
+      vi.advanceTimersByTime(500);
+      const b = jointPosition(state, 'elbow_flex');
+      expect(b).not.toBe(a);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('formatFastTelemetryMessage (TASK-191)', () => {
+  it('emits a telemetry_fast subset frame without slow-channel fields', () => {
+    const state = createMockState({ robotType: 'h1' });
+    const telemetry = generateTelemetry(state);
+    const parsed = JSON.parse(formatFastTelemetryMessage(telemetry));
+
+    expect(parsed.type).toBe('telemetry_fast');
+    expect(parsed.payload.robotId).toBe('test-robot-1');
+    expect(parsed.payload.jointStates).toBeDefined();
+    // Slow-channel-only fields must not ride the fast channel.
+    expect(parsed.payload.cpuUsage).toBeUndefined();
+    expect(parsed.payload.sensors).toBeUndefined();
+    expect(parsed.payload.batteryLevel).toBeUndefined();
+    expect(parsed.payload.motorTemperatures).toBeUndefined();
+  });
+
+  it('keeps only fast-group entries in the simulated labels', () => {
+    const state = createMockState({ robotType: 'g1_edu' });
+    const telemetry = generateTelemetry(state);
+    const parsed = JSON.parse(formatFastTelemetryMessage(telemetry));
+
+    const simulated: string[] = parsed.payload.simulated ?? [];
+    for (const group of simulated) {
+      expect(['joints', 'imu', 'odometry', 'position']).toContain(group);
+    }
   });
 });
 

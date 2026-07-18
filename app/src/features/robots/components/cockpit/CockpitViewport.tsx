@@ -86,6 +86,7 @@ export const CockpitViewport = memo(function CockpitViewport({
             robotType={robotType}
             jointStates={jointStates}
             isAnimating={telemetryConnected}
+            robotId={robotId}
             className="h-full w-full"
           />
         )}

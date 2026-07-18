@@ -621,6 +621,7 @@ export const RobotHeroSection = memo(function RobotHeroSection({
                 robotType={(telemetry?.robotType as RobotType) ?? 'generic'}
                 jointStates={telemetry?.jointStates}
                 isAnimating={isLive}
+                robotId={robot.id}
               />
             </Suspense>
 

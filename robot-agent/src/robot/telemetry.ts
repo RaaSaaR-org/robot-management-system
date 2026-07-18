@@ -27,13 +27,22 @@ import type {
 } from './types.js';
 import { getJointConfig } from './joint-configs/index.js';
 
-// Simulation time counter for joint animations
-let simulationTime = 0;
+// Simulation phase is wall-clock derived (TASK-191): generateTelemetry() may be
+// sampled by any number of consumers at any rate (2 s full frames, 100 ms fast
+// frames, REST polls) — a per-call counter would make joint phase advance with
+// call count instead of time, so motion speed changed with the number of pollers.
+const SIM_EPOCH_MS = Date.now();
+
+/** Seconds since agent start — monotonic no matter how often telemetry is read. */
+function getSimulationTime(): number {
+  return (Date.now() - SIM_EPOCH_MS) / 1000;
+}
 
 // Simulated motor warmth 0..1 — integrates toward 1 while the robot moves and
 // cools back down when idle, so motor temperatures drift believably instead of
-// flickering with random noise.
+// flickering with random noise. Integrated by elapsed time, not call count.
 let motorWarmth = 0;
+let lastWarmthTime = 0;
 
 // ============================================================================
 // REAL SYSTEM DATA HELPERS
@@ -99,16 +108,21 @@ function getRealDiskUsage(): number | undefined {
  * and removes it from the list, so consumers can badge sim vs. real per group.
  */
 export function generateTelemetry(state: SimulatedRobotState): RobotTelemetry {
-  // Increment simulation time for smooth animations
-  simulationTime += 0.1;
+  const simulationTime = getSimulationTime();
 
   const isSO101 = state.robotType === 'so101';
   const isG1 = state.robotType === 'g1' || state.robotType === 'g1_edu';
   const isMoving = state.status === 'busy' && state.speed > 0;
   const piTemp = getPiTemperature();
 
-  // Integrate motor warmth: heats up under motion, cools when idle.
-  motorWarmth = Math.min(1, Math.max(0, motorWarmth + (isMoving ? 0.02 : -0.005)));
+  // Integrate motor warmth by elapsed time: heats up under motion, cools when
+  // idle. The dt clamp keeps a long sampling gap from jumping the temperature.
+  const warmthDt = Math.min(5, Math.max(0, simulationTime - lastWarmthTime));
+  lastWarmthTime = simulationTime;
+  motorWarmth = Math.min(
+    1,
+    Math.max(0, motorWarmth + (isMoving ? 0.01 : -0.0025) * warmthDt)
+  );
 
   // Joints + position always come from the simulation here; sensors only for
   // non-G1 embodiments (the G1 has no sonars/bumpers/wheel motors — fabricating
@@ -540,6 +554,32 @@ export function formatTelemetryMessage(telemetry: RobotTelemetry): string {
   return JSON.stringify({
     type: 'telemetry',
     payload: telemetry,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/**
+ * High-rate channel frame (TASK-191): only the fields that animate the 3D
+ * viewer (joints, IMU, odometry). Pushed every TELEMETRY_FAST_INTERVAL_MS;
+ * everything else (temperatures, battery, touch, sensors) stays on the full
+ * frame at the regular cadence. The payload is a strict subset of
+ * RobotTelemetry so consumers can treat it as a partial frame.
+ */
+export function formatFastTelemetryMessage(telemetry: RobotTelemetry): string {
+  const fastGroups: TelemetryFieldGroup[] = ['joints', 'imu', 'odometry', 'position'];
+  return JSON.stringify({
+    type: 'telemetry_fast',
+    payload: {
+      robotId: telemetry.robotId,
+      robotType: telemetry.robotType,
+      jointStates: telemetry.jointStates,
+      imu: telemetry.imu,
+      odometry: telemetry.odometry,
+      speed: telemetry.speed,
+      hardwareConnected: telemetry.hardwareConnected,
+      simulated: telemetry.simulated?.filter((g) => fastGroups.includes(g)),
+      timestamp: telemetry.timestamp,
+    },
     timestamp: new Date().toISOString(),
   });
 }

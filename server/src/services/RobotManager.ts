@@ -119,6 +119,23 @@ export interface RobotTelemetry {
   timestamp: string;
 }
 
+/**
+ * High-rate telemetry frame (TASK-191): the joints/imu/odometry subset agents
+ * push on the fast channel. Broadcast-only — never persisted.
+ */
+export type RobotTelemetryFast = Pick<
+  RobotTelemetry,
+  | 'robotId'
+  | 'robotType'
+  | 'jointStates'
+  | 'imu'
+  | 'odometry'
+  | 'speed'
+  | 'hardwareConnected'
+  | 'simulated'
+  | 'timestamp'
+>;
+
 /** Robot command request */
 export interface RobotCommandRequest {
   type: CommandType;
@@ -175,6 +192,7 @@ export type RobotEventType =
   | 'robot_unregistered'
   | 'robot_status_changed'
   | 'robot_telemetry'
+  | 'robot_telemetry_fast'
   | 'robot_health_check';
 
 /** Robot event */
@@ -182,7 +200,8 @@ export interface RobotEvent {
   type: RobotEventType;
   robotId: string;
   robot?: Robot;
-  telemetry?: RobotTelemetry;
+  /** Full frame on `robot_telemetry`, subset frame on `robot_telemetry_fast`. */
+  telemetry?: RobotTelemetry | RobotTelemetryFast;
   timestamp: string;
 }
 
@@ -664,6 +683,20 @@ export class RobotManager {
   emitTelemetry(robotId: string, telemetry: RobotTelemetry): void {
     this.emitEvent({
       type: 'robot_telemetry',
+      robotId,
+      telemetry,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Emit a `robot_telemetry_fast` event for a high-rate subset frame
+   * (TASK-191). Distinct event type so existing consumers keep their full-frame
+   * cadence and only opted-in consumers (the 3D viewer) see the fast stream.
+   */
+  emitTelemetryFast(robotId: string, telemetry: RobotTelemetryFast): void {
+    this.emitEvent({
+      type: 'robot_telemetry_fast',
       robotId,
       telemetry,
       timestamp: new Date().toISOString(),
