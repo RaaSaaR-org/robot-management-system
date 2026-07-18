@@ -30,6 +30,7 @@ import { taskRoutes } from './routes/task.routes.js';
 import { agentRoutes } from './routes/agent.routes.js';
 import { eventsRoutes } from './routes/events.routes.js';
 import { robotRoutes } from './routes/robot.routes.js';
+import { voiceRoutes } from './routes/voice.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { zoneRoutes } from './routes/zone.routes.js';
@@ -192,6 +193,9 @@ export function createApp(): Express {
 
   // Robot routes (protected)
   app.use('/api/robots', authMiddleware, robotRoutes);
+
+  // Voice service proxy (say / events / volume) — robot-scoped, live-only
+  app.use('/api/robots', authMiddleware, voiceRoutes);
 
   // Alert routes (protected)
   app.use('/api/alerts', authMiddleware, alertRoutes);
