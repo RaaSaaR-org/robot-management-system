@@ -13,4 +13,5 @@ export { Model3DTab } from './Model3DTab';
 export { PerceptionTab } from './PerceptionTab';
 export { TeleopTab } from './TeleopTab';
 export { ChatTab } from './ChatTab';
+export { VoiceTab } from './VoiceTab';
 export type * from './types';

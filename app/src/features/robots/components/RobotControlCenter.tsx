@@ -22,6 +22,7 @@ import {
   InfoTab,
   TeleopTab,
   PerceptionTab,
+  VoiceTab,
 } from './tabs';
 import type { Robot, RobotTelemetry, RobotCommand } from '../types/robots.types';
 import type { Process } from '@/features/processes/types';
@@ -31,7 +32,15 @@ import type { WebSocketStatus } from '@/shared/types/api.types';
 // TYPES
 // ============================================================================
 
-type ViewId = 'overview' | 'telemetry' | 'perception' | 'commands' | 'tasks' | 'teleop' | 'info';
+type ViewId =
+  | 'overview'
+  | 'telemetry'
+  | 'perception'
+  | 'voice'
+  | 'commands'
+  | 'tasks'
+  | 'teleop'
+  | 'info';
 
 export interface RobotControlCenterProps {
   robot: Robot;
@@ -87,6 +96,15 @@ const VIEWS: ViewConfig[] = [
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+      </svg>
+    ),
+  },
+  {
+    id: 'voice',
+    label: 'Voice',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
       </svg>
     ),
   },
@@ -161,13 +179,16 @@ export const RobotControlCenter = memo(function RobotControlCenter({
   const [activeView, setActiveView] = useState<ViewId>('overview');
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  // The Perception (point-cloud) tab is only meaningful for robots with depth /
-  // LiDAR sensors — currently the Unitree G1 family.
-  const perceptionDescriptor = `${telemetry?.robotType ?? ''} ${
+  // The Perception (point-cloud) and Voice tabs are only meaningful for robots
+  // with the matching hardware (depth/LiDAR, mic array + speaker) — currently
+  // the Unitree G1 family.
+  const robotDescriptor = `${telemetry?.robotType ?? ''} ${
     (robot.metadata?.robotType as string | undefined) ?? ''
   } ${robot.model ?? ''}`.toLowerCase();
-  const supportsPerception = perceptionDescriptor.includes('g1');
-  const visibleViews = supportsPerception ? VIEWS : VIEWS.filter((v) => v.id !== 'perception');
+  const isG1Family = robotDescriptor.includes('g1');
+  const visibleViews = isG1Family
+    ? VIEWS
+    : VIEWS.filter((v) => v.id !== 'perception' && v.id !== 'voice');
 
   const renderView = () => {
     switch (activeView) {
@@ -210,6 +231,8 @@ export const RobotControlCenter = memo(function RobotControlCenter({
         );
       case 'perception':
         return <PerceptionTab robot={robot} robotId={robotId} telemetry={telemetry} />;
+      case 'voice':
+        return <VoiceTab robot={robot} robotId={robotId} />;
       case 'tasks':
         return <TasksTab robot={robot} robotId={robotId} tasks={tasks} />;
       case 'teleop':

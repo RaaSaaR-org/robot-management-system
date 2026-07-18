@@ -106,6 +106,11 @@ export interface PerceptionTabProps extends TabCommonProps {
 export interface ChatTabProps extends TabCommonProps {}
 
 /**
+ * Props for the VoiceTab component (type-to-speak + live mic transcripts)
+ */
+export interface VoiceTabProps extends TabCommonProps {}
+
+/**
  * Props for the TeleopTab component
  */
 export interface TeleopTabProps extends TabCommonProps {}
