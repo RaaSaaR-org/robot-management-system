@@ -4,7 +4,7 @@ aliases:
 - TASK-189
 title: Closed-loop eval harness — statistical power (n≥40), automation, built-in honesty controls
 slug: closed-loop-eval-harness-statistical-power-and-automation
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -17,10 +17,15 @@ depends_on:
 - '[[TASK-185]]'
 due_date: ''
 created: 2026-07-17
-updated: 2026-07-17
-status_note: 'Spun out of TASK-185, whose headline comparison came out p=0.47 purely
-  from n=10. Rollouts cost ~40 s — statistical power here is nearly free and we simply
-  did not buy it.'
+updated: 2026-07-19
+status_note: 'DONE 2026-07-19. Harness in C:\Unitree\_data\task189 (RUNBOOK.md): grid.py +
+  eval_rollouts.py + server.py + guards.py + stats.py + analyze.py, 51 offline tests,
+  hardened by a 69-agent adversarial review (21 confirmed findings fixed). Live n=40
+  replication grid ran unattended (~2.5 h, 5 cells, zero manual steps): null control 0/40;
+  real_only place 3/40 (n=10 estimate 2/10 was optimistic); dreams place 0/40 (p=0.24 vs
+  real_only — dreams deficit direction persists, still not significant); push proxy refused
+  automatically — off-instruction 56/80 EQUALS on-instruction 56/80, the TASK-185 invalidity
+  replicated exactly. Results: C:\Unitree\_data\task189\runs\grid_n40_20260719\report.md.'
 ---
 
 ## Description
