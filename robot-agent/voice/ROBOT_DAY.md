@@ -38,7 +38,7 @@ Verify: `Get-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"`.
 2. Ollama serving; `cd robot-agent && npm run dev:g1-edu` (A2A on `:41244`).
 3. Adapter: `.\scripts\run_g1_adapter.ps1` (real robot, DDS domain 0).
 4. `uv run python scripts/g1_preflight.py` — every check must pass.
-5. For the NeoDEM Voice tab (section 4): `cd server && npm run dev` (`:3001`)
+5. For the NeoDEM Voice tab (section 2b): `cd server && npm run dev` (`:3001`)
    and `cd app && npm run dev` (`:1420`).
 
 ## 2. The eight steps
