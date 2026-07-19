@@ -69,6 +69,10 @@ this task is hardware bring-up, tuning, and sign-off.
     the real robot 2026-07-17.**
   - `scripts/add_mic_firewall_rule.ps1` — idempotent elevated helper for step 1.
   - `.env.voice.g1` — ready config (g1 in/out, agent :41244, wake phrases on).
+- ✅ **NeoDEM Voice tab merged (2026-07-18, TASK-192 / PR #203)** — the same
+  say/transcript/pause/volume controls now exist in the product UI at
+  `http://localhost:1420/robots/g1-edu-4` → Voice; validate on the real robot
+  via `ROBOT_DAY.md` section 2b after step 4 passes.
 
 ### Steps
 

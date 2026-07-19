@@ -32,10 +32,14 @@ Verify: `Get-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"`.
 
 ## 1. Power-up order
 
-1. G1 EDU on, wait for PC2 (`ping 192.168.123.164` replies).
+1. G1 EDU on, wait for PC2 (`ping 192.168.123.164` replies). The "Ethernet 3"
+   NIC is statically 192.168.123.10/24 — it just shows Disconnected until the
+   robot LAN link is up.
 2. Ollama serving; `cd robot-agent && npm run dev:g1-edu` (A2A on `:41244`).
 3. Adapter: `.\scripts\run_g1_adapter.ps1` (real robot, DDS domain 0).
 4. `uv run python scripts/g1_preflight.py` — every check must pass.
+5. For the NeoDEM Voice tab (section 2b): `cd server && npm run dev` (`:3001`)
+   and `cd app && npm run dev` (`:1420`).
 
 ## 2. The eight steps
 
@@ -95,6 +99,29 @@ own speaker through the chassis, fall back to `{"mode": "ptt"}` and gate with
 
 Watch what the pipeline is doing live: `curl -N http://localhost:8768/events`
 (SSE — state, transcript, reply, `wake_ignored`, errors).
+
+## 2b. NeoDEM Voice tab (TASK-192 / PR #203)
+
+Once step 4 (full round trip) works from the terminal, validate the same thing
+through the product UI. The server proxies `/api/robots/g1-edu-4/voice/*` to
+the voice service (`:8768`) and adapter (`:8766`) — no extra config needed as
+long as agent, voice service and adapter run on this box.
+
+1. Open `http://localhost:1420/robots/g1-edu-4` → **Voice** tab.
+2. Health chips must show STT/TTS/Agent green and the adapter chip **without**
+   a mock flag; the offline banner must NOT be showing.
+3. Type a message (DE and EN via the toggle), press Enter → audible from the
+   robot speaker; the entry appears right-aligned as "Spoken by robot".
+4. Speak to the robot → transcript ("Robot heard") and the agent's reply
+   stream into the feed live; the state badge cycles
+   listening → capturing → thinking → speaking.
+5. **Pause mic** stops new transcripts; **New session** inserts a divider and
+   resets the A2A context (follow-up questions lose prior context).
+6. Volume slider → robot speaker gets audibly louder/quieter (this is the
+   adapter `/volume` DDS round-trip validated 2026-07-17).
+7. Kill nothing — but if the voice service dies mid-demo the tab must degrade
+   to the amber offline banner and auto-recover on restart (verified against
+   the mock; nice to confirm once on the real stack).
 
 ## 3. Sign-off (from the task's Test Strategy)
 
