@@ -11,6 +11,7 @@ import { memo, useRef } from 'react';
 import { Upload } from 'lucide-react';
 import { Button, Badge } from '@/shared/components/ui';
 import type { ScanStatus } from '../types/twin.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface ScanSessionPanelProps {
   robotName: string;
@@ -98,7 +99,7 @@ export const ScanSessionPanel = memo(function ScanSessionPanel({
 
       <div className="flex items-center gap-4 text-xs text-theme-tertiary">
         <span>Frames: <span className="text-theme-secondary font-mono">{framesCaptured}</span></span>
-        <span>Points: <span className="text-theme-secondary font-mono">{pointCount.toLocaleString()}</span></span>
+        <span>Points: <span className="text-theme-secondary font-mono">{pointCount.toLocaleString(UI_DATE_LOCALE)}</span></span>
       </div>
 
       <div className="flex gap-2">

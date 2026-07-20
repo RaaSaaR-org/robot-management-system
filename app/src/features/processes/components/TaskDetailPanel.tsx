@@ -22,6 +22,7 @@ import {
   isProcessCancellable as isTaskCancellable,
   isProcessRetryable as isTaskRetryable,
 } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // Action loading state type
 type ActionType = 'pause' | 'resume' | 'cancel' | 'retry' | 'refresh';
@@ -348,7 +349,7 @@ export function TaskDetailPanel({
         />
         <StatCard
           label="Created"
-          value={new Date(task.createdAt).toLocaleDateString()}
+          value={new Date(task.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
           icon={<CalendarIcon />}
         />
       </div>
@@ -574,14 +575,14 @@ export function TaskDetailPanel({
             <div>
               <dt className="text-sm text-theme-secondary">Created At</dt>
               <dd className="text-sm text-theme-primary">
-                {new Date(task.createdAt).toLocaleString()}
+                {new Date(task.createdAt).toLocaleString(UI_DATE_LOCALE)}
               </dd>
             </div>
             {task.startedAt && (
               <div>
                 <dt className="text-sm text-theme-secondary">Started At</dt>
                 <dd className="text-sm text-theme-primary">
-                  {new Date(task.startedAt).toLocaleString()}
+                  {new Date(task.startedAt).toLocaleString(UI_DATE_LOCALE)}
                 </dd>
               </div>
             )}
@@ -589,14 +590,14 @@ export function TaskDetailPanel({
               <div>
                 <dt className="text-sm text-theme-secondary">Completed At</dt>
                 <dd className="text-sm text-theme-primary">
-                  {new Date(task.completedAt).toLocaleString()}
+                  {new Date(task.completedAt).toLocaleString(UI_DATE_LOCALE)}
                 </dd>
               </div>
             )}
             <div>
               <dt className="text-sm text-theme-secondary">Last Updated</dt>
               <dd className="text-sm text-theme-primary">
-                {new Date(task.updatedAt).toLocaleString()}
+                {new Date(task.updatedAt).toLocaleString(UI_DATE_LOCALE)}
               </dd>
             </div>
           </dl>

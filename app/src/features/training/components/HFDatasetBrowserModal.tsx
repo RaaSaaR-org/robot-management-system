@@ -10,6 +10,7 @@ import type { Tab } from '@/shared/components/ui';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 import { trainingApi } from '../api';
 import type { Dataset, HFDataset, HFImportProgress } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // FEATURED DATASETS
@@ -573,7 +574,7 @@ function HFDatasetCard({ dataset, onImport, disabled }: HFDatasetCardProps) {
         </p>
         <div className="flex items-center gap-3 mt-1 text-xs text-theme-secondary">
           {dataset.downloads !== undefined && (
-            <span>{dataset.downloads.toLocaleString()} downloads</span>
+            <span>{dataset.downloads.toLocaleString(UI_DATE_LOCALE)} downloads</span>
           )}
           {dataset.tags && dataset.tags.length > 0 && (
             <span className="truncate">

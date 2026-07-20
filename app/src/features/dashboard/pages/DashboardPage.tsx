@@ -85,18 +85,26 @@ export function DashboardPage() {
           <>
             {/* E-Stop always visible — safety-critical, must be accessible on all viewports */}
             <FleetEmergencyStopButton size="md" />
-            <Button size="sm" variant="outline" onClick={openChat} leftIcon={<MessageSquare className="w-4 h-4" />}>
-              Chat
+            {/* Chat/Refresh collapse to icon-only below sm so the action row
+                fits a 390px viewport without clipping or horizontal scroll */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={openChat}
+              leftIcon={<MessageSquare className="w-4 h-4" />}
+              aria-label="Open orchestrator chat"
+            >
+              <span className="hidden sm:inline">Chat</span>
             </Button>
             <Button
               size="sm"
               variant="outline"
               onClick={refresh}
               isLoading={isLoading}
-              loadingText="Refreshing…"
               leftIcon={<RefreshCw className="w-4 h-4" />}
+              aria-label="Refresh fleet status"
             >
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
           </>
         }

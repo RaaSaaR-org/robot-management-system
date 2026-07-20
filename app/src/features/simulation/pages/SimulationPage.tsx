@@ -48,6 +48,7 @@ import { Card } from '@/shared/components/ui/Card';
 import { Badge } from '@/shared/components/ui/Badge';
 import { Button } from '@/shared/components/ui/Button';
 import { ProgressBar } from '@/shared/components/ui/ProgressBar';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { NextStepBanner } from '@/shared/components/ui/NextStepBanner';
@@ -61,6 +62,7 @@ import {
 } from '../store';
 import { getSimBackendMode } from '../types';
 import type { SimJob, SimToRealComparison, SimScene } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // GLOSSARY — hover-tooltip explanations for domain terms
@@ -153,7 +155,7 @@ function formatRelativeTime(isoDate: string | Date): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day}d ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
 /** Rough per-episode wall-clock estimate in seconds. Assumes ~35s per episode
@@ -674,7 +676,7 @@ function JobCard({
         <div className="flex items-center gap-3 text-xs text-theme-muted">
           <span>{job.rolloutCount} {job.rolloutCount === 1 ? 'rollout' : 'rollouts'}</span>
           <span>•</span>
-          <span title={new Date(job.createdAt).toLocaleString()}>
+          <span title={new Date(job.createdAt).toLocaleString(UI_DATE_LOCALE)}>
             {formatRelativeTime(job.createdAt)}
           </span>
         </div>
@@ -709,15 +711,17 @@ function JobsTab({
 
   if (jobs.length === 0) {
     return (
-      <Card variant="subtle" className="py-12">
-        <div className="flex flex-col items-center justify-center text-theme-muted">
-          <Briefcase className="w-12 h-12 mb-4 opacity-30" />
-          <p className="text-sm font-medium text-theme-secondary">No simulation jobs yet</p>
-          <p className="text-xs mt-1 max-w-sm text-center">
-            Go to the <strong>Launch</strong> tab, pick an environment, and hit{' '}
-            <em>Launch Simulation</em> to run your first evaluation.
-          </p>
-        </div>
+      <Card variant="subtle">
+        <EmptyState
+          icon={<Briefcase className="w-10 h-10" />}
+          title="No simulation jobs yet"
+          description={
+            <>
+              Go to the <strong>Launch</strong> tab, pick an environment, and hit{' '}
+              <em>Launch Simulation</em> to run your first evaluation.
+            </>
+          }
+        />
       </Card>
     );
   }
@@ -1359,7 +1363,7 @@ function SimVsRealTab() {
                     {c.validationDate && (
                       <span
                         className="flex items-center gap-1"
-                        title={new Date(c.validationDate).toLocaleString()}
+                        title={new Date(c.validationDate).toLocaleString(UI_DATE_LOCALE)}
                       >
                         <CalendarDays className="w-3 h-3" />
                         {formatRelativeTime(c.validationDate)}
@@ -1452,7 +1456,8 @@ function SimulationPageInner() {
               <FlaskConical className="w-6 h-6 text-cobalt-400" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-theme-primary">Simulation</h1>
+              {/* Embedded as a tab inside TrainingPage — that page owns the h1 */}
+              <h2 className="text-lg font-semibold text-theme-primary">Simulation</h2>
               <p className="text-sm text-theme-muted">
                 MuJoCo / Isaac Lab policy testing and sim-to-real analysis
               </p>

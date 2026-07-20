@@ -5,8 +5,10 @@
  */
 
 import { memo } from 'react';
-import { cn } from '@/shared/utils';
+import { MessageSquare } from 'lucide-react';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import type { A2AConversation } from '../types';
 
 interface ConversationListProps {
@@ -46,19 +48,19 @@ export const ConversationList = memo(function ConversationList({
       {/* List */}
       <div className="flex-1 overflow-y-auto">
         {conversations.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-theme-muted p-4">
-            <p className="text-center text-sm">
-              No conversations yet.
-              {onNew && (
-                <>
-                  <br />
-                  <Button variant="ghost" onClick={onNew} className="mt-2">
-                    Start a new one
-                  </Button>
-                </>
-              )}
-            </p>
-          </div>
+          <EmptyState
+            icon={<MessageSquare className="w-10 h-10" />}
+            title="No conversations yet"
+            description="Start a conversation to chat with an agent."
+            action={
+              onNew && (
+                <Button variant="ghost" onClick={onNew}>
+                  Start a new one
+                </Button>
+              )
+            }
+            size="sm"
+          />
         ) : (
           <div className="divide-y divide-gray-100 dark:divide-gray-700">
             {conversations.map((conversation) => (
@@ -129,7 +131,7 @@ const ConversationListItem = memo(function ConversationListItem({
           <div className="flex items-center gap-2 mt-1 text-xs text-theme-muted">
             <span>{messageCount} message{messageCount !== 1 ? 's' : ''}</span>
             <span>·</span>
-            <span>{new Date(conversation.updatedAt).toLocaleDateString()}</span>
+            <span>{new Date(conversation.updatedAt).toLocaleDateString(UI_DATE_LOCALE)}</span>
           </div>
         </div>
 
@@ -142,6 +144,7 @@ const ConversationListItem = memo(function ConversationListItem({
             }}
             className="p-1 text-theme-muted hover:text-red-500 rounded"
             title="Delete conversation"
+            aria-label="Delete conversation"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

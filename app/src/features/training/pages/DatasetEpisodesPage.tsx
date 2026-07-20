@@ -22,6 +22,7 @@ import { evaluationApi } from '@/features/evaluation/api/evaluationApi';
 import type { EpisodeReward } from '@/features/evaluation/types/evaluation.types';
 import { trainingApi } from '../api/trainingApi';
 import type { Dataset, EpisodeMeta, FrameData, EpisodeAnnotation, CurationResult, CurationSuggestion } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 const JOINT_COLORS: Record<string, string> = {
   shoulder_pan: '#3b82f6',
@@ -459,7 +460,7 @@ export function DatasetEpisodesPage() {
             </span>
             <span className="inline-flex items-center gap-1">
               <Film className="w-3 h-3" />
-              {totalDatasetFrames.toLocaleString()} frames
+              {totalDatasetFrames.toLocaleString(UI_DATE_LOCALE)} frames
             </span>
             <span className="inline-flex items-center gap-1">
               <Activity className="w-3 h-3" />

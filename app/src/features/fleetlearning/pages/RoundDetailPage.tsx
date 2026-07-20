@@ -32,6 +32,7 @@ import {
   canStartRound,
   canCancelRound,
 } from '../types/fleetlearning.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // COMPONENT
@@ -222,7 +223,7 @@ export function RoundDetailPage() {
             <div>
               <p className="text-sm text-theme-tertiary">Total Samples</p>
               <p className="text-xl font-bold text-theme-primary">
-                {round.totalLocalSamples.toLocaleString()}
+                {round.totalLocalSamples.toLocaleString(UI_DATE_LOCALE)}
               </p>
             </div>
           </div>
@@ -244,8 +245,8 @@ export function RoundDetailPage() {
 
         <div className="bg-theme-card rounded-xl border border-theme p-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+            <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+              <TrendingUp className="w-5 h-5 text-primary-600 dark:text-primary-400" />
             </div>
             <div>
               <p className="text-sm text-theme-tertiary">Improvement</p>
@@ -430,9 +431,9 @@ export function RoundDetailPage() {
 
       {/* Timestamps */}
       <div className="mt-4 text-sm text-theme-tertiary flex items-center gap-4">
-        <span>Created: {new Date(round.createdAt).toLocaleString()}</span>
-        {round.startedAt && <span>Started: {new Date(round.startedAt).toLocaleString()}</span>}
-        {round.completedAt && <span>Completed: {new Date(round.completedAt).toLocaleString()}</span>}
+        <span>Created: {new Date(round.createdAt).toLocaleString(UI_DATE_LOCALE)}</span>
+        {round.startedAt && <span>Started: {new Date(round.startedAt).toLocaleString(UI_DATE_LOCALE)}</span>}
+        {round.completedAt && <span>Completed: {new Date(round.completedAt).toLocaleString(UI_DATE_LOCALE)}</span>}
       </div>
     </div>
   );

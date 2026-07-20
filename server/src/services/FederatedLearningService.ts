@@ -23,6 +23,7 @@ import type {
   SubmitModelUpdateRequest,
   SelectionStrategy,
   FederatedEvent,
+  ConvergenceDataPoint,
 } from '../types/federated.types.js';
 import { DEFAULT_ROUND_CONFIG } from '../types/federated.types.js';
 
@@ -136,6 +137,41 @@ export class FederatedLearningService extends EventEmitter {
       rounds: rounds.map((r) => this.toFederatedRound(r)),
       total,
     };
+  }
+
+  /**
+   * Build convergence chart data from completed rounds.
+   * Returns one point per round that recorded a loss metric; an empty
+   * array when no rounds have converged metrics yet.
+   */
+  async getConvergenceData(modelVersion?: string): Promise<ConvergenceDataPoint[]> {
+    const where: Record<string, unknown> = {};
+    if (modelVersion) {
+      where.globalModelVersion = modelVersion;
+    }
+
+    const rounds = await this.prisma.federatedRound.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const dataPoints: ConvergenceDataPoint[] = [];
+    rounds.forEach((r, index) => {
+      const round = this.toFederatedRound(r);
+      const loss = round.metrics?.avgLocalLoss;
+      if (typeof loss !== 'number') {
+        return;
+      }
+      dataPoints.push({
+        roundNumber: index + 1,
+        roundId: round.id,
+        loss,
+        participants: round.participantCount,
+        timestamp: (round.completedAt ?? round.createdAt).toISOString(),
+      });
+    });
+
+    return dataPoints;
   }
 
   // ============================================================================

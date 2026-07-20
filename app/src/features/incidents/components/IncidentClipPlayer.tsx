@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { formatDateTime } from '@/shared/utils/format';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { incidentsApi } from '../api/incidentsApi';
 import type { IncidentClip } from '../types/incidents.types';
@@ -112,7 +113,7 @@ export function IncidentClipPlayer({ incidentId }: IncidentClipPlayerProps) {
       </div>
 
       <p className="text-xs text-theme-tertiary">
-        {clip.fps} fps · captured {new Date(clip.capturedAt).toLocaleString()}
+        {clip.fps} fps · captured {formatDateTime(clip.capturedAt)}
       </p>
     </div>
   );

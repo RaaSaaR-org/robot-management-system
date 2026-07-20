@@ -38,6 +38,8 @@ function makeStateStub(): RobotStateManager {
   return {
     getRobotInterface: () => ({ id: 'robot-1', status: 'idle' }),
     getVLAModelVersion: () => null,
+    // Every REST call feeds the SafetyMonitor's server-liveness heartbeat.
+    updateServerHeartbeat: (): void => {},
   } as unknown as RobotStateManager;
 }
 

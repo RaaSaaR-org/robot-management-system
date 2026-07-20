@@ -6,7 +6,6 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import {
-  Workflow,
   Camera,
   Database,
   Brain,
@@ -15,12 +14,14 @@ import {
 } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { StageCard, type StageStatus } from '../components/StageCard';
 import { FirstRunWizard } from '../components/FirstRunWizard';
 import { datacollectionApi } from '@/features/datacollection/api/datacollectionApi';
 import { trainingApi } from '@/features/training/api/trainingApi';
 import { deploymentApi } from '@/features/deployment/api/deploymentApi';
 import { simulationApi } from '@/features/simulation/api/simulationApi';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TIME HELPERS
@@ -38,7 +39,7 @@ function formatRelativeTime(isoDate: string | Date | undefined | null): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day}d ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
 // ============================================================================
@@ -251,20 +252,15 @@ export function PipelinePage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <header>
-        <div className="flex items-center gap-3 mb-1">
-          <div className="p-2 rounded-brand bg-cobalt-500/10">
-            <Workflow className="w-6 h-6 text-cobalt-400" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-theme-primary">Skill Training</h1>
-            <p className="text-sm text-theme-muted">
-              End-to-end workflow to teach your robots a new skill — from demos to production.{' '}
-              <a href="/skills" className="text-cobalt-400 hover:underline">View existing skills →</a>
-            </p>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Skill Training"
+        subtitle={
+          <>
+            End-to-end workflow to teach your robots a new skill — from demos to production.{' '}
+            <a href="/skills" className="text-cobalt-400 hover:underline">View existing skills →</a>
+          </>
+        }
+      />
 
       {/* First-run wizard (only when fully empty) */}
       {showFirstRun && <FirstRunWizard />}

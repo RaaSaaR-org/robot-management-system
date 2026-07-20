@@ -10,6 +10,7 @@ import { Card, Badge, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
 import type { Dataset, DatasetStatus } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface DatasetCardProps {
   dataset: Dataset;
@@ -88,7 +89,7 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
           <div>
             <span className="text-theme-tertiary">Frames</span>
             <p className="font-medium text-theme-primary">
-              {dataset.totalFrames.toLocaleString()}
+              {dataset.totalFrames.toLocaleString(UI_DATE_LOCALE)}
             </p>
           </div>
           <div>
@@ -142,7 +143,7 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
 
         <div className="mt-4 pt-3 border-t border-theme-secondary/20 flex items-center justify-between">
           <span className="text-xs text-theme-tertiary">
-            LeRobot {dataset.lerobotVersion} &bull; {new Date(dataset.createdAt).toLocaleDateString()}
+            LeRobot {dataset.lerobotVersion} &bull; {new Date(dataset.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
           </span>
           <div className="flex items-center gap-1">
             {dataset.status === 'ready' && onViewEpisodes && (

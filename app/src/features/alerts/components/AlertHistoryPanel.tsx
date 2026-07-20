@@ -5,8 +5,11 @@
  * @dependencies @/shared/utils/cn, @/features/alerts/hooks
  */
 
+import { BellOff } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
+import { formatDateTime } from '@/shared/utils/format';
 import { Button } from '@/shared/components/ui/Button';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { useAlertHistory } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
@@ -17,7 +20,7 @@ import { ALERT_SOURCE_LABELS } from '../types/alerts.types';
 // ============================================================================
 
 export interface AlertHistoryPanelProps {
-  /** Maximum height of the panel */
+  /** Maximum height of the list. When omitted, the list flows with the page (no inner scrollbar). */
   maxHeight?: string;
   /** Additional class names */
   className?: string;
@@ -40,15 +43,9 @@ const SEVERITY_BORDER_STYLES: Record<AlertSeverity, string> = {
 // HELPERS
 // ============================================================================
 
+/** Absolute date/time via the shared fixed-English-locale formatter */
 function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTime(isoString);
 }
 
 // ============================================================================
@@ -68,9 +65,10 @@ function HistoryItem({ alert }: HistoryItemProps) {
         alert.acknowledged && 'opacity-60'
       )}
     >
-      <div className="flex items-start justify-between gap-3">
+      {/* Stack the timestamp below the text on narrow screens */}
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
             <AlertSeverityBadge severity={alert.severity} size="sm" />
             <span className="text-xs text-theme-tertiary">
               {ALERT_SOURCE_LABELS[alert.source]}
@@ -80,7 +78,7 @@ function HistoryItem({ alert }: HistoryItemProps) {
           <h4 className="text-sm font-medium text-theme-primary truncate">{alert.title}</h4>
           <p className="text-xs text-theme-secondary mt-0.5 line-clamp-2">{alert.message}</p>
         </div>
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+        <div className="flex items-center gap-2 sm:flex-col sm:items-end sm:gap-1 flex-shrink-0">
           <span className="text-xs text-theme-tertiary whitespace-nowrap">
             {formatTimestamp(alert.timestamp)}
           </span>
@@ -155,7 +153,7 @@ function Pagination({ page, totalPages, total, onPrev, onNext, isLoading }: Pagi
  * ```
  */
 export function AlertHistoryPanel({
-  maxHeight = '400px',
+  maxHeight,
   className,
   autoFetch = true,
 }: AlertHistoryPanelProps) {
@@ -174,22 +172,22 @@ export function AlertHistoryPanel({
 
   if (history.length === 0) {
     return (
-      <div className={cn('flex items-center justify-center py-12', className)}>
-        <div className="text-center">
-          <div className="text-4xl mb-2">-</div>
-          <p className="text-theme-secondary">No alerts found</p>
-          <p className="text-sm text-theme-tertiary mt-1">
-            Alerts will appear here when they occur
-          </p>
-        </div>
-      </div>
+      <EmptyState
+        className={className}
+        icon={<BellOff className="w-10 h-10" />}
+        title="No alerts found"
+        description="Alerts will appear here when they occur"
+      />
     );
   }
 
   return (
     <div className={cn('flex flex-col', className)}>
       {/* History List */}
-      <div className="overflow-y-auto space-y-2" style={{ maxHeight }}>
+      <div
+        className={cn('space-y-2', maxHeight && 'overflow-y-auto')}
+        style={maxHeight ? { maxHeight } : undefined}
+      >
         {history.map((alert) => (
           <HistoryItem key={alert.id} alert={alert} />
         ))}

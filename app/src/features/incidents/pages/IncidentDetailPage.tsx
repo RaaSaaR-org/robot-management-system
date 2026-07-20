@@ -6,7 +6,9 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { UI_DATE_LOCALE, formatDateTime } from '@/shared/utils/format';
 import { Button } from '@/shared/components/ui/Button';
+import { Modal } from '@/shared/components/ui/Modal';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { StatusBadge } from '../components/StatusBadge';
@@ -35,15 +37,9 @@ const STATUS_TRANSITIONS: Record<IncidentStatus, IncidentStatus[]> = {
 // HELPERS
 // ============================================================================
 
+/** Absolute date/time via the shared fixed-English-locale formatter */
 function formatDate(isoString: string | null): string {
-  if (!isoString) return '-';
-  return new Date(isoString).toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDateTime(isoString);
 }
 
 // ============================================================================
@@ -66,6 +62,8 @@ export function IncidentDetailPage() {
   } = useIncident(id);
 
   const [isUpdating, setIsUpdating] = useState(false);
+  const [generatedContent, setGeneratedContent] = useState<string | null>(null);
+  const [contentCopied, setContentCopied] = useState(false);
 
   // Fetch incident on mount
   useEffect(() => {
@@ -90,9 +88,25 @@ export function IncidentDetailPage() {
   const handleGenerateContent = async (notificationId: string) => {
     const content = await generateNotificationContent(notificationId);
     if (content) {
-      // For now, just log it - a modal editor would be better UX
-      console.log('Generated content:', content);
-      alert('Content generated. Check console for output.');
+      setContentCopied(false);
+      setGeneratedContent(content);
+    }
+  };
+
+  const handleCloseGeneratedContent = () => {
+    setGeneratedContent(null);
+    setContentCopied(false);
+  };
+
+  const handleCopyGeneratedContent = async () => {
+    if (!generatedContent) return;
+    try {
+      await navigator.clipboard.writeText(generatedContent);
+      setContentCopied(true);
+    } catch {
+      // Clipboard API unavailable (e.g. insecure context) — leave the text
+      // selectable in the modal so the user can copy manually.
+      setContentCopied(false);
     }
   };
 
@@ -235,7 +249,7 @@ export function IncidentDetailPage() {
                     <div>
                       <p className="text-xs text-theme-tertiary mb-1">Affected Data Subjects</p>
                       <p className="text-2xl font-bold text-theme-primary">
-                        {incident.affectedDataSubjects.toLocaleString()}
+                        {incident.affectedDataSubjects.toLocaleString(UI_DATE_LOCALE)}
                       </p>
                     </div>
                   )}
@@ -348,6 +362,28 @@ export function IncidentDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Generated notification content (replaces the old console.log + alert()) */}
+      <Modal
+        isOpen={generatedContent !== null}
+        onClose={handleCloseGeneratedContent}
+        title="Generated Notification Content"
+        size="lg"
+        footer={
+          <>
+            <Button variant="ghost" onClick={handleCloseGeneratedContent}>
+              Close
+            </Button>
+            <Button variant="primary" onClick={handleCopyGeneratedContent}>
+              {contentCopied ? 'Copied' : 'Copy to clipboard'}
+            </Button>
+          </>
+        }
+      >
+        <pre className="whitespace-pre-wrap break-words font-sans text-sm text-theme-primary bg-theme-base rounded-lg p-4 max-h-[60vh] overflow-y-auto">
+          {generatedContent}
+        </pre>
+      </Modal>
     </div>
   );
 }

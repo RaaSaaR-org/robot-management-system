@@ -43,7 +43,10 @@ export function PageHeader({ title, subtitle, meta, actions, className }: PageHe
         </div>
         {subtitle && <p className="text-sm text-theme-secondary mt-1">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2 flex-wrap shrink-0">{actions}</div>}
+      {/* min-w-0 (not shrink-0): a wide action row must be allowed to shrink
+          below its max-content width so flex-wrap can break it onto new lines
+          on narrow viewports instead of overflowing the page. */}
+      {actions && <div className="flex items-center gap-2 flex-wrap min-w-0">{actions}</div>}
     </div>
   );
 }

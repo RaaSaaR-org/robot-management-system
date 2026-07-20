@@ -167,6 +167,9 @@ robotRoutes.get('/:id/telemetry', async (req: Request, res: Response) => {
  * GET /:id/telemetry/history — Persisted telemetry rows (TASK-184)
  * Query params: from=<ISO>, to=<ISO>, limit=<n, max 2000, default 500>.
  * Rows are ascending by timestamp with JSON columns parsed back to objects.
+ * Without `from` the default window is the LAST HOUR and the newest rows in
+ * range win the limit, so naive consumers see recent data instead of the
+ * oldest persisted rows.
  */
 robotRoutes.get('/:id/telemetry/history', async (req: Request, res: Response) => {
   try {
@@ -199,10 +202,19 @@ robotRoutes.get('/:id/telemetry/history', async (req: Request, res: Response) =>
       limit = Math.min(limit, 2000);
     }
 
+    // No explicit range: default to the last hour, newest rows first in the
+    // limit budget (response stays ascending). Explicit ?from= keeps the
+    // original oldest-first-from-that-point behavior.
+    const noExplicitFrom = from === undefined;
+    if (from === undefined && to === undefined) {
+      from = new Date(Date.now() - 60 * 60 * 1000);
+    }
+
     const telemetry = await robotRepository.getTelemetryHistory(req.params.id, {
       from,
       to,
       limit,
+      newest: noExplicitFrom,
     });
     res.json({ telemetry });
   } catch (error) {

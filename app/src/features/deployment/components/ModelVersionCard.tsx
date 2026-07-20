@@ -5,7 +5,7 @@
  */
 
 import { Card, Badge } from '@/shared/components/ui';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import type { ModelVersion } from '../types';
 
 export interface ModelVersionCardProps {
@@ -30,7 +30,7 @@ export function ModelVersionCard({
   compact = false,
   className,
 }: ModelVersionCardProps) {
-  const formattedDate = new Date(version.createdAt).toLocaleDateString();
+  const formattedDate = new Date(version.createdAt).toLocaleDateString(UI_DATE_LOCALE);
 
   return (
     <Card

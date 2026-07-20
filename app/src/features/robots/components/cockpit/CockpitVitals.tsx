@@ -11,6 +11,7 @@ import { Cpu, MemoryStick, Thermometer, Gauge, Bone, Activity } from 'lucide-rea
 import { cn } from '@/shared/utils/cn';
 import { BatteryGauge } from '../BatteryGauge';
 import type { RobotTelemetry } from '../../types/robots.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface CockpitVitalsProps {
   telemetry: RobotTelemetry | null;
@@ -25,8 +26,8 @@ function fmt(value: number | null | undefined, unit = '', digits = 0): string {
 }
 
 /** Colour a 0–100 utilisation reading green → amber → red. */
-function loadColor(v: number | undefined): string {
-  if (v === undefined) return 'text-theme-secondary';
+function loadColor(v: number | null | undefined): string {
+  if (v == null) return 'text-theme-secondary';
   if (v >= 85) return 'text-red-400';
   if (v >= 65) return 'text-amber-400';
   return 'text-[#18E4C3]';
@@ -53,7 +54,7 @@ export const CockpitVitals = memo(function CockpitVitals({
           <Activity className="h-3.5 w-3.5" /> Vitals
         </span>
         <span className="font-mono text-[10px] text-theme-tertiary">
-          {connected && lastUpdate ? `updated ${lastUpdate.toLocaleTimeString()}` : 'link down'}
+          {connected && lastUpdate ? `updated ${lastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}` : 'link down'}
         </span>
       </div>
 
@@ -70,7 +71,7 @@ export const CockpitVitals = memo(function CockpitVitals({
           />
         </div>
 
-        <Stat icon={<Cpu className="h-3.5 w-3.5" />} label="CPU" value={fmt(t?.cpuUsage, '%')} valueClass={loadColor(t?.cpuUsage)} bar={t?.cpuUsage} />
+        <Stat icon={<Cpu className="h-3.5 w-3.5" />} label="CPU" value={fmt(t?.cpuUsage, '%')} valueClass={loadColor(t?.cpuUsage)} bar={t?.cpuUsage ?? undefined} />
         <Stat icon={<MemoryStick className="h-3.5 w-3.5" />} label="Memory" value={fmt(t?.memoryUsage, '%')} valueClass={loadColor(t?.memoryUsage)} bar={t?.memoryUsage} />
         <Stat icon={<Thermometer className="h-3.5 w-3.5" />} label="Temp" value={fmt(t?.temperature, '°C')} />
         <Stat icon={<Gauge className="h-3.5 w-3.5" />} label="Speed" value={fmt(t?.speed, ' m/s', 2)} />

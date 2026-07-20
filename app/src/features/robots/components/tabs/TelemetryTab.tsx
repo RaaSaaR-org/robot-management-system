@@ -5,7 +5,7 @@
  */
 
 import { Card, Spinner, ProgressBar, Button } from '@/shared/components/ui';
-import { formatTimeAgo, CPU_THRESHOLDS, MEMORY_THRESHOLDS, getResourceVariant } from '@/shared/utils';
+import { UI_DATE_LOCALE, formatTimeAgo, CPU_THRESHOLDS, MEMORY_THRESHOLDS, getResourceVariant } from '@/shared/utils';
 import { BatteryGauge } from '../BatteryGauge';
 import { SensorGrid } from '../SensorGrid';
 import { SimBadge } from '../SimBadge';
@@ -121,7 +121,7 @@ export function TelemetryTab({
                 <span className="text-xs text-green-500 font-medium">Live</span>
                 {telemetryLastUpdate && (
                   <span className="text-xs text-theme-tertiary">
-                    {telemetryLastUpdate.toLocaleTimeString()}
+                    {telemetryLastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}
                   </span>
                 )}
               </div>
@@ -155,11 +155,21 @@ export function TelemetryTab({
                 </div>
               )}
 
-              <ProgressBar
-                label="CPU Usage"
-                value={telemetry.cpuUsage}
-                variant={getResourceVariant(telemetry.cpuUsage, CPU_THRESHOLDS.WARNING, CPU_THRESHOLDS.ERROR)}
-              />
+              {telemetry.cpuUsage != null ? (
+                <ProgressBar
+                  label="CPU Usage"
+                  value={telemetry.cpuUsage}
+                  variant={getResourceVariant(telemetry.cpuUsage, CPU_THRESHOLDS.WARNING, CPU_THRESHOLDS.ERROR)}
+                />
+              ) : (
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="card-label">CPU Usage</span>
+                    <span className="text-sm font-medium text-theme-tertiary">n/a</span>
+                  </div>
+                  <div className="h-1.5 glass-subtle rounded-full" />
+                </div>
+              )}
               <ProgressBar
                 label="Memory Usage"
                 value={telemetry.memoryUsage}

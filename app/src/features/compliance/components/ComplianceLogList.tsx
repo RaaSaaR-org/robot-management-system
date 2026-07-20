@@ -4,8 +4,10 @@
  * @feature compliance
  */
 
+import { FileText } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Card } from '@/shared/components/ui/Card';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import type { ComplianceLog, ComplianceEventType, ComplianceSeverity } from '../types';
 
 // Event type labels
@@ -80,12 +82,13 @@ export function ComplianceLogList({
 
   if (logs.length === 0) {
     return (
-      <Card className={cn('glass-card p-6 text-center', className)}>
-        <p className="text-theme-secondary font-medium">No compliance logs yet</p>
-        <p className="text-theme-tertiary text-sm mt-2">
-          Logs will appear here when robots execute commands or AI makes decisions.
-        </p>
-      </Card>
+      <EmptyState
+        icon={<FileText className="w-10 h-10" />}
+        title="No compliance logs yet"
+        description="Logs will appear here when robots execute commands or AI makes decisions."
+        size="sm"
+        className={className}
+      />
     );
   }
 

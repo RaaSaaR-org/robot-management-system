@@ -6,6 +6,7 @@
 
 import { memo } from 'react';
 import { cn } from '@/shared/utils/cn';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -34,7 +35,7 @@ function formatTimeAgo(dateString: string): string {
   if (diffMins < 1) return 'just now';
   if (diffMins < 60) return `${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
   if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
 // ============================================================================

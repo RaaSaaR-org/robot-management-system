@@ -84,6 +84,31 @@ class ContextCache {
 // Store contexts for multi-turn conversations with LRU eviction and TTL
 const contexts = new ContextCache();
 
+/**
+ * Compress an LLM/tool error into a clean one-line message suitable as an A2A
+ * task result. Provider errors (e.g. a GoogleGenerativeAI 400 for an invalid
+ * API key) carry multi-line, escaped JSON bodies — those must never surface
+ * verbatim as a task result. The full error still goes to the console log.
+ */
+export function toCleanErrorMessage(error: unknown): string {
+  let msg = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
+  const brace = msg.indexOf('{');
+  if (brace === 0) {
+    // The whole message is a JSON body — pull out its human-readable message.
+    try {
+      const parsed = JSON.parse(msg) as { error?: { message?: string }; message?: string };
+      msg = (parsed.error?.message ?? parsed.message ?? '').replace(/\s+/g, ' ').trim();
+    } catch {
+      msg = '';
+    }
+  } else if (brace > 0) {
+    // Message text followed by an embedded JSON payload — drop the payload.
+    msg = msg.slice(0, brace).replace(/[\s:,-]+$/, '').trim();
+  }
+  if (msg.length > 200) msg = `${msg.slice(0, 197)}...`;
+  return msg || 'LLM request failed';
+}
+
 export class RobotAgentExecutor implements AgentExecutor {
   private cancelledTasks = new Set<string>();
   private activeTasks = new Set<string>();
@@ -118,6 +143,11 @@ export class RobotAgentExecutor implements AgentExecutor {
       return;
     }
     this.activeTasks.add(taskId);
+
+    // An A2A message reaching the executor is live server traffic — feed the
+    // SafetyMonitor's liveness so a phantom communication-timeout stop cannot
+    // persist while commands demonstrably arrive.
+    this.robotStateManager.updateServerHeartbeat();
 
     try {
     console.log(
@@ -366,7 +396,10 @@ export class RobotAgentExecutor implements AgentExecutor {
         console.error('[RobotAgentExecutor] Failed to log AI decision:', logError);
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // LLM/tool failure → the task is FAILED, with a clean one-line reason.
+      // Raw provider payloads (escaped JSON error bodies) go to the log only,
+      // never into the task result.
+      const errorMessage = toCleanErrorMessage(error);
       console.error(`[RobotAgentExecutor] Error processing task ${taskId}:`, error);
       const errorUpdate: TaskStatusUpdateEvent = {
         kind: 'status-update',
@@ -378,7 +411,7 @@ export class RobotAgentExecutor implements AgentExecutor {
             kind: 'message',
             role: 'agent',
             messageId: uuidv4(),
-            parts: [{ kind: 'text', text: `Error: ${errorMessage}` }],
+            parts: [{ kind: 'text', text: `Task failed: ${errorMessage}` }],
             taskId: taskId,
             contextId: contextId,
           },

@@ -12,6 +12,7 @@ import { cn } from '@/shared/utils/cn';
 import { PointCloudViewer } from '../visualization/PointCloudViewer';
 import { usePointCloudStream } from '../../hooks/usePointCloudStream';
 import type { JointState, RobotType } from '../../types/robots.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface CockpitPerceptionPanelProps {
   robotId: string;
@@ -48,7 +49,7 @@ export const CockpitPerceptionPanel = memo(function CockpitPerceptionPanel({
         </div>
         {supported && enabled && (
           <span className="font-mono text-[10px] text-theme-tertiary">
-            {frame ? `${frame.pointCount.toLocaleString()} pts` : 'scanning…'}
+            {frame ? `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts` : 'scanning…'}
           </span>
         )}
       </div>

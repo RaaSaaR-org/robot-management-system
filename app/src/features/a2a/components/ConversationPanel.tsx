@@ -367,6 +367,7 @@ export const ConversationPanel = memo(function ConversationPanel({
             </div>
             <button
               type="submit"
+              aria-label="Send message"
               disabled={!inputValue.trim() || isSending || !canSend}
               className={cn(
                 'h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0',

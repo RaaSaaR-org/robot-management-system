@@ -13,6 +13,8 @@
  * - Art. 22: Automated Decision Making Safeguards
  */
 
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
+
 // ============================================================================
 // ENUMS & CONSTANTS
 // ============================================================================
@@ -364,7 +366,7 @@ export function getDaysUntilDeadline(request: GDPRRequest): number {
 }
 
 export function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString(undefined, {
+  return new Date(dateString).toLocaleDateString(UI_DATE_LOCALE, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -372,7 +374,7 @@ export function formatDate(dateString: string): string {
 }
 
 export function formatDateTime(dateString: string): string {
-  return new Date(dateString).toLocaleString(undefined, {
+  return new Date(dateString).toLocaleString(UI_DATE_LOCALE, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

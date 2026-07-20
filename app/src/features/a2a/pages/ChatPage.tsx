@@ -80,6 +80,7 @@ const ConversationDrawer = memo(function ConversationDrawer({
           <h2 className="font-semibold text-theme-primary">Conversations</h2>
           <button
             onClick={onClose}
+            aria-label="Close conversations"
             className="p-2 rounded-brand hover:bg-theme-hover transition-colors"
           >
             <CloseIcon className="w-5 h-5 text-theme-tertiary" />
@@ -182,8 +183,9 @@ const ChatPageInner = memo(function ChatPageInner() {
   return (
     <A2ALayout>
       <div className="flex flex-col h-full overflow-hidden">
-        {/* Header */}
-        <header className="flex-shrink-0 flex items-center justify-between h-14 px-4 border-b border-glass-subtle glass-elevated">
+        {/* Header — flex-wrap so the mode toolbar drops to its own row instead
+            of clipping mid-word on narrow (390px) screens */}
+        <header className="flex-shrink-0 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 min-h-14 px-4 py-2 border-b border-glass-subtle glass-elevated">
           {/* Left: Menu (mobile) + Conversation selector */}
           <div className="flex items-center gap-2">
             {isMobile && (

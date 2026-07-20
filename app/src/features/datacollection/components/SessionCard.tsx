@@ -5,6 +5,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
+import { UI_DATE_LOCALE, formatDateTime } from '@/shared/utils/format';
 import { Clock, Video, Bot, User, FileVideo } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { SessionStatusBadge } from './SessionStatusBadge';
@@ -40,7 +41,7 @@ function formatRelativeTime(dateString: string | null): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day}d ago`;
-  return date.toLocaleDateString();
+  return formatDateTime(dateString, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function qualityColor(score: number | null | undefined): string {
@@ -96,7 +97,7 @@ export function SessionCard({
         </div>
         <div className="flex items-center gap-1.5 text-theme-secondary">
           <FileVideo size={12} className="text-theme-muted" />
-          <span>{session.frameCount.toLocaleString()} frames</span>
+          <span>{session.frameCount.toLocaleString(UI_DATE_LOCALE)} frames</span>
         </div>
       </div>
 

@@ -8,7 +8,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Rocket, BookOpen } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Card, Button, Tabs } from '@/shared/components/ui';
+import { Card, Button, Tabs, PageHeader, EmptyState } from '@/shared/components/ui';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { useDeploymentStore } from '../store';
 import { DeploymentCard, CanaryConfig, RollbackConfirmation } from '../components';
@@ -115,27 +115,27 @@ export function DeploymentsPage() {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Deployments</h1>
-          <p className="text-sm text-theme-secondary mt-1">
-            {outerTab === 'deployments'
-              ? 'Manage model deployments across your robot fleet'
-              : 'Browse and run skills on the fleet'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <PipelineBreadcrumb stage="deploy" />
-          {outerTab === 'deployments' && (
-            <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
-              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Deployment
-            </Button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Deployments"
+        subtitle={
+          outerTab === 'deployments'
+            ? 'Manage model deployments across your robot fleet'
+            : 'Browse and run skills on the fleet'
+        }
+        actions={
+          <>
+            <PipelineBreadcrumb stage="deploy" />
+            {outerTab === 'deployments' && (
+              <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
+                <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                New Deployment
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <Tabs
         activeTab={outerTab}
@@ -308,30 +308,36 @@ export function DeploymentsPage() {
 
       {/* Empty state */}
       {!isLoading && displayDeployments.length === 0 && (
-        <Card className="text-center py-12">
-          <svg
-            className="w-12 h-12 mx-auto text-theme-tertiary mb-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-            />
-          </svg>
-          <p className="text-theme-secondary mb-4">
-            {activeTab === 'active'
-              ? 'No active deployments'
-              : 'No deployment history yet'}
-          </p>
-          {activeTab === 'active' && (
-            <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
-              Start your first deployment
-            </Button>
-          )}
+        <Card>
+          <EmptyState
+            icon={
+              <svg
+                className="w-10 h-10"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                />
+              </svg>
+            }
+            title={
+              activeTab === 'active'
+                ? 'No active deployments'
+                : 'No deployment history yet'
+            }
+            action={
+              activeTab === 'active' ? (
+                <Button variant="primary" onClick={() => setShowCanaryConfig(true)}>
+                  Start your first deployment
+                </Button>
+              ) : undefined
+            }
+          />
         </Card>
       )}
 

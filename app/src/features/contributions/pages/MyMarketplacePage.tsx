@@ -21,6 +21,7 @@ import { formatCredits } from '../types/contributions.types';
 import { LICENSE_TIER_LABELS } from '../types/marketplace.types';
 import type { MarketplaceListing } from '../types/marketplace.types';
 import { useMyMarketplace } from '../hooks/marketplace';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 type Tab = 'purchases' | 'listings';
 
@@ -268,7 +269,7 @@ export function MyMarketplacePage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right text-theme-secondary">
-                        {item.totalDownloads.toLocaleString()}
+                        {item.totalDownloads.toLocaleString(UI_DATE_LOCALE)}
                       </td>
                       <td className="px-4 py-3 text-right font-medium text-theme-primary">
                         {formatCredits(item.totalRevenue)} cr
@@ -310,5 +311,5 @@ export function MyMarketplacePage() {
 
 function formatDate(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(UI_DATE_LOCALE);
 }

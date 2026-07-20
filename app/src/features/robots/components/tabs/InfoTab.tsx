@@ -6,6 +6,7 @@
 
 import { Link } from 'react-router-dom';
 import { Card, Button, Badge } from '@/shared/components/ui';
+import { formatDateTime } from '@/shared/utils/format';
 import type { InfoTabProps } from './types';
 
 // ============================================================================
@@ -66,11 +67,11 @@ export function InfoTab({ robot }: InfoTabProps) {
             )}
             <div className="glass-subtle p-3 rounded-xl">
               <dt className="card-label">Created</dt>
-              <dd className="text-sm text-theme-primary mt-1">{new Date(robot.createdAt).toLocaleDateString()}</dd>
+              <dd className="text-sm text-theme-primary mt-1">{formatDateTime(robot.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}</dd>
             </div>
             <div className="glass-subtle p-3 rounded-xl">
               <dt className="card-label">Last Updated</dt>
-              <dd className="text-sm text-theme-primary mt-1">{new Date(robot.updatedAt).toLocaleString()}</dd>
+              <dd className="text-sm text-theme-primary mt-1">{formatDateTime(robot.updatedAt)}</dd>
             </div>
           </dl>
         </Card.Body>

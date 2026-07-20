@@ -38,6 +38,11 @@ export function createTelemetryWebSocket(
   wss.on('connection', (ws: WebSocket) => {
     console.log('[TelemetryWS] Client connected');
 
+    // A live telemetry consumer counts as server connectivity — without this,
+    // the SafetyMonitor's heartbeat could go stale (phantom "communication
+    // lost" protective stop) while telemetry demonstrably flows out.
+    robotStateManager.updateServerHeartbeat();
+
     // Send initial telemetry
     const initialTelemetry = robotStateManager.getTelemetry();
     ws.send(formatTelemetryMessage(initialTelemetry));
@@ -60,6 +65,8 @@ export function createTelemetryWebSocket(
       if (ws.readyState === WebSocket.OPEN) {
         const telemetry = robotStateManager.getTelemetry();
         ws.send(formatTelemetryMessage(telemetry));
+        // Each delivered frame keeps the server-liveness heartbeat fresh.
+        robotStateManager.updateServerHeartbeat();
       }
     }, fullIntervalMs);
 
@@ -79,6 +86,7 @@ export function createTelemetryWebSocket(
     // Handle incoming messages (for potential future commands)
     ws.on('message', (data: Buffer) => {
       try {
+        robotStateManager.updateServerHeartbeat();
         const message = JSON.parse(data.toString());
         console.log('[TelemetryWS] Received message:', message);
 

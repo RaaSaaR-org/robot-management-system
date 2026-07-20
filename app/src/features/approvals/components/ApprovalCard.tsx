@@ -20,6 +20,7 @@ import {
 import { cn } from '@/shared/utils/cn';
 import { SLAIndicator } from './SLAIndicator';
 import type { ApprovalQueueItem, ApprovalEntityType, ApprovalStatus, ApprovalPriority } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 interface ApprovalCardProps {
   approval: ApprovalQueueItem;
@@ -189,7 +190,7 @@ export function ApprovalCard({ approval, onClick, className }: ApprovalCardProps
           {approval.status.replace(/_/g, ' ')}
         </span>
         <span>
-          Created {new Date(approval.createdAt).toLocaleDateString()}
+          Created {new Date(approval.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
         </span>
       </div>
 

@@ -13,7 +13,7 @@ import type {
 } from '../types/telemetry.types.js';
 import { agentCardResolver } from './A2AClient.js';
 import { conversationManager } from './ConversationManager.js';
-import { robotRepository } from '../repositories/index.js';
+import { robotRepository, agentRepository } from '../repositories/index.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 // Safe to import directly: AlertService only depends on repositories (no service cycle)
 import { alertService } from './AlertService.js';
@@ -96,7 +96,11 @@ export interface RobotTelemetry {
   batteryLevel: number | null;
   batteryVoltage?: number;
   batteryTemperature?: number;
-  cpuUsage: number;
+  /**
+   * CPU load percentage. Optional/null = the agent has no real measurement
+   * (the agent omits the field on the wire; the app renders "n/a").
+   */
+  cpuUsage?: number | null;
   memoryUsage: number;
   diskUsage?: number;
   temperature: number;
@@ -548,8 +552,9 @@ export class RobotManager {
         const statusChanged = healthData.robotStatus && healthData.robotStatus !== registered.robot.status;
         const batteryChanged = newBatteryLevel !== registered.robot.batteryLevel;
 
-        // Also fetch robot data to sync position
+        // Also fetch robot data to sync position + identity
         let locationChanged = false;
+        let identityChanged = false;
         try {
           const robotHttpClient = new HttpClient(undefined, HTTP_TIMEOUTS.SHORT);
           const robotData = await robotHttpClient.get<Robot>(registered.endpoints.robot);
@@ -562,9 +567,47 @@ export class RobotManager {
               locationChanged = true;
             }
           }
+
+          // SIM-honesty: sync identity fields the agent reports (serial,
+          // firmware, ip, metadata incl. isSimulated, …) instead of freezing
+          // them at first-registration values forever.
+          const identityUpdate = this.buildIdentityUpdate(registered.robot, robotData);
+          if (identityUpdate) {
+            Object.assign(registered.robot, identityUpdate);
+            registered.robot.updatedAt = now;
+            identityChanged = true;
+            await robotRepository.update(registered.robot.id, identityUpdate);
+            console.log(
+              `[RobotManager] Synced identity for ${registered.robot.id}: ${Object.keys(identityUpdate).join(', ')}`
+            );
+          }
         } catch {
           // Log but don't fail health check - position sync is secondary
           console.warn(`[RobotManager] Failed to sync position for ${registered.robot.id}`);
+        }
+
+        // Re-fetch the live agent card so agent-side edits (description,
+        // skills, …) propagate to the stored registry copy instead of
+        // freezing at first-registration values forever.
+        try {
+          agentCardResolver.clearCache(registered.baseUrl);
+          const liveCard = await agentCardResolver.fetchAgentCard(registered.baseUrl);
+          if (JSON.stringify(liveCard) !== JSON.stringify(registered.agentCard)) {
+            const previousName = registered.agentCard.name;
+            registered.agentCard = liveCard;
+            // The agent card table is keyed by name — drop the stale row
+            // before upserting when the agent renamed itself.
+            if (previousName !== liveCard.name) {
+              await agentRepository.delete(previousName);
+            }
+            await agentRepository.upsert(liveCard, registered.robot.id);
+            console.log(
+              `[RobotManager] Refreshed agent card for ${registered.robot.id} (${liveCard.name})`
+            );
+          }
+        } catch {
+          // Log but don't fail health check - agent card refresh is secondary
+          console.warn(`[RobotManager] Failed to refresh agent card for ${registered.robot.id}`);
         }
 
         // Update in-memory cache
@@ -577,6 +620,8 @@ export class RobotManager {
           registered.robot.updatedAt = now;
 
           // Fire-and-forget alerts on status transitions (never fail the health check)
+          // Note: the robot name lives in the alert title only — repeating it in
+          // the message produced double-name renderings in the UI.
           const robotName = registered.robot.name;
           if (healthData.robotStatus === 'error') {
             alertService
@@ -584,7 +629,7 @@ export class RobotManager {
                 registered.robot.id,
                 'critical',
                 `Robot error: ${robotName}`,
-                `Robot "${robotName}" reported status 'error' (was '${previousStatus}').`
+                `Reported status 'error' (was '${previousStatus}').`
               )
               .catch((err) =>
                 console.error('[RobotManager] Failed to create robot error alert:', err)
@@ -600,10 +645,17 @@ export class RobotManager {
                 registered.robot.id,
                 'info',
                 `Robot recovered: ${robotName}`,
-                `Robot "${robotName}" recovered from '${previousStatus}' to '${healthData.robotStatus}'.`
+                `Recovered from '${previousStatus}' to '${healthData.robotStatus}'.`
               )
               .catch((err) =>
                 console.error('[RobotManager] Failed to create robot recovery alert:', err)
+              );
+
+            // Auto-resolve the offline/error alerts this recovery supersedes
+            alertService
+              .resolveRobotStatusAlerts(registered.robot.id)
+              .catch((err) =>
+                console.error('[RobotManager] Failed to auto-resolve robot alerts:', err)
               );
           }
         }
@@ -617,8 +669,8 @@ export class RobotManager {
           locationChanged ? registered.robot.location : undefined
         );
 
-        // Emit event if status, battery, or location changed
-        if (statusChanged || batteryChanged || locationChanged) {
+        // Emit event if status, battery, location, or identity changed
+        if (statusChanged || batteryChanged || locationChanged || identityChanged) {
           this.emitEvent({
             type: 'robot_status_changed',
             robotId: registered.robot.id,
@@ -635,6 +687,14 @@ export class RobotManager {
             robot: registered.robot,
             timestamp: now,
           });
+
+          // Robot answered health checks again — resolve its stale
+          // offline/error alerts even without a formal status transition.
+          alertService
+            .resolveRobotStatusAlerts(registered.robot.id)
+            .catch((err) =>
+              console.error('[RobotManager] Failed to auto-resolve robot alerts:', err)
+            );
         }
       } catch {
         // Mark as disconnected
@@ -652,7 +712,7 @@ export class RobotManager {
               registered.robot.id,
               'warning',
               `Robot offline: ${registered.robot.name}`,
-              `Robot "${registered.robot.name}" stopped responding to health checks and is now offline.`
+              'Stopped responding to health checks and is now offline.'
             )
             .catch((err) =>
               console.error('[RobotManager] Failed to create robot offline alert:', err)
@@ -669,6 +729,45 @@ export class RobotManager {
         }
       }
     }
+  }
+
+  /**
+   * Diff the identity fields the agent reports against the stored robot.
+   * Returns a partial update with only the changed fields, or null when
+   * nothing changed. Fields the agent omits are left untouched.
+   */
+  private buildIdentityUpdate(current: Robot, reported: Robot): Partial<Robot> | null {
+    const update: Partial<Robot> = {};
+
+    if (reported.name !== undefined && reported.name !== current.name) {
+      update.name = reported.name;
+    }
+    if (reported.model !== undefined && reported.model !== current.model) {
+      update.model = reported.model;
+    }
+    if (reported.serialNumber !== undefined && reported.serialNumber !== current.serialNumber) {
+      update.serialNumber = reported.serialNumber;
+    }
+    if (reported.firmware !== undefined && reported.firmware !== current.firmware) {
+      update.firmware = reported.firmware;
+    }
+    if (reported.ipAddress !== undefined && reported.ipAddress !== current.ipAddress) {
+      update.ipAddress = reported.ipAddress;
+    }
+    if (
+      reported.capabilities !== undefined &&
+      JSON.stringify(reported.capabilities) !== JSON.stringify(current.capabilities)
+    ) {
+      update.capabilities = reported.capabilities;
+    }
+    if (
+      reported.metadata !== undefined &&
+      JSON.stringify(reported.metadata) !== JSON.stringify(current.metadata)
+    ) {
+      update.metadata = reported.metadata;
+    }
+
+    return Object.keys(update).length > 0 ? update : null;
   }
 
   // ============================================================================

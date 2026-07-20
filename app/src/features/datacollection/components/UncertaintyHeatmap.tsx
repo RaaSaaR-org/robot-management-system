@@ -14,6 +14,7 @@ import { useUncertaintyAnalysis } from '../hooks/datacollection';
 import type { CategoryUncertainty } from '../types/datacollection.types';
 import { TREND_COLORS } from '../types/datacollection.types';
 import type { RegisteredModel } from '@/features/training/types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -104,7 +105,7 @@ function UncertaintyCell({ category, data, onClick }: UncertaintyCellProps) {
         <div>
           <p className="text-theme-muted">Samples</p>
           <p className="font-medium text-theme-primary">
-            {data.sampleCount.toLocaleString()}
+            {data.sampleCount.toLocaleString(UI_DATE_LOCALE)}
           </p>
         </div>
         <div>
@@ -191,7 +192,7 @@ export function UncertaintyHeatmap({
               <div>
                 <p className="text-sm text-theme-muted">Total Predictions</p>
                 <p className="text-2xl font-bold text-theme-primary">
-                  {analysis.totalPredictions.toLocaleString()}
+                  {analysis.totalPredictions.toLocaleString(UI_DATE_LOCALE)}
                 </p>
               </div>
               <div>
@@ -200,7 +201,7 @@ export function UncertaintyHeatmap({
                   <InfoIcon content="Number of predictions where the model was highly uncertain (above threshold). These indicate areas needing more training data." size={12} />
                 </div>
                 <p className="text-2xl font-bold text-red-400">
-                  {analysis.highUncertaintyCount.toLocaleString()}
+                  {analysis.highUncertaintyCount.toLocaleString(UI_DATE_LOCALE)}
                 </p>
               </div>
               <div>

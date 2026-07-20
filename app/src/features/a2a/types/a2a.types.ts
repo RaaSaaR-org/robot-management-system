@@ -626,6 +626,63 @@ export function isTaskComplete(task: A2ATask): boolean {
   return ['completed', 'failed', 'canceled'].includes(task.status.state);
 }
 
+/** Signatures marking a result/status text as an error payload rather than a real answer */
+const ERROR_TEXT_SIGNATURES: RegExp[] = [
+  /^\s*\[?GoogleGenerativeAI(\s+Error)?\]?/i,
+  /^\s*\[?\w*(Error|Exception)\]?\s*[:[]/,
+  /^\s*Error\b/,
+  /^\s*\{\s*"error"\s*:/,
+  /\[\d{3}\s+[A-Za-z ]+\]/, // e.g. "[400 Bad Request]"
+];
+
+/**
+ * Defensively detect error-shaped result text (e.g. a raw escaped-JSON
+ * GoogleGenerativeAI 400 persisted as a "completed" result by older backends).
+ */
+export function isErrorText(text: string): boolean {
+  if (!text) return false;
+  return ERROR_TEXT_SIGNATURES.some((re) => re.test(text));
+}
+
+/**
+ * Extract a human-readable message from an error-shaped result text.
+ * Handles plain error strings and (double-)JSON-encoded error objects.
+ */
+export function formatErrorText(text: string): string {
+  let value: unknown = text.trim();
+  // Unwrap up to two levels of JSON encoding (escaped-JSON strings)
+  for (let i = 0; i < 2 && typeof value === 'string'; i++) {
+    const str = value.trim();
+    if (!str.startsWith('{') && !str.startsWith('"') && !str.startsWith('[')) break;
+    try {
+      value = JSON.parse(str);
+    } catch {
+      break;
+    }
+  }
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>;
+    const inner = (typeof obj.error === 'object' && obj.error !== null ? obj.error : obj) as Record<string, unknown>;
+    if (typeof inner.message === 'string' && inner.message.length > 0) {
+      return inner.message;
+    }
+  }
+  return typeof value === 'string' ? value : text;
+}
+
+/**
+ * Effective task state for display: tasks persisted as "completed" whose
+ * result text is error-shaped are treated as failed (defensive handling for
+ * old rows written before failed-state persistence was fixed).
+ */
+export function getEffectiveTaskState(task: A2ATask): A2ATaskState {
+  if (task.status.state === 'completed' && task.status.message) {
+    const text = getMessageText(task.status.message);
+    if (isErrorText(text)) return 'failed';
+  }
+  return task.status.state;
+}
+
 /**
  * Check if task requires user input
  */

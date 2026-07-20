@@ -163,7 +163,7 @@ export const RobotQuickStats = memo(function RobotQuickStats({
   const batteryValue = isAcPowered ? 'AC' : (battery !== null && battery !== undefined ? `${battery.toFixed(0)}%` : na);
   const batteryColor = isAcPowered ? '#22c55e' : getColor(battery, 'battery');
 
-  const cpuValue = offline ? na : (telemetry?.cpuUsage !== undefined ? `${telemetry.cpuUsage.toFixed(0)}%` : na);
+  const cpuValue = offline ? na : (telemetry?.cpuUsage != null ? `${telemetry.cpuUsage.toFixed(0)}%` : na);
   const cpuColor = offline ? 'rgba(107,114,128,0.7)' : getColor(telemetry?.cpuUsage, 'cpu');
 
   const memValue = offline ? na : (telemetry?.memoryUsage !== undefined ? `${telemetry.memoryUsage.toFixed(0)}%` : na);

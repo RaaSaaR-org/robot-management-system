@@ -62,7 +62,6 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
 
       ws.onopen = () => {
         setIsConnected(true);
-        console.log('[TrainingProgress] WebSocket connected');
       };
 
       ws.onmessage = (event) => {
@@ -83,7 +82,6 @@ export function useTrainingProgress(): UseTrainingProgressReturn {
         if (intentionalCloseRef.current || wsRef.current !== ws) {
           return; // deliberately closed or superseded — no reconnect, no noise
         }
-        console.log('[TrainingProgress] WebSocket disconnected');
 
         // Auto-reconnect after 5 seconds
         reconnectTimeoutRef.current = window.setTimeout(() => {

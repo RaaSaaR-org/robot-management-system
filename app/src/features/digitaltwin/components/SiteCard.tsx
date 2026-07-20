@@ -11,6 +11,7 @@ import { Button } from '@/shared/components/ui';
 import type { Site, TwinStatus } from '../types/twin.types';
 import { twinDimensions } from '../types/twin.types';
 import { useOccupancyImage, type OccupancyImage } from '../utils/occupancy';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface SiteCardProps {
   site: Site;
@@ -118,9 +119,9 @@ export const SiteCard = memo(function SiteCard({ site, robotName, buildProgress,
           </span>
         )}
         {dims && <span>{Math.round(dims.area)} m²</span>}
-        {site.pointCount ? <span>{site.pointCount.toLocaleString()} pts</span> : null}
+        {site.pointCount ? <span>{site.pointCount.toLocaleString(UI_DATE_LOCALE)} pts</span> : null}
       </div>
-      <div className="text-[11px] text-theme-tertiary">{new Date(site.createdAt).toLocaleString()}</div>
+      <div className="text-[11px] text-theme-tertiary">{new Date(site.createdAt).toLocaleString(UI_DATE_LOCALE)}</div>
 
       <div className="flex gap-2 mt-auto pt-1">
         <Button variant="primary" size="sm" onClick={() => onOpen(site.id)}>Open</Button>

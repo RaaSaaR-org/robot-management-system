@@ -5,14 +5,17 @@
  */
 
 import { useState } from 'react';
+import { BarChart3 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Card } from '@/shared/components/ui/Card';
 import { Button } from '@/shared/components/ui/Button';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import {
   type AIPerformanceMetrics,
   type MetricsPeriod,
   METRICS_PERIOD_LABELS,
 } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface PerformanceDashboardProps {
   metrics: AIPerformanceMetrics | null;
@@ -93,12 +96,13 @@ export function PerformanceDashboard({
 
   if (!metrics) {
     return (
-      <Card className={cn('glass-card p-6 text-center', className)}>
-        <p className="text-theme-secondary font-medium">No performance data yet</p>
-        <p className="text-theme-tertiary text-sm mt-2">
-          Metrics will appear after the AI processes its first command.
-        </p>
-      </Card>
+      <EmptyState
+        icon={<BarChart3 className="w-10 h-10" />}
+        title="No performance data yet"
+        description="Metrics will appear after the AI processes its first command."
+        size="sm"
+        className={className}
+      />
     );
   }
 
@@ -259,8 +263,8 @@ export function PerformanceDashboard({
       {/* Time Range */}
       <Card className="glass-card p-3">
         <p className="text-theme-tertiary text-sm text-center">
-          Data from {new Date(metrics.startDate).toLocaleDateString()} to{' '}
-          {new Date(metrics.endDate).toLocaleDateString()}
+          Data from {new Date(metrics.startDate).toLocaleDateString(UI_DATE_LOCALE)} to{' '}
+          {new Date(metrics.endDate).toLocaleDateString(UI_DATE_LOCALE)}
         </p>
       </Card>
     </div>

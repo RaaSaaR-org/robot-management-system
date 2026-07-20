@@ -9,6 +9,7 @@ import { Trophy, Medal, Award, User } from 'lucide-react';
 import { TierBadge } from './TierBadge';
 import type { LeaderboardEntry, ContributorStats } from '../types/contributions.types';
 import { formatCredits } from '../types/contributions.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -45,7 +46,7 @@ function getRankBgClass(rank: number): string {
     case 2:
       return 'bg-gradient-to-r from-gray-50 to-slate-50 dark:from-gray-800/50 dark:to-slate-800/50 border-gray-200 dark:border-gray-700';
     case 3:
-      return 'bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-amber-200 dark:border-amber-800';
+      return 'bg-gradient-to-r from-primary-50 to-accent-50 dark:from-primary-900/20 dark:to-accent-900/20 border-primary-200 dark:border-primary-800';
     default:
       return 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700';
   }
@@ -148,7 +149,7 @@ export function Leaderboard({
               </div>
               <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
                 <span>{entry.totalContributions} contributions</span>
-                <span>{entry.totalTrajectories.toLocaleString()} trajectories</span>
+                <span>{entry.totalTrajectories.toLocaleString(UI_DATE_LOCALE)} trajectories</span>
                 <span>Quality: {entry.averageQuality.toFixed(0)}%</span>
               </div>
             </div>

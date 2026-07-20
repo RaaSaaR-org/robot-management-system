@@ -8,6 +8,7 @@ import { Card, Badge, ProgressBar, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import type { TrainingJob, TrainingJobStatus } from '../types';
 import { simRlTrainerLabel } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface TrainingJobCardProps {
   job: TrainingJob;
@@ -199,8 +200,8 @@ export function TrainingJobCard({
         <div className="mt-4 pt-3 border-t border-theme-secondary/20 flex items-center justify-between">
           <span className="text-xs text-theme-tertiary">
             {job.startedAt
-              ? `Started ${new Date(job.startedAt).toLocaleString()}`
-              : `Created ${new Date(job.createdAt).toLocaleString()}`}
+              ? `Started ${new Date(job.startedAt).toLocaleString(UI_DATE_LOCALE)}`
+              : `Created ${new Date(job.createdAt).toLocaleString(UI_DATE_LOCALE)}`}
           </span>
           <div className="flex gap-2">
             {isRunning && onCancel && (

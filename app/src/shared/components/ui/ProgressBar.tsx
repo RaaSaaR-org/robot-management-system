@@ -26,7 +26,7 @@ export interface ProgressBarProps {
 const variantStyles: Record<ProgressBarVariant, string> = {
   default: 'bg-gradient-to-r from-cobalt-400 to-cobalt-500',
   success: 'bg-gradient-to-r from-green-400 to-turquoise-400',
-  warning: 'bg-gradient-to-r from-yellow-400 to-orange-400',
+  warning: 'bg-amber-500',
   error: 'bg-gradient-to-r from-red-400 to-red-500',
 };
 

@@ -4,6 +4,8 @@
  * @feature explainability
  */
 
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
+
 // ============================================================================
 // CORE TYPES
 // ============================================================================
@@ -251,5 +253,5 @@ export function getConfidenceLevel(confidence: number): ConfidenceLevel {
 }
 
 export function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleString();
+  return new Date(dateString).toLocaleString(UI_DATE_LOCALE);
 }

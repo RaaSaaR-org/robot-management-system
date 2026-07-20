@@ -13,6 +13,7 @@ import {
   formatDuration,
   isRoundActive,
 } from '../types/fleetlearning.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -95,7 +96,7 @@ export function FederatedRoundCard({ round, onClick, className }: FederatedRound
           <div>
             <p className="text-xs text-gray-500 dark:text-gray-400">Local Samples</p>
             <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-              {round.totalLocalSamples.toLocaleString()}
+              {round.totalLocalSamples.toLocaleString(UI_DATE_LOCALE)}
             </p>
           </div>
         </div>
@@ -172,7 +173,7 @@ export function FederatedRoundCard({ round, onClick, className }: FederatedRound
 
       {/* Timestamp */}
       <div className="mt-3 text-xs text-gray-400 dark:text-gray-500">
-        Created {new Date(round.createdAt).toLocaleDateString()}
+        Created {new Date(round.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
       </div>
     </div>
   );

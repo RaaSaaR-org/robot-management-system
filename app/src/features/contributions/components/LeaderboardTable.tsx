@@ -5,6 +5,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -104,10 +105,10 @@ export function LeaderboardTable({ entries, isLoading, className }: LeaderboardT
                     : entry.userId}
                 </td>
                 <td className="px-4 py-3 text-right text-gray-900 dark:text-gray-100 font-mono">
-                  {entry.totalCredits.toLocaleString()}
+                  {entry.totalCredits.toLocaleString(UI_DATE_LOCALE)}
                 </td>
                 <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400 font-mono">
-                  {entry.totalEpisodes.toLocaleString()}
+                  {entry.totalEpisodes.toLocaleString(UI_DATE_LOCALE)}
                 </td>
               </tr>
             );

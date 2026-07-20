@@ -15,7 +15,12 @@ import { A2AExpressApp } from '@a2a-js/sdk/server/express';
 
 import { config, validateConfig } from './config/config.js';
 import { RobotStateManager } from './robot/state.js';
-import { createRobotAgentCard } from './agent/agent-card.js';
+import {
+  createRobotAgentCard,
+  updateAgentCardIdentity,
+  type AgentCardOptions,
+} from './agent/agent-card.js';
+import { hardwareClient } from './hardware/HardwareClient.js';
 import { RobotAgentExecutor } from './agent/agent-executor.js';
 import { createRestRoutes } from './api/rest-routes.js';
 import { createTelemetryWebSocket } from './api/websocket.js';
@@ -129,13 +134,45 @@ async function main() {
   }
 
   // Create A2A components
-  const agentCard = createRobotAgentCard({
+  const agentCardOptions: AgentCardOptions = {
     robotId: ROBOT_ID,
     robotName: ROBOT_NAME,
     port: PORT,
     robotClass: config.robotClass,
     maxPayloadKg: config.maxPayloadKg,
     robotDescription: config.robotDescription,
+    hardwareConnected: hardwareClient.isConnected(),
+  };
+  const agentCard = createRobotAgentCard(agentCardOptions);
+
+  // Honest identity follows the sim↔hardware state: on every sidecar
+  // attach/detach, update the served agent card in place (name/description)
+  // and ask the server to re-pull /api/v1/register so its fleet record picks
+  // up the changed serial/firmware/isSimulated values. Best-effort — the
+  // agent keeps working when the server is unreachable. Read-only from the
+  // robot's perspective: no motion or actuation is commanded.
+  hardwareClient.onConnectionChange((connected) => {
+    updateAgentCardIdentity(agentCard, agentCardOptions, connected);
+    console.log(
+      `[Identity] Hardware ${connected ? 'attached' : 'detached'} — agent card updated, re-reporting to server`
+    );
+    void (async () => {
+      try {
+        const robotUrl = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+        await fetch(`${config.serverUrl}/api/robots/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ robotUrl }),
+          signal: AbortSignal.timeout(5000),
+        });
+        console.log('[Identity] Server accepted identity re-report');
+      } catch (err) {
+        console.warn(
+          '[Identity] Identity re-report failed (server unreachable?):',
+          err instanceof Error ? err.message : err
+        );
+      }
+    })();
   });
   const taskStore: TaskStore = new InMemoryTaskStore();
   const agentExecutor = new RobotAgentExecutor(robotStateManager);

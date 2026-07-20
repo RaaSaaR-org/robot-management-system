@@ -5,6 +5,39 @@
  */
 
 /**
+ * Explicit locale for all user-facing date/time formatting.
+ *
+ * The UI copy is English, so date formatting must not pick up the OS locale
+ * (e.g. German "11. Juli") via bare toLocaleDateString(). 'en-US' matches the
+ * locale the app already uses most in explicit call sites.
+ */
+export const UI_DATE_LOCALE = 'en-US';
+
+/**
+ * Format an ISO date string as an absolute date/time with the app's fixed
+ * English locale (e.g. "Jul 11, 2026, 01:15 PM").
+ * @param dateString - ISO date string to format (null/undefined renders "-")
+ * @param options - Optional Intl options to override the default parts
+ * @returns Formatted date/time string, or "-" when no date is given
+ */
+export function formatDateTime(
+  dateString: string | null | undefined,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  if (!dateString) return '-';
+  return new Date(dateString).toLocaleString(
+    UI_DATE_LOCALE,
+    options ?? {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }
+  );
+}
+
+/**
  * Format a date string as relative time (e.g., "5m ago", "2h ago")
  * @param dateString - ISO date string to format
  * @returns Human-readable relative time string
@@ -21,7 +54,7 @@ export function formatTimeAgo(dateString: string): string {
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
 /**

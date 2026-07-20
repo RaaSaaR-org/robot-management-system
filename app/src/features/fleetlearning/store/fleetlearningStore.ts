@@ -261,10 +261,12 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.convergenceData = data;
           state.isLoading = false;
         });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to fetch convergence data';
+      } catch {
+        // Non-fatal: the server has no convergence endpoint yet. The shared
+        // `error` field surfaces on the Rounds tab banner, so a convergence
+        // failure must not clobber it — the ConvergenceChart renders its own
+        // empty state when data stays [].
         set((state) => {
-          state.error = message;
           state.isLoading = false;
         });
       }
@@ -337,12 +339,26 @@ export const selectRoundById = (id: string) => (state: FleetLearningStore) =>
   state.rounds.find((r) => r.id === id);
 
 /**
- * Select active rounds (in progress)
+ * Round statuses considered "in progress".
+ */
+export const ACTIVE_ROUND_STATUSES = [
+  'selecting',
+  'distributing',
+  'training',
+  'collecting',
+  'aggregating',
+] as const;
+
+/**
+ * Select active rounds (in progress).
+ *
+ * NOTE: returns a NEW array on every call — do not pass directly to
+ * `useFleetLearningStore(...)` (unstable snapshot → React infinite
+ * re-render loop). Select `rounds` and derive with `useMemo` instead
+ * (see `useFederatedRounds`). Safe for one-shot use on `getState()`.
  */
 export const selectActiveRounds = (state: FleetLearningStore) =>
-  state.rounds.filter((r) =>
-    ['selecting', 'distributing', 'training', 'collecting', 'aggregating'].includes(r.status)
-  );
+  state.rounds.filter((r) => (ACTIVE_ROUND_STATUSES as readonly string[]).includes(r.status));
 
 /**
  * Select completed rounds

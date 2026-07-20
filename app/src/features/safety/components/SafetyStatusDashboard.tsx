@@ -14,6 +14,7 @@ import {
   OPERATING_MODE_LABELS,
   type RobotSafetyStatus,
 } from '../types/safety.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // SUB-COMPONENTS
@@ -253,7 +254,7 @@ export function SafetyStatusDashboard({
         />
         <StatusIndicator
           label="Last Update"
-          value={new Date(fleetStatus.timestamp).toLocaleTimeString()}
+          value={new Date(fleetStatus.timestamp).toLocaleTimeString(UI_DATE_LOCALE)}
           status="neutral"
         />
       </div>
@@ -300,7 +301,7 @@ export function SafetyStatusDashboard({
                   </div>
                 </div>
                 <span className="text-xs text-theme-muted">
-                  {new Date(event.triggeredAt).toLocaleString()}
+                  {new Date(event.triggeredAt).toLocaleString(UI_DATE_LOCALE)}
                 </span>
               </div>
             ))}

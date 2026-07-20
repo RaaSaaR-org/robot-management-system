@@ -8,6 +8,7 @@ import { useMemo } from 'react';
 import { cn } from '@/shared/utils/cn';
 import { Users, TrendingUp, Bot, Target, Loader2, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import type { ROHEMetrics } from '../types/fleetlearning.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -91,7 +92,7 @@ export function ROHEDashboard({ metrics, isLoading = false, className }: ROHEDas
             <div>
               <p className="text-sm text-gray-500 dark:text-gray-400">Total Interventions</p>
               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {metrics.totalInterventions.toLocaleString()}
+                {metrics.totalInterventions.toLocaleString(UI_DATE_LOCALE)}
               </p>
             </div>
           </div>
@@ -127,8 +128,8 @@ export function ROHEDashboard({ metrics, isLoading = false, className }: ROHEDas
 
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-              <Bot className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+            <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+              <Bot className="w-5 h-5 text-primary-600 dark:text-primary-400" />
             </div>
             <div>
               <p className="text-sm text-gray-500 dark:text-gray-400">Active Robots</p>
@@ -259,8 +260,8 @@ export function ROHEDashboard({ metrics, isLoading = false, className }: ROHEDas
 
       {/* Period indicator */}
       <div className="text-center text-sm text-gray-500 dark:text-gray-400">
-        Data from {new Date(metrics.period.start).toLocaleDateString()} to{' '}
-        {new Date(metrics.period.end).toLocaleDateString()}
+        Data from {new Date(metrics.period.start).toLocaleDateString(UI_DATE_LOCALE)} to{' '}
+        {new Date(metrics.period.end).toLocaleDateString(UI_DATE_LOCALE)}
       </div>
     </div>
   );

@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react';
 import { Zap } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Card, Button, Badge } from '@/shared/components/ui';
+import { Card, Button, Badge, EmptyState } from '@/shared/components/ui';
 import { useDeploymentStore } from '../store';
 import { SkillBrowser, SkillEditor, SkillStatusBadge } from '../components';
 import { RunSkillModal } from '../components/RunSkillModal';
@@ -109,7 +109,8 @@ export function SkillsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Skill Library</h1>
+          {/* Embedded as a tab inside DeploymentsPage — that page owns the h1 */}
+          <h2 className="text-lg font-semibold text-theme-primary">Skill Library</h2>
           <p className="text-sm text-theme-secondary mt-1">
             Trained capabilities your robots can execute. Create new skills via{' '}
             <a href="/pipeline" className="text-cobalt-400 hover:underline">Skill Training</a>,
@@ -460,22 +461,26 @@ export function SkillsPage() {
               ))}
             </div>
           ) : (
-            <Card className="text-center py-12">
-              <svg
-                className="w-12 h-12 mx-auto text-theme-tertiary mb-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                />
-              </svg>
-              <p className="text-theme-secondary mb-4">No skill chains defined yet</p>
-              <Button variant="primary">Create Skill Chain</Button>
+            <Card>
+              <EmptyState
+                icon={
+                  <svg
+                    className="w-10 h-10"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+                    />
+                  </svg>
+                }
+                title="No skill chains defined yet"
+                action={<Button variant="primary">Create Skill Chain</Button>}
+              />
             </Card>
           )}
         </div>

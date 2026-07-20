@@ -4,7 +4,6 @@
  * @feature a2a
  */
 
-export { A2APage } from './A2APage';
 export { EventsPage } from './EventsPage';
 export { ChatPage } from './ChatPage';
 export { OrchestratorChatPage } from './OrchestratorChatPage';

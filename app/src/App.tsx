@@ -48,6 +48,8 @@ import {
   LazyMyMarketplacePage,
   LazyUpdatesPage,
   LazyPipelinePage,
+  LazyFleetLearningPage,
+  LazyFleetLearningRoundDetailPage,
   LazyDataCollectionPage,
   LazyNewSessionPage,
   LazySessionDetailPage,
@@ -436,6 +438,24 @@ function App() {
           />
           {/* Skill Library - merged into Deployments tabs (TASK-147) */}
           <Route path="/skills" element={<Navigate to="/deployments?tab=skills" replace />} />
+
+          {/* Fleet Learning - federated learning rounds */}
+          <Route
+            path="/fleet-learning"
+            element={
+              <ProtectedAppRoute>
+                <LazyFleetLearningPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/fleet-learning/rounds/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyFleetLearningRoundDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
 
           {/* Evaluation - merged into Training tabs (TASK-147) */}
           <Route path="/evaluation" element={<Navigate to="/training?tab=evaluation" replace />} />

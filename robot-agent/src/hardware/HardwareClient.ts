@@ -245,6 +245,8 @@ export class HardwareClient {
   private sidecarAvailable = false;
   private jointStates: JointState[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
+  /** Fired on every real-robot attach/detach transition (agent-card/identity re-report). */
+  private connectionListeners = new Set<(connected: boolean) => void>();
   /** Ordered joint names for the active embodiment; resolved lazily, then cached. */
   private jointOrder: string[] | null = null;
   // TASK-184: latest contract §2 field groups from the 2s /state poll. A group
@@ -275,6 +277,29 @@ export class HardwareClient {
     return this.jointOrder;
   }
 
+  /**
+   * Subscribe to hardware attach/detach transitions. The callback fires only
+   * on actual changes of `isConnected()`, never on every poll. Returns an
+   * unsubscribe function.
+   */
+  onConnectionChange(cb: (connected: boolean) => void): () => void {
+    this.connectionListeners.add(cb);
+    return () => this.connectionListeners.delete(cb);
+  }
+
+  /** Set the connected flag, notifying listeners on transitions only. */
+  private setConnected(connected: boolean): void {
+    if (this.connected === connected) return;
+    this.connected = connected;
+    for (const cb of this.connectionListeners) {
+      try {
+        cb(connected);
+      } catch (err) {
+        console.error('[Hardware] Connection listener error:', err);
+      }
+    }
+  }
+
   async init(): Promise<boolean> {
     const ok = await this._tryConnect();
     if (!ok) {
@@ -290,14 +315,14 @@ export class HardwareClient {
       const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(2000) });
       const data = (await res.json()) as { status: string; connected: boolean };
       this.sidecarAvailable = data.status === 'ok';
-      this.connected = data.connected;
+      this.setConnected(data.connected);
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
         if (!this.pollTimer) this.startPolling();
       }
     } catch {
       this.sidecarAvailable = false;
-      this.connected = false;
+      this.setConnected(false);
     }
     return this.sidecarAvailable;
   }
@@ -316,8 +341,9 @@ export class HardwareClient {
         const data = (await res.json()) as Record<string, unknown>;
         // Contract §2 carries an explicit `connected`; older sidecars only send
         // `simulated` — accept either, defensively.
-        this.connected =
-          typeof data.connected === 'boolean' ? data.connected : data.simulated === false;
+        this.setConnected(
+          typeof data.connected === 'boolean' ? data.connected : data.simulated === false
+        );
         // Joints: velocity/effort/temperature are OPTIONAL on the wire — carry
         // them through only when present (never fabricate zeros).
         const joints = Array.isArray(data.joints) ? data.joints : [];
@@ -344,7 +370,7 @@ export class HardwareClient {
       } catch {
         // sidecar went away — stop polling and schedule reconnect
         this.sidecarAvailable = false;
-        this.connected = false;
+        this.setConnected(false);
         this.stopPolling();
         console.log('[Hardware] Lost connection to sidecar — retrying in 10s');
         this._scheduleRetry();

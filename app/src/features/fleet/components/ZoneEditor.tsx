@@ -8,6 +8,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useZoneEditor } from '../hooks';
 import type { Zone, ZoneBounds } from '../types/fleet.types';
+import { MAINTENANCE_COLOR, MAINTENANCE_COLOR_RGB } from '../types/fleet.types';
 
 // ============================================================================
 // TYPES
@@ -51,7 +52,7 @@ const ZONE_COLORS: Record<string, { stroke: string; fill: string }> = {
   operational: { stroke: '#2A5FFF', fill: 'rgba(42, 95, 255, 0.15)' },
   restricted: { stroke: '#ef4444', fill: 'rgba(239, 68, 68, 0.15)' },
   charging: { stroke: '#18E4C3', fill: 'rgba(24, 228, 195, 0.15)' },
-  maintenance: { stroke: '#f97316', fill: 'rgba(249, 115, 22, 0.15)' },
+  maintenance: { stroke: MAINTENANCE_COLOR, fill: `rgba(${MAINTENANCE_COLOR_RGB}, 0.15)` },
 };
 
 // ============================================================================

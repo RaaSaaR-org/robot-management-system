@@ -89,6 +89,67 @@ export class ConversationManager {
   }
 
   // ============================================================================
+  // AGENT-RESULT FAILURE DETECTION
+  // ============================================================================
+
+  /**
+   * Extract the plain text from an A2A message's parts.
+   */
+  private extractMessageText(message: A2AMessage): string {
+    const textPart = message.parts?.find((p: A2APart) => p.kind === 'text');
+    return textPart && 'text' in textPart ? textPart.text : '';
+  }
+
+  /**
+   * Decide whether an agent's result is a failure, and if so return a clean,
+   * human-readable error message. Returns null for successful results.
+   *
+   * Failures are recognized two ways:
+   *  - the remote task's status.state is a terminal failure state, or
+   *  - the result text is a recognizable raw error payload (e.g. a
+   *    GoogleGenerativeAI error JSON dumped verbatim into the response).
+   */
+  private detectAgentFailure(remoteState: string | undefined, text: string): string | null {
+    const isFailedState = remoteState === 'failed' || remoteState === 'rejected';
+    const cleaned = this.cleanErrorText(text);
+
+    if (isFailedState) {
+      return cleaned ?? (text.trim() || 'Agent reported task failure.');
+    }
+    return cleaned;
+  }
+
+  /**
+   * If `text` looks like a raw error payload, return a concise human-readable
+   * message extracted from it; otherwise return null.
+   */
+  private cleanErrorText(text: string): string | null {
+    const t = text.trim();
+    const errorMarkers = [
+      /^\{\s*"error"/, // raw {"error": {...}} JSON dumps
+      /GoogleGenerativeAI(?:Fetch)?Error/i,
+      /\[GoogleGenerativeAI Error\]/i,
+      /^Error(?: communicating with agent)?:/i,
+    ];
+    if (!errorMarkers.some((m) => m.test(t))) return null;
+
+    // Try to pull the message out of a JSON error payload
+    try {
+      const parsed = JSON.parse(t) as { error?: { message?: string }; message?: string };
+      const msg = parsed.error?.message ?? parsed.message;
+      if (typeof msg === 'string' && msg.trim()) return msg.trim();
+    } catch {
+      // not JSON — fall through to string cleanup
+    }
+
+    // "[GoogleGenerativeAI Error]: <message>" style strings — keep the message
+    const bracketMatch = t.match(/\[GoogleGenerativeAI Error\]:?\s*(.+)/is);
+    const candidate = bracketMatch ? bracketMatch[1].trim() : t;
+
+    return candidate.length > 300 ? `${candidate.slice(0, 300)}…` : candidate;
+  }
+
+  // ============================================================================
   // CONVERSATION METHODS
   // ============================================================================
 
@@ -277,12 +338,14 @@ export class ConversationManager {
       // Create agent response message from the result
       let responseText = 'Agent processed your request.';
       let agentMessage: A2AMessage;
+      let remoteState: string | undefined;
 
       if (result && typeof result === 'object') {
         // Cast to access properties safely
         const resultObj = result as Record<string, unknown>;
         const statusObj = resultObj.status as Record<string, unknown> | undefined;
         const statusMessage = statusObj?.message as A2AMessage | undefined;
+        remoteState = typeof statusObj?.state === 'string' ? statusObj.state : undefined;
 
         // Check if it's a task with status message
         if (statusMessage?.parts) {
@@ -321,6 +384,18 @@ export class ConversationManager {
         };
       }
 
+      // Detect failed results (agent reported failed state, or a raw error
+      // payload came back as the result text) and persist them as 'failed'
+      // with a clean message instead of 'completed' with raw error JSON.
+      const failureMessage = this.detectAgentFailure(
+        remoteState,
+        this.extractMessageText(agentMessage)
+      );
+      if (failureMessage) {
+        agentMessage.parts = [{ kind: 'text', text: `Task failed: ${failureMessage}` }];
+        agentMessage.metadata = { ...agentMessage.metadata, error: true };
+      }
+
       // Save to database
       await conversationRepository.addMessage(conversationId, agentMessage);
 
@@ -336,9 +411,9 @@ export class ConversationManager {
         timestamp: Date.now(),
       });
 
-      // Update task to completed
+      // Update task to its true terminal state
       await this.updateTaskStatus(taskId, {
-        state: 'completed',
+        state: failureMessage ? 'failed' : 'completed',
         message: agentMessage,
         timestamp: new Date().toISOString(),
       });
@@ -1107,6 +1182,19 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
       timings: { selectionMs, orchStartTs: orchStart, forwardStartTs: forwardStart },
     };
 
+    // Record this NL interpretation/routing decision for explainability
+    // (EU AI Act Art. 13) — fire-and-forget, never fails the message flow.
+    this.recordOrchestrationDecision({
+      taskId: task.id,
+      text,
+      selectedAgent,
+      consideredAgents,
+      selectionMethod,
+      selectionMs,
+    }).catch((err) =>
+      console.warn('[Orchestrator] Failed to record explainability decision:', err)
+    );
+
     this.sendToRemoteAgentOrchestrated(
       conversationId, task.id, userMessage, selectedAgent, orchChainForResponse
     ).catch(
@@ -1118,6 +1206,74 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
     this.pendingMessages.set(userMessage.messageId, 'sent');
 
     return { messageId: userMessage.messageId, task };
+  }
+
+  /**
+   * Persist an orchestrated NL command as a decision in the explainability
+   * store so the Explainability page reflects the server's actual NL work
+   * (agent selection/routing), not only /api/command/interpret calls.
+   */
+  private async recordOrchestrationDecision(params: {
+    taskId: string;
+    text: string;
+    selectedAgent: A2AAgentCard;
+    consideredAgents: Array<{ name: string; selected: boolean }>;
+    selectionMethod: 'llm' | 'keyword';
+    selectionMs: number;
+  }): Promise<void> {
+    // Dynamic imports to avoid circular dependencies (same pattern as robotManager use above)
+    const { explainabilityService } = await import('./ExplainabilityService.js');
+    const { robotManager } = await import('./RobotManager.js');
+
+    // Map the selected agent card back to a robot record
+    const robots = await robotManager.listRobots();
+    const robot =
+      robots.find(
+        (r) => r.a2aAgentUrl && params.selectedAgent.url.startsWith(r.a2aAgentUrl)
+      ) ??
+      robots.find((r) =>
+        params.selectedAgent.name.toLowerCase().includes(r.name.toLowerCase())
+      );
+
+    await explainabilityService.storeDecision({
+      decisionType: 'command_interpretation',
+      entityId: params.taskId,
+      robotId: robot?.id ?? params.selectedAgent.name,
+      inputFactors: {
+        userCommand: params.text,
+        robotState: robot
+          ? {
+              status: robot.status,
+              batteryLevel: robot.batteryLevel ?? undefined,
+              location: { x: robot.location.x, y: robot.location.y, z: robot.location.z },
+            }
+          : {},
+      },
+      reasoning: [
+        `Interpreted natural-language command and routed it to agent "${params.selectedAgent.name}"`,
+        `Selection method: ${
+          params.selectionMethod === 'llm' ? 'LLM-based routing' : 'keyword matching'
+        } (${params.selectionMs}ms)`,
+        `Considered ${params.consideredAgents.length} connected agent(s)`,
+      ],
+      modelUsed:
+        params.selectionMethod === 'llm'
+          ? process.env.ORCHESTRATOR_MODEL || 'openrouter-llm'
+          : 'keyword-matcher',
+      confidence: params.selectionMethod === 'llm' ? 0.9 : 0.7,
+      alternatives: params.consideredAgents
+        .filter((a) => !a.selected)
+        .map((a) => ({
+          action: `Route to ${a.name}`,
+          reason: 'Connected agent considered by the orchestrator',
+          rejectionReason: 'Lower routing score than the selected agent',
+        })),
+      safetyFactors: {
+        classification: 'safe',
+        warnings: [],
+        constraints: [],
+      },
+    });
   }
 
   /**
@@ -1172,12 +1328,14 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
       // Process response
       const result = response.data.result;
       let agentMessage: A2AMessage;
+      let remoteState: string | undefined;
 
       if (result && typeof result === 'object') {
         // Cast to access properties safely
         const resultObj = result as Record<string, unknown>;
         const statusObj = resultObj.status as Record<string, unknown> | undefined;
         const statusMessage = statusObj?.message as A2AMessage | undefined;
+        remoteState = typeof statusObj?.state === 'string' ? statusObj.state : undefined;
 
         if (statusMessage?.parts) {
           agentMessage = statusMessage;
@@ -1208,12 +1366,24 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
         };
       }
 
+      // Detect failed results (agent reported failed state, or a raw error
+      // payload came back as the result text) — persist as 'failed' with a
+      // clean message instead of 'completed' with raw error JSON.
+      const failureMessage = this.detectAgentFailure(
+        remoteState,
+        this.extractMessageText(agentMessage)
+      );
+      if (failureMessage) {
+        agentMessage.parts = [{ kind: 'text', text: `Task failed: ${failureMessage}` }];
+      }
+
       // Add orchestration metadata + chain to response
       const now = Date.now();
       agentMessage.metadata = {
         ...agentMessage.metadata,
         agentName: agent.name,
         orchestrated: true,
+        ...(failureMessage && { error: true }),
         ...(orchChain && {
           orchestrationChain: {
             selectionMethod: orchChain.selectionMethod,
@@ -1242,9 +1412,9 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
         timestamp: Date.now(),
       });
 
-      // Update task to completed
+      // Update task to its true terminal state
       await this.updateTaskStatus(taskId, {
-        state: 'completed',
+        state: failureMessage ? 'failed' : 'completed',
         message: agentMessage,
         timestamp: new Date().toISOString(),
       });

@@ -5,7 +5,7 @@
  */
 
 import { memo, useMemo } from 'react';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import type { A2AEvent } from '../types';
 import { getMessageText } from '../types';
 
@@ -65,9 +65,6 @@ export const EventList = memo(function EventList({
                 Actor
               </th>
               <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
-                Role
-              </th>
-              <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary whitespace-nowrap">
                 ID
               </th>
               <th className="px-4 py-3 text-xs uppercase tracking-wider font-medium text-theme-tertiary">
@@ -106,7 +103,7 @@ function EventRow({ event, onClick }: EventRowProps) {
     ? messageText.slice(0, 100) + '...'
     : messageText;
 
-  const formattedTime = new Date(timestamp).toLocaleString();
+  const formattedTime = new Date(timestamp).toLocaleString(UI_DATE_LOCALE);
 
   return (
     <tr
@@ -124,9 +121,7 @@ function EventRow({ event, onClick }: EventRowProps) {
           {content.contextId ? content.contextId.slice(0, 8) : '-'}
         </span>
       </td>
-      <td className="px-4 py-3 whitespace-nowrap text-theme-primary">
-        {actor}
-      </td>
+      {/* Actor (role-colored) — actor and role carried identical values, merged into one column */}
       <td className="px-4 py-3 whitespace-nowrap">
         <span className={cn(
           'px-2.5 py-1 rounded-full text-xs font-medium',
@@ -134,7 +129,7 @@ function EventRow({ event, onClick }: EventRowProps) {
             ? 'bg-primary-100/50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
             : 'bg-accent-100/50 dark:bg-accent-900/30 text-accent-600 dark:text-accent-400'
         )}>
-          {content.role}
+          {actor}
         </span>
       </td>
       <td className="px-4 py-3 whitespace-nowrap">

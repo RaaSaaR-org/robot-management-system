@@ -197,10 +197,18 @@ function OpenIncidentsContent() {
 // MAIN COMPONENT
 // ============================================================================
 
+export interface IncidentsPageProps {
+  /**
+   * True when rendered inside another page (e.g. the Alerts page's Incidents
+   * tab). Hides the h1 header block so the host page keeps its single title.
+   */
+  embedded?: boolean;
+}
+
 /**
  * Main page for incident management and regulatory reporting.
  */
-export function IncidentsPage() {
+export function IncidentsPage({ embedded = false }: IncidentsPageProps) {
   if (import.meta.env.VITE_DEMO_MODE === 'true') {
     return (
       <DemoFeaturePlaceholder
@@ -248,40 +256,51 @@ export function IncidentsPage() {
     []
   );
 
+  const reportIncidentButton = (
+    <Button
+      variant="primary"
+      onClick={() => navigate('/incidents/new')}
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mr-2"
+      >
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+      Report Incident
+    </Button>
+  );
+
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <header className="flex-shrink-0 px-6 py-4 border-b border-gray-700/50">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-theme-primary">Incident Management</h1>
-            <p className="text-theme-secondary mt-1">
-              Track and report incidents per EU AI Act, GDPR, NIS2 & CRA requirements
-            </p>
-          </div>
-          <Button
-            variant="primary"
-            onClick={() => navigate('/incidents/new')}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="mr-2"
-            >
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            Report Incident
-          </Button>
+      {/* Header — suppressed when embedded as a tab inside another page,
+          which already renders its own PageHeader/h1 */}
+      {embedded ? (
+        <div className="flex-shrink-0 px-6 pt-4 flex justify-end">
+          {reportIncidentButton}
         </div>
-      </header>
+      ) : (
+        <header className="flex-shrink-0 px-6 py-4 border-b border-gray-700/50">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-theme-primary">Incident Management</h1>
+              <p className="text-theme-secondary mt-1">
+                Track and report incidents per EU AI Act, GDPR, NIS2 & CRA requirements
+              </p>
+            </div>
+            {reportIncidentButton}
+          </div>
+        </header>
+      )}
 
       {/* Info Box */}
       <div className="flex-shrink-0 px-6 pt-4">

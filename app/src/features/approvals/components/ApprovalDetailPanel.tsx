@@ -4,7 +4,7 @@
  * @feature approvals
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X,
   Clock,
@@ -21,9 +21,11 @@ import {
   Timer,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
+import { useAuthStore } from '@/features/auth/store/authStore';
 import { SLAIndicator } from './SLAIndicator';
 import { useApprovals } from '../hooks';
 import type { ApprovalRequest, ApprovalStep } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 interface ApprovalDetailPanelProps {
   approval: ApprovalRequest;
@@ -127,7 +129,7 @@ function StepTimeline({ steps }: { steps?: ApprovalStep[] }) {
               )}
               {step.decidedAt && (
                 <p className="text-xs text-theme-muted mt-1">
-                  {new Date(step.decidedAt).toLocaleString()}
+                  {new Date(step.decidedAt).toLocaleString(UI_DATE_LOCALE)}
                 </p>
               )}
             </div>
@@ -143,6 +145,20 @@ export function ApprovalDetailPanel({ approval, onClose, className }: ApprovalDe
   const [isProcessing, setIsProcessing] = useState(false);
   const { processApproval } = useApprovals();
 
+  // Real reviewer identity from the auth store (AuthProvider injects a mock
+  // user in dev when AUTH_DISABLED, so this stays populated locally)
+  const user = useAuthStore((state) => state.user);
+  const decidedBy = user?.email ?? user?.id ?? 'unknown-reviewer';
+
+  // Measure actual review time: from when this approval was opened in the
+  // panel until the decision is submitted
+  const reviewStartRef = useRef(Date.now());
+  useEffect(() => {
+    reviewStartRef.current = Date.now();
+  }, [approval.id]);
+  const getReviewDurationSec = () =>
+    Math.max(1, Math.round((Date.now() - reviewStartRef.current) / 1000));
+
   const EntityIcon = entityTypeIcons[approval.entityType] || FileText;
 
   const currentStep = useMemo(() => {
@@ -157,9 +173,9 @@ export function ApprovalDetailPanel({ approval, onClose, className }: ApprovalDe
     try {
       await processApproval(approval.id, currentStep.id, {
         decision: 'approve',
-        decidedBy: 'current-user', // TODO: Get from auth
+        decidedBy,
         decisionNotes: decisionNotes || undefined,
-        reviewDurationSec: 60, // TODO: Track actual review time
+        reviewDurationSec: getReviewDurationSec(),
         competenceVerified: true,
       });
       onClose();
@@ -179,9 +195,9 @@ export function ApprovalDetailPanel({ approval, onClose, className }: ApprovalDe
     try {
       await processApproval(approval.id, currentStep.id, {
         decision: 'reject',
-        decidedBy: 'current-user', // TODO: Get from auth
+        decidedBy,
         decisionNotes,
-        reviewDurationSec: 60,
+        reviewDurationSec: getReviewDurationSec(),
         competenceVerified: true,
       });
       onClose();
@@ -242,7 +258,7 @@ export function ApprovalDetailPanel({ approval, onClose, className }: ApprovalDe
               <div className="flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-theme-muted" />
                 <span className="text-theme-secondary">
-                  Created: {new Date(approval.createdAt).toLocaleDateString()}
+                  Created: {new Date(approval.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
                 </span>
               </div>
             </div>
@@ -293,7 +309,7 @@ export function ApprovalDetailPanel({ approval, onClose, className }: ApprovalDe
                 {approval.workerViewpoint.statement}
               </p>
               <p className="text-xs text-purple-600 dark:text-purple-400 mt-2">
-                Submitted: {new Date(approval.workerViewpoint.submittedAt).toLocaleString()}
+                Submitted: {new Date(approval.workerViewpoint.submittedAt).toLocaleString(UI_DATE_LOCALE)}
               </p>
             </div>
           </div>

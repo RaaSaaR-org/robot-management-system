@@ -371,10 +371,13 @@ export class RobotRepository {
   /**
    * Query persisted telemetry for a robot, ascending by timestamp, JSON
    * columns parsed back into RobotTelemetry-shaped objects.
+   * With `newest: true` the NEWEST `limit` rows in the window are returned
+   * (still ascending) instead of the oldest — used when the caller gave no
+   * explicit `from`, so naive consumers see recent data, not week-old rows.
    */
   async getTelemetryHistory(
     robotId: string,
-    options: { from?: Date; to?: Date; limit: number }
+    options: { from?: Date; to?: Date; limit: number; newest?: boolean }
   ): Promise<RobotTelemetry[]> {
     const rows = await prisma.robotTelemetry.findMany({
       where: {
@@ -388,9 +391,13 @@ export class RobotRepository {
             }
           : {}),
       },
-      orderBy: { timestamp: 'asc' },
+      orderBy: { timestamp: options.newest ? 'desc' : 'asc' },
       take: options.limit,
     });
+
+    if (options.newest) {
+      rows.reverse(); // back to ascending for a consistent response contract
+    }
 
     return rows.map((row) => ({
       robotId: row.robotId,

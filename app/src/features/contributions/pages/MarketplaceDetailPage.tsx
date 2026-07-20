@@ -20,6 +20,7 @@ import { MarketplaceDownloadModal } from '../components/MarketplaceDownloadModal
 import { formatCredits } from '../types/contributions.types';
 import { useMarketplaceListing } from '../hooks/marketplace';
 import type { MarketplaceLicenseTier } from '../types/marketplace.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export function MarketplaceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -175,8 +176,8 @@ export function MarketplaceDetailPage() {
             <div className="mb-6">
               <h2 className="text-sm font-semibold text-theme-primary mb-3">Dataset Info</h2>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <StatCard label="Episodes" value={(listing.episodeCount ?? 0).toLocaleString()} />
-                <StatCard label="Frames" value={(listing.frameCount ?? 0).toLocaleString()} />
+                <StatCard label="Episodes" value={(listing.episodeCount ?? 0).toLocaleString(UI_DATE_LOCALE)} />
+                <StatCard label="Frames" value={(listing.frameCount ?? 0).toLocaleString(UI_DATE_LOCALE)} />
                 <StatCard label="Size" value={`${listing.datasetSizeGB ?? 0} GB`} />
                 <StatCard label="Collection" value={listing.collectionMethod ?? 'N/A'} />
               </div>
@@ -204,7 +205,7 @@ export function MarketplaceDetailPage() {
                   <SpecRow label="Type" value={isSkill ? 'LoRA Adapter (.safetensors)' : 'Dataset (LeRobot v3)'} />
                   <SpecRow label="Robot" value={listing.robotType} />
                   {listing.baseModel !== 'None' && <SpecRow label="Base Model" value={listing.baseModel} />}
-                  <SpecRow label="Downloads" value={listing.downloadCount.toLocaleString()} />
+                  <SpecRow label="Downloads" value={listing.downloadCount.toLocaleString(UI_DATE_LOCALE)} />
                   <SpecRow label="Published" value={formatDate(listing.createdAt)} />
                 </tbody>
               </table>
@@ -365,7 +366,7 @@ export function MarketplaceDetailPage() {
 
 function formatDate(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {

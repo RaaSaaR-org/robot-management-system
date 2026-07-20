@@ -198,13 +198,24 @@ export const MAP_CANVAS_SIZE = {
   height: 400,
 } as const;
 
+/**
+ * Semantic maintenance color (Tailwind orange-500).
+ * Single source of truth for the maintenance hex used by robot status markers
+ * and maintenance zones (RobotMarker, ZoneOverlay, ZoneEditor). Semantic
+ * warning/maintenance orange — NOT a brand accent.
+ */
+export const MAINTENANCE_COLOR = '#f97316';
+
+/** RGB triplet of MAINTENANCE_COLOR for rgba() fills */
+export const MAINTENANCE_COLOR_RGB = '249, 115, 22';
+
 /** Robot status colors for map markers (futuristic theme) */
 export const ROBOT_STATUS_COLORS: Record<RobotStatus, string> = {
   online: '#18E4C3', // turquoise
   busy: '#3b82f6', // blue-500
   charging: '#eab308', // yellow-500
   error: '#ef4444', // red-500
-  maintenance: '#f97316', // orange-500
+  maintenance: MAINTENANCE_COLOR,
   offline: '#6b7280', // gray-500
   protective_stop: '#ef4444', // red-500 — safety state requiring attention
 };
@@ -213,7 +224,7 @@ export const ROBOT_STATUS_COLORS: Record<RobotStatus, string> = {
 export const ZONE_TYPE_COLORS: Record<ZoneType, { fill: string; stroke: string; opacity: number }> = {
   operational: { fill: '#2A5FFF', stroke: '#2A5FFF', opacity: 0.08 },
   charging: { fill: '#18E4C3', stroke: '#18E4C3', opacity: 0.08 },
-  maintenance: { fill: '#f97316', stroke: '#f97316', opacity: 0.08 },
+  maintenance: { fill: MAINTENANCE_COLOR, stroke: MAINTENANCE_COLOR, opacity: 0.08 },
   restricted: { fill: '#ef4444', stroke: '#ef4444', opacity: 0.06 },
 };
 

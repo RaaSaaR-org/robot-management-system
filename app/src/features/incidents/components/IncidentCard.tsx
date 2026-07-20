@@ -6,6 +6,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
+import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
 import { SeverityBadge } from './SeverityBadge';
 import { StatusBadge } from './StatusBadge';
 import type { Incident, IncidentSeverity } from '../types/incidents.types';
@@ -40,17 +41,10 @@ const SEVERITY_BORDER_STYLES: Record<IncidentSeverity, string> = {
 // ============================================================================
 
 function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-
-  return date.toLocaleDateString(undefined, {
+  const diffHours = (Date.now() - new Date(isoString).getTime()) / 3600000;
+  // Relative for recent incidents, absolute (fixed English locale) beyond a day
+  if (diffHours < 24) return formatTimeAgo(isoString);
+  return formatDateTime(isoString, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

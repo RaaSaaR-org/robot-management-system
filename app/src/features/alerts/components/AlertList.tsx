@@ -6,8 +6,11 @@
  */
 
 import { useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
+import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
 import { Button } from '@/shared/components/ui/Button';
+import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { useAlerts } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
@@ -18,7 +21,7 @@ import { ALERT_SOURCE_LABELS } from '../types/alerts.types';
 // ============================================================================
 
 export interface AlertListProps {
-  /** Maximum height of the list */
+  /** Maximum height of the list. When omitted, the list flows with the page (no inner scrollbar). */
   maxHeight?: string;
   /** Whether to show acknowledged alerts */
   showAcknowledged?: boolean;
@@ -42,17 +45,10 @@ const SEVERITY_BORDER_STYLES: Record<AlertSeverity, string> = {
 // ============================================================================
 
 function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-
-  return date.toLocaleDateString(undefined, {
+  const diffHours = (Date.now() - new Date(isoString).getTime()) / 3600000;
+  // Relative for recent alerts, absolute (fixed English locale) beyond a day
+  if (diffHours < 24) return formatTimeAgo(isoString);
+  return formatDateTime(isoString, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -64,15 +60,45 @@ function formatTimestamp(isoString: string): string {
 // SUB-COMPONENTS
 // ============================================================================
 
+interface RobotRefProps {
+  /** Robot ID the alert references */
+  sourceId: string;
+  /** Resolved robot name, or undefined when the robot no longer exists */
+  robotName: string | undefined;
+}
+
+/**
+ * Robot reference for an alert. Renders a linked chip when the robot still
+ * exists; degrades to plain text when the referenced robot has been removed
+ * (stale alerts must not render a broken chip/link).
+ */
+function RobotRef({ sourceId, robotName }: RobotRefProps) {
+  if (!robotName) {
+    return <span className="text-xs text-theme-tertiary truncate">{sourceId}</span>;
+  }
+  return (
+    <Link
+      to={`/robots/${sourceId}`}
+      className="inline-flex max-w-full items-center px-1.5 py-0.5 rounded bg-theme-hover text-xs text-theme-secondary hover:text-theme-primary truncate"
+    >
+      {robotName}
+    </Link>
+  );
+}
+
 interface AlertItemProps {
   alert: Alert;
+  /** Resolved name of the referenced robot, if it still exists */
+  robotName?: string;
   onAcknowledge: (id: string) => void;
   onDismiss: (id: string) => void;
 }
 
-function AlertItem({ alert, onAcknowledge, onDismiss }: AlertItemProps) {
+function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProps) {
   const isCritical = alert.severity === 'critical';
   const canDismiss = alert.dismissable && (alert.acknowledged || !isCritical);
+  // Degrade gracefully when the server sends a blank/broken title
+  const title = alert.title?.trim() || ALERT_SOURCE_LABELS[alert.source] || 'Alert';
 
   return (
     <div
@@ -82,19 +108,23 @@ function AlertItem({ alert, onAcknowledge, onDismiss }: AlertItemProps) {
         alert.acknowledged && 'opacity-60'
       )}
     >
-      <div className="flex items-start justify-between gap-3">
+      {/* Stack actions below the text on narrow screens; side-by-side from sm up */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
             <AlertSeverityBadge severity={alert.severity} size="sm" />
             <span className="text-xs text-theme-tertiary">
               {ALERT_SOURCE_LABELS[alert.source]}
             </span>
+            {alert.source === 'robot' && alert.sourceId && (
+              <RobotRef sourceId={alert.sourceId} robotName={robotName} />
+            )}
             <span className="text-xs text-theme-tertiary">
               {formatTimestamp(alert.timestamp)}
             </span>
           </div>
-          <h4 className="font-medium text-theme-primary text-sm">{alert.title}</h4>
-          <p className="text-sm text-theme-secondary mt-0.5">{alert.message}</p>
+          <h4 className="font-medium text-theme-primary text-sm break-words">{title}</h4>
+          <p className="text-sm text-theme-secondary mt-0.5 break-words">{alert.message}</p>
           {alert.acknowledged && alert.acknowledgedAt && (
             <p className="text-xs text-theme-tertiary mt-1">
               Acknowledged {formatTimestamp(alert.acknowledgedAt)}
@@ -102,7 +132,7 @@ function AlertItem({ alert, onAcknowledge, onDismiss }: AlertItemProps) {
           )}
         </div>
 
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex items-center gap-1 flex-shrink-0 self-end sm:self-start">
           {isCritical && !alert.acknowledged && (
             <Button
               size="sm"
@@ -185,12 +215,15 @@ function EmptyState() {
  * ```
  */
 export function AlertList({
-  maxHeight = '400px',
+  maxHeight,
   showAcknowledged = true,
   className,
 }: AlertListProps) {
   const { alerts, unacknowledgedAlerts, acknowledgeAlert, removeAlert, clearAcknowledged } =
     useAlerts();
+  // Resolve robot names for alert robot chips; alerts referencing deleted
+  // robots degrade to plain text (see RobotRef).
+  const robots = useRobotsStore(selectRobots);
 
   const displayAlerts = showAcknowledged ? alerts : unacknowledgedAlerts;
 
@@ -226,13 +259,18 @@ export function AlertList({
         </div>
       )}
       <div
-        className="space-y-2 overflow-y-auto"
-        style={{ maxHeight }}
+        className={cn('space-y-2', maxHeight && 'overflow-y-auto')}
+        style={maxHeight ? { maxHeight } : undefined}
       >
         {displayAlerts.map((alert) => (
           <AlertItem
             key={alert.id}
             alert={alert}
+            robotName={
+              alert.source === 'robot' && alert.sourceId
+                ? robots.find((r) => r.id === alert.sourceId)?.name
+                : undefined
+            }
             onAcknowledge={handleAcknowledge}
             onDismiss={handleDismiss}
           />

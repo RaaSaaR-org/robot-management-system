@@ -38,9 +38,10 @@ export function ApprovalsPage() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
+      {/* Section header — rendered as an embedded tab inside CompliancePage,
+          which owns the page-level h1, so this stays a demoted h2 */}
       <div className="px-6 py-4 border-b border-theme-subtle bg-theme-surface">
-        <h1 className="text-2xl font-semibold text-theme-primary">Human Approval Workflows</h1>
+        <h2 className="text-lg font-semibold text-theme-primary">Human Approval Workflows</h2>
         <p className="text-sm text-theme-muted mt-1">
           GDPR Art. 22 & AI Act Art. 14 compliance - Review automated decisions with meaningful oversight
         </p>

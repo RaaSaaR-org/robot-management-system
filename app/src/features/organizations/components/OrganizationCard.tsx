@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { Button } from '@/shared/components/ui/Button';
 import { cn } from '@/shared/utils/cn';
 import type { Organization, TenantSettings } from '../types/organizations.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 function parseSettings(raw: string): TenantSettings {
   try { return JSON.parse(raw) as TenantSettings; } catch { return {}; }
@@ -37,7 +38,7 @@ const BuildingIcon = () => (
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString(undefined, {
+    return new Date(iso).toLocaleDateString(UI_DATE_LOCALE, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

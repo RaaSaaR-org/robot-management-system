@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import type { RobotStateManager } from '../robot/state.js';
 import type {
   RobotCommandRequest,
@@ -25,6 +25,15 @@ export function createRestRoutes(
   secureBoot?: SecureBootVerifier,
 ): Router {
   const router = Router();
+
+  // Any inbound REST call proves the control plane can reach this agent —
+  // count it as server liveness so the communication-timeout protective stop
+  // only fires (and only persists) when traffic has actually ceased, not just
+  // when the dedicated /safety/heartbeat endpoint goes unused.
+  router.use((_req: Request, _res: Response, next: NextFunction) => {
+    robotStateManager.updateServerHeartbeat();
+    next();
+  });
 
   // GET /robots/:id - Get robot details (NeoDEM compatible)
   router.get('/robots/:id', (req: Request, res: Response) => {

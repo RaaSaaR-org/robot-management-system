@@ -8,6 +8,7 @@ import { cn } from '@/shared/utils/cn';
 import { Filter, Plus, ChevronLeft, ChevronRight, Video } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { SessionCard } from './SessionCard';
 import type {
   TeleoperationSession,
@@ -127,27 +128,27 @@ export function SessionList({
 
       {/* Empty State */}
       {!isLoading && sessions.length === 0 && (
-        <Card variant="subtle" className="py-12">
-          <div className="flex flex-col items-center justify-center text-theme-muted">
-            <Video className="w-12 h-12 mb-4 opacity-30" />
-            <p className="text-sm font-medium text-theme-secondary">
-              {hasFilters ? 'No sessions match your filters' : 'No sessions yet'}
-            </p>
-            <p className="text-xs mt-1 max-w-sm text-center">
-              {hasFilters
+        <Card variant="subtle">
+          <EmptyState
+            icon={<Video className="w-10 h-10" />}
+            title={hasFilters ? 'No sessions match your filters' : 'No sessions yet'}
+            description={
+              hasFilters
                 ? 'Try adjusting your filter criteria or clear all filters.'
-                : 'Start by creating a new teleoperation session. Each session records camera frames, joint states, and actions.'}
-            </p>
-            {!hasFilters && onNewSession && (
-              <button
-                onClick={onNewSession}
-                className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
-              >
-                <Plus size={16} />
-                Create Session
-              </button>
-            )}
-          </div>
+                : 'Start by creating a new teleoperation session. Each session records camera frames, joint states, and actions.'
+            }
+            action={
+              !hasFilters && onNewSession ? (
+                <button
+                  onClick={onNewSession}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all"
+                >
+                  <Plus size={16} />
+                  Create Session
+                </button>
+              ) : undefined
+            }
+          />
         </Card>
       )}
 
