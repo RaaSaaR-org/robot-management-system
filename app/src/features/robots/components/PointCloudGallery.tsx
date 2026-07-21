@@ -5,12 +5,13 @@
  */
 
 import { useState, useCallback } from 'react';
-import { Button, Badge, Spinner } from '@/shared/components/ui';
+import { Button, Badge, Spinner, EmptyState } from '@/shared/components/ui';
 import { PointCloudViewer } from './visualization';
 import { useRobotsStore } from '../store/robotsStore';
 import { sensorScansApi } from '../api/sensorScansApi';
 import { parsePcdBinary, downloadBlob } from '../utils/pointcloud';
 import type { PointCloudFrame, SensorScanSummary } from '../types/robots.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface PointCloudGalleryProps {
   robotId: string;
@@ -87,9 +88,11 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
 
   if (scans.length === 0) {
     return (
-      <p className="text-sm text-theme-tertiary py-6 text-center">
-        No recorded scans yet. Capture one from the live view above.
-      </p>
+      <EmptyState
+        size="sm"
+        title="No recorded scans yet"
+        description="Capture one from the live view above."
+      />
     );
   }
 
@@ -124,8 +127,8 @@ export function PointCloudGallery({ robotId }: PointCloudGalleryProps) {
                 </Badge>
               </div>
               <p className="text-xs text-theme-tertiary">
-                {scan.pointCount.toLocaleString()} pts · {formatBytes(scan.fileSize)} ·{' '}
-                {new Date(scan.capturedAt).toLocaleString()}
+                {scan.pointCount.toLocaleString(UI_DATE_LOCALE)} pts · {formatBytes(scan.fileSize)} ·{' '}
+                {new Date(scan.capturedAt).toLocaleString(UI_DATE_LOCALE)}
               </p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">

@@ -5,10 +5,17 @@
  */
 
 import { memo } from 'react';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import { Card } from '@/shared/components/ui/Card';
 import type { A2ATask } from '../types';
-import { A2A_TASK_STATE_LABELS, A2A_TASK_STATE_COLORS, getMessageText } from '../types';
+import {
+  A2A_TASK_STATE_LABELS,
+  A2A_TASK_STATE_COLORS,
+  getMessageText,
+  getEffectiveTaskState,
+  isErrorText,
+  formatErrorText,
+} from '../types';
 
 interface TaskStatusCardProps {
   task: A2ATask;
@@ -61,9 +68,13 @@ export const TaskStatusCard = memo(function TaskStatusCard({
   className,
   onClick,
 }: TaskStatusCardProps) {
-  const statusStyles = getStatusStyles(task.status.state);
-  const statusLabel = A2A_TASK_STATE_LABELS[task.status.state] || task.status.state;
-  const isActive = ['submitted', 'working'].includes(task.status.state);
+  // Effective state: "completed" rows carrying an error-shaped result render as failed
+  const effectiveState = getEffectiveTaskState(task);
+  const statusStyles = getStatusStyles(effectiveState);
+  const statusLabel = A2A_TASK_STATE_LABELS[effectiveState] || effectiveState;
+  const isActive = ['submitted', 'working'].includes(effectiveState);
+  const messageText = task.status.message ? getMessageText(task.status.message) : '';
+  const isErrorResult = effectiveState === 'failed' && isErrorText(messageText);
 
   return (
     <Card
@@ -105,11 +116,20 @@ export const TaskStatusCard = memo(function TaskStatusCard({
         </span>
       </div>
 
-      {/* Status message preview */}
+      {/* Status message preview — error results render as a styled error, not raw JSON */}
       {task.status.message && (
-        <p className="text-sm text-theme-secondary line-clamp-2 mb-3">
-          {getMessageText(task.status.message)}
-        </p>
+        isErrorResult ? (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-red-50/50 dark:bg-red-900/20 border border-red-200/60 dark:border-red-800/50">
+            <p className="text-sm text-red-600 dark:text-red-400 line-clamp-3 break-words">
+              <span className="font-medium">Error: </span>
+              {formatErrorText(messageText)}
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-theme-secondary line-clamp-2 mb-3">
+            {messageText}
+          </p>
+        )
       )}
 
       {/* Artifacts count */}
@@ -123,10 +143,10 @@ export const TaskStatusCard = memo(function TaskStatusCard({
       {/* Timestamps */}
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-glass-subtle text-xs text-theme-muted">
         {task.createdAt && (
-          <span>Created: {new Date(task.createdAt).toLocaleTimeString()}</span>
+          <span>Created: {new Date(task.createdAt).toLocaleTimeString(UI_DATE_LOCALE)}</span>
         )}
         {task.status.timestamp && (
-          <span>Updated: {new Date(task.status.timestamp).toLocaleTimeString()}</span>
+          <span>Updated: {new Date(task.status.timestamp).toLocaleTimeString(UI_DATE_LOCALE)}</span>
         )}
       </div>
     </Card>

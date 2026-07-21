@@ -5,6 +5,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -36,7 +37,7 @@ export function CreditBalance({ totalCredits, className }: CreditBalanceProps) {
           Credits
         </p>
         <p className="text-lg font-bold text-amber-900 dark:text-amber-100">
-          {totalCredits.toLocaleString()}
+          {totalCredits.toLocaleString(UI_DATE_LOCALE)}
         </p>
       </div>
     </div>

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import { Spinner } from '@/shared/components/ui/Spinner';
+import { UI_DATE_LOCALE, formatDateTime } from '@/shared/utils/format';
 import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionStatusBadge } from '../components/SessionStatusBadge';
 import { QualityIndicator } from '../components/QualityIndicator';
@@ -441,7 +442,7 @@ export function SessionDetailPage() {
             <div>
               <p className="text-sm text-theme-muted">Frames</p>
               <p className="text-xl font-bold text-theme-primary" data-testid="hud-frames">
-                {liveFrameCount.toLocaleString()}
+                {liveFrameCount.toLocaleString(UI_DATE_LOCALE)}
               </p>
             </div>
           </div>
@@ -472,8 +473,8 @@ export function SessionDetailPage() {
         {isLive ? (
           <Card className="!p-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-brand bg-orange-500/10">
-                <Film className="w-5 h-5 text-orange-400" />
+              <div className="p-2 rounded-brand bg-primary-500/10">
+                <Film className="w-5 h-5 text-primary-400" />
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
@@ -492,8 +493,8 @@ export function SessionDetailPage() {
         ) : (
           <Card className="!p-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-brand bg-orange-500/10">
-                <Bot className="w-5 h-5 text-orange-400" />
+              <div className="p-2 rounded-brand bg-accent-500/10">
+                <Bot className="w-5 h-5 text-accent-400" />
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
@@ -628,7 +629,7 @@ export function SessionDetailPage() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-theme-muted">Frames</dt>
-                  <dd className="text-theme-primary">{session.frameCount.toLocaleString()}</dd>
+                  <dd className="text-theme-primary">{session.frameCount.toLocaleString(UI_DATE_LOCALE)}</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-theme-muted">FPS</dt>
@@ -646,7 +647,7 @@ export function SessionDetailPage() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-theme-muted">Created</dt>
-                  <dd className="text-theme-primary">{new Date(session.createdAt).toLocaleString()}</dd>
+                  <dd className="text-theme-primary">{formatDateTime(session.createdAt)}</dd>
                 </div>
               </dl>
             </Card>
@@ -715,7 +716,7 @@ export function SessionDetailPage() {
                           Ep {ep.episodeIndex}
                         </td>
                         <td className="py-2 pr-4 text-theme-secondary">
-                          {ep.frameCount.toLocaleString()}
+                          {ep.frameCount.toLocaleString(UI_DATE_LOCALE)}
                         </td>
                         <td className="py-2 pr-4 text-theme-secondary">{ep.durationS.toFixed(1)}s</td>
                         <td className="py-2 text-theme-muted">{ep.startTime.toFixed(1)}s</td>

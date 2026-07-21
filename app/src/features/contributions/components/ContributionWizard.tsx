@@ -25,6 +25,7 @@ import type {
   InitiateContributionRequest,
   UploadContributionDataRequest,
 } from '../types/contributions.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -447,14 +448,14 @@ export function ContributionWizard({
               <div className="flex justify-between">
                 <span className="text-gray-600 dark:text-gray-400">Trajectories</span>
                 <span className="font-medium text-gray-900 dark:text-gray-100">
-                  {data.trajectoryCount?.toLocaleString()}
+                  {data.trajectoryCount?.toLocaleString(UI_DATE_LOCALE)}
                 </span>
               </div>
               {data.estimatedCredits && (
                 <div className="flex justify-between pt-3 border-t border-gray-200 dark:border-gray-700">
                   <span className="text-gray-600 dark:text-gray-400">Estimated Credits</span>
                   <span className="font-semibold text-green-600 dark:text-green-400">
-                    {data.estimatedCredits.toLocaleString()}
+                    {data.estimatedCredits.toLocaleString(UI_DATE_LOCALE)}
                   </span>
                 </div>
               )}

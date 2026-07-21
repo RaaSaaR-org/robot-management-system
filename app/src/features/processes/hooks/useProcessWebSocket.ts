@@ -168,7 +168,6 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
           case 'process:completed':
           case 'process:failed':
             if (data.processInstance) {
-              console.log(`[ProcessWebSocket] ${data.type}:`, data.processInstance.processName);
               const process = transformProcessInstance(data.processInstance);
               updateProcessFromWebSocket(process);
             }
@@ -180,7 +179,6 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
           case 'step:reassigned':
             // Step events include the updated process instance
             if (data.processInstance) {
-              console.log(`[ProcessWebSocket] ${data.type}:`, data.stepInstance?.name);
               const process = transformProcessInstance(data.processInstance);
               updateProcessFromWebSocket(process);
             }
@@ -208,25 +206,21 @@ export function useProcessWebSocket(options: UseProcessWebSocketOptions = {}) {
     }
 
     try {
-      console.log('[ProcessWebSocket] Connecting to', url);
       const ws = new WebSocket(url);
 
       ws.onopen = () => {
-        console.log('[ProcessWebSocket] Connected');
         isConnectedRef.current = true;
       };
 
       ws.onmessage = handleMessage;
 
       ws.onclose = () => {
-        console.log('[ProcessWebSocket] Disconnected');
         isConnectedRef.current = false;
         wsRef.current = null;
 
         // Auto-reconnect
         if (autoReconnect && enabled) {
           reconnectTimeoutRef.current = setTimeout(() => {
-            console.log('[ProcessWebSocket] Attempting to reconnect...');
             connect();
           }, reconnectInterval);
         }

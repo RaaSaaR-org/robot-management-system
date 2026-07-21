@@ -6,6 +6,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
+import { formatDateTime } from '@/shared/utils/format';
 import { Badge } from '@/shared/components/ui/Badge';
 import { Button } from '@/shared/components/ui/Button';
 import type { IncidentNotification, NotificationStatus } from '../types/incidents.types';
@@ -56,8 +57,7 @@ const STATUS_BADGE_VARIANT: Record<NotificationStatus, 'default' | 'success' | '
 // ============================================================================
 
 function formatDeadline(dueAt: string, hoursRemaining?: number): string {
-  const date = new Date(dueAt);
-  const formatted = date.toLocaleDateString(undefined, {
+  const formatted = formatDateTime(dueAt, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -78,8 +78,7 @@ function formatDeadline(dueAt: string, hoursRemaining?: number): string {
 
 function formatSentAt(sentAt: string | null): string {
   if (!sentAt) return '';
-  const date = new Date(sentAt);
-  return date.toLocaleDateString(undefined, {
+  return formatDateTime(sentAt, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

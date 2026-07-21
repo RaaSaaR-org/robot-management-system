@@ -62,6 +62,21 @@ export interface Config {
   };
 }
 
+/**
+ * The shipped g1-edu profile (.env.g1-edu) carries a German, ASCII-transliterated
+ * ROBOT_DESCRIPTION. Agent-facing surfaces (agent card, AI prompt context) must
+ * be English, so the known legacy string is mapped here; any other value passes
+ * through untouched. New profiles should set an English description directly.
+ */
+const LEGACY_DESCRIPTION_TRANSLATIONS: Record<string, string> = {
+  'Physischer Unitree G1 EDU Humanoid (43 DOF inkl. Dex3-1 Haende), Telemetrie read-only ueber DDS-ZMQ-Bridge':
+    'Physical Unitree G1 EDU humanoid (43 DOF incl. Dex3-1 hands), telemetry read-only via DDS-ZMQ bridge',
+};
+
+function normalizeRobotDescription(raw: string): string {
+  return LEGACY_DESCRIPTION_TRANSLATIONS[raw] ?? raw;
+}
+
 export const config: Config = {
   port: parseInt(process.env.PORT || '41243', 10),
   robotId: process.env.ROBOT_ID || 'sim-robot-001',
@@ -70,7 +85,9 @@ export const config: Config = {
   robotClass: (process.env.ROBOT_CLASS as RobotClass) || 'standard',
   robotType: (process.env.ROBOT_TYPE as RobotType) || 'h1',
   maxPayloadKg: parseFloat(process.env.MAX_PAYLOAD_KG || '10'),
-  robotDescription: process.env.ROBOT_DESCRIPTION || 'A versatile humanoid robot for general tasks',
+  robotDescription: normalizeRobotDescription(
+    process.env.ROBOT_DESCRIPTION || 'A versatile humanoid robot for general tasks'
+  ),
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   llmProvider: (process.env.LLM_PROVIDER as 'gemini' | 'openrouter' | 'ollama') || 'gemini',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',

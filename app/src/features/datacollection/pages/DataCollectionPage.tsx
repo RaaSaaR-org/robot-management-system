@@ -18,6 +18,7 @@ import {
   Gamepad2,
 } from 'lucide-react';
 import { Tabs } from '@/shared/components/ui/Tabs';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { Card } from '@/shared/components/ui/Card';
 import { PipelineBreadcrumb } from '@/shared/components/ui/PipelineBreadcrumb';
 import { NextStepBanner } from '@/shared/components/ui/NextStepBanner';
@@ -155,20 +156,11 @@ export function DataCollectionPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <header>
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="p-2 rounded-brand bg-cobalt-500/10">
-              <Database className="w-6 h-6 text-cobalt-400" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-theme-primary">Data Collection</h1>
-              <p className="text-sm text-theme-muted">
-                Record teleoperation demos and manage collection priorities
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
+      <PageHeader
+        title="Data Collection"
+        subtitle="Record teleoperation demos and manage collection priorities"
+        actions={
+          <>
             <button
               onClick={handleNewSession}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-brand text-sm font-medium bg-cobalt-500/15 text-cobalt-400 hover:bg-cobalt-500/25 border border-cobalt-500/20 transition-all whitespace-nowrap"
@@ -177,9 +169,9 @@ export function DataCollectionPage() {
               New Session
             </button>
             <PipelineBreadcrumb stage="collect" />
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       {/* Educational banner (collapsed by default) */}
       <EducationBanner />

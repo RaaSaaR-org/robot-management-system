@@ -5,7 +5,7 @@
  */
 
 import { memo, useEffect, useState } from 'react';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import { Button } from '@/shared/components/ui/Button';
 import { Badge } from '@/shared/components/ui/Badge';
 import { Spinner } from '@/shared/components/ui/Spinner';
@@ -13,7 +13,8 @@ import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { EventList } from '../components/EventList';
 import { A2ALayout } from '../components/A2ALayout';
 import { useA2AStore } from '../store';
-import type { A2AEvent } from '../types';
+import { isTextPart, isFilePart, isFileWithBytes } from '../types';
+import type { A2AEvent, A2APart } from '../types';
 
 // ============================================================================
 // ICONS
@@ -40,6 +41,46 @@ interface EventDetailProps {
   onClose: () => void;
 }
 
+/** Short label for a non-text message part, rendered as a chip */
+function getPartChipLabel(part: A2APart): string {
+  if (isFilePart(part)) {
+    const name = part.file.name || (isFileWithBytes(part.file) ? 'embedded file' : part.file.uri);
+    return `File: ${name} (${part.file.mimeType})`;
+  }
+  return `Data: ${Object.keys(part.kind === 'data' ? part.data : {}).join(', ') || 'structured payload'}`;
+}
+
+/** Renders message parts as readable text plus labeled chips for non-text parts */
+function MessageContent({ parts }: { parts: A2APart[] }) {
+  const textParts = parts.filter(isTextPart);
+  const otherParts = parts.filter((p) => !isTextPart(p));
+
+  return (
+    <div className="space-y-2">
+      {textParts.length > 0 && (
+        <p className="text-sm text-theme-primary whitespace-pre-wrap break-words">
+          {textParts.map((p) => p.text).join('\n')}
+        </p>
+      )}
+      {otherParts.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {otherParts.map((part, i) => (
+            <span
+              key={i}
+              className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium glass-subtle text-theme-secondary"
+            >
+              {getPartChipLabel(part)}
+            </span>
+          ))}
+        </div>
+      )}
+      {textParts.length === 0 && otherParts.length === 0 && (
+        <p className="text-sm text-theme-muted italic">No content</p>
+      )}
+    </div>
+  );
+}
+
 function EventDetail({ event, onClose }: EventDetailProps) {
   if (!event) return null;
 
@@ -59,6 +100,7 @@ function EventDetail({ event, onClose }: EventDetailProps) {
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close event details"
             className="p-2 rounded-lg hover:bg-gray-100/50 dark:hover:bg-gray-700/50 transition-colors"
           >
             <XIcon className="w-5 h-5 text-theme-tertiary" />
@@ -74,7 +116,7 @@ function EventDetail({ event, onClose }: EventDetailProps) {
             <div>
               <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Timestamp</dt>
               <dd className="mt-1 text-sm text-theme-primary">
-                {new Date(event.timestamp).toLocaleString()}
+                {new Date(event.timestamp).toLocaleString(UI_DATE_LOCALE)}
               </dd>
             </div>
             <div>
@@ -118,11 +160,19 @@ function EventDetail({ event, onClose }: EventDetailProps) {
             )}
             <div>
               <dt className="text-xs uppercase tracking-wider font-medium text-theme-tertiary">Content</dt>
-              <dd className="mt-1">
-                <pre className="p-3 glass-subtle rounded-lg text-xs overflow-x-auto font-mono text-theme-secondary">
+              <dd className="mt-1 p-3 glass-subtle rounded-lg">
+                <MessageContent parts={event.content.parts} />
+              </dd>
+            </div>
+            <div>
+              <details className="group">
+                <summary className="cursor-pointer text-xs uppercase tracking-wider font-medium text-theme-tertiary hover:text-theme-secondary transition-colors select-none">
+                  Raw JSON
+                </summary>
+                <pre className="mt-2 p-3 glass-subtle rounded-lg text-xs overflow-x-auto font-mono text-theme-secondary">
                   {JSON.stringify(event.content.parts, null, 2)}
                 </pre>
-              </dd>
+              </details>
             </div>
           </dl>
         </div>
@@ -181,6 +231,7 @@ export const EventsPage = memo(function EventsPage() {
                 size="sm"
                 onClick={handleRefresh}
                 disabled={isRefreshing}
+                aria-label="Refresh events"
                 className="gap-1.5"
               >
                 <RefreshIcon className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />

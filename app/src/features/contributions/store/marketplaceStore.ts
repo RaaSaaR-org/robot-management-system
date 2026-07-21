@@ -17,6 +17,7 @@ import type {
   CreateListingInput,
   SubmitReviewInput,
 } from '../types/marketplace.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // STORE TYPE
@@ -414,7 +415,7 @@ export const selectTrendingListings = (state: MarketplaceStore) =>
  */
 function formatInsufficientCredits(error: InsufficientCreditsError): string {
   if (typeof error.balance === 'number' && typeof error.required === 'number') {
-    return `Insufficient credits: this license costs ${error.required.toLocaleString()} credits, but your balance is ${error.balance.toLocaleString()}.`;
+    return `Insufficient credits: this license costs ${error.required.toLocaleString(UI_DATE_LOCALE)} credits, but your balance is ${error.balance.toLocaleString(UI_DATE_LOCALE)}.`;
   }
   return error.message || 'Insufficient credits';
 }

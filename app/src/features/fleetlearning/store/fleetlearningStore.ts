@@ -35,6 +35,7 @@ const initialState: FleetLearningState = {
   },
   isLoading: false,
   error: null,
+  convergenceError: null,
 };
 
 // ============================================================================
@@ -253,7 +254,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
     fetchConvergenceData: async (modelVersion?: string) => {
       set((state) => {
         state.isLoading = true;
-        state.error = null;
+        state.convergenceError = null;
       });
       try {
         const data = await fleetlearningApi.getConvergenceData(modelVersion);
@@ -262,9 +263,12 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.isLoading = false;
         });
       } catch (error) {
+        // Record on the dedicated `convergenceError` field, NOT the shared
+        // `error` (which drives the Rounds-tab banner). The ConvergenceChart
+        // surfaces this so a genuine failure isn't silently swallowed.
         const message = error instanceof Error ? error.message : 'Failed to fetch convergence data';
         set((state) => {
-          state.error = message;
+          state.convergenceError = message;
           state.isLoading = false;
         });
       }
@@ -329,6 +333,7 @@ export const selectFilters = (state: FleetLearningStore) => state.filters;
 export const selectPagination = (state: FleetLearningStore) => state.pagination;
 export const selectIsLoading = (state: FleetLearningStore) => state.isLoading;
 export const selectError = (state: FleetLearningStore) => state.error;
+export const selectConvergenceError = (state: FleetLearningStore) => state.convergenceError;
 
 /**
  * Select a round by ID
@@ -337,12 +342,26 @@ export const selectRoundById = (id: string) => (state: FleetLearningStore) =>
   state.rounds.find((r) => r.id === id);
 
 /**
- * Select active rounds (in progress)
+ * Round statuses considered "in progress".
+ */
+export const ACTIVE_ROUND_STATUSES = [
+  'selecting',
+  'distributing',
+  'training',
+  'collecting',
+  'aggregating',
+] as const;
+
+/**
+ * Select active rounds (in progress).
+ *
+ * NOTE: returns a NEW array on every call — do not pass directly to
+ * `useFleetLearningStore(...)` (unstable snapshot → React infinite
+ * re-render loop). Select `rounds` and derive with `useMemo` instead
+ * (see `useFederatedRounds`). Safe for one-shot use on `getState()`.
  */
 export const selectActiveRounds = (state: FleetLearningStore) =>
-  state.rounds.filter((r) =>
-    ['selecting', 'distributing', 'training', 'collecting', 'aggregating'].includes(r.status)
-  );
+  state.rounds.filter((r) => (ACTIVE_ROUND_STATUSES as readonly string[]).includes(r.status));
 
 /**
  * Select completed rounds

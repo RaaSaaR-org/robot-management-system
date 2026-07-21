@@ -9,6 +9,13 @@ import { useA2AStore } from '../store';
 import type { A2ATaskEvent } from '../types';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 
+/** Dev-only debug logging for WebSocket lifecycle events */
+function debugLog(...args: unknown[]): void {
+  if (import.meta.env.DEV) {
+    console.log(...args);
+  }
+}
+
 interface UseA2AStreamOptions {
   /** Auto-connect on mount */
   autoConnect?: boolean;
@@ -104,7 +111,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
 
       ws.onopen = () => {
         if (!mountedRef.current) return;
-        console.log('A2A WebSocket connected');
+        debugLog('A2A WebSocket connected');
         setIsConnected(true);
         setWsConnected(true);
         reconnectAttemptsRef.current = 0;
@@ -134,7 +141,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
       };
 
       ws.onclose = () => {
-        console.log('A2A WebSocket disconnected');
+        debugLog('A2A WebSocket disconnected');
         wsRef.current = null;
         if (!mountedRef.current) return;
 
@@ -149,7 +156,7 @@ export function useA2AStream(options: UseA2AStreamOptions = {}): UseA2AStreamRet
             reconnectDelay * Math.pow(2, reconnectAttemptsRef.current - 1),
             60000
           );
-          console.log(
+          debugLog(
             `Attempting reconnection ${reconnectAttemptsRef.current}/${maxReconnectAttempts} in ${backoffDelay}ms...`
           );
           reconnectTimeoutRef.current = setTimeout(connect, backoffDelay);

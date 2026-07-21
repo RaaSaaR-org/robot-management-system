@@ -22,6 +22,7 @@ import type {
   SubmitSimRlJobInput,
   TrainingJobKind,
 } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface TrainingJobWizardProps {
   isOpen: boolean;
@@ -412,7 +413,7 @@ export function TrainingJobWizard({
                       <Badge variant="success">Ready</Badge>
                     </div>
                     <p className="text-sm text-theme-secondary mt-1">
-                      {dataset.totalFrames.toLocaleString()} frames
+                      {dataset.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames
                     </p>
                   </button>
                 ))}

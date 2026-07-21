@@ -394,6 +394,30 @@ federatedRoutes.get('/metrics/rohe', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// CONVERGENCE
+// ============================================================================
+
+/**
+ * GET /api/federated/convergence
+ * Get convergence chart data (one point per round with recorded loss).
+ * Returns an empty array when no rounds have metrics yet.
+ */
+federatedRoutes.get('/convergence', async (req: Request, res: Response) => {
+  try {
+    const query = req.query as Record<string, string | undefined>;
+
+    const dataPoints = await federatedLearningService.getConvergenceData(
+      query.modelVersion
+    );
+
+    res.json(dataPoints);
+  } catch (error) {
+    console.error('[FederatedRoutes] Error getting convergence data:', error);
+    res.status(500).json({ error: 'Failed to get convergence data' });
+  }
+});
+
 /**
  * POST /api/federated/interventions
  * Record a human intervention

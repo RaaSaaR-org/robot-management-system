@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { BarChart3, Play } from 'lucide-react';
 import { DemoFeaturePlaceholder } from '@/components/demo/DemoFeaturePlaceholder';
-import { Button } from '@/shared/components/ui';
+import { Button, EmptyState } from '@/shared/components/ui';
 import type { EvaluationPeriod, EvaluationEpisode, SuccessRateResult, ErrorBreakdownItem, ModelComparisonResult } from '../types';
 import { evaluationApi } from '../api';
 import { PeriodSelector } from '../components/PeriodSelector';
@@ -41,26 +41,25 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
  * Explains the loop and CTAs to the HardwareTestPanel further down the page.
  * (TASK-144)
  */
-function EmptyState({ onScrollToTest }: { onScrollToTest: () => void }) {
+function NoEvaluationData({ onScrollToTest }: { onScrollToTest: () => void }) {
   return (
-    <div className="rounded-lg border border-theme section-primary p-8 text-center">
-      <BarChart3 className="w-12 h-12 mx-auto text-theme-tertiary mb-3" />
-      <h2 className="text-lg font-semibold text-theme-primary">
-        No evaluation data yet
-      </h2>
-      <p className="text-sm text-theme-secondary mt-2 max-w-md mx-auto">
-        This dashboard fills up as you run real-robot evaluations. Each test
-        runs N closed-loop episodes through the deployed VLA model and records
-        per-episode results — success rate, error breakdown, model comparison,
-        and recent rollouts.
-      </p>
-      <Button onClick={onScrollToTest} className="mt-4">
-        <Play className="w-4 h-4 mr-2" />
-        Run a hardware test
-      </Button>
-      <p className="text-xs text-theme-tertiary mt-3">
-        Need a robot online first? Check the Fleet page.
-      </p>
+    <div className="rounded-lg border border-theme section-primary">
+      <EmptyState
+        icon={<BarChart3 className="w-10 h-10" />}
+        title="No evaluation data yet"
+        description="This dashboard fills up as you run real-robot evaluations. Each test runs N closed-loop episodes through the deployed VLA model and records per-episode results — success rate, error breakdown, model comparison, and recent rollouts."
+        action={
+          <div className="flex flex-col items-center">
+            <Button onClick={onScrollToTest}>
+              <Play className="w-4 h-4 mr-2" />
+              Run a hardware test
+            </Button>
+            <p className="text-xs text-theme-tertiary mt-3">
+              Need a robot online first? Check the Fleet page.
+            </p>
+          </div>
+        }
+      />
     </div>
   );
 }
@@ -184,7 +183,7 @@ export function EvaluationDashboardPage() {
           {episodes.length === 0 ? (
             // First-time / no-data state. The HardwareTestPanel below is
             // still rendered so the CTA can scroll to it.
-            <EmptyState onScrollToTest={scrollToHardwareTest} />
+            <NoEvaluationData onScrollToTest={scrollToHardwareTest} />
           ) : (
             <>
               {/* Row 1: Stats Cards */}

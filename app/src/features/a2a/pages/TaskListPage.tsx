@@ -12,6 +12,7 @@ import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { TaskStatusCard } from '../components/TaskStatusCard';
 import { A2ALayout } from '../components/A2ALayout';
 import { useA2A } from '../hooks/useA2A';
+import { getEffectiveTaskState } from '../types';
 import type { A2ATaskState } from '../types';
 
 // ============================================================================
@@ -155,15 +156,16 @@ export const TaskListPage = memo(function TaskListPage() {
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Compute filtered tasks
+  // Compute filtered tasks — getEffectiveTaskState downgrades "completed" rows
+  // carrying error-shaped results to failed, so the Failed filter matches them
   const filteredTasks = useMemo(() => {
     switch (filter) {
       case 'active':
-        return tasks.filter((t) => ACTIVE_STATES.includes(t.status.state));
+        return tasks.filter((t) => ACTIVE_STATES.includes(getEffectiveTaskState(t)));
       case 'completed':
-        return tasks.filter((t) => COMPLETED_STATES.includes(t.status.state));
+        return tasks.filter((t) => COMPLETED_STATES.includes(getEffectiveTaskState(t)));
       case 'failed':
-        return tasks.filter((t) => FAILED_STATES.includes(t.status.state));
+        return tasks.filter((t) => FAILED_STATES.includes(getEffectiveTaskState(t)));
       default:
         return tasks;
     }
@@ -173,9 +175,9 @@ export const TaskListPage = memo(function TaskListPage() {
   const counts = useMemo(
     () => ({
       all: tasks.length,
-      active: tasks.filter((t) => ACTIVE_STATES.includes(t.status.state)).length,
-      completed: tasks.filter((t) => COMPLETED_STATES.includes(t.status.state)).length,
-      failed: tasks.filter((t) => FAILED_STATES.includes(t.status.state)).length,
+      active: tasks.filter((t) => ACTIVE_STATES.includes(getEffectiveTaskState(t))).length,
+      completed: tasks.filter((t) => COMPLETED_STATES.includes(getEffectiveTaskState(t))).length,
+      failed: tasks.filter((t) => FAILED_STATES.includes(getEffectiveTaskState(t))).length,
     }),
     [tasks]
   );
@@ -218,6 +220,7 @@ export const TaskListPage = memo(function TaskListPage() {
                 size="sm"
                 onClick={handleRefresh}
                 disabled={isRefreshing}
+                aria-label="Refresh tasks"
                 className="gap-1.5"
               >
                 <RefreshIcon

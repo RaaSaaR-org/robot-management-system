@@ -14,6 +14,7 @@ import { RobotModel } from './RobotModel';
 import type { RobotType, JointState, PointCloudFrame } from '../../types/robots.types';
 import { cn } from '@/shared/utils/cn';
 import { brandColors } from '@/brand';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -249,8 +250,8 @@ export const PointCloudViewer = memo(function PointCloudViewer({
         {frame && displayFrame
           ? `${frame.sensor.replace(/_/g, ' ').toUpperCase()} · ${
               clippedCount > 0
-                ? `${displayFrame.pointCount.toLocaleString()} of ${frame.pointCount.toLocaleString()} pts · clipped`
-                : `${frame.pointCount.toLocaleString()} pts`
+                ? `${displayFrame.pointCount.toLocaleString(UI_DATE_LOCALE)} of ${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts · clipped`
+                : `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts`
             }`
           : 'Awaiting scan…'}
       </div>

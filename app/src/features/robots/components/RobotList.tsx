@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Input, Button, Spinner } from '@/shared/components/ui';
+import { Input, Button, Spinner, EmptyState } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { RobotCard } from './RobotCard';
 import { RobotStatusBadge } from './RobotStatusBadge';
@@ -260,10 +260,11 @@ export function RobotList({
 
       {/* Robot list/grid */}
       {robots.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="glass-subtle rounded-2xl p-5">
+        <EmptyState
+          size="lg"
+          icon={
             <svg
-              className="h-8 w-8 text-theme-tertiary"
+              className="h-10 w-10"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -275,21 +276,21 @@ export function RobotList({
                 d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
               />
             </svg>
-          </div>
-          <h3 className="mt-4 text-lg font-medium text-theme-primary">
-            {currentStatus || filters.search ? 'No robots found' : 'No robots connected'}
-          </h3>
-          <p className="mt-1 card-meta">
-            {currentStatus || filters.search
+          }
+          title={currentStatus || filters.search ? 'No robots found' : 'No robots connected'}
+          description={
+            currentStatus || filters.search
               ? 'Try adjusting your filters'
-              : 'Add your first robot to get started'}
-          </p>
-          {!currentStatus && !filters.search && onAddRobot && (
-            <Button variant="primary" className="mt-4" onClick={onAddRobot}>
-              Add Robot
-            </Button>
-          )}
-        </div>
+              : 'Add your first robot to get started'
+          }
+          action={
+            !currentStatus && !filters.search && onAddRobot ? (
+              <Button variant="primary" onClick={onAddRobot}>
+                Add Robot
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <div
           className={cn(

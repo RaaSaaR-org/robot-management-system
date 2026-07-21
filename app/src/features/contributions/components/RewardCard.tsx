@@ -45,7 +45,7 @@ const REWARD_COLORS: Record<RewardType, string> = {
   service_credit: 'from-green-500 to-emerald-600',
   feature_unlock: 'from-purple-500 to-violet-600',
   priority_support: 'from-blue-500 to-cyan-600',
-  training_priority: 'from-orange-500 to-amber-600',
+  training_priority: 'from-primary-500 to-accent-500',
   merchandise: 'from-pink-500 to-rose-600',
 };
 

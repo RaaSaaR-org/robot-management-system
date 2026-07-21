@@ -26,9 +26,14 @@ vi.mock('../../repositories/index.js', () => ({
     getCountsBySeverity: vi.fn(),
     create: vi.fn(),
     acknowledge: vi.fn(),
+    acknowledgeMany: vi.fn().mockResolvedValue(0),
+    expireAutoDismissed: vi.fn().mockResolvedValue(0),
     delete: vi.fn(),
     deleteAcknowledged: vi.fn(),
     deleteAll: vi.fn(),
+  },
+  robotRepository: {
+    findAll: vi.fn().mockResolvedValue([]),
   },
 }));
 

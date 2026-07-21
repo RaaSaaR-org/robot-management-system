@@ -7,6 +7,7 @@
 
 import { cn } from '@/shared/utils/cn';
 import { type ProcessStep as TaskStep, type ProcessStepStatus as TaskStepStatus, PROCESS_STEP_STATUS_LABELS as TASK_STEP_STATUS_LABELS } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -166,12 +167,12 @@ export function TaskTimeline({
                     <div className="flex items-center gap-2 mt-1 text-xs text-theme-tertiary">
                       {step.startedAt && (
                         <span>
-                          Started: {new Date(step.startedAt).toLocaleTimeString()}
+                          Started: {new Date(step.startedAt).toLocaleTimeString(UI_DATE_LOCALE)}
                         </span>
                       )}
                       {step.completedAt && (
                         <span>
-                          Completed: {new Date(step.completedAt).toLocaleTimeString()}
+                          Completed: {new Date(step.completedAt).toLocaleTimeString(UI_DATE_LOCALE)}
                         </span>
                       )}
                     </div>

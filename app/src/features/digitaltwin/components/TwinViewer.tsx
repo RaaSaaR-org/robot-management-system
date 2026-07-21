@@ -20,6 +20,7 @@ import { TwinBackdrop, type TwinBackdropKind } from './TwinBackdrop';
 import { ZoneVolumes } from './ZoneVolumes';
 import { RobotPathTrail } from './RobotPathTrail';
 import { LivePoses } from './LivePoses';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface TwinViewerProps {
   cloud: AccumulatedCloud | null;
@@ -156,10 +157,10 @@ export const TwinViewer = memo(function TwinViewer({
             <span className="text-white/90">{dims.width.toFixed(1)} × {dims.length.toFixed(1)} m</span>
             <span>·</span>
             <span>{Math.round(dims.area)} m²</span>
-            {cloud && <><span>·</span><span>{cloud.pointCount.toLocaleString()} pts</span></>}
+            {cloud && <><span>·</span><span>{cloud.pointCount.toLocaleString(UI_DATE_LOCALE)} pts</span></>}
           </>
         ) : cloud ? (
-          `${cloud.pointCount.toLocaleString()} pts`
+          `${cloud.pointCount.toLocaleString(UI_DATE_LOCALE)} pts`
         ) : backdropKind === 'mesh' && meshUrl ? (
           'mesh'
         ) : (

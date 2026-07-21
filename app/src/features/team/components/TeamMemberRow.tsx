@@ -9,6 +9,7 @@
 import { useState } from 'react';
 
 import type { TeamMember, AssignableRole } from '../types/team.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 interface TeamMemberRowProps {
   member: TeamMember;
@@ -32,7 +33,7 @@ function formatLastLogin(iso: string | null): string {
   if (diffDays === 0) return 'today';
   if (diffDays === 1) return 'yesterday';
   if (diffDays < 7) return `${diffDays} days ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(UI_DATE_LOCALE);
 }
 
 function extractMessage(err: unknown, fallback: string): string {

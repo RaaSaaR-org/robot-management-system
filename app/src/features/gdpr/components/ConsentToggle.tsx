@@ -6,6 +6,7 @@
 
 import type { UserConsent, ConsentType } from '../types';
 import { CONSENT_TYPE_LABELS, CONSENT_TYPE_DESCRIPTIONS } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface ConsentToggleProps {
   consent: UserConsent | null;
@@ -41,12 +42,12 @@ export function ConsentToggle({
         <p className="text-sm text-theme-secondary mt-1">{description}</p>
         {consent?.grantedAt && granted && (
           <p className="text-xs text-theme-tertiary mt-2">
-            Granted on {new Date(consent.grantedAt).toLocaleDateString()}
+            Granted on {new Date(consent.grantedAt).toLocaleDateString(UI_DATE_LOCALE)}
           </p>
         )}
         {consent?.revokedAt && !granted && (
           <p className="text-xs text-theme-tertiary mt-2">
-            Revoked on {new Date(consent.revokedAt).toLocaleDateString()}
+            Revoked on {new Date(consent.revokedAt).toLocaleDateString(UI_DATE_LOCALE)}
           </p>
         )}
       </div>

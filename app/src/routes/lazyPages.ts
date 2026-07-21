@@ -18,13 +18,6 @@ export const LazyDashboardPage = lazy(() =>
 );
 
 /**
- * Robots list page - All robots with filtering
- */
-export const LazyRobotsPage = lazy(() =>
-  import('@/features/robots').then((m) => ({ default: m.RobotsPage }))
-);
-
-/**
  * Robot detail page - Single robot view
  */
 export const LazyRobotDetailPage = lazy(() =>
@@ -77,24 +70,10 @@ export const LazyAlertsPage = lazy(() =>
 );
 
 /**
- * A2A page - Agent-to-Agent communication (legacy, replaced by ChatPage)
- */
-export const LazyA2APage = lazy(() =>
-  import('@/features/a2a').then((m) => ({ default: m.A2APage }))
-);
-
-/**
  * A2A Chat page - Main chat interface
  */
 export const LazyA2AChatPage = lazy(() =>
   import('@/features/a2a').then((m) => ({ default: m.ChatPage }))
-);
-
-/**
- * Orchestrator Chat page - Chat with intelligent agent routing
- */
-export const LazyOrchestratorChatPage = lazy(() =>
-  import('@/features/a2a').then((m) => ({ default: m.OrchestratorChatPage }))
 );
 
 /**
@@ -126,13 +105,6 @@ export const LazyA2AEventsPage = lazy(() =>
 );
 
 /**
- * Explainability page - AI decision transparency (EU AI Act)
- */
-export const LazyExplainabilityPage = lazy(() =>
-  import('@/features/explainability').then((m) => ({ default: m.ExplainabilityPage }))
-);
-
-/**
  * Compliance page - Audit logging (EU AI Act Art. 12, GDPR Art. 30)
  */
 export const LazyCompliancePage = lazy(() =>
@@ -140,38 +112,10 @@ export const LazyCompliancePage = lazy(() =>
 );
 
 /**
- * GDPR Portal page - Data subject rights self-service (GDPR Articles 15-22)
- */
-export const LazyGDPRPortalPage = lazy(() =>
-  import('@/features/gdpr').then((m) => ({ default: m.GDPRPortalPage }))
-);
-
-/**
- * Incidents page - Incident management and regulatory reporting
- */
-export const LazyIncidentsPage = lazy(() =>
-  import('@/features/incidents').then((m) => ({ default: m.IncidentsPage }))
-);
-
-/**
  * Incident detail page - Single incident view
  */
 export const LazyIncidentDetailPage = lazy(() =>
   import('@/features/incidents').then((m) => ({ default: m.IncidentDetailPage }))
-);
-
-/**
- * Oversight page - Human oversight dashboard (EU AI Act Art. 14)
- */
-export const LazyOversightPage = lazy(() =>
-  import('@/features/oversight').then((m) => ({ default: m.OversightPage }))
-);
-
-/**
- * Approvals page - Human approval workflows (GDPR Art. 22, AI Act Art. 14)
- */
-export const LazyApprovalsPage = lazy(() =>
-  import('@/features/approvals').then((m) => ({ default: m.ApprovalsPage }))
 );
 
 /**
@@ -231,13 +175,6 @@ export const LazyDeploymentDetailPage = lazy(() =>
 );
 
 /**
- * Skills page - Skill library management
- */
-export const LazySkillsPage = lazy(() =>
-  import('@/features/deployment').then((m) => ({ default: m.SkillsPage }))
-);
-
-/**
  * Marketplace browse page
  */
 export const LazyMarketplacePage = lazy(() =>
@@ -259,13 +196,6 @@ export const LazyMyMarketplacePage = lazy(() =>
 );
 
 /**
- * Evaluation dashboard page - VLA model evaluation metrics
- */
-export const LazyEvaluationDashboardPage = lazy(() =>
-  import('@/features/evaluation').then((m) => ({ default: m.EvaluationDashboardPage }))
-);
-
-/**
  * Updates page - Secure OTA update management (CRA Art. 13, MR Art. 10)
  */
 export const LazyUpdatesPage = lazy(() =>
@@ -273,17 +203,24 @@ export const LazyUpdatesPage = lazy(() =>
 );
 
 /**
- * Simulation page - MuJoCo/Isaac Lab policy testing (TASK-081)
- */
-export const LazySimulationPage = lazy(() =>
-  import('@/features/simulation').then((m) => ({ default: m.SimulationPage }))
-);
-
-/**
  * Pipeline page - unified training pipeline overview (TASK-134)
  */
 export const LazyPipelinePage = lazy(() =>
   import('@/features/pipeline').then((m) => ({ default: m.PipelinePage }))
+);
+
+/**
+ * Fleet Learning page - Federated learning rounds, privacy budgets, ROHE
+ */
+export const LazyFleetLearningPage = lazy(() =>
+  import('@/features/fleetlearning').then((m) => ({ default: m.FleetLearningPage }))
+);
+
+/**
+ * Fleet Learning round detail page - Single federated round view
+ */
+export const LazyFleetLearningRoundDetailPage = lazy(() =>
+  import('@/features/fleetlearning').then((m) => ({ default: m.RoundDetailPage }))
 );
 
 // ============================================================================

@@ -166,7 +166,11 @@ export class RobotStateManager {
       id: config.id,
       name: config.name,
       model: config.model,
-      serialNumber: `SIM-${Date.now()}`,
+      // Deterministic sim serial: derived from the robot id, NOT a per-boot
+      // timestamp, so the agent and the server's fleet record agree across
+      // restarts. When real hardware fronts this agent, getRobotInterface
+      // reports 'unknown' instead of any fake SIM- value.
+      serialNumber: `SIM-${config.id}`,
       robotClass: config.robotClass,
       robotType: config.robotType,
       maxPayloadKg: config.maxPayloadKg,
@@ -337,24 +341,39 @@ export class RobotStateManager {
   }
 
   getRobotInterface(): Robot {
+    const hardwareConnected = hardwareClient.isConnected();
+    // Single battery source: the same hardware-over-sim resolution as
+    // getTelemetry(), so /robots/:id, /health and /telemetry never disagree.
+    const realBattery = hardwareConnected ? hardwareClient.getBattery() : null;
+    const batteryLevel =
+      this.state.robotType === 'so101'
+        ? null // SO-101 is AC-powered → null signals "no battery"
+        : Math.round(realBattery ? realBattery.soc : this.state.batteryLevel);
+
     return {
       id: this.state.id,
       name: this.state.name,
       model: this.state.model,
-      serialNumber: this.state.serialNumber,
+      // Honest identity: with real hardware attached we have no way to read
+      // the robot's serial/firmware/IP through the sidecar yet, so report an
+      // explicit 'unknown' rather than fake SIM- values. In sim mode the
+      // stable SIM-<robotId> serial and sim firmware are truthful.
+      serialNumber: hardwareConnected ? 'unknown' : this.state.serialNumber,
       status: this.state.status,
-      // SO-101 is AC-powered → null signals "no battery"
-      batteryLevel: this.state.robotType === 'so101' ? null : Math.round(this.state.batteryLevel),
+      batteryLevel,
       location: { ...this.state.location },
       lastSeen: this.state.lastSeen,
       currentTaskId: this.state.currentTaskId,
       currentTaskName: this.state.currentTaskName,
       capabilities: [...this.state.capabilities],
-      firmware: this.state.firmware,
-      ipAddress: this.state.ipAddress,
+      firmware: hardwareConnected ? 'unknown' : this.state.firmware,
+      ipAddress: hardwareConnected ? 'unknown' : this.state.ipAddress,
       metadata: {
         heldObject: this.state.heldObject,
-        isSimulated: true,
+        // Truthful sim flag: false while a real robot feeds this agent via the
+        // sidecar (per-group honesty lives in telemetry.simulated[]).
+        isSimulated: !hardwareConnected,
+        hardwareConnected,
         robotClass: this.state.robotClass,
         robotType: this.state.robotType,
         maxPayloadKg: this.state.maxPayloadKg,

@@ -78,7 +78,12 @@ describe('generateTelemetry', () => {
     const state = createMockState();
     const telemetry = generateTelemetry(state);
 
-    expect(telemetry.cpuUsage).toBeGreaterThanOrEqual(0);
+    // CPU usage is delta-based: undefined until the first sampling interval
+    // has elapsed (honest 'n/a'), afterwards a real 0..100 percentage.
+    if (telemetry.cpuUsage !== undefined) {
+      expect(telemetry.cpuUsage).toBeGreaterThanOrEqual(0);
+      expect(telemetry.cpuUsage).toBeLessThanOrEqual(100);
+    }
     expect(telemetry.memoryUsage).toBeGreaterThanOrEqual(0);
     expect(telemetry.memoryUsage).toBeLessThanOrEqual(100);
   });

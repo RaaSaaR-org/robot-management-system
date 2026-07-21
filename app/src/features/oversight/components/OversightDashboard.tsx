@@ -48,11 +48,13 @@ export interface OversightDashboardProps {
 interface StatCardProps {
   label: string;
   value: number;
+  /** Unit suffix rendered after the value (e.g. '%') */
+  unit?: string;
   icon: typeof Shield;
   status?: 'good' | 'warning' | 'error' | 'neutral';
 }
 
-function StatCard({ label, value, icon: Icon, status = 'neutral' }: StatCardProps) {
+function StatCard({ label, value, unit, icon: Icon, status = 'neutral' }: StatCardProps) {
   const statusStyles = {
     good: 'text-green-500',
     warning: 'text-yellow-500',
@@ -65,7 +67,10 @@ function StatCard({ label, value, icon: Icon, status = 'neutral' }: StatCardProp
       <div className="flex items-center gap-3">
         <Icon className={cn('h-8 w-8', statusStyles[status])} />
         <div>
-          <p className="text-2xl font-bold text-theme-primary">{value}</p>
+          <p className="text-2xl font-bold text-theme-primary">
+            {value}
+            {unit && <span className="text-base font-semibold">{unit}</span>}
+          </p>
           <p className="text-sm text-theme-muted">{label}</p>
         </div>
       </div>
@@ -199,7 +204,9 @@ export function OversightDashboard({ className }: OversightDashboardProps) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Human Oversight</h1>
+          {/* Rendered as an embedded tab inside CompliancePage, which owns the
+              page-level h1, so this stays a demoted h2 */}
+          <h2 className="text-lg font-semibold text-theme-primary">Human Oversight</h2>
           <p className="text-theme-muted">
             EU AI Act Article 14 - Control & Intervention Center
           </p>
@@ -240,6 +247,7 @@ export function OversightDashboard({ className }: OversightDashboardProps) {
         <StatCard
           label="Compliance Rate"
           value={Math.round(dashboardStats?.verificationComplianceRate ?? 100)}
+          unit="%"
           icon={CheckCircle}
           status={
             (dashboardStats?.verificationComplianceRate ?? 100) >= 90

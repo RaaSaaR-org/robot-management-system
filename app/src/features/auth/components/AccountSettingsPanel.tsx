@@ -9,6 +9,7 @@ import { Card } from '@/shared/components/ui';
 import { useAuth } from '../hooks/useAuth';
 import { ChangePasswordForm } from './ChangePasswordForm';
 import { SecuritySettings } from './SecuritySettings';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface AccountSettingsPanelProps {
   /** Callback when password is changed */
@@ -71,7 +72,7 @@ export function AccountSettingsPanel({ onPasswordChanged }: AccountSettingsPanel
                   Last Login
                 </label>
                 <p className="mt-1 text-gray-900 dark:text-white">
-                  {new Date(user.lastLoginAt).toLocaleDateString()}
+                  {new Date(user.lastLoginAt).toLocaleDateString(UI_DATE_LOCALE)}
                 </p>
               </div>
             )}
@@ -81,7 +82,7 @@ export function AccountSettingsPanel({ onPasswordChanged }: AccountSettingsPanel
                 Member Since
               </label>
               <p className="mt-1 text-gray-900 dark:text-white">
-                {new Date(user.createdAt).toLocaleDateString()}
+                {new Date(user.createdAt).toLocaleDateString(UI_DATE_LOCALE)}
               </p>
             </div>
           </div>

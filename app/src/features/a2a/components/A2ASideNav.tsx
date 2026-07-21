@@ -69,6 +69,7 @@ export const A2ASideNav = memo(function A2ASideNav({
             collapsed && 'justify-center px-2'
           )}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           <svg
             className={cn('w-5 h-5 shrink-0 transition-transform', !collapsed && 'rotate-180')}
@@ -128,6 +129,7 @@ export const A2ASideNav = memo(function A2ASideNav({
         <button
           onClick={onSettingsClick}
           title={collapsed ? 'Settings' : undefined}
+          aria-label="Settings"
           className={cn(
             'flex items-center gap-3 w-full rounded-brand transition-colors',
             collapsed ? 'px-2.5 py-2.5 justify-center' : 'px-3 py-2.5',

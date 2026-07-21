@@ -476,18 +476,14 @@ function CompliancePageInner() {
         </div>
       </div>
 
-      {/* Content — the Tabs header scrolls horizontally (scrollbar hidden);
-          the gradient hints that more tabs are available off-screen. */}
-      <div className="flex-1 overflow-hidden p-6 relative">
+      {/* Content — the Tabs header wraps onto multiple rows so the last tab
+          ("Data Privacy") is never clipped at desktop widths. */}
+      <div className="flex-1 overflow-hidden p-6">
         <Tabs
           tabs={tabs}
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          className="h-full"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute top-6 right-6 h-10 w-12 bg-gradient-to-r from-transparent to-[var(--bg-primary)]"
+          className="h-full [&_[role=tablist]]:flex-wrap"
         />
       </div>
 

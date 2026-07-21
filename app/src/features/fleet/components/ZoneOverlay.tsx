@@ -6,6 +6,7 @@
  */
 
 import type { ZoneOverlayProps, FloorZone } from '../types/fleet.types';
+import { MAINTENANCE_COLOR, MAINTENANCE_COLOR_RGB } from '../types/fleet.types';
 
 // ============================================================================
 // CONSTANTS
@@ -24,8 +25,8 @@ const ZONE_COLORS = {
     strokeOpacity: 0.5,
   },
   maintenance: {
-    fill: 'rgba(249, 115, 22, 0.08)',
-    stroke: '#f97316',
+    fill: `rgba(${MAINTENANCE_COLOR_RGB}, 0.08)`,
+    stroke: MAINTENANCE_COLOR,
     strokeOpacity: 0.4,
   },
   restricted: {

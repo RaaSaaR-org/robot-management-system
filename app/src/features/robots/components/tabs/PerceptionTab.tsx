@@ -18,6 +18,7 @@ import { frameToPcdBlob, downloadBlob } from '../../utils/pointcloud';
 import type { RobotType } from '../../types/robots.types';
 import type { PerceptionTabProps } from './types';
 import type { PointCloudColorMode } from '../visualization';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 const PointCloudViewer = lazy(() =>
   import('../visualization/PointCloudViewer').then((m) => ({ default: m.PointCloudViewer })),
@@ -168,7 +169,7 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
               )}
               {frame && (
                 <span className="text-xs text-theme-tertiary tabular-nums">
-                  {frame.pointCount.toLocaleString()} pts
+                  {frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts
                 </span>
               )}
             </div>
@@ -256,7 +257,7 @@ export function PerceptionTab({ robot, robotId, telemetry }: PerceptionTabProps)
             <h2 className="text-lg font-semibold text-theme-primary">Recorded Scans</h2>
             {lastUpdate && (
               <span className="text-xs text-theme-tertiary">
-                Live updated {lastUpdate.toLocaleTimeString()}
+                Live updated {lastUpdate.toLocaleTimeString(UI_DATE_LOCALE)}
               </span>
             )}
           </div>

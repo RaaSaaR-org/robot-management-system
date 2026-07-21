@@ -400,6 +400,44 @@ export class SafetyMonitor {
     if (!this.serverConnected) {
       this.serverConnected = true;
       console.log('[SafetyMonitor] Server connection restored');
+      this.clearCommunicationLossStop();
+    }
+  }
+
+  /**
+   * Connectivity restored: un-latch the communication-timeout protective stop.
+   * Protective stops auto-reset (requiresManualReset=false) and the trigger
+   * condition — a stale heartbeat — is gone the moment fresh server traffic
+   * arrives, so both the E-stop latch and the robot-state warning are cleared
+   * here instead of latching forever. Only the comms-loss stop is touched:
+   * stops with other causes (tilt, force, …) keep their own reset path.
+   */
+  private clearCommunicationLossStop(): void {
+    const COMM_REASON = 'Server communication lost';
+
+    if (
+      this.estopState.status === 'triggered' &&
+      this.estopState.triggeredBy === 'system' &&
+      this.estopState.reason === COMM_REASON
+    ) {
+      this.estopState = {
+        status: 'armed',
+        stopCategory: this.config.defaultStopCategory,
+        requiresManualReset: this.config.estopRequiresManualReset,
+      };
+      console.log('[SafetyMonitor] Communication restored — protective stop cleared');
+    }
+
+    // Clear the latched warning from robot state — this also handles a stale
+    // comms-loss warning restored from persisted state after a restart.
+    const state = this.stateGetter();
+    if (state.warnings.some((w) => w.includes(COMM_REASON))) {
+      this.stateUpdater((s) => {
+        s.warnings = s.warnings.filter((w) => !w.includes(COMM_REASON));
+        if (s.currentTaskName === 'Protective stop') s.currentTaskName = undefined;
+        s.updatedAt = new Date().toISOString();
+      });
+      this.changeNotifier();
     }
   }
 
@@ -923,6 +961,14 @@ export class SafetyMonitor {
       activeSpeedLimit: this.getEffectiveSpeedLimit(),
       systemHealthy: this.estopState.status === 'armed',
       warnings: [
+        // An active E-stop / protective stop must appear in the SAME payload
+        // that reports systemHealthy=false — /safety must never be
+        // self-contradictory (healthy + hidden active stop, or vice versa).
+        ...(this.estopState.status === 'triggered' && this.estopState.reason
+          ? [
+              `${this.estopState.stopCategory === 0 ? 'Emergency stop' : 'Protective stop'}: ${this.estopState.reason}`,
+            ]
+          : []),
         ...(this.speedLimitActive ? [this.speedLimitReason] : []),
         ...(this.tiltWarning ? [this.tiltWarning] : []),
         ...this.jointLimitWarnings,

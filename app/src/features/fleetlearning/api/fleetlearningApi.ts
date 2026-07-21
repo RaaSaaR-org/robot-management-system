@@ -34,8 +34,8 @@ const ENDPOINTS = {
   // Privacy
   privacyBudgets: '/federated/privacy-budgets',
   privacyBudget: (robotId: string) => `/federated/privacy-budgets/${robotId}`,
-  // ROHE
-  rohe: '/federated/rohe',
+  // ROHE (server route: GET /api/federated/metrics/rohe)
+  rohe: '/federated/metrics/rohe',
   // Convergence
   convergence: '/federated/convergence',
 } as const;

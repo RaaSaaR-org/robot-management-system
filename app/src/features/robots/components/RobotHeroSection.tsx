@@ -167,7 +167,8 @@ const HexagonalDataHUD = memo(function HexagonalDataHUD({
   const showUnavailable = isOffline && !telemetry;
 
   // Get telemetry values with fallbacks (null means unavailable)
-  const cpu = showUnavailable ? null : (telemetry?.cpuUsage ?? 0);
+  // null CPU = robot reports no CPU data — render N/A instead of a pinned 0%
+  const cpu = showUnavailable ? null : (telemetry?.cpuUsage ?? null);
   const memory = showUnavailable ? null : (telemetry?.memoryUsage ?? 0);
   const temp = showUnavailable ? null : (telemetry?.temperature ?? 0);
   const speed = telemetry?.speed;

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { formatTimeAgo, formatPercent, formatWithUnit } from '../format';
+import { UI_DATE_LOCALE, formatDateTime, formatTimeAgo, formatPercent, formatWithUnit } from '../format';
 
 describe('formatTimeAgo', () => {
   const NOW = new Date('2026-06-22T12:00:00.000Z');
@@ -43,14 +43,41 @@ describe('formatTimeAgo', () => {
     expect(formatTimeAgo(ago(6 * 24 * 60 * 60 * 1000))).toBe('6d ago');
   });
 
-  it('falls back to locale date string at 7 days or more', () => {
+  it('falls back to the fixed English locale date string at 7 days or more', () => {
     const old = ago(7 * 24 * 60 * 60 * 1000);
-    expect(formatTimeAgo(old)).toBe(new Date(old).toLocaleDateString());
+    expect(formatTimeAgo(old)).toBe(new Date(old).toLocaleDateString(UI_DATE_LOCALE));
   });
 
   it('handles boundary exactly at 60 minutes -> 1h', () => {
     // 60 mins = exactly 1 hour, diffHours < 24 branch
     expect(formatTimeAgo(ago(60 * 60 * 1000))).toBe('1h ago');
+  });
+});
+
+describe('formatDateTime', () => {
+  it('formats an ISO string with the fixed English locale', () => {
+    const iso = '2026-07-11T13:15:00.000Z';
+    expect(formatDateTime(iso)).toBe(
+      new Date(iso).toLocaleString(UI_DATE_LOCALE, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    );
+  });
+
+  it('renders "-" for null/undefined', () => {
+    expect(formatDateTime(null)).toBe('-');
+    expect(formatDateTime(undefined)).toBe('-');
+  });
+
+  it('accepts Intl option overrides', () => {
+    const iso = '2026-07-11T13:15:00.000Z';
+    expect(formatDateTime(iso, { month: 'short', day: 'numeric' })).toBe(
+      new Date(iso).toLocaleString(UI_DATE_LOCALE, { month: 'short', day: 'numeric' })
+    );
   });
 });
 

@@ -249,7 +249,7 @@ export interface RobotTelemetry {
   batteryVoltage?: number | null;
   batteryTemperature?: number | null;
   powerSource?: 'battery' | 'ac_powered';
-  cpuUsage: number;
+  cpuUsage?: number | null;           // absent/null = no CPU data from the robot (render "n/a")
   memoryUsage: number;
   diskUsage?: number;
   temperature: number;

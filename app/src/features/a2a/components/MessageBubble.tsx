@@ -6,7 +6,7 @@
 
 import { memo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import { Spinner } from '@/shared/components/ui/Spinner';
 import { OrchestrationChainSummary } from './OrchestrationChainSummary';
 import type { A2AMessage, A2APart, FormSchema } from '../types';
@@ -248,7 +248,7 @@ export const MessageBubble = memo(function MessageBubble({
                 : 'text-theme-muted'
             )}
           >
-            {new Date(message.timestamp).toLocaleTimeString()}
+            {new Date(message.timestamp).toLocaleTimeString(UI_DATE_LOCALE)}
           </div>
         )}
       </div>

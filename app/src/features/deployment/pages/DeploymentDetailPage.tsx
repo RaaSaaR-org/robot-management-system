@@ -7,7 +7,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Button, Badge } from '@/shared/components/ui';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import { useDeployment } from '../hooks/useDeployment';
 import { useDeploymentMetrics } from '../hooks/useDeploymentMetrics';
 import { useDeploymentProgress } from '../hooks/useDeploymentProgress';
@@ -141,7 +141,7 @@ export function DeploymentDetailPage() {
             <p className="text-sm text-theme-secondary mt-1">
               Model v{deployment.modelVersion?.version} · Started{' '}
               {deployment.startedAt
-                ? new Date(deployment.startedAt).toLocaleString()
+                ? new Date(deployment.startedAt).toLocaleString(UI_DATE_LOCALE)
                 : 'Not started'}
             </p>
           </div>
@@ -211,14 +211,14 @@ export function DeploymentDetailPage() {
                   <div>
                     <span className="text-theme-secondary">Created</span>
                     <p className="font-medium text-theme-primary">
-                      {new Date(deployment.createdAt).toLocaleString()}
+                      {new Date(deployment.createdAt).toLocaleString(UI_DATE_LOCALE)}
                     </p>
                   </div>
                   {deployment.startedAt && (
                     <div>
                       <span className="text-theme-secondary">Started</span>
                       <p className="font-medium text-theme-primary">
-                        {new Date(deployment.startedAt).toLocaleString()}
+                        {new Date(deployment.startedAt).toLocaleString(UI_DATE_LOCALE)}
                       </p>
                     </div>
                   )}
@@ -226,7 +226,7 @@ export function DeploymentDetailPage() {
                     <div>
                       <span className="text-theme-secondary">Completed</span>
                       <p className="font-medium text-theme-primary">
-                        {new Date(deployment.completedAt).toLocaleString()}
+                        {new Date(deployment.completedAt).toLocaleString(UI_DATE_LOCALE)}
                       </p>
                     </div>
                   )}

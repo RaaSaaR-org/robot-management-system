@@ -6,8 +6,10 @@
 
 import { cn } from '@/shared/utils/cn';
 import { Bot, Database, Clock, AlertCircle } from 'lucide-react';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { ParticipantStatusBadge } from './ParticipantStatusBadge';
 import type { FederatedParticipant } from '../types/fleetlearning.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -55,7 +57,7 @@ function ParticipantRow({ participant }: ParticipantRowProps) {
         {participant.localSamples !== undefined && (
           <div className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
             <Database className="w-4 h-4" />
-            <span>{participant.localSamples.toLocaleString()}</span>
+            <span>{participant.localSamples.toLocaleString(UI_DATE_LOCALE)}</span>
           </div>
         )}
 
@@ -101,11 +103,7 @@ function ParticipantRow({ participant }: ParticipantRowProps) {
 
 export function ParticipantList({ participants, className }: ParticipantListProps) {
   if (participants.length === 0) {
-    return (
-      <div className={cn('text-center py-8 text-gray-500 dark:text-gray-400', className)}>
-        No participants yet
-      </div>
-    );
+    return <EmptyState size="sm" className={className} title="No participants yet" />;
   }
 
   // Group by status

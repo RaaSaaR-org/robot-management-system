@@ -142,6 +142,19 @@ export interface RoundMetrics {
   };
 }
 
+/**
+ * Convergence data point (for charts) — shape mirrors the frontend's
+ * `ConvergenceDataPoint` in app/src/features/fleetlearning/types.
+ */
+export interface ConvergenceDataPoint {
+  roundNumber: number;
+  roundId: string;
+  loss: number;
+  accuracy?: number;
+  participants: number;
+  timestamp: string;
+}
+
 // ============================================================================
 // PARTICIPANT TYPES
 // ============================================================================

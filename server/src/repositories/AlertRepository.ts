@@ -198,6 +198,44 @@ export class AlertRepository {
   }
 
   /**
+   * Acknowledge many alerts at once (auto-resolve sweeps).
+   * Only touches rows that are still unacknowledged. Returns the count updated.
+   */
+  async acknowledgeMany(ids: string[], userId?: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await prisma.alert.updateMany({
+      where: { id: { in: ids }, acknowledged: false },
+      data: {
+        acknowledged: true,
+        acknowledgedAt: new Date(),
+        acknowledgedBy: userId,
+      },
+    });
+    return result.count;
+  }
+
+  /**
+   * Acknowledge unacknowledged alerts whose autoDismissMs window has elapsed.
+   * This makes "active" a single consistent definition server-side: an
+   * auto-dismissing info alert stops counting once its window is over, instead
+   * of each frontend consumer hiding it (or not) on its own timer.
+   * Returns the count of expired alerts.
+   */
+  async expireAutoDismissed(): Promise<number> {
+    const candidates = await prisma.alert.findMany({
+      where: { acknowledged: false, autoDismissMs: { not: null } },
+      select: { id: true, createdAt: true, autoDismissMs: true },
+    });
+
+    const now = Date.now();
+    const expiredIds = candidates
+      .filter((a) => a.autoDismissMs !== null && a.createdAt.getTime() + a.autoDismissMs < now)
+      .map((a) => a.id);
+
+    return this.acknowledgeMany(expiredIds, 'system:auto-dismiss');
+  }
+
+  /**
    * Delete an alert
    */
   async delete(id: string): Promise<boolean> {
@@ -228,13 +266,16 @@ export class AlertRepository {
   }
 
   /**
-   * Get alert counts by severity
+   * Get alert counts by severity.
+   * Uses the exact same where clause as findActive (unacknowledged) so the
+   * severity tiles, the active list, and any badge derived from either can
+   * never disagree at the same moment.
    */
   async getCountsBySeverity(): Promise<Record<AlertSeverity, number>> {
     const counts = await prisma.alert.groupBy({
       by: ['severity'],
       _count: { id: true },
-      where: { acknowledged: false },
+      where: this.buildWhereClause({ acknowledged: false }),
     });
 
     const result: Record<AlertSeverity, number> = {

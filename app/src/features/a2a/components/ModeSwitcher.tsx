@@ -35,7 +35,7 @@ export const ModeSwitcher = memo(function ModeSwitcher({
         onClick={() => onChange('direct')}
         disabled={disabled}
         className={cn(
-          'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200',
+          'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200 whitespace-nowrap',
           mode === 'direct'
             ? 'bg-cobalt-500 text-white shadow-sm'
             : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'
@@ -48,7 +48,7 @@ export const ModeSwitcher = memo(function ModeSwitcher({
         onClick={() => onChange('orchestration')}
         disabled={disabled}
         className={cn(
-          'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200',
+          'px-3 py-1.5 text-xs font-medium rounded-brand transition-all duration-200 whitespace-nowrap',
           mode === 'orchestration'
             ? 'bg-cobalt-500 text-white shadow-sm'
             : 'text-theme-secondary hover:text-theme-primary hover:bg-theme-hover'

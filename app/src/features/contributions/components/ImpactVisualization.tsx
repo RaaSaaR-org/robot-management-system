@@ -14,6 +14,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import type { ImpactSummary, PerformanceImprovement } from '../types/contributions.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -226,7 +227,7 @@ export function ImpactVisualization({
         <StatCard
           icon={Database}
           label="Trajectories Used"
-          value={impact.totalTrajectoriesUsed.toLocaleString()}
+          value={impact.totalTrajectoriesUsed.toLocaleString(UI_DATE_LOCALE)}
           subtext="data points"
         />
         <StatCard

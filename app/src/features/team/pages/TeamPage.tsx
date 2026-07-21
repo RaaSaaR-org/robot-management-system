@@ -8,6 +8,8 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/shared/components/ui/Button';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { useFeatures } from '@/shared/hooks';
 import { useTeamStore } from '../store/teamStore';
 import { useServiceAccountsStore } from '../store/serviceAccountsStore';
@@ -123,23 +125,26 @@ export function TeamPage() {
       {/* ================================================================== */}
       {/* TEAM MEMBERS */}
       {/* ================================================================== */}
-      <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-theme-primary">Team</h1>
-          <p className="text-sm text-theme-secondary mt-1">
+      <PageHeader
+        className="mb-6"
+        title="Team"
+        subtitle={
+          <>
             Manage members of your organization. Add new teammates with a
             temporary password — they'll set their own on first login.
-          </p>
-        </div>
-        <Button
-          variant="primary"
-          size="md"
-          onClick={() => setAddMemberOpen(true)}
-          leftIcon={<PlusIcon />}
-        >
-          Add teammate
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <Button
+            variant="primary"
+            size="md"
+            onClick={() => setAddMemberOpen(true)}
+            leftIcon={<PlusIcon />}
+          >
+            Add teammate
+          </Button>
+        }
+      />
 
       {membersLoaded && (
         <div className="mb-6 flex items-center gap-6 text-sm text-theme-tertiary">
@@ -169,8 +174,8 @@ export function TeamPage() {
       {!membersLoaded && membersLoading ? (
         <div className="text-sm text-theme-tertiary">Loading team…</div>
       ) : members.length === 0 ? (
-        <div className="rounded-brand border border-theme bg-theme-card px-4 py-8 text-center text-sm text-theme-tertiary">
-          No team members yet.
+        <div className="rounded-brand border border-theme bg-theme-card">
+          <EmptyState size="sm" title="No team members yet" />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-brand border border-theme bg-theme-card">
@@ -229,8 +234,8 @@ export function TeamPage() {
       {!accountsLoaded && accountsLoading ? (
         <div className="text-sm text-theme-tertiary">Loading service accounts…</div>
       ) : accounts.length === 0 ? (
-        <div className="rounded-brand border border-theme bg-theme-card px-4 py-8 text-center text-sm text-theme-tertiary">
-          No service accounts yet.
+        <div className="rounded-brand border border-theme bg-theme-card">
+          <EmptyState size="sm" title="No service accounts yet" />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-brand border border-theme bg-theme-card">

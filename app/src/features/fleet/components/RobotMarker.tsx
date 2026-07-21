@@ -6,6 +6,7 @@
  */
 
 import type { RobotMarkerProps } from '../types/fleet.types';
+import { MAINTENANCE_COLOR } from '../types/fleet.types';
 
 // ============================================================================
 // CONSTANTS
@@ -17,9 +18,15 @@ const STATUS_COLORS = {
   busy: '#3b82f6',     // blue
   charging: '#eab308', // yellow
   error: '#ef4444',    // red
-  maintenance: '#f97316', // orange
+  maintenance: MAINTENANCE_COLOR,
   offline: '#6b7280',  // gray
 } as const;
+
+/**
+ * Only truncate genuinely long names — real robot names like
+ * "Unitree G1 EDU" must render in full (there is ample space on the map).
+ */
+const MAX_LABEL_CHARS = 22;
 
 // ============================================================================
 // COMPONENT
@@ -147,7 +154,9 @@ export function RobotMarker({ robot, position, isSelected, onClick }: RobotMarke
         fill="#94a3b8"
         style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
       >
-        {robot.name.length > 10 ? `${robot.name.substring(0, 10)}...` : robot.name}
+        {robot.name.length > MAX_LABEL_CHARS
+          ? `${robot.name.substring(0, MAX_LABEL_CHARS - 1)}…`
+          : robot.name}
       </text>
 
       {/* Battery indicator for low battery (skip for AC-powered) */}

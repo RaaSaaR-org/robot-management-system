@@ -9,6 +9,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { Tabs } from '@/shared/components/ui/Tabs';
 import { FleetMap } from '../components/FleetMap';
 import { ZoneConfigPanel } from '../components/ZoneConfigPanel';
@@ -157,19 +158,13 @@ export function FleetPage({ className }: FleetPageProps) {
   return (
     <div className={cn('min-h-screen', className)}>
       <div className="mx-auto max-w-7xl px-4 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-theme-primary">
-                Fleet Management
-              </h1>
-              <p className="mt-1 text-sm text-theme-secondary">
-                Monitor robots and manage facility zones
-              </p>
-            </div>
-            {activeTab === 'map' && (
-              <div className="flex items-center gap-2">
+        <PageHeader
+          className="mb-8"
+          title="Fleet Management"
+          subtitle="Monitor robots and manage facility zones"
+          actions={
+            activeTab === 'map' && (
+              <>
                 <Button
                   variant={showZonePanel ? 'primary' : 'secondary'}
                   size="sm"
@@ -184,10 +179,10 @@ export function FleetPage({ className }: FleetPageProps) {
                 >
                   {editorMode === 'draw' ? 'Exit Draw Mode' : 'Draw Zone'}
                 </Button>
-              </div>
-            )}
-          </div>
-        </div>
+              </>
+            )
+          }
+        />
 
         <Tabs
           activeTab={activeTab}

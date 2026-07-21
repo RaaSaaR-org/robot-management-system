@@ -15,6 +15,7 @@ import { useRobotCommandHistory } from '../hooks/useCommand';
 import type { CommandHistoryEntry } from '../types/command.types';
 import { HISTORY_STATUS_LABELS, HISTORY_STATUS_COLORS } from '../types/command.types';
 import { COMMAND_TYPE_LABELS } from '@/features/robots/types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -58,7 +59,7 @@ function HistoryItem({ entry, onSelect }: HistoryItemProps) {
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(UI_DATE_LOCALE);
   }, [createdAt]);
 
   return (

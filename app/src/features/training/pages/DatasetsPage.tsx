@@ -18,6 +18,7 @@ import { GenerateSyntheticModal } from '../components/GenerateSyntheticModal';
 import { useDatasetsAutoFetch } from '../hooks';
 import { useTrainingStore } from '../store';
 import type { Dataset, DatasetQueryParams } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 /**
  * Main page for dataset management
@@ -191,7 +192,7 @@ export function DatasetsPage() {
           />
           <StatCard
             label="Total Frames"
-            value={datasets.reduce((acc, d) => acc + d.totalFrames, 0).toLocaleString()}
+            value={datasets.reduce((acc, d) => acc + d.totalFrames, 0).toLocaleString(UI_DATE_LOCALE)}
           />
         </div>
       )}

@@ -45,6 +45,15 @@ interface UseRobotWebSocketOptions {
   reconnectInterval?: number;
 }
 
+/**
+ * Robot-events WebSocket URL. The API-base derivation (`VITE_API_BASE_URL` →
+ * `ws://<api-host>/api/a2a/ws` instead of the Vite page origin) now lives in
+ * the shared `getWebSocketUrl` util so every WS hook benefits.
+ */
+function getRobotWebSocketUrl(): string {
+  return getWebSocketUrl();
+}
+
 // ============================================================================
 // HOOK
 // ============================================================================
@@ -62,7 +71,7 @@ interface UseRobotWebSocketOptions {
  */
 export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
   const {
-    url = getWebSocketUrl(),
+    url = getRobotWebSocketUrl(),
     autoReconnect = true,
     reconnectInterval = 5000,
   } = options;
@@ -89,21 +98,18 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
         switch (data.type) {
           case 'robot_registered':
             if (data.robot) {
-              console.log('[RobotWebSocket] Robot registered:', data.robot.name);
               addRobot(data.robot);
             }
             break;
 
           case 'robot_unregistered':
             if (data.robotId) {
-              console.log('[RobotWebSocket] Robot unregistered:', data.robotId);
               removeRobot(data.robotId);
             }
             break;
 
           case 'robot_status_changed':
             if (data.robot) {
-              console.log('[RobotWebSocket] Robot status changed:', data.robot.name, data.robot.status);
               updateRobot(data.robot);
             }
             break;
@@ -133,12 +139,10 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
           }
 
           case 'connected':
-            console.log('[RobotWebSocket] Connected to server');
             break;
 
           case 'safety:estop':
             if (data.event) {
-              console.log('[RobotWebSocket] E-stop event:', data.event.scope, data.event.reason);
               useSafetyStore.getState().addEvent(data.event);
             }
             break;
@@ -157,7 +161,6 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
   // Connect to WebSocket
   const connect = useCallback(() => {
     if (import.meta.env.VITE_DEMO_MODE === 'true') {
-      console.info('[Demo] WebSocket disabled in demo mode');
       return;
     }
 
@@ -168,18 +171,15 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
     intentionalCloseRef.current = false;
 
     try {
-      console.log('[RobotWebSocket] Connecting to', url);
       const ws = new WebSocket(url);
 
       ws.onopen = () => {
-        console.log('[RobotWebSocket] Connected');
         isConnectedRef.current = true;
       };
 
       ws.onmessage = handleMessage;
 
       ws.onclose = () => {
-        console.log('[RobotWebSocket] Disconnected');
         isConnectedRef.current = false;
 
         // A superseded socket (a newer connect() already replaced wsRef) must
@@ -194,7 +194,6 @@ export function useRobotWebSocket(options: UseRobotWebSocketOptions = {}) {
         // loop that keeps reopening the connection after teardown.
         if (autoReconnect && !intentionalCloseRef.current && !superseded) {
           reconnectTimeoutRef.current = setTimeout(() => {
-            console.log('[RobotWebSocket] Attempting to reconnect...');
             connect();
           }, reconnectInterval);
         }

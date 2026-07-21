@@ -9,6 +9,7 @@ import { Calendar, Database, FileStack, Award } from 'lucide-react';
 import { ContributionStatusBadge } from './ContributionStatusBadge';
 import type { DataContribution } from '../types/contributions.types';
 import { LICENSE_TYPE_LABELS, formatCredits } from '../types/contributions.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -68,7 +69,7 @@ export function ContributionCard({
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <FileStack size={16} className="text-gray-400" />
-          <span>{contribution.trajectoryCount.toLocaleString()} trajectories</span>
+          <span>{contribution.trajectoryCount.toLocaleString(UI_DATE_LOCALE)} trajectories</span>
         </div>
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <Database size={16} className="text-gray-400" />

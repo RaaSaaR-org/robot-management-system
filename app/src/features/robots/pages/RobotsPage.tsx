@@ -51,16 +51,14 @@ export function RobotsPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-primary">Robots</h1>
-          <p className="text-theme-secondary mt-1">Manage and monitor your robot fleet</p>
-        </div>
+      {/* No page heading here — this view is embedded as the "List" tab of
+          FleetPage, which already renders the page-level header. */}
+      <div className="flex items-center justify-end">
         <Button onClick={() => setIsAddDialogOpen(true)} className="gap-2">
           <PlusIcon className="w-5 h-5" />
           Add Robot
         </Button>
-      </header>
+      </div>
 
       <RobotList
         onSelectRobot={handleSelectRobot}

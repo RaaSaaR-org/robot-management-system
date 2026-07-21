@@ -92,6 +92,8 @@ import { taskDistributor } from './services/TaskDistributor.js';
 import { incidentService } from './services/IncidentService.js';
 import { notificationWorkflowService } from './services/NotificationWorkflowService.js';
 import { approvalWorkflowService } from './services/ApprovalWorkflowService.js';
+import { safetyService } from './services/SafetyService.js';
+import { alertService } from './services/AlertService.js';
 
 // Default CORS origins for development
 const DEFAULT_CORS_ORIGINS = ['http://localhost:1420', 'http://localhost:5173', 'http://localhost:3000'];
@@ -359,6 +361,21 @@ export function createApp(): Express {
 
   // Start robot health checks
   robotManager.startHealthChecks(30000);
+
+  // Start safety heartbeats to robot agents. The agents' SafetyMonitor treats
+  // a missing server heartbeat (>30 s, communicationTimeoutMs) as
+  // "communication lost" and raises a protective stop — so the server must
+  // send them continuously, not only after a manual
+  // POST /api/safety/heartbeats/start. 5 s gives a 6x margin; the per-cycle
+  // robot listing means reconnecting robots resume receiving heartbeats
+  // automatically once health checks mark them connected.
+  safetyService.startHeartbeats(5000);
+
+  // Start stale-alert sweep: expires elapsed auto-dismiss alerts, resolves
+  // alerts for robots that no longer exist, and clears offline/error alerts
+  // for robots that have recovered. Runs immediately (cleans rows left over
+  // from previous runs) and then every 60 s.
+  alertService.startStaleAlertSweep(60000);
 
   // Start task distributor (push model for task assignment)
   taskDistributor.start();

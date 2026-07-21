@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/shared/components/ui/Button';
+import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { useFeatures } from '@/shared/hooks';
 import { useOrganizationsStore } from '../store/organizationsStore';
 import { OrganizationCard } from '../components/OrganizationCard';
@@ -108,23 +109,26 @@ export function OrganizationsPage() {
       )}
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-theme-primary">Organizations</h1>
-          <p className="text-sm text-theme-secondary mt-1">
+      <PageHeader
+        className="mb-6"
+        title="Organizations"
+        subtitle={
+          <>
             Customer tenants on this NeoDEM instance. Each organization sees only
             its own robots, datasets, and training jobs.
-          </p>
-        </div>
-        <Button
-          variant="primary"
-          size="md"
-          onClick={handleCreate}
-          leftIcon={<PlusIcon />}
-        >
-          Create organization
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <Button
+            variant="primary"
+            size="md"
+            onClick={handleCreate}
+            leftIcon={<PlusIcon />}
+          >
+            Create organization
+          </Button>
+        }
+      />
 
       {/* Summary strip */}
       {listLoaded && (

@@ -295,6 +295,7 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
           <div className="flex items-start gap-2">
             <Link
               to="/a2a/agents"
+              aria-label="Back to agents"
               className="p-2 -ml-2 mt-0.5 rounded-brand hover:bg-theme-hover transition-colors"
             >
               <ArrowLeftIcon className="w-5 h-5 text-theme-tertiary" />
@@ -360,6 +361,7 @@ export const AgentDetailPage = memo(function AgentDetailPage() {
                     variant="ghost"
                     size="sm"
                     onClick={handleCopyUrl}
+                    aria-label={copied ? 'Agent URL copied' : 'Copy agent URL'}
                     className="flex-shrink-0"
                   >
                     {copied ? (

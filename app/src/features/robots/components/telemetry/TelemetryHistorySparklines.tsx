@@ -17,6 +17,7 @@ import { Card, Spinner } from '@/shared/components/ui';
 import { robotsApi } from '../../api/robotsApi';
 import { MOTOR_TEMP_WARNING_C } from '../../utils/temperature';
 import type { RobotTelemetry } from '../../types/robots.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES & CONSTANTS
@@ -92,8 +93,11 @@ function Sparkline({ label, unit, data, dataKey, color, warnAt, domain }: Sparkl
         </span>
       </div>
       {points.length >= 2 ? (
-        <div className="h-16">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-16 min-h-16 min-w-0">
+          {/* initialDimension: Recharts measures -1×-1 on first mount before
+              its ResizeObserver fires, logging a "width(-1) and height(-1)"
+              warning — seed a real size so the initial render isn't zero. */}
+          <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 320, height: 64 }}>
             <AreaChart data={points} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -115,7 +119,7 @@ function Sparkline({ label, unit, data, dataKey, color, warnAt, domain }: Sparkl
                 formatter={(value: number | undefined) =>
                   value != null ? [`${Number(value).toFixed(1)}${unit}`, label] : ['—', label]
                 }
-                labelFormatter={(time) => new Date(String(time)).toLocaleTimeString()}
+                labelFormatter={(time) => new Date(String(time)).toLocaleTimeString(UI_DATE_LOCALE)}
                 contentStyle={{
                   backgroundColor: 'var(--glass-bg)',
                   border: '1px solid var(--glass-border)',

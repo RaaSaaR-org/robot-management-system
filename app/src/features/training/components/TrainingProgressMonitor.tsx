@@ -8,6 +8,7 @@ import { Card, ProgressBar, Badge, Spinner } from '@/shared/components/ui';
 import { LossCurveChart } from './LossCurveChart';
 import type { TrainingJob, TrainingJobStatus } from '../types';
 import { simRlTrainerLabel } from '../types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface TrainingProgressMonitorProps {
   job: TrainingJob;
@@ -200,7 +201,7 @@ export function TrainingProgressMonitor({
             <MetricDisplay
               label="Timesteps"
               value={job.metrics.total_timesteps}
-              format={(v) => v.toLocaleString()}
+              format={(v) => v.toLocaleString(UI_DATE_LOCALE)}
             />
           </div>
         )}
@@ -246,7 +247,7 @@ export function TrainingProgressMonitor({
             <MetricDisplay
               label="Timesteps"
               value={job.metrics.total_timesteps}
-              format={(v) => v.toLocaleString()}
+              format={(v) => v.toLocaleString(UI_DATE_LOCALE)}
             />
             <MetricDisplay
               label="Training Time"

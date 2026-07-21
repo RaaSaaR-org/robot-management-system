@@ -5,6 +5,7 @@
  */
 
 import { cn } from '@/shared/utils/cn';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import type { UpdateDeployment } from '../types/updates.types';
 import { DEPLOYMENT_STATUS_LABELS, DEPLOYMENT_STATUS_COLORS } from '../types/updates.types';
 
@@ -26,11 +27,7 @@ function formatDate(iso: string | null): string {
 
 export function DeploymentHistory({ deployments, className }: DeploymentHistoryProps) {
   if (deployments.length === 0) {
-    return (
-      <div className={cn('text-sm text-theme-tertiary py-4 text-center', className)}>
-        No deployments found.
-      </div>
-    );
+    return <EmptyState size="sm" className={className} title="No deployments found." />;
   }
 
   return (

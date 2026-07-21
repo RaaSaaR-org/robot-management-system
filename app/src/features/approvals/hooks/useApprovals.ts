@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
+import { useAuthStore } from '@/features/auth/store/authStore';
 import { useApprovalsStore } from '../store';
 import type {
   ApprovalRequest,
@@ -78,6 +79,11 @@ export function useApprovals(options: UseApprovalsOptions = {}): UseApprovalsRet
   const total = useApprovalsStore((state) => state.approvalRequestsTotal);
   const page = useApprovalsStore((state) => state.approvalRequestsPage);
 
+  // Real actor identity from the auth store (dev auto-login keeps this
+  // populated when AUTH_DISABLED)
+  const user = useAuthStore((state) => state.user);
+  const actorId = user?.email ?? user?.id ?? 'unknown-reviewer';
+
   const storeFetchApprovals = useApprovalsStore((state) => state.fetchApprovalRequests);
   const storeProcessApproval = useApprovalsStore((state) => state.processApproval);
   const storeCancelApproval = useApprovalsStore((state) => state.cancelApprovalRequest);
@@ -121,18 +127,16 @@ export function useApprovals(options: UseApprovalsOptions = {}): UseApprovalsRet
 
   const cancelApproval = useCallback(
     async (id: string, reason: string) => {
-      // TODO: Get userId from auth context
-      return storeCancelApproval(id, 'system', reason);
+      return storeCancelApproval(id, actorId, reason);
     },
-    [storeCancelApproval]
+    [storeCancelApproval, actorId]
   );
 
   const escalateApproval = useCallback(
     async (id: string, reason?: string) => {
-      // TODO: Get userId from auth context
-      return storeEscalateApproval(id, 'system', reason);
+      return storeEscalateApproval(id, actorId, reason);
     },
-    [storeEscalateApproval]
+    [storeEscalateApproval, actorId]
   );
 
   const refresh = useCallback(async () => {

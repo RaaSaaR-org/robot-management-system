@@ -14,6 +14,7 @@ import type {
   ServiceAccount,
   ApiTokenSummary,
 } from '../types/serviceAccount.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 interface ServiceAccountTokensModalProps {
   isOpen: boolean;
@@ -25,7 +26,7 @@ interface ServiceAccountTokensModalProps {
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString(UI_DATE_LOCALE, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

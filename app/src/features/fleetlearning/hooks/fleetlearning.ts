@@ -5,7 +5,7 @@
  * @dependencies useFleetLearningStore
  */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   useFleetLearningStore,
   selectRounds,
@@ -18,8 +18,8 @@ import {
   selectPagination,
   selectIsLoading,
   selectError,
-  selectActiveRounds,
-  selectCompletedRounds,
+  selectConvergenceError,
+  ACTIVE_ROUND_STATUSES,
 } from '../store/fleetlearningStore';
 import type {
   FederatedRound,
@@ -92,8 +92,17 @@ export interface UseConvergenceDataReturn {
  */
 export function useFederatedRounds(): UseFederatedRoundsReturn {
   const rounds = useFleetLearningStore(selectRounds);
-  const activeRounds = useFleetLearningStore(selectActiveRounds);
-  const completedRounds = useFleetLearningStore(selectCompletedRounds);
+  // Derived lists are memoized here instead of using the filtering store
+  // selectors — those return a fresh array per call, which makes the
+  // useSyncExternalStore snapshot unstable and loops React forever.
+  const activeRounds = useMemo(
+    () => rounds.filter((r) => (ACTIVE_ROUND_STATUSES as readonly string[]).includes(r.status)),
+    [rounds]
+  );
+  const completedRounds = useMemo(
+    () => rounds.filter((r) => r.status === 'completed'),
+    [rounds]
+  );
   const filters = useFleetLearningStore(selectFilters);
   const pagination = useFleetLearningStore(selectPagination);
   const isLoading = useFleetLearningStore(selectIsLoading);
@@ -277,7 +286,7 @@ export function useROHEMetrics(initialParams?: GetROHEParams): UseROHEMetricsRet
 export function useConvergenceData(modelVersion?: string): UseConvergenceDataReturn {
   const data = useFleetLearningStore(selectConvergenceData);
   const isLoading = useFleetLearningStore(selectIsLoading);
-  const error = useFleetLearningStore(selectError);
+  const error = useFleetLearningStore(selectConvergenceError);
   const storeFetchData = useFleetLearningStore((state) => state.fetchConvergenceData);
 
   const fetchData = useCallback(

@@ -29,6 +29,7 @@ import {
   canSubmitContribution,
   canRevokeContribution,
 } from '../types/contributions.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 // ============================================================================
 // TYPES
@@ -188,7 +189,7 @@ export function ContributionDetail({
             <div>
               <p className="text-sm text-gray-500 dark:text-gray-400">Trajectories</p>
               <p className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                {contribution.trajectoryCount.toLocaleString()}
+                {contribution.trajectoryCount.toLocaleString(UI_DATE_LOCALE)}
               </p>
             </div>
           </div>

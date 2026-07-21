@@ -12,6 +12,7 @@ import { InfoIcon } from '@/shared/components/ui/Tooltip';
 import { SessionTypeSelector } from '../components/SessionTypeSelector';
 import { useDataCollectionStore } from '../store/datacollectionStore';
 import { useRobotsStore } from '../../robots/store/robotsStore';
+import { useAuthStore } from '@/features/auth/store/authStore';
 import type { TeleoperationType, CreateSessionRequest } from '../types/datacollection.types';
 
 // ============================================================================
@@ -41,9 +42,12 @@ export function NewSessionPage() {
     fetchRobots();
   }, [fetchRobots]);
 
+  // Auth identity — real user id when signed in (dev mode auto-injects a
+  // mock user, so this is also populated with AUTH_DISABLED=true).
+  const currentUser = useAuthStore((state) => state.user);
+
   // Form state
   const [formData, setFormData] = useState<Partial<CreateSessionRequest>>({
-    operatorId: 'current-user', // TODO: Get from auth
     fps: 10,
     numEpisodes: 3,
   });
@@ -70,7 +74,10 @@ export function NewSessionPage() {
     }
 
     try {
-      const session = await createSession(formData as CreateSessionRequest);
+      const session = await createSession({
+        ...formData,
+        operatorId: currentUser?.id ?? 'dev-operator',
+      } as CreateSessionRequest);
       setActiveSession(session);
       navigate(`/data-collection/${session.id}`);
     } catch {

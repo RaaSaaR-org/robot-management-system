@@ -11,6 +11,23 @@ import { modelVersionRepository } from '../repositories/index.js';
 export const modelsRoutes = Router();
 
 /**
+ * GET /api/models
+ * Base-path index: serves the model-version collection (same data as
+ * /versions) so the base path answers like its sibling collections instead
+ * of 404ing.
+ */
+modelsRoutes.get('/', async (_req: Request, res: Response) => {
+  try {
+    const result = await modelVersionRepository.findAll();
+    res.json({ modelVersions: result.data, pagination: result.pagination });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ error: err instanceof Error ? err.message : 'Failed to list model versions' });
+  }
+});
+
+/**
  * GET /api/models/versions
  * List model versions, newest first (created by TrainingOrchestrator.completeJob).
  * Response shape matches the deployment client: `{ modelVersions, pagination }`.

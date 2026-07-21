@@ -4,8 +4,10 @@
  * @feature explainability
  */
 
+import { Brain } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { Card } from '@/shared/components/ui/Card';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import { ConfidenceGauge } from './ConfidenceGauge';
 import { SafetyBadge } from './SafetyBadge';
 import { type DecisionExplanation, DECISION_TYPE_LABELS, formatDate } from '../types';
@@ -52,12 +54,13 @@ export function DecisionList({
 
   if (decisions.length === 0) {
     return (
-      <Card className={cn('glass-card p-6 text-center', className)}>
-        <p className="text-theme-secondary font-medium">No AI decisions yet</p>
-        <p className="text-theme-tertiary text-sm mt-2">
-          Send a command to a robot (like "Go to warehouse B") to see how the AI processes it.
-        </p>
-      </Card>
+      <EmptyState
+        icon={<Brain className="w-10 h-10" />}
+        title="No AI decisions yet"
+        description={'Send a command to a robot (like "Go to warehouse B") to see how the AI processes it.'}
+        size="sm"
+        className={className}
+      />
     );
   }
 

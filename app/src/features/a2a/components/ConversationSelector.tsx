@@ -5,7 +5,7 @@
  */
 
 import { memo, useState, useRef, useEffect } from 'react';
-import { cn } from '@/shared/utils';
+import { UI_DATE_LOCALE, cn } from '@/shared/utils';
 import type { A2AConversation } from '../types';
 
 interface ConversationSelectorProps {
@@ -155,7 +155,7 @@ export const ConversationSelector = memo(function ConversationSelector({
                     <span>{conv.messages?.length || 0} messages</span>
                     <span>·</span>
                     <span>
-                      {new Date(conv.updatedAt).toLocaleDateString()}
+                      {new Date(conv.updatedAt).toLocaleDateString(UI_DATE_LOCALE)}
                     </span>
                   </div>
                 </button>

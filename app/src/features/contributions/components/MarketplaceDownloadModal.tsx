@@ -13,6 +13,7 @@ import { cn } from '@/shared/utils/cn';
 import { formatCredits } from '../types/contributions.types';
 import { useMarketplaceDownload } from '../hooks/marketplace';
 import type { MarketplaceListing } from '../types/marketplace.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface MarketplaceDownloadModalProps {
   listing: MarketplaceListing;
@@ -279,5 +280,5 @@ function formatArtifactFormat(format: string | undefined, isSkill: boolean): str
 
 function formatDate(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(UI_DATE_LOCALE);
 }

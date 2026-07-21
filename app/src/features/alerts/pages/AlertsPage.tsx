@@ -5,13 +5,13 @@
  * @dependencies @/features/alerts/components, @/features/alerts/hooks
  */
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
 import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { Tabs } from '@/shared/components/ui/Tabs';
-import { useAlertHistory, useAlertCounts, useAlerts } from '../hooks/useAlerts';
+import { useAlertHistory, useAlerts } from '../hooks/useAlerts';
 import { AlertList } from '../components/AlertList';
 import { AlertHistoryPanel } from '../components/AlertHistoryPanel';
 import { IncidentsPage } from '@/features/incidents/pages/IncidentsPage';
@@ -106,9 +106,24 @@ export function AlertsPage({ className }: AlertsPageProps) {
     setSearchParams(next, { replace: true });
   };
 
-  const { unacknowledgedCount, fetchAlerts } = useAlerts();
+  const { unacknowledgedAlerts, unacknowledgedCount, fetchAlerts } = useAlerts();
   const { pagination } = useAlertHistory(false);
-  const { counts, total: totalActive } = useAlertCounts();
+
+  // Single source of truth: the header badge, the severity tiles and the
+  // Active tab count are ALL derived from the same fetched active-alerts
+  // array (no separate counts poll, so they can never disagree).
+  const counts = useMemo(() => {
+    const bySeverity: Record<AlertSeverity, number> = {
+      critical: 0,
+      error: 0,
+      warning: 0,
+      info: 0,
+    };
+    for (const alert of unacknowledgedAlerts) {
+      bySeverity[alert.severity] += 1;
+    }
+    return bySeverity;
+  }, [unacknowledgedAlerts]);
 
   const handleRefresh = useCallback(async () => {
     await fetchAlerts();
@@ -117,8 +132,6 @@ export function AlertsPage({ className }: AlertsPageProps) {
   return (
     <div className={cn('min-h-screen', className)}>
       <div className="mx-auto max-w-6xl px-4 py-8">
-        {/* Header — the chip counts UNACKNOWLEDGED alerts; the "Active Alerts"
-            tab counts all active ones (incl. acknowledged), so label precisely. */}
         <PageHeader
           className="mb-8"
           title="Alerts"
@@ -137,8 +150,8 @@ export function AlertsPage({ className }: AlertsPageProps) {
           }
         />
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
+        {/* Stats Cards — 2-up on narrow screens so tiles never clip their labels */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 mb-8">
           <StatsCard label="Critical" count={counts.critical} severity="critical" />
           <StatsCard label="Errors" count={counts.error} severity="error" />
           <StatsCard label="Warnings" count={counts.warning} severity="warning" />
@@ -151,26 +164,28 @@ export function AlertsPage({ className }: AlertsPageProps) {
           tabs={[
             {
               id: 'active',
-              label: totalActive > 0 ? `Active Alerts (${totalActive})` : 'Active Alerts',
-              content: (
-                <div className="bg-theme-surface rounded-lg border border-theme-border p-6">
-                  <AlertList maxHeight="600px" showAcknowledged={false} />
-                </div>
-              ),
+              // Counts the same unacknowledged set the list below renders
+              label:
+                unacknowledgedCount > 0
+                  ? `Active Alerts (${unacknowledgedCount})`
+                  : 'Active Alerts',
+              // No card/scroll container: the list flows with the page so
+              // mobile gets a single page scrollbar instead of a nested one.
+              content: <AlertList className="pt-2" showAcknowledged={false} />,
             },
             {
               id: 'history',
               label: pagination.total > 0 ? `History (${pagination.total})` : 'History',
               content: (
-                <div className="bg-theme-surface rounded-lg border border-theme-border p-6 relative">
-                  <AlertHistoryPanel maxHeight="600px" autoFetch={activeTab === 'history'} />
+                <div className="bg-theme-surface rounded-lg border border-theme-border p-4 sm:p-6 relative">
+                  <AlertHistoryPanel autoFetch={activeTab === 'history'} />
                 </div>
               ),
             },
             {
               id: 'incidents',
               label: 'Incidents',
-              content: <IncidentsPage />,
+              content: <IncidentsPage embedded />,
             },
           ]}
         />

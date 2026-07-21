@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { SkipForward, Trash2, Film, Loader2 } from 'lucide-react';
 import { Card } from '@/shared/components/ui/Card';
 import type { EpisodeSummary } from '../types/datacollection.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface EpisodePanelProps {
   episodes: EpisodeSummary[];
@@ -124,7 +125,7 @@ export function EpisodePanel({
                   </span>
                 )}
                 <span className="text-theme-muted truncate">
-                  {ep.frameCount.toLocaleString()} frames · {formatSeconds(ep.durationS)}
+                  {ep.frameCount.toLocaleString(UI_DATE_LOCALE)} frames · {formatSeconds(ep.durationS)}
                 </span>
               </div>
               {canDiscard && (

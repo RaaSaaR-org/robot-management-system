@@ -132,11 +132,12 @@ export function GDPRPortalPage() {
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
+      {/* Section header — rendered as an embedded tab inside CompliancePage,
+          which owns the page-level h1, so this stays a demoted h2 */}
       <div className="section-secondary border-b border-theme">
-        <div className="max-w-5xl mx-auto px-4 py-6">
-          <h1 className="text-2xl font-bold text-theme-primary">Data Privacy Portal</h1>
-          <p className="text-theme-secondary mt-1">
+        <div className="max-w-5xl mx-auto px-4 py-4">
+          <h2 className="text-lg font-semibold text-theme-primary">Data Privacy Portal</h2>
+          <p className="text-sm text-theme-secondary mt-1">
             Manage your data rights under GDPR (Articles 15-22)
           </p>
         </div>

@@ -105,7 +105,12 @@ export const ImuCard = memo(function ImuCard({ telemetry }: ImuCardProps) {
             <SimBadge telemetry={telemetry} group="imu" />
           </div>
           {imu.temperature != null && (
-            <span className="text-xs text-theme-tertiary">{imu.temperature.toFixed(0)}°C</span>
+            <span
+              className="text-xs text-theme-tertiary"
+              title="IMU die temperature — the sensor chip normally runs much hotter than the motors; this is not a motor temperature"
+            >
+              IMU temp {imu.temperature.toFixed(0)}°C
+            </span>
           )}
         </div>
       </Card.Header>

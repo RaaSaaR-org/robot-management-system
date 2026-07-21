@@ -54,15 +54,16 @@ function normalizePosition(degrees: number): number {
 }
 
 /**
- * Get color class based on position in degrees
- * (centered = green, extremes = orange/red)
+ * Get color class based on position in degrees. Semantic scale:
+ * centered = success, normal range = brand primary, approaching a limit =
+ * warning (amber), near the limit = error.
  */
 function getPositionColor(degrees: number): string {
   const absDeg = Math.abs(degrees);
-  if (absDeg < 30) return 'from-green-400 to-emerald-500';
-  if (absDeg < 90) return 'from-cobalt-400 to-turquoise-400';
-  if (absDeg < 150) return 'from-yellow-400 to-orange-400';
-  return 'from-orange-400 to-red-400';
+  if (absDeg < 30) return 'bg-green-500';
+  if (absDeg < 90) return 'bg-cobalt-500';
+  if (absDeg < 150) return 'bg-amber-500';
+  return 'bg-red-500';
 }
 
 /**
@@ -173,7 +174,7 @@ const JointItem = memo(function JointItem({ joint, positionUnit }: JointItemProp
       <div className="relative">
         <div className="h-2 bg-surface-600 rounded-full overflow-hidden">
           <div
-            className={cn('h-full rounded-full bg-gradient-to-r transition-all duration-150', colorClass)}
+            className={cn('h-full rounded-full transition-all duration-150', colorClass)}
             style={{ width: `${percentage}%` }}
           />
         </div>
@@ -233,7 +234,7 @@ const CompactJointRow = memo(function CompactJointRow({ joint, label, positionUn
       <div className="relative h-1.5 flex-1 rounded-full bg-surface-600">
         <div
           className={cn(
-            'absolute top-0 h-full rounded-full bg-gradient-to-r transition-all duration-150',
+            'absolute top-0 h-full rounded-full transition-all duration-150',
             colorClass
           )}
           style={degrees >= 0 ? { left: '50%', width: `${halfPct}%` } : { right: '50%', width: `${halfPct}%` }}

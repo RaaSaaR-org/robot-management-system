@@ -158,7 +158,8 @@ export interface RobotTelemetry {
   batteryVoltage?: number | null;
   batteryTemperature?: number | null;
   powerSource?: 'battery' | 'ac_powered';
-  cpuUsage: number;
+  /** Real system CPU usage %; undefined while no measurement exists yet (UI shows 'n/a'). */
+  cpuUsage?: number;
   memoryUsage: number;
   diskUsage?: number;
   temperature: number;

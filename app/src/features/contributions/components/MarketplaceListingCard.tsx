@@ -10,6 +10,7 @@ import { TierBadge } from './TierBadge';
 import { MarketplaceStarRating } from './MarketplaceStarRating';
 import { formatCredits } from '../types/contributions.types';
 import type { MarketplaceListing } from '../types/marketplace.types';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
 export interface MarketplaceListingCardProps {
   listing: MarketplaceListing;
@@ -93,7 +94,7 @@ export function MarketplaceListingCard({ listing, onClick }: MarketplaceListingC
           <span>({listing.reviewCount})</span>
           <span className="inline-flex items-center gap-1">
             <Download size={10} />
-            {listing.downloadCount.toLocaleString()}
+            {listing.downloadCount.toLocaleString(UI_DATE_LOCALE)}
           </span>
         </div>
       </div>
