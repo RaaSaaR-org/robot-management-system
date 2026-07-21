@@ -35,6 +35,7 @@ const initialState: FleetLearningState = {
   },
   isLoading: false,
   error: null,
+  convergenceError: null,
 };
 
 // ============================================================================
@@ -253,7 +254,7 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
     fetchConvergenceData: async (modelVersion?: string) => {
       set((state) => {
         state.isLoading = true;
-        state.error = null;
+        state.convergenceError = null;
       });
       try {
         const data = await fleetlearningApi.getConvergenceData(modelVersion);
@@ -261,12 +262,13 @@ export const useFleetLearningStore = createStore<FleetLearningStore>(
           state.convergenceData = data;
           state.isLoading = false;
         });
-      } catch {
-        // Non-fatal: the server has no convergence endpoint yet. The shared
-        // `error` field surfaces on the Rounds tab banner, so a convergence
-        // failure must not clobber it — the ConvergenceChart renders its own
-        // empty state when data stays [].
+      } catch (error) {
+        // Record on the dedicated `convergenceError` field, NOT the shared
+        // `error` (which drives the Rounds-tab banner). The ConvergenceChart
+        // surfaces this so a genuine failure isn't silently swallowed.
+        const message = error instanceof Error ? error.message : 'Failed to fetch convergence data';
         set((state) => {
+          state.convergenceError = message;
           state.isLoading = false;
         });
       }
@@ -331,6 +333,7 @@ export const selectFilters = (state: FleetLearningStore) => state.filters;
 export const selectPagination = (state: FleetLearningStore) => state.pagination;
 export const selectIsLoading = (state: FleetLearningStore) => state.isLoading;
 export const selectError = (state: FleetLearningStore) => state.error;
+export const selectConvergenceError = (state: FleetLearningStore) => state.convergenceError;
 
 /**
  * Select a round by ID

@@ -352,6 +352,12 @@ export interface FleetLearningState {
   pagination: RoundPagination;
   isLoading: boolean;
   error: string | null;
+  /**
+   * Convergence-fetch error, kept separate from the shared `error` field so a
+   * failing convergence request surfaces on the chart without clobbering the
+   * Rounds-tab banner (which reads `error`).
+   */
+  convergenceError: string | null;
 }
 
 /**

@@ -6,7 +6,7 @@
 
 import { useMemo } from 'react';
 import { cn } from '@/shared/utils/cn';
-import { TrendingDown, Users, Loader2 } from 'lucide-react';
+import { TrendingDown, Users, Loader2, AlertTriangle } from 'lucide-react';
 import type { ConvergenceDataPoint } from '../types/fleetlearning.types';
 
 // ============================================================================
@@ -16,6 +16,8 @@ import type { ConvergenceDataPoint } from '../types/fleetlearning.types';
 export interface ConvergenceChartProps {
   data: ConvergenceDataPoint[];
   isLoading?: boolean;
+  /** Convergence-fetch error; when set (and not loading) the chart shows an error state. */
+  error?: string | null;
   height?: number;
   className?: string;
 }
@@ -27,6 +29,7 @@ export interface ConvergenceChartProps {
 export function ConvergenceChart({
   data,
   isLoading = false,
+  error = null,
   height = 300,
   className,
 }: ConvergenceChartProps) {
@@ -102,6 +105,23 @@ export function ConvergenceChart({
         style={{ height }}
       >
         <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+      </div>
+    );
+  }
+
+  // Error state — a genuine convergence-fetch failure with no data to fall back on.
+  if (error && data.length === 0) {
+    return (
+      <div
+        className={cn(
+          'flex flex-col items-center justify-center bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700',
+          className
+        )}
+        style={{ height }}
+      >
+        <AlertTriangle className="w-12 h-12 text-amber-400 mb-2" />
+        <p className="text-gray-500 dark:text-gray-400">Failed to load convergence data</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{error}</p>
       </div>
     );
   }

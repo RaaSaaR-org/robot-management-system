@@ -595,6 +595,39 @@ describe('ConversationManager', () => {
   });
 
   // -------------------------------------------------------------------------
+  // detectAgentFailure (private) — regression guards for the QA-sweep fixes
+  // -------------------------------------------------------------------------
+  describe('detectAgentFailure', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const detect = (state: string | undefined, text: string): string | null =>
+      (manager as unknown as { detectAgentFailure: (s: string | undefined, t: string) => string | null })
+        .detectAgentFailure(state, text);
+
+    it('strips an existing "Task failed:" prefix so callers do not double it', () => {
+      // The agent-executor already emits "Task failed: <msg>"; the message we
+      // return must be the bare reason (callers re-add the prefix).
+      expect(detect('failed', 'Task failed: gripper stalled')).toBe('gripper stalled');
+    });
+
+    it('returns a generic reason for an empty failed result', () => {
+      expect(detect('failed', '')).toBe('Agent reported task failure.');
+    });
+
+    it('does NOT flag a completed task whose text merely mentions an error', () => {
+      expect(detect('completed', 'Error: the door was already open, so I stopped')).toBeNull();
+    });
+
+    it('still sniffs a raw error payload when the remote gave no state (legacy)', () => {
+      const raw = '{"error":{"message":"quota exceeded"}}';
+      expect(detect(undefined, raw)).toBe('quota exceeded');
+    });
+
+    it('does not match a GoogleGenerativeAI mention mid-text', () => {
+      expect(detect(undefined, 'The agent explained a GoogleGenerativeAIError to the user')).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // processOrchestratedMessage
   // -------------------------------------------------------------------------
   describe('processOrchestratedMessage', () => {

@@ -18,6 +18,7 @@ import {
   selectPagination,
   selectIsLoading,
   selectError,
+  selectConvergenceError,
   ACTIVE_ROUND_STATUSES,
 } from '../store/fleetlearningStore';
 import type {
@@ -285,7 +286,7 @@ export function useROHEMetrics(initialParams?: GetROHEParams): UseROHEMetricsRet
 export function useConvergenceData(modelVersion?: string): UseConvergenceDataReturn {
   const data = useFleetLearningStore(selectConvergenceData);
   const isLoading = useFleetLearningStore(selectIsLoading);
-  const error = useFleetLearningStore(selectError);
+  const error = useFleetLearningStore(selectConvergenceError);
   const storeFetchData = useFleetLearningStore((state) => state.fetchConvergenceData);
 
   const fetchData = useCallback(

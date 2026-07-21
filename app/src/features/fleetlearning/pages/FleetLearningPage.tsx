@@ -62,7 +62,7 @@ export function FleetLearningPage() {
     setPage,
   } = useFederatedRounds();
 
-  const { data: convergenceData, isLoading: convergenceLoading } = useConvergenceData();
+  const { data: convergenceData, isLoading: convergenceLoading, error: convergenceError } = useConvergenceData();
   const { budgets, isLoading: budgetsLoading } = usePrivacyBudgets();
   const { metrics: roheMetrics, isLoading: roheLoading } = useROHEMetrics();
   const { createRound, isLoading: createLoading } = useCreateRound();
@@ -252,7 +252,7 @@ export function FleetLearningPage() {
 
       {activeTab === 'convergence' && (
         <div>
-          <ConvergenceChart data={convergenceData} isLoading={convergenceLoading} height={400} />
+          <ConvergenceChart data={convergenceData} isLoading={convergenceLoading} error={convergenceError} height={400} />
         </div>
       )}
 

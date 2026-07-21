@@ -111,12 +111,22 @@ export class ConversationManager {
    */
   private detectAgentFailure(remoteState: string | undefined, text: string): string | null {
     const isFailedState = remoteState === 'failed' || remoteState === 'rejected';
-    const cleaned = this.cleanErrorText(text);
 
     if (isFailedState) {
-      return cleaned ?? (text.trim() || 'Agent reported task failure.');
+      const message = this.cleanErrorText(text) ?? (text.trim() || 'Agent reported task failure.');
+      // The agent-executor already emits "Task failed: <msg>" and both callers
+      // re-add that prefix — strip a leading one so it isn't doubled.
+      return message.replace(/^Task failed:\s*/i, '').trim() || 'Agent reported task failure.';
     }
-    return cleaned;
+
+    // The remote reported a NON-failure terminal state (e.g. 'completed') — trust
+    // it, even if the result text happens to mention an error. Only sniff the
+    // text for a raw error payload when the remote gave us no state at all
+    // (legacy agents that dumped an error JSON into an otherwise-200 result).
+    if (remoteState === undefined) {
+      return this.cleanErrorText(text);
+    }
+    return null;
   }
 
   /**
@@ -127,8 +137,8 @@ export class ConversationManager {
     const t = text.trim();
     const errorMarkers = [
       /^\{\s*"error"/, // raw {"error": {...}} JSON dumps
-      /GoogleGenerativeAI(?:Fetch)?Error/i,
-      /\[GoogleGenerativeAI Error\]/i,
+      /^\s*\[?\s*GoogleGenerativeAI(?:Fetch)?Error/i, // anchored: the thrown error class at payload start, not a passing mention
+      /^\s*\[GoogleGenerativeAI Error\]/i,
       /^Error(?: communicating with agent)?:/i,
     ];
     if (!errorMarkers.some((m) => m.test(t))) return null;

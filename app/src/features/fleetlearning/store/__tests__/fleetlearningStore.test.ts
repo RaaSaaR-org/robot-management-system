@@ -403,12 +403,14 @@ describe('fleetlearningStore', () => {
     expect(useFleetLearningStore.getState().convergenceData).toEqual(data);
   });
 
-  it('fetchConvergenceData sets error on failure', async () => {
+  it('fetchConvergenceData sets convergenceError on failure without clobbering the shared error', async () => {
     mockedApi.getConvergenceData.mockRejectedValue(new Error('conv fail'));
 
     await useFleetLearningStore.getState().fetchConvergenceData();
 
-    expect(useFleetLearningStore.getState().error).toBe('conv fail');
+    expect(useFleetLearningStore.getState().convergenceError).toBe('conv fail');
+    // The Rounds-tab banner reads `error` — a convergence failure must not touch it.
+    expect(useFleetLearningStore.getState().error).toBeNull();
   });
 
   // --------------------------------------------------------------------------
