@@ -4,7 +4,7 @@ aliases:
 - TASK-172
 title: Real-to-Sim follow-ups — full-circle hardware run, GLB→OBJ + G1 meshes, Phase 4 sim-RL
 slug: sim-to-real-fidelity-and-sim-rl-followups
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -20,8 +20,21 @@ depends_on:
 - "[[TASK-171]]"
 due_date: ''
 created: 2026-06-25
-updated: 2026-07-11
-status_note: 'Software-complete as of 2026-07-11. §A validated live on dz-226 (real migration confirmed; rl_policy sim rollout on the real-MID-360-scan twin scene completed through the server with frames+metrics; sim-only validation row persisted with null gap; deploy-gate logic 77/77 vitest). §B done. §C Phases 0-3 done; Phase-4 CUDA gait now SHIPPED via sim-trainer isaac_ppo.py (Isaac Lab + rsl_rl, Isaac-Velocity-Flat-G1-v0, PRs #1/#2 in ../sim-trainer). Remaining = 2 hardware bullets (real-G1 eval → measured domainGapScore) + runtime REQUIRE_SIM_VALIDATION flip on a deploy target; see TASK-169 robot-day checklist item 5. Also open (found 2026-07-11): stub vla-server is SO-101-only (6-dim) — G1 VLA rollouts need a real VLA server on :8000.'
+updated: 2026-07-21
+status_note: 'CLOSED 2026-07-21 — everything solvable without the robot is done.
+2026-07-21 session: (1) stub vla-server is now G1-capable — configurable
+VLA_ACTION_DIM (default 6, G1=29), vla-server PR #7; G1 VLA rollout proven live
+through the dev server (job c1e538ee, twin scene "Lab (live G1 scan
+2026-07-17)", completed with metrics+frames, stub served 29-dim chunks).
+(2) REQUIRE_SIM_VALIDATION exercised AT RUNTIME on an isolated :3002 server
+instance (copied DB): all 5 branches live-verified — sim-only block (400,
+0<0.6), sim-only allow (201, SIM_MIN_SUCCESS=0), off-by-default (201), gap
+block (400, 0.5>0.3), gap allow (201, SIM_REAL_GAP_THRESHOLD=0.6). Earlier:
+§A software validated 2026-07-11 (migration, sim rollout, sim-only validation
+row, 77/77 vitest); §B done; §C Phases 0-3 done + Phase-4 CUDA gait SHIPPED
+via sim-trainer isaac_ppo.py (PRs #1/#2). Sole remainder = the robot-gated
+real-G1 eval → measured domainGapScore, tracked as TASK-169 robot-day
+checklist item 5 (this task does not need to stay open for it).'
 ---
 
 # Real-to-Sim follow-ups
@@ -48,9 +61,16 @@ bullets remain (see TASK-169 "Robot-day checklist" item 5).
       2026-07-11; the "production Prisma migration" open item is closed.
 - [x] Start the **VLA server on :8000** — running in `--stub` mode on dz-226
       (health: `stub:true`); rollouts no longer die at `connect_backend`.
-      ⚠ Stub emits 6-dim SO-101 sine actions → a **G1** VLA rollout fails with a
-      (6,)-vs-(29,) shape error (correctly surfaced via `failureReason`); G1
-      VLA rollouts need a real (non-stub) server or a 29-dim-aware stub.
+      ~~⚠ Stub emits 6-dim SO-101 sine actions → a **G1** VLA rollout fails with
+      a (6,)-vs-(29,) shape error~~ **RESOLVED 2026-07-21:** stub action dim is
+      now configurable (`VLA_ACTION_DIM=29 uv run python server.py --stub`,
+      vla-server PR #7, 66 pytest green). G1 VLA rollout proven live: job
+      `c1e538ee` on twin scene "Lab (live G1 scan 2026-07-17)" **completed**
+      through the dev server (2 eps, metrics + frames persisted, stub served
+      29-dim chunks — garbage actions as expected from the sine stub).
+      Note: twin scenes whose `mjcfKey` is a storage object key still need
+      RustFS up (job `7faa27d7` failed fast with "RustFS client not
+      initialized"); scenes with local absolute-path MJCFs work without it.
 - [x] Ensure the `sim_evaluator` uv env is present on the host that runs jobs.
       *(Created on dz-226 2026-07-11 via `uv sync`: mujoco 3.6.0, onnxruntime
       1.27.0; imports + `evaluate_policy.py --help` verified.)*
@@ -63,20 +83,27 @@ bullets remain (see TASK-169 "Robot-day checklist" item 5).
       garbage actions as expected from the sine stub).
 - [ ] **Real eval** — run the same policy on the real G1 in the same room;
       record `EvaluationEpisode`s so `realSuccessRate` is *derived*.
-      *(Still blocked on hardware.)*
+      *(Robot-gated → tracked as TASK-169 robot-day checklist item 5;
+      not blocking task closure.)*
 - [ ] **Gap** — `POST /validations` (no `realSuccessRate`) → confirm persisted
       `domainGapScore` = measured `sim − real`; "Sim vs Real" shows it.
-      *(Real-derived gap still needs the hardware run. The sim-only variant is
-      proven live 2026-07-11: validation `bb626921` for the rl_policy persisted
-      `realSuccessRate: null, domainGapScore: null`, `simOnly` auto-derived from
-      `modelType='rl_policy'`.)*
-- [ ] **Gate** — `REQUIRE_SIM_VALIDATION=true` (+ `SIM_REAL_GAP_THRESHOLD`):
+      *(Real-derived gap still needs the hardware run → TASK-169 item 5. The
+      sim-only variant is proven live 2026-07-11: validation `bb626921` for the
+      rl_policy persisted `realSuccessRate: null, domainGapScore: null`,
+      `simOnly` auto-derived from `modelType='rl_policy'`.)*
+- [x] **Gate** — `REQUIRE_SIM_VALIDATION=true` (+ `SIM_REAL_GAP_THRESHOLD`):
       *(Gate logic verified 2026-07-11 via vitest — 77/77 incl. all 5 gate
-      branches: sim-only block/allow via `SIM_MIN_SUCCESS`, gap block,
-      off-by-default. Runtime flag flip not done — requires restarting the
-      protected live dev server; exercise it on a deploy target / robot day.
-      Note: the measured rl_policy `simSuccessRate=0` would correctly BLOCK at
-      the default `SIM_MIN_SUCCESS=0.6`.)*
+      branches.)* **Runtime flip DONE 2026-07-21** on an isolated second server
+      instance (:3002, copied dev DB, robot rows truncated; shared :3001 server
+      + real dev.db provably untouched). All 5 branches live via
+      `POST /api/deployments` for rl_policy `7f7ebcb2`: (a) sim-only BLOCK
+      400 "Sim success rate 0 is below the minimum 0.6 (sim-only policy, no
+      real counterpart)"; (b) sim-only ALLOW 201 with `SIM_MIN_SUCCESS=0`
+      (pending deployment created); (c) off-by-default 201; (d) gap BLOCK 400
+      "domain gap 0.5 exceeds threshold 0.3" via a synthetic newer validation
+      row in the DB copy; (e) gap ALLOW 201 with `SIM_REAL_GAP_THRESHOLD=0.6`.
+      Env is read per-request at `DeploymentService.ts:137-164`. The
+      *measured*-gap variant on real hardware remains TASK-169 item 5.
 
 ### B. Geometry fidelity
 
