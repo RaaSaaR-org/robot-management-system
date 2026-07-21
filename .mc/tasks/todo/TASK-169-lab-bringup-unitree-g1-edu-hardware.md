@@ -217,6 +217,10 @@ TASK-170, TASK-172 and TASK-181 too):
 5. **Full circle (TASK-172 §A):** run the same policy in sim and on the real
    G1 in the scanned room, `POST /validations` → real `domainGapScore`, then
    the `REQUIRE_SIM_VALIDATION` deploy gate with a measured gap.
+   *(2026-07-21: TASK-172 closed — the gate's runtime flip is already proven
+   live on an isolated server instance for all 5 branches, and the stub VLA
+   server is 29-dim/G1-capable (`VLA_ACTION_DIM=29`, vla-server PR #7).
+   Only the real-G1 eval → measured gap remains here.)*
 6. **TASK-173 tail:** walk the G1 into the CoACD-decomposed scanned-room
    collision scene (already merged, sim-side tests green).
 
