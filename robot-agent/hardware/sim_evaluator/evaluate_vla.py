@@ -88,6 +88,7 @@ def run_episode(
     max_steps: int,
     frames_dir: str | None = None,
     episode_num: int = 1,
+    exec_horizon: int = 0,
 ) -> dict:
     """Run a single evaluation episode.
 
@@ -125,6 +126,10 @@ def run_episode(
             try:
                 actions = backend.predict(images, np.array(state), task)
                 action_queue = list(actions)
+                # exec_horizon > 0: execute only the first N actions of each
+                # chunk, then re-predict (receding-horizon execution).
+                if exec_horizon > 0:
+                    action_queue = action_queue[:exec_horizon]
             except Exception as e:
                 logger.error(f"Predict failed at step {step_count}: {e}")
                 break
@@ -174,6 +179,7 @@ def evaluate(
     frames_dir: str | None = None,
     scene_file: str | None = None,
     embodiment: str = "so101",
+    exec_horizon: int = 0,
 ) -> SimRunMetrics:
     """Run a full evaluation and return aggregated metrics."""
 
@@ -188,9 +194,15 @@ def evaluate(
         os.makedirs(frames_dir, exist_ok=True)
 
     # Create environment.
+    # g1_dex3 path: the fixed-base G1+Dex3 tabletop pick-place env (WS2).
+    # scene_file is optional and defaults to the bundled pick-place scene.
     # G1 path: a twin-derived scene file OR an explicit g1 embodiment selects the
     # 29-DOF humanoid env. Otherwise keep the default SO-101 tabletop env.
-    if scene_file or embodiment == "g1":
+    if embodiment == "g1_dex3":
+        from envs.g1_pickplace_env import G1PickPlaceEnv
+
+        env = G1PickPlaceEnv(scene_path=scene_file, max_steps=max_steps)
+    elif scene_file or embodiment == "g1":
         # Import lazily so the SO-101 path never depends on the G1 env loading.
         from envs.g1_env import G1Env
 
@@ -213,7 +225,9 @@ def evaluate(
     try:
         for ep in range(1, episodes + 1):
             logger.info(f"Episode {ep}/{episodes}")
-            result = run_episode(env, backend, task, max_steps, frames_dir, ep)
+            result = run_episode(
+                env, backend, task, max_steps, frames_dir, ep, exec_horizon
+            )
             all_frames.extend(result.pop("frames", []))
             results.append(result)
 
@@ -312,8 +326,15 @@ def main():
     parser.add_argument(
         "--embodiment",
         default="so101",
-        help="Robot embodiment: 'so101' (default) or 'g1'. 'g1' selects the "
-        "29-DOF humanoid environment.",
+        help="Robot embodiment: 'so101' (default), 'g1' (29-DOF humanoid), or "
+        "'g1_dex3' (fixed-base G1+Dex3 tabletop pick-place).",
+    )
+    parser.add_argument(
+        "--exec-horizon",
+        type=int,
+        default=0,
+        help="Execute only the first N actions of each predicted chunk before "
+        "re-predicting (0 = execute the full chunk, default).",
     )
     args = parser.parse_args()
 
@@ -327,6 +348,7 @@ def main():
         frames_dir=args.frames_dir,
         scene_file=args.scene_file,
         embodiment=args.embodiment,
+        exec_horizon=args.exec_horizon,
     )
 
     # Also print final metrics as JSON line for the server

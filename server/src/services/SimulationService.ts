@@ -97,6 +97,9 @@ export interface SimEnvironment {
   name: string;
   description: string;
   backend: 'mujoco' | 'isaac';
+  /** Embodiment jobs in this environment roll out (e.g. 'g1_dex3'). Legacy
+   *  so101_* environments omit it and fall back to the id-prefix heuristic. */
+  embodiment?: string;
   imageUrl?: string;
 }
 
@@ -142,7 +145,51 @@ const AVAILABLE_ENVIRONMENTS: SimEnvironment[] = [
     description: 'High-fidelity pick-and-place environment with physics randomization',
     backend: 'isaac',
   },
+  {
+    id: 'g1_pickplace',
+    name: 'G1 Pick & Place',
+    description: 'G1 + Dex3-1 tabletop pick & place (bottle -> crate)',
+    backend: 'mujoco',
+    embodiment: 'g1_dex3',
+  },
 ];
+
+// ============================================================================
+// PER-EMBODIMENT VLA ROLLOUT PROFILES
+// ============================================================================
+
+/** Per-embodiment evaluate_vla.py parameters. `maxSteps` is a server-side
+ *  constant (never a request field); `execHorizon` maps to `--exec-horizon`
+ *  (steps of each action chunk executed before re-querying the policy) and is
+ *  only passed when set — the evaluator's own default applies otherwise. */
+interface VlaEvalProfile {
+  task: string;
+  maxSteps: number;
+  execHorizon?: number;
+}
+
+const DEFAULT_VLA_PROFILE: VlaEvalProfile = {
+  task: 'Pick up the red cube and place it on the target.',
+  maxSteps: 200,
+};
+
+const G1_WALK_PROFILE: VlaEvalProfile = {
+  task: 'Walk to the goal zone while avoiding keep-out areas.',
+  maxSteps: 200,
+};
+
+const VLA_EVAL_PROFILES: Record<string, VlaEvalProfile> = {
+  g1: G1_WALK_PROFILE,
+  unitree_g1: G1_WALK_PROFILE,
+  // GR00T-N1.7 checkpoint contract (n187_real_only_14k): 16-step action
+  // chunks, re-plan after 8 executed steps; pick & place needs the longer
+  // 600-step horizon.
+  g1_dex3: {
+    task: 'Put the bottle into the plate.',
+    maxSteps: 600,
+    execHorizon: 8,
+  },
+};
 
 // ============================================================================
 // PATHS
@@ -337,7 +384,7 @@ export class SimulationService extends EventEmitter {
       jobId: uuid(),
       modelId,
       environment,
-      embodiment: environment.startsWith('so101') ? 'so101' : undefined,
+      embodiment: env.embodiment ?? (environment.startsWith('so101') ? 'so101' : undefined),
       rolloutCount,
       backend,
       status: 'queued',
@@ -510,7 +557,8 @@ export class SimulationService extends EventEmitter {
           builtinEnvId: env.id,
           name: env.name,
           description: env.description,
-          embodimentTag: env.id.startsWith('so101') ? 'so101' : 'generic',
+          embodimentTag:
+            env.embodiment ?? (env.id.startsWith('so101') ? 'so101' : 'generic'),
           backend: env.backend,
         });
       }
@@ -716,10 +764,9 @@ export class SimulationService extends EventEmitter {
         args.push('--scene-file', job.sceneFile);
       }
     } else {
-      const isG1 = job.embodiment === 'g1' || job.embodiment === 'unitree_g1';
-      const task = isG1
-        ? 'Walk to the goal zone while avoiding keep-out areas.'
-        : 'Pick up the red cube and place it on the target.';
+      const profile =
+        (job.embodiment ? VLA_EVAL_PROFILES[job.embodiment] : undefined) ??
+        DEFAULT_VLA_PROFILE;
 
       args = [
         'run', 'python',
@@ -727,13 +774,16 @@ export class SimulationService extends EventEmitter {
         '--vla-server', VLA_SERVER_URL,
         '--environment', job.environment,
         '--episodes', String(job.rolloutCount),
-        '--max-steps', '200',
-        '--task', task,
+        '--max-steps', String(profile.maxSteps),
+        '--task', profile.task,
         '--output', outputPath,
         '--frames-dir', framesDir,
       ];
       if (job.embodiment) {
         args.push('--embodiment', job.embodiment);
+      }
+      if (profile.execHorizon !== undefined) {
+        args.push('--exec-horizon', String(profile.execHorizon));
       }
       if (job.sceneFile) {
         args.push('--scene-file', job.sceneFile);
