@@ -1,0 +1,76 @@
+<mujoco model="g1_dex3_pickplace_scene">
+  <!--
+    G1 EDU + Dex3-1 tabletop pick-place scene (WS2) - replicates the Isaac
+    "g1_pickplace" layout: robot base fixed at (-0.15, 0, 0.76) with +90 deg
+    yaw (baked into g1_dex3/g1_43dof_fixedbase.xml - the robot faces world +y),
+    tabletop surface at z=0.794, a dark bottle at (-0.35, 0.40) and a yellow
+    open-top crate on the +x side whose interior floor (z~0.80) matches the
+    success box x[0.28,0.96] y[0.24,0.57] z[0.81,0.90] used by
+    envs/g1_pickplace_env.py.
+
+    Sits directly in mjcf/ (like so101_tabletop_scene.xml), so no meshdir is
+    needed: the robot include references meshes as g1_dex3/meshes/*.STL which
+    resolve next to this file.
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <include file="g1_dex3/g1_43dof_fixedbase.xml"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.45 0.55 0.65" rgb2="0.15 0.18 0.22"
+             width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.25 0.28 0.30" rgb2="0.18 0.21 0.23" markrgb="0.6 0.6 0.6"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true"
+              texrepeat="5 5" reflectance="0.1"/>
+    <material name="wood" rgba="0.55 0.39 0.25 1" specular="0.2" shininess="0.2"/>
+    <material name="crate_yellow" rgba="0.90 0.75 0.10 1" specular="0.3" shininess="0.3"/>
+    <material name="bottle_dark" rgba="0.15 0.15 0.15 1" specular="0.4" shininess="0.5"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0.5 3.5" dir="0 0 -1" directional="true" diffuse="0.7 0.7 0.7"/>
+    <light pos="-1.0 -0.8 2.5" dir="0.4 0.5 -1" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <light pos="1.2 1.2 2.2" dir="-0.4 -0.3 -1" diffuse="0.35 0.35 0.35"/>
+
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane"
+          friction="0.8" condim="3"/>
+
+    <!-- Table: top surface z = 0.794, valid area x in [-0.85, 1.0], y in [0.2, 0.7]
+         => solid block, half-extents (0.925, 0.25, 0.397) centered (0.075, 0.45, 0.397) -->
+    <geom name="table" type="box" size="0.925 0.25 0.397" pos="0.075 0.45 0.397"
+          material="wood" friction="0.6" condim="3"/>
+
+    <!-- Yellow open-top crate on the +x side. Interior footprint = success box
+         x[0.28,0.96] y[0.24,0.57]; interior floor top at z=0.80 (slab 6 mm on
+         the tabletop); walls 10 mm thick, rising to z=0.90 OUTSIDE the interior. -->
+    <geom name="crate_floor" type="box" size="0.34 0.165 0.003" pos="0.62 0.405 0.797"
+          material="crate_yellow" friction="0.6" condim="3"/>
+    <geom name="crate_wall_xneg" type="box" size="0.005 0.175 0.053" pos="0.275 0.405 0.847"
+          material="crate_yellow" friction="0.6" condim="3"/>
+    <geom name="crate_wall_xpos" type="box" size="0.005 0.175 0.053" pos="0.965 0.405 0.847"
+          material="crate_yellow" friction="0.6" condim="3"/>
+    <geom name="crate_wall_yneg" type="box" size="0.34 0.005 0.053" pos="0.62 0.235 0.847"
+          material="crate_yellow" friction="0.6" condim="3"/>
+    <geom name="crate_wall_ypos" type="box" size="0.34 0.005 0.053" pos="0.62 0.575 0.847"
+          material="crate_yellow" friction="0.6" condim="3"/>
+
+    <!-- Dark bottle: cylinder r=0.032 h=0.26, mass 0.4 kg. Spawned just above
+         the tabletop (bottom at z=0.799) so it settles standing with its
+         center at z ~= 0.924 (Isaac lists init z=0.85 for a prim origin that
+         would penetrate the MuJoCo table; we spawn contact-free instead). -->
+    <body name="bottle" pos="-0.35 0.40 0.929">
+      <freejoint name="bottle_freejoint"/>
+      <geom name="bottle_geom" type="cylinder" size="0.032 0.13" mass="0.4"
+            material="bottle_dark" friction="0.6" condim="3"/>
+    </body>
+  </worldbody>
+</mujoco>
