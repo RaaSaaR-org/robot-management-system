@@ -22,7 +22,11 @@
 
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
 
-  <include file="g1_dex3/g1_43dof_fixedbase.xml"/>
+  <!-- REALISM: byte-identical copy of g1_dex3/g1_43dof_fixedbase.xml except
+       the Dex3 hands + wrist cuffs are BLACK like the real robot (the stock
+       include is shared with the bottle scene, whose policy was trained on
+       the light-grey renders — it must stay untouched). -->
+  <include file="g1_dex3/g1_43dof_fixedbase_realism.xml"/>
 
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
@@ -33,13 +37,29 @@
     <!-- Bright, near-white room like the dataset background wall. -->
     <texture type="skybox" builtin="gradient" rgb1="0.87 0.87 0.88" rgb2="0.62 0.63 0.65"
              width="512" height="3072"/>
+    <!-- REALISM PASS (sampled from decoded AppleToPlate ego_view frames, see
+         textures/): crushed-velvet grey cloth crop (tileable, ep300 t=0) and a
+         blotchy orange-red-yellow apple texture built from real apple pixels
+         (real apple mean RGB ~(246,179,74) — NOT flat red). -->
+    <texture name="cloth_tex" type="2d" file="textures/cloth.png"/>
+    <texture name="apple_tex" type="cube" file="textures/apple.png"/>
     <!-- Plain matte floor: the dataset's ego view never shows a textured
          floor, so avoid high-salience checker patterns around the table. -->
     <material name="groundplane" rgba="0.60 0.60 0.61 1" reflectance="0.02"/>
-    <!-- Matte dark-gray/black cloth (dataset tablecloth). -->
-    <material name="tablecloth" rgba="0.13 0.13 0.14 1" specular="0.05" shininess="0.05"/>
-    <material name="apple_red" rgba="0.72 0.10 0.06 1" specular="0.5" shininess="0.6"/>
-    <material name="plate_white" rgba="0.93 0.93 0.93 1" specular="0.3" shininess="0.4"/>
+    <!-- Physics table faces (almost fully hidden under the visual cloth
+         plane): plain velvet grey matching the texture mean. -->
+    <material name="tablecloth" rgba="0.30 0.30 0.31 1" specular="0.05" shininess="0.05"/>
+    <!-- Visual cloth: real velvet texture, ~1.1 m wrinkle period like the
+         source crop; velvet = low specular. -->
+    <!-- rgba < 1 compensates the scene lighting gain: texture mean ~76 renders
+         at ~150 with rgba 1; real cloth reads ~50 (near) to ~100 (far). -->
+    <material name="cloth_real" texture="cloth_tex" texuniform="true" texrepeat="0.9 0.9"
+              rgba="0.48 0.48 0.49 1" specular="0.12" shininess="0.10"/>
+    <material name="apple_real" texture="apple_tex" specular="0.45" shininess="0.55"/>
+    <!-- Real plate reads slightly blue-white (mean ~(226,227,232)). -->
+    <material name="plate_white" rgba="0.886 0.888 0.912 1" specular="0.25" shininess="0.35"/>
+    <!-- Dataset background wall band (mean ~(209,207,203)). -->
+    <material name="wall_white" rgba="0.84 0.83 0.81 1" specular="0.05" shininess="0.05"/>
   </asset>
 
   <!-- The fixed base pose (z=0.76 vs the 0.793 free-standing height) leaves
@@ -78,9 +98,28 @@
     <geom name="table" type="box" size="0.61 0.6 0.375" pos="-0.39 0.8 0.375"
           material="tablecloth" friction="0.8" condim="3"/>
 
+    <!-- REALISM PASS — visual-only geoms (contype/conaffinity 0, zero mass
+         via static worldbody geoms): physics stays EXACTLY as tuned above.
+         1) A textured cloth plane 0.5 mm above the physics tabletop, extending
+            past the collision box on all sides so the ego frame is cloth
+            edge-to-edge like every real frame (the current box leaves white
+            floor visible bottom-right — high-salience OOD for the policy).
+            Objects rest on the physics top at z=0.75 and visually sink 0.5 mm
+            into the plane — imperceptible.
+         2) A white wall plane behind the table matching the dataset's
+            background band at the top of the frame. -->
+    <geom name="cloth_visual" type="plane" size="1.0 0.8 0.001" pos="0.0 0.85 0.7505"
+          material="cloth_real" contype="0" conaffinity="0"/>
+    <geom name="wall_visual" type="plane" size="2.0 1.5 0.001" pos="0 1.66 1.2"
+          zaxis="0 -1 0" material="wall_white" contype="0" conaffinity="0"/>
+
     <!-- Static WHITE plate: 19 cm dish, 2 cm tall low cylinder resting on the
-         cloth (top at z=0.77). Success = apple geom in contact with THIS geom. -->
-    <geom name="plate" type="cylinder" size="0.095 0.01" pos="0.03 0.55 0.76"
+         cloth (top at z=0.77). Success = apple geom in contact with THIS geom.
+         REALISM: position = mean left-fingertip centroid at the RELEASE moment
+         of 15 real episodes FK'd through this model (scratchpad fk_grasp.py):
+         demos released at (-0.05, 0.365) +/- (0.04, 0.03). The original
+         (0.03, 0.55) was 10 cm right and 19 cm deep of every real release. -->
+    <geom name="plate" type="cylinder" size="0.095 0.01" pos="-0.05 0.365 0.76"
           material="plate_white" friction="0.8" condim="3"/>
 
     <!-- RED apple: slightly squashed ellipsoid r~0.04 m, 0.18 kg, freejoint.
@@ -88,15 +127,24 @@
          LEFT-front; settles to center z ~= 0.786. -->
     <body name="apple" pos="-0.22 0.46 0.789">
       <freejoint name="apple_freejoint"/>
+      <!-- friction 1.2 (was 1.0): real apple skin against rubberized Dex3
+           fingertips grips — with the softened finger actuators this is what
+           lets a closed hand actually hold the apple instead of losing it.
+           Rolling friction 0.02 (was 0.001): a real apple (irregular, stem)
+           stops within centimeters when nudged; the near-frictionless
+           ellipsoid rolled >1 m off the table on any grazing contact, ending
+           episodes the policy could otherwise retry. condim 6 enables the
+           rolling term. -->
       <geom name="apple" type="ellipsoid" size="0.04 0.04 0.036" mass="0.18"
-            material="apple_red" friction="1.0 0.01 0.001" condim="4"/>
+            material="apple_real" friction="1.2 0.02 0.02" condim="6"/>
     </body>
 
-    <!-- Ego camera matching the dataset's head-mounted D435 view (VFOV ~42 deg;
-         the robot include's head_camera fovy 89 is far too wide and is aimed at
-         the old crate): head-height pose, looking at (-0.06, 1.10, 0.50).
-         Iterated against ref_frames/ of episode_000000 - see cam_match.jpg. -->
-    <camera name="ego_camera" pos="-0.15 0.08 1.18" fovy="44"
-            xyaxes="0.9961 -0.0879 0.0000 0.0486 0.5511 0.8330"/>
+    <!-- Ego camera: MOVED into torso_link inside
+         g1_dex3/g1_43dof_fixedbase_realism.xml (REALISM pass). The real
+         ego_view D435 is head-mounted — it translates/pitches when the robot
+         leans into the reach; a world-static camera gives the policy visual
+         flow that contradicts its own commanded waist motion. The torso-frame
+         transform reproduces the world pose that was matched against
+         ref_frames/ (pos -0.15 0.08 1.18, fovy 44) at the settled start pose. -->
   </worldbody>
 </mujoco>
