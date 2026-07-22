@@ -142,14 +142,16 @@ JOINT_LIMITS_31 = [
     ("left_hand_middle_1", -1.74533, 0.0),
     ("left_hand_index_0", -1.5708, 0.0),
     ("left_hand_index_1", -1.74533, 0.0),
-    # right hand
+    # right hand — Dex3 DDS order is thumb, INDEX, middle (the L/R asymmetry;
+    # matches g1_apple_env RIGHT_HAND_JOINT_NAMES / the AppleToPlate dataset).
+    # Do NOT reorder to mirror the left hand.
     ("right_hand_thumb_0", -1.0472, 1.0472),
     ("right_hand_thumb_1", -1.0472, 0.724312),
     ("right_hand_thumb_2", -1.74533, 0.0),
-    ("right_hand_middle_0", 0.0, 1.5708),
-    ("right_hand_middle_1", 0.0, 1.74533),
     ("right_hand_index_0", 0.0, 1.5708),
     ("right_hand_index_1", 0.0, 1.74533),
+    ("right_hand_middle_0", 0.0, 1.5708),
+    ("right_hand_middle_1", 0.0, 1.74533),
     # waist
     ("waist_yaw", -2.618, 2.618),
     ("waist_roll", -0.52, 0.52),
@@ -422,6 +424,7 @@ class ArmedWriters:
         self.lock = threading.Lock()
         self.targets31 = None        # np.ndarray(31) or None (nothing yet)
         self._stop = threading.Event()
+        self._thread_error = None    # set if _publish_loop dies (fail-safe)
         self.crc = CRC()
 
         self.pub_arm = ChannelPublisher(ARM_SDK_TOPIC, LowCmd_)
@@ -481,53 +484,97 @@ class ArmedWriters:
 
     def _publish_loop(self):
         dt = 1.0 / self.PUB_HZ
-        while not self._stop.is_set():
-            t_next = time.time() + dt
+        try:
+            while not self._stop.is_set():
+                t_next = time.time() + dt
+                with self.lock:
+                    t31 = None if self.targets31 is None else self.targets31.copy()
+                    # slew the blend weight toward its target
+                    step = dt / self.ramp_seconds
+                    if self.weight < self.weight_target:
+                        self.weight = min(self.weight + step, self.weight_target)
+                    elif self.weight > self.weight_target:
+                        self.weight = max(self.weight - step, self.weight_target)
+                    w = self.weight
+                if t31 is not None:
+                    for k, i in enumerate(LEFT_ARM_IDX):
+                        self.low_msg.motor_cmd[i].q = float(t31[ACT_LEFT_ARM][k])
+                    for k, i in enumerate(RIGHT_ARM_IDX):
+                        self.low_msg.motor_cmd[i].q = float(t31[ACT_RIGHT_ARM][k])
+                    for k, i in enumerate(WAIST_IDX):
+                        self.low_msg.motor_cmd[i].q = float(t31[ACT_WAIST][k])
+                    self.low_msg.motor_cmd[WEIGHT_MOTOR_IDX].q = w
+                    self.low_msg.crc = self.crc.Crc(self.low_msg)
+                    self.pub_arm.Write(self.low_msg)
+                    lh = t31[ACT_LEFT_HAND]
+                    rh = t31[ACT_RIGHT_HAND]
+                    for i in range(NUM_HAND):
+                        self.lh_msg.motor_cmd[i].q = float(lh[i])
+                        self.rh_msg.motor_cmd[i].q = float(rh[i])
+                    self.pub_lh.Write(self.lh_msg)
+                    self.pub_rh.Write(self.rh_msg)
+                time.sleep(max(0.0, t_next - time.time()))
+        except Exception as e:
+            # The publish thread is the ONLY writer of the arm-sdk blend weight.
+            # If it dies we must NOT leave the weight latched high: force it to
+            # 0 and emit explicit zero-weight commands directly from this thread
+            # before it exits, so the robot's own controller reclaims arm
+            # authority. (ramp_down_and_stop() alone can't help — it depends on
+            # this very thread to slew + publish.)
             with self.lock:
-                t31 = None if self.targets31 is None else self.targets31.copy()
-                # slew the blend weight toward its target
-                step = dt / self.ramp_seconds
-                if self.weight < self.weight_target:
-                    self.weight = min(self.weight + step, self.weight_target)
-                elif self.weight > self.weight_target:
-                    self.weight = max(self.weight - step, self.weight_target)
-                w = self.weight
-            if t31 is not None:
-                for k, i in enumerate(LEFT_ARM_IDX):
-                    self.low_msg.motor_cmd[i].q = float(t31[ACT_LEFT_ARM][k])
-                for k, i in enumerate(RIGHT_ARM_IDX):
-                    self.low_msg.motor_cmd[i].q = float(t31[ACT_RIGHT_ARM][k])
-                for k, i in enumerate(WAIST_IDX):
-                    self.low_msg.motor_cmd[i].q = float(t31[ACT_WAIST][k])
-                self.low_msg.motor_cmd[WEIGHT_MOTOR_IDX].q = w
-                self.low_msg.crc = self.crc.Crc(self.low_msg)
-                self.pub_arm.Write(self.low_msg)
-                lh = t31[ACT_LEFT_HAND]
-                rh = t31[ACT_RIGHT_HAND]
-                for i in range(NUM_HAND):
-                    self.lh_msg.motor_cmd[i].q = float(lh[i])
-                    self.rh_msg.motor_cmd[i].q = float(rh[i])
-                self.pub_lh.Write(self.lh_msg)
-                self.pub_rh.Write(self.rh_msg)
-            time.sleep(max(0.0, t_next - time.time()))
+                self._thread_error = e
+                self.weight = 0.0
+                self.weight_target = 0.0
+            log(f"ERROR: arm-sdk publish thread crashed: {e!r} — forcing blend "
+                f"weight to 0")
+            try:
+                self._emit_zero_weight(reps=10)
+            except Exception as e2:
+                log(f"ERROR: failed to emit zero-weight after crash: {e2!r}")
+
+    def _emit_zero_weight(self, reps: int = 5):
+        """Publish `reps` arm-sdk LowCmds with blend weight 0 so the robot's own
+        controller reclaims arm authority. This is the ramp-down fail-safe and
+        does NOT depend on the publish thread (which may have died). Must only
+        be called once the publish loop is stopped or crashing, so there is no
+        concurrent writer of self.low_msg / self.pub_arm."""
+        self.low_msg.motor_cmd[WEIGHT_MOTOR_IDX].q = 0.0
+        for _ in range(max(reps, 1)):
+            self.low_msg.crc = self.crc.Crc(self.low_msg)
+            self.pub_arm.Write(self.low_msg)
+            time.sleep(0.01)
 
     def ramp_down_and_stop(self):
-        """Ramp motor_cmd[29].q back to 0, then stop publishing. Called from
-        the main try/finally on EVERY exit path."""
+        """Ramp motor_cmd[29].q back to 0, then stop publishing and emit a few
+        EXPLICIT zero-weight commands so the last word on the wire is provably 0
+        — even if the publish thread has died. Called from the main try/finally
+        on EVERY exit path."""
         with self.lock:
             self.weight_target = 0.0
             w0 = self.weight
         log(f"ramp-down: weight {w0:.2f} -> 0 over <= {self.ramp_seconds}s")
         deadline = time.time() + self.ramp_seconds + 2.0
         while time.time() < deadline:
+            if not self.thread.is_alive():
+                log("ramp-down: publish thread not alive — emitting zero-weight "
+                    "directly")
+                break
             with self.lock:
                 if self.weight <= 1e-3:
                     break
             time.sleep(0.02)
-        # a few explicit zero-weight messages so the last word on the wire is 0
-        time.sleep(0.05)
+        # Stop the (possibly still-slewing) publish thread, then emit explicit
+        # zero-weight LowCmds ourselves. After join() there is no concurrent
+        # writer, so this is the authoritative last word on rt/arm_sdk.
         self._stop.set()
         self.thread.join(timeout=2.0)
+        with self.lock:
+            self.weight = 0.0
+            self.weight_target = 0.0
+        try:
+            self._emit_zero_weight(reps=5)
+        except Exception as e:
+            log(f"ERROR: failed to emit final zero-weight: {e!r}")
         with self.lock:
             final_w = self.weight
         log(f"ramp-down complete (final weight {final_w:.3f}); publishers stopped")
@@ -735,11 +782,23 @@ def main(argv=None) -> int:
                 break
 
             # --- stale-state watchdog (mandatory) --------------------------
+            # Guards ALL THREE state streams: a frozen Dex3 hand-state stream
+            # would otherwise feed stale hand values into the 43-dim obs while
+            # the loop keeps commanding.
             ages = buffer.ages(t_tick)
-            if ages["lowstate_ms"] is None or ages["lowstate_ms"] > args.stale_ms:
-                stop_reason["reason"] = f"stale_lowstate_{ages['lowstate_ms']}"
-                log(f"WATCHDOG: rt/lowstate stale ({ages['lowstate_ms']:.0f} ms "
-                    f"> {args.stale_ms:.0f} ms) — aborting with ramp-down")
+            stale = [
+                f"{name}={None if a is None else round(a)}ms"
+                for name, a in (
+                    ("lowstate", ages["lowstate_ms"]),
+                    ("left_hand", ages["left_hand_ms"]),
+                    ("right_hand", ages["right_hand_ms"]),
+                )
+                if a is None or a > args.stale_ms
+            ]
+            if stale:
+                stop_reason["reason"] = "stale_state_" + ",".join(stale)
+                log(f"WATCHDOG: stale state ({'; '.join(stale)}; limit "
+                    f"{args.stale_ms:.0f} ms) — aborting with ramp-down")
                 exit_code = 4
                 break
 

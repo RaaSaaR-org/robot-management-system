@@ -428,7 +428,7 @@ class G1ApplePnPEnv(gym.Env):
         # at the zero pose the LEFT Dex3 fingertips hover near the spawn).
         adr = self._apple_qpos_adr
         for _attempt in range(20):
-            jitter = np.random.uniform(-APPLE_JITTER, APPLE_JITTER, size=2)
+            jitter = self.np_random.uniform(-APPLE_JITTER, APPLE_JITTER, size=2)
             self.data.qpos[adr + 0] = APPLE_SPAWN_XY[0] + jitter[0]
             self.data.qpos[adr + 1] = APPLE_SPAWN_XY[1] + jitter[1]
             self.data.qpos[adr + 2] = APPLE_SPAWN_Z
