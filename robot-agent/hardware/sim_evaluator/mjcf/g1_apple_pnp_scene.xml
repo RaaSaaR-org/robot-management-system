@@ -1,0 +1,102 @@
+<mujoco model="g1_apple_pnp_scene">
+  <!--
+    G1 EDU + Dex3-1 apple-to-plate scene (NVIDIA GR00T E2E apple workflow,
+    C:\Unitree\_data\apple_pnp\CONTRACT.md): robot base fixed at
+    (-0.15, 0, 0.76) with +90 deg yaw (baked into g1_dex3/g1_43dof_fixedbase.xml,
+    robot faces world +y), a ~0.75 m table covered in a BLACK tablecloth, a RED
+    apple (freejoint) on the robot's LEFT-front (world -x; every dataset episode
+    is a LEFT-hand grasp), and a static WHITE plate (19 cm dish) ~0.30 m to the
+    apple's +x side — matching the dataset ego_view composition (apple
+    left-of-center, plate right-of-center, cloth filling the frame).
+
+    The robot include's own `head_camera` (fovy 89) is far wider than the real
+    dataset camera (RealSense D435, VFOV ~42 deg) and is yawed toward the old
+    crate scene, so this scene adds its own `ego_camera` (scene-level - the
+    shared robot file stays untouched) whose pose/fov were iterated against
+    decoded frames of dataset episode_000000 (see cam_match.jpg).
+
+    Sits directly in mjcf/ so the robot include's g1_dex3/meshes/*.STL paths
+    resolve next to this file (no meshdir), like g1_dex3_pickplace_scene.xml.
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <include file="g1_dex3/g1_43dof_fixedbase.xml"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <!-- Bright, near-white room like the dataset background wall. -->
+    <texture type="skybox" builtin="gradient" rgb1="0.87 0.87 0.88" rgb2="0.62 0.63 0.65"
+             width="512" height="3072"/>
+    <!-- Plain matte floor: the dataset's ego view never shows a textured
+         floor, so avoid high-salience checker patterns around the table. -->
+    <material name="groundplane" rgba="0.60 0.60 0.61 1" reflectance="0.02"/>
+    <!-- Matte dark-gray/black cloth (dataset tablecloth). -->
+    <material name="tablecloth" rgba="0.13 0.13 0.14 1" specular="0.05" shininess="0.05"/>
+    <material name="apple_red" rgba="0.72 0.10 0.06 1" specular="0.5" shininess="0.6"/>
+    <material name="plate_white" rgba="0.93 0.93 0.93 1" specular="0.3" shininess="0.4"/>
+  </asset>
+
+  <!-- The fixed base pose (z=0.76 vs the 0.793 free-standing height) leaves
+       the foot spheres permanently ~3 cm inside the floor. In the bottle scene
+       this was only excluded from the collision METRIC, but the contact forces
+       also bend the knees ~0.5 rad during settling and the legs then creep
+       back toward their held targets for seconds — a visible drift in the
+       43-dim state this task DOES observe. Exclude the foot<->world contact
+       pairs entirely (feet never legitimately touch floor/table/plate with a
+       fixed base; the artifact has no physical meaning). -->
+  <contact>
+    <exclude body1="left_ankle_roll_link" body2="world"/>
+    <exclude body1="right_ankle_roll_link" body2="world"/>
+    <exclude body1="left_ankle_pitch_link" body2="world"/>
+    <exclude body1="right_ankle_pitch_link" body2="world"/>
+  </contact>
+
+  <worldbody>
+    <light pos="0 0.5 3.5" dir="0 0 -1" directional="true" diffuse="0.75 0.75 0.75"/>
+    <light pos="-1.0 -0.8 2.5" dir="0.4 0.5 -1" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <light pos="1.2 1.2 2.2" dir="-0.4 -0.3 -1" diffuse="0.35 0.35 0.35"/>
+
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane"
+          friction="0.8" condim="3"/>
+
+    <!-- Tablecloth-covered table: top surface z = 0.75, x in [-1.0, 0.22],
+         y in [0.2, 1.4] => solid block, half-extents (0.61, 0.6, 0.375)
+         centered (-0.39, 0.8, 0.375). Deep enough that the cloth fills the
+         ego frame like the dataset view (the real frame shows the table's
+         right edge at top-right too); the +x edge at 0.22 lets the
+         dataset-mean start pose's drooping RIGHT fingers (meshes reach
+         x~0.24-0.30, gravity-sag equilibrium bottom ~z=0.70) hang PAST the
+         table instead of resting on the cloth - no table height in the
+         ~0.75 m contract range can clear them. The whole block wears the
+         cloth material (the cloth drapes to the floor in the dataset too). -->
+    <geom name="table" type="box" size="0.61 0.6 0.375" pos="-0.39 0.8 0.375"
+          material="tablecloth" friction="0.8" condim="3"/>
+
+    <!-- Static WHITE plate: 19 cm dish, 2 cm tall low cylinder resting on the
+         cloth (top at z=0.77). Success = apple geom in contact with THIS geom. -->
+    <geom name="plate" type="cylinder" size="0.095 0.01" pos="0.03 0.55 0.76"
+          material="plate_white" friction="0.8" condim="3"/>
+
+    <!-- RED apple: slightly squashed ellipsoid r~0.04 m, 0.18 kg, freejoint.
+         Spawned just above the cloth (bottom at z=0.753) on the robot's
+         LEFT-front; settles to center z ~= 0.786. -->
+    <body name="apple" pos="-0.22 0.46 0.789">
+      <freejoint name="apple_freejoint"/>
+      <geom name="apple" type="ellipsoid" size="0.04 0.04 0.036" mass="0.18"
+            material="apple_red" friction="1.0 0.01 0.001" condim="4"/>
+    </body>
+
+    <!-- Ego camera matching the dataset's head-mounted D435 view (VFOV ~42 deg;
+         the robot include's head_camera fovy 89 is far too wide and is aimed at
+         the old crate): head-height pose, looking at (-0.06, 1.10, 0.50).
+         Iterated against ref_frames/ of episode_000000 - see cam_match.jpg. -->
+    <camera name="ego_camera" pos="-0.15 0.08 1.18" fovy="44"
+            xyaxes="0.9961 -0.0879 0.0000 0.0486 0.5511 0.8330"/>
+  </worldbody>
+</mujoco>

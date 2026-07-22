@@ -152,6 +152,14 @@ const AVAILABLE_ENVIRONMENTS: SimEnvironment[] = [
     backend: 'mujoco',
     embodiment: 'g1_dex3',
   },
+  {
+    id: 'g1_apple_pnp',
+    name: 'G1 Apple to Plate (NVIDIA workflow)',
+    description:
+      'G1 + Dex3-1 apple-to-plate tabletop task replicating the NVIDIA GR00T E2E apple use case',
+    backend: 'mujoco',
+    embodiment: 'g1_apple_pnp',
+  },
 ];
 
 // ============================================================================
@@ -186,6 +194,14 @@ const VLA_EVAL_PROFILES: Record<string, VlaEvalProfile> = {
   // 600-step horizon.
   g1_dex3: {
     task: 'Put the bottle into the plate.',
+    maxSteps: 600,
+    execHorizon: 8,
+  },
+  // NVIDIA GR00T E2E apple workflow (GR00T-N1.7-AppleToPlate contract): the
+  // task string is the dataset's exact annotation.human.task_description;
+  // 16-step chunks, re-plan after 8 executed steps, 600-step horizon.
+  g1_apple_pnp: {
+    task: 'move the apple to the plate',
     maxSteps: 600,
     execHorizon: 8,
   },

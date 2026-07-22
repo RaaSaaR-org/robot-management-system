@@ -198,7 +198,13 @@ def evaluate(
     # scene_file is optional and defaults to the bundled pick-place scene.
     # G1 path: a twin-derived scene file OR an explicit g1 embodiment selects the
     # 29-DOF humanoid env. Otherwise keep the default SO-101 tabletop env.
-    if embodiment == "g1_dex3":
+    if embodiment == "g1_apple_pnp":
+        # g1_apple_pnp path: NVIDIA GR00T E2E apple-to-plate parity env
+        # (43-dim state / 31-dim action, bundled g1_apple_pnp_scene.xml).
+        from envs.g1_apple_env import G1ApplePnPEnv
+
+        env = G1ApplePnPEnv(scene_path=scene_file, max_steps=max_steps)
+    elif embodiment == "g1_dex3":
         from envs.g1_pickplace_env import G1PickPlaceEnv
 
         env = G1PickPlaceEnv(scene_path=scene_file, max_steps=max_steps)
@@ -326,8 +332,9 @@ def main():
     parser.add_argument(
         "--embodiment",
         default="so101",
-        help="Robot embodiment: 'so101' (default), 'g1' (29-DOF humanoid), or "
-        "'g1_dex3' (fixed-base G1+Dex3 tabletop pick-place).",
+        help="Robot embodiment: 'so101' (default), 'g1' (29-DOF humanoid), "
+        "'g1_dex3' (fixed-base G1+Dex3 tabletop pick-place), or "
+        "'g1_apple_pnp' (fixed-base G1+Dex3 apple-to-plate, NVIDIA workflow).",
     )
     parser.add_argument(
         "--exec-horizon",
