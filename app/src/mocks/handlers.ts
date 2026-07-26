@@ -19,6 +19,8 @@ import {
   DEMO_MY_LISTINGS,
   withoutReviews,
 } from './marketplaceDemoData';
+import { createDemoAgentState, createDemoScene } from './agentModeDemoData';
+import type { AgentModeState } from '@/features/agentmode/types/agentmode.types';
 import type {
   MarketplaceListing,
   MarketplacePurchase,
@@ -109,6 +111,58 @@ export const handlers = [
 
   http.post('/api/robots/:id/command', () => {
     return HttpResponse.json({ success: true });
+  }),
+
+  // ========================================================================
+  // Agent Mode (TASK-194) — server proxies these to the robot-agent
+  // ========================================================================
+
+  http.get('/api/robots/:id/agent-mode/scene', ({ params }) => {
+    return HttpResponse.json(demoAgentScene(String(params.id)));
+  }),
+
+  http.get('/api/robots/:id/agent-mode', ({ params }) => {
+    return HttpResponse.json(demoAgentState(String(params.id)));
+  }),
+
+  http.post('/api/robots/:id/agent-mode/command', async ({ params, request }) => {
+    const robotId = String(params.id);
+    const body = (await request.json().catch(() => ({}))) as { text?: string };
+
+    if (demoAgentEstop.get(robotId)) {
+      return HttpResponse.json({
+        accepted: false,
+        message: 'E-Stop is latched — reset it before sending commands.',
+      });
+    }
+
+    demoAgentPlanSeq += 1;
+    const planId = `plan-demo-${demoAgentPlanSeq}`;
+    return HttpResponse.json({
+      accepted: true,
+      planId,
+      message: `Understood — planning "${body.text ?? ''}".`,
+    });
+  }),
+
+  http.post('/api/robots/:id/agent-mode/toggle', async ({ params, request }) => {
+    const robotId = String(params.id);
+    const body = (await request.json().catch(() => ({}))) as { enabled?: boolean };
+    demoAgentEnabled.set(robotId, body.enabled !== false);
+    return HttpResponse.json(demoAgentState(robotId));
+  }),
+
+  http.post('/api/robots/:id/agent-mode/estop/reset', ({ params }) => {
+    const robotId = String(params.id);
+    demoAgentEstop.set(robotId, false);
+    return HttpResponse.json(demoAgentState(robotId));
+  }),
+
+  http.post('/api/robots/:id/agent-mode/estop', ({ params }) => {
+    demoAgentEstop.set(String(params.id), true);
+    // `delivered` mirrors the real wire contract: the demo robot always
+    // confirms StopMove/Damp, so the clean-stop banner is what demo shows.
+    return HttpResponse.json({ ok: true, stopped: true, delivered: true });
   }),
 
   // ========================================================================
@@ -534,6 +588,28 @@ export const handlers = [
     return HttpResponse.json({ data: [], total: 0, items: [] });
   }),
 ];
+
+// ============================================================================
+// Agent Mode demo state (mutable so toggle/E-Stop persist per session)
+// ============================================================================
+
+/** Hands out plan ids; the demo plan driver replays a plan for each one. */
+let demoAgentPlanSeq = 0;
+const demoAgentEnabled = new Map<string, boolean>();
+const demoAgentEstop = new Map<string, boolean>();
+
+function demoAgentScene(robotId: string) {
+  return createDemoScene(robotId);
+}
+
+function demoAgentState(robotId: string): AgentModeState {
+  return {
+    ...createDemoAgentState(robotId),
+    enabled: demoAgentEnabled.get(robotId) ?? true,
+    estopActive: demoAgentEstop.get(robotId) ?? false,
+    scene: demoAgentScene(robotId),
+  };
+}
 
 // ============================================================================
 // Marketplace demo state (mutable so purchases/reviews persist per session)

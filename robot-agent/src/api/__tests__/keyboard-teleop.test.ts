@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { createKeyboardTeleopWebSocket } from '../keyboard-teleop.js';
+import { controlOwnerLock } from '../../agent-mode/control-owner.js';
 import type { RobotStateManager } from '../../robot/state.js';
 
 const TEST_JOINTS = [
@@ -65,12 +66,16 @@ function sendMsg(ws: FakeWs, payload: unknown) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // The control lock is a process-wide singleton and is now refcounted, so
+  // sockets left open by an earlier test would keep holders alive.
+  controlOwnerLock.reset();
 });
 
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  controlOwnerLock.reset();
 });
 
 describe('keyboard-teleop — connection handshake', () => {
@@ -99,6 +104,49 @@ describe('keyboard-teleop — connection handshake', () => {
     const ws = connect(state);
     ws.emit('error', new Error('boom'));
     expect(state.disableTeleop).toHaveBeenCalledOnce();
+  });
+});
+
+describe('keyboard-teleop — concurrent operators hold the control lock', () => {
+  /** Two live sockets on one endpoint — the ordinary case: keyboard tab + VR view. */
+  function connectTwo(state: StateStub): { a: FakeWs; b: FakeWs } {
+    const wss = createKeyboardTeleopWebSocket(state as unknown as RobotStateManager);
+    const a = new FakeWs();
+    const b = new FakeWs();
+    wss.emit('connection', a);
+    wss.emit('connection', b);
+    return { a, b };
+  }
+
+  it('one view closing must not release a lock the other operator still holds', () => {
+    const state = makeStateStub();
+    const { a, b } = connectTwo(state);
+    expect(controlOwnerLock.get()).toBe('teleop');
+    expect(controlOwnerLock.holderCount()).toBe(2);
+
+    b.emit('close');
+
+    // The human on socket A is still streaming joint targets: control must stay
+    // theirs, and the joints must stay under teleop.
+    expect(controlOwnerLock.get()).toBe('teleop');
+    expect(state.disableTeleop).not.toHaveBeenCalled();
+
+    a.emit('close');
+
+    expect(controlOwnerLock.get()).toBe('idle');
+    expect(state.disableTeleop).toHaveBeenCalledOnce();
+  });
+
+  it('error followed by close on the same socket releases exactly one holder', () => {
+    const state = makeStateStub();
+    const { a } = connectTwo(state);
+
+    a.emit('error', new Error('boom'));
+    a.emit('close');
+
+    expect(controlOwnerLock.get()).toBe('teleop');
+    expect(controlOwnerLock.holderCount()).toBe(1);
+    expect(state.disableTeleop).not.toHaveBeenCalled();
   });
 });
 

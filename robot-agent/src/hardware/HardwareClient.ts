@@ -204,6 +204,44 @@ export interface RecordingStopResult {
   exitCode?: number | null;
 }
 
+/**
+ * Result of a `/loco/*` call. The sidecar's failure codes mean different things
+ * and are kept distinct, because they call for different operator action:
+ *
+ * - **403** → `G1_LOCO_ENABLED != 1` on that sidecar (a telemetry-only process).
+ *   Permanent for the life of the process; retrying is pointless. Flagged as
+ *   {@link locoDisabled}.
+ * - **503** → SDK missing, DDS down, or the RPC went unanswered. Transient-ish;
+ *   the body carries the real reason.
+ * - **400** → the request itself was malformed (e.g. a missing `duration_s`).
+ *
+ * The sidecar's `error` text is always surfaced verbatim so a block can fail
+ * honestly instead of pretending the robot moved.
+ */
+export interface LocoResult {
+  ok: boolean;
+  error?: string;
+  /** True only for HTTP 403 — locomotion is switched off on this sidecar. */
+  locoDisabled?: boolean;
+  /** Unitree RPC status code echoed by the sidecar on success. */
+  rpcCode?: number;
+}
+
+/** Planar base pose from `GET /loco/odom` (`rt/odommodestate`). */
+export interface LocoOdometry {
+  /** Base x in metres, world frame. */
+  x: number;
+  /** Base y in metres, world frame. */
+  y: number;
+  /** Base yaw in **radians**, CCW positive (DDS convention). */
+  yaw: number;
+  /** Where the sidecar got it from, e.g. `rt/odommodestate` or `sim`. */
+  source: string;
+}
+
+/** Named high-level arm/loco actions the sidecar maps onto LocoClient calls. */
+export type LocoActionName = 'wave' | 'shake' | 'stop';
+
 export interface RecordingStatus {
   running: boolean;
   repoId: string | null;
@@ -483,20 +521,36 @@ export class HardwareClient {
 
   /**
    * One-shot camera snapshot as a base64 JPEG. Used per-tick by the
-   * closed loop when it needs fresh frames for `/predict`.
+   * closed loop when it needs fresh frames for `/predict`, and by Agent Mode's
+   * `look` / `scan_room` blocks.
+   *
+   * Wire-key note (TASK-194): so101_sidecar.py returns `image_b64`, while
+   * g1_sidecar.py's `_snapshot()` returns **`jpeg_base64`**. Both are accepted —
+   * before this, every G1 snapshot failed with a misleading "empty response".
+   * The sidecar's `error` text is surfaced verbatim instead of being swallowed.
    */
   async snapshot(name: string): Promise<string> {
     const res = await fetch(`${getSidecarUrl()}/cameras/${encodeURIComponent(name)}/snapshot`, {
       signal: AbortSignal.timeout(1500),
     });
+    const data = (await res.json().catch(() => ({}))) as {
+      image_b64?: string;
+      jpeg_base64?: string;
+      ok?: boolean;
+      error?: string;
+    };
     if (!res.ok) {
-      throw new Error(`Sidecar snapshot ${name} failed: HTTP ${res.status}`);
+      throw new Error(
+        `Sidecar snapshot ${name} failed: HTTP ${res.status}${data.error ? ` — ${data.error}` : ''}`
+      );
     }
-    const data = (await res.json()) as { image_b64?: string };
-    if (!data.image_b64) {
-      throw new Error(`Sidecar snapshot ${name}: empty response`);
+    const b64 = data.image_b64 ?? data.jpeg_base64;
+    if (!b64) {
+      throw new Error(
+        `Sidecar snapshot ${name}: ${data.error ?? 'response carried neither image_b64 nor jpeg_base64'}`
+      );
     }
-    return data.image_b64;
+    return b64;
   }
 
   /**
@@ -792,6 +846,134 @@ export class HardwareClient {
         lastError: data.last_error ?? null,
         uploadStatus: data.upload_status ?? null,
       };
+    } catch {
+      return null;
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // TASK-194: LocoClient facade (`/loco/*` on g1_sidecar.py, port 8767).
+  //
+  // Identical call path in simulation and on the real G1 EDU: the sidecar
+  // either talks to the onboard FSM (hardware) or to our own DDS `sport`
+  // service shim (sim). All four endpoints answer 503 with a clear `error`
+  // when the SDK/DDS is unavailable or `G1_LOCO_ENABLED` is off; none of these
+  // methods throw — the caller turns `ok:false` into a failed block.
+  // ────────────────────────────────────────────────────────────────
+
+  /** Shared POST helper for the `/loco/*` endpoints. Never throws. */
+  private async _loco(
+    path: string,
+    body: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<LocoResult> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        rpc_code?: number;
+      };
+      if (res.status === 403) {
+        return {
+          ok: false,
+          locoDisabled: true,
+          error:
+            data.error ??
+            'locomotion is not enabled on this robot (G1_LOCO_ENABLED is off on the sidecar)',
+        };
+      }
+      if (!res.ok || data.ok === false) {
+        return {
+          ok: false,
+          error: data.error ?? `sidecar ${path} returned HTTP ${res.status}`,
+        };
+      }
+      return typeof data.rpc_code === 'number' ? { ok: true, rpcCode: data.rpc_code } : { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: `sidecar ${path} unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  /**
+   * `LocoClient.SetVelocity(vx, vy, omega, duration)` — a planar base velocity
+   * held for `durationS` seconds. vx/vy are m/s in the robot frame (+x forward,
+   * +y left), omega is rad/s (CCW positive).
+   *
+   * The request timeout covers the whole motion plus slack, because the sidecar
+   * is free to either return immediately or block for the duration; callers
+   * additionally wait out any remaining wall-clock time themselves.
+   */
+  async locoMove(vx: number, vy: number, omega: number, durationS: number): Promise<LocoResult> {
+    return this._loco(
+      '/loco/move',
+      { vx, vy, omega, duration_s: durationS },
+      Math.round(durationS * 1000) + 5_000
+    );
+  }
+
+  /** `LocoClient.WaveHand` / `ShakeHand` / `StopMove` by name. */
+  async locoAction(name: LocoActionName, args?: Record<string, unknown>): Promise<LocoResult> {
+    return this._loco('/loco/action', args ? { name, args } : { name }, 15_000);
+  }
+
+  /**
+   * `LocoClient.SetFsmId(id)` — posture switch (stand / high / low / sit / damp).
+   * The numeric ids live in `agent-mode/block-executor.ts` (`G1_FSM_IDS`).
+   */
+  async locoFsm(id: number): Promise<LocoResult> {
+    return this._loco('/loco/fsm', { id }, 10_000);
+  }
+
+  /**
+   * `LocoClient.SetStandHeight()` — how tall the robot stands.
+   *
+   * Deliberately NOT `locoFsm`: standing height is a separate RPC (api 7104) and
+   * there is no high-stand/low-stand entry in the FSM table, so routing
+   * `posture: high|low` through an FSM id would mean guessing an id and sending
+   * it to a 43-DOF humanoid.
+   */
+  async locoStandHeight(preset: 'high' | 'low'): Promise<LocoResult> {
+    return this._loco('/loco/stand-height', { preset }, 10_000);
+  }
+
+  /** `LocoClient.StopMove()` — zero the base velocity immediately. */
+  async locoStop(): Promise<LocoResult> {
+    return this.locoAction('stop');
+  }
+
+  /**
+   * Planar base pose from `GET /loco/odom`. Returns null when the sidecar is
+   * unreachable or reports `ok:false` — callers must treat null as "no odometry"
+   * and fall back to dead reckoning *explicitly*, never fabricate a pose.
+   */
+  async getLocoOdometry(): Promise<LocoOdometry | null> {
+    try {
+      const res = await fetch(`${getSidecarUrl()}/loco/odom`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        ok?: boolean;
+        x?: unknown;
+        y?: unknown;
+        yaw?: unknown;
+        source?: unknown;
+      };
+      if (data.ok === false) return null;
+      const x = _toNum(data.x);
+      const y = _toNum(data.y);
+      const yaw = _toNum(data.yaw);
+      if (x === undefined || y === undefined || yaw === undefined) return null;
+      return { x, y, yaw, source: typeof data.source === 'string' ? data.source : 'unknown' };
     } catch {
       return null;
     }

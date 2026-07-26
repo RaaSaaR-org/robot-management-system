@@ -37,19 +37,40 @@ const openrouterPlugin = config.openrouterApiKey
     })
   : null;
 
-// Ollama plugin (local, OpenAI-compatible endpoint; only when selected as provider)
-const ollamaPlugin = config.llmProvider === "ollama"
+// Ollama plugin (local, OpenAI-compatible endpoint).
+//
+// TASK-194: constructed UNCONDITIONALLY, not only when `llmProvider === 'ollama'`.
+// Agent Mode always plans/sees through local Ollama models, even when the main
+// agent runs on Gemini or OpenRouter, so `ollama/<model>` refs must resolve in
+// every provider configuration. Building the plugin is free — it is a keyless
+// local endpoint and no connection is opened until a model is actually called.
+const ollamaPlugin = openAICompatible({
+  name: "ollama",
+  apiKey: "ollama", // Ollama ignores the key, but the OpenAI client requires one
+  baseURL: config.ollamaBaseUrl,
+});
+
+// Agent Mode may point at a *different* Ollama host (AGENT_OLLAMA_BASE_URL).
+// Only then is a second, separately-named plugin registered; otherwise agent
+// model refs reuse the `ollama/` prefix above. Consumers must build their model
+// refs via AGENT_OLLAMA_PREFIX rather than hardcoding "ollama/".
+const agentOllamaSeparate = config.agentMode.ollamaBaseUrl !== config.ollamaBaseUrl;
+
+/** Model-ref prefix agent-mode calls must use, e.g. `${AGENT_OLLAMA_PREFIX}/gemma3:4b`. */
+export const AGENT_OLLAMA_PREFIX = agentOllamaSeparate ? "agentollama" : "ollama";
+
+const agentOllamaPlugin = agentOllamaSeparate
   ? openAICompatible({
-      name: "ollama",
-      apiKey: "ollama", // Ollama ignores the key, but the OpenAI client requires one
-      baseURL: config.ollamaBaseUrl,
+      name: AGENT_OLLAMA_PREFIX,
+      apiKey: "ollama",
+      baseURL: config.agentMode.ollamaBaseUrl,
     })
   : null;
 
 export const configuredModel = resolveModel();
 
 export const ai = genkit({
-  plugins: [googleAIPlugin, openrouterPlugin, ollamaPlugin].filter(
+  plugins: [googleAIPlugin, openrouterPlugin, ollamaPlugin, agentOllamaPlugin].filter(
     (p): p is NonNullable<typeof p> => p !== null
   ),
   model: configuredModel,

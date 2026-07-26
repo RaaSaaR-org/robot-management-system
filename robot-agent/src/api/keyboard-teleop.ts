@@ -10,6 +10,7 @@
 
 import { WebSocketServer, WebSocket } from 'ws';
 import type { RobotStateManager } from '../robot/state.js';
+import { controlOwnerLock } from '../agent-mode/control-owner.js';
 
 /** How fast a held joint moves, in radians per second. */
 const SLEW_RATE_RAD_PER_S = 0.8;
@@ -55,6 +56,14 @@ export function createKeyboardTeleopWebSocket(
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('[KeyboardTeleop] Client connected');
+
+    // TASK-194 arbitration: a human at the controls outranks every autonomous
+    // owner. The claim always succeeds; Agent Mode reacts to the preemption by
+    // aborting its running plan.
+    const claim = controlOwnerLock.claim('teleop');
+    if (claim.preempted) {
+      console.warn(`[KeyboardTeleop] Preempted ${claim.preempted} — human teleop takes over`);
+    }
 
     // Enter teleop mode — joints now follow operator input instead of animation.
     const positions = robotStateManager.enableTeleop();
@@ -139,17 +148,33 @@ export function createKeyboardTeleopWebSocket(
       }
     });
 
+    // 'error' is normally followed by 'close', and a socket must never release
+    // more holders of the lock than the one it claimed — that is what let a
+    // second view's disconnect free a lock a live operator was still holding.
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      clearInterval(timer);
+      controlOwnerLock.release('teleop');
+      // Teleop is active only while an operator is connected — but "an
+      // operator" can be several sockets at once (keyboard tab + VR view +
+      // gamepad). Only the LAST one leaves teleop mode and resumes the idle
+      // animation; otherwise one closing view yanks the joints out from under
+      // a human still driving from another.
+      if (!controlOwnerLock.isOwnedBy('teleop')) {
+        robotStateManager.disableTeleop();
+      }
+    };
+
     ws.on('close', () => {
       console.log('[KeyboardTeleop] Client disconnected');
-      clearInterval(timer);
-      // Teleop is active only while an operator is connected — resume animation.
-      robotStateManager.disableTeleop();
+      cleanup();
     });
 
     ws.on('error', (error) => {
       console.error('[KeyboardTeleop] WebSocket error:', error);
-      clearInterval(timer);
-      robotStateManager.disableTeleop();
+      cleanup();
     });
   });
 

@@ -60,6 +60,71 @@ export interface Config {
     /** Full-frame interval in ms (temperatures, battery, touch, sensors, ...) */
     fullIntervalMs: number;
   };
+  /**
+   * Agent Mode (TASK-194): a local Ollama LLM translates plain-language
+   * commands into executable blocks driven through the sidecar's `/loco/*`
+   * LocoClient facade. Off by default — with `enabled: false` the A2A path is
+   * byte-identical to the pre-TASK-194 behaviour.
+   */
+  agentMode: {
+    /** Mode on at boot (`AGENT_MODE_ENABLED`). */
+    enabled: boolean;
+    /** Ollama model used for planning; never sees pixels (`AGENT_PLANNER_MODEL`). */
+    plannerModel: string;
+    /** Ollama VLM used for `look` / `scan_room` (`AGENT_VISION_MODEL`). */
+    visionModel: string;
+    /**
+     * Let the planner model think before answering (`AGENT_PLANNER_THINKING`).
+     * Default OFF — see `visionThinking` for why the two roles differ.
+     */
+    plannerThinking: boolean;
+    /**
+     * Let the vision model think before answering (`AGENT_VISION_THINKING`).
+     * Default ON.
+     *
+     * Measured on gemma4:e2b (thinking is on by default in Ollama 0.32):
+     * thinking costs ~10 s and ~500 generated tokens per call, so switching it
+     * off roughly halves Agent Mode latency — a `scan_room 8` drops from ~3.5
+     * to ~2.5 minutes. What it costs is rule adherence, and the two roles pay
+     * different prices:
+     *
+     *  - Planner (3 of 7 commands degraded): "turn left" gains an invented
+     *    `walk 0.5 m`, "dreh dich nach links" a `walk` with no distance at all,
+     *    and "wave with your left hand" loses the `speak` block that says the
+     *    gesture is right-arm only. The first two are caught downstream (schema
+     *    validation, then the repair attempt); none of them steer the robot
+     *    anywhere it was not told to go.
+     *  - Vision (5 out-of-fan bearings across 3 of 4 real sim frames, against
+     *    1 across 4 with thinking on): chair at 120°, door at 180°, wall at 90°
+     *    on frames where the prompt allows ±60. `parseVisionAnswer` clamps
+     *    those to ±90 rather than dropping them, so a hallucinated bearing
+     *    enters scene memory as a confident hard-left heading, and
+     *    `SceneMemoryStore.merge` lets it overwrite a real sighting. Bearings
+     *    are already the weakest part of this pipeline; this is the one place
+     *    where the speed is not worth it.
+     */
+    visionThinking: boolean;
+    /**
+     * Ollama OpenAI-compatible endpoint for the agent-mode models. Falls back to
+     * the main `OLLAMA_BASE_URL`, then to the local default, so Agent Mode works
+     * even when the main agent runs on Gemini/OpenRouter.
+     */
+    ollamaBaseUrl: string;
+    /** Idle person-watcher period in ms (`AGENT_IDLE_WATCH_INTERVAL_MS`). */
+    idleWatchIntervalMs: number;
+    /** `goto` abort threshold in navigation stages (`AGENT_MAX_NAV_STAGES`). */
+    maxNavStages: number;
+    /** Walking speed used to convert `walk.distanceM` → duration (`AGENT_WALK_SPEED_MPS`). */
+    walkSpeedMps: number;
+    /** Turn rate used to convert `turn.angleDeg` → duration (`AGENT_TURN_SPEED_DPS`). */
+    turnSpeedDps: number;
+    /** Lower-cased words that bypass the planner and trigger an E-Stop (`AGENT_STOP_WORDS`). */
+    stopWords: string[];
+    /** Camera used by `look` / `scan_room` (`AGENT_CAMERA_NAME`). */
+    cameraName: string;
+    /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
+    voiceServiceUrl: string;
+  };
 }
 
 /**
@@ -76,6 +141,13 @@ const LEGACY_DESCRIPTION_TRANSLATIONS: Record<string, string> = {
 function normalizeRobotDescription(raw: string): string {
   return LEGACY_DESCRIPTION_TRANSLATIONS[raw] ?? raw;
 }
+
+/**
+ * Default Ollama model for both Agent Mode roles (planner + vision). Declared
+ * before `config` because the config initializer reads it (a `const` below the
+ * initializer would still be in its temporal dead zone).
+ */
+export const DEFAULT_AGENT_MODEL = 'gemma3:4b';
 
 export const config: Config = {
   port: parseInt(process.env.PORT || '41243', 10),
@@ -113,6 +185,29 @@ export const config: Config = {
   telemetry: {
     fastIntervalMs: parseInt(process.env.TELEMETRY_FAST_INTERVAL_MS || '100', 10),
     fullIntervalMs: parseInt(process.env.TELEMETRY_FULL_INTERVAL_MS || '2000', 10),
+  },
+  agentMode: {
+    enabled: process.env.AGENT_MODE_ENABLED === 'true',
+    plannerModel: process.env.AGENT_PLANNER_MODEL || DEFAULT_AGENT_MODEL,
+    visionModel: process.env.AGENT_VISION_MODEL || DEFAULT_AGENT_MODEL,
+    // Opt-IN for the planner, opt-OUT for vision: both env vars accept
+    // 'true'/'false' and fall back to the measured default (see the interface).
+    plannerThinking: process.env.AGENT_PLANNER_THINKING === 'true',
+    visionThinking: process.env.AGENT_VISION_THINKING !== 'false',
+    ollamaBaseUrl:
+      process.env.AGENT_OLLAMA_BASE_URL ||
+      process.env.OLLAMA_BASE_URL ||
+      'http://localhost:11434/v1',
+    idleWatchIntervalMs: parseInt(process.env.AGENT_IDLE_WATCH_INTERVAL_MS || '3000', 10),
+    maxNavStages: parseInt(process.env.AGENT_MAX_NAV_STAGES || '12', 10),
+    walkSpeedMps: parseFloat(process.env.AGENT_WALK_SPEED_MPS || '0.4'),
+    turnSpeedDps: parseFloat(process.env.AGENT_TURN_SPEED_DPS || '45'),
+    stopWords: (process.env.AGENT_STOP_WORDS || 'stopp,stop,halt')
+      .split(',')
+      .map((w) => w.trim().toLowerCase())
+      .filter((w) => w.length > 0),
+    cameraName: process.env.AGENT_CAMERA_NAME || 'head_camera',
+    voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
   },
 };
 
@@ -162,5 +257,41 @@ export function validateConfig(): void {
     console.log(`    - Host: ${config.vla.host}:${config.vla.port}`);
     console.log(`    - Pool Size: ${config.vla.poolSize}`);
     console.log(`    - Health Check Interval: ${config.vla.healthCheckIntervalMs}ms`);
+  }
+  console.log(`  - Agent Mode: ${config.agentMode.enabled ? 'ENABLED' : 'disabled'}`);
+  console.log(
+    `    - Planner Model: ollama/${config.agentMode.plannerModel} ` +
+      `(thinking ${config.agentMode.plannerThinking ? 'on' : 'off'})`
+  );
+  console.log(
+    `    - Vision Model: ollama/${config.agentMode.visionModel} ` +
+      `(thinking ${config.agentMode.visionThinking ? 'on' : 'off'})`
+  );
+  console.log(`    - Ollama Base URL: ${config.agentMode.ollamaBaseUrl}`);
+  // Genkit reaches Ollama through its OpenAI-compatible API, which is served
+  // under /v1. A bare host:11434 looks right and 404s on every call, and the
+  // planner reports that as "could not produce a plan" — true, but it points
+  // at the model rather than at the URL. Say it once, at boot.
+  if (!/\/v1\/?$/.test(config.agentMode.ollamaBaseUrl)) {
+    console.warn(
+      `[Config] WARNING AGENT_OLLAMA_BASE_URL (${config.agentMode.ollamaBaseUrl}) does not end in /v1. ` +
+        `Ollama's OpenAI-compatible endpoint is http://<host>:11434/v1 — without it every planner and ` +
+        `vision call returns 404 and Agent Mode will refuse to plan.`
+    );
+  }
+  console.log(`    - Camera: ${config.agentMode.cameraName}`);
+  console.log(
+    `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s`
+  );
+  console.log(`    - Max Nav Stages: ${config.agentMode.maxNavStages}`);
+  console.log(`    - Idle Watch Interval: ${config.agentMode.idleWatchIntervalMs}ms`);
+  console.log(`    - Stop Words: ${config.agentMode.stopWords.join(', ') || '(none)'}`);
+  console.log(`    - Voice Service: ${config.agentMode.voiceServiceUrl}`);
+  if (config.agentMode.enabled) {
+    console.log(
+      `[Config] Agent Mode is ON — inbound A2A messages are planned into blocks. ` +
+        `Ensure the models are pulled (ollama pull ${config.agentMode.plannerModel}` +
+        `${config.agentMode.visionModel !== config.agentMode.plannerModel ? ` && ollama pull ${config.agentMode.visionModel}` : ''}).`
+    );
   }
 }

@@ -11,6 +11,7 @@
         "dev:g1": "cross-env DOTENV_CONFIG_PATH=.env.g1 tsx watch src/index.ts",
         "dev:g1-edu": "cross-env DOTENV_CONFIG_PATH=.env.g1-edu tsx watch src/index.ts",
         "dev:g1-edu-sim": "cross-env DOTENV_CONFIG_PATH=.env.g1-edu-sim tsx watch src/index.ts",
+        "dev:g1-edu-agent": "cross-env AGENT_MODE_ENABLED=true DOTENV_CONFIG_PATH=.env.g1-edu-agent tsx watch src/index.ts",
         "dev:h1": "cross-env DOTENV_CONFIG_PATH=.env.h1 tsx watch src/index.ts",
         "build": "tsc",
         "start": "node dist/index.js",

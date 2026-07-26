@@ -127,10 +127,77 @@ Key endpoints:
 |------|----------|---------|
 | App <-> Server | REST + WebSocket | UI operations, real-time telemetry |
 | Server <-> Agent | A2A (HTTP) | Task distribution, commands |
-| Agent <-> Sidecar | HTTP | Hardware control, VLA orchestration |
+| Agent <-> Sidecar | HTTP | Hardware control, VLA orchestration, `/loco/*` |
+| Sidecar <-> G1 | DDS (Unitree) | `LocoClient` RPC on `rt/api/sport/*`, `rt/arm_sdk`, `rt/dex3/*` |
 | Sidecar <-> SO-101 | Serial (LeRobot) | Joint commands via `/dev/ttyACM0` |
 | Sidecar <-> VLA Server | HTTP | Inference requests (POST /predict) |
 | VLA Server <-> GR00T | ZMQ (port 5555) | GR00T N1 model inference |
+
+## Agent Mode
+
+A toggleable mode in which a **local Ollama LLM** turns plain language ("geh zum Tisch
+mit dem Hut") into a list of executable **blocks** and runs them over the Unitree
+**LocoClient** — the same call path in simulation and on a real G1 EDU.
+
+```
+chat / voice ──► A2A message ──► planner (Ollama) ──► block list
+                                      ▲                   │
+                          scene memory │                   ▼
+                                   vision (VLM) ◄── block executor ──► LocoClient
+                                       ▲                                    │
+                                  head camera                        ┌──────┴───────┐
+                                                                     ▼              ▼
+                                                              real G1 (FSM)   sim_g1_dds
+```
+
+**Blocks** (v1): `walk`, `turn`, `goto`, `look`, `scan_room`, `wave`, `greet`, `posture`,
+`speak`, `wait`. `walk`/`turn`/`goto` become `SetVelocity` (api 7105) with a duration;
+`wave`/`greet` become arm tasks (7106); `posture` becomes `SetFsmId` (7101). `look` and
+`scan_room` take no robot action — they capture a head-camera frame and send it to the
+vision model. A `vla_skill` block is deliberately **not** in v1.
+
+**Planning** is re-entrant: the planner emits a full block list, and after each block it
+may rewrite only the *remaining* plan. Completed blocks are frozen. A running block is
+never interrupted mid-flight; the stop word bypasses the LLM entirely.
+
+**Two models, two roles.** `AGENT_VISION_MODEL` sees pixels and returns text;
+`AGENT_PLANNER_MODEL` sees only that text and the scene memory. Both default to
+`gemma3:4b` on the local Ollama endpoint.
+
+**Scene memory** is in-memory only: an entity list (`label`, world bearing, distance
+estimate, confidence, last seen) plus a free-text "current view", dumpable as Markdown.
+Plans are ephemeral too — no Prisma model, no migration, no `SkillChain` reuse. State is
+mirrored robot-agent → server (in memory, last plan per robot) → app over the existing
+`/api/a2a/ws` as `agent:*` events, and every finished block is written to the audit log.
+
+**People** are handled statelessly: the VLM is only ever asked whether a person is in
+frame and roughly where. No faces, no identities, no image retention.
+
+**Arbitration.** A `controlOwner` (`idle | teleop | vla | agent`) is exclusive. Human
+teleop preempts the agent and discards the running plan.
+
+> **Safety deviation — read before pointing this at hardware.** Agent Mode ships with a
+> **manual E-Stop only** — three triggers, all manual: the UI button on `/agent`, a spoken
+> stop word (which bypasses the LLM entirely), and SPACE/ESC in the terminal running the
+> robot-agent (`src/terminal-estop.ts`; no-ops when stdin is not a TTY). It deliberately does
+> **not** have the arming gate, dry-run default, connection watchdog or delta clamping that
+> `robot-agent/hardware/real_g1_bridge/README.md` defines as the house standard. This was
+> an explicit product decision (TASK-194). Consequence: the first real-hardware run needs a
+> spotter on the physical E-Stop and a hand-set velocity cap.
+
+### Simulation
+
+`robot-agent/hardware/sim_g1_dds/` is a MuJoCo node that is indistinguishable on the wire
+from a real G1: it subscribes `rt/arm_sdk` and `rt/dex3/*/cmd`, publishes `rt/lowstate`,
+`rt/dex3/*/state` and `rt/odommodestate`, and **serves the `sport` RPC service** on
+`rt/api/sport/{request,response}`. `LocoClient` is not onboard-only — it is RPC over
+ordinary DDS, and the SDK ships the server stub, so we answer it ourselves.
+
+The scene is `g1_dex3_room_scene.xml` (~6×6 m room, table with a hat, chair, shelf,
+doorway, person figure). The pelvis has x/y/yaw position actuators driven from the
+integrated loco velocity; the legs stay in the stand pose. **There is no gait in v1** —
+what matters is that the head camera genuinely moves, so `look` returns different images
+from different places. A real gait policy is a follow-up.
 
 ## Hardware
 

@@ -21,6 +21,8 @@ import { sensorScanService } from '../services/SensorScanService.js';
 import { scanSessionService } from '../services/ScanSessionService.js';
 import { digitalTwinService } from '../services/DigitalTwinService.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
+import { agentModeService } from '../services/AgentModeService.js';
+import type { AgentModeEvent } from '../types/agent-mode.types.js';
 import type { SensorScanEvent } from '../types/pointcloud.types.js';
 import type { DigitalTwinEvent, TwinZoneEvent } from '../types/twin.types.js';
 import type { IncidentEvent } from '../types/incident.types.js';
@@ -372,6 +374,23 @@ export function setupWebSocket(server: Server): void {
         error: event.error,
       },
       timestamp: Date.now(),
+    });
+    broadcast(clients, message);
+  });
+
+  // Subscribe to Agent Mode events (TASK-194) and broadcast to all clients.
+  // Event types are namespaced 'agent:*' so the /agent feature can filter with
+  // a simple prefix check (mirrors 'teleop:*'). The envelope is flat and the
+  // event's own ISO timestamp is preserved; absent fields drop out of the JSON.
+  agentModeService.onAgentModeEvent((event: AgentModeEvent) => {
+    const message = JSON.stringify({
+      type: event.type,
+      robotId: event.robotId,
+      plan: event.plan,
+      block: event.block,
+      scene: event.scene,
+      state: event.state,
+      timestamp: event.timestamp,
     });
     broadcast(clients, message);
   });

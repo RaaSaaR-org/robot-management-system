@@ -83,12 +83,18 @@ cd app && npm run dev
 ### Testing
 
 ```bash
-./scripts/test-all.sh              # typecheck + playwright
-./scripts/test-all.sh --skip-pw    # typecheck only
+./scripts/test-all.sh              # typecheck + unit tests + playwright
+./scripts/test-all.sh --skip-pw    # everything except playwright
 ```
 
-`test-all.sh` runs typecheck (server + app) and Playwright UI tests
-(training wizard + datasets page).
+`test-all.sh` runs, in order: typecheck (server, app, robot-agent), vitest
+(server, app, robot-agent), the `sim_g1_dds` pytest suite, and the Playwright UI
+tests. Every stage runs even when an earlier one fails, so one invocation gives the
+whole picture.
+
+The pytest stage needs the cyclonedds+mujoco venv described in
+`robot-agent/hardware/sim_g1_dds/README.md` — point `SIM_PYTHON` at it. Without it
+the stage reports as SKIPPED, never as passed.
 
 ### Environment Setup
 
@@ -185,6 +191,7 @@ robot-management-system/
 │   ├── src/
 │   │   ├── features/       # 25 feature modules (see app/AGENTS.md)
 │   │   │   ├── a2a/        # Agent-to-Agent chat & orchestration
+│   │   │   ├── agentmode/  # Agent Mode chat + live block timeline (/agent)
 │   │   │   ├── alerts/     # Alert management
 │   │   │   ├── approvals/  # Human approval workflows (EU AI Act)
 │   │   │   ├── auth/       # Authentication (login, register, etc.)
@@ -240,6 +247,7 @@ robot-management-system/
 ├── robot-agent/            # Robot Software
 │   ├── src/
 │   │   ├── agent/          # A2A agent & Genkit AI
+│   │   ├── agent-mode/     # Agent Mode: local-LLM planner + block executor (LocoClient)
 │   │   ├── robot/          # State, simulation, telemetry, task queue
 │   │   │   └── joint-configs/ # Per-robot-type joint configurations
 │   │   ├── tools/          # AI tools (navigation, manipulation, status)
@@ -250,6 +258,10 @@ robot-management-system/
 │   │   ├── api/            # REST & WebSocket
 │   │   ├── config/         # Environment configuration
 │   │   └── prompts/        # AI prompt templates
+│   ├── hardware/
+│   │   ├── g1_sidecar.py   # DDS<->HTTP bridge to a real G1 (adds /loco/* for Agent Mode)
+│   │   ├── sim_g1_dds/     # MuJoCo sim that speaks the real Unitree wire protocol
+│   │   └── sim_evaluator/  # MJCF scenes (incl. g1_dex3_room_scene.xml)
 │   ├── smolvla/            # Python client for real SO-101 hardware via LeRobot
 │   └── AGENTS.md
 │

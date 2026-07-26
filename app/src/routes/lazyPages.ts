@@ -63,6 +63,13 @@ export const LazyTwinViewerPage = lazy(() =>
 );
 
 /**
+ * Agent Mode page - local LLM commands the robot via executable blocks (TASK-194)
+ */
+export const LazyAgentModePage = lazy(() =>
+  import('@/features/agentmode').then((m) => ({ default: m.AgentModePage }))
+);
+
+/**
  * Alerts page - Alert history and management
  */
 export const LazyAlertsPage = lazy(() =>

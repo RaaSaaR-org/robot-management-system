@@ -1,0 +1,175 @@
+<mujoco model="g1_dex3_room_scene">
+  <!--
+    ==========================================================================
+    Agent Mode room scene (TASK-194)
+    ==========================================================================
+    A ~6x6 m room the G1 EDU + Dex3-1 can be commanded around by the Agent Mode
+    planner: "geh zum Tisch mit dem Hut" must produce scan_room -> turn -> walk
+    -> look -> walk -> arrival, and the head camera must return genuinely
+    different images along the way.
+
+    Robot: g1_dex3/g1_43dof_planarbase.xml (generated - see
+    g1_dex3/build_planarbase_include.py). It starts at the origin facing world
+    +x with three position-actuated base DOFs (base_x, base_y, base_yaw) that
+    hardware/sim_g1_dds/loco_service.py drives from LocoClient SetVelocity
+    calls. Legs stay in the stand pose; there is no gait in v1.
+
+    "Stay in the stand pose" needs two things that were each broken once, so if
+    you change the pelvis height or the arm_sdk blend, re-check both: the feet
+    must CLEAR this floor (PELVIS_Z = 0.807 -> mj_forward gives ncon = 0 at rest;
+    at 0.775 they were 1.69 cm inside it and the first-step impulse ratcheted the
+    ankles), and sim_node.py's weight-0 hold pose must be LATCHED (a live one
+    gives zero restoring torque and gravity pins waist_pitch at its limit within
+    2 s, tilting the head camera from 15 deg down to ~45 deg). Both are covered
+    by e2e_loco_check.py checks 2 and 11.
+
+    Landmarks are deliberately distinct in colour and shape so a small VLM
+    (gemma3:4b) can name them apart from a 640x480 head-camera frame:
+      table (light wood, +x)  with a red HAT on it
+      chair (blue, +x/-y)
+      shelf (dark, against the +y wall)
+      person figure (green torso, skin-tone head, -x)
+      door frame (bright) in the -y wall as a directional cue
+
+    World -> compass convention used by scene memory: +x = 0 deg bearing,
+    counter-clockwise positive, so +y = +90 deg. base_yaw is the robot heading.
+
+    Sits directly in mjcf/ like the other scenes, so mesh paths of the form
+    g1_dex3/meshes/*.STL inside the robot include resolve next to this file.
+    g1_dex3_pickplace_scene.xml is untouched.
+    ==========================================================================
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <include file="g1_dex3/g1_43dof_planarbase.xml"/>
+
+  <visual>
+    <headlight diffuse="0.55 0.55 0.55" ambient="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.45 0.55 0.65" rgb2="0.15 0.18 0.22"
+             width="512" height="3072"/>
+    <texture type="2d" name="roomfloor" builtin="checker" mark="edge"
+             rgb1="0.32 0.30 0.28" rgb2="0.24 0.23 0.21" markrgb="0.5 0.5 0.5"
+             width="300" height="300"/>
+    <material name="roomfloor" texture="roomfloor" texuniform="true"
+              texrepeat="6 6" reflectance="0.05"/>
+    <material name="wall" rgba="0.86 0.84 0.80 1" specular="0.05" shininess="0.05"/>
+    <material name="wood_light" rgba="0.72 0.55 0.34 1" specular="0.2" shininess="0.2"/>
+    <material name="hat_red" rgba="0.78 0.12 0.12 1" specular="0.3" shininess="0.3"/>
+    <material name="chair_blue" rgba="0.15 0.35 0.75 1" specular="0.2" shininess="0.2"/>
+    <material name="shelf_dark" rgba="0.22 0.20 0.19 1" specular="0.1" shininess="0.1"/>
+    <material name="person_shirt" rgba="0.15 0.62 0.32 1" specular="0.1" shininess="0.1"/>
+    <material name="person_skin" rgba="0.90 0.74 0.62 1" specular="0.1" shininess="0.1"/>
+    <material name="person_legs" rgba="0.20 0.22 0.30 1" specular="0.1" shininess="0.1"/>
+    <material name="door" rgba="0.95 0.93 0.55 1" specular="0.1" shininess="0.1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3.2" dir="0 0 -1" directional="true" diffuse="0.6 0.6 0.6"/>
+    <light pos="-2.0 -2.0 2.6" dir="0.5 0.5 -1" diffuse="0.3 0.3 0.3" specular="0.05 0.05 0.05"/>
+    <light pos="2.0 2.0 2.6" dir="-0.5 -0.5 -1" diffuse="0.3 0.3 0.3"/>
+
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="roomfloor"
+          friction="0.8" condim="3"/>
+
+    <!-- ================= Room shell: 6 x 6 m, 2.5 m high ================= -->
+    <geom name="wall_xpos" type="box" size="0.05 3.0 1.25" pos="3.0 0 1.25" material="wall"/>
+    <geom name="wall_xneg" type="box" size="0.05 3.0 1.25" pos="-3.0 0 1.25" material="wall"/>
+    <geom name="wall_ypos" type="box" size="3.0 0.05 1.25" pos="0 3.0 1.25" material="wall"/>
+    <!-- -y wall split around a 1 m doorway centred at x = 1.2: segment a spans
+         x [-3.0, 0.7], segment b spans [1.7, 3.0], leaving [0.7, 1.7] open with
+         the frame geoms around the actual gap. -->
+    <geom name="wall_yneg_a" type="box" size="1.85 0.05 1.25" pos="-1.15 -3.0 1.25" material="wall"/>
+    <geom name="wall_yneg_b" type="box" size="0.65 0.05 1.25" pos="2.35 -3.0 1.25" material="wall"/>
+    <geom name="door_frame_l" type="box" size="0.04 0.06 1.05" pos="0.70 -3.0 1.05" material="door"/>
+    <geom name="door_frame_r" type="box" size="0.04 0.06 1.05" pos="1.70 -3.0 1.05" material="door"/>
+    <geom name="door_frame_top" type="box" size="0.54 0.06 0.04" pos="1.20 -3.0 2.14" material="door"/>
+
+    <!-- ================= Table with the hat (bearing ~ +17 deg) ============
+         Top surface z = 0.75. This is the "Tisch mit dem Hut" the acceptance
+         run navigates to. Legs are separate boxes so it reads as a table and
+         not a block from the head camera. -->
+    <body name="table" pos="2.20 0.70 0">
+      <geom name="table_top" type="box" size="0.60 0.40 0.03" pos="0 0 0.72"
+            material="wood_light" friction="0.6" condim="3"/>
+      <geom name="table_leg_a" type="box" size="0.035 0.035 0.36" pos="0.55 0.35 0.36"
+            material="wood_light"/>
+      <geom name="table_leg_b" type="box" size="0.035 0.035 0.36" pos="-0.55 0.35 0.36"
+            material="wood_light"/>
+      <geom name="table_leg_c" type="box" size="0.035 0.035 0.36" pos="0.55 -0.35 0.36"
+            material="wood_light"/>
+      <geom name="table_leg_d" type="box" size="0.035 0.035 0.36" pos="-0.55 -0.35 0.36"
+            material="wood_light"/>
+    </body>
+
+    <!-- Red hat on the table: brim + crown, free so a later VLA grasp
+         (follow-up, blocked on TASK-188) has something to actually pick up. -->
+    <body name="hat" pos="2.20 0.70 0.775">
+      <freejoint name="hat_freejoint"/>
+      <geom name="hat_brim" type="cylinder" size="0.15 0.008" pos="0 0 0.008" mass="0.06"
+            material="hat_red" friction="0.7" condim="3"/>
+      <geom name="hat_crown" type="cylinder" size="0.095 0.055" pos="0 0 0.07" mass="0.06"
+            material="hat_red" friction="0.7" condim="3"/>
+    </body>
+
+    <!-- ================= Chair (bearing ~ -49 deg) ================= -->
+    <body name="chair" pos="1.60 -1.85 0">
+      <geom name="chair_seat" type="box" size="0.22 0.22 0.03" pos="0 0 0.45"
+            material="chair_blue" friction="0.6" condim="3"/>
+      <geom name="chair_back" type="box" size="0.22 0.03 0.28" pos="0 -0.19 0.76"
+            material="chair_blue"/>
+      <geom name="chair_leg_a" type="box" size="0.025 0.025 0.225" pos="0.18 0.18 0.225"
+            material="chair_blue"/>
+      <geom name="chair_leg_b" type="box" size="0.025 0.025 0.225" pos="-0.18 0.18 0.225"
+            material="chair_blue"/>
+      <geom name="chair_leg_c" type="box" size="0.025 0.025 0.225" pos="0.18 -0.18 0.225"
+            material="chair_blue"/>
+      <geom name="chair_leg_d" type="box" size="0.025 0.025 0.225" pos="-0.18 -0.18 0.225"
+            material="chair_blue"/>
+    </body>
+
+    <!-- ================= Shelf against the +y wall (bearing ~ +90 deg) ===== -->
+    <body name="shelf" pos="-0.40 2.75 0">
+      <geom name="shelf_side_l" type="box" size="0.03 0.18 0.85" pos="-0.55 0 0.85"
+            material="shelf_dark"/>
+      <geom name="shelf_side_r" type="box" size="0.03 0.18 0.85" pos="0.55 0 0.85"
+            material="shelf_dark"/>
+      <geom name="shelf_board_0" type="box" size="0.58 0.18 0.02" pos="0 0 0.42"
+            material="shelf_dark"/>
+      <geom name="shelf_board_1" type="box" size="0.58 0.18 0.02" pos="0 0 0.94"
+            material="shelf_dark"/>
+      <geom name="shelf_board_2" type="box" size="0.58 0.18 0.02" pos="0 0 1.46"
+            material="shelf_dark"/>
+    </body>
+
+    <!-- ================= Person figure (bearing ~ 217 deg / -143 deg) ======
+         A crude standing figure, not a person model: the idle watcher only
+         ever asks the VLM "is a person in the image?" -- no faces, no
+         identities, nothing to recognise. Free-floating on a mocap-style body
+         so a test can teleport it into and out of view.
+    -->
+    <body name="person" pos="-1.90 -1.45 0" mocap="true">
+      <geom name="person_leg_l" type="capsule" size="0.055" fromto="0.0 0.09 0.03 0.0 0.09 0.82"
+            material="person_legs" contype="0" conaffinity="0"/>
+      <geom name="person_leg_r" type="capsule" size="0.055" fromto="0.0 -0.09 0.03 0.0 -0.09 0.82"
+            material="person_legs" contype="0" conaffinity="0"/>
+      <geom name="person_torso" type="capsule" size="0.145" fromto="0 0 0.85 0 0 1.34"
+            material="person_shirt" contype="0" conaffinity="0"/>
+      <geom name="person_arm_l" type="capsule" size="0.045" fromto="0 0.17 1.30 0 0.21 0.88"
+            material="person_shirt" contype="0" conaffinity="0"/>
+      <geom name="person_arm_r" type="capsule" size="0.045" fromto="0 -0.17 1.30 0 -0.21 0.88"
+            material="person_shirt" contype="0" conaffinity="0"/>
+      <geom name="person_head" type="sphere" size="0.105" pos="0 0 1.48"
+            material="person_skin" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- Overhead camera for debugging / recordings; the agent never uses it. -->
+    <camera name="room_overview" pos="-4.2 -4.2 3.6" xyaxes="0.707 -0.707 0 0.42 0.42 0.80"
+            fovy="55"/>
+  </worldbody>
+</mujoco>

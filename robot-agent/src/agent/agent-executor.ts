@@ -16,6 +16,8 @@ import { pickupObject, dropObject } from '../tools/manipulation.js';
 import { getRobotStatus, emergencyStop } from '../tools/status.js';
 import type { RobotStateManager } from '../robot/state.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
+import { agentModeController } from '../agent-mode/agent-mode-controller.js';
+import type { AgentBlock, AgentPlan } from '../agent-mode/types.js';
 
 // Load the Genkit prompt
 const robotAgentPrompt = ai.prompt('robot_agent');
@@ -168,6 +170,15 @@ export class RobotAgentExecutor implements AgentExecutor {
         metadata: userMessage.metadata,
       };
       eventBus.publish(initialTask);
+    }
+
+    // 1b. TASK-194 — Agent Mode. When the mode is ON the inbound message goes
+    // to the block planner instead of the tool-calling prompt, and block
+    // progress is streamed as non-final status updates. When it is OFF this
+    // branch is not taken and everything below is unchanged.
+    if (agentModeController.isEnabled()) {
+      await this.executeAgentMode(taskId, contextId, userMessage, eventBus);
+      return;
     }
 
     // 2. Publish "working" status update
@@ -425,4 +436,132 @@ export class RobotAgentExecutor implements AgentExecutor {
       this.activeTasks.delete(taskId);
     }
   }
+
+  // ==========================================================================
+  // TASK-194 — Agent Mode branch
+  // ==========================================================================
+
+  /**
+   * Hand the message to the Agent Mode controller, acknowledge immediately,
+   * then stream one non-final A2A status-update per block transition and close
+   * with a single final update.
+   */
+  private async executeAgentMode(
+    taskId: string,
+    contextId: string,
+    userMessage: Message,
+    eventBus: ExecutionEventBus
+  ): Promise<void> {
+    const text = userMessage.parts
+      .filter((p): p is TextPart => p.kind === 'text' && !!(p as TextPart).text)
+      .map((p) => p.text)
+      .join(' ')
+      .trim();
+
+    const publish = (state: TaskState, message: string, final: boolean): void => {
+      const update: TaskStatusUpdateEvent = {
+        kind: 'status-update',
+        taskId,
+        contextId,
+        status: {
+          state,
+          message: {
+            kind: 'message',
+            role: 'agent',
+            messageId: uuidv4(),
+            parts: [{ kind: 'text', text: message }],
+            taskId,
+            contextId,
+          },
+          timestamp: new Date().toISOString(),
+        },
+        final,
+      };
+      eventBus.publish(update);
+    };
+
+    if (!text) {
+      publish('failed', 'No message found to process.', true);
+      return;
+    }
+
+    // Immediate acknowledgement — planning runs on a local LLM and must not
+    // hold the A2A response open.
+    publish('working', 'Agent Mode: understanding the command…', false);
+
+    const result = await agentModeController.submitCommand({ text, contextId });
+
+    if (!result.accepted) {
+      publish('failed', result.message, true);
+      return;
+    }
+
+    if (!result.planId) {
+      // Stop word / no plan produced — the controller already acted.
+      publish('completed', result.message, true);
+      return;
+    }
+
+    const planId = result.planId;
+    const unsubscribe = agentModeController.subscribe((event) => {
+      if (event.plan && event.plan.id !== planId) return;
+      const line = formatAgentEvent(event.type, event.plan, event.block);
+      if (line) publish('working', line, false);
+    });
+
+    try {
+      await agentModeController.whenIdle();
+    } finally {
+      unsubscribe();
+    }
+
+    const state = agentModeController.getState();
+    const plan = state.plan && state.plan.id === planId ? state.plan : null;
+    const summary = summarizePlan(plan);
+
+    if (!plan) {
+      publish('completed', summary, true);
+    } else if (plan.status === 'done') {
+      publish('completed', summary, true);
+    } else if (plan.status === 'aborted') {
+      publish('canceled', summary, true);
+    } else {
+      publish('failed', summary, true);
+    }
+  }
+}
+
+/** One short human line per streamed Agent Mode event; null = not worth a message. */
+function formatAgentEvent(
+  type: string,
+  plan: AgentPlan | undefined,
+  block: AgentBlock | undefined
+): string | null {
+  switch (type) {
+    case 'agent:plan:updated':
+      return plan ? `Plan: ${plan.blocks.map((b) => b.kind).join(' → ')}` : null;
+    case 'agent:block:started':
+      return block
+        ? `▶ ${block.kind}${block.reasoning ? ` — ${block.reasoning}` : ''}`
+        : null;
+    case 'agent:block:finished':
+      if (!block) return null;
+      return block.status === 'done'
+        ? `✓ ${block.kind}: ${block.result ?? 'done'}`
+        : `✗ ${block.kind}: ${block.error ?? block.status}`;
+    default:
+      return null;
+  }
+}
+
+/** Final message: what actually ran, honestly. */
+function summarizePlan(plan: AgentPlan | null): string {
+  if (!plan) return 'Agent Mode: nothing to report.';
+  const done = plan.blocks.filter((b) => b.status === 'done').length;
+  const failed = plan.blocks.filter((b) => b.status === 'failed');
+  const skipped = plan.blocks.filter((b) => b.status === 'skipped' || b.status === 'aborted').length;
+  const parts = [`${done}/${plan.blocks.length} blocks completed`];
+  if (failed.length > 0) parts.push(`failed: ${failed.map((b) => `${b.kind} (${b.error ?? '?'})`).join('; ')}`);
+  if (skipped > 0) parts.push(`${skipped} not executed`);
+  return `Agent Mode plan ${plan.status} — ${parts.join(', ')}.`;
 }
