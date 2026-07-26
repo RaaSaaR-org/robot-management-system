@@ -33,6 +33,19 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
   POST /record/stop   → SIGINT the recording subprocess
   GET  /record/status → recording progress / dataset path
 
+  --- Agent Mode locomotion (TASK-194), behind G1_LOCO_ENABLED=1 (default OFF) ---
+  POST /loco/move     → {"vx","vy","omega","duration_s"} → LocoClient.SetVelocity
+  POST /loco/action   → {"name": "wave"|"shake"|"stop", "args": {...}}
+                        → WaveHand / ShakeHand / StopMove
+  POST /loco/fsm      → {"id": int} → LocoClient.SetFsmId (0 zero-torque, 1 damp,
+                        3 sit, 500 start, 706 squat↔stand)
+  GET  /loco/odom     → {"ok","x","y","yaw","source"} from rt/odommodestate
+                        (source "zmq" = read-only bridge, "dds" = direct DDS;
+                         503 + error when nothing fresh — NEVER zeros)
+                        These four are 403 while the gate is off and 503 when the
+                        Unitree SDK is missing or DDS is down. They are NOT behind
+                        G1_READ_ONLY — see the gate's rationale at LOCO_ENABLED.
+
 Run via:
   uv run python robot-agent/hardware/g1_sidecar.py
 
@@ -41,6 +54,7 @@ Run via:
 
 import base64
 import json
+import math
 import os
 import struct
 import threading
@@ -68,6 +82,31 @@ NET_INTERFACE = os.environ.get("G1_NET_INTERFACE", "eth0")
 # Set G1_READ_ONLY=0 explicitly and deliberately to enable the command path.
 READ_ONLY = os.environ.get("G1_READ_ONLY", "1").strip() != "0"
 LOWSTATE_ENDPOINT = os.environ.get("G1_LOWSTATE_ENDPOINT", f"tcp://{ROBOT_IP}:6001")
+
+# ---------------------------------------------------------------------------
+# AGENT-MODE LOCOMOTION GATE (TASK-194) — DEFAULT OFF
+# ---------------------------------------------------------------------------
+# Enables the /loco/* endpoints (high-level Unitree `sport` RPC via LocoClient).
+#
+# ⚠️ This is NOT a safety factor for the agent. Agent Mode ships with
+# manual-E-Stop-only by an explicit product decision (TASK-194), a recorded
+# deviation from hardware/real_g1_bridge/README.md — there is no arming gate,
+# no dry-run default, no watchdog and no velocity cap between the planner and
+# the robot. Once G1_LOCO_ENABLED=1, an agent command moves the robot.
+#
+# What this flag IS: a per-process off switch. The overwhelmingly common way to
+# run this sidecar is telemetry-only (G1_READ_ONLY defaults to 1), and such a
+# process must not be turnable into a motion path by a stray HTTP call from a
+# mis-pointed component or a stale config. With the gate off, /loco/* answers
+# 403 and no LocoClient is ever constructed.
+#
+# Deliberately SEPARATE from G1_READ_ONLY: that flag governs the rt/lowcmd
+# joint-position path (the lerobot driver), while /loco/* is the rt/api/sport
+# request/response path. Different wires, different risk profiles — one must not
+# silently imply the other. Telemetry-only + locomotion-enabled (READ_ONLY=1,
+# LOCO_ENABLED=1) is a legitimate, intended configuration: it is exactly what
+# Agent Mode uses against the simulated loco service in sim_g1_dds/.
+LOCO_ENABLED = os.environ.get("G1_LOCO_ENABLED", "0").strip() == "1"
 
 # TASK-184: extra READ-ONLY telemetry topics forwarded by the bridge over the
 # same ZMQ PUB socket. Names must match the bridge's DDS topic strings.
@@ -1255,6 +1294,459 @@ def start_record(body: dict) -> dict:
     )
 
 
+# ---------------------------------------------------------------------------
+# AGENT MODE — high-level locomotion via LocoClient (/loco/*, TASK-194)
+# ---------------------------------------------------------------------------
+# Despite living in the SDK's `high_level/` folder, LocoClient is plain DDS RPC
+# on rt/api/sport/{request,response}. The identical client code therefore drives
+# the real G1's onboard FSM and the simulated service in
+# sim_g1_dds/loco_service.py — only the DDS peer changes. Keep the semantics
+# here in sync with sim_g1_dds/loco_state.py (nothing is imported from it: that
+# module runs in the simulator's Python, this file in the sidecar's).
+#
+# Gate: G1_LOCO_ENABLED (see its rationale at the top of this file). Gate off →
+# 403; SDK missing / DDS down / RPC unanswered → 503 with the real reason.
+#
+# DDS domain + interface come from _ensure_dds_factory(), i.e. from
+# G1_LIDAR_DDS_DOMAIN / G1_LIDAR_DDS_IFACE. The names are historical (the LiDAR
+# path got there first) but the value is process-global: CycloneDDS'
+# ChannelFactoryInitialize can only run once per process, so LiDAR, odometry and
+# loco RPC necessarily share one domain. Against the simulator set
+# G1_LIDAR_DDS_DOMAIN=1 (0 = real robot, 1 = sim, 9 = mock/tests).
+
+LOCO_RPC_TIMEOUT_S = _pos_float("G1_LOCO_RPC_TIMEOUT_S", 3.0)
+ODOM_MAX_AGE_S = _pos_float("G1_ODOM_MAX_AGE_S", 2.0)
+
+# FSM ids used by LocoClient's convenience wrappers — echoed back so a caller
+# (and the audit log) can read what was commanded, not just a bare number.
+LOCO_FSM_NAMES = {
+    0: "zero_torque",
+    1: "damp",
+    3: "sit",
+    500: "start",
+    702: "lie_to_stand",
+    706: "squat_stand",
+}
+
+# unitree_sdk2py/rpc/internal.py — surfaced verbatim so a 503 says WHY.
+_RPC_CODE_NAMES = {
+    3001: "unknown error",
+    3102: "client send failed (no DDS peer?)",
+    3103: "api not registered on the client",
+    3104: "api call timed out — no response from the sport service",
+    3105: "api id mismatch in the response",
+    3106: "bad response data",
+    3202: "server internal error",
+    3203: "api not implemented by the service",
+    3204: "bad parameter",
+}
+
+_loco_client = None
+_loco_lock = threading.Lock()       # guards construction of the singleton
+_loco_rpc_lock = threading.Lock()   # serialises RPC calls (ThreadingHTTPServer)
+
+
+def _loco_gate_error() -> dict:
+    return {
+        "ok": False,
+        "error": (
+            "G1_LOCO_ENABLED != 1 — /loco/* disabled on this sidecar "
+            "(telemetry-only process). Set G1_LOCO_ENABLED=1 to allow locomotion."
+        ),
+    }
+
+
+def _get_loco_client():
+    """(client, None) on success, (None, error_dict) on failure. Never raises.
+
+    ONE LocoClient per process, built lazily and cached: its RPC stub owns DDS
+    readers/writers, so re-creating it per request would re-run discovery every
+    time. Failures are deliberately NOT cached — "SDK missing" is permanent but
+    "DDS peer not up yet" is not, and the honest thing is to retry and report
+    the current reason rather than remember a stale one.
+    """
+    global _loco_client
+    with _loco_lock:
+        if _loco_client is not None:
+            return _loco_client, None
+        try:
+            from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore
+        except ImportError as e:  # noqa: BLE001
+            return None, {
+                "ok": False,
+                "error": f"unitree_sdk2py not installed — LocoClient unavailable ({e})",
+            }
+        domain = os.environ.get("G1_LIDAR_DDS_DOMAIN", "0")
+        iface = os.environ.get("G1_LIDAR_DDS_IFACE", os.environ.get("G1_NET_INTERFACE", "")).strip()
+        try:
+            _ensure_dds_factory()
+        except Exception as e:  # noqa: BLE001
+            return None, {
+                "ok": False,
+                "error": (
+                    f"DDS init failed (domain {domain}, iface '{iface or 'default'}'): {e}"
+                ),
+            }
+        try:
+            client = LocoClient()
+            set_timeout = getattr(client, "SetTimeout", None)
+            if callable(set_timeout):
+                set_timeout(LOCO_RPC_TIMEOUT_S)
+            client.Init()
+        except Exception as e:  # noqa: BLE001
+            return None, {"ok": False, "error": f"LocoClient init failed: {e}"}
+        _loco_client = client
+        print(
+            f"[G1 Sidecar] ✅ LocoClient ready (sport service, domain {domain}, "
+            f"iface '{iface or 'default'}', timeout {LOCO_RPC_TIMEOUT_S}s)",
+            flush=True,
+        )
+        return client, None
+
+
+def _rpc_failed(what: str, code: int) -> dict:
+    return {
+        "ok": False,
+        "error": f"{what} rejected by the sport service: rpc code {code} "
+                 f"({_RPC_CODE_NAMES.get(code, 'see unitree_sdk2py/rpc/internal.py')})",
+        "rpc_code": code,
+    }
+
+
+def _finite_number(value):
+    """float(value) when it is a real, finite number — else None.
+
+    bool is rejected explicitly: in Python `True` is an int, and a JSON `true`
+    slipping through as vx=1.0 m/s is exactly the kind of thing that must be a
+    400, not a step forward.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    return v if math.isfinite(v) else None
+
+
+def loco_move(body: dict) -> tuple[int, dict]:
+    """POST /loco/move — {"vx","vy","omega","duration_s"} → SetVelocity.
+
+    All four are required and must be finite numbers. duration_s is not
+    optional on purpose: the real robot expires a velocity command after its
+    duration (that is why LocoClient.Move() has to be called in a loop), so a
+    silently defaulted duration would mean a silently different distance
+    travelled.
+    """
+    if not LOCO_ENABLED:
+        return 403, _loco_gate_error()
+
+    values = {}
+    for key in ("vx", "vy", "omega", "duration_s"):
+        if key not in body:
+            return 400, {"ok": False, "error": f"missing '{key}' (all of vx, vy, omega, duration_s are required)"}
+        v = _finite_number(body[key])
+        if v is None:
+            return 400, {"ok": False, "error": f"'{key}' must be a finite number, got {body[key]!r}"}
+        values[key] = v
+    if values["duration_s"] < 0:
+        return 400, {"ok": False, "error": f"'duration_s' must be >= 0, got {values['duration_s']}"}
+
+    client, err = _get_loco_client()
+    if client is None:
+        return 503, err
+    try:
+        with _loco_rpc_lock:
+            code = client.SetVelocity(
+                values["vx"], values["vy"], values["omega"], values["duration_s"]
+            )
+    except Exception as e:  # noqa: BLE001
+        return 503, {"ok": False, "error": f"SetVelocity failed: {e}"}
+    if code != 0:
+        return 503, _rpc_failed("SetVelocity", code)
+    return 200, {"ok": True, "rpc_code": 0, **values}
+
+
+def _dispatch_action(client, name: str, detail: dict) -> int:
+    """Issue one gesture/stop request and return its RPC status code.
+
+    ⚠️ We deliberately do NOT call LocoClient.WaveHand / StopMove /
+    ShakeHand(0|1), even though those are the documented wrappers: each of them
+    DISCARDS the status code of the SetTaskId / SetVelocity call it makes (see
+    unitree_sdk2py/g1/loco/g1_loco_client.py), so a request that never reached
+    the robot would read back as a successful wave. Observed live, not
+    theoretical: on a domain with no sport service the same wire error surfaced
+    as rpc code 3102 through ShakeHand() and as silence through WaveHand().
+
+    What goes on the wire is IDENTICAL to the wrapper — same api id, same JSON
+    parameter — so "sim and hardware speak one API" still holds:
+        WaveHand(turn)  ==  SetTaskId(1 if turn else 0)
+        ShakeHand(0)    ==  SetTaskId(2), first_shake_hand_stage_ = False
+        ShakeHand(1)    ==  SetTaskId(3), first_shake_hand_stage_ = True
+        ShakeHand(-1)   ==  the toggling wrapper, which DOES return the code
+        StopMove()      ==  SetVelocity(0, 0, 0)   [SDK default duration 1.0 s]
+    """
+    if name == "wave":
+        return client.SetTaskId(1 if detail["turn"] else 0)
+    if name == "shake":
+        stage = detail["stage"]
+        if stage == 0:
+            client.first_shake_hand_stage_ = False
+            return client.SetTaskId(2)
+        if stage == 1:
+            client.first_shake_hand_stage_ = True
+            return client.SetTaskId(3)
+        return client.ShakeHand(stage)
+    return client.SetVelocity(0.0, 0.0, 0.0)
+
+
+def loco_action(body: dict) -> tuple[int, dict]:
+    """POST /loco/action — {"name": "wave"|"shake"|"stop", "args": {...}}.
+
+    args: wave → {"turn": bool} (turn the torso toward the greeted person),
+    shake → {"stage": -1 toggle | 0 reach | 1 return}, stop → none.
+    """
+    if not LOCO_ENABLED:
+        return 403, _loco_gate_error()
+
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return 400, {"ok": False, "error": 'body must be {"name": "wave"|"shake"|"stop", "args": {...}}'}
+    name = name.strip().lower()
+    args = body.get("args")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return 400, {"ok": False, "error": f"'args' must be an object, got {type(args).__name__}"}
+
+    if name == "wave":
+        turn = args.get("turn", False)
+        if not isinstance(turn, bool):
+            return 400, {"ok": False, "error": f"'args.turn' must be a boolean, got {turn!r}"}
+        detail = {"turn": turn}
+    elif name == "shake":
+        stage = args.get("stage", -1)
+        if isinstance(stage, bool) or not isinstance(stage, int):
+            return 400, {"ok": False, "error": f"'args.stage' must be an integer (-1 toggle, 0 reach, 1 return), got {stage!r}"}
+        detail = {"stage": stage}
+    elif name == "stop":
+        detail = {}
+    else:
+        return 400, {"ok": False, "error": f"unknown action '{name}' — expected 'wave', 'shake' or 'stop'"}
+
+    client, err = _get_loco_client()
+    if client is None:
+        return 503, err
+    try:
+        with _loco_rpc_lock:
+            code = _dispatch_action(client, name, detail)
+    except Exception as e:  # noqa: BLE001
+        return 503, {"ok": False, "error": f"{name} failed: {e}"}
+    if code != 0:
+        return 503, _rpc_failed(name, code)
+    return 200, {"ok": True, "action": name, "rpc_code": 0, **detail}
+
+
+def loco_fsm(body: dict) -> tuple[int, dict]:
+    """POST /loco/fsm — {"id": int} → SetFsmId.
+
+    Known ids: 0 zero-torque, 1 damp, 3 sit, 500 start/main, 702 lie→stand,
+    706 squat↔stand. Unknown ids are passed through: the FSM table belongs to
+    the robot's firmware, and refusing an id this file has not heard of would
+    make the sidecar the bottleneck on a firmware update. The id is echoed back
+    with its name (or null) so the caller sees what it actually sent.
+    """
+    if not LOCO_ENABLED:
+        return 403, _loco_gate_error()
+
+    fsm_id = body.get("id")
+    if isinstance(fsm_id, bool) or not isinstance(fsm_id, int):
+        return 400, {"ok": False, "error": f"'id' must be an integer FSM id, got {fsm_id!r}"}
+
+    client, err = _get_loco_client()
+    if client is None:
+        return 503, err
+    try:
+        with _loco_rpc_lock:
+            code = client.SetFsmId(fsm_id)
+    except Exception as e:  # noqa: BLE001
+        return 503, {"ok": False, "error": f"SetFsmId({fsm_id}) failed: {e}"}
+    if code != 0:
+        return 503, _rpc_failed(f"SetFsmId({fsm_id})", code)
+    return 200, {"ok": True, "rpc_code": 0, "id": fsm_id, "fsm": LOCO_FSM_NAMES.get(fsm_id)}
+
+
+# Sentinels LocoClient.HighStand()/LowStand() send through SetStandHeight.
+_UINT32_MAX = (1 << 32) - 1
+
+
+def loco_stand_height(body: dict) -> tuple[int, dict]:
+    """POST /loco/stand-height — {"preset": "high"|"low"} or {"metres": float}.
+
+    Standing height is NOT an FSM id — there is no high-stand/low-stand entry in
+    the FSM table. It is its own RPC (SetStandHeight, api 7106's neighbour 7104),
+    and LocoClient.HighStand()/LowStand() are thin wrappers that send UINT32_MAX
+    and 0 as sentinels. Agent Mode's `posture: high|low` blocks route here;
+    without this endpoint they had no way to work at all.
+    """
+    if not LOCO_ENABLED:
+        return 403, _loco_gate_error()
+
+    preset = body.get("preset")
+    metres = body.get("metres")
+    if preset is not None:
+        if preset == "high":
+            value = float(_UINT32_MAX)
+        elif preset == "low":
+            value = 0.0
+        else:
+            return 400, {"ok": False, "error": f"'preset' must be 'high' or 'low', got {preset!r}"}
+    elif metres is not None:
+        value = _finite_number(metres)
+        if value is None or value <= 0.0:
+            return 400, {"ok": False, "error": f"'metres' must be a positive finite number, got {metres!r}"}
+    else:
+        return 400, {"ok": False, "error": "body must carry 'preset' ('high'|'low') or 'metres'"}
+
+    client, err = _get_loco_client()
+    if client is None:
+        return 503, err
+    try:
+        with _loco_rpc_lock:
+            code = client.SetStandHeight(value)
+    except Exception as e:  # noqa: BLE001
+        return 503, {"ok": False, "error": f"SetStandHeight({value}) failed: {e}"}
+    if code != 0:
+        return 503, _rpc_failed(f"SetStandHeight({value})", code)
+    return 200, {"ok": True, "rpc_code": 0, "preset": preset, "metres": metres}
+
+
+# --- odometry (rt/odommodestate) ---------------------------------------------
+# Two possible sources, both reporting the SAME SportModeState_ content:
+#   • "zmq" — the read-only bridge on the robot's PC2 forwards the topic over
+#     the existing ZMQ PUB socket (this is how /state gets odometry while
+#     G1_READ_ONLY is on; no DDS init needed here).
+#   • "dds" — a direct CycloneDDS subscriber, used when the ZMQ bridge is not
+#     the state source (e.g. against the simulator, which publishes the topic
+#     itself).
+# If neither has anything fresh we return 503 and say so. Returning (0,0,0)
+# would be a fabricated pose, and the navigator would happily integrate it.
+
+_dds_odom_source = None
+_dds_odom_lock = threading.Lock()
+
+
+class _UnitreeDdsOdomSource:
+    """Caches the latest SportModeState_ from rt/odommodestate, with its
+    arrival time so staleness is judged the same way _LowStateReader does."""
+
+    def __init__(self, topic: str) -> None:
+        self.topic = topic
+        self._latest = None  # (msg, recv ts)
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        from unitree_sdk2py.core.channel import ChannelSubscriber  # type: ignore
+        from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_  # type: ignore
+
+        _ensure_dds_factory()
+        sub = ChannelSubscriber(self.topic, SportModeState_)
+        sub.Init(self._cb, 8)
+        print(f"[G1 Sidecar] ✅ DDS odometry subscriber on {self.topic}", flush=True)
+
+    def _cb(self, msg) -> None:
+        with self._lock:
+            self._latest = (msg, time.time())
+
+    def latest(self, max_age_s: float):
+        with self._lock:
+            entry = self._latest
+        if entry is None or time.time() - entry[1] > max_age_s:
+            return None
+        return entry[0]
+
+
+def _pose_from(position, rpy):
+    """(x, y, yaw) from a SportModeState_ position + rpy pair, or None.
+
+    yaw is rpy[2]; a message without a usable position is not a pose, so we
+    refuse it rather than defaulting anything to 0.
+    """
+    pos = _coerce3(position)
+    if pos is None:
+        return None
+    ang = _coerce3(rpy)
+    if ang is None:
+        return None
+    return pos[0], pos[1], ang[2]
+
+
+def _odom_from_zmq():
+    """Pose from the read-only bridge feed, or None when nothing fresh."""
+    if not _lowstate_reader.start():
+        return None
+    data = _lowstate_reader.latest(TOPIC_ODOM, max_age_s=ODOM_MAX_AGE_S)
+    if not isinstance(data, dict):
+        return None
+    # The bridge flattens SportModeState_; accept both a top-level "rpy" (what
+    # _get_state_readonly consumes) and the nested imu_state.rpy of the IDL.
+    rpy = data.get("rpy")
+    if rpy is None and isinstance(data.get("imu_state"), dict):
+        rpy = data["imu_state"].get("rpy")
+    return _pose_from(data.get("position"), rpy)
+
+
+def _odom_from_dds():
+    """Pose from a direct DDS subscriber, or None. Never raises."""
+    global _dds_odom_source
+    try:
+        import unitree_sdk2py  # type: ignore  # noqa: F401  (availability check only)
+    except ImportError:
+        return None
+    try:
+        with _dds_odom_lock:
+            if _dds_odom_source is None:
+                source = _UnitreeDdsOdomSource(TOPIC_ODOM)
+                source.start()
+                _dds_odom_source = source
+        msg = _dds_odom_source.latest(ODOM_MAX_AGE_S)
+        if msg is None:
+            return None
+        return _pose_from(getattr(msg, "position", None),
+                          getattr(getattr(msg, "imu_state", None), "rpy", None))
+    except Exception as e:  # noqa: BLE001
+        print(f"[G1 Sidecar] DDS odometry unavailable ({e})", flush=True)
+        return None
+
+
+def loco_odom() -> tuple[int, dict]:
+    """GET /loco/odom — {"ok","x","y","yaw","source"} in the world frame.
+
+    Read-only, but gated with the rest of /loco/* per the Agent Mode contract:
+    a sidecar that refuses to move should not advertise a navigation feed
+    either, and one flag is easier to reason about than two.
+    """
+    if not LOCO_ENABLED:
+        return 403, _loco_gate_error()
+
+    # ZMQ first while READ_ONLY: that bridge is the state source in that mode
+    # and is already running, so it costs nothing. Otherwise DDS leads.
+    order = (("zmq", _odom_from_zmq), ("dds", _odom_from_dds))
+    if not READ_ONLY:
+        order = tuple(reversed(order))
+    for source, fetch in order:
+        pose = fetch()
+        if pose is not None:
+            x, y, yaw = pose
+            return 200, {"ok": True, "x": x, "y": y, "yaw": yaw,
+                         "source": source, "topic": TOPIC_ODOM}
+    return 503, {
+        "ok": False,
+        "error": (
+            f"no odometry newer than {ODOM_MAX_AGE_S}s on '{TOPIC_ODOM}' "
+            f"(tried: {', '.join(s for s, _ in order)}). The read-only bridge or "
+            "the DDS publisher is not running — refusing to report a pose."
+        ),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, payload: dict) -> None:
         data = json.dumps(payload).encode()
@@ -1293,6 +1785,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, get_point_cloud(name))
         elif self.path == "/record/status":
             self._send(200, recorder.status())
+        elif self.path == "/loco/odom":
+            self._send(*loco_odom())
         else:
             self._send(404, {"error": "not found"})
 
@@ -1323,6 +1817,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, start_record(body))
         elif self.path == "/record/stop":
             self._send(200, recorder.stop())
+        # --- Agent Mode locomotion (TASK-194) --------------------------------
+        # Behind G1_LOCO_ENABLED, NOT G1_READ_ONLY: /loco/* is the high-level
+        # rt/api/sport RPC path, a different wire from the rt/lowcmd path
+        # READ_ONLY protects. See the LOCO_ENABLED rationale at the top.
+        elif self.path == "/loco/move":
+            self._send(*loco_move(body))
+        elif self.path == "/loco/action":
+            self._send(*loco_action(body))
+        elif self.path == "/loco/fsm":
+            self._send(*loco_fsm(body))
+        elif self.path == "/loco/stand-height":
+            self._send(*loco_stand_height(body))
         else:
             self._send(404, {"error": "not found"})
 
@@ -1381,6 +1887,19 @@ def main() -> None:
         print(
             f"[G1 Sidecar] action ramp: max_vel={MAX_JOINT_VEL} rad/s @ {CONTROL_HZ} Hz "
             f"→ {_MAX_STEP:.4f} rad/tick (NOT balance control)",
+            flush=True,
+        )
+    if LOCO_ENABLED:
+        print(
+            "[G1 Sidecar] ⚠️  LOCOMOTION ENABLED (G1_LOCO_ENABLED=1) — /loco/* will move "
+            f"the robot via the sport service on DDS domain "
+            f"{os.environ.get('G1_LIDAR_DDS_DOMAIN', '0')} (0 = real robot, 1 = sim). "
+            "Agent Mode has manual E-Stop only: no arming gate, no watchdog, no speed cap.",
+            flush=True,
+        )
+    else:
+        print(
+            "[G1 Sidecar] /loco/* disabled (G1_LOCO_ENABLED=0) — locomotion endpoints answer 403",
             flush=True,
         )
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
