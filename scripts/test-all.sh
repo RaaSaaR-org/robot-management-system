@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-all.sh — Run all project tests: typecheck + playwright UI.
+# test-all.sh — Run all project tests: typecheck + unit tests + playwright UI.
 #
 # Usage:
 #   ./scripts/test-all.sh            # run everything
@@ -7,7 +7,16 @@
 #
 # Training E2E is now in the separate training-worker repo.
 #
-# Exits 0 if all tests pass, non-zero on first failure.
+# The vitest and pytest stages were added by TASK-194: until then this script ran only
+# typechecks and Playwright, so the ~6500 unit tests across server/app/robot-agent never
+# ran from the documented entry point and new suites could rot unnoticed.
+#
+# The pytest stage needs the cyclonedds+mujoco venv from
+# robot-agent/hardware/sim_g1_dds/README.md — point SIM_PYTHON at it. Without it the
+# stage is reported as SKIPPED, never as passed.
+#
+# Every stage runs even when an earlier one fails, so one invocation gives the full
+# picture. Exits 0 if all tests pass, non-zero otherwise.
 
 set -euo pipefail
 
@@ -34,9 +43,36 @@ step "Server typecheck"
 step "App typecheck"
 (cd "$REPO_ROOT/app" && npx tsc --noEmit) || { echo "  app typecheck FAILED"; FAILURES=$((FAILURES + 1)); }
 
+step "Robot agent typecheck"
+(cd "$REPO_ROOT/robot-agent" && npm run typecheck) || { echo "  robot-agent typecheck FAILED"; FAILURES=$((FAILURES + 1)); }
+
+# ---------------------------------------------------------------- 2. Unit tests
+step "Server unit tests"
+(cd "$REPO_ROOT/server" && npm test) || { echo "  server vitest FAILED"; FAILURES=$((FAILURES + 1)); }
+
+step "App unit tests"
+(cd "$REPO_ROOT/app" && npm test) || { echo "  app vitest FAILED"; FAILURES=$((FAILURES + 1)); }
+
+step "Robot agent unit tests"
+(cd "$REPO_ROOT/robot-agent" && npm test) || { echo "  robot-agent vitest FAILED"; FAILURES=$((FAILURES + 1)); }
+
+# ------------------------------------------------------- 3. Python sim state machine
+# sim_g1_dds is what makes Agent Mode testable without a G1, so its state machine is
+# part of the regression suite — but only when the venv is actually there. A missing
+# venv is reported as skipped; it must never read as a pass.
+SIM_DIR="$REPO_ROOT/robot-agent/hardware/sim_g1_dds"
+SIM_PY="${SIM_PYTHON:-}"
+if [ -z "$SIM_PY" ] && [ -x "$SIM_DIR/.venv/bin/python" ]; then SIM_PY="$SIM_DIR/.venv/bin/python"; fi
+if [ -n "$SIM_PY" ] && "$SIM_PY" -c 'import mujoco' >/dev/null 2>&1; then
+  step "Sim state machine (pytest)"
+  (cd "$SIM_DIR" && "$SIM_PY" -m pytest -q) || { echo "  sim_g1_dds pytest FAILED"; FAILURES=$((FAILURES + 1)); }
+else
+  step "Sim state machine (SKIPPED — set SIM_PYTHON, see $SIM_DIR/README.md)"
+fi
+
 # Training E2E — now in separate training-worker repo (run ../training-worker/scripts/test-e2e.sh)
 
-# ---------------------------------------------------------------- 2. Playwright
+# ---------------------------------------------------------------- 4. Playwright
 if $SKIP_PW; then
   step "Playwright UI tests (SKIPPED)"
 else
@@ -59,7 +95,7 @@ else
   fi
 fi
 
-# ---------------------------------------------------------------- 4. Summary
+# ---------------------------------------------------------------- 5. Summary
 echo
 step "Results"
 if [ "$FAILURES" -eq 0 ]; then
