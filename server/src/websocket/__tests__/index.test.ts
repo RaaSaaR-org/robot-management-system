@@ -66,6 +66,7 @@ const services = vi.hoisted(() => {
     job: make(), // trainingJobService.onJobEvent
     dataset: make(), // datasetService.onDatasetEvent
     deployment: make(), // deploymentService.onDeploymentEvent
+    agentMode: make(), // agentModeService.onAgentModeEvent
     // taskDistributor.on('robot:work_assigned' | 'robot:work_cancelled')
     distributorOn: {} as Record<string, (data: unknown) => void>,
     // teleoperationService.on('teleoperation:event')
@@ -132,6 +133,11 @@ vi.mock('../../services/DeploymentService.js', () => ({
 vi.mock('../../services/TeleoperationService.js', () => ({
   teleoperationService: {
     on: vi.fn((event: string, cb: (e: unknown) => void) => { services.teleopOn[event] = cb; }),
+  },
+}));
+vi.mock('../../services/AgentModeService.js', () => ({
+  agentModeService: {
+    onAgentModeEvent: vi.fn((cb: (e: unknown) => void) => { services.agentMode.cb = cb; return () => {}; }),
   },
 }));
 
@@ -595,6 +601,44 @@ describe('setupWebSocket', () => {
         timestamp: new Date(),
       });
       expect(client.send).not.toHaveBeenCalled();
+    });
+
+    it('broadcasts agent mode block events under their agent: type', () => {
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+      services.agentMode.cb?.({
+        type: 'agent:block:started',
+        robotId: 'robot-001',
+        plan: { id: 'plan-1', cursor: 0, status: 'running', blocks: [{ id: 'b1' }] },
+        block: { id: 'b1', kind: 'walk', status: 'running' },
+        timestamp: '2026-07-25T10:00:01.000Z',
+      });
+      const msg = JSON.parse(client.sent[0]);
+      expect(msg.type).toBe('agent:block:started');
+      expect(msg.robotId).toBe('robot-001');
+      expect(msg.block).toEqual({ id: 'b1', kind: 'walk', status: 'running' });
+      expect(msg.plan.id).toBe('plan-1');
+      expect(msg.timestamp).toBe('2026-07-25T10:00:01.000Z');
+      // Fields irrelevant to this event are dropped by JSON.stringify.
+      expect('scene' in msg).toBe(false);
+      expect('state' in msg).toBe(false);
+    });
+
+    it('broadcasts agent mode scene updates to every client', () => {
+      const wss = setup();
+      const c1 = connect(wss, makeClient());
+      const c2 = connect(wss, makeClient());
+      c1.reset();
+      c2.reset();
+      services.agentMode.cb?.({
+        type: 'agent:scene:updated',
+        robotId: 'robot-001',
+        scene: { robotId: 'robot-001', currentView: 'Tisch mit Hut', entities: [], personVisible: false, updatedAt: 'x' },
+        timestamp: '2026-07-25T10:00:02.000Z',
+      });
+      expect(JSON.parse(c1.sent[0]).scene.currentView).toBe('Tisch mit Hut');
+      expect(JSON.parse(c2.sent[0]).type).toBe('agent:scene:updated');
     });
 
     it('broadcasts deployment events with all fields', () => {
