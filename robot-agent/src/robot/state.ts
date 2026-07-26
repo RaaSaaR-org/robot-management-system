@@ -30,6 +30,7 @@ import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
+import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { SimulationEngine } from './SimulationEngine.js';
 import { TaskQueue } from './TaskQueue.js';
@@ -105,6 +106,23 @@ function markGroupReal(telemetry: RobotTelemetry, group: TelemetryFieldGroup): v
 // hardware the IMU should ideally be read in-process at ≥100Hz (HARDWARE GAP).
 const HUMANOID_SAFETY_POLL_MS = 50;
 
+/**
+ * Thrown by `startVLAControl()` when another owner (Agent Mode, a human at the
+ * teleop controls) holds exclusive control. Distinct from a generic start
+ * failure so the REST layer can answer 409 instead of 500 — and so the caller
+ * knows it never owned the lock and must not release it.
+ */
+export class ControlBusyError extends Error {
+  /** Honest, human-readable reason from the arbitration lock. */
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`Control is busy: ${reason}`);
+    this.name = 'ControlBusyError';
+    this.reason = reason;
+  }
+}
+
 // ============================================================================
 // ROBOT STATE MANAGER
 // ============================================================================
@@ -125,6 +143,15 @@ export class RobotStateManager {
   private vlaInstructionLocal = '';
   /** Registry key of the active VLA-control SkillExecutor run (null = none). */
   private vlaSkillId: string | null = null;
+  /**
+   * Registry key of the run that currently holds `controlOwnerLock` for `vla`.
+   * Tracked separately from `vlaSkillId` so a run that is stopped early (which
+   * clears `vlaSkillId` immediately) still releases exactly its own claim, and
+   * a late-settling run can never release a *newer* rollout's lock.
+   */
+  private vlaLockSkillId: string | null = null;
+  /** Monotonic counter making every VLA run id unique (see startVLAControl). */
+  private vlaRunSeq = 0;
 
   // Keyboard teleop override — when active, the simulated joints follow operator
   // input instead of the idle/walk animation. Map of joint name -> position (rad).
@@ -265,6 +292,19 @@ export class RobotStateManager {
       path.resolve(path.dirname(fileURLToPath(import.meta.url)), `../../data/state-${appConfig.robotId}.json`)
     );
     this.restorePersistedState();
+
+    // TASK-194 arbitration: teleop preempting `vla` must STOP the rollout, not
+    // just relabel the lock — the SkillExecutor closed loop knows nothing about
+    // the lock and would keep POSTing actions under the operator's hands, and
+    // once the last teleop socket closed the lock read `idle` while the rollout
+    // still ran, letting Agent Mode claim it for a second concurrent driver.
+    // Mirrors the Agent Mode controller's own takeover subscription.
+    controlOwnerLock.subscribe((change) => {
+      if (change.preempted && change.previous === 'vla' && change.next === 'teleop') {
+        console.warn('[RobotStateManager/VLA] Teleop took over — aborting the VLA rollout');
+        void this.stopVLAControl();
+      }
+    });
   }
 
   // ============================================================================
@@ -1025,24 +1065,44 @@ export class RobotStateManager {
    * the hardware sidecar. The run executes in the background; completion (or
    * failure) flips the active flag back and notifies listeners.
    *
+   * TASK-194 arbitration: the exclusive control lock is claimed and released
+   * HERE, not by the REST route, so its lifetime is exactly the rollout's. A
+   * rollout ends far more often on its own (unreachable VLA server, max steps,
+   * the 10-minute timeout) than through `POST /vla/stop`, and a lock released
+   * only by that route stayed held for the life of the process — which killed
+   * Agent Mode permanently, with no UI path to recover it.
+   *
    * @param instruction Natural language task instruction
    * @param config Optional VLA controller configuration overrides (unused by
    *               the closed-loop executor; kept for API compatibility)
+   * @throws ControlBusyError when another owner holds exclusive control
    */
   async startVLAControl(
     instruction: string,
     config?: Partial<VLAControllerConfig>
   ): Promise<void> {
+    // Checked BEFORE claiming: `claim('vla')` succeeds trivially when a rollout
+    // already owns the lock, so claiming first would make this throw with the
+    // live rollout's claim in hand.
     if (this.vlaActiveLocal) {
       throw new Error('VLA control is already active');
     }
     void config; // accepted for API compatibility; the closed loop is self-configuring
 
-    const skillId = `vla-control-${Date.now()}`;
+    const claim = controlOwnerLock.claim('vla');
+    if (!claim.ok) {
+      throw new ControlBusyError(claim.reason ?? 'control is busy.');
+    }
+
+    // The sequence number matters: two runs started inside the same millisecond
+    // would otherwise share an id, and every "is this still my run?" guard
+    // (registry key, lock holder, active-run flag) would match the wrong one.
+    const skillId = `vla-control-${Date.now()}-${++this.vlaRunSeq}`;
     const executor = new SkillExecutor(this);
     // Same registry as skill runs, so the safety loop's abortAll() halts this too.
     skillExecutorRegistry.register(skillId, executor);
 
+    this.vlaLockSkillId = skillId;
     this.vlaActiveLocal = true;
     this.vlaInstructionLocal = instruction;
     this.vlaSkillId = skillId;
@@ -1066,6 +1126,10 @@ export class RobotStateManager {
       })
       .finally(() => {
         skillExecutorRegistry.unregister(skillId);
+        // This is where the rollout's lifecycle really ends — success, crash,
+        // max steps or timeout all land here. Hand the lock back so the next
+        // owner (Agent Mode, teleop) can take control.
+        this.releaseVLAControlLock(skillId);
         if (this.vlaSkillId === skillId) {
           this.vlaActiveLocal = false;
           this.vlaInstructionLocal = '';
@@ -1078,12 +1142,34 @@ export class RobotStateManager {
   }
 
   /**
+   * Release the exclusive control lock held by one VLA run. A no-op when that
+   * run is not the current lock holder — a rollout that settles late must never
+   * pull the lock out from under the rollout that replaced it.
+   */
+  private releaseVLAControlLock(skillId: string): void {
+    if (this.vlaLockSkillId !== skillId) return;
+    this.vlaLockSkillId = null;
+    controlOwnerLock.release('vla');
+  }
+
+  /**
    * Stop VLA control mode gracefully (aborts the background closed loop).
    */
   async stopVLAControl(): Promise<void> {
     console.log('[RobotStateManager/VLA] Stopping VLA control');
     if (this.vlaSkillId) {
       skillExecutorRegistry.abort(this.vlaSkillId);
+    }
+    // Release now rather than waiting for the aborted run's promise to settle,
+    // so an operator can immediately hand control to Agent Mode. The run's own
+    // `finally` then finds the lock already released and does nothing.
+    if (this.vlaLockSkillId) {
+      this.releaseVLAControlLock(this.vlaLockSkillId);
+    } else {
+      // Escape hatch: the lock still says `vla` but no run is tracked (e.g. a
+      // leak from an earlier build). `POST /vla/stop` is the operator's only
+      // UI path here, so let it clear the stale claim. No-op otherwise.
+      controlOwnerLock.release('vla');
     }
     this.vlaActiveLocal = false;
     this.vlaInstructionLocal = '';

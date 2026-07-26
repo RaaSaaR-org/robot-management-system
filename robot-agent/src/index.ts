@@ -25,6 +25,9 @@ import { RobotAgentExecutor } from './agent/agent-executor.js';
 import { createRestRoutes } from './api/rest-routes.js';
 import { createTelemetryWebSocket } from './api/websocket.js';
 import { createPointCloudWebSocket } from './api/pointcloud-websocket.js';
+import { createAgentModeWebSocket } from './api/agent-mode-websocket.js';
+import { agentModeController } from './agent-mode/agent-mode-controller.js';
+import { startTerminalEstop } from './terminal-estop.js';
 import { setRobotStateManager as setNavigationStateManager } from './tools/navigation.js';
 import { setRobotStateManager as setManipulationStateManager } from './tools/manipulation.js';
 import { setRobotStateManager as setStatusStateManager } from './tools/status.js';
@@ -88,6 +91,33 @@ async function main() {
   // Start safety monitoring
   robotStateManager.startSafetyMonitoring();
   console.log('[SimulatedRobot] Safety monitoring started');
+
+  // Agent Mode (TASK-194): give the controller the safety path it delegates
+  // E-Stop to, and start the idle person watcher when the mode is on at boot.
+  agentModeController.attach(robotStateManager);
+  agentModeController.startIdleWatcher();
+  // Seed the server's in-memory mirror, which otherwise learns nothing about
+  // this robot until its first plan and shows the mode as off in the meantime.
+  agentModeController.announceBootState();
+  // The third E-Stop trigger next to the UI button and the spoken stop word. Whoever
+  // runs this from a terminal is usually the person standing next to the robot.
+  // Armed only while Agent Mode is on (and follows the runtime toggle): raw-mode
+  // stdin that latches an E-Stop on a stray SPACE is an observable behaviour
+  // change every mode-off dev profile would otherwise inherit.
+  let terminalEstop = config.agentMode.enabled ? startTerminalEstop() : null;
+  agentModeController.subscribe((event) => {
+    if (event.type !== 'agent:state:changed') return;
+    const on = agentModeController.isEnabled();
+    if (on && !terminalEstop) {
+      terminalEstop = startTerminalEstop();
+    } else if (!on && terminalEstop) {
+      terminalEstop.dispose();
+      terminalEstop = null;
+    }
+  });
+  if (config.agentMode.enabled) {
+    console.log('[AgentMode] Agent Mode is ON — A2A messages are planned into blocks');
+  }
 
   // Start compliance logging session
   try {
@@ -224,6 +254,7 @@ async function main() {
   const frameRecorder = new FrameRecorder();
   const bilateralWss = createBilateralTeleopWebSocket(frameRecorder);
   const keyboardWss = createKeyboardTeleopWebSocket(robotStateManager);
+  const agentModeWss = createAgentModeWebSocket();
 
   // Single upgrade dispatcher routes each WebSocket path to its server.
   server.on('upgrade', (req, socket, head) => {
@@ -246,6 +277,8 @@ async function main() {
       route(bilateralWss);
     } else if (pathname === '/ws/keyboard-teleop') {
       route(keyboardWss);
+    } else if (pathname === '/ws/agent-mode') {
+      route(agentModeWss);
     } else {
       socket.destroy();
     }
@@ -273,6 +306,8 @@ async function main() {
     console.log(`    PointCloud WS:  ws://localhost:${PORT}/ws/pointcloud/${ROBOT_ID}`);
     console.log(`    PointCloud:     http://localhost:${PORT}/api/v1/robots/${ROBOT_ID}/pointcloud`);
     console.log(`    Keyboard Teleop:ws://localhost:${PORT}/ws/keyboard-teleop`);
+    console.log(`    Agent Mode:     http://localhost:${PORT}/api/v1/robots/${ROBOT_ID}/agent-mode`);
+    console.log(`    Agent Mode WS:  ws://localhost:${PORT}/ws/agent-mode`);
     console.log(`    Health Check:   http://localhost:${PORT}/api/v1/health`);
     console.log('');
     console.log('  Press Ctrl+C to stop the server');
@@ -312,6 +347,8 @@ async function main() {
       console.log('[FederatedLearning] Federated learning lifecycle stopped');
     }
     secureUpdateClient.stopPeriodicChecks();
+    terminalEstop?.dispose();
+    agentModeController.dispose();
     robotStateManager.stopSafetyMonitoring();
     robotStateManager.stopSimulation();
     server.close(() => {

@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import type { RobotStateManager } from '../robot/state.js';
+import { ControlBusyError } from '../robot/state.js';
 import type {
   RobotCommandRequest,
   RegistrationInfo,
@@ -18,6 +19,8 @@ import type { DeviceIdentityManager } from '../security/device-identity.js';
 import type { SecureBootVerifier } from '../security/secure-boot.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { RolloutStrategies, type RolloutStrategy } from '../vla/types.js';
+import { agentModeController } from '../agent-mode/agent-mode-controller.js';
+import { controlOwnerLock } from '../agent-mode/control-owner.js';
 
 export function createRestRoutes(
   robotStateManager: RobotStateManager,
@@ -678,7 +681,7 @@ export function createRestRoutes(
   });
 
   // POST /robots/:id/safety/estop - Trigger emergency stop
-  router.post('/robots/:id/safety/estop', (req: Request, res: Response) => {
+  router.post('/robots/:id/safety/estop', async (req: Request, res: Response) => {
     const robot = robotStateManager.getRobotInterface();
     if (req.params.id !== robot.id) {
       res.status(404).json({
@@ -689,11 +692,33 @@ export function createRestRoutes(
     }
 
     const { reason, triggeredBy } = req.body;
+    const stopReason = reason || 'Remote E-stop triggered';
 
-    robotStateManager.triggerEmergencyStop(
-      triggeredBy || 'remote',
-      reason || 'Remote E-stop triggered'
-    );
+    // Latched FIRST: it is synchronous and cannot fail, while the Agent Mode
+    // stop below goes over HTTP to the sidecar. The latch keeps the real trigger
+    // source because SafetyMonitor records the first trigger and ignores the
+    // 'local' one that agentModeController.estop() raises a moment later.
+    robotStateManager.triggerEmergencyStop(triggeredBy || 'remote', stopReason);
+
+    // TASK-194: the platform E-Stop has to reach Agent Mode. SafetyMonitor's
+    // stop only zeroes the simulated speed and raises a warning — it never
+    // touches the LocoClient the block executor is driving, so without this the
+    // robot kept walking while the whole product reported it as e-stopped.
+    // Best-effort: a failing Agent Mode stop is reported, never swallowed.
+    let agentModeStopped = false;
+    let agentModeError: string | undefined;
+    try {
+      const result = await agentModeController.estop(`Platform E-Stop: ${stopReason}`);
+      agentModeStopped = result.stopped;
+      // The stop latched but StopMove/Damp never reached the robot — that is a
+      // delivery failure, and hiding it renders an un-damped robot as stopped.
+      if (!result.delivered) {
+        agentModeError = result.deliveryError ?? 'stop/damp not confirmed by the sidecar';
+      }
+    } catch (error) {
+      agentModeError = error instanceof Error ? error.message : String(error);
+      console.error('[REST] Agent Mode E-Stop failed during platform E-Stop:', agentModeError);
+    }
 
     // Update server heartbeat since we received communication
     robotStateManager.updateServerHeartbeat();
@@ -702,6 +727,9 @@ export function createRestRoutes(
     res.json({
       robotId: robot.id,
       message: 'Emergency stop triggered',
+      // Honest report of what this stop actually reached.
+      agentModeStopped,
+      ...(agentModeError ? { agentModeError } : {}),
       ...estopState,
     });
   });
@@ -857,6 +885,11 @@ export function createRestRoutes(
       return;
     }
 
+    // TASK-194 arbitration: control is exclusive. A VLA rollout must not start
+    // while Agent Mode (or a human at the teleop controls) owns the robot.
+    // The claim itself lives in startVLAControl() together with every release,
+    // so this route never holds a lock it could leak — or hand back on behalf
+    // of a rollout that is still running.
     try {
       await robotStateManager.startVLAControl(instruction, vlaConfig);
 
@@ -867,6 +900,14 @@ export function createRestRoutes(
         status: robotStateManager.getVLAStatus(),
       });
     } catch (error) {
+      if (error instanceof ControlBusyError) {
+        res.status(409).json({
+          code: 'CONTROL_BUSY',
+          message: `Cannot start VLA control: ${error.reason}`,
+          controlOwner: controlOwnerLock.get(),
+        });
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : 'Failed to start VLA control';
       res.status(500).json({
         code: 'VLA_START_FAILED',
@@ -887,6 +928,7 @@ export function createRestRoutes(
     }
 
     try {
+      // stopVLAControl() releases the control lock itself — see startVLAControl.
       await robotStateManager.stopVLAControl();
 
       res.json({
@@ -1041,6 +1083,87 @@ export function createRestRoutes(
       metrics: robotStateManager.getVLAInferenceMetrics(),
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // ============================================================================
+  // AGENT MODE ENDPOINTS (TASK-194)
+  //
+  // Full paths are /api/v1/robots/:id/agent-mode/... — see the wire contract.
+  // Plans are ephemeral: nothing here touches the database.
+  // ============================================================================
+
+  /** Shared 404 guard — this agent serves exactly one robot. */
+  const wrongRobot = (req: Request, res: Response): boolean => {
+    const robot = robotStateManager.getRobotInterface();
+    if (req.params.id === robot.id) return false;
+    res.status(404).json({
+      code: 'ROBOT_NOT_FOUND',
+      message: `Robot ${req.params.id} not found. This agent serves robot ${robot.id}`,
+    });
+    return true;
+  };
+
+  // GET /robots/:id/agent-mode — full AgentModeState
+  router.get('/robots/:id/agent-mode', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json(agentModeController.getState());
+  });
+
+  // POST /robots/:id/agent-mode/toggle — {enabled: boolean}
+  router.post('/robots/:id/agent-mode/toggle', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {enabled: boolean}' });
+      return;
+    }
+    res.json(agentModeController.setEnabled(enabled));
+  });
+
+  // POST /robots/:id/agent-mode/command — {text, contextId?}
+  router.post('/robots/:id/agent-mode/command', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const text = req.body?.text;
+    if (typeof text !== 'string' || !text.trim()) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {text: string}' });
+      return;
+    }
+    const contextId = typeof req.body?.contextId === 'string' ? req.body.contextId : undefined;
+    const result = await agentModeController.submitCommand({
+      text,
+      ...(contextId ? { contextId } : {}),
+    });
+    // A refusal is a normal, expected answer (mode off, E-Stop latched, control
+    // held elsewhere) — the caller reads `accepted`, not the status code.
+    res.json(result);
+  });
+
+  // POST /robots/:id/agent-mode/estop — {reason?}
+  router.post('/robots/:id/agent-mode/estop', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const reason =
+      typeof req.body?.reason === 'string' && req.body.reason.trim()
+        ? req.body.reason.trim()
+        : 'Manual E-Stop from the operator UI';
+    res.json(await agentModeController.estop(reason));
+  });
+
+  // POST /robots/:id/agent-mode/estop/reset
+  router.post('/robots/:id/agent-mode/estop/reset', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json(agentModeController.resetEstop());
+  });
+
+  // GET /robots/:id/agent-mode/scene — SceneMemory | null
+  router.get('/robots/:id/agent-mode/scene', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json(agentModeController.getScene());
+  });
+
+  // GET /robots/:id/agent-mode/scene.md — the current_view.md dump
+  router.get('/robots/:id/agent-mode/scene.md', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.type('text/markdown').send(agentModeController.sceneMarkdown());
   });
 
   // ============================================================================

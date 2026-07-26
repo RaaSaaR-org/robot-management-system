@@ -18,6 +18,7 @@ import {
   getChargingStationLocation,
   getHomeLocation,
 } from '../tools/navigation.js';
+import { agentModeController } from '../agent-mode/agent-mode-controller.js';
 
 /**
  * Callback to update robot state
@@ -25,10 +26,22 @@ import {
 export type StateUpdater = (updater: (state: SimulatedRobotState) => void) => void;
 
 /**
+ * Stops whatever Agent Mode is executing. Injectable so tests do not have to
+ * reach the process-wide controller singleton; the default is that singleton.
+ */
+export type AgentEstop = (
+  reason: string
+) => Promise<{ stopped: boolean; delivered?: boolean; deliveryError?: string }>;
+
+const defaultAgentEstop: AgentEstop = (reason) => agentModeController.estop(reason);
+
+/**
  * Configuration for command executor
  */
 export interface CommandExecutorConfig {
   speedUnitsPerSecond: number;
+  /** Override for the Agent Mode E-Stop hook (tests). */
+  agentEstop?: AgentEstop;
 }
 
 /**
@@ -236,11 +249,27 @@ export class CommandExecutor {
   }
 
   /**
-   * Emergency stop - immediate halt
+   * Emergency stop — commands an immediate halt.
+   *
+   * TASK-194: this is the `emergency_stop` command path (`roboctl estop`, the
+   * server's fleet commands, the Genkit `emergencyStop` tool). Clearing the
+   * simulated target and speed does NOT stop an Agent Mode plan — that drives
+   * the robot through its own LocoClient loop — so the stop is forwarded to the
+   * Agent Mode controller, which aborts the plan, damps the base and latches the
+   * SafetyMonitor's E-stop.
+   *
+   * HONESTY (TASK-194): the returned message says what was *commanded*. This
+   * executor has no feedback channel that could confirm the physical robot
+   * stopped, so it must not claim "all movement halted".
    */
   async emergencyStop(): Promise<CommandResult> {
     const state = this.stateGetter();
 
+    // Local state first, and deliberately so: it is synchronous and cannot fail,
+    // whereas the Agent Mode stop below goes over HTTP to the sidecar. Every one
+    // of those requests is bounded by an AbortSignal.timeout, but "bounded" still
+    // means seconds. Nothing about an E-Stop should wait on a network round trip
+    // that a slow or dead sidecar can stretch out.
     this.stateUpdater((s) => {
       s.targetLocation = undefined;
       s.speed = 0;
@@ -250,10 +279,42 @@ export class CommandExecutor {
       s.updatedAt = new Date().toISOString();
     });
 
+    let agentModeStopped = false;
+    let agentModeError: string | undefined;
+    try {
+      const result = await (this.config.agentEstop ?? defaultAgentEstop)(
+        'Emergency stop command received'
+      );
+      agentModeStopped = result.stopped;
+      // Latched locally but not confirmed by the sidecar — say so, the same
+      // way a thrown stop is reported.
+      if (result.delivered === false) {
+        agentModeError = result.deliveryError ?? 'stop/damp not confirmed by the sidecar';
+      }
+    } catch (error) {
+      agentModeError = error instanceof Error ? error.message : String(error);
+      console.error('[CommandExecutor] Agent Mode E-Stop failed:', agentModeError);
+    }
+
+    const parts = ['EMERGENCY STOP commanded'];
+    parts.push(
+      agentModeStopped
+        ? 'the running Agent Mode plan was aborted'
+        : 'no Agent Mode plan was running'
+    );
+    if (agentModeError) parts.push(`Agent Mode E-Stop FAILED: ${agentModeError}`);
+    parts.push('physical halt not verified by this agent');
+
     return {
-      success: true,
-      message: 'EMERGENCY STOP ACTIVATED - All movement halted',
-      data: { location: state.location },
+      // An E-Stop that could not reach Agent Mode is reported as a failure —
+      // the caller must not read it as "the robot is stopped".
+      success: agentModeError === undefined,
+      message: parts.join(' — '),
+      data: {
+        location: state.location,
+        agentModeStopped,
+        ...(agentModeError ? { agentModeError } : {}),
+      },
     };
   }
 

@@ -232,6 +232,14 @@ export class SafetyMonitor {
     requiresManualReset: true,
   };
 
+  /**
+   * True while the current latch came from `triggerEmergencyStop`, as opposed to
+   * an auto-resetting protective stop. It is what lets the first emergency stop
+   * keep ownership of `triggeredBy`/`reason` through a cascade — see the comment
+   * in `triggerEmergencyStop`.
+   */
+  private latchedByEmergencyStop = false;
+
   // Operating mode
   private operatingMode: OperatingMode = 'automatic';
 
@@ -425,6 +433,7 @@ export class SafetyMonitor {
         stopCategory: this.config.defaultStopCategory,
         requiresManualReset: this.config.estopRequiresManualReset,
       };
+      this.latchedByEmergencyStop = false;
       console.log('[SafetyMonitor] Communication restored — protective stop cleared');
     }
 
@@ -749,19 +758,31 @@ export class SafetyMonitor {
   ): void {
     console.log(`[SafetyMonitor] EMERGENCY STOP triggered by ${triggeredBy}: ${reason}`);
 
-    this.estopState = {
-      status: 'triggered',
-      triggeredAt: new Date().toISOString(),
-      triggeredBy,
-      reason,
-      stopCategory: 0, // E-stop uses Category 0
-      requiresManualReset: this.config.estopRequiresManualReset,
-    };
+    // The FIRST emergency stop wins the record. An E-Stop cascades — the fleet
+    // route stops Agent Mode, Agent Mode latches locally, a watchdog notices the
+    // damped base — and each hop would otherwise overwrite `triggeredBy`/`reason`
+    // with its own second-hand version. What the operator needs afterwards is the
+    // ORIGINAL cause, not whichever handler happened to run last. (TASK-194)
+    //
+    // A latched *protective* stop is still overwritten, deliberately: it carries
+    // `triggeredBy: 'system'` and auto-resets, so leaving its record in place
+    // would let clearCommunicationLossStop() silently un-latch a real E-Stop the
+    // moment the server heartbeat came back.
+    if (!this.latchedByEmergencyStop) {
+      this.estopState = {
+        status: 'triggered',
+        triggeredAt: new Date().toISOString(),
+        triggeredBy,
+        reason,
+        stopCategory: 0, // E-stop uses Category 0
+        requiresManualReset: this.config.estopRequiresManualReset,
+      };
+      this.latchedByEmergencyStop = true;
+    }
 
-    // Execute immediate stop
+    // Executed and logged on EVERY call, even a repeat: the record is a
+    // forensic detail, but actually commanding the stop is the job.
     this.executeStop(0);
-
-    // Log safety event
     this.logSafetyEvent('emergency_stop', 0, triggeredBy, reason);
   }
 
@@ -771,14 +792,19 @@ export class SafetyMonitor {
   triggerProtectiveStop(type: SafetyStopType, reason: string): void {
     console.log(`[SafetyMonitor] PROTECTIVE STOP: ${reason}`);
 
-    this.estopState = {
-      status: 'triggered',
-      triggeredAt: new Date().toISOString(),
-      triggeredBy: 'system',
-      reason,
-      stopCategory: this.config.defaultStopCategory,
-      requiresManualReset: false, // Protective stops can auto-reset
-    };
+    // A protective stop must not take the record away from a latched emergency
+    // stop: it auto-resets (`requiresManualReset: false`), so doing so would
+    // downgrade a manual E-Stop into something the system clears by itself.
+    if (!this.latchedByEmergencyStop) {
+      this.estopState = {
+        status: 'triggered',
+        triggeredAt: new Date().toISOString(),
+        triggeredBy: 'system',
+        reason,
+        stopCategory: this.config.defaultStopCategory,
+        requiresManualReset: false, // Protective stops can auto-reset
+      };
+    }
 
     // Execute stop with configured category
     this.executeStop(this.config.defaultStopCategory);
@@ -816,6 +842,11 @@ export class SafetyMonitor {
     // Perform reset checks
     if (!this.canReset()) {
       console.warn('[SafetyMonitor] Cannot reset - safety conditions not met');
+      // Put the latch back. Leaving it on 'resetting' made isEStopTriggered()
+      // return false, so a REFUSED reset silently presented the robot as no
+      // longer e-stopped — the exact opposite of what refusing it meant.
+      this.estopState.status = 'triggered';
+      this.changeNotifier();
       return false;
     }
 
@@ -824,6 +855,7 @@ export class SafetyMonitor {
       stopCategory: this.config.defaultStopCategory,
       requiresManualReset: this.config.estopRequiresManualReset,
     };
+    this.latchedByEmergencyStop = false;
 
     // Update robot state
     this.stateUpdater((s) => {

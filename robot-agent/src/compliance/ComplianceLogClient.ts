@@ -105,7 +105,10 @@ export class ComplianceLogClient {
   private readonly flushIntervalMs = 5000;
 
   constructor(serverUrl?: string, robotId?: string) {
-    this.serverUrl = serverUrl || process.env.SERVER_URL || 'http://localhost:3000';
+    // config.serverUrl already resolves SERVER_URL (default :3001). The previous
+    // literal fallback here was :3000 — a port nothing in this repo serves — so
+    // every log silently went nowhere whenever SERVER_URL was unset.
+    this.serverUrl = serverUrl || config.serverUrl;
     this.robotId = robotId || config.robotId;
     console.log(`[ComplianceLogClient] Initialized for robot ${this.robotId}`);
   }
