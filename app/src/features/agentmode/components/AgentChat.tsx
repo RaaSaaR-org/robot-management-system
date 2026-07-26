@@ -238,7 +238,10 @@ export const AgentChat = memo(function AgentChat({ robotId, className }: AgentCh
               'flex-1 resize-none rounded-brand border border-glass-subtle glass-subtle',
               'px-3 py-2.5 text-sm text-theme-primary transition-all duration-200',
               'focus:ring-2 focus:ring-cobalt-500/40 focus:border-cobalt-500/50 focus:outline-none',
-              'placeholder:text-gray-400 dark:placeholder:text-gray-500',
+              // `truncate` on the placeholder pseudo-element only — long copy must
+              // ellipsize on narrow (mobile) widths instead of wrapping a second
+              // line that the collapsed 40px height then clips mid-character.
+              'placeholder:text-gray-400 dark:placeholder:text-gray-500 placeholder:truncate',
               'min-h-[40px] max-h-24 overflow-y-auto',
               !canSend && 'opacity-50 cursor-not-allowed'
             )}
