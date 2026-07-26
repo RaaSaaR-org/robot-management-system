@@ -5,7 +5,13 @@
  */
 
 export { cn } from './cn';
-export { getErrorMessage, isAbortError, isNetworkError } from './error';
+export {
+  getErrorMessage,
+  getErrorStatus,
+  isAbortError,
+  isNetworkError,
+  isNotFoundError,
+} from './error';
 export {
   CPU_THRESHOLDS,
   MEMORY_THRESHOLDS,

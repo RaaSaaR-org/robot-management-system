@@ -25,6 +25,7 @@ import {
   LazyRobotDetailPage,
   LazyRobotCockpitPage,
   LazyFleetPage,
+  LazyAgentModePage,
   LazyAlertsPage,
   LazyProcessesPage,
   LazyProcessDetailPage,
@@ -528,6 +529,16 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyUpdatesPage />
+              </ProtectedAppRoute>
+            }
+          />
+
+          {/* Agent Mode - local LLM plans and runs blocks on a robot (TASK-194) */}
+          <Route
+            path="/agent"
+            element={
+              <ProtectedAppRoute>
+                <LazyAgentModePage />
               </ProtectedAppRoute>
             }
           />
