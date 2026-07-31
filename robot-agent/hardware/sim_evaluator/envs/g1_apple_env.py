@@ -413,11 +413,15 @@ class G1ApplePnPEnv(gym.Env):
         # The fixed base pose (z=0.76 vs the 0.793 free-standing height) puts
         # the foot region at/inside the floor — a scene artifact, not a policy
         # collision (the scene also contact-EXCLUDES ankle<->world pairs so the
-        # artifact cannot bend the legs). Exclude all ankle (foot) geoms from
-        # the collision METRIC, mirroring g1_pickplace_env.py's intent.
+        # artifact cannot bend the legs). The same holds for the whole leg once
+        # reset() starts from the REAL t=0 leg pose: hanging bent off a fixed
+        # pelvis, the knees sit inside the table. The policy commands 31 joints
+        # (arms/hands/waist) and cannot move a leg, so no leg contact can ever
+        # be a policy collision. Exclude every leg geom from the collision
+        # METRIC, extending g1_pickplace_env.py's ankle-only intent.
         for b in robot_bodies:
             bname = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b) or ""
-            if "ankle" in bname:
+            if any(seg in bname for seg in ("hip", "knee", "ankle")):
                 for g in range(self.model.ngeom):
                     if int(self.model.geom_bodyid[g]) == b:
                         self._robot_geom_ids.discard(g)

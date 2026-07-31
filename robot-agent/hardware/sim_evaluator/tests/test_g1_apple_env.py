@@ -98,8 +98,9 @@ def test_state_layout_maps_named_joints(env):
 def test_smoke_200_steps_hold_pose(env):
     """(a) 200 zero-delta steps holding the initial pose: no explosion, no
     collapse, no NaN."""
-    obs, _ = env.reset(seed=1)
+    obs, reset_info = env.reset(seed=1)
     initial_state = obs["state"].copy()
+    initial_collisions = reset_info["collision_count"]
     action = _hold_action(obs)
     max_qvel = 0.0
     for _ in range(200):
@@ -109,13 +110,21 @@ def test_smoke_200_steps_hold_pose(env):
         assert not terminated, f"unexpected termination: {info}"
     # Bounded joint velocities (no physics explosion).
     assert max_qvel < 5.0, f"joint velocities unbounded: max |qvel| = {max_qvel:.2f}"
-    # Robot holds its standing pose (position actuators, kp=500): every state
-    # joint stays close to where it started.
+    # Robot holds its standing pose (position actuators): every state joint
+    # stays close to where it started. Legs included — they are held at the
+    # real t=0 pose by the leg_hold actuator class (kp 8000 + lifted force
+    # clamp); without it the hips sag ~0.35 rad off a fixed pelvis.
     drift = np.max(np.abs(obs["state"] - initial_state))
     assert drift < 0.15, f"robot collapsed/drifted: max joint drift {drift:.3f} rad"
-    # The apple stayed on the table and the idle robot touches nothing.
+    # The apple stayed on the table and the idle robot starts nothing NEW.
+    # Not ==0: the real t=0 pose legitimately rests the right hand on the
+    # table, so the scene begins in contact. What must not happen is the idle
+    # robot drifting into fresh contacts.
     assert info["apple_pos"][2] > 0.7
-    assert info["collision_count"] == 0
+    assert info["collision_count"] <= initial_collisions, (
+        f"idle robot gained contacts: {initial_collisions} -> "
+        f"{info['collision_count']}"
+    )
 
 
 def test_success_trigger_apple_on_plate(env):
