@@ -15,7 +15,10 @@ Mirrors envs/g1_pickplace_env.py structurally but implements the 43-state /
     thumb,middle,index / right: thumb,index,middle — verified against the
     dataset's min/max ranges vs the model's joint limits; do not "fix" it).
   * obs["image"]  : (480, 640, 3) uint8 RGB from the scene-level `ego_camera`
-    (the dataset's single head-mounted D435 `ego_view`).
+    (the dataset's single head-mounted D435 `ego_view`), passed through a
+    camera-realism stage (blur + affine color match vs real dataset frames +
+    sensor noise; disable via G1_APPLE_RAW_RENDER=1) so the real-data-only
+    policy sees in-distribution image statistics.
   * action        : 31-dim ABSOLUTE joint-position targets
     [L-arm 7 | R-arm 7 | L-hand 7 | R-hand 7 | waist 3], clipped to each
     actuator's ctrlrange. Leg actuators are held at their initial standing
@@ -38,9 +41,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import os
+
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from PIL import Image, ImageFilter
 
 logger = logging.getLogger(__name__)
 
@@ -147,15 +153,16 @@ N_ACTION_JOINTS = len(ACTION_JOINT_NAMES)  # 31
 
 LEG_JOINT_NAMES = LEFT_LEG_JOINT_NAMES + RIGHT_LEG_JOINT_NAMES
 
-# Deterministic reset pose for the COMMANDED joints (ACTION_JOINT_NAMES
+# Fallback reset pose for the COMMANDED joints (ACTION_JOINT_NAMES
 # order: [L-arm 7 | R-arm 7 | L-hand 7 | R-hand 7 | waist 3]) — the mean t=0
 # state of the first 50 AppleToPlate episodes. Real episodes never start from
 # the zero home pose (arms hang OUT of the ego frame), and the policy's arm
 # actions are RELATIVE (decoded against submitted state), so the sim must
-# start in-distribution. Per-episode start jitter in the dataset is large
-# (std up to 0.55 rad on arms) — exact values matter less than being roughly
-# in-distribution; deliberately NO jitter here (deterministic). Legs stay at
-# the model home pose.
+# start in-distribution. NOTE: by default reset() now samples an ACTUAL
+# episode t=0 pose from apple_start_poses.json (see below) — the mean of many
+# distinct start poses is itself a pose no demo ever visited, and the policy
+# can freeze there (near-zero relative deltas = fixed point). This constant
+# remains as fallback when the JSON is missing.
 INIT_ACTION_POSE = np.array(
     [
         # left_arm: sh_pitch, sh_roll, sh_yaw, elbow, wr_roll, wr_pitch, wr_yaw
@@ -171,16 +178,49 @@ INIT_ACTION_POSE = np.array(
     ]
 )
 
+# Real per-episode t=0 poses sampled evenly from the 402 AppleToPlate
+# episodes' parquet observation.state[0]. Each entry: {"action": 31 dims in
+# ACTION_JOINT_NAMES order, "legs": 12 dims in LEG_JOINT_NAMES order}.
+# reset() picks one via the seeded RNG so every episode starts from a pose
+# the policy has actually seen demos start from — INCLUDING the legs: the
+# real standing legs are far from zero (knee ~1.0 rad, hip pitch ~-0.5) and
+# they are part of the 43-dim state the policy conditions on; holding them
+# at the model home pose (all zeros) is state the policy has never seen.
+_START_POSES_PATH = Path(__file__).resolve().parent / "apple_start_poses.json"
+try:
+    import json as _json
+
+    START_POSES: list[dict] | None = [
+        {
+            "action": np.asarray(p["action"], dtype=np.float64),
+            "legs": np.asarray(p["legs"], dtype=np.float64),
+        }
+        for p in _json.loads(_START_POSES_PATH.read_text())
+    ]
+except (OSError, ValueError, KeyError, TypeError):
+    logger.warning("apple_start_poses.json missing/invalid — falling back to mean pose")
+    START_POSES = None
+
 # Success: apple geom touching the plate geom AND apple slower than this
 # (NVIDIA sim parity, CONTRACT.md).
 APPLE_SUCCESS_SPEED = 0.1
+
+# ... AND resting ON TOP of the plate, not leaning against its rim: apple
+# center resting on the plate top (z=0.77) is ~0.806; resting on the cloth
+# beside the plate is ~0.786. The FK-true layout puts the apple ~2 cm from
+# the rim, so a side-nudge into the rim must not count as success.
+APPLE_ON_PLATE_MIN_Z = 0.795
 
 # Apple fell off the table below this z => episode failure.
 APPLE_FALL_Z = 0.5
 
 # Apple spawn (bottom rests just above the tablecloth at z=0.75; settles to
 # center z ~= 0.786) with +/- this much uniform xy jitter on reset.
-APPLE_SPAWN_XY = (-0.22, 0.46)
+# Position = mean left-fingertip centroid at the GRASP moment of 15 real
+# episodes, FK'd through this model (scratchpad fk_grasp.py): the demos
+# grasped at (-0.194, 0.396) +/- (0.05, 0.03) — the old spawn (-0.22, 0.46)
+# sat 6 cm beyond every demo grasp and the policy reached short of it.
+APPLE_SPAWN_XY = (-0.19, 0.40)
 APPLE_SPAWN_Z = 0.789
 APPLE_JITTER = 0.02
 
@@ -197,6 +237,19 @@ _DEFAULT_SCENE = _MJCF_DIR / "g1_apple_pnp_scene.xml"
 # Policy camera: native dataset resolution (ego_view is 480x640 RGB, D435).
 _RENDER_WIDTH = 640
 _RENDER_HEIGHT = 480
+
+# ----------------------------------------------------- camera realism (Option A)
+# The policy was finetuned exclusively on REAL D435 frames; raw rasterized
+# renders are far out of distribution. Together with the textured scene
+# (mjcf/textures/) this post-processing maps the render statistics onto the
+# real ego_view statistics. Affine constants were fit per channel so the
+# textured sim t=0 render's mean/std match the pooled t=0 frames of dataset
+# episodes 0/50/100/200/300/401 (lifts blacks — the D435's washed
+# low-contrast look). Disable via G1_APPLE_RAW_RENDER=1 or camera_realism=False.
+_COLOR_GAIN = np.array([0.8515, 0.8725, 0.8987], dtype=np.float32)
+_COLOR_BIAS = np.array([22.58, 19.63, 14.85], dtype=np.float32)
+_BLUR_RADIUS = 0.7  # px — real optics are visibly softer than a rasterizer
+_NOISE_STD = 2.5  # 8-bit counts of per-pixel Gaussian sensor noise
 
 # 16 sub-steps @ 0.002 s => 31.25 Hz control (training data is 30 fps).
 _N_SUBSTEPS = 16
@@ -226,6 +279,7 @@ class G1ApplePnPEnv(gym.Env):
         render_mode: str = "rgb_array",
         scene_path: str | Path | None = None,
         max_steps: int = _MAX_STEPS,
+        camera_realism: bool | None = None,
     ):
         super().__init__()
         if not _MUJOCO_AVAILABLE:
@@ -237,6 +291,11 @@ class G1ApplePnPEnv(gym.Env):
         self.render_mode = render_mode
         self.max_steps = max_steps
         self._step_count = 0
+        # Camera realism defaults ON (the policy only knows real frames);
+        # G1_APPLE_RAW_RENDER=1 or camera_realism=False restores raw renders.
+        if camera_realism is None:
+            camera_realism = os.environ.get("G1_APPLE_RAW_RENDER", "0") != "1"
+        self.camera_realism = bool(camera_realism)
 
         scene = Path(scene_path) if scene_path else _DEFAULT_SCENE
         if not scene.exists():
@@ -354,11 +413,15 @@ class G1ApplePnPEnv(gym.Env):
         # The fixed base pose (z=0.76 vs the 0.793 free-standing height) puts
         # the foot region at/inside the floor — a scene artifact, not a policy
         # collision (the scene also contact-EXCLUDES ankle<->world pairs so the
-        # artifact cannot bend the legs). Exclude all ankle (foot) geoms from
-        # the collision METRIC, mirroring g1_pickplace_env.py's intent.
+        # artifact cannot bend the legs). The same holds for the whole leg once
+        # reset() starts from the REAL t=0 leg pose: hanging bent off a fixed
+        # pelvis, the knees sit inside the table. The policy commands 31 joints
+        # (arms/hands/waist) and cannot move a leg, so no leg contact can ever
+        # be a policy collision. Exclude every leg geom from the collision
+        # METRIC, extending g1_pickplace_env.py's ankle-only intent.
         for b in robot_bodies:
             bname = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b) or ""
-            if "ankle" in bname:
+            if any(seg in bname for seg in ("hip", "knee", "ankle")):
                 for g in range(self.model.ngeom):
                     if int(self.model.geom_bodyid[g]) == b:
                         self._robot_geom_ids.discard(g)
@@ -415,17 +478,27 @@ class G1ApplePnPEnv(gym.Env):
 
         mujoco.mj_resetData(self.model, self.data)
 
-        # Legs stay at the model home pose (0) and are held there for the
-        # whole episode. Waist/arms/hands start at the dataset's mean t=0
-        # pose (INIT_ACTION_POSE) — qpos AND actuator targets, so the
-        # position actuators hold the pose from the first sub-step.
+        # Whole-body start = a REAL episode's t=0 state (seed-deterministic
+        # pick from apple_start_poses.json; fallback: dataset-mean
+        # INIT_ACTION_POSE with home-pose legs) — qpos AND actuator targets,
+        # so the position actuators hold the pose from the first sub-step.
+        # Legs are held at their (real) start values for the whole episode.
+        if START_POSES is not None:
+            picked = START_POSES[int(self.np_random.integers(len(START_POSES)))]
+            pose = picked["action"]
+            self.data.qpos[self._leg_qpos_indices] = picked["legs"]
+        else:
+            pose = INIT_ACTION_POSE
         self._leg_hold = self.data.qpos[self._leg_qpos_indices].copy()
-        init_pose = np.clip(INIT_ACTION_POSE, self._ctrl_low, self._ctrl_high)
+        init_pose = np.clip(pose, self._ctrl_low, self._ctrl_high)
         self.data.qpos[self._action_qpos_indices] = init_pose
 
         # Apple: spawn with +/- APPLE_JITTER xy jitter. Resample jitters that
         # start in contact with the robot (the nominal spawn is contact-free;
-        # at the zero pose the LEFT Dex3 fingertips hover near the spawn).
+        # at the zero pose the LEFT Dex3 fingertips hover near the spawn) or
+        # with the PLATE (the FK-true layout puts the apple ~2 cm from the
+        # plate rim — a jittered spawn touching the plate would count as an
+        # instant false success).
         adr = self._apple_qpos_adr
         for _attempt in range(20):
             jitter = self.np_random.uniform(-APPLE_JITTER, APPLE_JITTER, size=2)
@@ -435,15 +508,16 @@ class G1ApplePnPEnv(gym.Env):
             self.data.qpos[adr + 3 : adr + 7] = (1.0, 0.0, 0.0, 0.0)
             self.data.qvel[:] = 0.0
             mujoco.mj_forward(self.model, self.data)
-            touches_robot = any(
+            touches_bad = any(
                 self._apple_geom_id in (int(c.geom1), int(c.geom2))
                 and (
                     int(c.geom1) in self._robot_geom_ids
                     or int(c.geom2) in self._robot_geom_ids
+                    or self._plate_geom_id in (int(c.geom1), int(c.geom2))
                 )
                 for c in [self.data.contact[i] for i in range(self.data.ncon)]
             )
-            if not touches_robot:
+            if not touches_bad:
                 break
         else:
             # Fall back to the contact-free nominal spawn.
@@ -511,9 +585,21 @@ class G1ApplePnPEnv(gym.Env):
             self.renderer = None
 
     # -------------------------------------------------------------- internals
+    def _camera_realism(self, img: np.ndarray) -> np.ndarray:
+        """Map a raw render onto the real D435 ego_view statistics:
+        optics blur -> per-channel affine (fit vs real dataset frames) ->
+        sensor noise (seeded via the env's np_random)."""
+        soft = Image.fromarray(img).filter(ImageFilter.GaussianBlur(_BLUR_RADIUS))
+        out = np.asarray(soft, dtype=np.float32) * _COLOR_GAIN + _COLOR_BIAS
+        out += self.np_random.normal(0.0, _NOISE_STD, out.shape).astype(np.float32)
+        return np.clip(out, 0.0, 255.0).astype(np.uint8)
+
     def _get_obs(self):
         state = self.data.qpos[self._state_qpos_indices].astype(np.float32)
-        return {"image": self.render(), "state": state}
+        img = self.render()
+        if self.camera_realism:
+            img = self._camera_realism(img)
+        return {"image": img, "state": state}
 
     def _apple_pos(self) -> np.ndarray:
         return self.data.xpos[self._apple_body_id].copy()
@@ -541,7 +627,11 @@ class G1ApplePnPEnv(gym.Env):
                 apple[1] - self._plate_center_xy[1],
             )
         )
-        success = bool(self._apple_on_plate() and speed < APPLE_SUCCESS_SPEED)
+        success = bool(
+            self._apple_on_plate()
+            and speed < APPLE_SUCCESS_SPEED
+            and apple[2] > APPLE_ON_PLATE_MIN_Z
+        )
         return {
             "success": success,
             "collision_count": self._count_collisions(),
