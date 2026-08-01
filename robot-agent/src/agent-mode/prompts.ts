@@ -145,10 +145,20 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
 }
 
 /**
- * Vision prompt. Bearing convention is stated explicitly because the whole
- * scene map hangs off it: the model reports a bearing RELATIVE to the image
- * centre, positive to the robot's left, and scene-memory adds the robot's yaw
- * to obtain a world bearing.
+ * Vision prompt.
+ *
+ * The model is asked WHERE something sits in the picture, not at what angle it
+ * lies — `x` is a fraction of the image width, and {@link bearingFromImageX}
+ * turns it into a bearing with the camera's own FOV. Asking for the angle
+ * directly was measured against the MJCF room scene, where every landmark has
+ * an exact world position: 131° mean absolute error (qwen2.5vl:7b answers ±180
+ * or ±60 and is not doing the projection at all) versus 7.2° for `x` over the
+ * same four poses and frames. Bearings drive `goto`, so this is the difference
+ * between navigation working and not.
+ *
+ * `bearingDeg` is still accepted on the way in — see `parseVisionAnswer` — so a
+ * model that ignores the schema and answers in degrees degrades instead of
+ * landing everything at bearing 0.
  */
 export const VISION_PROMPT = `
 You are the eyes of a Unitree G1 humanoid robot. Describe ONLY what is actually
@@ -162,7 +172,7 @@ Answer with JSON only — no prose, no markdown fence:
   "entities": [
     {
       "label": "<short English noun, e.g. table, chair, hat, person>",
-      "bearingDeg": <-60..60, angle from the image centre; POSITIVE = to the robot's LEFT, NEGATIVE = to the right>,
+      "x": <0.0..1.0, the horizontal centre of the object IN THE IMAGE: 0.0 = left edge, 0.5 = middle, 1.0 = right edge>,
       "distanceEstM": <rough distance in metres, or null if you cannot tell>,
       "confidence": <0.0..1.0>,
       "note": "<optional extra detail, e.g. 'a hat lies on it'>"
@@ -172,6 +182,9 @@ Answer with JSON only — no prose, no markdown fence:
 
 Rules:
 - List at most 8 entities, the most salient first.
+- "x" is a position in the picture, not an angle. Do not convert it to degrees,
+  do not guess a compass heading — just say how far across the frame the object
+  is. Something in the left third is around 0.2, dead centre is 0.5.
 - LABELS MUST BE ENGLISH, always, and always the same word for the same thing:
   table, chair, hat, person, door, wall, floor, ceiling, shelf.
   Never another language ("Tisch", "Stuhl"), never a compound description

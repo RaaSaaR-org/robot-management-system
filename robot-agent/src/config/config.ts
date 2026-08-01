@@ -122,6 +122,15 @@ export interface Config {
     stopWords: string[];
     /** Camera used by `look` / `scan_room` (`AGENT_CAMERA_NAME`). */
     cameraName: string;
+    /**
+     * Horizontal field of view of that camera in degrees (`AGENT_CAMERA_HFOV_DEG`).
+     * The vision model reports WHERE in the frame something is; this turns that
+     * into a bearing. Wrong value → every bearing is scaled wrong → `goto`
+     * walks the wrong way, so set it per camera:
+     *   sim `head_camera` (fovy 89 at 4:3) = 105.3 — the default
+     *   RealSense D435i RGB = 69, its depth stream = 87
+     */
+    cameraHfovDeg: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
   };
@@ -207,6 +216,7 @@ export const config: Config = {
       .map((w) => w.trim().toLowerCase())
       .filter((w) => w.length > 0),
     cameraName: process.env.AGENT_CAMERA_NAME || 'head_camera',
+    cameraHfovDeg: parseFloat(process.env.AGENT_CAMERA_HFOV_DEG || '105.3'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
   },
 };
@@ -279,7 +289,9 @@ export function validateConfig(): void {
         `vision call returns 404 and Agent Mode will refuse to plan.`
     );
   }
-  console.log(`    - Camera: ${config.agentMode.cameraName}`);
+  console.log(
+    `    - Camera: ${config.agentMode.cameraName} (HFOV ${config.agentMode.cameraHfovDeg}°)`
+  );
   console.log(
     `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s`
   );

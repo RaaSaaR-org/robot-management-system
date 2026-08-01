@@ -8,28 +8,82 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { VisionClient, parseVisionAnswer } from '../vision.js';
+import { VisionClient, parseVisionAnswer, bearingFromImageX } from '../vision.js';
 import type { GenerateRequest, GenerateResponse } from '../llm.js';
 
+/** The sim `head_camera`: fovy 89 at 4:3. */
+const HFOV = 105.3;
+
+describe('bearingFromImageX', () => {
+  it('puts the image centre dead ahead', () => {
+    expect(bearingFromImageX(0.5, HFOV)).toBeCloseTo(0, 6);
+  });
+
+  it('maps the edges to ±hfov/2 — left edge is the robot LEFT, i.e. positive', () => {
+    expect(bearingFromImageX(0, HFOV)).toBeCloseTo(HFOV / 2, 3);
+    expect(bearingFromImageX(1, HFOV)).toBeCloseTo(-HFOV / 2, 3);
+  });
+
+  it('is a projection, not a linear ramp — a quarter across is not a quarter of the FOV', () => {
+    // tan(b) = -0.5·tan(52.65°) → 33.2°, where linear would say 26.3°. The
+    // difference is 7° at a metre or two, which is the whole point of doing
+    // the arithmetic instead of asking the model for the angle.
+    expect(bearingFromImageX(0.25, HFOV)).toBeCloseTo(33.2, 1);
+  });
+
+  it('clamps a fraction outside the frame instead of inventing a wider camera', () => {
+    expect(bearingFromImageX(-3, HFOV)).toBeCloseTo(HFOV / 2, 3);
+    expect(bearingFromImageX(9, HFOV)).toBeCloseTo(-HFOV / 2, 3);
+  });
+});
+
 describe('parseVisionAnswer', () => {
-  it('parses a well-formed answer', () => {
+  it('parses a well-formed answer, converting image x to a bearing', () => {
     const observation = parseVisionAnswer(
       JSON.stringify({
         currentView: 'a table with a hat',
         personVisible: false,
         entities: [
-          { label: 'table', bearingDeg: -15, distanceEstM: 2.5, confidence: 0.9 },
-          { label: 'hat', bearingDeg: -12, distanceEstM: 2.4, confidence: 0.7, note: 'liegt darauf' },
+          { label: 'table', x: 0.75, distanceEstM: 2.5, confidence: 0.9 },
+          { label: 'hat', x: 0.5, distanceEstM: 2.4, confidence: 0.7, note: 'liegt darauf' },
         ],
-      })
+      }),
+      HFOV
     );
 
     expect(observation.degraded).toBe(false);
     expect(observation.currentView).toBe('a table with a hat');
     expect(observation.entities).toEqual([
-      { label: 'table', bearingDeg: -15, distanceEstM: 2.5, confidence: 0.9 },
-      { label: 'hat', bearingDeg: -12, distanceEstM: 2.4, confidence: 0.7, note: 'liegt darauf' },
+      // Right of centre → negative, and by the projection, not 0.25·105.3.
+      { label: 'table', bearingDeg: -33.2, distanceEstM: 2.5, confidence: 0.9 },
+      { label: 'hat', bearingDeg: 0, distanceEstM: 2.4, confidence: 0.7, note: 'liegt darauf' },
     ]);
+  });
+
+  it('scales the bearing with the camera FOV, not with the number alone', () => {
+    const answer = JSON.stringify({ currentView: 'x', entities: [{ label: 'table', x: 0.25 }] });
+
+    // Same frame position, narrower lens → the object really is closer to ahead.
+    expect(parseVisionAnswer(answer, 105.3).entities[0].bearingDeg).toBeCloseTo(33.2, 1);
+    expect(parseVisionAnswer(answer, 69).entities[0].bearingDeg).toBeCloseTo(19.0, 1);
+  });
+
+  it('still accepts a bearingDeg answer from a model that ignored the schema', () => {
+    const observation = parseVisionAnswer(
+      JSON.stringify({ currentView: 'x', entities: [{ label: 'table', bearingDeg: -15 }] }),
+      HFOV
+    );
+
+    expect(observation.entities[0].bearingDeg).toBe(-15);
+  });
+
+  it('prefers x over bearingDeg when a model sends both', () => {
+    const observation = parseVisionAnswer(
+      JSON.stringify({ currentView: 'x', entities: [{ label: 'table', x: 0.5, bearingDeg: 47 }] }),
+      HFOV
+    );
+
+    expect(observation.entities[0].bearingDeg).toBe(0);
   });
 
   it('extracts JSON out of a fenced, chatty answer', () => {
@@ -63,7 +117,8 @@ describe('parseVisionAnswer', () => {
       JSON.stringify({
         currentView: 'x',
         entities: [{ label: 'table', bearingDeg: 5000, distanceEstM: 9999, confidence: 42 }],
-      })
+      }),
+      HFOV
     );
 
     expect(observation.entities[0]).toEqual({

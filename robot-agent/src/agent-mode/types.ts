@@ -51,6 +51,13 @@ export interface AgentBlock {
   finishedAt?: string;
   result?: string;
   error?: string;
+  /**
+   * What the block ACHIEVED, from odometry — see {@link BlockOutcome.measured}.
+   * Carried on the block so a caller that only sees finished blocks (the
+   * navigator, the UI) can tell "walked 0.98 m" from "did not move at all"
+   * without parsing the message.
+   */
+  measured?: { distanceM?: number; angleDeg?: number };
 }
 
 export interface AgentPlan {

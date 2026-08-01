@@ -831,6 +831,9 @@ export class AgentModeController {
     if (block.status === 'aborted' || block.status === 'skipped') return;
 
     block.finishedAt = nowIso();
+    // Kept on failures too: "walk failed" and "walk failed after 0.00 m" lead
+    // to different decisions, and the navigator makes one of them.
+    if (outcome.measured) block.measured = outcome.measured;
     if (this.abortSignalled() && !outcome.ok) {
       block.status = 'aborted';
       block.error = this.abortReason ?? outcome.message;

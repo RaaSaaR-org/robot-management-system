@@ -27,6 +27,20 @@ interface WorldOptions {
    * the robot has turned away from it.
    */
   visibleForLooks?: number;
+  /**
+   * Number of walks after which the robot is physically stuck: every later walk
+   * FAILS with 0.00 m measured, exactly as `walk` does when the base is up
+   * against something (or when the loco service is dead — the navigator has to
+   * tell those apart).
+   */
+  blockedAfterWalks?: number;
+  /**
+   * What being blocked looks like. 'stall' is the hard case the executor fails
+   * (0.00 m measured); 'short' is the far more common one on real contact — the
+   * walk succeeds but barely moves, which is how a base pushing against a table
+   * actually reports.
+   */
+  blockedMode?: 'stall' | 'short';
 }
 
 /**
@@ -39,6 +53,7 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
   const ran: Array<{ kind: AgentBlockKind; params: Record<string, unknown> }> = [];
 
   let looks = 0;
+  let walks = 0;
 
   const look = (): void => {
     // Once the target leaves the frame the look still succeeds — it just says
@@ -73,6 +88,30 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
     if (kind === 'turn') {
       scene.advanceYawDeg(Number(params.angleDeg));
     } else if (kind === 'walk') {
+      if (opts.blockedAfterWalks !== undefined && walks >= opts.blockedAfterWalks) {
+        walks++;
+        if (opts.blockedMode === 'short') {
+          return {
+            id: `gen-${ran.length}`,
+            kind,
+            params,
+            status: 'done',
+            reasoning,
+            result: 'Walked 0.04 m forward — 96% short of the commanded 1.00 m',
+            measured: { distanceM: 0.04 },
+          };
+        }
+        return {
+          id: `gen-${ran.length}`,
+          kind,
+          params,
+          status: 'failed',
+          reasoning,
+          error: 'walk: the robot did not move (0.00 m measured for a commanded 1.00 m)',
+          measured: { distanceM: 0 },
+        };
+      }
+      walks++;
       state.distance = Math.max(0, state.distance - Number(params.distanceM) * progressFactor);
     } else if (kind === 'look') {
       look();
@@ -84,6 +123,7 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
       status: 'done',
       reasoning,
       result: 'ok',
+      ...(kind === 'walk' ? { measured: { distanceM: Number(params.distanceM) } } : {}),
     };
   };
 
@@ -333,5 +373,88 @@ describe('Navigator — abort', () => {
     expect(outcome.message).toMatch(/not in the scene memory/);
     // It spent exactly one look looking for it, then stopped — no blind walking.
     expect(world.ran).toEqual([{ kind: 'look', params: {} }]);
+  });
+});
+
+describe('Navigator — walking into the target', () => {
+  function navigateBlocked(opts: {
+    distanceM: number;
+    blockedAfterWalks: number;
+    worldBearingDeg?: number;
+    blockedMode?: 'stall' | 'short';
+    /** Default: no distance at all, which is what the real VLM reports. */
+    distanceUnknown?: boolean;
+  }) {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, {
+      worldBearingDeg: opts.worldBearingDeg ?? 0,
+      distanceM: opts.distanceM,
+      blockedAfterWalks: opts.blockedAfterWalks,
+      blockedMode: opts.blockedMode,
+      distanceUnknown: opts.distanceUnknown ?? true,
+    });
+    world.look();
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+    return { navigator, world };
+  }
+
+  it('stops on the first badly short walk, before the base grinds into the target', async () => {
+    // The walk still "succeeds" — it just moves 0.04 m of a commanded 1.0 m.
+    // Pushing on from here is what leaves the robot inside the table with every
+    // later turn coming up short.
+    const { navigator, world } = navigateBlocked({
+      distanceM: 2.0,
+      blockedAfterWalks: 1,
+      blockedMode: 'short',
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/moved only 0.04 m of 1.00 m/);
+    expect(world.ran.filter((b) => b.kind === 'walk')).toHaveLength(2);
+  });
+
+  it('counts a stalled walk against a near target as arrival, not as a failure', async () => {
+    const { navigator } = navigateBlocked({ distanceM: 2.0, blockedAfterWalks: 1 });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/moved only 0.00 m of 1.00 m/);
+    expect(outcome.message).toMatch(/"table" is straight ahead/);
+  });
+
+  it('fails when the FIRST walk stalls — that is a dead loco service, not a table', async () => {
+    const { navigator, world } = navigateBlocked({ distanceM: 2.0, blockedAfterWalks: 0 });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/walk failed/);
+    expect(outcome.message).toMatch(/did not move/);
+    // It stopped on the first stalled walk instead of grinding out 12 stages.
+    expect(world.ran.filter((b) => b.kind === 'walk')).toHaveLength(1);
+  });
+
+  it('fails when the robot stalls while the target is still far — something else is in the way', async () => {
+    // Blocked at ~4 m out, which is a chair in the path, not the table. Needs a
+    // distance to know that — with none, "blocked and dead ahead" is all there is.
+    const { navigator } = navigateBlocked({
+      distanceM: 5.0,
+      blockedAfterWalks: 1,
+      distanceUnknown: false,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/walk failed/);
   });
 });
