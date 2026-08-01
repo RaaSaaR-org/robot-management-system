@@ -55,7 +55,9 @@ class FakeA2A:
     def __init__(self, delay_s: float) -> None:
         self.delay_s = delay_s
 
-    async def send(self, text: str, context_id: str) -> AgentReply:
+    async def send(self, text: str, context_id: str,
+                   metadata: dict | None = None) -> AgentReply:
+        self.last_metadata = metadata
         await asyncio.sleep(self.delay_s)
         return AgentReply(text="Der Akku ist bei 50 Prozent.", state="completed")
 

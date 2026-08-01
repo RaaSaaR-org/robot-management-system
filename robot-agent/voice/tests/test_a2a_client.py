@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from voice_service.a2a_client import A2AClient, _parse_result
+from voice_service.pipeline import VOICE_METADATA_KEY
 
 
 class StubAgent:
@@ -97,6 +98,38 @@ def test_send_and_parse(stub: StubAgent) -> None:
     assert message["contextId"] == "ctx-42"
     assert message["parts"] == [{"kind": "text", "text": "hello robot"}]
     assert message["messageId"]
+
+
+def test_send_omits_metadata_when_there_is_none(stub: StubAgent) -> None:
+    """A plain turn must stay byte-identical to what non-NeoDEM agents expect."""
+
+    async def run() -> None:
+        client = A2AClient(f"http://127.0.0.1:{stub.port}")
+        await client.send("hello", "ctx-1")
+        await client.aclose()
+
+    asyncio.run(run())
+    assert "metadata" not in stub.requests[0]["params"]["message"]
+
+
+def test_send_passes_speech_metadata_through(stub: StubAgent) -> None:
+    """The speech hint rides on the message, where an unaware agent ignores it."""
+
+    async def run() -> None:
+        client = A2AClient(f"http://127.0.0.1:{stub.port}")
+        await client.send(
+            "geh zur Tuer",
+            "ctx-7",
+            {VOICE_METADATA_KEY: {"speech": True, "language": "de"}},
+        )
+        await client.aclose()
+
+    asyncio.run(run())
+    message = stub.requests[0]["params"]["message"]
+    assert message["metadata"] == {"neodem/voice": {"speech": True, "language": "de"}}
+    # The text and context are untouched by the hint.
+    assert message["parts"] == [{"kind": "text", "text": "geh zur Tuer"}]
+    assert message["contextId"] == "ctx-7"
 
 
 def test_jsonrpc_error_raises(stub: StubAgent) -> None:

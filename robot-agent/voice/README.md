@@ -94,6 +94,44 @@ speech is dropped silently (visible as `wake_ignored` on `/events`).
 
 Recommended: off on the PC (lab use), `hey g1,hallo g1` on the real robot.
 
+## Speaking with Agent Mode
+
+Point the service at an agent whose Agent Mode is ON and the conversation
+drives the robot: what you say becomes a block plan, and the robot answers
+about what it is doing.
+
+```powershell
+cd robot-agent && npm run dev:g1-edu-agent           # Agent Mode on :41246
+cd robot-agent/voice
+uv run python -m voice_service --env-file .env.voice.agentmode
+```
+
+Say *"schau dich um und geh zur Tür"* and the robot answers **"Alles klar, ich
+sehe mich im Raum um und gehe zu door."** before it starts moving, then
+**"Fertig."** when it gets there. The plan appears in the NeoDEM Agent Mode tab
+(`/agent`) like a typed one, marked `heard · DE`.
+
+Three things make this work, all of them in the robot-agent:
+
+- **The reply comes when the plan is UNDERSTOOD, not when it has run.** The
+  pipeline is half-duplex — the microphone is shut until the robot has spoken
+  its answer — so an agent that replied only after a two-minute plan would keep
+  you mute for two minutes, including for the word "stop". A speech client says
+  so with a `neodem/voice` metadata key on the A2A message; the outcome is
+  spoken later through this service's own `/say`.
+- **You can interrupt.** With the mic open during execution, `VOICE_WAKE_PHRASES`
+  off and `AGENT_STOP_WORDS` (`stopp,stop,halt`) armed, saying "stopp" latches
+  the E-Stop mid-plan. That is a spoken E-Stop, not a polite request — it damps
+  the base.
+- **The robot answers in the language it heard.** The detected language rides
+  along on the same metadata key, and the planner is told to write its spoken
+  text in it. `goto` targets stay English nouns whatever you speak, because
+  that is what the scene memory is keyed by (see `VISION_PROMPT`).
+
+Non-Agent-Mode agents are unaffected: the metadata key is ignored by anything
+that does not know it, and the utterance goes to the tool-calling prompt as
+before.
+
 ## Unitree G1 backends
 
 - **Mic:** the G1 multicasts its 4-mic array as 16 kHz mono s16le PCM on UDP

@@ -418,6 +418,19 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             // A stop the agent confirmed makes later progress events stale.
             // An unconfirmed one does not — see `progressSuppressed`.
             if (progressSuppressed(state)) break;
+            // A plan this tab did not send still has an author — someone spoke
+            // to the robot, or drove it from another client. Without this the
+            // conversation shows an answer to a question that was never
+            // written down, and the operator watching the screen cannot tell
+            // what the robot was actually asked to do.
+            if (!startedHere(state, event.plan)) {
+              state.messages.push(
+                makeMessage('user', event.plan.command, {
+                  planId: event.plan.id,
+                  ...(event.plan.language ? { spokenLanguage: event.plan.language } : {}),
+                })
+              );
+            }
             if (state.plan && state.plan.id !== event.plan.id) {
               state.planHistory.push(state.plan);
               if (state.planHistory.length > MAX_PLAN_HISTORY) {
@@ -435,6 +448,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           case 'agent:plan:updated': {
             if (!event.plan || progressSuppressed(state)) break;
             if (!state.plan || state.plan.id === event.plan.id) {
+              recordFoldedInterrupt(state, event.plan);
               state.plan = event.plan;
             }
             break;
@@ -565,8 +579,60 @@ type MutableState = AgentModeStore;
  * synchronous pre-await writes of each action skip this check — they run in
  * the same tick as the user's act, while the robot is still bound.
  */
+/**
+ * Whether the plan now starting is the one THIS tab just asked for.
+ *
+ * `isSending` covers the race the `pendingCommand` check alone cannot: the
+ * `agent:plan:started` event routinely overtakes the HTTP response that sets
+ * `pendingCommand`, so a locally typed command would otherwise be echoed back
+ * into the conversation a second time as if someone else had said it.
+ */
+function startedHere(state: MutableState, plan: AgentPlan): boolean {
+  return (
+    state.isSending ||
+    state.pendingCommand?.planId === plan.id ||
+    state.messages.some((m) => m.planId === plan.id)
+  );
+}
+
 function staleResponse(state: MutableState, robotId: string): boolean {
   return state.robotId !== robotId;
+}
+
+/** How the agent records an interrupt folded into a running plan's command. */
+const INTERRUPT_SEPARATOR = ' → ';
+
+/**
+ * Write a command that was folded into the RUNNING plan into the conversation.
+ *
+ * An interrupt never starts a plan of its own, so it emits no
+ * `agent:plan:started` and the `plan:started` echo above never sees it. All that
+ * arrives is an `agent:plan:updated` whose `command` has grown a
+ * `" → dreh dich nach links"` tail and whose blocks have been rewritten. Without
+ * this the operator watches the timeline change into something nobody in the
+ * room appears to have asked for — which is precisely what happens when the
+ * second command was SPOKEN and there is no typed record of it anywhere.
+ */
+function recordFoldedInterrupt(state: MutableState, incoming: AgentPlan): void {
+  const previous = state.plan?.id === incoming.id ? state.plan.command : null;
+  if (previous === null || previous === incoming.command) return;
+  if (!incoming.command.startsWith(previous + INTERRUPT_SEPARATOR)) return;
+  const folded = incoming.command.slice(previous.length + INTERRUPT_SEPARATOR.length);
+  if (!folded) return;
+
+  // An interrupt typed in THIS tab is already the newest thing in the
+  // conversation — `sendCommand` pushes it before the request even leaves the
+  // browser, so it cannot have a `planId` yet to match on. Comparing against the
+  // last user line is what keeps it from being echoed back a second time.
+  const lastUser = [...state.messages].reverse().find((m) => m.role === 'user');
+  if (lastUser?.text === folded) return;
+
+  state.messages.push(
+    makeMessage('user', folded, {
+      planId: incoming.id,
+      ...(incoming.language ? { spokenLanguage: incoming.language } : {}),
+    })
+  );
 }
 
 /**

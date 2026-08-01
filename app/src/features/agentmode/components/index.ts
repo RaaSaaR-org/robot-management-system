@@ -21,3 +21,6 @@ export type { AgentModeToggleProps } from './AgentModeToggle';
 
 export { EstopBanner } from './EstopBanner';
 export type { EstopBannerProps } from './EstopBanner';
+
+export { AgentVoiceBar } from './AgentVoiceBar';
+export type { AgentVoiceBarProps } from './AgentVoiceBar';

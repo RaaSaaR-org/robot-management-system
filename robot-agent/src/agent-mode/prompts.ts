@@ -22,7 +22,10 @@
  * prompt-tuning change has to touch.
  */
 
-import { AgentBlockKinds } from './types.js';
+import { AgentBlockKinds, type SpokenLanguage } from './types.js';
+
+/** How the planner prompt names a language to the model. */
+const LANGUAGE_NAMES: Record<SpokenLanguage, string> = { de: 'German', en: 'English' };
 
 /** The block vocabulary, rendered once so the planner prompt cannot drift. */
 const BLOCK_REFERENCE = `
@@ -51,6 +54,11 @@ export interface PlannerPromptInput {
    * frozen and are never shown to the planner.
    */
   remainingPlan?: Array<{ kind: string; params: Record<string, unknown> }>;
+  /**
+   * Language the operator SPOKE, when the command arrived over the voice
+   * channel. Only the spoken text follows it — see the rule it produces below.
+   */
+  language?: SpokenLanguage;
   /** Set on the retry attempt so the model is told what went wrong. */
   repairHint?: string;
 }
@@ -115,8 +123,23 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '- If the command cannot be carried out with these blocks, answer with a single',
     '  `speak` block that says plainly what is not possible.',
     '- `reasoning` is one short sentence in English.',
-    '- Spoken text (`speak`, `greet`) must be in English, whatever language the',
-    '  operator used.',
+    // Spoken text follows the EAR, everything else follows the code. When the
+    // command was typed there is nobody listening, so English stays the default
+    // and the whole UI reads consistently. When it was spoken, the operator is
+    // standing in front of the robot waiting for an answer, and the voice
+    // service picks its Piper voice from the language it heard — so English
+    // words here come back out of a German voice, mispronounced word by word.
+    ...(input.language && input.language !== 'en'
+      ? [
+          `- Spoken text (\`speak\`, \`greet\`) MUST be in ${LANGUAGE_NAMES[input.language]} —`,
+          '  the operator SPOKE to the robot and is listening for the answer in that',
+          '  language. This is the only field that changes: `reasoning` stays English,',
+          '  and `goto.entity` stays a bare English noun as required above.',
+        ]
+      : [
+          '- Spoken text (`speak`, `greet`) must be in English, whatever language the',
+          '  operator used.',
+        ]),
     '',
     'Scene memory:',
     input.sceneSummary,

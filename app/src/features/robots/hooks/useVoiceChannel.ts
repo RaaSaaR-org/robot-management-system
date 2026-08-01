@@ -30,6 +30,7 @@ export function useVoiceChannel(robotId: string) {
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshHealth = useCallback(async () => {
+    if (!robotId) return;
     try {
       const [nextHealth, nextStatus] = await Promise.all([
         voiceApi.getHealth(robotId),
@@ -44,6 +45,12 @@ export function useVoiceChannel(robotId: string) {
   }, [robotId, setHealth, setStatus]);
 
   useEffect(() => {
+    // A caller that renders before its robot is bound (the Agent Mode voice bar
+    // does, for one frame) would otherwise open an SSE stream and poll
+    // `/api/robots//voice/health` — a URL that addresses no robot and answers
+    // 404 forever, with a managed reconnect keeping it up.
+    if (!robotId) return;
+
     let disposed = false;
 
     const connect = () => {

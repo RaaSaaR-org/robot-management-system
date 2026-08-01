@@ -13,7 +13,12 @@ import { z } from 'genkit';
 import { config } from '../config/config.js';
 import { extractJsonObject, genkitGenerate, agentModelRef, type GenerateFn } from './llm.js';
 import { buildPlannerPrompt } from './prompts.js';
-import { AgentBlockKinds, type AgentBlockKind, type AgentBlock } from './types.js';
+import {
+  AgentBlockKinds,
+  type AgentBlock,
+  type AgentBlockKind,
+  type SpokenLanguage,
+} from './types.js';
 
 /**
  * Flat schema (params as siblings of `kind`) rather than a discriminated union.
@@ -56,6 +61,12 @@ export interface PlannerInput {
   sceneSummary: string;
   /** Not-yet-started blocks of a running plan, when re-planning. */
   remainingPlan?: AgentBlock[];
+  /**
+   * Language the operator SPOKE, when the command arrived by voice. Only the
+   * `speak`/`greet` text follows it; `goto.entity` stays an English noun
+   * whatever happens, because that is the key the scene memory is stored under.
+   */
+  language?: SpokenLanguage;
 }
 
 export interface PlannerResult {
@@ -301,16 +312,26 @@ function validate(candidate: unknown): { blocks: PlannedBlock[]; dropped: AgentB
  * never guesses at motion — a robot that could not understand must say so, not
  * start walking.
  */
-export function plannerFallback(command: string, reason: string): PlannedBlock[] {
+export function plannerFallback(
+  command: string,
+  reason: string,
+  language?: SpokenLanguage
+): PlannedBlock[] {
+  // The technical reason stays out of the German text on purpose: it is an
+  // English model/schema error, and a German voice reading it aloud is noise
+  // where a plain "I did not understand that" is information. The full reason
+  // is logged and shown in the block result either way.
+  const text =
+    language === 'de'
+      ? `Ich konnte daraus keinen Plan machen: "${command}". ` +
+        `Bitte sag es noch einmal anders.`
+      : `I could not build a plan for "${command}". ` +
+        `The local planning model gave no valid answer (${reason}). ` +
+        `Please phrase the command differently.`;
   return [
     {
       kind: 'speak',
-      params: {
-        text:
-          `I could not build a plan for "${command}". ` +
-          `The local planning model gave no valid answer (${reason}). ` +
-          `Please phrase the command differently.`,
-      },
+      params: { text },
       reasoning: 'Planner failed twice — reporting the failure instead of moving.',
     },
   ];
@@ -340,6 +361,7 @@ export class Planner {
         command: input.command,
         sceneSummary: input.sceneSummary,
         ...(remainingPlan && remainingPlan.length > 0 ? { remainingPlan } : {}),
+        ...(input.language ? { language: input.language } : {}),
         ...(attempt > 0 ? { repairHint: lastError } : {}),
       });
 
@@ -396,7 +418,7 @@ export class Planner {
     }
 
     return {
-      blocks: plannerFallback(input.command, lastError),
+      blocks: plannerFallback(input.command, lastError, input.language),
       fallback: true,
       error: lastError,
       attempts,

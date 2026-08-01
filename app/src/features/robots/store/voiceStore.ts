@@ -221,6 +221,17 @@ export const useVoiceStore = createStore<VoiceStore>(
     setStatus: (robotId, status) =>
       set((state) => {
         state.status[robotId] = status;
+        // The pipeline state otherwise only ever arrives on the SSE stream, so
+        // a page opened onto a quiet service showed "Unknown" until somebody
+        // spoke — while /status was plainly answering "idle" all along. Adopted
+        // only until the first live event: after that the stream is fresher
+        // than a 10-second poll, and folding the poll in would flip a live
+        // "Speaking" back to "Idle" mid-sentence.
+        if (status && state.byRobot[robotId]?.lastEventTs) return;
+        if (status) {
+          state.byRobot[robotId] ??= emptyVoiceRobotState();
+          state.byRobot[robotId].pipelineState = status.state;
+        }
       }),
 
     setPaused: (robotId, paused) =>

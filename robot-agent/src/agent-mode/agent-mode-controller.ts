@@ -36,12 +36,19 @@ import type {
   AgentPlan,
   BlockOutcome,
   SceneMemory,
+  SpokenLanguage,
 } from './types.js';
 
 export interface SubmitCommandInput {
   text: string;
   /** A2A context id, when the command arrived over the A2A message path. */
   contextId?: string;
+  /**
+   * Language the operator spoke, when the command came in over the voice
+   * channel. Carried onto the plan so everything the robot SAYS about it — the
+   * planner's `speak` text, the spoken outcome — comes back in that language.
+   */
+  language?: SpokenLanguage;
 }
 
 /**
@@ -184,6 +191,10 @@ export class AgentModeController {
       isAborted: () => this.abortSignalled(),
       onScene: (scene) => this.emit('agent:scene:updated', { scene }),
       loco: trackedLoco,
+      // The blocks of the RUNNING plan speak the language its operator used;
+      // typed commands leave it undefined and the voice service falls back to
+      // its own default, exactly as before.
+      language: () => this.plan?.language,
     };
     if (deps.say) executorDeps.say = deps.say;
     if (deps.sleep) executorDeps.sleep = deps.sleep;
@@ -373,10 +384,14 @@ export class AgentModeController {
 
   async submitCommand(input: SubmitCommandInput): Promise<AgentCommandResult> {
     const text = input.text?.trim() ?? '';
-    if (!text) return { accepted: false, message: 'Empty command.' };
+    if (!text) return { accepted: false, outcome: 'empty', message: 'Empty command.' };
 
     if (!this.enabled) {
-      return { accepted: false, message: 'Agent Mode is off — enable it before sending commands.' };
+      return {
+        accepted: false,
+        outcome: 'disabled',
+        message: 'Agent Mode is off — enable it before sending commands.',
+      };
     }
 
     if (this.isStopWord(text)) {
@@ -394,6 +409,7 @@ export class AgentModeController {
         : `but the robot did NOT confirm StopMove/Damp (${result.deliveryError ?? 'no sidecar ack'}) — it may still be moving; use the hardware E-Stop.`;
       return {
         accepted: true,
+        outcome: 'estop',
         message: `E-Stop: ${head} ${tail}`,
         delivered: result.delivered,
         ...(result.deliveryError === undefined ? {} : { deliveryError: result.deliveryError }),
@@ -407,7 +423,7 @@ export class AgentModeController {
     // emergency-stopped.
     const latch = this.latchedEstop();
     if (latch) {
-      return { accepted: false, message: this.latchMessage(latch) };
+      return { accepted: false, outcome: 'estop_latched', message: this.latchMessage(latch) };
     }
 
     // A plan that an E-Stop or a takeover terminated may still be winding down:
@@ -417,6 +433,7 @@ export class AgentModeController {
     if (this.isRunning() && this.abortSignalled()) {
       return {
         accepted: false,
+        outcome: 'winding_down',
         message: 'The stopped plan is still winding down — send the command again in a moment.',
       };
     }
@@ -428,10 +445,16 @@ export class AgentModeController {
     // accepted order silently evaporated waits forever for it.
     if (this.isRunning() && this.plan) {
       const replaced = this.pendingCommand;
-      this.pendingCommand = { text, ...(input.contextId ? { contextId: input.contextId } : {}) };
+      this.pendingCommand = {
+        text,
+        ...(input.contextId ? { contextId: input.contextId } : {}),
+        ...(input.language ? { language: input.language } : {}),
+      };
       return {
         accepted: true,
+        outcome: 'folded',
         planId: this.plan.id,
+        ...(replaced ? { replacedCommand: replaced.text } : {}),
         message: replaced
           ? `Understood — I will fold that into the running plan after the current block. ` +
             `This replaces your earlier instruction "${replaced.text}", which had not started yet.`
@@ -441,7 +464,11 @@ export class AgentModeController {
 
     const claim = this.lock.claim('agent');
     if (!claim.ok) {
-      return { accepted: false, message: `Cannot start: ${claim.reason ?? 'control is busy.'}` };
+      return {
+        accepted: false,
+        outcome: 'busy',
+        message: `Cannot start: ${claim.reason ?? 'control is busy.'}`,
+      };
     }
 
     const plan: AgentPlan = {
@@ -449,6 +476,7 @@ export class AgentModeController {
       robotId: this.robotId,
       command: text,
       ...(input.contextId ? { contextId: input.contextId } : {}),
+      ...(input.language ? { language: input.language } : {}),
       blocks: [],
       cursor: -1,
       status: 'planning',
@@ -467,7 +495,7 @@ export class AgentModeController {
       this.runPromise = null;
     });
 
-    return { accepted: true, planId: plan.id, message: 'Planning…' };
+    return { accepted: true, outcome: 'planned', planId: plan.id, message: 'Planning…' };
   }
 
   // ── E-Stop ────────────────────────────────────────────────────────────────
@@ -609,6 +637,7 @@ export class AgentModeController {
         const planned = await this.planner.plan({
           command: plan.command,
           sceneSummary: this.plannerSceneSummary(),
+          ...(plan.language ? { language: plan.language } : {}),
         });
         // An E-Stop that landed during the LLM round-trip already finalized
         // this plan and emitted its `finished`. Writing fresh pending blocks
@@ -802,10 +831,17 @@ export class AgentModeController {
     this.pendingCommand = null;
 
     const remaining = plan.blocks.slice(nextIndex).filter((b) => b.status === 'pending');
+    // The INTERRUPTING utterance sets the language from here on: whoever spoke
+    // last is the one waiting for an answer. A typed interrupt (no language)
+    // leaves the plan's existing one alone rather than silently switching the
+    // robot back to English mid-conversation.
+    if (pending.language) plan.language = pending.language;
+
     const replanned = await this.planner.plan({
       command: pending.text,
       sceneSummary: this.plannerSceneSummary(),
       remainingPlan: remaining,
+      ...(plan.language ? { language: plan.language } : {}),
     });
 
     // Completed blocks are frozen; only the pending tail is replaced.

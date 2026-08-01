@@ -26,6 +26,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 from voice_service.a2a_client import A2AClient
 from voice_service.audio.resample import resample_s16le
 from voice_service.config import FRAME_BYTES, PIPELINE_SAMPLE_RATE, VoiceConfig
+from voice_service.pipeline import VOICE_METADATA_KEY
 from voice_service.stt.faster_whisper_stt import FasterWhisperSTT
 from voice_service.tts.piper_engine import PiperEngine
 from voice_service.vad.segmenter import SpeechEnd, UtteranceSegmenter
@@ -35,6 +36,10 @@ QUESTIONS = {
     "de": "Hallo Roboter, wie hoch ist dein Akkustand und in welcher Zone bist du gerade?",
     "en": "Hello robot, what is your battery level and which zone are you in right now?",
 }
+
+# Against an Agent-Mode agent the question above is not the interesting one --
+# it answers with a plan, not a battery reading. Pass --text with a command
+# ("dreh dich nach links") to exercise that path from a machine with no mic.
 
 
 async def run(lang: str, text: str | None) -> int:
@@ -72,7 +77,14 @@ async def run(lang: str, text: str | None) -> int:
     client = A2AClient(config.agent_url, timeout_s=config.a2a_timeout_s)
     context_id = str(uuid.uuid4())
     t0 = time.perf_counter()
-    reply = await client.send(transcript.text, context_id)
+    # The same speech hint the live pipeline sends. Without it an Agent-Mode
+    # agent would hold this call open until the whole plan had RUN, and the
+    # round trip would measure plan execution instead of the answer latency.
+    reply = await client.send(
+        transcript.text,
+        context_id,
+        {VOICE_METADATA_KEY: {"speech": True, "language": transcript.language}},
+    )
     timings["agent"] = time.perf_counter() - t0
     print(f"reply ({reply.state}, {timings['agent']:.2f}s): {reply.text}")
     await client.aclose()

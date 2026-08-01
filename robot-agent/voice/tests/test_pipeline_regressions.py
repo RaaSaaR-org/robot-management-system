@@ -77,8 +77,11 @@ class FlakyOut:
 class FakeA2A:
     def __init__(self, delay_s: float) -> None:
         self.delay_s = delay_s
+        self.last_metadata: dict | None = None
 
-    async def send(self, text: str, context_id: str) -> AgentReply:
+    async def send(self, text: str, context_id: str,
+                   metadata: dict | None = None) -> AgentReply:
+        self.last_metadata = metadata
         await asyncio.sleep(self.delay_s)
         return AgentReply(text="Der Akku ist bei 50 Prozent.", state="completed")
 
@@ -216,3 +219,24 @@ def test_filler_playback_error_does_not_drop_reply() -> None:
 async def _run_turn(pipeline: VoicePipeline) -> None:
     _init_loop(pipeline)
     await pipeline._handle_turn(SpeechEnd(pcm=b"\x00\x00" * 512, duration_s=1.0))
+
+
+def test_turn_tells_the_agent_it_is_speaking_and_in_which_language() -> None:
+    """The speech hint is what lets Agent Mode answer before the plan runs.
+
+    Without it the robot-agent holds the A2A response open until the whole plan
+    has finished, and this pipeline is deaf for exactly that long — so the word
+    "stop" could not be said while the robot was walking.
+    """
+    pipeline, _tts, _mic = _make()
+
+    async def go() -> None:
+        _init_loop(pipeline)
+        await pipeline._handle_turn(SpeechEnd(pcm=b"\x00\x00" * 512, duration_s=1.0))
+
+    asyncio.run(go())
+
+    # FakeSTT reports German; the hint must carry that, not the config default.
+    assert pipeline.a2a.last_metadata == {
+        "neodem/voice": {"speech": True, "language": "de"}
+    }

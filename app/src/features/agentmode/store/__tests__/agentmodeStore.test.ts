@@ -181,6 +181,41 @@ describe('agentmodeStore', () => {
       expect(statuses()).toEqual(['pending', 'pending', 'pending']);
     });
 
+    it('agent:plan:started echoes a command that came from somewhere else', () => {
+      // A spoken command never passes through this tab's `sendCommand`, so
+      // without the echo the conversation shows the robot answering a question
+      // it was never seen to be asked.
+      apply(event({ type: 'agent:plan:started', plan: makePlan({ language: 'de' }) }));
+
+      const s = useAgentModeStore.getState();
+      expect(s.messages).toHaveLength(1);
+      expect(s.messages[0]).toMatchObject({
+        role: 'user',
+        text: 'walk to the table with the hat',
+        planId: 'plan-1',
+        spokenLanguage: 'de',
+      });
+    });
+
+    it('does not echo a typed command back as if someone else had said it', () => {
+      // The plan:started event routinely overtakes the HTTP response, so the
+      // in-flight `isSending` flag — not `pendingCommand` — is what stops the
+      // local command from appearing twice.
+      mockedApi.sendCommand.mockReturnValue(new Promise(() => {})); // never settles
+      void useAgentModeStore.getState().sendCommand(ROBOT_ID, 'walk to the table with the hat');
+      apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+
+      const s = useAgentModeStore.getState();
+      expect(s.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    });
+
+    it('marks a plan started elsewhere without claiming it was spoken', () => {
+      // No `language` means it was typed — in another tab, over A2A, anywhere.
+      // The message is still shown; the microphone marker is not.
+      apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+      expect(useAgentModeStore.getState().messages[0].spokenLanguage).toBeUndefined();
+    });
+
     it('agent:plan:started pushes a superseded plan into the history', () => {
       apply(event({ type: 'agent:plan:started', plan: makePlan({ id: 'plan-1' }) }));
       apply(event({ type: 'agent:plan:started', plan: makePlan({ id: 'plan-2' }) }));
@@ -205,6 +240,59 @@ describe('agentmodeStore', () => {
       const s = useAgentModeStore.getState();
       expect(s.plan?.blocks).toHaveLength(1);
       expect(s.plan?.blocks[0].kind).toBe('speak');
+    });
+
+    it('shows a command folded into the running plan, marked as heard', () => {
+      // A spoken interrupt starts no plan of its own: all that arrives is an
+      // updated plan whose command grew a "→ …" tail. Without the echo the
+      // timeline rewrites itself with nobody on screen having asked for it.
+      apply(event({ type: 'agent:plan:started', plan: makePlan({ language: 'de' }) }));
+      apply(
+        event({
+          type: 'agent:plan:updated',
+          plan: makePlan({
+            command: 'walk to the table with the hat → dreh dich nach links',
+            language: 'de',
+          }),
+        })
+      );
+
+      const spoken = useAgentModeStore.getState().messages.filter((m) => m.role === 'user');
+      expect(spoken).toHaveLength(2);
+      expect(spoken[1]).toMatchObject({
+        text: 'dreh dich nach links',
+        planId: 'plan-1',
+        spokenLanguage: 'de',
+      });
+    });
+
+    it('does not echo an interrupt this tab typed itself', () => {
+      apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+      mockedApi.sendCommand.mockReturnValue(new Promise(() => {})); // never settles
+      void useAgentModeStore.getState().sendCommand(ROBOT_ID, 'dreh dich nach links');
+
+      apply(
+        event({
+          type: 'agent:plan:updated',
+          plan: makePlan({ command: 'walk to the table with the hat → dreh dich nach links' }),
+        })
+      );
+
+      const typed = useAgentModeStore
+        .getState()
+        .messages.filter((m) => m.role === 'user' && m.text === 'dreh dich nach links');
+      expect(typed).toHaveLength(1);
+    });
+
+    it('says nothing extra when a plan update only rewrites blocks', () => {
+      apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+      apply(
+        event({
+          type: 'agent:plan:updated',
+          plan: makePlan({ blocks: [makeBlock({ id: 'b1', kind: 'speak' })] }),
+        })
+      );
+      expect(useAgentModeStore.getState().messages.filter((m) => m.role === 'user')).toHaveLength(1);
     });
 
     it('agent:block:started marks the block running and moves the cursor', () => {
@@ -1011,11 +1099,14 @@ describe('agentmodeStore', () => {
 
       const s = useAgentModeStore.getState();
       // The new robot was never asked to stop — no latch, no aborted plan,
-      // no "E-Stop confirmed" in its conversation.
+      // no "E-Stop confirmed" in its conversation. Its own plan IS echoed as a
+      // user message (it was started elsewhere, see `startedHere`), so the
+      // assertion is about the stop, not about the conversation being empty.
       expect(s.estopActive).toBe(false);
       expect(s.plan?.status).toBe('running');
       expect(statuses()).toEqual(['pending', 'pending', 'pending']);
-      expect(s.messages).toEqual([]);
+      expect(s.messages.map((m) => m.role)).toEqual(['user']);
+      expect(s.messages.some((m) => m.text.includes('E-Stop'))).toBe(false);
     });
 
     it('resetEstop drops a stale confirmation instead of clearing the new robot latch', async () => {

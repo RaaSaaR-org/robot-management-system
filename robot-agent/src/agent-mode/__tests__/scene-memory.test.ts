@@ -172,6 +172,80 @@ describe('SceneMemoryStore — merge by label', () => {
   });
 });
 
+// Regression: a `goto "door"` in the four-room house walked 5.5 m past two
+// doorways, turning -38°, +28°, -33° as the stored bearing jumped between them,
+// and failed as "stale". The frame really did contain two doors; the store can
+// only keep one; the defect was that WHICH one was decided by the order the
+// vision model listed them.
+describe('SceneMemoryStore — one label, several things in frame', () => {
+  it('keeps the instance closest to the centre of the frame', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+
+    scene.merge(observation([
+      { label: 'door', bearingDeg: -40 },
+      { label: 'door', bearingDeg: 12 },
+    ]));
+
+    expect(scene.get('door')?.bearingDeg).toBe(12);
+  });
+
+  it('picks the same one however the model orders them', () => {
+    const forwards = new SceneMemoryStore('robot-1');
+    const backwards = new SceneMemoryStore('robot-1');
+    const pair = [
+      { label: 'door', bearingDeg: -40, distanceEstM: 1 },
+      { label: 'door', bearingDeg: 12, distanceEstM: 4 },
+    ];
+    forwards.merge(observation(pair));
+    backwards.merge(observation([...pair].reverse()));
+
+    // The bug, stated as a test: these two differed, so the robot steered on
+    // whichever door the VLM happened to mention last.
+    expect(forwards.get('door')?.bearingDeg).toBe(backwards.get('door')?.bearingDeg);
+  });
+
+  it('counts one look as one observation, not one per mention', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'door', bearingDeg: 5 }]));
+    const afterFirst = scene.get('door')?.observedSeq ?? 0;
+
+    scene.merge(observation([
+      { label: 'door', bearingDeg: 5 },
+      { label: 'door', bearingDeg: 30 },
+      { label: 'door', bearingDeg: 60 },
+    ]));
+
+    // The navigator gates "did that look find it again?" on this counter, so an
+    // increment per MENTION would let a duplicated label mask a target that was
+    // never actually re-seen.
+    expect(scene.get('door')?.observedSeq).toBe(afterFirst + 1);
+  });
+
+  it('records how many things shared the label, and only when it is >1', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([
+      { label: 'door', bearingDeg: 5 },
+      { label: 'door', bearingDeg: 30 },
+      { label: 'table', bearingDeg: 0 },
+    ]));
+
+    expect(scene.get('door')?.duplicatesInView).toBe(2);
+    expect(scene.get('table')?.duplicatesInView).toBeUndefined();
+  });
+
+  it('breaks a dead-centre tie towards the nearer, known distance', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([
+      { label: 'door', bearingDeg: 10, distanceEstM: null },
+      { label: 'door', bearingDeg: -10, distanceEstM: 3 },
+      { label: 'door', bearingDeg: 10, distanceEstM: 1.5 },
+    ]));
+
+    expect(scene.get('door')?.distanceEstM).toBe(1.5);
+  });
+});
+
 describe('SceneMemoryStore — reporting', () => {
   it('is null until the first observation', () => {
     const scene = new SceneMemoryStore('robot-1');
