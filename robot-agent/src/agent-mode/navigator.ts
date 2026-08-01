@@ -160,14 +160,22 @@ export class Navigator {
 
     // The loop below re-looks after every stage, so inside a navigation the
     // distances are always one walk old at most. What it cannot see is what
-    // happened BEFORE it was called: a `walk` block, a previous `goto`, an
-    // operator driving the robot across the room. Scene memory has expired the
-    // distances that motion invalidated (see expireOnTranslation), which leaves
-    // this navigation blind on its first stage unless it measures again — and
-    // measuring is cheap next to walking off a two-metre-old number.
+    // happened BEFORE it was called: a `walk` block or a previous `goto`. Those
+    // motions have expired the distances they invalidated (see
+    // expireOnTranslation), which leaves this navigation blind on its first
+    // stage unless it measures again — and measuring is cheap next to walking
+    // off a two-metre-old number.
     //
     // The 07 recording is the case: retreat 2 m, "geh zum Tisch", arrival
     // declared on the spot from the clearance measured before the retreat.
+    //
+    // NOT covered, and it must not be read as if it were: motion that never
+    // passed through Agent Mode. Quest teleop and a direct POST to the sidecar
+    // both move the robot without touching `noteTranslationM`, so
+    // `hasMovedSinceObservation()` answers false, this look is skipped, and a
+    // distance measured before a four-metre teleop drive can still end a
+    // navigation at stage 0. Closing it means feeding measured odometry deltas
+    // in here, or clearing scene memory when the control lock leaves the agent.
     if (!lookedAlready && this.deps.scene.hasMovedSinceObservation()) {
       const look = await this.deps.runGeneratedBlock(
         'look',
@@ -287,12 +295,16 @@ export class Navigator {
       //     a stopping margin of something solid and cannot usefully advance.
       //     Commanding the remaining few centimetres would just push into it.
       if (clearanceM !== null && stageM < MIN_STAGE_M) {
-        // `null` is UNKNOWN, and it only counts as "near" on a robot whose
-        // lidar never spoke for this target — see `everMeasured`.
-        const near =
-          current.distanceEstM === null
-            ? !everMeasured
-            : current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
+        // `measuredM`, not `distanceEstM`: same rule as line 218 — only a lidar
+        // distance may end a navigation. `distanceEstM` still carries the VLM's
+        // own guess whenever the cone came back sparse (the DOCUMENTED normal
+        // degradation, since the fan misses head-height objects), and that guess
+        // is 0.94 m MAE against a 1.5 m threshold. Reading it here would let a
+        // model that says "1.5 m" about a table 3.5 m away turn a chair in the
+        // way into "arrived". A guess is UNKNOWN for this purpose, and UNKNOWN
+        // only counts as "near" on a robot whose lidar never spoke for this
+        // target — see `everMeasured`.
+        const near = measuredM === null ? !everMeasured : measuredM <= CONTACT_MAX_DISTANCE_M;
         // Same reasoning as the contact rule: "I cannot advance" only means "I
         // am there" when the target was just re-observed straight ahead and is
         // believed near. The extra `stagesThatMoved > 0 || measuredM !== null`
@@ -346,10 +358,8 @@ export class Navigator {
       // is given: the stage turned onto the bearing immediately before this walk.
       const blocked =
         walkedM !== null && (walkedM < CONTACT_STALL_M || walkedM < stageM * CONTACT_SHORTFALL_RATIO);
-      const near =
-        current.distanceEstM === null
-          ? !everMeasured
-          : current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
+      // Lidar-only, for the reason spelled out at the same test in 2b above.
+      const near = measuredM === null ? !everMeasured : measuredM <= CONTACT_MAX_DISTANCE_M;
       if (blocked && stagesThatMoved > 0 && unseenLooks === 0 && near) {
         return {
           ok: true,

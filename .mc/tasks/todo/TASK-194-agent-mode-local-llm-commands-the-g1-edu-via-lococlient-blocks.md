@@ -18,7 +18,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-25
-updated: 2026-07-25
+updated: 2026-08-01
 ---
 
 
@@ -866,3 +866,67 @@ App suite after both batches: 57 files / 1113 tests green, typecheck clean.
   venv (`SIM_PYTHON`), per `test-all.sh` policy.
 - `agent-mode.spec.ts` asserts the German demo labels (Tisch/Stuhl/Hut) while the pipeline
   contract is English labels — cosmetic demo-data inconsistency, noted for the next touch.
+
+## Follow-ups from the PR #214 review (2026-08-01)
+
+An independent read of `main...feat/agent-mode-lidar-range` found eight items. One was fixed
+in the PR before merge (a VLM distance guess could decide contact-arrival, `navigator.ts` —
+the `near` test now reads a lidar distance only, pinned by "does not let the vision model's
+guess turn a blocked walk into an arrival"). These are the ones left, in severity order.
+
+- **HIGH — scene memory only expires distances for motion Agent Mode itself commanded.**
+  `BlockExecutor.driveFor` is the only producer of `noteTranslationM`, and
+  `SceneMemoryStore.clear()` has no callers, so Quest teleop or a direct POST to the sidecar
+  moves the robot invisibly. Failure: look (table stored at 0.55 m, lidar) → operator takes
+  the teleop lock, drives 4 m away, releases → "geh zum Tisch" →
+  `hasMovedSinceObservation()` is false, the pre-flight look is skipped, and `goto` returns
+  *"Arrived at table after 0 stages"* without moving. The same skip desyncs yaw, so the
+  first stage is sized by a clearance measured down a heading the robot has left.
+  **Fix:** track `odom.x/odom.y` in `refreshYaw` and feed measured deltas to
+  `noteTranslationM`, and/or clear scene memory when the control lock leaves `'agent'`.
+  The gap is documented in `navigator.ts` at the pre-flight look — the comment states it
+  rather than claiming coverage, so this is a known hole, not a surprise.
+
+- **MED — `x: null` no longer fabricates +52.65°; it fabricates 0°.** `vision.ts` falls back
+  to bearing `0` when neither `x` nor `bearingDeg` is usable, and `VisionEntity` has no
+  "unplaced" state. For `goto` that is arguably worse than the bug it replaced: 0° needs no
+  correction turn, gets lidar-ranged at 0° (the wall dead ahead), is stored as `'lidar'` and
+  can end a navigation nose-to-wall. **Fix:** drop the entity, or carry `bearingKnown:
+  false` and have `observeAndMerge` skip ranging and the navigator refuse to steer on it.
+  Note the two `vision.test.ts` cases that assert `bearingDeg === 0` encode the wrong
+  invariant and must change with it.
+
+- **MED — turn >10° then walk is still unclamped.** The clearance expires past the yaw
+  tolerance, which makes the new `walk` clamp a no-op for exactly the plan shape that
+  matters: `goto-door` fails 3/3 on `gemma4:e2b` as `turn 96° + walk 4.4 m`. The prompt rule
+  aimed at it was benched and reverted as noise (51/54 → 51/54, 6 → 5 dashes). The
+  deterministic repair is the open option: when a `turn` matches an entity's relative
+  bearing *and* the following `walk` matches that same entity's distance, fold the pair into
+  one `goto` — two independent numbers off one scene row is a coincidence a genuine "turn
+  left and walk 3 m" will not produce. Needs `PlannerInput` to carry structured scene
+  targets, which `agent-mode-controller.ts` can supply from `scene.listEntities()`.
+
+- **LOW — dropping the `MIN_STAGE_M` floor is partly defeated by `MIN_DURATION_S`.**
+  `walkToCommand` floors duration at 0.2 s, so a 0.001 m stage still commands ~0.08 m. No
+  collision path (well inside the 0.45 m margin), but a 0.1 m stage on a real base often
+  measures ~0 m, and with `stagesThatMoved === 0` a `goto` to something 0.7 m away can now
+  fail outright where it previously overshot. Robot-day observation, not a desk fix.
+
+- **LOW — `forwardClearance` is blind inside 0.35 m and blind reads as unclamped.** "Unknown
+  because too near" and "unknown because too far" have opposite costs and are the same
+  `null` today. Backstopped by arrival-by-contact.
+
+- **NIT — `scripts/planner-bench.ts` is outside `tsconfig`'s `include` and outside vitest's
+  glob**, so it can rot against `Planner`/`SceneMemoryStore` with nothing to catch it. Add a
+  `tsconfig.scripts.json` and an `npm run bench:planner`. Its `openLoopDashes` also matches
+  only within 0.06 m of a known scene distance (a `walk 4 m` for the 4.4 m door is
+  invisible), and it inherits `AGENT_PLANNER_THINKING` without recording it — both worth
+  printing in the header before the next A/B.
+
+- **NIT — no integration test drives `Navigator` against a real `BlockExecutor`.** The
+  navigator suite runs against `makeWorld`, a good hand-written model that re-derives
+  bearings and calls `noteTranslationM` — but if `driveFor` stopped calling it, or blocks
+  stopped carrying `measured`, all 32 tests would stay green.
+
+- **NIT — doc drift:** `scene-memory.ts` says `yawDegOverride` is "passed explicitly by
+  `scan_room`"; `block-executor.ts` passes `undefined` and relies on `refreshYaw`.

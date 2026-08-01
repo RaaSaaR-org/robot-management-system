@@ -185,6 +185,22 @@ function normalizeRobotDescription(raw: string): string {
  */
 export const DEFAULT_AGENT_MODEL = 'gemma3:4b';
 
+/**
+ * A number from the environment, or the fallback when it is missing OR unusable.
+ *
+ * `parseFloat('' )` and `parseFloat('105,3')`-style typos yield NaN, and NaN
+ * propagates silently through geometry: a NaN camera HFOV makes every bearing
+ * NaN, `normalizeDeg` folds NaN to 0 (types.ts), and the navigator then plans no
+ * correction turn at all because `Math.abs(0) > BEARING_DEADBAND_DEG` is false —
+ * the robot walks dead ahead past whatever it was aimed at, with nothing in any
+ * log to say why. A misconfigured value must fall back to the default, loudly in
+ * the startup banner, not disable steering.
+ */
+function envFloat(raw: string | undefined, fallback: number): number {
+  const n = parseFloat(raw ?? '');
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export const config: Config = {
   port: parseInt(process.env.PORT || '41243', 10),
   robotId: process.env.ROBOT_ID || 'sim-robot-001',
@@ -243,7 +259,7 @@ export const config: Config = {
       .map((w) => w.trim().toLowerCase())
       .filter((w) => w.length > 0),
     cameraName: process.env.AGENT_CAMERA_NAME || 'head_camera',
-    cameraHfovDeg: parseFloat(process.env.AGENT_CAMERA_HFOV_DEG || '105.3'),
+    cameraHfovDeg: envFloat(process.env.AGENT_CAMERA_HFOV_DEG, 105.3),
     // Range sensing. Opt-OUT: the honest default is "try the sidecar, and fall
     // back to the old bearing-only behaviour when it is not there" — the VLM
     // cannot supply a distance (0.94 m MAE, usually null), so without this the

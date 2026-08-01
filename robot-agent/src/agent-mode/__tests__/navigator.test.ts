@@ -68,6 +68,16 @@ interface WorldOptions {
    * measured failure mode, not an invented one.
    */
   unrangedLookIndex?: number;
+  /**
+   * Index of ONE look where the cone came back unusable but the VLM DID answer a
+   * distance. `BlockExecutor` then keeps the model's own number and labels it
+   * 'vlm-estimate' (see its range enrichment) — the documented normal
+   * degradation, since the sensor's fan misses head-height objects. The number
+   * that rides in is a guess with 0.94 m MAE against a 1.5 m contact threshold.
+   */
+  vlmGuessLookIndex?: number;
+  /** What the model guesses on that look, in metres. The truth is `distanceM`. */
+  vlmGuessM?: number;
 }
 
 /**
@@ -92,8 +102,12 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
     // nothing about the target, which is what leaves the stored bearing stale.
     const visible = opts.visibleForLooks === undefined || looks < opts.visibleForLooks;
     const unranged = opts.unrangedLookIndex !== undefined && looks === opts.unrangedLookIndex;
+    const vlmGuess = opts.vlmGuessLookIndex !== undefined && looks === opts.vlmGuessLookIndex;
     looks++;
-    const targetDistance = opts.distanceUnknown || unranged ? null : state.distance;
+    const targetDistance =
+      opts.distanceUnknown || unranged ? null : vlmGuess ? (opts.vlmGuessM ?? 1.5) : state.distance;
+    const targetSource =
+      targetDistance !== null && vlmGuess ? ('vlm-estimate' as const) : sourceOf(targetDistance);
     const observation: Observation = {
       currentView: visible ? 'I can see the table' : 'a shelf and a wall',
       personVisible: false,
@@ -105,7 +119,7 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
               label: 'table',
               bearingDeg: normalizeDeg(state.worldBearing - scene.getYawDeg()),
               distanceEstM: targetDistance,
-              distanceSource: sourceOf(targetDistance),
+              distanceSource: targetSource,
               confidence: 0.9,
             },
           ]
@@ -805,6 +819,31 @@ describe('Navigator — measured range', () => {
       worldBearingDeg: 0,
       distanceM: 5.2,
       unrangedLookIndex: 3,
+      blockedAfterWalks: 2,
+      blockedMode: 'short',
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).not.toMatch(/Counting that as arrived/);
+    // It really did stop far away — this is not passing by never walking.
+    expect(world.state.distance).toBeGreaterThan(2);
+  });
+
+  // Same hole, entered from the other side. `everMeasured` guarded the NULL
+  // path, but a sparse cone does not always produce a null: when the VLM
+  // answered a distance, that guess survives on `distanceEstM` labelled
+  // 'vlm-estimate', and reading it here contradicted the rule 130 lines above
+  // that only a MEASURED distance may end a navigation. 0.94 m MAE against a
+  // 1.5 m threshold is not a small difference — it is a chair three metres short
+  // of the table reported as arrival.
+  it('does not let the vision model’s guess turn a blocked walk into an arrival', async () => {
+    const { navigator, world } = navigatorFor({
+      worldBearingDeg: 0,
+      distanceM: 5.2,
+      vlmGuessLookIndex: 3,
+      vlmGuessM: 1.5, // the model says 1.5 m about a table still >3 m away
       blockedAfterWalks: 2,
       blockedMode: 'short',
     });
