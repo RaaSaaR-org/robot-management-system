@@ -169,8 +169,11 @@ export interface TurnSignCorrection {
  * grasp of a sign convention.
  *
  * Only fires when the command names exactly ONE direction, so "erst links, dann
- * rechts" is left alone rather than half-corrected. Returns the correction so
- * the caller can surface it instead of silently rewriting the operator's plan.
+ * rechts" is left alone rather than half-corrected. What it corrects is the
+ * model's sign CONVENTION — read once off the first directional turn, then
+ * applied to the whole plan — so the relative structure survives: a plan that
+ * turns and turns back still turns back. Returns the correction so the caller
+ * can surface it instead of silently rewriting the operator's plan.
  */
 export function enforceTurnDirection(
   command: string,
@@ -183,13 +186,35 @@ export function enforceTurnDirection(
   const sign = wantsLeft ? 1 : -1;
   const corrections: TurnSignCorrection[] = [];
 
-  const next = blocks.map((block) => {
-    if (block.kind !== 'turn') return block;
-    const angle = block.params.angleDeg;
-    // A 180° turn is direction-free, and 0 is a no-op — neither can be "wrong way".
-    if (typeof angle !== 'number' || angle === 0 || Math.abs(angle) === 180) return block;
-    if (Math.sign(angle) === sign) return block;
+  /** A turn that carries a direction: not a no-op, not a direction-free 180. */
+  const directional = (block: PlannedBlock): block is PlannedBlock & { params: { angleDeg: number } } =>
+    block.kind === 'turn' &&
+    typeof block.params.angleDeg === 'number' &&
+    block.params.angleDeg !== 0 &&
+    Math.abs(block.params.angleDeg) !== 180;
 
+  // What this repairs is the MODEL'S SIGN CONVENTION, which is a property of
+  // the plan as a whole — so it is decided once, from the first directional
+  // turn, and then applied to every turn.
+  //
+  // Judging each turn on its own was wrong in both directions. "turn left, look,
+  // then turn back" -> [+90, look, -90] is a correct plan naming one direction,
+  // and per-block correction flipped the RETURN leg to +90: 180° from where the
+  // operator asked, logged as "turn direction corrected", and every later walk
+  // in the plan then ran backwards. A genuinely inverted model emitting
+  // [-90, look, +90] fared no better — only the first was flipped, giving
+  // [+90, look, +90], equally 180° off. No counter-turn plan survived.
+  const reference = blocks.find(directional);
+  if (reference === undefined || Math.sign(reference.params.angleDeg) === sign) {
+    // The convention agrees with the operator (or there is nothing to judge it
+    // by), so any opposite-signed turn later in the plan is a deliberate
+    // counter-turn and must be left alone.
+    return { blocks, corrections: [] };
+  }
+
+  const next = blocks.map((block) => {
+    if (!directional(block)) return block;
+    const angle = block.params.angleDeg;
     const corrected = -angle;
     corrections.push({ from: angle, to: corrected, direction: wantsLeft ? 'left' : 'right' });
     return { ...block, params: { ...block.params, angleDeg: corrected } };

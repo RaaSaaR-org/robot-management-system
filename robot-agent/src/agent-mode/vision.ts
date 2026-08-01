@@ -20,6 +20,17 @@ export interface VisionEntity {
   bearingDeg: number;
   distanceEstM: number | null;
   confidence: number;
+  /**
+   * The horizontal position in the frame the model actually answered with, 0 =
+   * left edge, 1 = right edge — present only when it supplied a finite `x`.
+   *
+   * `bearingDeg` is derived from it and is what everything downstream steers on;
+   * this is kept because the derivation is lossy in the one direction that
+   * matters for depth: a depth image (or a projected point cloud) is indexed by
+   * PIXELS, not by bearings, so associating this entity with a depth frame needs
+   * the image coordinate back. Nothing reads it yet.
+   */
+  imageX?: number;
   note?: string;
 }
 
@@ -40,6 +51,8 @@ export interface VisionDeps {
   /** Override the model ref (tests). Default: `<prefix>/<AGENT_VISION_MODEL>`. */
   modelRef?: string;
   cameraName?: string;
+  /** Horizontal FOV of that camera in degrees (`AGENT_CAMERA_HFOV_DEG`). */
+  cameraHfovDeg?: number;
 }
 
 /** Bearings outside this fan are almost certainly hallucinated for a single frame. */
@@ -51,11 +64,31 @@ function clamp(n: number, lo: number, hi: number): number {
 }
 
 /**
+ * Horizontal position in the frame → bearing, by the pinhole model:
+ * `tan(bearing) = ndc · tan(hfov/2)`, with `ndc` the offset from the image
+ * centre in half-widths. Right of centre is the robot's right, i.e. negative.
+ *
+ * This is why the prompt asks for a position and not an angle: the projection
+ * is exact arithmetic given the camera's FOV, and the model is bad at it.
+ * Measured against the MJCF room scene (exact landmark positions, four robot
+ * poses): 7.2° MAE this way, 131° when the model is asked for degrees.
+ */
+export function bearingFromImageX(xFrac: number, hfovDeg: number): number {
+  const ndc = 2 * clamp(xFrac, 0, 1) - 1;
+  const halfTan = Math.tan((clamp(hfovDeg, 1, 179) * Math.PI) / 360);
+  // `+ 0` normalises -0 (dead centre) to 0, so a bearing never serialises as "-0".
+  return -(Math.atan(ndc * halfTan) * 180) / Math.PI + 0;
+}
+
+/**
  * Defensive parse of the VLM answer. A malformed answer NEVER throws: it
  * degrades to "no entities, currentView = the raw text", which is honest — we
  * saw something, we just could not structure it.
  */
-export function parseVisionAnswer(text: string): VisionObservation {
+export function parseVisionAnswer(
+  text: string,
+  hfovDeg: number = config.agentMode.cameraHfovDeg
+): VisionObservation {
   const degraded: VisionObservation = {
     currentView: text.trim().slice(0, 500) || '(the vision model returned nothing)',
     entities: [],
@@ -77,10 +110,34 @@ export function parseVisionAnswer(text: string): VisionObservation {
     const label = typeof e.label === 'string' ? e.label.trim() : '';
     if (!label) continue;
 
+    // `x` is what the prompt asks for. `bearingDeg` is only a fallback for a
+    // model that answered the old schema — accepting it costs nothing and stops
+    // every entity from landing at bearing 0, but it is the bad path (see
+    // VISION_PROMPT for the measurement).
+    // `Number(null)` is 0, and 0 is a perfectly finite image-x meaning "hard
+    // against the left edge" — so a model answering `"x": null` ("I cannot
+    // place it") used to come out as a CONFIDENT +52.65° bearing, worse than
+    // omitting the field entirely. The prompt teaches `null` on the line below
+    // `x`, so copying it up is a plausible answer, not a contrived one. Same
+    // guard the distance below already uses; NaN is what the rest of this
+    // function is written to handle.
+    // Out-of-contract magnitudes go the same way: a model answering in pixels
+    // (x: 640) must degrade to "no position" rather than collapse every entity
+    // onto the right edge. The 0.05 slack keeps 1.02 clamping to 1.
+    const xNum = Number(e.x);
+    const xRaw =
+      (typeof e.x === 'number' || (typeof e.x === 'string' && e.x.trim() !== '')) &&
+      Number.isFinite(xNum) &&
+      xNum >= -0.05 &&
+      xNum <= 1.05
+        ? xNum
+        : Number.NaN;
     const bearingRaw = Number(e.bearingDeg);
-    const bearingDeg = Number.isFinite(bearingRaw)
-      ? clamp(bearingRaw, -MAX_RELATIVE_BEARING_DEG, MAX_RELATIVE_BEARING_DEG)
-      : 0;
+    const bearingDeg = Number.isFinite(xRaw)
+      ? bearingFromImageX(xRaw, hfovDeg)
+      : Number.isFinite(bearingRaw)
+        ? clamp(bearingRaw, -MAX_RELATIVE_BEARING_DEG, MAX_RELATIVE_BEARING_DEG)
+        : 0;
 
     const distRaw = Number(e.distanceEstM);
     const distanceEstM =
@@ -89,7 +146,15 @@ export function parseVisionAnswer(text: string): VisionObservation {
     const confRaw = Number(e.confidence);
     const confidence = Number.isFinite(confRaw) ? clamp(confRaw, 0, 1) : 0.5;
 
-    const entity: VisionEntity = { label, bearingDeg, distanceEstM, confidence };
+    const entity: VisionEntity = {
+      label,
+      bearingDeg: Math.round(bearingDeg * 10) / 10,
+      distanceEstM,
+      confidence,
+    };
+    // Only when the model really answered an `x` — a fabricated 0.5 would read
+    // as "dead centre" instead of "the model never said".
+    if (Number.isFinite(xRaw)) entity.imageX = clamp(xRaw, 0, 1);
     if (typeof e.note === 'string' && e.note.trim()) entity.note = e.note.trim();
     entities.push(entity);
     if (entities.length >= MAX_ENTITIES) break;
@@ -119,12 +184,14 @@ export class VisionClient {
   private readonly snapshotFn: (cameraName: string) => Promise<string>;
   private readonly generate: GenerateFn;
   private readonly cameraName: string;
+  private readonly cameraHfovDeg: number;
   private readonly modelRefOverride: string | undefined;
 
   constructor(deps: VisionDeps = {}) {
     this.snapshotFn = deps.snapshot ?? ((name) => hardwareClient.snapshot(name));
     this.generate = deps.generate ?? genkitGenerate;
     this.cameraName = deps.cameraName ?? config.agentMode.cameraName;
+    this.cameraHfovDeg = deps.cameraHfovDeg ?? config.agentMode.cameraHfovDeg;
     this.modelRefOverride = deps.modelRef;
   }
 
@@ -168,6 +235,6 @@ export class VisionClient {
       };
     }
 
-    return parseVisionAnswer(text);
+    return parseVisionAnswer(text, this.cameraHfovDeg);
   }
 }

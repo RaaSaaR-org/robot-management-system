@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { AgentModeController } from '../agent-mode-controller.js';
 import { ControlOwnerLock } from '../control-owner.js';
 import { G1_FSM_DAMP } from '../block-executor.js';
+import { RangeSensor } from '../range.js';
 import type { Planner, PlannedBlock } from '../planner.js';
 import type { ServerMirror } from '../server-mirror.js';
 import type { VisionClient, VisionObservation } from '../vision.js';
@@ -96,6 +97,10 @@ function makeController(
     planner,
     mirror,
     vision: { observe: async () => opts.observation ?? EMPTY_VIEW } as unknown as VisionClient,
+    // Ranging off: these tests are about the plan lifecycle, and the default
+    // sensor would go looking for a sidecar on localhost. Off is also the path
+    // that must leave Agent Mode behaving exactly as it did before LiDAR.
+    range: new RangeSensor({ enabled: false }),
     loco: {
       move: opts.move ?? (async () => ({ ok: true })),
       action: async (name) => {
@@ -374,6 +379,34 @@ describe('AgentModeController — E-Stop', () => {
       const result = await h.controller.estop('operator pressed STOPP');
       expect(result.delivered).toBe(false);
       expect(result.deliveryError).toMatch(/Damp: rpc code 3104/);
+    });
+
+    // `estop()` was honest and the caller threw it away: the typed-stop-word
+    // path hard-coded "and the robot was damped." into BOTH arms, so the one
+    // message an operator reads while deciding whether to run for the hardware
+    // kill switch claimed a damped robot that had never been told to damp.
+    it('does not tell the operator the robot was damped when nothing was delivered', async () => {
+      const h = makeController([], {
+        action: async () => ({ ok: false, error: 'sidecar unreachable' }),
+        fsm: async () => ({ ok: false, error: 'rpc code 3104' }),
+      });
+
+      const result = await h.controller.submitCommand({ text: 'STOPP!' });
+
+      expect(result.accepted).toBe(true);
+      expect(result.message).not.toMatch(/robot was damped/);
+      expect(result.message).toMatch(/did NOT confirm StopMove\/Damp/);
+      expect(result.message).toMatch(/hardware E-Stop/);
+      expect(result.delivered).toBe(false);
+      expect(result.deliveryError).toMatch(/StopMove: sidecar unreachable; Damp: rpc code 3104/);
+    });
+
+    it('still says damped when the robot confirmed it', async () => {
+      const h = makeController([]);
+      const result = await h.controller.submitCommand({ text: 'STOPP!' });
+      expect(result.message).toMatch(/and the robot was damped\./);
+      expect(result.delivered).toBe(true);
+      expect(result.deliveryError).toBeUndefined();
     });
   });
 

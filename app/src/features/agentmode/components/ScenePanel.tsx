@@ -1,13 +1,17 @@
 /**
  * @file ScenePanel.tsx
- * @description Collapsible panel: latest camera frame + the scene-memory entities
+ * @description Collapsible panel: latest camera frame + the scene-memory entities,
+ *              rendering a MEASURED distance visibly differently from a guessed
+ *              one, plus the measured forward clearance when there is one.
  * @feature agentmode
  */
 
 import { memo, useState } from 'react';
 import { cn } from '@/shared/utils';
 import { formatTimeAgo } from '@/shared/utils/format';
+import { Tooltip } from '@/shared/components/ui/Tooltip';
 import { useAgentModeStore, selectScene } from '../store/agentmodeStore';
+import type { SceneEntity } from '../types';
 import { formatBearing } from '../utils/blockFormat';
 
 export interface ScenePanelProps {
@@ -49,14 +53,80 @@ function CameraIcon({ className }: { className?: string }) {
 }
 
 /**
+ * Distance cell for one entity. A measured metre and a guessed one must not
+ * look alike here: before there was any range sensing, `goto` "arrived" by
+ * walking into things, so the operator has to be able to read off the panel
+ * which numbers the robot actually measured.
+ *
+ * - `'lidar'`      → plain value, cobalt: a real range out of the point cloud.
+ * - anything else  → `~` prefix, muted: the vision model's guess (0.94 m MAE
+ *                    against known geometry), or an older agent that sent no
+ *                    source at all. Unknown provenance is rendered as
+ *                    unverified — the safe direction, since the alternative is
+ *                    presenting a guess as a measurement.
+ * - `null`         → the em-dash this panel has always shown. Never `0`.
+ */
+function DistanceReadout({ entity }: { entity: SceneEntity }) {
+  const { distanceEstM, distanceSource } = entity;
+
+  if (distanceEstM === null || distanceEstM === undefined || !Number.isFinite(distanceEstM)) {
+    return (
+      <span
+        data-testid="agent-scene-distance"
+        data-distance-source="none"
+        className="card-meta tabular-nums shrink-0"
+      >
+        — m
+      </span>
+    );
+  }
+
+  const measured = distanceSource === 'lidar';
+
+  return (
+    <Tooltip
+      className="shrink-0"
+      side="left"
+      content={
+        measured
+          ? 'Measured by LiDAR — nearest surface in a cone around this bearing. Returns carry no labels, so this is the closest thing in that direction, not necessarily this object.'
+          : 'Estimated by the vision model, not measured. Treat as a rough guess.'
+      }
+    >
+      <span
+        data-testid="agent-scene-distance"
+        data-distance-source={measured ? 'lidar' : (distanceSource ?? 'unknown')}
+        className={cn(
+          'text-xs tabular-nums',
+          measured ? 'font-medium text-cobalt-600 dark:text-cobalt-400' : 'card-meta'
+        )}
+      >
+        {measured ? '' : '~'}
+        {distanceEstM.toFixed(1)} m
+      </span>
+    </Tooltip>
+  );
+}
+
+/**
  * What the robot believes is around it. Bearings are world bearings
- * (+x = 0, CCW positive); a missing distance stays blank rather than 0.
+ * (+x = 0, CCW positive); a missing distance stays blank rather than 0, and a
+ * measured distance is set apart from a guessed one — see {@link DistanceReadout}.
  */
 export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: ScenePanelProps) {
   const scene = useAgentModeStore(selectScene);
   const [open, setOpen] = useState(true);
 
   const entities = scene?.entities ?? [];
+
+  // Rendered only when it is a real number. Null (or an older agent that sends
+  // no field at all) means "we do not know how far the wall is" — and unknown
+  // is not "clear", so the row says nothing rather than showing a dash the eye
+  // could read as free space.
+  const forwardClearanceM =
+    typeof scene?.forwardClearanceM === 'number' && Number.isFinite(scene.forwardClearanceM)
+      ? scene.forwardClearanceM
+      : null;
 
   return (
     <div
@@ -117,6 +187,24 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
             </div>
           )}
 
+          {/* Measured clearance straight ahead — absent when nothing measured it */}
+          {forwardClearanceM !== null && (
+            <div
+              data-testid="agent-scene-clearance"
+              className="flex items-center gap-2 text-[11px] text-theme-muted"
+            >
+              <Tooltip
+                side="top"
+                content="Measured by LiDAR — nearest surface straight ahead. The sensor's vertical fan does not see everything, so this is the closest return, not a guarantee that the rest is free."
+              >
+                <span>Clear ahead</span>
+              </Tooltip>
+              <span className="ml-auto tabular-nums font-medium text-cobalt-600 dark:text-cobalt-400">
+                {forwardClearanceM.toFixed(2)} m
+              </span>
+            </div>
+          )}
+
           {/* Entity list */}
           <ul className="space-y-1.5">
             {entities.map((entity) => (
@@ -130,9 +218,7 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
                   <span className="ml-auto card-meta tabular-nums shrink-0">
                     {formatBearing(entity.bearingDeg)}
                   </span>
-                  <span className="card-meta tabular-nums shrink-0">
-                    {entity.distanceEstM !== null ? `${entity.distanceEstM.toFixed(1)} m` : '— m'}
-                  </span>
+                  <DistanceReadout entity={entity} />
                 </div>
                 <div className="flex items-center gap-2 mt-0.5">
                   {entity.note && <span className="card-meta truncate">{entity.note}</span>}

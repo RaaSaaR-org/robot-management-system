@@ -22,6 +22,7 @@ import { controlOwnerLock, type ControlOwnerLock } from './control-owner.js';
 import { IdleWatcher } from './idle-watcher.js';
 import { Navigator } from './navigator.js';
 import { Planner, type PlannedBlock } from './planner.js';
+import { RangeSensor } from './range.js';
 import { SceneMemoryStore } from './scene-memory.js';
 import { ServerMirror } from './server-mirror.js';
 import { VisionClient, type VisionObservation } from './vision.js';
@@ -65,6 +66,12 @@ export interface AgentModeControllerDeps {
   enabled?: boolean;
   planner?: Planner;
   vision?: VisionClient;
+  /**
+   * LiDAR ranging for `look`/`scan_room`. Constructed once and shared, like
+   * {@link AgentModeControllerDeps.vision}, so its one-cloud-per-observation
+   * cache actually spans the observation instead of being rebuilt per block.
+   */
+  range?: RangeSensor;
   scene?: SceneMemoryStore;
   mirror?: ServerMirror;
   lock?: ControlOwnerLock;
@@ -109,6 +116,7 @@ export class AgentModeController {
   private readonly lock: ControlOwnerLock;
   private readonly planner: Planner;
   private readonly vision: VisionClient;
+  private readonly range: RangeSensor;
   private readonly scene: SceneMemoryStore;
   private readonly mirror: ServerMirror;
   private readonly executor: BlockExecutor;
@@ -152,6 +160,7 @@ export class AgentModeController {
     this.lock = deps.lock ?? controlOwnerLock;
     this.planner = deps.planner ?? new Planner();
     this.vision = deps.vision ?? new VisionClient();
+    this.range = deps.range ?? new RangeSensor();
     this.scene = deps.scene ?? new SceneMemoryStore(this.robotId);
     this.mirror = deps.mirror ?? new ServerMirror({ robotId: this.robotId });
     this.loco = deps.loco ?? defaultLoco;
@@ -171,6 +180,7 @@ export class AgentModeController {
     const executorDeps: BlockExecutorDeps = {
       scene: this.scene,
       vision: this.vision,
+      range: this.range,
       isAborted: () => this.abortSignalled(),
       onScene: (scene) => this.emit('agent:scene:updated', { scene }),
       loco: trackedLoco,
@@ -185,7 +195,10 @@ export class AgentModeController {
       isAborted: () => this.abortSignalled(),
       runGeneratedBlock: (kind, params, reasoning) =>
         this.runGeneratedBlock(kind, params, reasoning),
-      ...(deps.maxNavStages === undefined ? {} : { maxNavStages: deps.maxNavStages }),
+      // `maxStages` is what NavigatorDeps calls it. Spelled `maxNavStages` here
+      // the override type-checked (a spread skips the excess-property check) and
+      // was silently dropped, so AGENT_MAX_NAV_STAGES always won.
+      ...(deps.maxNavStages === undefined ? {} : { maxStages: deps.maxNavStages }),
     });
 
     this.idleWatcher = new IdleWatcher({
@@ -368,11 +381,22 @@ export class AgentModeController {
 
     if (this.isStopWord(text)) {
       const result = await this.estop(`Stop word "${text}" received`);
+      // `estop()` computes `delivered` precisely so the caller can tell "latch
+      // set" from "base actually stopped" — hard-coding "and the robot was
+      // damped." into both arms threw that away and told the operator the one
+      // thing they must be able to trust. The typed-stop-word path is the same
+      // E-Stop as the button and gets the same honesty.
+      const head = result.stopped
+        ? 'the running plan was discarded'
+        : 'nothing was running';
+      const tail = result.delivered
+        ? 'and the robot was damped.'
+        : `but the robot did NOT confirm StopMove/Damp (${result.deliveryError ?? 'no sidecar ack'}) — it may still be moving; use the hardware E-Stop.`;
       return {
         accepted: true,
-        message: result.stopped
-          ? 'E-Stop: the running plan was discarded and the robot was damped.'
-          : 'E-Stop: nothing was running; the robot was damped.',
+        message: `E-Stop: ${head} ${tail}`,
+        delivered: result.delivered,
+        ...(result.deliveryError === undefined ? {} : { deliveryError: result.deliveryError }),
       };
     }
 
@@ -831,6 +855,9 @@ export class AgentModeController {
     if (block.status === 'aborted' || block.status === 'skipped') return;
 
     block.finishedAt = nowIso();
+    // Kept on failures too: "walk failed" and "walk failed after 0.00 m" lead
+    // to different decisions, and the navigator makes one of them.
+    if (outcome.measured) block.measured = outcome.measured;
     if (this.abortSignalled() && !outcome.ok) {
       block.status = 'aborted';
       block.error = this.abortReason ?? outcome.message;

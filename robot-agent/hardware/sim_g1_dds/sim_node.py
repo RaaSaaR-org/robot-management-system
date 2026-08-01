@@ -11,8 +11,12 @@ Two jobs:
 
 2. **Sidecar-compatible HTTP facade** (`--http-port`). Serves the subset of
    `g1_sidecar.py` that Agent Mode needs -- `/health`, `/cameras`,
-   `/cameras/<n>/snapshot`, `/state`, `/loco/*` -- so the whole Collect→Act loop
-   can be exercised with no hardware attached. The `/loco/*` routes deliberately
+   `/cameras/<n>/snapshot`, `/state`, `/loco/*`, `/pointcloud/*` -- so the whole
+   Collect→Act loop can be exercised with no hardware attached. The
+   `/pointcloud/*` routes are backed by a real `mj_ray` cast against the scene
+   (see `SimNode.cast_lidar`), NOT by a fabricated room: an obstacle that is not
+   in the MJCF produces no return here, exactly as an obstacle that is not in
+   front of the robot produces none on the MID-360. The `/loco/*` routes deliberately
    do NOT poke LocoState directly: they go out through a real `LocoClient` over
    DDS and come back in through our own service, so the demo exercises the
    actual wire rather than a shortcut. Request validation and RPC status-code
@@ -80,6 +84,102 @@ TOPIC_HAND_STATE = "rt/dex3/{}/state"
 ODOM_PUBLISH_HZ = 50.0
 STATE_PUBLISH_HZ = 100.0
 
+# --------------------------------------------------------------- ray LiDAR
+# The sim's range sensor stands in for the head-mounted Livox MID-360 of the
+# real G1, and it advertises itself under the SAME name the sidecar uses
+# (g1_sidecar.py DEPTH_SENSORS) so one client works against both with no
+# branching. Only the LiDAR is advertised: these scenes have no depth-camera
+# cloud source, and offering `d435i_depth` here would mean answering for a
+# sensor the sim does not have -- an empty cloud reads as "nothing in the way",
+# which is the one lie this facade must never tell.
+LIDAR_SENSOR = "mid360_lidar"
+SIM_DEPTH_SENSORS = [LIDAR_SENSOR]
+
+# Site the rays leave from. Present on torso_link in
+# mjcf/g1_dex3/g1_43dof_planarbase.xml (and in the two fixed-base variants), so
+# it rides the waist the way a head-mounted sensor does. It is the head
+# CAMERA's mount -- the MJCF offers nothing better -- which is why the origin
+# ends up inside the torso shell; see _robot_geom_mask for what that costs.
+LIDAR_SITE = "head_camera_site"
+
+# Fallback origin when a scene has no such site: base pose + this offset,
+# (forward, left, up) in base_link metres. Measured with mj_forward on
+# g1_dex3_room_scene.xml at the rest pose -- site_xpos = (0.0760, 0.000, 1.271)
+# with the base at the origin. It is a SCENE-SPECIFIC number and the snapshot
+# says so in `origin_source`, because a scene whose robot stands differently
+# would put the sensor somewhere else.
+LIDAR_FALLBACK_OFFSET = (0.076, 0.0, 1.271)
+
+# Fan geometry. The elevation band mirrors the REAL sensor rather than a
+# friendlier fiction: the MID-360 on the G1 is mounted INVERTED (a walking robot
+# needs ground vision), and g1_sidecar.py records its effective vertical fan as
+# about -52 deg .. +7 deg from ~1.29-1.34 m up. Reproducing that band means the
+# sim reproduces the real blind spot too -- an object at head height can fall
+# entirely outside the fan, so a missing return is UNKNOWN and never "clear".
+# 180 azimuth rays = 2 deg steps over the full 360 deg. Dense enough to resolve
+# the room's furniture: measured from the origin, the chair 2.4 m away returned
+# 14 rays across 6 of its geoms and the table 17 across 4.
+#
+# 32 elevation rings, and the reason is a measurement rather than taste.
+# What matters is not how many rays hit a thing, but how many survive the
+# CONSUMER's filters -- src/agent-mode/range.ts drops everything outside a
+# 0.15-1.8 m height band and then needs >= 6 returns before it will call
+# anything a surface. Below that threshold an object is discarded as noise and
+# the answer falls through to whatever is BEHIND it, so the failure is always
+# in the dangerous direction: the robot is told it has clear floor where
+# furniture is.
+#
+# Two measurements, both of that same failure, at _data/agentmode/ring_density.py:
+#   - vertical surface (table's near edge, head on from 1.7 m): 8 rings put 5
+#     returns on it and answered 3.30 m -- the wall behind. 16 rings answered
+#     1.73 m against a true 1.70 m.
+#   - horizontal surface (table TOP, oblique from 2.62 m): 16 rings STILL
+#     answered 3.80 m -- the wall again -- with only 4 returns on the table.
+#     24 rings answered 2.63 m, 32 rings 2.62 m exactly.
+# A near-horizontal surface is the worst case for a fan of elevation rings and
+# is why the first (vertical-edge) measurement was not sufficient: consecutive
+# rings land ~0.7 m apart in RANGE on a 0.72 m-high surface, so a 0.8 m deep
+# table top catches one ring or none, while a vertical edge catches every ring.
+# 24 is where all three test cases become correct; 32 is where they become
+# exact, and the margin is worth having because the error mode is silent.
+#
+# 180 azimuth rays = 2 deg steps over the full 360 deg, which already puts 9
+# columns inside range.ts's +-8 deg cone, so the rings are where the accuracy is
+# bought. Cost, measured on this box: 1.9 ms at 180x8, 2.9 ms at 180x16, 5.2 ms
+# at 180x32, 10.1 ms at 360x32. The cast runs between physics steps and is still
+# an order of magnitude cheaper than the offscreen render the same loop already
+# services. For scale, 180x32 is ~5700 points against the real MID-360's ~20000
+# per 10 Hz frame -- this fan is conservative next to the sensor it stands in for.
+LIDAR_AZIMUTH_RAYS = 180
+LIDAR_ELEVATION_RINGS = 32
+LIDAR_ELEV_MIN_DEG = -52.0
+LIDAR_ELEV_MAX_DEG = 7.0
+
+# About half of every raw real frame is a self-return blob (the sensor seeing
+# its own housing) at range < 0.3 m, which g1_sidecar.py drops before any
+# geometry. The same gate runs here so both facades hand out clouds with the
+# same near-field semantics. Be aware of what it does and does not do in the
+# sim: with the default self-filter it is DORMANT (measured dropped_near = 0 in
+# the room scene, because the robot's own geoms are already out of the cast) --
+# it earns its keep with `include_self=True`, where it removes 402 of 1440
+# returns, and as the guard for any scene that puts geometry right against the
+# sensor. A little wider than the sidecar's 0.3 m because our ray origin sits
+# inside the torso shell rather than on a sensor housing's skin.
+LIDAR_MIN_RANGE = 0.35
+# Beyond this a return is discarded, and -- as with a real LiDAR -- an
+# over-range surface is then indistinguishable from no return at all. This is
+# not decoration even in a 6x6 m room: MuJoCo's `plane` is INFINITE, so rays
+# that leave through the doorway still hit the floor far outside the walls
+# (measured: 7 of 1440 rays at 51 m). Not a datasheet figure for the MID-360.
+LIDAR_MAX_RANGE = 25.0
+# Cap on returned points, matching g1_sidecar.py's G1_POINTCLOUD_MAX_POINTS
+# default so both facades are bounded the same way. With the defaults above the
+# fan can produce at most 180*32 = 5760 points, so the cap is purely defensive
+# against a caller asking for a very dense fan; it decimates with a uniform
+# stride rather than truncating, which would silently delete whole azimuth
+# sectors and read as "clear over there".
+LIDAR_MAX_POINTS = 20000
+
 # Ceiling on physics ticks made up in one loop iteration. At dt=2 ms this is
 # 0.5 s of sim time, enough to absorb an offscreen render, while keeping a host
 # that genuinely cannot keep up from trying to catch up forever and locking the
@@ -104,6 +204,22 @@ class RenderRequest:
         self.error: str | None = None
 
 
+class RangeRequest:
+    """One pending LiDAR cast, fulfilled by the physics thread.
+
+    Same handshake as RenderRequest, and for a stricter reason: `mj_ray` reads
+    mjData, so casting from an HTTP worker while the physics loop is inside
+    `mj_step` samples a half-integrated state. That does not crash -- it returns
+    plausible, wrong ranges, which is the worst failure mode a range sensor has.
+    """
+
+    def __init__(self, params: dict) -> None:
+        self.params = params
+        self.done = threading.Event()
+        self.cloud: dict | None = None
+        self.error: str | None = None
+
+
 class PoseResetRequest:
     """One pending base teleport, applied by the physics thread.
 
@@ -118,6 +234,202 @@ class PoseResetRequest:
         self.error: str | None = None
 
 
+def _ray_fan_directions(n_azimuth: int, n_elevation: int,
+                        elev_min_deg: float, elev_max_deg: float,
+                        yaw: float) -> np.ndarray:
+    """Unit ray directions in WORLD coordinates, shape (n_azimuth*n_elevation, 3).
+
+    The fan is defined in base_link (azimuth 0 = straight ahead, counter-
+    clockwise positive) and rotated into the world by the base yaw only. Torso
+    pitch/roll are deliberately NOT applied even though the site rides the
+    waist: the real pipeline gravity-aligns its cloud before anyone sees it
+    (g1_sidecar.py `_normalize_mid360_frame` anchors the floor to z=0), so a
+    level fan is closer to what a consumer actually receives from the robot than
+    a tilted one would be. The site's POSITION does follow the torso; only its
+    orientation is idealised.
+    """
+    az = np.arange(n_azimuth, dtype=np.float64) * (2.0 * math.pi / n_azimuth)
+    if n_elevation == 1:
+        el = np.array([math.radians(0.5 * (elev_min_deg + elev_max_deg))])
+    else:
+        el = np.radians(np.linspace(elev_min_deg, elev_max_deg, n_elevation))
+    # (azimuth-major so consecutive rays sweep elevation within one column)
+    a, e = np.meshgrid(az + yaw, el, indexing="ij")
+    a, e = a.ravel(), e.ravel()
+    ce = np.cos(e)
+    return np.stack([ce * np.cos(a), ce * np.sin(a), np.sin(e)], axis=1)
+
+
+def _robot_geom_mask(model, root_body: str = "pelvis") -> tuple:
+    """Geom-group mask that hides the robot's OWN geoms from the cast.
+
+    Returns `(mask_or_None, description)`; `mask` is the uint8[mjNGROUP] array
+    `mj_ray`/`mj_multiRay` take as `geomgroup`, or None for "cast against
+    everything".
+
+    Why this exists at all -- measured on g1_dex3_room_scene.xml with the fan
+    below, origin at head_camera_site:
+      * 420 of 1440 rays came back off the robot itself, 366 of them off
+        torso_link at 0.028-0.173 m. Our ray origin sits INSIDE the torso
+        shell, because the MJCF offers no external head mount to hang a sensor
+        on -- so the torso mesh swallowed 25 % of the sweep from the inside,
+        including the whole sector containing the `person` figure (its torso,
+        head and arms went from 0 returns to 10).
+      * That blindness is an artefact of where we could attach the origin, not
+        of the robot's shape. The real MID-360 is bolted to the outside of the
+        head and does not occlude itself this way.
+    So the default cast hides the robot. It is a real simplification and it
+    cuts BOTH ways: the real sensor does see the robot's own arms beyond the
+    0.3 m self-return filter (measured here: wrists at 0.42 m), and the sim
+    will not show them. Code that picks "the nearest surface" out of a real
+    cloud still has to reject returns inside the robot's own footprint -- the
+    sim does not exercise that for you.
+
+    The groups are DERIVED, not hard-coded: only groups used exclusively by
+    bodies in the robot's kinematic tree are masked, so a scene that puts props
+    in the same group as robot geoms keeps its props visible (and says so).
+    Measured today: robot = groups {2, 3}, scene props = group {0}, in
+    g1_dex3_room_scene, g1_dex3_pickplace_scene and g1_apple_pnp_scene alike.
+    """
+    n_group = 6  # mjNGROUP
+    body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root_body)
+    if body < 0:
+        return None, f"none (no '{root_body}' body in this scene)"
+
+    def grp(i: int) -> int:
+        # mj_ray clamps out-of-range groups into [0, mjNGROUP-1]; mirror that
+        # here or the mask would be indexed differently from the filter.
+        return min(max(int(model.geom_group[i]), 0), n_group - 1)
+
+    rid = model.body_rootid[body]
+    robot = {grp(i) for i in range(model.ngeom)
+             if model.body_rootid[model.geom_bodyid[i]] == rid}
+    other = {grp(i) for i in range(model.ngeom)
+             if model.body_rootid[model.geom_bodyid[i]] != rid}
+    exclusive = sorted(robot - other)
+    if not exclusive:
+        return None, (f"none (robot geom groups {sorted(robot)} are shared with "
+                      f"scene geometry -- masking them would hide props too)")
+    mask = np.ones(n_group, dtype=np.uint8)
+    for g in exclusive:
+        mask[g] = 0
+    return mask, f"geom groups {exclusive} (used only by the '{root_body}' tree)"
+
+
+def _cast_ray_fan(model, data, origin_world, base_x: float, base_y: float,
+                  yaw: float, *, n_azimuth: int, n_elevation: int,
+                  elev_min_deg: float, elev_max_deg: float, min_range: float,
+                  max_range: float, max_points: int, bodyexclude: int,
+                  geomgroup) -> dict:
+    """Cast the fan and return the surviving hits in the base_link contract.
+
+    Contract (`src/robot/types.ts` PointCloudFrame): flat XYZ triplets in
+    METRES, x forward, y left, z up, floor at z = 0. The world floor of every
+    scene here is the z=0 plane, so the z of a world hit is already the contract
+    z; only x/y need the base translation and a rotation by -yaw.
+
+    `flg_static=True` is mandatory, not incidental: every wall, the floor, the
+    table and the chair are children of <worldbody> and would otherwise be
+    invisible to the cast, leaving a room that reports itself empty. Note that
+    `mj_ray` filters on geomgroup / flg_static / bodyexclude and NOT on contact
+    affinity, so the room's mocap `person` -- whose geoms are contype=0
+    conaffinity=0 and collide with nothing -- IS visible to the sensor.
+    Verified: with the robot at the origin its legs, torso, arms and head all
+    return (2.31-2.58 m at bearing -143 deg).
+    """
+    dirs = _ray_fan_directions(n_azimuth, n_elevation, elev_min_deg, elev_max_deg, yaw)
+    n_ray = dirs.shape[0]
+    pnt = np.asarray(origin_world, dtype=np.float64).reshape(3)
+    vec = np.ascontiguousarray(dirs.reshape(-1), dtype=np.float64)
+    geomid = np.full(n_ray, -1, dtype=np.int32)
+    dist = np.full(n_ray, -1.0, dtype=np.float64)
+
+    # mj_multiRay is one C call for the whole fan and takes a cutoff; the
+    # per-ray loop is the fallback for bindings that predate it. They are not
+    # bit-identical against MESH geoms -- with the self-filter off, 4 of 1440
+    # rays differed on the robot's own STLs (all inside min_range) -- so the
+    # `method` is reported in the snapshot rather than assumed irrelevant. With
+    # the default self-filter no meshes remain in the cast and they agree
+    # exactly.
+    method = "mj_multiRay"
+    if hasattr(mujoco, "mj_multiRay"):
+        try:
+            mujoco.mj_multiRay(model, data, pnt, vec, geomgroup, True, bodyexclude,
+                               geomid, dist, None, n_ray, max_range)
+        except TypeError:
+            # Older bindings take no `normal` argument. Retry without it rather
+            # than degrading to the slow path on every cast from now on.
+            mujoco.mj_multiRay(model, data, pnt, vec, geomgroup, True, bodyexclude,
+                               geomid, dist, n_ray, max_range)
+    else:
+        method = "mj_ray"
+        gid = np.zeros(1, dtype=np.int32)
+        for i in range(n_ray):
+            dist[i] = mujoco.mj_ray(model, data, pnt,
+                                    np.ascontiguousarray(dirs[i]), geomgroup,
+                                    True, bodyexclude, gid)
+            geomid[i] = gid[0]
+
+    # -1 means "no intersection". A ray that leaves through the doorway and
+    # never comes back is UNKNOWN, not free space, and simply contributes no
+    # point -- exactly like a MID-360 ray that gets no return.
+    #
+    # max_range is enforced HERE and not left to mj_multiRay's `cutoff`,
+    # because cutoff does not prune an infinite `plane`: with cutoff=25 the
+    # room's floor plane still returned 7 of 1440 rays at 51 m (they slip out
+    # through the doorway and hit the floor far outside the room), which then
+    # showed up in the cloud as points 49 m to the side. Same filter, both
+    # paths, so the fallback and the fast path agree exactly.
+    hit = dist >= 0.0
+    near = hit & (dist < min_range)
+    far = hit & (dist > max_range)
+    keep = hit & (dist >= min_range) & (dist <= max_range)
+
+    d = dist[keep][:, None]
+    pts_world = pnt[None, :] + d * dirs[keep]
+
+    c, s = math.cos(yaw), math.sin(yaw)
+    dx = pts_world[:, 0] - base_x
+    dy = pts_world[:, 1] - base_y
+    pts = np.empty_like(pts_world)
+    pts[:, 0] = dx * c + dy * s        # rotate by -yaw
+    pts[:, 1] = -dx * s + dy * c
+    pts[:, 2] = pts_world[:, 2]
+
+    decimated = False
+    if pts.shape[0] > max_points:
+        stride = int(math.ceil(pts.shape[0] / max_points))
+        pts = pts[::stride]
+        decimated = True
+
+    ox, oy, oz = float(pnt[0]), float(pnt[1]), float(pnt[2])
+    odx, ody = ox - base_x, oy - base_y
+    return {
+        # Rounded to 0.1 mm: two orders of magnitude finer than any LiDAR this
+        # stands in for, and it keeps a 1440-point JSON body small.
+        "positions": [round(float(v), 4) for v in pts.reshape(-1)],
+        "origin": [round(odx * c + ody * s, 4), round(-odx * s + ody * c, 4),
+                   round(oz, 4)],
+        "point_count": int(pts.shape[0]),
+        "rays": n_ray,
+        # Rays that came back with anything at all, in range or not, then what
+        # the two range gates removed. `returns - dropped_near - dropped_far`
+        # is the point count before decimation.
+        "returns": int(hit.sum()),
+        "dropped_near": int(near.sum()),
+        "dropped_far": int(far.sum()),
+        "decimated": decimated,
+        "method": method,
+        "fan": {
+            "azimuth_rays": n_azimuth,
+            "elevation_rings": n_elevation,
+            "elevation_deg": [elev_min_deg, elev_max_deg],
+            "min_range_m": min_range,
+            "max_range_m": max_range,
+        },
+    }
+
+
 class SimNode:
     def __init__(self, scene: Path, domain: int, verbose: bool = True) -> None:
         self.model = mujoco.MjModel.from_xml_path(str(scene))
@@ -130,6 +442,7 @@ class SimNode:
         self.loco = LocoState()
         self._render_queue: list[RenderRequest] = []
         self._reset_queue: list[PoseResetRequest] = []
+        self._range_queue: list[RangeRequest] = []
         self._renderer: mujoco.Renderer | None = None
         self.crc = CRC()
 
@@ -154,6 +467,9 @@ class SimNode:
         print("[SimNode]   rpc  rt/api/sport/{request,response}")
         if not self.has_base:
             print("[SimNode]   NOTE scene has no planar base -- loco velocity is a no-op")
+        if self.lidar_site < 0:
+            print(f"[SimNode]   NOTE no site '{LIDAR_SITE}' in this scene -- the "
+                  f"ray-LiDAR origin is dead-reckoned from the base pose")
 
     # ------------------------------------------------------------------ set-up
 
@@ -201,6 +517,18 @@ class SimNode:
         self.base_dofadr = [dofadr(n) for n in BASE_JOINTS] if self.has_base else []
 
         self.head_cam = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "head_camera")
+
+        # Ray-LiDAR mount. A negative id is not fatal -- cast_lidar falls back to
+        # the base pose plus LIDAR_FALLBACK_OFFSET and SAYS SO in the snapshot's
+        # `origin_source`, so a consumer can tell a measured mount from an
+        # assumed one instead of inheriting a silent metre of error.
+        self.lidar_site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, LIDAR_SITE)
+        # bodyexclude takes ONE body id, so this drops the pelvis only -- it is
+        # not a self-filter for the whole robot and is not relied on as one; the
+        # geom-group mask below is. Kept because it costs nothing and is correct
+        # even in a scene where the mask comes back None (-1 excludes nothing).
+        self.lidar_exclude_body = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+        self.lidar_geomgroup, self.lidar_self_filter = _robot_geom_mask(m)
 
     def _init_dds(self) -> None:
         self.tgt = {"body": np.zeros(N_BODY), "lh": np.zeros(N_HAND), "rh": np.zeros(N_HAND)}
@@ -491,6 +819,84 @@ class SimNode:
             if n:
                 names.append(n)
         return names
+
+    # ------------------------------------------------------------- ray LiDAR
+
+    def cast_lidar(self, n_azimuth: int = LIDAR_AZIMUTH_RAYS,
+                   n_elevation: int = LIDAR_ELEVATION_RINGS,
+                   elev_min_deg: float = LIDAR_ELEV_MIN_DEG,
+                   elev_max_deg: float = LIDAR_ELEV_MAX_DEG,
+                   min_range: float = LIDAR_MIN_RANGE,
+                   max_range: float = LIDAR_MAX_RANGE,
+                   max_points: int = LIDAR_MAX_POINTS,
+                   include_self: bool = False) -> dict:
+        """One MID-360-shaped ray sweep of the scene, in the base_link contract.
+
+        This is a MEASUREMENT of the loaded MJCF, not a model of a room: every
+        returned point is a real ray/geom intersection, and geometry that is not
+        in the scene produces nothing. Returns are UNLABELLED -- nothing here
+        associates a point with "the table"; that association is the caller's,
+        and it can only ever be "the nearest surface within some cone".
+
+        A missing return means UNKNOWN, never "clear". Two ways that happens
+        here, both faithful to the real sensor: the ray left the room through
+        the doorway and never came back, or the surface is outside the
+        elevation band. With the defaults, from the measured 1.271 m mount, the
+        fan covers only z 0.63-1.33 m at 0.5 m and z 0-1.39 m at 1 m -- so a
+        shelf at chest height one step away is genuinely not looked at.
+
+        `include_self=True` puts the robot's own geoms back into the cast; see
+        _robot_geom_mask for what that trades away and why it is not the
+        default.
+
+        MUST run on the physics thread (see RangeRequest / drain_ranges).
+        """
+        x, y, yaw = self.measured_pose()
+        if self.lidar_site >= 0:
+            origin = np.array(self.data.site_xpos[self.lidar_site], dtype=np.float64)
+            origin_source = f"site:{LIDAR_SITE}"
+        else:
+            # No mount site in this scene: place the sensor by dead reckoning
+            # from the base and flag it, rather than refusing to answer.
+            fx, fy, fz = LIDAR_FALLBACK_OFFSET
+            c, s = math.cos(yaw), math.sin(yaw)
+            origin = np.array([x + fx * c - fy * s, y + fx * s + fy * c, fz],
+                              dtype=np.float64)
+            origin_source = (f"base+offset{LIDAR_FALLBACK_OFFSET} "
+                             f"(no site '{LIDAR_SITE}' in {self.scene.name})")
+
+        cloud = _cast_ray_fan(
+            self.model, self.data, origin, x, y, yaw,
+            n_azimuth=n_azimuth, n_elevation=n_elevation,
+            elev_min_deg=elev_min_deg, elev_max_deg=elev_max_deg,
+            min_range=min_range, max_range=max_range, max_points=max_points,
+            bodyexclude=self.lidar_exclude_body,
+            geomgroup=None if include_self else self.lidar_geomgroup,
+        )
+        cloud["origin_source"] = origin_source
+        cloud["self_filter"] = ("disabled (include_self=True)" if include_self
+                                else self.lidar_self_filter)
+        cloud["sim_time"] = round(float(self.data.time), 4)
+        return cloud
+
+    def request_range(self, params: dict, timeout: float = 5.0) -> RangeRequest:
+        req = RangeRequest(params)
+        with self.lock:
+            self._range_queue.append(req)
+        if not req.done.wait(timeout):
+            req.error = "lidar cast timed out (is the physics loop running?)"
+        return req
+
+    def drain_ranges(self) -> None:
+        with self.lock:
+            pending, self._range_queue = self._range_queue, []
+        for req in pending:
+            try:
+                req.cloud = self.cast_lidar(**req.params)
+            except Exception as exc:  # noqa: BLE001
+                req.error = str(exc)
+            finally:
+                req.done.set()
 
 
 # ---------------------------------------------------------------- HTTP facade
@@ -783,6 +1189,56 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 with node.lock:
                     x, y, yaw = node.measured_pose()
                 self._send(200, {"ok": True, "x": x, "y": y, "yaw": yaw, "source": "sim"})
+            elif self.path == "/pointcloud/sensors":
+                # Same shape as g1_sidecar.py: {"sensors": [...]}.
+                self._send(200, {"sensors": SIM_DEPTH_SENSORS})
+            elif (self.path.startswith("/pointcloud/")
+                  and self.path.endswith("/snapshot")):
+                name = self.path[len("/pointcloud/"):-len("/snapshot")]
+                if name not in SIM_DEPTH_SENSORS:
+                    # 200 + ok:false, verbatim the sidecar's wording for an
+                    # unknown sensor, so a client's error handling is identical.
+                    self._send(200, {"ok": False,
+                                     "error": f"no depth sensor '{name}'"})
+                    return
+                req = node.request_range({})
+                if req.error or req.cloud is None:
+                    # 503, NOT an empty cloud. An empty `positions` array is
+                    # indistinguishable from "the sweep found nothing", i.e.
+                    # from "the way is clear" -- so a broken sensor has to fail
+                    # loudly at the HTTP layer instead.
+                    self._send(503, {"ok": False,
+                                     "error": req.error or "no lidar frame"})
+                    return
+                cloud = req.cloud
+                self._send(200, {
+                    "ok": True,
+                    "sensor": name,
+                    "sensor_type": "lidar",
+                    # The cast measures geometry, not reflectivity. Claiming an
+                    # intensity channel and filling it with a constant would be
+                    # a fabricated measurement.
+                    "has_intensity": False,
+                    "positions": cloud["positions"],
+                    "intensities": [],
+                    "origin": cloud["origin"],
+                    "source": "sim-ray",
+                    # Beyond the sidecar's contract, ignored by clients that do
+                    # not know it: what the sweep actually did, so a surprising
+                    # cloud can be explained without re-running it.
+                    "point_count": cloud["point_count"],
+                    "rays": cloud["rays"],
+                    "returns": cloud["returns"],
+                    "dropped_near": cloud["dropped_near"],
+                    "dropped_far": cloud["dropped_far"],
+                    "decimated": cloud["decimated"],
+                    "method": cloud["method"],
+                    "origin_source": cloud["origin_source"],
+                    "self_filter": cloud["self_filter"],
+                    "sim_time": cloud["sim_time"],
+                    "fan": cloud["fan"],
+                    "scene": node.scene.name,
+                })
             else:
                 self._send(404, {"error": "not found"})
 
@@ -815,6 +1271,28 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 else:
                     x, y, yaw = node.measured_pose()
                     self._send(200, {"ok": True, "x": x, "y": y, "yaw": yaw})
+                return
+
+            # Accepted no-op. On the robot this publishes rt/utlidar/switch and
+            # the sensor takes ~3 s to come up; the sim's rays are always
+            # available, so there is nothing to switch. It answers anyway --
+            # with the sidecar's exact success shape -- so a client can run one
+            # unchanged enable sequence against both facades. `sim` and `note`
+            # are additive: nothing is claimed to have been switched.
+            if self.path == "/pointcloud/lidar/switch":
+                on = body.get("on")
+                if not isinstance(on, bool):
+                    self._send(400, {"ok": False,
+                                     "error": 'body must be {"on": true|false}'})
+                    return
+                self._send(200, {
+                    "ok": True,
+                    "lidar": "ON" if on else "OFF",
+                    "sim": True,
+                    "note": ("sim ray-LiDAR is always on -- switch accepted and "
+                             "ignored; /pointcloud/mid360_lidar/snapshot casts "
+                             "regardless of this flag"),
+                })
                 return
 
             if self.path not in ("/loco/move", "/loco/action", "/loco/fsm",
@@ -873,6 +1351,9 @@ def run_loop(node: SimNode, viewer=None) -> None:
                 break  # re-base the clock below before stepping any further
         node.drain_pose_resets()
         node.drain_renders()
+        # Between steps, never during one: mj_ray reads the same mjData mj_step
+        # is writing (see RangeRequest).
+        node.drain_ranges()
         if viewer is not None and node.data.time - last_sync > 1 / 60:
             viewer.sync()
             last_sync = node.data.time
@@ -924,7 +1405,8 @@ def main(argv: list[str] | None = None) -> int:
                                     make_handler(node, _LocoBridge()))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         print(f"[SimNode]   http :{args.http_port} "
-              f"(/health /cameras /state /loco/*) -- point HARDWARE_SIDECAR_URL here")
+              f"(/health /cameras /state /loco/* /pointcloud/*) "
+              f"-- point HARDWARE_SIDECAR_URL here")
 
     try:
         if args.viewer:

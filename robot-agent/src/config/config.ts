@@ -122,6 +122,42 @@ export interface Config {
     stopWords: string[];
     /** Camera used by `look` / `scan_room` (`AGENT_CAMERA_NAME`). */
     cameraName: string;
+    /**
+     * Horizontal field of view of that camera in degrees (`AGENT_CAMERA_HFOV_DEG`).
+     * The vision model reports WHERE in the frame something is; this turns that
+     * into a bearing. Wrong value → every bearing is scaled wrong → `goto`
+     * walks the wrong way, so set it per camera:
+     *   sim `head_camera` (fovy 89 at 4:3) = 105.3 — the default
+     *   RealSense D435i RGB = 69, its depth stream = 87
+     */
+    cameraHfovDeg: number;
+    /**
+     * Whether `look`/`scan_room` measure distances with the LiDAR
+     * (`AGENT_RANGE_ENABLED`, default true — set to `false` to disable).
+     * Off, or with no sidecar answering, Agent Mode keeps the VLM's distance
+     * guess and `goto` falls back to arriving by walking into things.
+     */
+    rangeEnabled: boolean;
+    /**
+     * Depth/LiDAR sensor name asked of the sidecar (`AGENT_RANGE_SENSOR`).
+     * `mid360_lidar` is what `hardware/g1_sidecar.py` publishes the real Livox
+     * MID-360 as, and what `hardware/sim_g1_dds/sim_node.py` ray-casts under the
+     * same HTTP contract.
+     */
+    rangeSensor: string;
+    /** Returns beyond this say nothing actionable about the current block (`AGENT_RANGE_MAX_M`). */
+    rangeMaxM: number;
+    /**
+     * Half-width in degrees of the cone searched around an entity's bearing
+     * (`AGENT_RANGE_CONE_DEG`). Sized to the VLM's 7.2° bearing MAE.
+     */
+    rangeConeDeg: number;
+    /**
+     * Returns nearer than this are rejected (`AGENT_RANGE_MIN_M`). On the real
+     * MID-360 roughly half of every raw frame is the sensor seeing its own
+     * housing at < 0.3 m, so without this every bearing reads ~0 m.
+     */
+    rangeMinM: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
   };
@@ -148,6 +184,22 @@ function normalizeRobotDescription(raw: string): string {
  * initializer would still be in its temporal dead zone).
  */
 export const DEFAULT_AGENT_MODEL = 'gemma3:4b';
+
+/**
+ * A number from the environment, or the fallback when it is missing OR unusable.
+ *
+ * `parseFloat('' )` and `parseFloat('105,3')`-style typos yield NaN, and NaN
+ * propagates silently through geometry: a NaN camera HFOV makes every bearing
+ * NaN, `normalizeDeg` folds NaN to 0 (types.ts), and the navigator then plans no
+ * correction turn at all because `Math.abs(0) > BEARING_DEADBAND_DEG` is false —
+ * the robot walks dead ahead past whatever it was aimed at, with nothing in any
+ * log to say why. A misconfigured value must fall back to the default, loudly in
+ * the startup banner, not disable steering.
+ */
+function envFloat(raw: string | undefined, fallback: number): number {
+  const n = parseFloat(raw ?? '');
+  return Number.isFinite(n) ? n : fallback;
+}
 
 export const config: Config = {
   port: parseInt(process.env.PORT || '41243', 10),
@@ -207,6 +259,23 @@ export const config: Config = {
       .map((w) => w.trim().toLowerCase())
       .filter((w) => w.length > 0),
     cameraName: process.env.AGENT_CAMERA_NAME || 'head_camera',
+    cameraHfovDeg: envFloat(process.env.AGENT_CAMERA_HFOV_DEG, 105.3),
+    // Range sensing. Opt-OUT: the honest default is "try the sidecar, and fall
+    // back to the old bearing-only behaviour when it is not there" — the VLM
+    // cannot supply a distance (0.94 m MAE, usually null), so without this the
+    // robot only ever "arrives" by walking into things.
+    rangeEnabled: process.env.AGENT_RANGE_ENABLED !== 'false',
+    // The name the G1 sidecar publishes the Livox MID-360 under, and the one the
+    // MuJoCo sim mirrors — so the same value works against robot and sim.
+    rangeSensor: process.env.AGENT_RANGE_SENSOR || 'mid360_lidar',
+    rangeMaxM: parseFloat(process.env.AGENT_RANGE_MAX_M || '12'),
+    // Cone half-width for "how far is the thing at that bearing". 8° is sized to
+    // the VLM's own 7.2° bearing MAE (see vision.ts): a narrower cone would miss
+    // the object it is aimed at and report "nothing there".
+    rangeConeDeg: parseFloat(process.env.AGENT_RANGE_CONE_DEG || '8'),
+    // Returns nearer than this are the sensor seeing its own housing — about
+    // half of every raw MID-360 frame sits below 0.3 m.
+    rangeMinM: parseFloat(process.env.AGENT_RANGE_MIN_M || '0.35'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
   },
 };
@@ -279,7 +348,14 @@ export function validateConfig(): void {
         `vision call returns 404 and Agent Mode will refuse to plan.`
     );
   }
-  console.log(`    - Camera: ${config.agentMode.cameraName}`);
+  console.log(
+    `    - Camera: ${config.agentMode.cameraName} (HFOV ${config.agentMode.cameraHfovDeg}°)`
+  );
+  console.log(
+    `    - Range Sensor: ${config.agentMode.rangeSensor} ` +
+      `(${config.agentMode.rangeEnabled ? 'enabled' : 'DISABLED — distances stay VLM guesses'}, ` +
+      `${config.agentMode.rangeMinM}–${config.agentMode.rangeMaxM} m, ±${config.agentMode.rangeConeDeg}° cone)`
+  );
   console.log(
     `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s`
   );

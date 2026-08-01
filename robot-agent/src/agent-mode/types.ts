@@ -51,6 +51,13 @@ export interface AgentBlock {
   finishedAt?: string;
   result?: string;
   error?: string;
+  /**
+   * What the block ACHIEVED, from odometry — see {@link BlockOutcome.measured}.
+   * Carried on the block so a caller that only sees finished blocks (the
+   * navigator, the UI) can tell "walked 0.98 m" from "did not move at all"
+   * without parsing the message.
+   */
+  measured?: { distanceM?: number; angleDeg?: number };
 }
 
 export interface AgentPlan {
@@ -75,6 +82,19 @@ export interface SceneEntity {
   bearingDeg: number;
   /** Rough distance estimate in metres, or null when the VLM did not give one. */
   distanceEstM: number | null;
+  /**
+   * Where `distanceEstM` came from — the difference between a metre we measured
+   * and a metre we guessed, which the operator must be able to see.
+   *
+   * `'lidar'` is a measured range: the nearest surface inside a cone around this
+   * entity's bearing, taken from a real point cloud. LiDAR returns carry no
+   * labels, so it means "something solid is that far away in that direction" —
+   * not "the object I named is that far away". `'vlm-estimate'` is the vision
+   * model's own guess, which measured 0.94 m MAE against known geometry and is
+   * usually null anyway. `null` means there is no distance at all, which is
+   * never the same as 0.
+   */
+  distanceSource: 'lidar' | 'vlm-estimate' | null;
   confidence: number;
   lastSeen: string;
   /**
@@ -94,6 +114,16 @@ export interface SceneMemory {
   currentView: string;
   entities: SceneEntity[];
   personVisible: boolean;
+  /**
+   * Nearest surface straight ahead in metres, measured, or null when unknown —
+   * no range sensor present, nothing returned, or every return rejected.
+   *
+   * Unknown is NOT "clear". The MID-360's vertical fan does not cover
+   * everything in front of the robot, so an object can be real and still
+   * produce no return; absence of a return is absence of evidence, and a
+   * consumer that reads null as free space will walk into things.
+   */
+  forwardClearanceM: number | null;
   updatedAt: string;
 }
 
@@ -155,6 +185,17 @@ export interface AgentCommandResult {
   accepted: boolean;
   planId?: string;
   message: string;
+  /**
+   * E-Stop paths only: whether StopMove AND Damp were acknowledged by the
+   * robot. `false` means the latch is set — no further blocks will run — but
+   * the base was never told, so it may still be executing up to a minute of
+   * already-commanded velocity. The distinction has to survive all the way to
+   * the operator; a banner that says "damped" when it isn't is the one message
+   * nobody can afford to have wrong.
+   */
+  delivered?: boolean;
+  /** Why delivery failed, when `delivered` is false. */
+  deliveryError?: string;
 }
 
 /** Walking direction in the robot's own frame. */

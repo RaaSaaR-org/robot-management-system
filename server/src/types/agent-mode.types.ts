@@ -76,6 +76,14 @@ export interface AgentBlock {
   finishedAt?: string;
   result?: string;
   error?: string;
+  /**
+   * What the block ACTUALLY achieved, from odometry — as opposed to what it was
+   * commanded to do. Carried on the block so a consumer that only sees finished
+   * blocks (the UI) can tell "walked 0.98 m" from "did not move at all" without
+   * parsing the message. Absent when no odometry was available, which is itself
+   * meaningful: the motion is then unverified, not confirmed.
+   */
+  measured?: { distanceM?: number; angleDeg?: number };
 }
 
 /** A full block list produced by the planner for one utterance. */
@@ -107,10 +115,33 @@ export interface SceneEntity {
   /** World bearing, +x = 0, CCW positive, (-180, 180]. */
   bearingDeg: number;
   distanceEstM: number | null;
+  /**
+   * Where `distanceEstM` came from — a measured metre and a guessed one must
+   * not be presented alike.
+   *
+   * `'lidar'` is a measured range: the nearest surface inside a cone around
+   * this bearing, from a real point cloud. Returns are unlabelled, so it means
+   * "something solid is that far away in that direction", not "the named object
+   * is". `'vlm-estimate'` is the vision model's guess (0.94 m MAE against known
+   * geometry, usually null). `null` means no distance at all — never 0.
+   *
+   * Optional, like `fsmId`/`damped` below: an older robot-agent sends no source
+   * field, and the server mirrors what it is given rather than inventing one.
+   * Consumers must treat "absent" as unverified, not as measured.
+   */
+  distanceSource?: 'lidar' | 'vlm-estimate' | null;
   /** 0..1 */
   confidence: number;
   /** ISO timestamp */
   lastSeen: string;
+  /**
+   * Monotonic count of merges that actually re-observed this entity. Lets a
+   * consumer tell "the last look confirmed this" from "this is what the last
+   * look that saw it said" — `lastSeen` cannot serve there, because two merges
+   * inside the same millisecond share a timestamp. Optional for the same
+   * older-agent reason as `distanceSource`; display-irrelevant.
+   */
+  observedSeq?: number;
   note?: string;
 }
 
@@ -121,6 +152,16 @@ export interface SceneMemory {
   currentView: string;
   entities: SceneEntity[];
   personVisible: boolean;
+  /**
+   * Nearest surface straight ahead in metres, measured, or null when unknown —
+   * no range sensor present, nothing returned, or every return rejected.
+   *
+   * Unknown is NOT "clear": the LiDAR's vertical fan does not cover everything
+   * in front of the robot, so an object can be real and still produce no
+   * return. Optional because an older robot-agent omits the field entirely;
+   * absent and null both mean "we do not know", never "the way is free".
+   */
+  forwardClearanceM?: number | null;
   /** ISO timestamp */
   updatedAt: string;
 }

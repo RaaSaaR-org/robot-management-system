@@ -10,7 +10,12 @@
 
 import { config } from '../config/config.js';
 import { hardwareClient, type LocoActionName, type LocoResult } from '../hardware/HardwareClient.js';
-import type { SceneMemoryStore } from './scene-memory.js';
+// The two clamp constants live in navigator.ts because that is where they are
+// justified (the 0.45 m comment is the reason the number exists). Importing
+// them is acyclic: navigator.ts imports only config, scene-memory and types.
+import { CLEARANCE_MARGIN_M, MIN_STAGE_M } from './navigator.js';
+import { RangeSensor } from './range.js';
+import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
 import type { VisionClient, VisionObservation } from './vision.js';
 import {
   DEG_TO_RAD,
@@ -147,6 +152,13 @@ export function turnToCommand(
 export interface BlockExecutorDeps {
   scene: SceneMemoryStore;
   vision: VisionClient;
+  /**
+   * LiDAR ranging for every observation. Defaults to a real {@link RangeSensor},
+   * which talks to the sidecar and degrades to "no readings" when there is none
+   * — the same facade pattern as {@link BlockExecutorDeps.loco}, so a test can
+   * inject a disabled or scripted sensor instead of reaching for the network.
+   */
+  range?: RangeSensor;
   /** Checked between blocks and inside `wait` — never mid-motion. */
   isAborted: () => boolean;
   /** Called after every scene merge so the controller can mirror it. */
@@ -193,6 +205,7 @@ function defaultSleep(ms: number): Promise<void> {
 export class BlockExecutor {
   private readonly deps: BlockExecutorDeps;
   private readonly loco: NonNullable<BlockExecutorDeps['loco']>;
+  private readonly range: RangeSensor;
   private readonly say: (text: string) => Promise<boolean>;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
@@ -200,6 +213,7 @@ export class BlockExecutor {
   constructor(deps: BlockExecutorDeps) {
     this.deps = deps;
     this.loco = deps.loco ?? defaultLoco;
+    this.range = deps.range ?? new RangeSensor();
     this.say = deps.say ?? defaultSay;
     this.sleep = deps.sleep ?? defaultSleep;
     this.now = deps.now ?? (() => Date.now());
@@ -247,9 +261,48 @@ export class BlockExecutor {
   // ── motion ────────────────────────────────────────────────────────────────
 
   private async walk(block: AgentBlock): Promise<BlockOutcome> {
-    const distanceM = Number(block.params.distanceM);
+    const requestedM = Number(block.params.distanceM);
     const direction = (block.params.direction as WalkDirection) ?? 'forward';
-    if (!Number.isFinite(distanceM)) return { ok: false, message: 'walk: distanceM is not a number' };
+    if (!Number.isFinite(requestedM)) return { ok: false, message: 'walk: distanceM is not a number' };
+
+    // The measured clearance used to protect only the blocks the NAVIGATOR
+    // generated — `getForwardClearanceM()` had exactly one caller. So a plan
+    // the model wrote itself ("look, then walk 3 m") drove open-loop at a
+    // surface the same look had measured at 1.20 m and printed into the very
+    // prompt that produced the plan. Any walk is now clamped by whatever the
+    // sensor last said, wherever the block came from.
+    //
+    // Three properties are deliberate. `null` is UNKNOWN and clamps nothing, so
+    // this can never make the robot more timid than the sensor justifies.
+    // Forward only, because `forwardClearance` measures the +x corridor and
+    // nothing else. And the comparison is strict, so it is provably a no-op for
+    // navigator stages, which already clamped themselves to the same number.
+    let distanceM = requestedM;
+    let clampNote = '';
+    if (direction === 'forward') {
+      const clearanceM = this.deps.scene.getForwardClearanceM();
+      if (clearanceM !== null) {
+        const allowedM = Math.max(0, clearanceM - CLEARANCE_MARGIN_M);
+        if (allowedM < distanceM) {
+          if (allowedM < MIN_STAGE_M) {
+            return {
+              ok: false,
+              message:
+                `walk: the lidar measures ${clearanceM.toFixed(2)} m straight ahead, inside the ` +
+                `${CLEARANCE_MARGIN_M.toFixed(2)} m stopping margin — refusing to walk into it. ` +
+                `Turn, or use goto so the approach is measured.`,
+            };
+          }
+          distanceM = allowedM;
+          // Say it in the result, not only in the log: the planner re-plans
+          // from what the block reports, so a silent clamp would have it
+          // believing a pose the robot never reached.
+          clampNote =
+            ` Shortened from the requested ${requestedM.toFixed(2)} m — the lidar measures ` +
+            `${clearanceM.toFixed(2)} m straight ahead.`;
+        }
+      }
+    }
 
     const cmd = walkToCommand(distanceM, direction);
     const before = await this.loco.odometry();
@@ -267,7 +320,7 @@ export class BlockExecutor {
         message:
           `Commanded ${distanceM.toFixed(2)} m ${direction} ` +
           `(${cmd.durationS.toFixed(1)} s at ${config.agentMode.walkSpeedMps} m/s). ` +
-          `No odometry available — distance travelled is unverified.`,
+          `No odometry available — distance travelled is unverified.${clampNote}`,
       };
     }
 
@@ -293,7 +346,7 @@ export class BlockExecutor {
         : '';
     return {
       ok: true,
-      message: `Walked ${moved.toFixed(2)} m ${direction} in ${cmd.durationS.toFixed(1)} s${note}.`,
+      message: `Walked ${moved.toFixed(2)} m ${direction} in ${cmd.durationS.toFixed(1)} s${note}.${clampNote}`,
       measured: { distanceM: moved },
     };
   }
@@ -357,6 +410,19 @@ export class BlockExecutor {
   private async driveFor(cmd: WalkCommand): Promise<LocoResult> {
     const startedAt = this.now();
     const result = await this.loco.move(cmd.vx, cmd.vy, cmd.omega, cmd.durationS);
+    // Every base motion in Agent Mode funnels through here, which makes this the
+    // one place a cached point cloud is provably stale: it was taken at a pose
+    // the robot has just left. Ranging the NEXT look's bearings against it would
+    // aim each cone at whatever used to be in that direction. Unconditional
+    // (even on a failed command) because a `move` that reports an error may
+    // still have moved the robot before failing.
+    this.range.invalidateAfterMotion();
+    // And for the same reason, one level up: the DISTANCES in scene memory were
+    // measured from the pose the robot is leaving. The commanded displacement is
+    // what is known here — see SceneMemoryStore.noteTranslationM for why the
+    // commanded number is the right one to hand over. A pure turn contributes
+    // zero, which is correct: rotation is the yaw rule's business.
+    this.deps.scene.noteTranslationM(Math.hypot(cmd.vx, cmd.vy) * cmd.durationS);
     if (!result.ok) return result;
     const remainingMs = cmd.durationS * 1000 - (this.now() - startedAt);
     if (remainingMs > 0) await this.sleep(remainingMs);
@@ -425,11 +491,48 @@ export class BlockExecutor {
     return { ok: true, message: summary + headingNote };
   }
 
-  /** Take one frame, merge it into scene memory at the current heading. */
+  /**
+   * Take one frame, measure what it saw, merge it into scene memory at the
+   * current heading.
+   *
+   * This is the ONE funnel every perception update passes through — `look` and
+   * each step of `scan_room` — which is why the range enrichment lives here and
+   * nowhere else. Vision stays vision (`vision.ts` knows nothing about LiDAR),
+   * and scene memory stays a store.
+   */
   private async observeAndMerge(): Promise<VisionObservation> {
     await this.refreshYaw();
     const observation = await this.deps.vision.observe();
-    const scene = this.deps.scene.merge(observation);
+
+    // ONE cloud per observation, ranged against the bearings that very frame
+    // produced. `measure` never throws: no sidecar, a timed-out snapshot or an
+    // empty cloud all come back as `ok:false` with every reading null, and the
+    // merge below is then exactly what it was before LiDAR existed — the VLM's
+    // own distance, now labelled as the guess it is.
+    //
+    // The bearings handed over are the RELATIVE ones (image centre = straight
+    // ahead), because that is the frame the cloud is in: `base_link`, x forward.
+    // The world conversion happens afterwards, in `scene.merge`. Adding the yaw
+    // here would rotate every cone away from the thing it is aimed at.
+    const measurement = await this.range.measure(observation.entities.map((e) => e.bearingDeg));
+    const entities: ObservedEntity[] = observation.entities.map((entity, index) => {
+      const reading = measurement.readings[index] ?? null;
+      if (reading) {
+        // The measurement REPLACES the model's guess. What it claims is exactly
+        // "the nearest surface inside a ±cone around that bearing" — LiDAR
+        // returns are unlabelled, so it is not provably the named object. It is
+        // still the better number by a wide margin: the VLM's is 0.94 m MAE and
+        // usually null, this one is a range measurement.
+        return { ...entity, distanceEstM: reading.distanceM, distanceSource: 'lidar' };
+      }
+      return { ...entity, distanceSource: entity.distanceEstM === null ? null : 'vlm-estimate' };
+    });
+
+    const scene = this.deps.scene.merge({ ...observation, entities }, undefined, {
+      // null when nothing was measured. Scene memory stores that as UNKNOWN and
+      // the navigator refuses to read it as free space.
+      forwardClearanceM: measurement.clearanceM,
+    });
     this.deps.onScene?.(scene);
     return observation;
   }

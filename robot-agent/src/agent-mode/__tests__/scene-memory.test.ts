@@ -191,6 +191,185 @@ describe('SceneMemoryStore — reporting', () => {
     expect(md).toContain('world-frame');
   });
 
+  it('labels an unenriched distance as the vision guess it is', () => {
+    // An observation that never met the range sensor (the idle watcher, an old
+    // caller) must not have its number stored as if it had been measured.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table', distanceEstM: 2 }, { label: 'door' }]));
+
+    expect(scene.get('table')?.distanceSource).toBe('vlm-estimate');
+    // No distance at all → no source. Never 'vlm-estimate' for a null.
+    expect(scene.get('door')?.distanceSource).toBeNull();
+    expect(scene.summary()).toMatch(/vision guess/);
+  });
+
+  it('carries a measured distance through with its provenance', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge({
+      currentView: 'a table',
+      personVisible: false,
+      raw: '{}',
+      degraded: false,
+      entities: [
+        {
+          label: 'table',
+          bearingDeg: 0,
+          distanceEstM: 2.31,
+          distanceSource: 'lidar',
+          confidence: 0.9,
+        },
+      ],
+    });
+
+    expect(scene.get('table')?.distanceSource).toBe('lidar');
+    expect(scene.summary()).toMatch(/2\.3 m \(lidar-measured\)/);
+    expect(scene.toMarkdown()).toContain('| table | 0° | 2.3 m | lidar |');
+  });
+
+  it('drops a measured distance rather than carrying it past the next look', () => {
+    // The robot has moved between the two merges. A retained 2.31 m would still
+    // wear the 'lidar' label the navigator acts on, describing a pose the robot
+    // is no longer in — worse than knowing nothing.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge({
+      currentView: 'a table',
+      personVisible: false,
+      raw: '{}',
+      degraded: false,
+      entities: [
+        { label: 'table', bearingDeg: 0, distanceEstM: 2.31, distanceSource: 'lidar', confidence: 0.9 },
+      ],
+    });
+    scene.merge(observation([{ label: 'table', bearingDeg: 0 }]));
+
+    expect(scene.get('table')?.distanceEstM).toBeNull();
+    expect(scene.get('table')?.distanceSource).toBeNull();
+  });
+
+  it('treats an unmeasured clearance as unknown and says so, rather than keeping the old one', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 1.42 });
+    expect(scene.getForwardClearanceM()).toBe(1.42);
+    expect(scene.snapshot()?.forwardClearanceM).toBe(1.42);
+    expect(scene.summary()).toMatch(/Clear ahead: 1\.42 m/);
+
+    // The next look measured nothing — a stale clearance is not a clearance.
+    scene.merge(observation([{ label: 'table' }]));
+
+    expect(scene.getForwardClearanceM()).toBeNull();
+    expect(scene.summary()).toMatch(/does NOT mean the way is clear/);
+    expect(scene.toMarkdown()).toMatch(/not the same as clear/);
+  });
+
+  it('retires the clearance once the robot turns away from the heading it measured', () => {
+    // The navigator's stage is look → turn → walk. Without this, the walk down
+    // the new heading would be sized by the free space down the old one.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 1.42 });
+
+    scene.advanceYawDeg(8); // inside the deadband — the corridor barely moved
+    expect(scene.getForwardClearanceM()).toBe(1.42);
+
+    scene.advanceYawDeg(30); // now it points somewhere else entirely
+    expect(scene.getForwardClearanceM()).toBeNull();
+    expect(scene.snapshot()?.forwardClearanceM).toBeNull();
+    expect(scene.summary()).toMatch(/does NOT mean the way is clear/);
+  });
+
+  it('retires the clearance on a measured yaw jump too, not only on dead reckoning', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.setYawDeg(3, 'odometry'); // odometry noise/refresh — still the same direction
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+
+    scene.setYawDeg(-90, 'odometry');
+    expect(scene.getForwardClearanceM()).toBeNull();
+  });
+
+  it('keeps a clearance measured at the scan step yaw, not the store yaw', () => {
+    // `scan_room` merges each step against an explicit yaw; the clearance must
+    // be pinned to THAT heading or it expires the moment the store catches up.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(90, 'odometry');
+    scene.merge(observation([{ label: 'table' }]), 90, { forwardClearanceM: 3.3 });
+
+    expect(scene.getForwardClearanceM()).toBe(3.3);
+    scene.advanceYawDeg(45);
+    expect(scene.getForwardClearanceM()).toBeNull();
+  });
+
+  it('retires the clearance AND every distance once the robot walks away from the pose that measured them', () => {
+    // The 07 recording's false arrival, reduced: measure at one pose, walk 2 m,
+    // and the navigator reads 0.67 m — a number about somewhere the robot no
+    // longer is. Rotation had this rule from the start; translation did not.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(
+      {
+        currentView: 'a table',
+        personVisible: false,
+        raw: '{}',
+        degraded: false,
+        entities: [
+          { label: 'table', bearingDeg: 0, distanceEstM: 0.67, distanceSource: 'lidar', confidence: 0.9 },
+        ],
+      },
+      undefined,
+      { forwardClearanceM: 0.67 }
+    );
+
+    scene.noteTranslationM(0.1); // shuffling, odometry noise — nothing has moved
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(0.67);
+    expect(scene.get('table')?.distanceEstM).toBe(0.67);
+
+    scene.noteTranslationM(2.0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+    expect(scene.getForwardClearanceM()).toBeNull();
+    expect(scene.get('table')?.distanceEstM).toBeNull();
+    // Nulled together with the number: a distance must never be left wearing
+    // the label that makes the navigator act on it.
+    expect(scene.get('table')?.distanceSource).toBeNull();
+    expect(scene.summary()).toMatch(/does NOT mean the way is clear/);
+    // The bearing survives on purpose — it is what lets `goto` aim at all, and
+    // it is re-measured by the look the navigator now takes first.
+    expect(scene.get('table')?.bearingDeg).toBe(0);
+  });
+
+  it('counts backwards walking as movement, and forgets it once the robot looks again', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteTranslationM(-2.0); // direction is irrelevant: it is somewhere else now
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 4.1 });
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(4.1);
+  });
+
+  it('accumulates small steps — three 0.1 m shuffles are a moved robot', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteTranslationM(0.1);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+    scene.noteTranslationM(0.1);
+    expect(scene.getForwardClearanceM()).toBeNull();
+  });
+
+  it('ignores a non-finite translation instead of poisoning the tally', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteTranslationM(Number.NaN);
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
   it('propagates personVisible into the snapshot', () => {
     const scene = new SceneMemoryStore('robot-1');
     scene.merge(observation([{ label: 'Person' }], { personVisible: true }));
