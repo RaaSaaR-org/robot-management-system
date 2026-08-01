@@ -10,6 +10,10 @@
 
 import { config } from '../config/config.js';
 import { hardwareClient, type LocoActionName, type LocoResult } from '../hardware/HardwareClient.js';
+// The two clamp constants live in navigator.ts because that is where they are
+// justified (the 0.45 m comment is the reason the number exists). Importing
+// them is acyclic: navigator.ts imports only config, scene-memory and types.
+import { CLEARANCE_MARGIN_M, MIN_STAGE_M } from './navigator.js';
 import { RangeSensor } from './range.js';
 import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
 import type { VisionClient, VisionObservation } from './vision.js';
@@ -257,9 +261,48 @@ export class BlockExecutor {
   // ── motion ────────────────────────────────────────────────────────────────
 
   private async walk(block: AgentBlock): Promise<BlockOutcome> {
-    const distanceM = Number(block.params.distanceM);
+    const requestedM = Number(block.params.distanceM);
     const direction = (block.params.direction as WalkDirection) ?? 'forward';
-    if (!Number.isFinite(distanceM)) return { ok: false, message: 'walk: distanceM is not a number' };
+    if (!Number.isFinite(requestedM)) return { ok: false, message: 'walk: distanceM is not a number' };
+
+    // The measured clearance used to protect only the blocks the NAVIGATOR
+    // generated — `getForwardClearanceM()` had exactly one caller. So a plan
+    // the model wrote itself ("look, then walk 3 m") drove open-loop at a
+    // surface the same look had measured at 1.20 m and printed into the very
+    // prompt that produced the plan. Any walk is now clamped by whatever the
+    // sensor last said, wherever the block came from.
+    //
+    // Three properties are deliberate. `null` is UNKNOWN and clamps nothing, so
+    // this can never make the robot more timid than the sensor justifies.
+    // Forward only, because `forwardClearance` measures the +x corridor and
+    // nothing else. And the comparison is strict, so it is provably a no-op for
+    // navigator stages, which already clamped themselves to the same number.
+    let distanceM = requestedM;
+    let clampNote = '';
+    if (direction === 'forward') {
+      const clearanceM = this.deps.scene.getForwardClearanceM();
+      if (clearanceM !== null) {
+        const allowedM = Math.max(0, clearanceM - CLEARANCE_MARGIN_M);
+        if (allowedM < distanceM) {
+          if (allowedM < MIN_STAGE_M) {
+            return {
+              ok: false,
+              message:
+                `walk: the lidar measures ${clearanceM.toFixed(2)} m straight ahead, inside the ` +
+                `${CLEARANCE_MARGIN_M.toFixed(2)} m stopping margin — refusing to walk into it. ` +
+                `Turn, or use goto so the approach is measured.`,
+            };
+          }
+          distanceM = allowedM;
+          // Say it in the result, not only in the log: the planner re-plans
+          // from what the block reports, so a silent clamp would have it
+          // believing a pose the robot never reached.
+          clampNote =
+            ` Shortened from the requested ${requestedM.toFixed(2)} m — the lidar measures ` +
+            `${clearanceM.toFixed(2)} m straight ahead.`;
+        }
+      }
+    }
 
     const cmd = walkToCommand(distanceM, direction);
     const before = await this.loco.odometry();
@@ -277,7 +320,7 @@ export class BlockExecutor {
         message:
           `Commanded ${distanceM.toFixed(2)} m ${direction} ` +
           `(${cmd.durationS.toFixed(1)} s at ${config.agentMode.walkSpeedMps} m/s). ` +
-          `No odometry available — distance travelled is unverified.`,
+          `No odometry available — distance travelled is unverified.${clampNote}`,
       };
     }
 
@@ -303,7 +346,7 @@ export class BlockExecutor {
         : '';
     return {
       ok: true,
-      message: `Walked ${moved.toFixed(2)} m ${direction} in ${cmd.durationS.toFixed(1)} s${note}.`,
+      message: `Walked ${moved.toFixed(2)} m ${direction} in ${cmd.durationS.toFixed(1)} s${note}.${clampNote}`,
       measured: { distanceM: moved },
     };
   }

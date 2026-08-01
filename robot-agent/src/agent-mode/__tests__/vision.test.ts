@@ -158,6 +158,44 @@ describe('parseVisionAnswer', () => {
     expect(observation.entities[0].distanceEstM).toBeNull();
   });
 
+  it('keeps a null image-x unplaced instead of pinning it to the left edge', () => {
+    // `Number(null)` is 0, and 0 is a legal image-x meaning "hard against the
+    // left edge" — so the model's way of saying "I cannot place it" used to
+    // come back as a CONFIDENT +52.65° bearing, worse than omitting the field.
+    // The prompt teaches `null` on the very next field, so this is what a model
+    // actually sends.
+    const observation = parseVisionAnswer(
+      JSON.stringify({
+        currentView: 'x',
+        entities: [{ label: 'table', x: null, distanceEstM: 2.0, confidence: 0.9 }],
+      }),
+      HFOV
+    );
+
+    expect(observation.entities[0].bearingDeg).toBe(0);
+    expect(observation.entities[0].imageX).toBeUndefined();
+  });
+
+  it('rejects an image-x answered in pixels instead of collapsing it onto the edge', () => {
+    const observation = parseVisionAnswer(
+      JSON.stringify({
+        currentView: 'x',
+        entities: [
+          { label: 'table', x: 640 },
+          { label: 'chair', x: 120 },
+        ],
+      }),
+      HFOV
+    );
+
+    // Both are out of contract, so neither gets a position — what must NOT
+    // happen is the two landing on the same clamped bearing as if they were
+    // measured.
+    expect(observation.entities[0].bearingDeg).toBe(0);
+    expect(observation.entities[0].imageX).toBeUndefined();
+    expect(observation.entities[1].imageX).toBeUndefined();
+  });
+
   it('infers personVisible from a person entity when the flag is missing', () => {
     const observation = parseVisionAnswer(
       JSON.stringify({ currentView: 'x', entities: [{ label: 'person', bearingDeg: 0 }] })

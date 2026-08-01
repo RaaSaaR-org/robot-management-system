@@ -381,11 +381,22 @@ export class AgentModeController {
 
     if (this.isStopWord(text)) {
       const result = await this.estop(`Stop word "${text}" received`);
+      // `estop()` computes `delivered` precisely so the caller can tell "latch
+      // set" from "base actually stopped" — hard-coding "and the robot was
+      // damped." into both arms threw that away and told the operator the one
+      // thing they must be able to trust. The typed-stop-word path is the same
+      // E-Stop as the button and gets the same honesty.
+      const head = result.stopped
+        ? 'the running plan was discarded'
+        : 'nothing was running';
+      const tail = result.delivered
+        ? 'and the robot was damped.'
+        : `but the robot did NOT confirm StopMove/Damp (${result.deliveryError ?? 'no sidecar ack'}) — it may still be moving; use the hardware E-Stop.`;
       return {
         accepted: true,
-        message: result.stopped
-          ? 'E-Stop: the running plan was discarded and the robot was damped.'
-          : 'E-Stop: nothing was running; the robot was damped.',
+        message: `E-Stop: ${head} ${tail}`,
+        delivered: result.delivered,
+        ...(result.deliveryError === undefined ? {} : { deliveryError: result.deliveryError }),
       };
     }
 

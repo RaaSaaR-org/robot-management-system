@@ -347,4 +347,36 @@ describe('enforceTurnDirection', () => {
     expect(blocks[0]).toBe(walk);
     expect(corrections).toEqual([]);
   });
+
+  it('leaves the return leg of a counter-turn alone', () => {
+    // "turn left, look, then turn back" names exactly one direction, so judging
+    // each turn on its own flipped the RETURN leg to +90 — 180° from what the
+    // operator asked for, logged as "turn direction corrected", with every
+    // later walk in the plan running backwards.
+    const look: PlannedBlock = { kind: 'look', params: {} };
+    const { blocks, corrections } = enforceTurnDirection('schau nach links und dann wieder zurück', [
+      turn(90),
+      look,
+      turn(-90),
+    ]);
+    expect(blocks.map((b) => b.params.angleDeg)).toEqual([90, undefined, -90]);
+    expect(corrections).toEqual([]);
+  });
+
+  it('flips a counter-turn plan as a whole when the model has the convention inverted', () => {
+    // The other half of the same bug: correcting per block turned
+    // [-90, look, +90] into [+90, look, +90], equally 180° off. The convention
+    // is a property of the PLAN, so it is decided once and applied to both.
+    const look: PlannedBlock = { kind: 'look', params: {} };
+    const { blocks, corrections } = enforceTurnDirection('schau nach links und dann wieder zurück', [
+      turn(-90),
+      look,
+      turn(90),
+    ]);
+    expect(blocks.map((b) => b.params.angleDeg)).toEqual([90, undefined, -90]);
+    expect(corrections).toEqual([
+      { from: -90, to: 90, direction: 'left' },
+      { from: 90, to: -90, direction: 'left' },
+    ]);
+  });
 });

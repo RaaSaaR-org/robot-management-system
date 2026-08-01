@@ -185,6 +185,17 @@ export interface AgentCommandResult {
   accepted: boolean;
   planId?: string;
   message: string;
+  /**
+   * E-Stop paths only: whether StopMove AND Damp were acknowledged by the
+   * robot. `false` means the latch is set — no further blocks will run — but
+   * the base was never told, so it may still be executing up to a minute of
+   * already-commanded velocity. The distinction has to survive all the way to
+   * the operator; a banner that says "damped" when it isn't is the one message
+   * nobody can afford to have wrong.
+   */
+  delivered?: boolean;
+  /** Why delivery failed, when `delivered` is false. */
+  deliveryError?: string;
 }
 
 /** Walking direction in the robot's own frame. */

@@ -26,7 +26,7 @@ const BEARING_DEADBAND_DEG = 8;
 /** Longest single walk stage, in metres. */
 const STAGE_LENGTH_M = 1.0;
 /** Shortest useful stage — below this the FSM barely moves. */
-const MIN_STAGE_M = 0.3;
+export const MIN_STAGE_M = 0.3;
 /**
  * Considered "arrived" at or inside this distance — but ONLY when the distance
  * was measured, i.e. `distanceSource === 'lidar'`.
@@ -77,7 +77,7 @@ const UNKNOWN_DISTANCE_STAGE_M = 1.0;
  * out to be too timid on the real robot, measure the stopping distance and
  * replace this comment with that measurement.
  */
-const CLEARANCE_MARGIN_M = 0.45;
+export const CLEARANCE_MARGIN_M = 0.45;
 /** A walk that measured less than this moved nothing worth calling motion. */
 const CONTACT_STALL_M = 0.05;
 /**
@@ -187,6 +187,20 @@ export class Navigator {
     let stagesThatMoved = 0;
     let walkedTotalM = 0;
     let bestDistance = entity.distanceEstM;
+    /**
+     * Has the lidar EVER put a number on this target during this navigation?
+     *
+     * The contact rules below treat a null distance as "near enough to count
+     * hitting something as arriving". That is right for a robot with no range
+     * sensor at all — contact is the only arrival signal it has. It is wrong
+     * the moment the lidar is alive and merely missed one look (snapshot
+     * timeout, empty cloud, sparse cone), because then null means UNKNOWN, and
+     * a robot that walks into a chair four metres short of the table would
+     * report `ok: true`. This flag is the only thing that can tell those two
+     * situations apart, and translation-expiry routes through null constantly
+     * by design, so the distinction is load-bearing rather than theoretical.
+     */
+    let everMeasured = entity.distanceSource === 'lidar' && entity.distanceEstM !== null;
 
     while (stages < this.maxStages) {
       if (this.deps.isAborted()) {
@@ -205,6 +219,7 @@ export class Navigator {
       // whichever number the last look produced, and the vision model's guess
       // (0.94 m MAE) at a 0.6 m threshold would call arrival in open floor.
       const measuredM = current.distanceSource === 'lidar' ? current.distanceEstM : null;
+      if (measuredM !== null) everMeasured = true;
 
       if (measuredM !== null && measuredM <= ARRIVAL_M) {
         return {
@@ -244,7 +259,15 @@ export class Navigator {
       //    a measured range the stage is sized to what is actually left; without
       //    one it is still the blind fixed stage, then look again.
       const remaining = measuredM === null ? UNKNOWN_DISTANCE_STAGE_M : Math.max(0, measuredM - ARRIVAL_M);
-      let stageM = Math.max(MIN_STAGE_M, Math.min(STAGE_LENGTH_M, remaining));
+      // No MIN_STAGE_M floor here: `remaining` is already the approach that is
+      // left, so flooring it commands the robot to walk further than the lidar
+      // says it may — a target measured 0.61 m out got a 0.30 m stage, up to
+      // 0.29 m of it into the target. Clamp 2a would normally catch that, but
+      // it is gated on a live clearance, and the re-bearing turn just above
+      // expires the clearance whenever it exceeds 10° — so the same physical
+      // situation was decided by whether the correction happened to be 9° or
+      // 15°. MIN_STAGE_M keeps its real job: the stop trigger in 2b.
+      let stageM = Math.min(STAGE_LENGTH_M, remaining);
 
       // 2a. Never walk further than the measured way ahead allows. This is the
       //     only obstacle check the navigator has that does not require hitting
@@ -264,7 +287,12 @@ export class Navigator {
       //     a stopping margin of something solid and cannot usefully advance.
       //     Commanding the remaining few centimetres would just push into it.
       if (clearanceM !== null && stageM < MIN_STAGE_M) {
-        const near = current.distanceEstM === null || current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
+        // `null` is UNKNOWN, and it only counts as "near" on a robot whose
+        // lidar never spoke for this target — see `everMeasured`.
+        const near =
+          current.distanceEstM === null
+            ? !everMeasured
+            : current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
         // Same reasoning as the contact rule: "I cannot advance" only means "I
         // am there" when the target was just re-observed straight ahead and is
         // believed near. The extra `stagesThatMoved > 0 || measuredM !== null`
@@ -279,7 +307,7 @@ export class Navigator {
               `${walkedTotalM.toFixed(2)} m: the lidar measures the nearest surface straight ahead ` +
               `at ${clearanceM.toFixed(2)} m, inside the ${CLEARANCE_MARGIN_M.toFixed(2)} m ` +
               `stopping margin, and "${current.label}" is straight ahead` +
-              `${measuredM === null ? '' : ` (${measuredM.toFixed(2)} m by lidar)`}. Counting that ` +
+              `${measuredM === null ? ' (its distance was never measured)' : ` (${measuredM.toFixed(2)} m by lidar)`}. Counting that ` +
               `as arrived — the returns are unlabelled, so if something else is in the way, it is ` +
               `between the robot and the target.`,
           };
@@ -318,7 +346,10 @@ export class Navigator {
       // is given: the stage turned onto the bearing immediately before this walk.
       const blocked =
         walkedM !== null && (walkedM < CONTACT_STALL_M || walkedM < stageM * CONTACT_SHORTFALL_RATIO);
-      const near = current.distanceEstM === null || current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
+      const near =
+        current.distanceEstM === null
+          ? !everMeasured
+          : current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
       if (blocked && stagesThatMoved > 0 && unseenLooks === 0 && near) {
         return {
           ok: true,
@@ -327,7 +358,7 @@ export class Navigator {
             `${(walkedTotalM + (walkedM ?? 0)).toFixed(2)} m: the last step moved only ` +
             `${(walkedM ?? 0).toFixed(2)} m of ${stageM.toFixed(2)} m, so the robot is up against ` +
             `something, and "${current.label}" is straight ahead` +
-            `${current.distanceEstM === null ? '' : ` (~${current.distanceEstM.toFixed(1)} m by the last look)`}. ` +
+            `${current.distanceEstM === null ? ' (its distance was never measured)' : ` (~${current.distanceEstM.toFixed(1)} m by the last look)`}. ` +
             `Counting that as arrived — if something else is in the way, it is between the robot ` +
             `and the target.`,
         };

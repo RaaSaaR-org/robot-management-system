@@ -121,6 +121,37 @@ const CASES: Case[] = [
       return g !== undefined && /tür|tuer|door/i.test(String(g.params.entity ?? ''));
     },
   },
+  // Three more approach cases, on purpose. `goto` vs turn+walk is the single
+  // failure every model shares, so one or two samples of it cannot tell a real
+  // prompt improvement from noise. These vary the language, the bearing sign
+  // and the confidence of the target while asking for exactly the same block.
+  {
+    id: 'goto-chair',
+    command: 'geh zum Stuhl',
+    want: 'goto with entity ≈ chair (target is at -48°, so a walk with no turn is doubly wrong)',
+    check: (b) => {
+      const g = first(b, 'goto');
+      return g !== undefined && /stuhl|chair/i.test(String(g.params.entity ?? ''));
+    },
+  },
+  {
+    id: 'goto-ladder-en',
+    command: 'go to the ladder',
+    want: 'goto with entity ≈ ladder (lowest-confidence entity, behind the robot)',
+    check: (b) => {
+      const g = first(b, 'goto');
+      return g !== undefined && /ladder|leiter/i.test(String(g.params.entity ?? ''));
+    },
+  },
+  {
+    id: 'goto-table-en',
+    command: 'walk over to the table and stop in front of it',
+    want: 'goto with entity ≈ table — "walk over to" must not become a raw walk',
+    check: (b) => {
+      const g = first(b, 'goto');
+      return g !== undefined && /tisch|table/i.test(String(g.params.entity ?? ''));
+    },
+  },
   {
     id: 'scan',
     command: 'schau dich im Raum um und sag mir was du siehst',

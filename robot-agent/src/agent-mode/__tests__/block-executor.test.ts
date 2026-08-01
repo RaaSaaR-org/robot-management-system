@@ -788,4 +788,85 @@ describe('BlockExecutor — range enrichment on every observation', () => {
       expect(scene.get(label)?.distanceSource).toBe('lidar');
     }
   });
+  // The cones must be aimed in base_link, the frame the cloud is in. Nothing
+  // pinned that: every other test in this describe runs at yaw 0, the one
+  // heading where relative and world coincide, so adding the store yaw to the
+  // bearing stayed green across the whole suite while making the robot arrive
+  // at a wall 90 degrees away from the table.
+  it('aims the range cones in base_link, not in the world frame', async () => {
+    const { executor, scene } = makeExecutor({
+      observation: SEEN,
+      odometry: async () => ({ x: 0, y: 0, yaw: 90 * DEG_TO_RAD, source: 'odometry' }),
+      range: new RangeSensor({
+        snapshot: async () => frameOf([...arcAt(2.31, 20), ...arcAt(0.55, 110)]),
+      }),
+    });
+
+    await executor.execute(block('look'));
+
+    expect(scene.get('table')?.distanceEstM).toBeCloseTo(2.31, 2);
+    // The world-frame conversion still happens — once, in the store's merge.
+    // Asserting it here stops a future failure being "fixed" by deleting it.
+    expect(scene.get('table')?.bearingDeg).toBeCloseTo(110, 1);
+  });
+});
+
+describe('BlockExecutor — a planner-written walk is clamped by the measurement too', () => {
+  const SEEN_CLEAR: VisionObservation = {
+    currentView: 'a table straight ahead',
+    entities: [],
+    personVisible: false,
+    raw: '{}',
+    degraded: false,
+  };
+
+  /** Put a measured clearance into scene memory the way a `look` would. */
+  function withClearance(clearanceM: number | null) {
+    const h = makeExecutor({ observation: SEEN_CLEAR });
+    h.scene.merge(
+      { ...SEEN_CLEAR, entities: [] },
+      undefined,
+      { forwardClearanceM: clearanceM }
+    );
+    return h;
+  }
+
+  it('shortens a walk that would drive past the measured clearance', async () => {
+    const h = withClearance(1.2);
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
+
+    // 1.20 - 0.45 margin = 0.75 m allowed, at AGENT_WALK_SPEED_MPS.
+    expect(h.moves).toHaveLength(1);
+    expect(h.moves[0].durationS).toBeCloseTo(0.75 / WALK_SPEED, 3);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/Shortened from the requested 3\.00 m/);
+  });
+
+  it('refuses a forward walk when the clearance is already inside the margin', async () => {
+    const h = withClearance(0.6);
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 2.0, direction: 'forward' }));
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/refusing to walk into it/);
+    expect(h.moves).toHaveLength(0);
+  });
+
+  it('leaves the walk alone when the clearance is unknown — null is never a clamp', async () => {
+    const h = withClearance(null);
+
+    await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
+
+    expect(h.moves[0].durationS).toBeCloseTo(3.0 / WALK_SPEED, 3);
+  });
+
+  it('does not clamp a backward walk — the clearance only measures ahead', async () => {
+    const h = withClearance(0.6);
+
+    const outcome = await h.executor.execute(block('walk', { distanceM: 2.0, direction: 'backward' }));
+
+    expect(outcome.ok).toBe(true);
+    expect(h.moves[0].durationS).toBeCloseTo(2.0 / WALK_SPEED, 3);
+  });
 });

@@ -60,6 +60,14 @@ interface WorldOptions {
    * actually reports.
    */
   blockedMode?: 'stall' | 'short';
+  /**
+   * Index of ONE look (0 = the seeding look) that comes back without a range
+   * for the target — the sensor is alive, this snapshot just produced nothing
+   * usable: a 1500 ms timeout, an empty cloud, a cone too sparse to cluster.
+   * The 07 recording saw three such frames in one `scan_room`, so this is the
+   * measured failure mode, not an invented one.
+   */
+  unrangedLookIndex?: number;
 }
 
 /**
@@ -83,8 +91,9 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
     // Once the target leaves the frame the look still succeeds — it just says
     // nothing about the target, which is what leaves the stored bearing stale.
     const visible = opts.visibleForLooks === undefined || looks < opts.visibleForLooks;
+    const unranged = opts.unrangedLookIndex !== undefined && looks === opts.unrangedLookIndex;
     looks++;
-    const targetDistance = opts.distanceUnknown ? null : state.distance;
+    const targetDistance = opts.distanceUnknown || unranged ? null : state.distance;
     const observation: Observation = {
       currentView: visible ? 'I can see the table' : 'a shelf and a wall',
       personVisible: false,
@@ -786,5 +795,59 @@ describe('Navigator — measured range', () => {
 
     const walks = world.ran.filter((b) => b.kind === 'walk');
     expect(Number(walks[0].params.distanceM)).toBeCloseTo(1.0, 6);
+  });
+  // A dropped range frame is not the same thing as a robot with no lidar, and
+  // reading `null` as "near enough to count contact as arrival" conflated them.
+  // With the sensor alive, `null` means UNKNOWN — the same rule the rest of this
+  // feature follows.
+  it('does not turn one unranged look into an arrival metres from the target', async () => {
+    const { navigator, world } = navigatorFor({
+      worldBearingDeg: 0,
+      distanceM: 5.2,
+      unrangedLookIndex: 3,
+      blockedAfterWalks: 2,
+      blockedMode: 'short',
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).not.toMatch(/Counting that as arrived/);
+    // It really did stop far away — this is not passing by never walking.
+    expect(world.state.distance).toBeGreaterThan(2);
+  });
+
+  // Same shape, opposite verdict: a robot whose lidar never spoke for this
+  // target has nothing BUT contact to go on, so contact still means arrival.
+  it('still arrives by contact when the lidar never measured the target at all', async () => {
+    const { navigator } = navigatorFor({
+      worldBearingDeg: 0,
+      distanceM: 1.2,
+      distanceUnknown: true,
+      blockedAfterWalks: 1,
+      blockedMode: 'short',
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/Counting that as arrived/);
+    expect(outcome.message).toMatch(/its distance was never measured/);
+  });
+
+  // MIN_STAGE_M is the shortest stage worth taking, not a floor on the approach
+  // that is LEFT. Flooring `remaining` commanded up to 0.29 m more than the
+  // lidar said was available, and clamp 2a could not catch it because the
+  // re-bearing turn above expires the clearance past 10 degrees — so the same
+  // physical situation was decided by whether the correction was 9 or 15.
+  it('does not walk further than the measurement allows on the final approach', async () => {
+    const { navigator, world } = navigatorFor({ worldBearingDeg: 15, distanceM: 0.7 }, 4);
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(walks).toHaveLength(1);
+    expect(Number(walks[0].params.distanceM)).toBeCloseTo(0.1, 6);
   });
 });

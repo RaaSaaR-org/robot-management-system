@@ -114,7 +114,24 @@ export function parseVisionAnswer(
     // model that answered the old schema — accepting it costs nothing and stops
     // every entity from landing at bearing 0, but it is the bad path (see
     // VISION_PROMPT for the measurement).
-    const xRaw = Number(e.x);
+    // `Number(null)` is 0, and 0 is a perfectly finite image-x meaning "hard
+    // against the left edge" — so a model answering `"x": null` ("I cannot
+    // place it") used to come out as a CONFIDENT +52.65° bearing, worse than
+    // omitting the field entirely. The prompt teaches `null` on the line below
+    // `x`, so copying it up is a plausible answer, not a contrived one. Same
+    // guard the distance below already uses; NaN is what the rest of this
+    // function is written to handle.
+    // Out-of-contract magnitudes go the same way: a model answering in pixels
+    // (x: 640) must degrade to "no position" rather than collapse every entity
+    // onto the right edge. The 0.05 slack keeps 1.02 clamping to 1.
+    const xNum = Number(e.x);
+    const xRaw =
+      (typeof e.x === 'number' || (typeof e.x === 'string' && e.x.trim() !== '')) &&
+      Number.isFinite(xNum) &&
+      xNum >= -0.05 &&
+      xNum <= 1.05
+        ? xNum
+        : Number.NaN;
     const bearingRaw = Number(e.bearingDeg);
     const bearingDeg = Number.isFinite(xRaw)
       ? bearingFromImageX(xRaw, hfovDeg)

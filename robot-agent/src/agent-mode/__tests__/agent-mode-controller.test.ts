@@ -380,6 +380,34 @@ describe('AgentModeController — E-Stop', () => {
       expect(result.delivered).toBe(false);
       expect(result.deliveryError).toMatch(/Damp: rpc code 3104/);
     });
+
+    // `estop()` was honest and the caller threw it away: the typed-stop-word
+    // path hard-coded "and the robot was damped." into BOTH arms, so the one
+    // message an operator reads while deciding whether to run for the hardware
+    // kill switch claimed a damped robot that had never been told to damp.
+    it('does not tell the operator the robot was damped when nothing was delivered', async () => {
+      const h = makeController([], {
+        action: async () => ({ ok: false, error: 'sidecar unreachable' }),
+        fsm: async () => ({ ok: false, error: 'rpc code 3104' }),
+      });
+
+      const result = await h.controller.submitCommand({ text: 'STOPP!' });
+
+      expect(result.accepted).toBe(true);
+      expect(result.message).not.toMatch(/robot was damped/);
+      expect(result.message).toMatch(/did NOT confirm StopMove\/Damp/);
+      expect(result.message).toMatch(/hardware E-Stop/);
+      expect(result.delivered).toBe(false);
+      expect(result.deliveryError).toMatch(/StopMove: sidecar unreachable; Damp: rpc code 3104/);
+    });
+
+    it('still says damped when the robot confirmed it', async () => {
+      const h = makeController([]);
+      const result = await h.controller.submitCommand({ text: 'STOPP!' });
+      expect(result.message).toMatch(/and the robot was damped\./);
+      expect(result.delivered).toBe(true);
+      expect(result.deliveryError).toBeUndefined();
+    });
   });
 
   // Review round 2: an E-Stop landing during the planner's LLM round-trip
