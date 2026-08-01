@@ -6,7 +6,9 @@
  *              are sized from the LiDAR range to the target when there is one
  *              and clamped by the measured clearance straight ahead; without a
  *              measurement it is the old blind stage plus arrival-by-contact.
- *              Gives up after
+ *              Looks once before the first stage when the robot has moved since
+ *              it last looked, so no navigation starts on a distance measured
+ *              from a pose the robot has left. Gives up after
  *              AGENT_MAX_NAV_STAGES stages in total (progress resets the
  *              no-progress tally that the give-up message reports, but does not
  *              refund the stage budget), or sooner when MAX_UNSEEN_LOOKS looks
@@ -135,6 +137,7 @@ export class Navigator {
    */
   async navigate(entityLabel: string): Promise<BlockOutcome> {
     let entity = this.deps.scene.get(entityLabel);
+    let lookedAlready = false;
 
     if (!entity) {
       const look = await this.deps.runGeneratedBlock(
@@ -145,6 +148,7 @@ export class Navigator {
       if (look.status !== 'done') {
         return { ok: false, message: `goto "${entityLabel}": the look failed (${look.error ?? 'unknown'})` };
       }
+      lookedAlready = true;
       entity = this.deps.scene.get(entityLabel);
     }
     if (!entity) {
@@ -152,6 +156,29 @@ export class Navigator {
         ok: false,
         message: `goto "${entityLabel}": not in the scene memory — scan the room first.`,
       };
+    }
+
+    // The loop below re-looks after every stage, so inside a navigation the
+    // distances are always one walk old at most. What it cannot see is what
+    // happened BEFORE it was called: a `walk` block, a previous `goto`, an
+    // operator driving the robot across the room. Scene memory has expired the
+    // distances that motion invalidated (see expireOnTranslation), which leaves
+    // this navigation blind on its first stage unless it measures again — and
+    // measuring is cheap next to walking off a two-metre-old number.
+    //
+    // The 07 recording is the case: retreat 2 m, "geh zum Tisch", arrival
+    // declared on the spot from the clearance measured before the retreat.
+    if (!lookedAlready && this.deps.scene.hasMovedSinceObservation()) {
+      const look = await this.deps.runGeneratedBlock(
+        'look',
+        {},
+        `Looking again before walking to "${entityLabel}" — the robot has moved since it was last seen, ` +
+          `so the remembered distances are from a pose it has left.`
+      );
+      if (look.status !== 'done') {
+        return { ok: false, message: `goto "${entityLabel}": the look failed (${look.error ?? 'unknown'})` };
+      }
+      entity = this.deps.scene.get(entityLabel) ?? entity;
     }
 
     let stages = 0;

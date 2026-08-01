@@ -128,6 +128,10 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
     if (kind === 'turn') {
       scene.advanceYawDeg(Number(params.angleDeg));
     } else if (kind === 'walk') {
+      // What BlockExecutor.driveFor does for every base motion: tell the store
+      // the robot is no longer where it measured from. Unconditional, and before
+      // the blocked branch below, because a walk that fails may still have moved.
+      scene.noteTranslationM(Number(params.distanceM));
       if (opts.blockedAfterWalks !== undefined && walks >= opts.blockedAfterWalks) {
         walks++;
         if (opts.blockedMode === 'short') {
@@ -671,6 +675,106 @@ describe('Navigator — measured range', () => {
     expect(outcome.message).toMatch(/Arrived at "table"|stopping margin/);
     const walks = world.ran.filter((b) => b.kind === 'walk');
     for (const walk of walks) expect(Number(walk.params.distanceM)).toBeLessThanOrEqual(1);
+  });
+
+  it('does not read a clearance measured before the robot walked away from it', async () => {
+    // The 07 recording's false arrival. Standing at the table (0.67 m of
+    // clearance), the robot is walked 2 m backwards and then told "geh zum
+    // Tisch". It reported "Stopped at table after 1 stage and 0.00 m … 0.67 m
+    // straight ahead" while the lidar in that same frame measured 1.98 m,
+    // because 0.67 − 0.45 < 0.30 took the stopping-margin branch.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, {
+      worldBearingDeg: 0,
+      distanceM: 0.67,
+      clearanceFromTarget: true,
+    });
+    world.look();
+
+    world.state.distance += 2.0; // the robot retreats; the world does not care
+    scene.noteTranslationM(2.0); // ← the only thing scene memory is told
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    // It measures again before committing to anything.
+    expect(world.ran[0].kind).toBe('look');
+    // And then it actually goes there, rather than declaring victory in place.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).not.toMatch(/after 1 stage and 0\.00 m/);
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(walks.length).toBeGreaterThan(1);
+    // No stage was sized by the pre-retreat 0.67 m (0.67 − 0.45 = 0.22 m).
+    for (const walk of walks) expect(Number(walk.params.distanceM)).toBeGreaterThanOrEqual(0.3);
+    // It closed the 2.67 m for real, and stopped where the table is — 0.67 m,
+    // the stopping margin, which is where the recording's run also ended.
+    expect(world.state.distance).toBeCloseTo(0.67, 2);
+    expect(outcome.message).toMatch(/stopping margin|Arrived/);
+  });
+
+  it('does not arrive on a lidar distance measured two metres ago either', async () => {
+    // The same staleness one field over: the target's own range. 0.5 m is inside
+    // the arrival threshold, so before the loop turns or walks anything, the
+    // first `if` in navigate() would have returned "Arrived after 0 stages".
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 0, distanceM: 0.5 });
+    world.look();
+
+    world.state.distance = 2.5;
+    scene.noteTranslationM(2.0);
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.message).not.toMatch(/after 0 stages/);
+    expect(world.ran[0].kind).toBe('look');
+    expect(world.ran.filter((b) => b.kind === 'walk').length).toBeGreaterThan(0);
+    expect(outcome.ok).toBe(true);
+  });
+
+  it('spends no look when nothing has moved since the last one', async () => {
+    // The pre-flight look is not a free tax on every goto: a target seen from
+    // where the robot still stands is walked to straight away.
+    const { navigator, world } = navigatorFor({ worldBearingDeg: 0, distanceM: 5.0 }, 1);
+
+    await navigator.navigate('table');
+
+    expect(world.ran[0].kind).toBe('walk');
+  });
+
+  it('looks once, not twice, when the target is unknown and the robot has moved', async () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 0, distanceM: 3.0 });
+    scene.noteTranslationM(2.0); // moved, and nothing was ever observed
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+    await navigator.navigate('table');
+
+    const beforeFirstWalk = world.ran.slice(
+      0,
+      world.ran.findIndex((b) => b.kind === 'walk')
+    );
+    expect(beforeFirstWalk.filter((b) => b.kind === 'look')).toHaveLength(1);
   });
 
   it('ignores an unknown clearance instead of reading it as clear or as blocked', async () => {

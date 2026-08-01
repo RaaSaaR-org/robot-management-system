@@ -669,6 +669,47 @@ describe('BlockExecutor — range enrichment on every observation', () => {
     expect(scene.snapshot()?.forwardClearanceM).toBeCloseTo(1.4, 2);
   });
 
+  it('expires the clearance and the distances when a walk carries the robot away', async () => {
+    // `driveFor` is the funnel every base motion passes through, and it is where
+    // both the point-cloud cache and the stored distances are retired. Without
+    // this the next `goto` sizes its first stage off a metre measured from a
+    // pose the robot has left (the 07 recording's false arrival).
+    const { executor, scene } = makeExecutor({
+      observation: SEEN,
+      range: new RangeSensor({
+        snapshot: async () => frameOf([...arcAt(2.31, 20), ...arcAt(1.4, 0)]),
+      }),
+    });
+    await executor.execute(block('look'));
+    expect(scene.getForwardClearanceM()).toBeCloseTo(1.4, 2);
+    expect(scene.get('table')?.distanceSource).toBe('lidar');
+
+    await executor.execute(block('walk', { distanceM: 1.0, direction: 'forward' }));
+
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+    expect(scene.getForwardClearanceM()).toBeNull();
+    expect(scene.get('table')?.distanceEstM).toBeNull();
+    expect(scene.get('table')?.distanceSource).toBeNull();
+  });
+
+  it('leaves the distances alone when the robot only turns', async () => {
+    // Rotation is the yaw rule's business, and a turn small enough to keep the
+    // clearance valid must not trip the translation rule instead.
+    const { executor, scene } = makeExecutor({
+      observation: SEEN,
+      range: new RangeSensor({
+        snapshot: async () => frameOf([...arcAt(2.31, 20), ...arcAt(1.4, 0)]),
+      }),
+    });
+    await executor.execute(block('look'));
+
+    await executor.execute(block('turn', { angleDeg: 5 }));
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBeCloseTo(1.4, 2);
+    expect(scene.get('table')?.distanceSource).toBe('lidar');
+  });
+
   it('never fails the block when the sidecar is not there', async () => {
     // Losing range must degrade Agent Mode to its old behaviour, not break a
     // plan. The camera failing is the loud case; the LiDAR failing is not.

@@ -374,6 +374,12 @@ export class BlockExecutor {
     // (even on a failed command) because a `move` that reports an error may
     // still have moved the robot before failing.
     this.range.invalidateAfterMotion();
+    // And for the same reason, one level up: the DISTANCES in scene memory were
+    // measured from the pose the robot is leaving. The commanded displacement is
+    // what is known here — see SceneMemoryStore.noteTranslationM for why the
+    // commanded number is the right one to hand over. A pure turn contributes
+    // zero, which is correct: rotation is the yaw rule's business.
+    this.deps.scene.noteTranslationM(Math.hypot(cmd.vx, cmd.vy) * cmd.durationS);
     if (!result.ok) return result;
     const remainingMs = cmd.durationS * 1000 - (this.now() - startedAt);
     if (remainingMs > 0) await this.sleep(remainingMs);

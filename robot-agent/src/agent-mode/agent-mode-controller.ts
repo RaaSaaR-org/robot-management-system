@@ -195,7 +195,10 @@ export class AgentModeController {
       isAborted: () => this.abortSignalled(),
       runGeneratedBlock: (kind, params, reasoning) =>
         this.runGeneratedBlock(kind, params, reasoning),
-      ...(deps.maxNavStages === undefined ? {} : { maxNavStages: deps.maxNavStages }),
+      // `maxStages` is what NavigatorDeps calls it. Spelled `maxNavStages` here
+      // the override type-checked (a spread skips the excess-property check) and
+      // was silently dropped, so AGENT_MAX_NAV_STAGES always won.
+      ...(deps.maxNavStages === undefined ? {} : { maxStages: deps.maxNavStages }),
     });
 
     this.idleWatcher = new IdleWatcher({

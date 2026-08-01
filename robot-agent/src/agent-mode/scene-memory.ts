@@ -31,6 +31,26 @@ const STALE_MS = 15 * 60_000;
  */
 const CLEARANCE_YAW_TOLERANCE_DEG = 10;
 
+/**
+ * How far the robot may TRANSLATE before every stored distance — the forward
+ * clearance and each entity's range — stops describing where things are.
+ *
+ * The yaw rule above closes the same hole for rotation, and leaving translation
+ * open cost a false arrival in the 07 recording: after a 2 m backward walk,
+ * `goto` read the clearance measured before it (0.67 m), found
+ * `0.67 − 0.45 < 0.30 m` and declared arrival ~2.4 m from the table, while the
+ * LiDAR in that same frame measured 1.98 m. A distance is a measurement FROM A
+ * POSE; the robot leaving that pose invalidates it just as surely as turning
+ * away from the heading does.
+ *
+ * 0.15 m, from three directions: below the navigator's 0.30 m minimum stage, so
+ * every commanded stage expires what preceded it; a third of its 0.45 m stopping
+ * margin, so whatever error survives cannot eat the margin; and an order of
+ * magnitude above odometry noise, so a standing robot does not churn its own
+ * memory to null.
+ */
+const TRANSLATION_TOLERANCE_M = 0.15;
+
 /** Where the yaw used for the relative→world conversion came from. */
 export type YawSource = 'odometry' | 'dead-reckoning';
 
@@ -95,6 +115,13 @@ export class SceneMemoryStore {
    * produced it and the walk that uses it — see {@link expireClearanceOnTurn}.
    */
   private forwardClearanceYawDeg: number | null = null;
+  /**
+   * Distance the robot has travelled since the last observation, in metres,
+   * accumulated from commanded base motion (see
+   * {@link SceneMemoryStore.noteTranslationM}). Reset by every merge, because a
+   * merge is the robot looking again from where it now stands.
+   */
+  private translationSinceObservationM = 0;
 
   constructor(robotId: string) {
     this.robotId = robotId;
@@ -141,6 +168,58 @@ export class SceneMemoryStore {
     }
     this.forwardClearanceM = null;
     this.forwardClearanceYawDeg = null;
+  }
+
+  /**
+   * Tell the store the robot has moved `distanceM` metres.
+   *
+   * Called from the ONE funnel every base motion in Agent Mode passes through
+   * (`BlockExecutor.driveFor`), with the COMMANDED displacement rather than the
+   * measured one. Commanded over-states what a slowed or blocked base actually
+   * achieved, and over-stating is the safe direction: expiring a still-valid
+   * measurement costs one blind stage, keeping an invalid one steers the robot.
+   */
+  noteTranslationM(distanceM: number): void {
+    if (!Number.isFinite(distanceM)) return;
+    this.translationSinceObservationM += Math.abs(distanceM);
+    this.expireOnTranslation();
+  }
+
+  /**
+   * Has the robot moved far enough since its last look that what it remembers
+   * about distances is no longer about where it stands?
+   *
+   * The navigator asks this before its first stage: the honest answer to "how
+   * far is the table" is then "look again", not a number from two metres back.
+   */
+  hasMovedSinceObservation(): boolean {
+    return this.translationSinceObservationM > TRANSLATION_TOLERANCE_M;
+  }
+
+  /**
+   * Drop every stored distance once the robot has walked away from the pose
+   * they were measured at — the clearance straight ahead AND each entity's own
+   * range.
+   *
+   * Bearings deliberately survive. A bearing goes wrong gradually with
+   * translation and the navigator already re-bears after every look, so keeping
+   * it lets `goto` aim at something; a distance, by contrast, is what ends the
+   * navigation, and a wrong one ends it in the wrong place. Nulling both the
+   * number and its provenance together is the same rule {@link merge} follows:
+   * a distance is never left wearing the `lidar` label that makes the navigator
+   * act on it.
+   */
+  private expireOnTranslation(): void {
+    if (!this.hasMovedSinceObservation()) return;
+    this.forwardClearanceM = null;
+    this.forwardClearanceYawDeg = null;
+    for (const [key, entity] of this.entities) {
+      if (entity.distanceEstM === null && entity.distanceSource === null) continue;
+      // Replaced, not mutated in place: callers hold the object they read (the
+      // navigator compares a pre-walk snapshot against what the walk did), and
+      // rewriting it under them would change the past.
+      this.entities.set(key, { ...entity, distanceEstM: null, distanceSource: null });
+    }
   }
 
   getYawDeg(): number {
@@ -212,6 +291,9 @@ export class SceneMemoryStore {
     // expireClearanceOnTurn). `yaw` and not `this.yawDeg`: `scan_room` merges
     // each step against the yaw that step was observed at.
     this.forwardClearanceYawDeg = this.forwardClearanceM === null ? null : yaw;
+    // Everything above was just measured from where the robot now stands, so
+    // the distance it walked to get here is spent (see expireOnTranslation).
+    this.translationSinceObservationM = 0;
     this.updatedAt = now;
     this.prune(Date.parse(now));
     // Non-null by construction: `updatedAt` was just set.
@@ -301,6 +383,7 @@ export class SceneMemoryStore {
     this.personVisible = false;
     this.forwardClearanceM = null;
     this.forwardClearanceYawDeg = null;
+    this.translationSinceObservationM = 0;
     this.updatedAt = null;
   }
 
