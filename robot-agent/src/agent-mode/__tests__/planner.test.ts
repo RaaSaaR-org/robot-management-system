@@ -196,6 +196,27 @@ describe('Planner — prompt contents', () => {
     expect(text).toContain('"distanceM":2');
     expect(text).toContain('halt an und schau');
   });
+
+  it('shows the remaining blocks in the flat shape the schema demands', async () => {
+    const { planner, calls } = makePlanner([
+      { text: JSON.stringify({ blocks: [{ kind: 'look' }] }) },
+    ]);
+
+    await planner.plan({
+      command: 'stop and look',
+      sceneSummary: 'Known entities: none',
+      remainingPlan: [
+        { id: 'b1', kind: 'walk', params: { distanceM: 2, direction: 'forward' }, status: 'pending' },
+      ],
+    });
+
+    const text = promptText(calls[0]);
+    // The prompt tells the model to put params as flat siblings of `kind`. The
+    // running plan is the only example of a block it ever sees, so rendering it
+    // nested would teach the opposite of the rule two dozen lines above.
+    expect(text).toContain('{"kind":"walk","distanceM":2,"direction":"forward"}');
+    expect(text).not.toContain('"params":');
+  });
 });
 
 describe('coerceParams / plannerFallback', () => {

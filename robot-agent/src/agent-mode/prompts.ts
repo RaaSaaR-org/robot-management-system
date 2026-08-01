@@ -128,7 +128,12 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
       'A plan is already running. These blocks have NOT started yet — rewrite,',
       'keep or drop them as the new command requires. Blocks that already ran are',
       'frozen and are not shown:',
-      JSON.stringify(input.remainingPlan)
+      // Flattened, because this is the only worked example of the block shape
+      // the model gets — and a nested `{"kind":…,"params":{…}}` here would
+      // contradict the FLAT-keys rule above in the one place a small model is
+      // most likely to copy rather than read. Every re-plan would then arrive
+      // in the forbidden shape and cost a repair pass.
+      JSON.stringify(input.remainingPlan.map((b) => ({ kind: b.kind, ...b.params })))
     );
   }
 
