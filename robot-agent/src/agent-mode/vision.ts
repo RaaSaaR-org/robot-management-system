@@ -20,6 +20,17 @@ export interface VisionEntity {
   bearingDeg: number;
   distanceEstM: number | null;
   confidence: number;
+  /**
+   * The horizontal position in the frame the model actually answered with, 0 =
+   * left edge, 1 = right edge — present only when it supplied a finite `x`.
+   *
+   * `bearingDeg` is derived from it and is what everything downstream steers on;
+   * this is kept because the derivation is lossy in the one direction that
+   * matters for depth: a depth image (or a projected point cloud) is indexed by
+   * PIXELS, not by bearings, so associating this entity with a depth frame needs
+   * the image coordinate back. Nothing reads it yet.
+   */
+  imageX?: number;
   note?: string;
 }
 
@@ -124,6 +135,9 @@ export function parseVisionAnswer(
       distanceEstM,
       confidence,
     };
+    // Only when the model really answered an `x` — a fabricated 0.5 would read
+    // as "dead centre" instead of "the model never said".
+    if (Number.isFinite(xRaw)) entity.imageX = clamp(xRaw, 0, 1);
     if (typeof e.note === 'string' && e.note.trim()) entity.note = e.note.trim();
     entities.push(entity);
     if (entities.length >= MAX_ENTITIES) break;

@@ -31,12 +31,16 @@ const SCENE: SceneMemory = {
       label: 'table',
       bearingDeg: 30,
       distanceEstM: 2,
+      // A measured range, so the fixture exercises the provenance the routes
+      // now have to carry through untouched.
+      distanceSource: 'lidar',
       confidence: 0.9,
       observedSeq: 1,
       lastSeen: '2026-07-25T10:00:00.000Z',
     },
   ],
   personVisible: false,
+  forwardClearanceM: 1.8,
   updatedAt: '2026-07-25T10:00:00.000Z',
 };
 

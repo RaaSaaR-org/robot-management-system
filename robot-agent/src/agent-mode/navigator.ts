@@ -2,7 +2,11 @@
  * @file navigator.ts
  * @description `goto(entity)` expansion: bearing-and-correct navigation that
  *              emits VISIBLE `turn` / `walk` / `look` blocks into the running
- *              plan, ~1 m per stage, re-bearing after every look. Gives up after
+ *              plan, up to ~1 m per stage, re-bearing after every look. Stages
+ *              are sized from the LiDAR range to the target when there is one
+ *              and clamped by the measured clearance straight ahead; without a
+ *              measurement it is the old blind stage plus arrival-by-contact.
+ *              Gives up after
  *              AGENT_MAX_NAV_STAGES stages in total (progress resets the
  *              no-progress tally that the give-up message reports, but does not
  *              refund the stage budget), or sooner when MAX_UNSEEN_LOOKS looks
@@ -22,14 +26,19 @@ const STAGE_LENGTH_M = 1.0;
 /** Shortest useful stage — below this the FSM barely moves. */
 const MIN_STAGE_M = 0.3;
 /**
- * Considered "arrived" at or inside this distance — when a distance exists at
- * all. Do not build anything load-bearing on it: measured against the room
- * scene's exact geometry, qwen2.5vl:7b asked for metres directly is 0.94 m mean
- * absolute error (and usually answers `null`, which is why this branch rarely
- * fires), and deriving the distance from where the object meets the floor is
- * worse — a floor contact near the image horizon projects to tens of metres.
- * Bearing is the reliable signal (7.2° MAE, see vision.ts); arrival in practice
- * comes from walking into the thing.
+ * Considered "arrived" at or inside this distance — but ONLY when the distance
+ * was measured, i.e. `distanceSource === 'lidar'`.
+ *
+ * The history matters, because it is why the check is conditional. Measured
+ * against the room scene's exact geometry, qwen2.5vl:7b asked for metres
+ * directly is 0.94 m mean absolute error and usually answers `null`; deriving
+ * the distance from where the object meets the floor is worse — a floor contact
+ * near the image horizon projects to tens of metres. Acting on a guess with that
+ * error at a 0.6 m threshold means declaring arrival in open floor, which is
+ * both a lie and the end of the navigation. Bearing is the reliable VLM signal
+ * (7.2° MAE, see vision.ts); the DISTANCE now comes from the LiDAR (range.ts),
+ * and when it does not, arrival still comes from walking into the thing (see
+ * the contact rule below).
  */
 const ARRIVAL_M = 0.6;
 /** Distance must shrink by at least this much for a stage to count as progress. */
@@ -41,8 +50,32 @@ const PROGRESS_EPSILON_M = 0.05;
  * somewhere nobody aimed it at.
  */
 const MAX_UNSEEN_LOOKS = 2;
-/** Assumed distance when the VLM gave none — one stage, then look again. */
+/**
+ * Stage length when no measurement says otherwise — walk this, then look again.
+ * Unchanged from the pre-LiDAR behaviour, and still what runs whenever the
+ * target is outside the sensor's vertical fan.
+ */
 const UNKNOWN_DISTANCE_STAGE_M = 1.0;
+/**
+ * How close to the nearest measured surface ahead a commanded stage may take
+ * the base. Chosen, not measured, and deliberately conservative:
+ *
+ *  - the range module rejects every return inside 0.35 m (the MID-360's
+ *    self-return blob, see range.ts), so below that radius the sensor is blind
+ *    by construction — a margin smaller than 0.35 m would be a number the
+ *    measurement cannot back up;
+ *  - `forwardClearance` measures from the sensor origin in `base_link`, while
+ *    the part of the robot that hits the table first is its feet, further
+ *    forward than base_link;
+ *  - a stage is open-loop: the executor issues a velocity for a duration and
+ *    only measures afterwards, so the base is still moving when the command
+ *    expires.
+ *
+ * 0.45 m = the blind radius plus a hand's width of command slop. If it turns
+ * out to be too timid on the real robot, measure the stopping distance and
+ * replace this comment with that measurement.
+ */
+const CLEARANCE_MARGIN_M = 0.45;
 /** A walk that measured less than this moved nothing worth calling motion. */
 const CONTACT_STALL_M = 0.05;
 /**
@@ -60,6 +93,10 @@ const CONTACT_SHORTFALL_RATIO = 0.3;
  * as arrival by contact. Beyond this, something ELSE is in the way and saying
  * "arrived" would be a lie — a chair between the robot and the table blocks the
  * walk just as well as the table does.
+ *
+ * The same threshold decides whether a stage stopped by the measured forward
+ * clearance counts as arrival, for the same reason: "I cannot advance" is only
+ * "I am there" when the target is known to be right in front.
  */
 const CONTACT_MAX_DISTANCE_M = 1.5;
 
@@ -137,10 +174,18 @@ export class Navigator {
         };
       }
 
-      if (current.distanceEstM !== null && current.distanceEstM <= ARRIVAL_M) {
+      // Only a MEASURED distance may drive the loop. `distanceEstM` carries
+      // whichever number the last look produced, and the vision model's guess
+      // (0.94 m MAE) at a 0.6 m threshold would call arrival in open floor.
+      const measuredM = current.distanceSource === 'lidar' ? current.distanceEstM : null;
+
+      if (measuredM !== null && measuredM <= ARRIVAL_M) {
         return {
           ok: true,
-          message: `Arrived at "${current.label}" after ${stages} stage${stages === 1 ? '' : 's'} (~${current.distanceEstM.toFixed(2)} m).`,
+          message:
+            `Arrived at "${current.label}" after ${stages} stage${stages === 1 ? '' : 's'}: ` +
+            `the lidar measures ${measuredM.toFixed(2)} m in that direction (nearest surface ` +
+            `inside the cone around its bearing).`,
         };
       }
 
@@ -168,16 +213,66 @@ export class Navigator {
       }
 
       // 2. Walk one stage — never the whole remaining distance in one go, so a
-      //    stale distance estimate cannot drive the robot into the target.
-      const remaining =
-        current.distanceEstM === null
-          ? UNKNOWN_DISTANCE_STAGE_M
-          : Math.max(0, current.distanceEstM - ARRIVAL_M);
-      const stageM = Math.max(MIN_STAGE_M, Math.min(STAGE_LENGTH_M, remaining));
+      //    stale distance estimate cannot drive the robot into the target. With
+      //    a measured range the stage is sized to what is actually left; without
+      //    one it is still the blind fixed stage, then look again.
+      const remaining = measuredM === null ? UNKNOWN_DISTANCE_STAGE_M : Math.max(0, measuredM - ARRIVAL_M);
+      let stageM = Math.max(MIN_STAGE_M, Math.min(STAGE_LENGTH_M, remaining));
+
+      // 2a. Never walk further than the measured way ahead allows. This is the
+      //     only obstacle check the navigator has that does not require hitting
+      //     the obstacle first: `forwardClearanceM` is the nearest surface in a
+      //     robot-wide corridor straight ahead. `null` is UNKNOWN — the sensor's
+      //     vertical fan does not cover everything in front of the robot — so it
+      //     changes nothing, and the loop falls back to the contact rule below.
+      const clearanceM = this.deps.scene.getForwardClearanceM();
+      /** The clearance that shortened this stage, or null if none did. */
+      let clampedToM: number | null = null;
+      if (clearanceM !== null && Math.max(0, clearanceM - CLEARANCE_MARGIN_M) < stageM) {
+        stageM = Math.max(0, clearanceM - CLEARANCE_MARGIN_M);
+        clampedToM = clearanceM;
+      }
+
+      // 2b. Clamped below the shortest useful stage: the robot is already within
+      //     a stopping margin of something solid and cannot usefully advance.
+      //     Commanding the remaining few centimetres would just push into it.
+      if (clearanceM !== null && stageM < MIN_STAGE_M) {
+        const near = current.distanceEstM === null || current.distanceEstM <= CONTACT_MAX_DISTANCE_M;
+        // Same reasoning as the contact rule: "I cannot advance" only means "I
+        // am there" when the target was just re-observed straight ahead and is
+        // believed near. The extra `stagesThatMoved > 0 || measuredM !== null`
+        // guard keeps a robot that never moved from claiming arrival on a wall
+        // it happened to be started against — unless the lidar measured the
+        // target itself to be that close.
+        if (near && unseenLooks === 0 && (stagesThatMoved > 0 || measuredM !== null)) {
+          return {
+            ok: true,
+            message:
+              `Stopped at "${current.label}" after ${stages} stage${stages === 1 ? '' : 's'} and ` +
+              `${walkedTotalM.toFixed(2)} m: the lidar measures the nearest surface straight ahead ` +
+              `at ${clearanceM.toFixed(2)} m, inside the ${CLEARANCE_MARGIN_M.toFixed(2)} m ` +
+              `stopping margin, and "${current.label}" is straight ahead` +
+              `${measuredM === null ? '' : ` (${measuredM.toFixed(2)} m by lidar)`}. Counting that ` +
+              `as arrived — the returns are unlabelled, so if something else is in the way, it is ` +
+              `between the robot and the target.`,
+          };
+        }
+        return {
+          ok: false,
+          message:
+            `goto "${entityLabel}": stopped after ${stages} stage${stages === 1 ? '' : 's'} and ` +
+            `${walkedTotalM.toFixed(2)} m — the lidar measures a surface ${clearanceM.toFixed(2)} m ` +
+            `straight ahead, too close to take another step, and that is not "${current.label}"` +
+            `${current.distanceEstM === null ? ' (its distance is unknown)' : ` (~${current.distanceEstM.toFixed(1)} m away)`}. ` +
+            `Something is in the way — walk around it, or ask again from a different position.`,
+        };
+      }
+
       const walk = await this.deps.runGeneratedBlock(
         'walk',
         { distanceM: stageM, direction: 'forward' },
-        `Walking ${stageM.toFixed(1)} m towards "${current.label}" (stage ${stages}/${this.maxStages}).`
+        `Walking ${stageM.toFixed(1)} m towards "${current.label}" (stage ${stages}/${this.maxStages})` +
+          `${clampedToM === null ? '' : `, shortened to keep ${CLEARANCE_MARGIN_M.toFixed(2)} m clear of the surface the lidar measures ${clampedToM.toFixed(2)} m ahead`}.`
       );
       const walkedM = walk.measured?.distanceM ?? null;
 

@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { AgentModeController } from '../agent-mode-controller.js';
 import { ControlOwnerLock } from '../control-owner.js';
 import { G1_FSM_DAMP } from '../block-executor.js';
+import { RangeSensor } from '../range.js';
 import type { Planner, PlannedBlock } from '../planner.js';
 import type { ServerMirror } from '../server-mirror.js';
 import type { VisionClient, VisionObservation } from '../vision.js';
@@ -96,6 +97,10 @@ function makeController(
     planner,
     mirror,
     vision: { observe: async () => opts.observation ?? EMPTY_VIEW } as unknown as VisionClient,
+    // Ranging off: these tests are about the plan lifecycle, and the default
+    // sensor would go looking for a sidecar on localhost. Off is also the path
+    // that must leave Agent Mode behaving exactly as it did before LiDAR.
+    range: new RangeSensor({ enabled: false }),
     loco: {
       move: opts.move ?? (async () => ({ ok: true })),
       action: async (name) => {

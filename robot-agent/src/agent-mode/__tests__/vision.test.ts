@@ -55,9 +55,30 @@ describe('parseVisionAnswer', () => {
     expect(observation.currentView).toBe('a table with a hat');
     expect(observation.entities).toEqual([
       // Right of centre → negative, and by the projection, not 0.25·105.3.
-      { label: 'table', bearingDeg: -33.2, distanceEstM: 2.5, confidence: 0.9 },
-      { label: 'hat', bearingDeg: 0, distanceEstM: 2.4, confidence: 0.7, note: 'liegt darauf' },
+      // `imageX` is the model's own answer, kept alongside the bearing derived
+      // from it: the derivation is one-way, and a depth image is indexed by
+      // pixels, not by bearings.
+      { label: 'table', bearingDeg: -33.2, imageX: 0.75, distanceEstM: 2.5, confidence: 0.9 },
+      {
+        label: 'hat',
+        bearingDeg: 0,
+        imageX: 0.5,
+        distanceEstM: 2.4,
+        confidence: 0.7,
+        note: 'liegt darauf',
+      },
     ]);
+  });
+
+  it('keeps no imageX at all when the model answered a bearing instead of a position', () => {
+    // Absent, not 0.5: a fabricated "dead centre" would read as an answer the
+    // model never gave, and it is the one field a depth association would trust.
+    const observation = parseVisionAnswer(
+      JSON.stringify({ currentView: 'x', entities: [{ label: 'table', bearingDeg: -15 }] }),
+      HFOV
+    );
+
+    expect(observation.entities[0]).not.toHaveProperty('imageX');
   });
 
   it('scales the bearing with the camera FOV, not with the number alone', () => {

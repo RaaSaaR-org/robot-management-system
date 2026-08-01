@@ -22,6 +22,7 @@ import { controlOwnerLock, type ControlOwnerLock } from './control-owner.js';
 import { IdleWatcher } from './idle-watcher.js';
 import { Navigator } from './navigator.js';
 import { Planner, type PlannedBlock } from './planner.js';
+import { RangeSensor } from './range.js';
 import { SceneMemoryStore } from './scene-memory.js';
 import { ServerMirror } from './server-mirror.js';
 import { VisionClient, type VisionObservation } from './vision.js';
@@ -65,6 +66,12 @@ export interface AgentModeControllerDeps {
   enabled?: boolean;
   planner?: Planner;
   vision?: VisionClient;
+  /**
+   * LiDAR ranging for `look`/`scan_room`. Constructed once and shared, like
+   * {@link AgentModeControllerDeps.vision}, so its one-cloud-per-observation
+   * cache actually spans the observation instead of being rebuilt per block.
+   */
+  range?: RangeSensor;
   scene?: SceneMemoryStore;
   mirror?: ServerMirror;
   lock?: ControlOwnerLock;
@@ -109,6 +116,7 @@ export class AgentModeController {
   private readonly lock: ControlOwnerLock;
   private readonly planner: Planner;
   private readonly vision: VisionClient;
+  private readonly range: RangeSensor;
   private readonly scene: SceneMemoryStore;
   private readonly mirror: ServerMirror;
   private readonly executor: BlockExecutor;
@@ -152,6 +160,7 @@ export class AgentModeController {
     this.lock = deps.lock ?? controlOwnerLock;
     this.planner = deps.planner ?? new Planner();
     this.vision = deps.vision ?? new VisionClient();
+    this.range = deps.range ?? new RangeSensor();
     this.scene = deps.scene ?? new SceneMemoryStore(this.robotId);
     this.mirror = deps.mirror ?? new ServerMirror({ robotId: this.robotId });
     this.loco = deps.loco ?? defaultLoco;
@@ -171,6 +180,7 @@ export class AgentModeController {
     const executorDeps: BlockExecutorDeps = {
       scene: this.scene,
       vision: this.vision,
+      range: this.range,
       isAborted: () => this.abortSignalled(),
       onScene: (scene) => this.emit('agent:scene:updated', { scene }),
       loco: trackedLoco,

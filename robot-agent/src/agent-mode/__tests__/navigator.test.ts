@@ -2,16 +2,17 @@
  * @file navigator.test.ts
  * @description The `goto` bearing-and-correct loop against a simulated world:
  *              it converges on a target that gets closer, and it gives up after
- *              AGENT_MAX_NAV_STAGES when the target never does.
+ *              AGENT_MAX_NAV_STAGES when the target never does. Plus the range
+ *              rules: only a MEASURED distance may end the navigation, and no
+ *              stage may be longer than the measured way ahead.
  * @feature agentmode
  * @status test
  */
 
 import { describe, it, expect } from 'vitest';
 import { Navigator } from '../navigator.js';
-import { SceneMemoryStore } from '../scene-memory.js';
+import { SceneMemoryStore, type Observation } from '../scene-memory.js';
 import { normalizeDeg, type AgentBlock, type AgentBlockKind } from '../types.js';
-import type { VisionObservation } from '../vision.js';
 
 interface WorldOptions {
   /** True world bearing of the target, degrees. */
@@ -19,8 +20,26 @@ interface WorldOptions {
   distanceM: number;
   /** Fraction of a commanded walk that actually closes the gap. 0 = no progress. */
   progressFactor?: number;
-  /** Simulate the VLM never estimating a distance. */
+  /** Simulate no distance at all — neither a lidar range nor a VLM guess. */
   distanceUnknown?: boolean;
+  /**
+   * Where the distance the looks report came from. 'lidar' is a measurement and
+   * the navigator may act on it; 'vlm-estimate' is the vision model's own guess
+   * (0.94 m MAE) and must never trigger arrival. Default 'lidar' — a robot with
+   * a working range sensor is the normal case now.
+   */
+  distanceSource?: 'lidar' | 'vlm-estimate';
+  /**
+   * What the forward-clearance measurement reports on every look, in metres.
+   * `undefined` = no range sensor answered, which is the pre-LiDAR world and
+   * must leave the navigator's behaviour exactly as it was.
+   */
+  clearanceM?: number;
+  /**
+   * Report the target's own distance as the forward clearance — the case where
+   * the thing being walked to IS the nearest surface ahead.
+   */
+  clearanceFromTarget?: boolean;
   /**
    * Number of looks after which the target drops out of frame — every later
    * look reports the room but not the target, exactly as the real VLM does once
@@ -55,12 +74,18 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
   let looks = 0;
   let walks = 0;
 
+  // A distance always carries its provenance, exactly as BlockExecutor's range
+  // enrichment produces it: no distance → no source.
+  const sourceOf = (distanceM: number | null): 'lidar' | 'vlm-estimate' | null =>
+    distanceM === null ? null : (opts.distanceSource ?? 'lidar');
+
   const look = (): void => {
     // Once the target leaves the frame the look still succeeds — it just says
     // nothing about the target, which is what leaves the stored bearing stale.
     const visible = opts.visibleForLooks === undefined || looks < opts.visibleForLooks;
     looks++;
-    const observation: VisionObservation = {
+    const targetDistance = opts.distanceUnknown ? null : state.distance;
+    const observation: Observation = {
       currentView: visible ? 'I can see the table' : 'a shelf and a wall',
       personVisible: false,
       raw: '{}',
@@ -70,13 +95,28 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
             {
               label: 'table',
               bearingDeg: normalizeDeg(state.worldBearing - scene.getYawDeg()),
-              distanceEstM: opts.distanceUnknown ? null : state.distance,
+              distanceEstM: targetDistance,
+              distanceSource: sourceOf(targetDistance),
               confidence: 0.9,
             },
           ]
-        : [{ label: 'shelf', bearingDeg: 0, distanceEstM: 2, confidence: 0.9 }],
+        : [
+            {
+              label: 'shelf',
+              bearingDeg: 0,
+              distanceEstM: 2,
+              distanceSource: sourceOf(2),
+              confidence: 0.9,
+            },
+          ],
     };
-    scene.merge(observation);
+    const clearanceM =
+      opts.clearanceM !== undefined
+        ? opts.clearanceM
+        : opts.clearanceFromTarget
+          ? state.distance
+          : null;
+    scene.merge(observation, undefined, { forwardClearanceM: clearanceM });
   };
 
   const runGeneratedBlock = async (
@@ -443,6 +483,25 @@ describe('Navigator — walking into the target', () => {
     expect(world.ran.filter((b) => b.kind === 'walk')).toHaveLength(1);
   });
 
+  it('takes the blind 1 m stage and arrives by contact when nothing is measured', async () => {
+    // The pre-LiDAR path, kept because the real robot can have its target
+    // outside the sensor's vertical fan: no clearance, no measured distance,
+    // fixed stages, and arrival comes from the walk falling badly short.
+    const { navigator, world } = navigateBlocked({
+      distanceM: 2.0,
+      blockedAfterWalks: 1,
+      blockedMode: 'short',
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/moved only 0.04 m of 1.00 m/);
+    // Every stage is the blind full stage — nothing measured anything.
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    for (const walk of walks) expect(Number(walk.params.distanceM)).toBeCloseTo(1.0, 6);
+  });
+
   it('fails when the robot stalls while the target is still far — something else is in the way', async () => {
     // Blocked at ~4 m out, which is a chair in the path, not the table. Needs a
     // distance to know that — with none, "blocked and dead ahead" is all there is.
@@ -456,5 +515,172 @@ describe('Navigator — walking into the target', () => {
 
     expect(outcome.ok).toBe(false);
     expect(outcome.message).toMatch(/walk failed/);
+  });
+});
+
+describe('Navigator — measured range', () => {
+  function navigatorFor(opts: Parameters<typeof makeWorld>[1], maxStages = 12) {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, opts);
+    world.look();
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages,
+    });
+    return { navigator, world, scene };
+  }
+
+  it('arrives on a lidar-measured distance', async () => {
+    const { navigator } = navigatorFor({ worldBearingDeg: 0, distanceM: 1.0 }, 3);
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/Arrived at "table"/);
+    // And it says the number was measured, not guessed.
+    expect(outcome.message).toMatch(/lidar/);
+  });
+
+  it('does NOT arrive on the same distance when it is only a vision estimate', async () => {
+    // The whole point: qwen2.5vl:7b is 0.94 m MAE on distance. Acting on it at a
+    // 0.6 m arrival threshold declares arrival while standing in open floor.
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 0, distanceM: 1.0, distanceSource: 'vlm-estimate' },
+      3
+    );
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).not.toMatch(/Arrived/);
+    expect(outcome.message).toMatch(/gave up after 3 stages/);
+    // It also keeps the blind fixed stage rather than sizing one off a guess.
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(walks.length).toBeGreaterThan(0);
+    for (const walk of walks) expect(Number(walk.params.distanceM)).toBeCloseTo(1.0, 6);
+  });
+
+  it('sizes the stage from the measured distance instead of the blind 1 m', async () => {
+    // 1.0 m measured − 0.6 m arrival = 0.4 m left to walk. The blind path would
+    // command a full metre and push straight past the target.
+    const { navigator, world } = navigatorFor({ worldBearingDeg: 0, distanceM: 1.0 }, 3);
+
+    await navigator.navigate('table');
+
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(Number(walks[0].params.distanceM)).toBeCloseTo(0.4, 6);
+  });
+
+  it('clamps the stage to the measured clearance ahead', async () => {
+    // Target 5 m away, but the lidar measures a surface 1.2 m ahead — something
+    // is in the path. 1.2 − 0.45 stopping margin = 0.75 m is all that may be
+    // commanded, instead of the full 1 m stage.
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 0, distanceM: 5.0, clearanceM: 1.2 },
+      1
+    );
+
+    await navigator.navigate('table');
+
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(walks).toHaveLength(1);
+    expect(Number(walks[0].params.distanceM)).toBeCloseTo(0.75, 6);
+  });
+
+  it('does NOT clamp with a clearance measured before the stage turned away from it', async () => {
+    // The stage order is look → turn → walk, so the clearance in the store was
+    // measured down the PREVIOUS heading. Here the target is 75° off: the 0.7 m
+    // surface the last look found is behind the robot's left shoulder now, and
+    // clamping on it would either veto an open path or — with the numbers
+    // reversed — wave the robot into what is actually ahead. It must expire.
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 75, distanceM: 5.0, clearanceM: 0.7 },
+      1
+    );
+
+    const outcome = await navigator.navigate('table');
+
+    // Compare with 'stops without walking when the way ahead is inside the
+    // stopping margin' (same 0.7 m, no turn): there it refuses to step at all.
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(walks).toHaveLength(1);
+    expect(Number(walks[0].params.distanceM)).toBeCloseTo(1.0, 6);
+    expect(outcome.message).not.toMatch(/stopping margin/);
+  });
+
+  it('leaves the stage alone when the clearance is further than the stage', async () => {
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 0, distanceM: 5.0, clearanceM: 6.0 },
+      1
+    );
+
+    await navigator.navigate('table');
+
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(Number(walks[0].params.distanceM)).toBeCloseTo(1.0, 6);
+  });
+
+  it('stops without walking when the way ahead is inside the stopping margin', async () => {
+    // 0.7 m of clearance leaves 0.25 m after the margin — less than the shortest
+    // useful stage. The target is measured at 0.8 m, i.e. it IS what is ahead,
+    // so this counts as arrival; the alternative is grinding into it.
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 0, distanceM: 0.8, clearanceM: 0.7 },
+      12
+    );
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/stopping margin/);
+    expect(outcome.message).toMatch(/0.70 m/);
+    // Nothing was commanded — it never took the step.
+    expect(world.ran.filter((b) => b.kind === 'walk')).toHaveLength(0);
+  });
+
+  it('refuses to call a blocking surface the target when the target is measured far off', async () => {
+    // Blocked 0.7 m ahead while the table is measured 3 m away: that is a chair
+    // in the path, and "arrived at the table" would be a lie.
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 0, distanceM: 3.0, clearanceM: 0.7 },
+      12
+    );
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/Something is in the way/);
+    expect(world.ran.filter((b) => b.kind === 'walk')).toHaveLength(0);
+  });
+
+  it('walks up to a target that is itself the nearest surface ahead', async () => {
+    // The ordinary good case end to end: the table is what the corridor
+    // measurement sees, so every stage is clamped by its own distance and the
+    // robot converges instead of stopping short.
+    const { navigator, world } = navigatorFor(
+      { worldBearingDeg: 20, distanceM: 3.0, clearanceFromTarget: true },
+      12
+    );
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/Arrived at "table"|stopping margin/);
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    for (const walk of walks) expect(Number(walk.params.distanceM)).toBeLessThanOrEqual(1);
+  });
+
+  it('ignores an unknown clearance instead of reading it as clear or as blocked', async () => {
+    // `null` clearance is UNKNOWN: the sensor's vertical fan does not cover
+    // everything ahead. It must change nothing — same stages as before LiDAR.
+    const { navigator, world } = navigatorFor({ worldBearingDeg: 0, distanceM: 5.0 }, 1);
+
+    await navigator.navigate('table');
+
+    const walks = world.ran.filter((b) => b.kind === 'walk');
+    expect(Number(walks[0].params.distanceM)).toBeCloseTo(1.0, 6);
   });
 });
