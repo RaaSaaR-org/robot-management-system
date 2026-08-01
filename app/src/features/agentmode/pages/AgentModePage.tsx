@@ -10,6 +10,7 @@ import { cn } from '@/shared/utils';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { AgentChat } from '../components/AgentChat';
 import { AgentModeToggle } from '../components/AgentModeToggle';
+import { AgentVoiceBar } from '../components/AgentVoiceBar';
 import { BlockTimeline } from '../components/BlockTimeline';
 import { EstopBanner } from '../components/EstopBanner';
 import { ScenePanel } from '../components/ScenePanel';
@@ -118,6 +119,8 @@ export function AgentModePage() {
       />
 
       <EstopBanner onReset={() => robotId && void agentActions.resetEstop(robotId)} />
+
+      <AgentVoiceBar robotId={robotId} />
 
       {error && (
         <div

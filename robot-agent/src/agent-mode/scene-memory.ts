@@ -15,6 +15,68 @@ import type { VisionEntity, VisionObservation } from './vision.js';
 const STALE_MS = 15 * 60_000;
 
 /**
+ * Collapse repeats of one label inside a SINGLE observation, deterministically.
+ *
+ * A frame containing two doorways comes back as `entities: [door, door]` — two
+ * real, differently-placed objects sharing one name. The store is keyed by
+ * label, so they cannot both be kept; the question is only whether the survivor
+ * is chosen or accidental. Writing them in sequence made it accidental: the last
+ * one the model happened to list won, and two looks from nearly the same pose
+ * could disagree. The navigator then steers on a bearing that jumps between two
+ * real objects and converges on neither — observed as a `goto "door"` that
+ * turned −38°, +28°, −33° over successive stages and gave up having walked 5.5 m
+ * past both.
+ *
+ * The instance kept is the one CLOSEST TO THE CENTRE OF THE FRAME. It is the one
+ * the robot is already looking at, which is what "the door" ordinarily refers to;
+ * and, unlike a nearest-or-first rule, it is *stable under the navigator's own
+ * steering* — having turned towards it, it stays the most central, so the next
+ * look chooses it again and the approach converges.
+ *
+ * Ties break towards the instance that carries a distance at all, then the
+ * nearer, then the more confident — so the survivor is fully determined by the
+ * observation and never by iteration order.
+ *
+ * @returns one entry per distinct label, each with the count it stood for.
+ */
+export function dedupeByLabel<T extends VisionEntity>(
+  entities: readonly T[]
+): Array<{ seen: T; rawLabel: string; inView: number }> {
+  // Generic over the element type, not fixed to VisionEntity: `merge` is handed
+  // ObservedEntity, which carries the `distanceSource` that says whether a metre
+  // was measured or guessed. Narrowing to the base type here would silently drop
+  // it and re-label every lidar range as a vision estimate.
+  const byKey = new Map<string, { seen: T; rawLabel: string; inView: number }>();
+  for (const seen of entities) {
+    const rawLabel = seen.label.trim();
+    if (!rawLabel) continue;
+    const key = rawLabel.toLowerCase();
+    const prior = byKey.get(key);
+    if (!prior) {
+      byKey.set(key, { seen, rawLabel, inView: 1 });
+      continue;
+    }
+    prior.inView++;
+    if (moreCentral(seen, prior.seen)) prior.seen = seen;
+  }
+  return [...byKey.values()];
+}
+
+/** True when `a` is the better referent for a shared label than `b`. */
+function moreCentral(a: VisionEntity, b: VisionEntity): boolean {
+  const da = Math.abs(a.bearingDeg);
+  const db = Math.abs(b.bearingDeg);
+  if (da !== db) return da < db;
+  // A known distance beats an unknown one: it is the instance the navigator can
+  // actually judge progress against.
+  if ((a.distanceEstM === null) !== (b.distanceEstM === null)) return b.distanceEstM === null;
+  if (a.distanceEstM !== null && b.distanceEstM !== null && a.distanceEstM !== b.distanceEstM) {
+    return a.distanceEstM < b.distanceEstM;
+  }
+  return a.confidence > b.confidence;
+}
+
+/**
  * How far the robot may turn before the stored forward clearance stops
  * describing what is in front of it.
  *
@@ -249,13 +311,11 @@ export class SceneMemoryStore {
     const yaw = yawDegOverride === undefined ? this.yawDeg : normalizeDeg(yawDegOverride);
     const now = new Date().toISOString();
 
-    for (const seen of observation.entities) {
-      const label = seen.label.trim();
-      if (!label) continue;
-      const key = label.toLowerCase();
+    for (const { seen, rawLabel, inView } of dedupeByLabel(observation.entities)) {
+      const key = rawLabel.toLowerCase();
       const previous = this.entities.get(key);
       const entity: SceneEntity = {
-        label: previous?.label ?? label,
+        label: previous?.label ?? rawLabel,
         bearingDeg: normalizeDeg(yaw + seen.bearingDeg),
         // Distance AND its provenance are overwritten together, unconditionally.
         // Keeping a previous measured distance when this look produced none
@@ -272,6 +332,12 @@ export class SceneMemoryStore {
         lastSeen: now,
         observedSeq: (previous?.observedSeq ?? 0) + 1,
       };
+      // How many instances this one label stood for in the frame it came from.
+      // Recorded rather than smoothed away: it is the difference between "the
+      // door" and "one of the two doors I can see", and the navigator quotes it
+      // when a goto on this label fails. Absent (not 1) in the ordinary case, so
+      // the field only ever appears when it means something.
+      if (inView > 1) entity.duplicatesInView = inView;
       // Keep the previous note when this observation carries none — a note is
       // extra colour, not something to lose on a terser second look.
       const note = seen.note ?? previous?.note;

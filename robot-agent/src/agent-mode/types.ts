@@ -40,6 +40,13 @@ export type AgentPlanStatus = (typeof AgentPlanStatuses)[number];
 export const ControlOwners = ['idle', 'teleop', 'vla', 'agent'] as const;
 export type ControlOwner = (typeof ControlOwners)[number];
 
+/**
+ * Languages the robot can be spoken to and answer in — the two the voice
+ * service has a Piper voice for (`piper_voice_de` / `piper_voice_en`).
+ */
+export const SpokenLanguages = ['en', 'de'] as const;
+export type SpokenLanguage = (typeof SpokenLanguages)[number];
+
 export interface AgentBlock {
   id: string;
   kind: AgentBlockKind;
@@ -67,6 +74,15 @@ export interface AgentPlan {
   command: string;
   /** A2A context id, when the command arrived over A2A. */
   contextId?: string;
+  /**
+   * Language the operator SPOKE, when the command came in over the voice
+   * channel; absent for typed commands. Everything the robot says out loud
+   * about this plan is in this language — the planner's `speak`/`greet` text,
+   * the spoken acknowledgement and the spoken outcome. `reasoning`, block
+   * results and the whole UI stay English: those are read, not heard, and the
+   * operator reading them is not necessarily the one who spoke.
+   */
+  language?: SpokenLanguage;
   blocks: AgentBlock[];
   /** Index of the running block; -1 when nothing runs. */
   cursor: number;
@@ -105,6 +121,16 @@ export interface SceneEntity {
    * Display-irrelevant; not rendered in the scene table.
    */
   observedSeq: number;
+  /**
+   * How many separate things the last look called by this label — present only
+   * when it was more than one.
+   *
+   * The store is keyed by label, so two doorways in one frame are two real
+   * objects competing for the key "door". One of them is kept (the most central
+   * — see `dedupeByLabel`), and this records that the choice was made, because
+   * "walk to the door" is a different instruction when the robot can see two.
+   */
+  duplicatesInView?: number;
   note?: string;
 }
 
@@ -180,11 +206,46 @@ export interface AgentModeEvent {
   timestamp: string;
 }
 
+/**
+ * What a submitted command actually became. `message` says the same thing in
+ * English prose written for the timeline; this says it in a form a caller can
+ * branch on.
+ *
+ * It exists for the SPOKEN path. A voice client cannot read the English message
+ * aloud — the operator may be speaking German, and "E-Stop: the running plan was
+ * discarded and the robot was damped." through a German TTS voice is the worst
+ * possible rendering of the one reply that has to land instantly. The codes let
+ * the narrator say the same fact in the operator's own language.
+ */
+export type AgentCommandOutcome =
+  /** A new plan was created; `planId` is set and the blocks are being planned. */
+  | 'planned'
+  /** Folded into the already-running plan as an interrupt; `planId` is THAT plan. */
+  | 'folded'
+  /** A bare stop word — the E-Stop was taken, no planner involved. */
+  | 'estop'
+  | 'empty'
+  | 'disabled'
+  /** An E-Stop latch (ours or the SafetyMonitor's) forbids driving. */
+  | 'estop_latched'
+  /** A stopped plan is still finishing its in-flight block. */
+  | 'winding_down'
+  /** Something other than the agent holds the control lock. */
+  | 'busy';
+
 /** Response of `POST /robots/:id/agent-mode/command`. */
 export interface AgentCommandResult {
   accepted: boolean;
   planId?: string;
   message: string;
+  /** Machine-readable form of `message` — see {@link AgentCommandOutcome}. */
+  outcome?: AgentCommandOutcome;
+  /**
+   * The earlier interrupt this one displaced, when `outcome` is `folded`. The
+   * operator has to be told: an accepted order that silently evaporates is one
+   * they will wait for forever.
+   */
+  replacedCommand?: string;
   /**
    * E-Stop paths only: whether StopMove AND Damp were acknowledged by the
    * robot. `false` means the latch is set — no further blocks will run — but

@@ -6,7 +6,13 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applyVoiceEvent, emptyVoiceRobotState, type VoiceRobotState } from '../voiceStore';
+import {
+  applyVoiceEvent,
+  emptyVoiceRobotState,
+  useVoiceStore,
+  type VoiceRobotState,
+} from '../voiceStore';
+import type { VoicePipelineState, VoiceStatus } from '../../types/voice.types';
 
 describe('applyVoiceEvent (TASK-192)', () => {
   let state: VoiceRobotState;
@@ -83,5 +89,38 @@ describe('applyVoiceEvent (TASK-192)', () => {
     applyVoiceEvent(state, { type: 'config_changed', ts: 2.0, mode: 'vad' });
     expect(state.entries).toHaveLength(0);
     expect(state.micActivity).toHaveLength(0);
+  });
+});
+
+describe('setStatus', () => {
+  const ROBOT = 'g1-edu-1';
+
+  function status(state: VoicePipelineState): VoiceStatus {
+    return {
+      state,
+      paused: false,
+      wake: { enabled: false, windowOpenS: null },
+      contextId: null,
+      lastTranscript: null,
+      lastReply: null,
+      metrics: {},
+    };
+  }
+
+  beforeEach(() => {
+    useVoiceStore.setState({ byRobot: {}, connection: {}, health: {}, status: {} });
+  });
+
+  it('adopts the polled pipeline state while the stream has said nothing', () => {
+    // A page opened onto a quiet service showed "Unknown" until someone spoke,
+    // with /status answering "idle" the whole time.
+    useVoiceStore.getState().setStatus(ROBOT, status('idle'));
+    expect(useVoiceStore.getState().byRobot[ROBOT].pipelineState).toBe('idle');
+  });
+
+  it('never lets a 10-second poll overwrite the live stream', () => {
+    useVoiceStore.getState().applyEvent(ROBOT, { type: 'state', ts: 9.0, state: 'speaking' });
+    useVoiceStore.getState().setStatus(ROBOT, status('idle'));
+    expect(useVoiceStore.getState().byRobot[ROBOT].pipelineState).toBe('speaking');
   });
 });

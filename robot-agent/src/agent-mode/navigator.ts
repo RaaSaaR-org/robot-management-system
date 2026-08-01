@@ -413,7 +413,15 @@ export class Navigator {
               `${stages} stages and ${walkedTotalM.toFixed(2)} m rather than walk on an ` +
               `unconfirmed heading. It may be out of view, or close enough that the camera now ` +
               `shows only part of it and the vision model named that part something else — ` +
-              `check the last look before re-scanning.`,
+              `check the last look before re-scanning.` +
+              // The ambiguous case reads exactly like the out-of-view one from the
+              // outside, and the fix is different: naming a different landmark
+              // helps, re-scanning does not.
+              (current.duplicatesInView && current.duplicatesInView > 1
+                ? ` Note that a look reported ${current.duplicatesInView} separate things called ` +
+                  `"${current.label}" — I steered towards the most central one, so if that was ` +
+                  `not the one you meant, name it differently or move closer first.`
+                : ''),
           };
         }
       } else {

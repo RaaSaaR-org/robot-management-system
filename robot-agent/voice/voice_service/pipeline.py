@@ -31,6 +31,15 @@ from .wake import match_wake
 
 LOW_CONFIDENCE_LOGPROB = -1.5
 
+# Metadata key that tells a NeoDEM robot-agent this turn came from a MOUTH and
+# is going back to an EAR. It matters because this pipeline is half-duplex: the
+# microphone stays shut until the reply has been spoken. An agent that answers
+# only once a several-minute robot plan has finished would therefore keep the
+# operator mute for the whole plan — including for the word "stop". Agents that
+# do not know the key ignore it and behave exactly as before.
+# Mirror of VOICE_METADATA_KEY in src/agent/agent-executor.ts.
+VOICE_METADATA_KEY = "neodem/voice"
+
 CANNED = {
     "error": {
         "de": "Entschuldigung, da ist etwas schiefgelaufen.",
@@ -232,10 +241,13 @@ class VoicePipeline:
 
             context_id = self.session.context_id()
             t1 = time.monotonic()
+            metadata = {
+                VOICE_METADATA_KEY: {"speech": True, "language": language}
+            }
             reply_arrived = asyncio.Event()
             filler = asyncio.create_task(self._thinking_filler(language, reply_arrived))
             try:
-                reply = await self.a2a.send(text, context_id)
+                reply = await self.a2a.send(text, context_id, metadata)
                 self.metrics.record("agent", time.monotonic() - t1)
             finally:
                 reply_arrived.set()

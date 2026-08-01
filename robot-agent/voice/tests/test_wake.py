@@ -103,7 +103,9 @@ class FakeA2A:
     def __init__(self) -> None:
         self.sent: list[str] = []
 
-    async def send(self, text: str, context_id: str) -> AgentReply:
+    async def send(self, text: str, context_id: str,
+                   metadata: dict | None = None) -> AgentReply:
+        self.last_metadata = metadata
         self.sent.append(text)
         return AgentReply(text="Der Akku ist bei 50 Prozent.", state="completed")
 

@@ -27,22 +27,29 @@ class A2AClient:
         self.last_ok: bool | None = None
         self._client: httpx.AsyncClient | None = None
 
-    async def send(self, text: str, context_id: str) -> AgentReply:
+    async def send(
+        self, text: str, context_id: str, metadata: dict | None = None
+    ) -> AgentReply:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=self.timeout_s)
+        message = {
+            "kind": "message",
+            "messageId": str(uuid.uuid4()),
+            "role": "user",
+            "parts": [{"kind": "text", "text": text}],
+            "contextId": context_id,
+        }
+        # A2A carries arbitrary per-message metadata, and an agent that does not
+        # know the key ignores it. That is what makes this safe to send to ANY
+        # A2A agent: the NeoDEM robot-agent reads it and answers a speech client
+        # differently, everything else sees a plain message.
+        if metadata:
+            message["metadata"] = metadata
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
             "method": "message/send",
-            "params": {
-                "message": {
-                    "kind": "message",
-                    "messageId": str(uuid.uuid4()),
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": text}],
-                    "contextId": context_id,
-                }
-            },
+            "params": {"message": message},
         }
         try:
             response = await self._client.post(self.agent_url, json=payload)

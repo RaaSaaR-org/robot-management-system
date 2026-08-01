@@ -49,6 +49,18 @@ function SendIcon({ className }: { className?: string }) {
   );
 }
 
+function MicIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 15a3 3 0 003-3V6a3 3 0 10-6 0v6a3 3 0 003 3zm7-3a7 7 0 01-14 0m7 7v3"
+      />
+    </svg>
+  );
+}
+
 function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentPlan | null }) {
   const isUser = message.role === 'user';
 
@@ -67,6 +79,19 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
       >
         {message.text}
       </div>
+
+      {/* A heard command is not a typed one: the words went through a speech
+          model first, so the operator has to be able to see that this is a
+          transcript before judging a plan that misread it. */}
+      {message.spokenLanguage && (
+        <span
+          data-testid="agent-spoken-marker"
+          className="card-meta mt-1 inline-flex items-center gap-1"
+        >
+          <MicIcon className="w-3 h-3" />
+          heard · {message.spokenLanguage.toUpperCase()}
+        </span>
+      )}
 
       {/* Blocks the command produced, inline underneath its acknowledgement */}
       {message.showsPlan && plan && (

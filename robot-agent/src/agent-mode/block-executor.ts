@@ -15,6 +15,7 @@ import { hardwareClient, type LocoActionName, type LocoResult } from '../hardwar
 // them is acyclic: navigator.ts imports only config, scene-memory and types.
 import { CLEARANCE_MARGIN_M, MIN_STAGE_M } from './navigator.js';
 import { RangeSensor } from './range.js';
+import { speakThroughVoiceService } from './voice-narrator.js';
 import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
 import type { VisionClient, VisionObservation } from './vision.js';
 import {
@@ -25,6 +26,7 @@ import {
   type BlockOutcome,
   type PostureName,
   type SceneMemory,
+  type SpokenLanguage,
   type WalkDirection,
 } from './types.js';
 
@@ -171,7 +173,13 @@ export interface BlockExecutorDeps {
     odometry(): Promise<{ x: number; y: number; yaw: number; source: string } | null>;
   };
   /** Voice service POST. Default: `${VOICE_SERVICE_URL}/say`. */
-  say?: (text: string) => Promise<boolean>;
+  say?: (text: string, language?: SpokenLanguage) => Promise<boolean>;
+  /**
+   * Language the robot speaks in right now — the operator's, when the command
+   * arrived by voice. A getter, not a value, because it belongs to the running
+   * plan while the executor is built once at startup.
+   */
+  language?: () => SpokenLanguage | undefined;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -184,20 +192,6 @@ const defaultLoco: NonNullable<BlockExecutorDeps['loco']> = {
   odometry: () => hardwareClient.getLocoOdometry(),
 };
 
-async function defaultSay(text: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${config.agentMode.voiceServiceUrl}/say`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -206,7 +200,8 @@ export class BlockExecutor {
   private readonly deps: BlockExecutorDeps;
   private readonly loco: NonNullable<BlockExecutorDeps['loco']>;
   private readonly range: RangeSensor;
-  private readonly say: (text: string) => Promise<boolean>;
+  private readonly say: (text: string, language?: SpokenLanguage) => Promise<boolean>;
+  private readonly language: () => SpokenLanguage | undefined;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
 
@@ -214,7 +209,8 @@ export class BlockExecutor {
     this.deps = deps;
     this.loco = deps.loco ?? defaultLoco;
     this.range = deps.range ?? new RangeSensor();
-    this.say = deps.say ?? defaultSay;
+    this.say = deps.say ?? speakThroughVoiceService;
+    this.language = deps.language ?? (() => undefined);
     this.sleep = deps.sleep ?? defaultSleep;
     this.now = deps.now ?? (() => Date.now());
   }
@@ -574,7 +570,7 @@ export class BlockExecutor {
     const text = typeof block.params.text === 'string' && block.params.text.trim()
       ? block.params.text.trim()
       : 'Hello! Good to see you.';
-    const spoken = await this.say(text);
+    const spoken = await this.say(text, this.language());
     // `turn: false` — the same gesture the robot has always performed here. The
     // torso turn is only correct when we know where the person is, and `greet`
     // carries no bearing; the planner can ask for it explicitly via `wave`.
@@ -622,7 +618,7 @@ export class BlockExecutor {
   private async speak(block: AgentBlock): Promise<BlockOutcome> {
     const text = typeof block.params.text === 'string' ? block.params.text.trim() : '';
     if (!text) return { ok: false, message: 'speak: empty text' };
-    const spoken = await this.say(text);
+    const spoken = await this.say(text, this.language());
     // A missing voice service is explicitly a degraded success, not a failure:
     // the utterance still reaches the operator as text in the block result.
     return {

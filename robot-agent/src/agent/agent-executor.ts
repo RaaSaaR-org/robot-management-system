@@ -17,7 +17,19 @@ import { getRobotStatus, emergencyStop } from '../tools/status.js';
 import type { RobotStateManager } from '../robot/state.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
-import type { AgentBlock, AgentPlan } from '../agent-mode/types.js';
+import {
+  awaitPlannedBlocks,
+  describeCommandReplyAloud,
+  describePlanAloud,
+  narratePlanOutcome,
+} from '../agent-mode/voice-narrator.js';
+import {
+  SpokenLanguages,
+  type AgentBlock,
+  type AgentModeEvent,
+  type AgentPlan,
+  type SpokenLanguage,
+} from '../agent-mode/types.js';
 
 // Load the Genkit prompt
 const robotAgentPrompt = ai.prompt('robot_agent');
@@ -109,6 +121,34 @@ export function toCleanErrorMessage(error: unknown): string {
   }
   if (msg.length > 200) msg = `${msg.slice(0, 197)}...`;
   return msg || 'LLM request failed';
+}
+
+/**
+ * Metadata key a SPEECH client puts on its A2A message. The voice service sets
+ * it; every other caller (the UI chat, tests, another agent) leaves it off and
+ * gets exactly the behaviour it had before.
+ */
+export const VOICE_METADATA_KEY = 'neodem/voice';
+
+export interface VoiceHint {
+  /** The caller will SPEAK the reply, so it must be short and answer now. */
+  speech: true;
+  /** Language the operator was heard in, when the client could tell. */
+  language?: SpokenLanguage;
+}
+
+/**
+ * Read the speech hint off an inbound message. Anything malformed reads as
+ * "not speech": a hint is an optimisation, and a garbled one must never make a
+ * normal command fail.
+ */
+export function readVoiceHint(message: Message): VoiceHint | null {
+  const raw = (message.metadata as Record<string, unknown> | undefined)?.[VOICE_METADATA_KEY];
+  if (!raw || typeof raw !== 'object') return null;
+  const hint = raw as { speech?: unknown; language?: unknown };
+  if (hint.speech !== true) return null;
+  const language = SpokenLanguages.find((l) => l === hint.language);
+  return language ? { speech: true, language } : { speech: true };
 }
 
 export class RobotAgentExecutor implements AgentExecutor {
@@ -445,6 +485,17 @@ export class RobotAgentExecutor implements AgentExecutor {
    * Hand the message to the Agent Mode controller, acknowledge immediately,
    * then stream one non-final A2A status-update per block transition and close
    * with a single final update.
+   *
+   * SPEECH CLIENTS TAKE A DIFFERENT EXIT (see {@link readVoiceHint}). A voice
+   * client is half-duplex: it holds the microphone shut from the end of the
+   * utterance until it has spoken the reply. Keeping the A2A response open
+   * until the plan finished therefore did three bad things at once — the
+   * operator could not say "stop" while the robot was walking, a plan longer
+   * than the client's timeout was announced as a failure while the robot
+   * happily carried on executing it, and the streamed `▶ walk`/`✓ goto` lines
+   * are written for a screen, not an ear. So a speech client is answered as
+   * soon as the plan is UNDERSTOOD, and the outcome is spoken later through
+   * the voice service's own `/say`.
    */
   private async executeAgentMode(
     taskId: string,
@@ -480,6 +531,8 @@ export class RobotAgentExecutor implements AgentExecutor {
       eventBus.publish(update);
     };
 
+    const voice = readVoiceHint(userMessage);
+
     if (!text) {
       publish('failed', 'No message found to process.', true);
       return;
@@ -489,20 +542,50 @@ export class RobotAgentExecutor implements AgentExecutor {
     // hold the A2A response open.
     publish('working', 'Agent Mode: understanding the command…', false);
 
-    const result = await agentModeController.submitCommand({ text, contextId });
+    const result = await agentModeController.submitCommand({
+      text,
+      contextId,
+      ...(voice?.language ? { language: voice.language } : {}),
+    });
+
+    // A spoken client gets the same fact in the language it was spoken to in;
+    // `message` is English prose for the timeline and would be read out by a
+    // German TTS voice as-is. Null = no spoken form, so fall back to the prose.
+    const spokenReply = voice
+      ? describeCommandReplyAloud(result, voice.language ?? 'en')
+      : null;
 
     if (!result.accepted) {
-      publish('failed', result.message, true);
+      publish('failed', spokenReply ?? result.message, true);
       return;
     }
 
     if (!result.planId) {
-      // Stop word / no plan produced — the controller already acted.
-      publish('completed', result.message, true);
+      // Stop word / no plan produced — the controller already acted. For a
+      // spoken "stop" this IS the answer, and it is the one reply that must
+      // never wait on anything.
+      publish('completed', spokenReply ?? result.message, true);
       return;
     }
 
     const planId = result.planId;
+
+    if (voice) {
+      if (result.outcome === 'folded') {
+        // An interrupt carries the RUNNING plan's id. Describing that plan back
+        // would promise steps the robot has already taken, so the reply is the
+        // short "after the current step" line instead. The narrator is still
+        // armed (idempotent) so a spoken interrupt on a plan that was started
+        // by typing gets its outcome spoken too.
+        narratePlanOutcome(planId, voice.language ?? 'en', {
+          subscribe: (listener) => agentModeController.subscribe(listener),
+        });
+        publish('completed', spokenReply ?? result.message, true);
+        return;
+      }
+      await this.acknowledgeSpokenPlan(planId, voice, publish);
+      return;
+    }
     const unsubscribe = agentModeController.subscribe((event) => {
       if (event.plan && event.plan.id !== planId) return;
       const line = formatAgentEvent(event.type, event.plan, event.block);
@@ -529,7 +612,50 @@ export class RobotAgentExecutor implements AgentExecutor {
       publish('failed', summary, true);
     }
   }
+
+  /**
+   * Speech exit: answer with what the robot is ABOUT to do, and arrange for the
+   * outcome to be spoken when it happens.
+   *
+   * Waiting here for the planner (a few seconds on the local model, capped by
+   * `awaitPlannedBlocks`) buys a reply that names the actual steps — "Okay, I
+   * will look around the room and walk to the door" — instead of a content-free
+   * "working on it". That is worth the wait; waiting for the plan to RUN is
+   * not, and is what this method exists to stop doing.
+   */
+  private async acknowledgeSpokenPlan(
+    planId: string,
+    voice: VoiceHint,
+    publish: (state: TaskState, message: string, final: boolean) => void
+  ): Promise<void> {
+    const language: SpokenLanguage = voice.language ?? 'en';
+    const subscribe = (listener: (event: AgentModeEvent) => void): (() => void) =>
+      agentModeController.subscribe(listener);
+
+    // Armed BEFORE the await: a one-block plan can finish while we are still
+    // waiting for the planner, and the outcome listener must already be in
+    // place or that plan would end in silence.
+    narratePlanOutcome(planId, language, { subscribe });
+
+    const plan = await awaitPlannedBlocks(planId, { subscribe });
+    const spoken = plan ? describePlanAloud(plan, language) : null;
+
+    // Fallbacks, in order of how much they can honestly claim: the planned
+    // steps; a bare acknowledgement when the plan is only speech (the words
+    // themselves are the answer, and the voice service speaks them from the
+    // `speak` block); a "still thinking" when the planner has not answered yet.
+    publish('completed', spoken ?? (plan ? ACK_NO_ACTION[language] : ACK_PLANNING[language]), true);
+  }
 }
+
+/** Spoken when the plan turned out to be pure speech — the block says the rest. */
+const ACK_NO_ACTION: Record<SpokenLanguage, string> = { de: 'Moment.', en: 'One moment.' };
+
+/** Spoken when the planner has not produced blocks inside the ack window. */
+const ACK_PLANNING: Record<SpokenLanguage, string> = {
+  de: 'Ich denke noch darüber nach.',
+  en: 'I am still working out how to do that.',
+};
 
 /** One short human line per streamed Agent Mode event; null = not worth a message. */
 function formatAgentEvent(

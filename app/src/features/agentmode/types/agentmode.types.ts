@@ -73,6 +73,13 @@ export interface AgentBlock {
 }
 
 /** An ephemeral plan — never persisted, never a `SkillChain`. */
+/**
+ * Languages the robot can be spoken to and answer in. Mirrors
+ * `SpokenLanguages` in the robot-agent's agent-mode types.
+ */
+export const SpokenLanguages = ['en', 'de'] as const;
+export type SpokenLanguage = (typeof SpokenLanguages)[number];
+
 export interface AgentPlan {
   id: string;
   robotId: string;
@@ -80,6 +87,13 @@ export interface AgentPlan {
   command: string;
   /** A2A context, when the command came in over A2A. */
   contextId?: string;
+  /**
+   * Language the operator SPOKE, when the command arrived over the voice
+   * channel; absent for every typed command. Set by the robot-agent — the one
+   * reliable marker that a plan came in through the microphone rather than
+   * from a keyboard somewhere.
+   */
+  language?: SpokenLanguage;
   blocks: AgentBlock[];
   /** Index of the running block; -1 when nothing runs. */
   cursor: number;
@@ -108,6 +122,16 @@ export interface SceneEntity {
    * source field. Absent must be rendered as unverified, never as measured.
    */
   distanceSource?: 'lidar' | 'vlm-estimate' | null;
+  /**
+   * How many separate things the last look called by this label — present only
+   * when it was more than one.
+   *
+   * Scene memory is keyed by label, so two doorways in one frame are two real
+   * objects competing for the key "door". The robot-agent keeps the most
+   * central one; this says the choice was made, because "walk to the door" is
+   * a different instruction when the robot can see two.
+   */
+  duplicatesInView?: number;
   /** 0..1 */
   confidence: number;
   lastSeen: string;
@@ -279,6 +303,13 @@ export interface AgentChatMessage {
   showsPlan?: boolean;
   /** Rendered as an error bubble. */
   isError?: boolean;
+  /**
+   * Set on a command the robot HEARD rather than one that was typed here, with
+   * the language it was heard in. The distinction is worth showing: a spoken
+   * command was transcribed by a speech model and may not be the words the
+   * operator actually said.
+   */
+  spokenLanguage?: SpokenLanguage;
 }
 
 /** The command a plan is expected for — drives the demo-mode plan driver. */
