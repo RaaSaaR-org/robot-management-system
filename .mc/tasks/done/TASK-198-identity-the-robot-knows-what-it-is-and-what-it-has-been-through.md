@@ -4,7 +4,7 @@ aliases:
 - TASK-198
 title: Identity — the robot knows what it is and what it has been through
 slug: identity-the-robot-knows-what-it-is-and-what-it-has-been-through
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -19,6 +19,12 @@ depends_on:
 due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
+status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
+Live on dz-226: the robot answers as "Nova" (Unitree G1 EDU (Dex3-1), operator
+Sebastian, site dz-226 Lab), carries bootId b-a43bf2facdfc at incarnation 249,
+and reports plansLast24h / failuresLast24h alongside it. The unnamed-robot path
+(asking to be named instead of taking a placeholder) is covered by tests; this
+robot was already named, so that branch was not re-walked by hand.'
 ---
 
 

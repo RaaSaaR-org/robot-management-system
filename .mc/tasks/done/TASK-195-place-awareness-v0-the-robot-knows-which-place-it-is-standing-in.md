@@ -4,7 +4,7 @@ aliases:
 - TASK-195
 title: Place awareness v0 — the robot knows which place it is standing in
 slug: place-awareness-v0-the-robot-knows-which-place-it-is-standing-in
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -19,6 +19,21 @@ depends_on: []
 due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
+status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
+Verified live on dz-226 against the warehouse scene with the real planner
+(gemma4:e2b) and VLM (qwen2.5vl:7b), checking every claim against the
+simulator''s own odometry and a point-in-polygon over places.warehouse.json
+rather than against the agent''s word:
+- boot resolved UNKNOWN -> STAGING at (0.00, 0.00);
+- a 3 m walk committed STAGING -> AISLE-1 at x=3.001, claim == truth;
+- at (3.16, -5.00), on floor no polygon covers, the belief went to NULL rather
+  than holding the last place. That is the honesty rule this task was written
+  around, exercised without fault injection.
+KNOWN LIMITATION, not a regression: `goto` resolves entities from scene memory,
+so no surveyed place is reachable by name — `goto {entity: "charging bay"}`
+fails with "not in the scene memory — scan the room first". Honest, but it
+means the place graph informs answers and the geofence, not navigation. A
+place-directed `goto` would be its own task.'
 ---
 
 
