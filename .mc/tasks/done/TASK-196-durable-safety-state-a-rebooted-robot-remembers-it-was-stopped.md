@@ -4,7 +4,7 @@ aliases:
 - TASK-196
 title: Durable safety state — a rebooted robot remembers it was stopped
 slug: durable-safety-state-a-rebooted-robot-remembers-it-was-stopped
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -19,6 +19,16 @@ depends_on: []
 due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
+status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
+Exercised for real by an unclean restart during the 2026-08-02 warehouse
+session rather than only by tests: the boot logged
+"[Incarnations] Previous incarnation b-23760b0286f1 never shut down cleanly
+(started 2026-08-02T12:35:35.938Z) — treating this boot as crash recovery" and
+"[AgentMode] the base was damped when this robot last shut down (FSM 1) — send
+`posture stand` before any locomotion", and the console rendered "Recovered
+from an unclean shutdown" behind its acknowledge gate. The restored snapshot
+correctly dropped pose, place and held object as too old rather than carrying
+them forward.'
 ---
 
 

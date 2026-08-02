@@ -4,7 +4,7 @@ aliases:
 - TASK-197
 title: Memory workspace — the robot remembers across restarts
 slug: memory-workspace-the-robot-remembers-across-restarts
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -20,6 +20,13 @@ depends_on:
 due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
+status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
+Workspace, per-robot-id memory and the GDPR erasure route
+(RobotMemoryErasureService, DELETE /api/v1/robots/:id/memory) ship and are
+covered by their unit tests. Stated plainly rather than implied: the erasure
+route was NOT re-exercised by hand in the 2026-08-02 warehouse session, which
+drove place awareness, the geofence and the cockpit. It is closed on the merge
+and its tests, not on a fresh manual GDPR run.'
 ---
 
 

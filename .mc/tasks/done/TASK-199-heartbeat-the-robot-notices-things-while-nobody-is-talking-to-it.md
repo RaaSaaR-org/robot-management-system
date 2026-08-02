@@ -4,7 +4,7 @@ aliases:
 - TASK-199
 title: Heartbeat — the robot notices things while nobody is talking to it
 slug: heartbeat-the-robot-notices-things-while-nobody-is-talking-to-it
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -21,6 +21,12 @@ depends_on:
 due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
+status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
+heartbeat / initiative / idle-watcher ship with their tests. Worth recording
+rather than glossing: AGENT_HEARTBEAT_ENABLED is false in the
+.env.g1-edu-agent profile, so the heartbeat was NOT running during the
+2026-08-02 warehouse session — the idle watcher was, and the run stayed inside
+its "never locomotes on idle" rule throughout.'
 ---
 
 

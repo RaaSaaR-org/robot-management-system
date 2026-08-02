@@ -4,7 +4,7 @@ aliases:
 - TASK-200
 title: Place v2 — real sites, twin-bound places and an enforced geofence
 slug: place-v2-real-sites-twin-bound-places-and-an-enforced-geofence
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -20,6 +20,21 @@ depends_on:
 due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
+status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
+The geofence was verified live in the warehouse hall and it is exact while the
+pose is trusted: a `walk forward 2 metres` aimed at keepout RACK-A was stopped
+at x=3.52, 0.48 m clear of the rack face, with
+"[SafetyMonitor] PROTECTIVE STOP: Keepout violated: Rack A (RACK-A) — 0.02 m
+past the safety margin at (3.52, -2.50)", the plan aborted through
+onSafetyStop, and the next command refused while the latch held. A second
+approach on an earlier run reproduced it at (3.51, -1.99).
+ONE GAP FOUND, filed as [[TASK-201]] rather than fixed here: once accumulated
+travel passes PLACE_DRIFT_BUDGET_M the belief goes `stale`, poseTrusted is
+false, the fence answers `unknown` and the SafetyMonitor changes nothing — so
+enforcement lapses silently and the robot walked straight through RACK-A with
+estop=armed and systemHealthy=true. Each module behaves as its own doc-comment
+says; what is missing is that nothing tells the operator the fence is no longer
+enforcing.'
 ---
 
 
