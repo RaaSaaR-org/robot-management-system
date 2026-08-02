@@ -1,0 +1,464 @@
+<mujoco model="g1_warehouse_scene">
+  <!--
+    ==========================================================================
+    Agent Mode warehouse scene (TASK-195, place awareness v0)
+    ==========================================================================
+    The industrial sibling of g1_dex3_room_scene.xml and g1_dex3_house_scene.xml.
+    Same robot, same base actuation, same conventions, same include mechanism -
+    only the world changed: a 20 x 12 m hall with racking, a loading dock and a
+    charging bay instead of an apartment.
+
+      (drawn with '=' and not '-' on purpose: XML forbids a double hyphen inside
+      a comment, and an ASCII wall made of them left the house scene unparseable
+      by every strict XML tool while MuJoCo's lenient tinyxml accepted it
+      happily. Do not "tidy" these back to hyphens.)
+
+    Why an industrial scene at all: place awareness is an industry-first feature
+    (placeType is the closed set aisle | rack_face | dock | staging | cell |
+    charging | corridor | office | unknown) and there was no industrial scene in
+    mjcf/ to resolve places against. This hall exists to test POSE  ->  PLACE
+    resolution, not manipulation: everything in it is a static box.
+
+    ======================= PLACE GRAPH GROUND TRUTH ==========================
+    The numbers below are the single source of truth. They are transcribed
+    verbatim into places/places.warehouse.json; if you move a geom here, move
+    the polygon there in the same commit or the resolver silently starts lying.
+
+    Hall bounds (interior, floor 0):  x [-10.0, +10.0]   y [-6.0, +6.0]
+    Wall height 4.0 m, wall half thickness 0.05 m centred ON the bound, exactly
+    as the house scene does it (so x = +10.0 is the wall centre line and the
+    polygons run up to it).
+
+      place id       placeType   footprint (axis aligned unless noted)  keepout
+      ============   =========   ====================================  =======
+      STAGING        staging     x [-2.0,  2.0]   y [-2.0,  2.0]        no
+      AISLE-1        aisle       x [ 2.0,  4.0]   y [-4.0,  2.0]        no
+      RACK-A         rack_face   x [ 4.0,  5.0]   y [-4.0,  2.0]        YES
+      AISLE-2        aisle       x [ 5.0,  7.0]   y [-4.0,  2.0]        no
+      RACK-B         rack_face   x [ 7.0,  8.0]   y [-4.0,  2.0]        YES
+      AISLE-3        aisle       x [ 8.0, 10.0]   y [-4.0,  2.0]        no
+      DOCK-1         dock        x [-9.0, -5.5]   y [-3.0,  3.0]        no
+      DOCK-1-EDGE    dock        x [-9.95,-9.0]   y [-3.0,  3.0]        YES
+      CHARGING-A     charging    x [-1.5,  1.5]   y [-5.5, -2.0]        no
+      CROSS-AISLE    corridor    L shaped, see below                    no
+
+      CROSS-AISLE polygon, counter clockwise, 6 vertices, concave at (-2, 2):
+        (-5.5, -3.0) (-2.0, -3.0) (-2.0, 2.0) (10.0, 2.0) (10.0, 5.5) (-5.5, 5.5)
+      i.e. a west leg x [-5.5, -2.0] y [-3.0, 5.5] joined to a north band
+      x [-5.5, 10.0] y [2.0, 5.5]. It is deliberately NOT a rectangle: the
+      resolver's ray cast has to survive a concave polygon on day one.
+
+    Adjacency the tests lean on (shared edges, never overlaps):
+      STAGING  |  AISLE-1      at x = +2.0   (walk +x from spawn)
+      STAGING  |  CHARGING-A   at y = -2.0   (walk -y from spawn)
+      STAGING  |  CROSS-AISLE  at y = +2.0 and x = -2.0
+      aisle mouths             at y = +2.0   (the classic flap location)
+      DOCK-1   |  DOCK-1-EDGE  at x = -9.0
+    NO two polygons overlap. That is a hard invariant of this scene: a pose
+    resolves to at most one place, so the resolver never has to break a tie.
+
+    Uncovered floor is DELIBERATE, not an oversight. y < -4.0 east of staging,
+    the pocket x [-3.5, -2.0] y [-6.0, -3.0], the strip north of the dock: a
+    pose there is genuinely UNKNOWN and the honesty rule ("null place is never
+    silently replaced by the last known place") needs somewhere to be exercised
+    that is not a fault injection.
+
+    Floor markings are painted as 4 mm thin boxes with contype = conaffinity = 0
+    on the place boundaries, so a render of this scene is a picture of the place
+    graph. They sit far below the 0.15 to 1.80 m band the LiDAR cone query uses,
+    so they are invisible to range and cannot manufacture a phantom obstacle.
+    ==========================================================================
+
+    Robot: g1_dex3/g1_43dof_planarbase.xml, the same generated include the room
+    and house scenes use. It spawns at (0, 0) facing world +x, standing in
+    STAGING, with three position actuated base DOFs (base_x, base_y, base_yaw,
+    slide range +/- 25 m, so the whole hall is reachable). Legs stay in the
+    stand pose; there is no gait.
+
+    Unchanged from the room scene and load bearing: PELVIS_Z = 0.807 keeps the
+    feet clear of the floor (mj_forward gives ncon = 0 at rest) and sim_node.py's
+    weight-0 hold pose must stay LATCHED. Both are covered by e2e_loco_check.py
+    checks 2 and 11. Do not "tidy" the pelvis height to make the robot look
+    better standing - it ratchets the ankles on the first step.
+
+    World  ->  compass convention, same as the other scenes: +x = 0 deg bearing,
+    counter clockwise positive, so +y = +90 deg. base_yaw is the robot heading.
+    The place file declares exactly this as "deg,+x=0,CCW+".
+
+    Colour coding follows the house scene's reasoning: a 7B vision model cannot
+    tell two grey racks apart but it reliably names "the orange racking" and
+    "the yellow roller door", so the landmark colour IS the landmark.
+
+    Sits directly in mjcf/ like the other scenes, so mesh paths of the form
+    g1_dex3/meshes/*.STL inside the robot include resolve next to this file.
+    Load it exactly like the others, via sim_node.py's scene flag; there is no
+    special casing anywhere in the harness for which scene is loaded.
+    ==========================================================================
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <include file="g1_dex3/g1_43dof_planarbase.xml"/>
+
+  <visual>
+    <headlight diffuse="0.55 0.55 0.55" ambient="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.45 0.55 0.65" rgb2="0.15 0.18 0.22"
+             width="512" height="3072"/>
+    <texture type="2d" name="whsefloor" builtin="checker" mark="edge"
+             rgb1="0.42 0.42 0.43" rgb2="0.35 0.35 0.36" markrgb="0.5 0.5 0.5"
+             width="300" height="300"/>
+    <material name="whsefloor" texture="whsefloor" texuniform="true"
+              texrepeat="20 20" reflectance="0.06"/>
+
+    <material name="wall" rgba="0.80 0.80 0.78 1" specular="0.05" shininess="0.05"/>
+    <material name="wall_band" rgba="0.32 0.42 0.52 1" specular="0.1" shininess="0.1"/>
+
+    <!-- The roller door is the one opening in the shell and the dock landmark. -->
+    <material name="door_amber" rgba="0.93 0.72 0.16 1" specular="0.2" shininess="0.2"/>
+
+    <!-- Racking: orange uprights, blue beams. Classic and unmistakable. -->
+    <material name="rack_orange" rgba="0.88 0.42 0.10 1" specular="0.2" shininess="0.2"/>
+    <material name="rack_blue" rgba="0.13 0.32 0.62 1" specular="0.2" shininess="0.2"/>
+
+    <material name="pallet_wood" rgba="0.68 0.52 0.32 1" specular="0.1" shininess="0.1"/>
+    <material name="box_card" rgba="0.76 0.62 0.42 1" specular="0.05" shininess="0.05"/>
+    <material name="box_white" rgba="0.90 0.90 0.88 1" specular="0.05" shininess="0.05"/>
+    <material name="steel_grey" rgba="0.72 0.74 0.78 1" specular="0.5" shininess="0.5"/>
+
+    <!-- Charger: green cabinet, the only green thing in the hall. -->
+    <material name="charger_green" rgba="0.15 0.62 0.34 1" specular="0.3" shininess="0.3"/>
+    <material name="charger_dark" rgba="0.16 0.18 0.20 1" specular="0.2" shininess="0.2"/>
+
+    <!-- Floor paint. mark_red is reserved for keepout footprints. -->
+    <material name="mark_yellow" rgba="0.95 0.82 0.15 1" specular="0.0" shininess="0.0"/>
+    <material name="mark_blue" rgba="0.20 0.45 0.85 1" specular="0.0" shininess="0.0"/>
+    <material name="mark_green" rgba="0.20 0.70 0.35 1" specular="0.0" shininess="0.0"/>
+    <material name="mark_red" rgba="0.78 0.16 0.14 1" specular="0.0" shininess="0.0"/>
+
+    <material name="person_shirt" rgba="0.95 0.55 0.10 1" specular="0.1" shininess="0.1"/>
+    <material name="person_skin" rgba="0.90 0.74 0.62 1" specular="0.1" shininess="0.1"/>
+    <material name="person_legs" rgba="0.20 0.22 0.30 1" specular="0.1" shininess="0.1"/>
+  </asset>
+
+  <worldbody>
+    <!-- High bay lighting: one directional key plus fills over each functional
+         area. A single overhead light leaves the aisles between the 2.2 m racks
+         dark enough that the vision model answers "a dark corridor" instead of
+         naming the racking. -->
+    <light pos="0 0 6.0" dir="0 0 -1" directional="true" diffuse="0.55 0.55 0.55"/>
+    <light pos="-7.0 0 4.2" dir="0 0 -1" diffuse="0.30 0.30 0.30"/>
+    <light pos="0 0 4.2" dir="0 0 -1" diffuse="0.30 0.30 0.30"/>
+    <light pos="3.0 -1.0 4.2" dir="0 0 -1" diffuse="0.32 0.32 0.32"/>
+    <light pos="6.0 -1.0 4.2" dir="0 0 -1" diffuse="0.32 0.32 0.32"/>
+    <light pos="9.0 -1.0 4.2" dir="0 0 -1" diffuse="0.32 0.32 0.32"/>
+    <light pos="0 4.0 4.2" dir="0 0 -1" diffuse="0.30 0.30 0.30"/>
+    <light pos="0 -4.5 4.2" dir="0 0 -1" diffuse="0.28 0.28 0.28"/>
+
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="whsefloor"
+          friction="0.8" condim="3"/>
+
+    <!-- ============== Outer shell: 20 x 12 m, 4.0 m high ==================
+         Wall centre lines ARE the hall bounds: +/-10 in x, +/-6 in y. -->
+    <geom name="wall_north" type="box" size="10.05 0.05 2.0" pos="0 6 2.0" material="wall"/>
+    <geom name="wall_south" type="box" size="10.05 0.05 2.0" pos="0 -6 2.0" material="wall"/>
+    <geom name="wall_east"  type="box" size="0.05 6.0 2.0" pos="10 0 2.0" material="wall"/>
+
+    <!-- West end wall, split around the roller door gap y [-1.5, +1.5].
+         Segment extents are written as the gap they leave, not as a centre and
+         a half size, because it is the GAP that matters. -->
+    <geom name="wall_west_a" type="box" size="0.05 2.25 2.0" pos="-10 -3.75 2.0" material="wall"/>
+    <geom name="wall_west_b" type="box" size="0.05 2.25 2.0" pos="-10 3.75 2.0" material="wall"/>
+    <geom name="wall_west_lintel" type="box" size="0.05 1.50 0.50" pos="-10 0 3.5" material="wall"/>
+
+    <!-- Roller door frame around that gap: the dock landmark. -->
+    <geom name="door_roller_l" type="box" size="0.06 0.08 1.50" pos="-9.94 -1.50 1.50"
+          material="door_amber"/>
+    <geom name="door_roller_r" type="box" size="0.06 0.08 1.50" pos="-9.94 1.50 1.50"
+          material="door_amber"/>
+    <geom name="door_roller_top" type="box" size="0.06 1.58 0.10" pos="-9.94 0 3.00"
+          material="door_amber"/>
+    <geom name="door_roller_curtain" type="box" size="0.04 1.50 0.35" pos="-9.90 0 2.65"
+          material="door_amber"/>
+
+    <!-- A waist high colour band on the north wall so a head camera pointed at
+         a bare 20 m wall still has something to name. -->
+    <geom name="wall_band_n" type="box" size="10.0 0.02 0.25" pos="0 5.93 1.30"
+          material="wall_band"/>
+
+    <!-- ====================================================================
+         RACK-A  x [4.0, 5.0]  y [-4.0, 2.0]   (keepout in the place graph)
+         Body origin is the rack centre, (4.5, -1.0). Half sizes: 0.5 x 3.0.
+         2.2 m tall, which is inside the LiDAR band, so an aisle wall is a real
+         range return and "the aisle is 2 m wide" is measurable, not asserted.
+         ==================================================================== -->
+    <body name="rack_a" pos="4.5 -1.0 0">
+      <geom name="rack_a_post_sw" type="box" size="0.06 0.06 1.10" pos="-0.44 -2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_a_post_se" type="box" size="0.06 0.06 1.10" pos="0.44 -2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_a_post_nw" type="box" size="0.06 0.06 1.10" pos="-0.44 2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_a_post_ne" type="box" size="0.06 0.06 1.10" pos="0.44 2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_a_post_mw" type="box" size="0.06 0.06 1.10" pos="-0.44 0 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_a_post_me" type="box" size="0.06 0.06 1.10" pos="0.44 0 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_a_deck_0" type="box" size="0.50 3.00 0.03" pos="0 0 0.42"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_a_deck_1" type="box" size="0.50 3.00 0.03" pos="0 0 1.14"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_a_deck_2" type="box" size="0.50 3.00 0.03" pos="0 0 1.86"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_a_load_0" type="box" size="0.38 0.52 0.30" pos="0 -2.10 0.75"
+            material="box_card"/>
+      <geom name="rack_a_load_1" type="box" size="0.38 0.52 0.30" pos="0 0.40 0.75"
+            material="box_white"/>
+      <geom name="rack_a_load_2" type="box" size="0.38 0.52 0.28" pos="0 2.05 1.45"
+            material="box_card"/>
+    </body>
+
+    <!-- ====================================================================
+         RACK-B  x [7.0, 8.0]  y [-4.0, 2.0]   (keepout in the place graph)
+         Centre (7.5, -1.0). Identical geometry to RACK-A on purpose: two
+         same shaped places 3 m apart is exactly the situation a place resolver
+         with no hysteresis gets wrong.
+         ==================================================================== -->
+    <body name="rack_b" pos="7.5 -1.0 0">
+      <geom name="rack_b_post_sw" type="box" size="0.06 0.06 1.10" pos="-0.44 -2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_b_post_se" type="box" size="0.06 0.06 1.10" pos="0.44 -2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_b_post_nw" type="box" size="0.06 0.06 1.10" pos="-0.44 2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_b_post_ne" type="box" size="0.06 0.06 1.10" pos="0.44 2.94 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_b_post_mw" type="box" size="0.06 0.06 1.10" pos="-0.44 0 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_b_post_me" type="box" size="0.06 0.06 1.10" pos="0.44 0 1.10"
+            material="rack_orange" friction="0.6" condim="3"/>
+      <geom name="rack_b_deck_0" type="box" size="0.50 3.00 0.03" pos="0 0 0.42"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_b_deck_1" type="box" size="0.50 3.00 0.03" pos="0 0 1.14"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_b_deck_2" type="box" size="0.50 3.00 0.03" pos="0 0 1.86"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_b_load_0" type="box" size="0.38 0.52 0.30" pos="0 -1.55 0.75"
+            material="box_white"/>
+      <geom name="rack_b_load_1" type="box" size="0.38 0.52 0.30" pos="0 1.20 0.75"
+            material="box_card"/>
+      <geom name="rack_b_load_2" type="box" size="0.38 0.52 0.28" pos="0 -0.30 1.45"
+            material="box_white"/>
+    </body>
+
+    <!-- AISLE-3's east flank is the hall wall itself: a fourth free standing
+         rack row would have to eat into the 2.0 m the spec fixes for an aisle.
+         Shallow wall shelving (0.10 m deep, x [9.85, 9.95]) makes the aisle read
+         as an aisle from the head camera at the cost of 0.10 m of free width.
+         It stands INSIDE the AISLE-3 polygon on purpose: the place graph
+         describes the surveyed bay, not the swept free space, exactly like the
+         racking that lines a real aisle. -->
+    <body name="rack_c_wall" pos="9.90 -1.0 0">
+      <geom name="rack_c_deck_0" type="box" size="0.05 3.00 0.03" pos="0 0 0.42"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_c_deck_1" type="box" size="0.05 3.00 0.03" pos="0 0 1.14"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_c_deck_2" type="box" size="0.05 3.00 0.03" pos="0 0 1.86"
+            material="rack_blue" friction="0.6" condim="3"/>
+      <geom name="rack_c_post_s" type="box" size="0.05 0.06 1.10" pos="0 -2.94 1.10"
+            material="rack_orange"/>
+      <geom name="rack_c_post_n" type="box" size="0.05 0.06 1.10" pos="0 2.94 1.10"
+            material="rack_orange"/>
+    </body>
+
+    <!-- ====================================================================
+         DOCK-1  x [-9.0, -5.5]  y [-3.0, 3.0]
+         The loading dock behind the roller door. Pallets staged inside the
+         place, none of them across the DOCK-1-EDGE keepout line at x = -9.0.
+         ==================================================================== -->
+    <body name="dock_pallet_a" pos="-8.20 -2.10 0">
+      <geom name="dock_pallet_a_base" type="box" size="0.60 0.40 0.07" pos="0 0 0.07"
+            material="pallet_wood" friction="0.7" condim="3"/>
+      <geom name="dock_pallet_a_load" type="box" size="0.54 0.36 0.34" pos="0 0 0.48"
+            material="box_card" friction="0.6" condim="3"/>
+    </body>
+
+    <body name="dock_pallet_b" pos="-6.60 1.90 0">
+      <geom name="dock_pallet_b_base" type="box" size="0.60 0.40 0.07" pos="0 0 0.07"
+            material="pallet_wood" friction="0.7" condim="3"/>
+      <geom name="dock_pallet_b_load" type="box" size="0.52 0.34 0.46" pos="0 0 0.60"
+            material="box_white" friction="0.6" condim="3"/>
+    </body>
+
+    <!-- Dock office kiosk against the south side of the dock. Gives DOCK-1 a
+         landmark that is not a pallet, and gives the "office" placeType a real
+         world referent for whoever extends this graph later. -->
+    <body name="dock_kiosk" pos="-6.25 -2.50 0">
+      <geom name="dock_kiosk_body" type="box" size="0.60 0.42 0.90" pos="0 0 0.90"
+            material="steel_grey" friction="0.6" condim="3"/>
+      <geom name="dock_kiosk_window" type="box" size="0.50 0.02 0.30" pos="0 0.44 1.40"
+            material="wall_band"/>
+    </body>
+
+    <!-- ====================================================================
+         CHARGING-A  x [-1.5, 1.5]  y [-5.5, -2.0]
+         A marked bay off the south edge of STAGING. The charger cabinet stands
+         against the south wall, fully inside the bay.
+         ==================================================================== -->
+    <body name="charger" pos="0 -5.15 0">
+      <geom name="charger_cabinet" type="box" size="0.55 0.30 0.75" pos="0 0 0.75"
+            material="charger_green" friction="0.6" condim="3"/>
+      <geom name="charger_head" type="box" size="0.55 0.32 0.10" pos="0 0 1.60"
+            material="charger_dark"/>
+      <geom name="charger_pillar_l" type="box" size="0.07 0.07 0.40" pos="-0.48 0.34 0.40"
+            material="charger_dark"/>
+      <geom name="charger_pillar_r" type="box" size="0.07 0.07 0.40" pos="0.48 0.34 0.40"
+            material="charger_dark"/>
+    </body>
+
+    <!-- ====================================================================
+         STAGING  x [-2.0, 2.0]  y [-2.0, 2.0]   robot spawns at (0, 0)
+         Kept deliberately clear around the spawn: one pallet in the north west
+         corner so the very first head camera frame is not an empty floor, and
+         nothing within 1.2 m of the origin.
+         ==================================================================== -->
+    <body name="staging_pallet" pos="-1.55 1.50 0">
+      <geom name="staging_pallet_base" type="box" size="0.42 0.42 0.07" pos="0 0 0.07"
+            material="pallet_wood" friction="0.7" condim="3"/>
+      <geom name="staging_pallet_load" type="box" size="0.36 0.36 0.30" pos="0 0 0.44"
+            material="box_card" friction="0.6" condim="3"/>
+    </body>
+
+    <!-- ====================================================================
+         CROSS-AISLE furniture. A single steel column at the concave corner of
+         the L, so the one place whose polygon is not a rectangle also has a
+         landmark exactly where the geometry is interesting.
+         ==================================================================== -->
+    <body name="cross_column" pos="-2.60 2.60 0">
+      <geom name="cross_column_post" type="box" size="0.14 0.14 1.75" pos="0 0 1.75"
+            material="steel_grey" friction="0.6" condim="3"/>
+      <geom name="cross_column_guard" type="box" size="0.22 0.22 0.28" pos="0 0 0.28"
+            material="mark_yellow" friction="0.6" condim="3"/>
+    </body>
+
+    <!-- ====================================================================
+         Floor paint: the place graph, drawn. 4 mm slabs, collision off, well
+         below the 0.15 to 1.80 m LiDAR band so they never become an obstacle.
+         Every stripe below sits ON a boundary listed in the header table.
+         ==================================================================== -->
+    <!-- STAGING outline, blue. The south stripe is shared with CHARGING-A's
+         north edge and the north stripe with CROSS-AISLE's south edge, which
+         is why neither of those places repaints it. -->
+    <geom name="mark_staging_n" type="box" size="2.00 0.05 0.002" pos="0 2.0 0.002"
+          material="mark_blue" contype="0" conaffinity="0"/>
+    <geom name="mark_staging_s" type="box" size="2.00 0.05 0.002" pos="0 -2.0 0.002"
+          material="mark_blue" contype="0" conaffinity="0"/>
+    <geom name="mark_staging_w" type="box" size="0.05 2.00 0.002" pos="-2.0 0 0.002"
+          material="mark_blue" contype="0" conaffinity="0"/>
+    <geom name="mark_staging_e" type="box" size="0.05 2.00 0.002" pos="2.0 0 0.002"
+          material="mark_blue" contype="0" conaffinity="0"/>
+
+    <!-- Aisle mouths at y = +2.0, yellow. These three lines are where a naive
+         resolver flaps, so they are painted and therefore checkable on camera. -->
+    <geom name="mark_aisle1_mouth" type="box" size="1.00 0.05 0.002" pos="3.0 2.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_aisle2_mouth" type="box" size="1.00 0.05 0.002" pos="6.0 2.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_aisle3_mouth" type="box" size="1.00 0.05 0.002" pos="9.0 2.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <!-- Aisle south ends at y = -4.0. -->
+    <geom name="mark_aisle1_end" type="box" size="1.00 0.05 0.002" pos="3.0 -4.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_aisle2_end" type="box" size="1.00 0.05 0.002" pos="6.0 -4.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_aisle3_end" type="box" size="1.00 0.05 0.002" pos="9.0 -4.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+
+    <!-- CHARGING-A bay, green. North edge omitted: it is the STAGING stripe. -->
+    <geom name="mark_charge_w" type="box" size="0.05 1.75 0.002" pos="-1.5 -3.75 0.002"
+          material="mark_green" contype="0" conaffinity="0"/>
+    <geom name="mark_charge_e" type="box" size="0.05 1.75 0.002" pos="1.5 -3.75 0.002"
+          material="mark_green" contype="0" conaffinity="0"/>
+    <geom name="mark_charge_s" type="box" size="1.50 0.05 0.002" pos="0 -5.5 0.002"
+          material="mark_green" contype="0" conaffinity="0"/>
+
+    <!-- DOCK-1 outline, yellow. Its east edge is NOT painted here: x = -5.5 is
+         shared with CROSS-AISLE's west leg and is painted once, below. Two
+         coincident 4 mm slabs on the same line z fight in every renderer. -->
+    <geom name="mark_dock_n" type="box" size="1.75 0.05 0.002" pos="-7.25 3.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_dock_s" type="box" size="1.75 0.05 0.002" pos="-7.25 -3.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+
+    <!-- DOCK-1-EDGE keepout, red, filled rather than outlined: it is the strip
+         a truck tail lift swings into and the robot must never stand in. -->
+    <geom name="mark_dock_edge" type="box" size="0.475 3.00 0.002" pos="-9.475 0 0.002"
+          material="mark_red" contype="0" conaffinity="0"/>
+    <geom name="mark_dock_edge_line" type="box" size="0.05 3.00 0.003" pos="-9.0 0 0.003"
+          material="mark_red" contype="0" conaffinity="0"/>
+
+    <!-- RACK-A / RACK-B keepout footprints, red outline on the aisle facing
+         sides so the painted floor and the place graph agree. -->
+    <geom name="mark_rack_a_w" type="box" size="0.05 3.00 0.002" pos="4.0 -1.0 0.002"
+          material="mark_red" contype="0" conaffinity="0"/>
+    <geom name="mark_rack_a_e" type="box" size="0.05 3.00 0.002" pos="5.0 -1.0 0.002"
+          material="mark_red" contype="0" conaffinity="0"/>
+    <geom name="mark_rack_b_w" type="box" size="0.05 3.00 0.002" pos="7.0 -1.0 0.002"
+          material="mark_red" contype="0" conaffinity="0"/>
+    <geom name="mark_rack_b_e" type="box" size="0.05 3.00 0.002" pos="8.0 -1.0 0.002"
+          material="mark_red" contype="0" conaffinity="0"/>
+
+    <!-- CROSS-AISLE: only the two edges that are not shared with another place
+         (the west leg's west and south edges) plus the north band's north edge. -->
+    <geom name="mark_cross_leg_w" type="box" size="0.05 4.25 0.002" pos="-5.5 1.25 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_cross_leg_s" type="box" size="1.75 0.05 0.002" pos="-3.75 -3.0 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+    <geom name="mark_cross_band_n" type="box" size="7.75 0.05 0.002" pos="2.25 5.5 0.002"
+          material="mark_yellow" contype="0" conaffinity="0"/>
+
+    <!-- ====================================================================
+         Person figure, on the dock.
+         A crude standing figure, not a person model: the idle watcher only ever
+         asks the VLM "is a person in the image?" - no faces, no identities,
+         nothing to recognise. Mocap body so a test can teleport it in and out
+         of view; collision off so it can never trip the robot. High vis orange
+         torso, because that is what a person on a dock wears.
+         ==================================================================== -->
+    <body name="person" pos="-7.40 0.90 0" mocap="true">
+      <geom name="person_leg_l" type="capsule" size="0.055" fromto="0.0 0.09 0.03 0.0 0.09 0.82"
+            material="person_legs" contype="0" conaffinity="0"/>
+      <geom name="person_leg_r" type="capsule" size="0.055" fromto="0.0 -0.09 0.03 0.0 -0.09 0.82"
+            material="person_legs" contype="0" conaffinity="0"/>
+      <geom name="person_torso" type="capsule" size="0.145" fromto="0 0 0.85 0 0 1.34"
+            material="person_shirt" contype="0" conaffinity="0"/>
+      <geom name="person_arm_l" type="capsule" size="0.045" fromto="0 0.17 1.30 0 0.21 0.88"
+            material="person_shirt" contype="0" conaffinity="0"/>
+      <geom name="person_arm_r" type="capsule" size="0.045" fromto="0 -0.17 1.30 0 -0.21 0.88"
+            material="person_shirt" contype="0" conaffinity="0"/>
+      <geom name="person_head" type="sphere" size="0.105" pos="0 0 1.48"
+            material="person_skin" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- Debug / recording cameras. The agent never uses any of them: it only
+         ever reads the head camera on the robot itself. The overview is framed
+         so the painted place graph is legible end to end, because "does the
+         robot think it is where the paint says it is" is the whole task. -->
+    <camera name="warehouse_overview" pos="0 0 20.0" xyaxes="1 0 0 0 1 0" fovy="38"/>
+    <camera name="warehouse_iso" pos="-16.0 -14.0 12.0"
+            xyaxes="0.659 -0.753 0 0.370 0.324 0.871" fovy="34"/>
+    <!-- Follows the robot from a fixed perch south of the hall: targetbody keeps
+         the position and re aims at the pelvis, so one camera works in every
+         place instead of needing one per place. The perch height is not a taste
+         decision: the sightline to a robot at the origin crosses the y = -6 wall
+         at z = 7.5 m, clear of its 4.0 m top, and clears the 2.2 m racking from
+         every aisle. -->
+    <camera name="warehouse_follow" mode="targetbody" target="pelvis" pos="0 -12.0 14.0"
+            fovy="22"/>
+  </worldbody>
+</mujoco>

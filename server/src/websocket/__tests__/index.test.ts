@@ -641,6 +641,26 @@ describe('setupWebSocket', () => {
       expect(JSON.parse(c2.sent[0]).type).toBe('agent:scene:updated');
     });
 
+    it('broadcasts the memory digest an agent:memory:updated event carries', () => {
+      // The digest is the ONLY payload of this event. Left out of the envelope
+      // the app was told that durable memory changed without being told what it
+      // now holds, so the MemoryPanel kept showing the previous counts.
+      const wss = setup();
+      const client = connect(wss, makeClient());
+      client.reset();
+      services.agentMode.cb?.({
+        type: 'agent:memory:updated',
+        robotId: 'robot-001',
+        memory: { robotId: 'robot-001', place: 'AISLE-3', memoryEntries: 3, places: [] },
+        timestamp: '2026-08-02T10:00:03.000Z',
+      });
+      const msg = JSON.parse(client.sent[0]);
+      expect(msg.type).toBe('agent:memory:updated');
+      expect(msg.memory.memoryEntries).toBe(3);
+      // Counts, not content — the digest is fanned out to every client.
+      expect(msg.memory.place).toBe('AISLE-3');
+    });
+
     it('broadcasts deployment events with all fields', () => {
       const wss = setup();
       const client = connect(wss, makeClient());

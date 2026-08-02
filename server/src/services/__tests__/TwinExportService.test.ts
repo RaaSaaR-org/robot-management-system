@@ -79,6 +79,42 @@ describe('TwinExportService.buildKeepoutMask', () => {
     expect(workcellLethal).toBe(0);
   });
 
+  /**
+   * REGRESSION (TASK-200). A `room` is a named region of floor the robot is
+   * SUPPOSED to stand in. Rasterizing rooms would mark every navigable room in
+   * the building lethal, Nav2 would refuse to plan anywhere, and the symptom
+   * ("the robot won't move") points nowhere near this file.
+   */
+  it('never rasterizes a type:"room" zone — rooms are not obstacles', async () => {
+    const twin = makeTwin();
+    const room = makeZone({ id: 'r1', name: 'Staging', type: 'room' });
+
+    const { grid } = await service.buildKeepoutMask(twin, [room]);
+
+    const lethal = grid.data.reduce((a, v) => a + (v === 254 ? 1 : 0), 0);
+    expect(lethal).toBe(0);
+  });
+
+  it('rasterizes the keepout and NOT the room when both cover the same floor', async () => {
+    const twin = makeTwin();
+    // The room spans the whole twin; the keepout is the 2x2 m square inside it.
+    const room = makeZone({
+      id: 'r1',
+      name: 'Staging',
+      type: 'room',
+      points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 5 }],
+    });
+    const keepout = makeZone({ id: 'k1', type: 'keepout' });
+
+    const { grid } = await service.buildKeepoutMask(twin, [room, keepout]);
+
+    const lethal = grid.data.reduce((a, v) => a + (v === 254 ? 1 : 0), 0);
+    // Only the keepout's 2x2 m at 0.5 m/px = 4x4 px worth of cells, nowhere near
+    // the 100-cell grid the room covers.
+    expect(lethal).toBeGreaterThan(0);
+    expect(lethal).toBeLessThan(grid.data.length / 2);
+  });
+
   it('emits a costmap-filter YAML referencing the PGM with matching origin/resolution', async () => {
     // ROS map origin = the grid's bottom-left corner (bounds.min), so the mask
     // aligns with the occupancy grid — NOT the world frame origin.

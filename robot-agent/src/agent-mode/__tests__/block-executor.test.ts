@@ -610,6 +610,104 @@ describe('BlockExecutor — dispatch', () => {
     // And the heading it reports is the one it is actually at.
     expect(scene.getYawDeg()).toBe(-90);
   });
+
+  /**
+   * FOUND LIVE (2026-08-02), driving the real page against a damped G1 in the
+   * MuJoCo sim: `scan_room` reported
+   *
+   *   "Scan room · 8 steps · 360° · 18.4s · Done —
+   *    Scanned the room in 8 steps; found: door, bed."
+   *
+   * while sim odometry showed 0.00° of rotation for the whole block. A `turn`
+   * block on the same immobile base correctly failed ("the robot did not turn
+   * (0° measured for a commanded 90°)") — because the zero-motion rule lived
+   * inside `turn()` and `scan_room` called `driveFor` directly, trusting the
+   * sidecar's ACK. The loco service ACKs every velocity command while the base
+   * sits in a non-locomoting FSM, which is the entire reason ZERO_MOTION_DEG
+   * exists.
+   *
+   * What makes this worth a test rather than a one-line fix: the operator is
+   * not told "a turn failed", they are told the ROOM was scanned. Eight
+   * identical frames of one heading become an inventory of a room, and
+   * everything behind the robot is reported as absent rather than unobserved.
+   */
+  it('fails a scan_room whose base measurably never rotated', async () => {
+    const observe = vi.fn(async () => ({
+      currentView: 'a door and a bed',
+      entities: [{ label: 'door', bearingDeg: 0, distanceEstM: 1.5, confidence: 1 }],
+      personVisible: false,
+      raw: '{}',
+      degraded: false,
+    }));
+    const scene = new SceneMemoryStore('robot-1');
+    const executor = new BlockExecutor({
+      scene,
+      vision: { observe } as unknown as VisionClient,
+      range: noRange(),
+      isAborted: () => false,
+      loco: {
+        // The damped base: every command is ACKed, nothing ever moves.
+        move: async () => ({ ok: true }),
+        action: async () => ({ ok: true }),
+        fsm: async () => ({ ok: true }),
+        standHeight: async () => ({ ok: true }),
+        odometry: async () => ({ x: 0, y: 0, yaw: 0, source: 'odometry' as const }),
+      },
+      sleep: async () => {},
+      now: () => 1e12,
+    });
+
+    const outcome = await executor.execute(block('scan_room', { steps: 8 }));
+
+    expect(outcome.ok).toBe(false);
+    // It must not claim a sweep it did not perform...
+    expect(outcome.message).not.toMatch(/Scanned the room/);
+    // ...and must say which heading was actually observed, and why.
+    expect(outcome.message).toMatch(/did not turn/);
+    expect(outcome.message).toMatch(/1 of 8 looks/);
+    expect(outcome.message).toMatch(/not a 360° scan/);
+    expect(outcome.message).toMatch(/posture.*stand/);
+    // It fails on the FIRST turn — seven more looks at the same heading would
+    // only add confidence to a view it already has.
+    expect(observe).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The mirror of the above: a robot with no odometry cannot measure rotation,
+   * and "unmeasured" must never be read as "did not move" — that would ground
+   * every scan on a robot for a sensor it does not have. Both tests above this
+   * one already run on `odometry: () => null`; this states the rule outright.
+   */
+  it('still scans a robot that has no odometry to measure the turn with', async () => {
+    const observe = vi.fn(async () => ({
+      currentView: 'a table',
+      entities: [{ label: 'table', bearingDeg: 0, distanceEstM: 2, confidence: 0.9 }],
+      personVisible: false,
+      raw: '{}',
+      degraded: false,
+    }));
+    const executor = new BlockExecutor({
+      scene: new SceneMemoryStore('robot-1'),
+      vision: { observe } as unknown as VisionClient,
+      range: noRange(),
+      isAborted: () => false,
+      loco: {
+        move: async () => ({ ok: true }),
+        action: async () => ({ ok: true }),
+        fsm: async () => ({ ok: true }),
+        standHeight: async () => ({ ok: true }),
+        odometry: async () => null,
+      },
+      sleep: async () => {},
+      now: () => 1e12,
+    });
+
+    const outcome = await executor.execute(block('scan_room', { steps: 4 }));
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toContain('table');
+    expect(observe).toHaveBeenCalledTimes(4);
+  });
 });
 
 /**

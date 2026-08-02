@@ -1,33 +1,72 @@
 /**
  * @file TwinZoneFormModal.tsx
  * @description Modal form for creating/editing an L2 twin zone — name, type
- *   (keepout | workcell | charging | speed), color, and the floor/ceiling
+ *   (keepout | workcell | charging | speed | room), color, and the floor/ceiling
  *   heights (minZ/maxZ). The polygon itself is captured by the authoring
  *   overlay; this modal just attaches metadata. Cloned from the fleet zone form.
+ *
+ *   TASK-200: a `room` (and a `keepout`, which is a place the robot must NOT
+ *   stand in) also carries a `placeType` in `metadata` — the vocabulary the
+ *   robot's place graph is expressed in. Places are HAND-AUTHORED here rather
+ *   than derived from the twin-builder's DBSCAN clusters: a cluster is a blob of
+ *   geometry with no name, and "AISLE-3" is a name a human uses out loud.
  * @feature digitaltwin
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, Button, Input } from '@/shared/components/ui';
 import { useTwinZoneStore, TWIN_ZONE_COLORS } from '../store/twinZoneStore';
-import type { TwinZoneDTO, TwinZoneType, TwinPoint } from '../types/twin.types';
+import { TWIN_PLACE_TYPES } from '../types/twin.types';
+import type { TwinZoneDTO, TwinZoneType, TwinPlaceType, TwinPoint } from '../types/twin.types';
 
 const TYPE_OPTIONS: { value: TwinZoneType; label: string }[] = [
   { value: 'keepout', label: 'Keep-out' },
   { value: 'workcell', label: 'Work cell' },
   { value: 'charging', label: 'Charging' },
   { value: 'speed', label: 'Speed limit' },
+  { value: 'room', label: 'Room / place' },
 ];
+
+/** Zone types that become entries in the robot's place graph. */
+const PLACE_BEARING_TYPES: ReadonlySet<TwinZoneType> = new Set<TwinZoneType>(['room', 'keepout']);
+
+const PLACE_TYPE_LABELS: Record<TwinPlaceType, string> = {
+  aisle: 'Aisle',
+  rack_face: 'Rack face',
+  dock: 'Dock',
+  staging: 'Staging',
+  cell: 'Work cell',
+  charging: 'Charging',
+  corridor: 'Corridor',
+  office: 'Office',
+  unknown: 'Unclassified',
+};
 
 interface FormData {
   name: string;
   type: TwinZoneType;
+  placeType: TwinPlaceType;
   color: string;
   minZ: string;
   maxZ: string;
 }
 
-const DEFAULT_FORM: FormData = { name: '', type: 'keepout', color: '', minZ: '0', maxZ: '2' };
+const DEFAULT_FORM: FormData = {
+  name: '',
+  type: 'keepout',
+  placeType: 'unknown',
+  color: '',
+  minZ: '0',
+  maxZ: '2',
+};
+
+/** Read `metadata.placeType` back out of a saved zone, defaulting honestly. */
+function readPlaceType(zone: TwinZoneDTO): TwinPlaceType {
+  const raw = zone.metadata?.placeType;
+  return typeof raw === 'string' && (TWIN_PLACE_TYPES as readonly string[]).includes(raw)
+    ? (raw as TwinPlaceType)
+    : 'unknown';
+}
 
 export interface TwinZoneFormModalProps {
   /** The twin (used only for context; the store knows its twinId). */
@@ -57,6 +96,7 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
       setForm({
         name: editingZone.name,
         type: editingZone.type,
+        placeType: readPlaceType(editingZone),
         color: editingZone.color ?? '',
         minZ: String(editingZone.minZ),
         maxZ: String(editingZone.maxZ),
@@ -76,12 +116,20 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
       }
       const minZ = parseFloat(form.minZ);
       const maxZ = parseFloat(form.maxZ);
+      // Merge, never replace: `metadata` also carries keys this form knows
+      // nothing about (speedLimit, placeId, floor), and clobbering them here
+      // would silently re-floor a place on every unrelated colour edit.
+      const metadata: Record<string, unknown> = { ...(editingZone?.metadata ?? {}) };
+      if (PLACE_BEARING_TYPES.has(form.type)) metadata.placeType = form.placeType;
+      else delete metadata.placeType;
+
       const body = {
         name: form.name.trim(),
         type: form.type,
         color: form.color || undefined,
         minZ: Number.isFinite(minZ) ? minZ : 0,
         maxZ: Number.isFinite(maxZ) ? maxZ : 2,
+        metadata,
       };
 
       if (editingZone) {
@@ -123,6 +171,25 @@ export function TwinZoneFormModal(_props: TwinZoneFormModalProps) {
             ))}
           </select>
         </div>
+
+        {PLACE_BEARING_TYPES.has(form.type) && (
+          <div>
+            <label className="block text-sm font-medium text-theme-secondary mb-1">Place type</label>
+            <select
+              value={form.placeType}
+              onChange={(e) => setForm((f) => ({ ...f, placeType: e.target.value as TwinPlaceType }))}
+              className="w-full px-3 py-2 section-secondary border border-theme rounded-brand text-theme-primary focus:border-cobalt focus:outline-none focus:ring-1 focus:ring-cobalt"
+            >
+              {TWIN_PLACE_TYPES.map((t) => (
+                <option key={t} value={t}>{PLACE_TYPE_LABELS[t]}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-theme-tertiary">
+              How the robot names this region out loud. Rooms and keep-outs are published to the
+              robot as its place graph.
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>

@@ -78,6 +78,15 @@ export function Tooltip({
           style={{ maxWidth }}
           className={cn(
             'absolute z-50 pointer-events-none',
+            // `w-max` is load-bearing, not cosmetic. An absolutely positioned box
+            // shrink-to-fits against its CONTAINING BLOCK — the relative wrapper,
+            // which is exactly as wide as the trigger. On a narrow trigger (a chip,
+            // an icon) that made `maxWidth` unreachable and rendered a sentence as
+            // a one-word-per-line column: the place-belief tooltip in Agent Mode
+            // came out 92px wide and 14 lines tall. `width: max-content` lets it
+            // grow to its text first, and `maxWidth` then does the capping it has
+            // always claimed to do.
+            'w-max',
             'px-3 py-2 rounded-brand text-xs leading-relaxed',
             'bg-slate-900/95 text-slate-100 border border-slate-700/50 shadow-xl',
             'backdrop-blur-sm',

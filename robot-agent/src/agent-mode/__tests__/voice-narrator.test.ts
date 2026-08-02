@@ -12,8 +12,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   awaitPlannedBlocks,
   describeCommandReplyAloud,
+  describeNameAloud,
   describeOutcomeAloud,
   describePlanAloud,
+  isVoiceTurnInFlight,
   narratePlanOutcome,
   resetNarrationState,
 } from '../voice-narrator.js';
@@ -303,5 +305,111 @@ describe('narratePlanOutcome', () => {
     });
     expect(say).not.toHaveBeenCalled();
     expect(bus.size).toBe(0);
+  });
+});
+
+// ============================================================================
+// THE ROBOT'S OWN NAME (TASK-198)
+// ============================================================================
+
+describe('describeNameAloud', () => {
+  it('is a template — the name is the only substitution', () => {
+    expect(describeNameAloud('Nova', 'en')).toBe('I am Nova.');
+    expect(describeNameAloud('Nova', 'de')).toBe('Ich bin Nova.');
+  });
+
+  it('degrades honestly when the robot has no name', () => {
+    // A robot that has not been named still has to be able to say something —
+    // "I am ." is worse than admitting it.
+    expect(describeNameAloud('  ', 'en')).toBe('I do not have a name yet.');
+    expect(describeNameAloud('', 'de')).toBe('Ich habe noch keinen Namen.');
+  });
+});
+
+// ============================================================================
+// THE HALF-DUPLEX SPAN (TASK-199)
+// ============================================================================
+
+describe('isVoiceTurnInFlight', () => {
+  it('is true for exactly as long as the robot owes somebody a spoken answer', async () => {
+    const bus = makeBus();
+    let finishSpeaking!: () => void;
+    const spoken = new Promise<boolean>((resolve) => {
+      finishSpeaking = () => resolve(true);
+    });
+    const say = vi.fn(() => spoken);
+
+    expect(isVoiceTurnInFlight()).toBe(false);
+
+    // Armed the moment a spoken command is accepted — before the planner has
+    // even answered. That is the span an unsolicited heartbeat utterance must
+    // not land inside: every span of robot speech mutes the microphone, and the
+    // microphone is where "stopp" has to go.
+    narratePlanOutcome('plan-1', 'de', { subscribe: bus.subscribe, say });
+    expect(isVoiceTurnInFlight()).toBe(true);
+
+    bus.emit({
+      type: 'agent:plan:finished',
+      robotId: 'g1',
+      plan: plan([block('walk')], { status: 'done' }),
+      timestamp: 'now',
+    });
+
+    // THE assertion: the plan is over, the closing line is being SPOKEN, and
+    // the span is still held. It used to be released one line before `say` was
+    // even called, so a heartbeat could start a second utterance on top of this
+    // one and extend the mute window over the operator's stop word.
+    expect(say).toHaveBeenCalledTimes(1);
+    expect(isVoiceTurnInFlight()).toBe(true);
+
+    finishSpeaking();
+    await vi.waitFor(() => expect(isVoiceTurnInFlight()).toBe(false));
+  });
+
+  it('gives the span back even when the voice service rejects', async () => {
+    const bus = makeBus();
+    const say = vi.fn(async () => {
+      throw new Error('voice service exploded');
+    });
+    narratePlanOutcome('plan-1', 'en', { subscribe: bus.subscribe, say });
+
+    bus.emit({
+      type: 'agent:plan:finished',
+      robotId: 'g1',
+      plan: plan([block('walk')], { status: 'done' }),
+      timestamp: 'now',
+    });
+
+    // A voice service that threw must not wedge the microphone shut forever.
+    await vi.waitFor(() => expect(isVoiceTurnInFlight()).toBe(false));
+  });
+
+  it('gives the span back immediately when there is nothing to say', () => {
+    const bus = makeBus();
+    const say = vi.fn(async () => true);
+    narratePlanOutcome('plan-1', 'en', { subscribe: bus.subscribe, say });
+
+    // A plan that only spoke has no closing line (`describeOutcomeAloud`
+    // returns null) — nothing is uttered, so nothing holds the microphone.
+    bus.emit({
+      type: 'agent:plan:finished',
+      robotId: 'g1',
+      plan: plan([block('speak')], { status: 'done' }),
+      timestamp: 'now',
+    });
+
+    expect(say).not.toHaveBeenCalled();
+    expect(isVoiceTurnInFlight()).toBe(false);
+  });
+
+  it('is false again once a narrator is cancelled', () => {
+    const bus = makeBus();
+    const stop = narratePlanOutcome('plan-1', 'en', {
+      subscribe: bus.subscribe,
+      say: vi.fn(async () => true),
+    });
+    expect(isVoiceTurnInFlight()).toBe(true);
+    stop();
+    expect(isVoiceTurnInFlight()).toBe(false);
   });
 });

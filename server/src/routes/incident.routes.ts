@@ -575,19 +575,24 @@ incidentRoutes.put('/:id/clip', async (req: Request, res: Response) => {
       if (aborted) return;
       received += c.length;
       if (received > MAX_CLIP_BYTES) {
-        // Respond immediately and drain the rest of the stream without
-        // buffering (no req.destroy() — keeps the response deliverable).
+        // Over the limit: stop buffering and drain the rest of the stream
+        // (no req.destroy()). The 413 is sent from the 'end' handler, NOT
+        // here: ending the response while the request body is still arriving
+        // makes Node tear down the socket, so the client sees ECONNRESET
+        // instead of the status. Draining first keeps the 413 deliverable.
         aborted = true;
         chunks.length = 0;
-        if (!res.headersSent) {
-          res.status(413).json({ error: 'Clip exceeds maximum size (32MB)' });
-        }
         return;
       }
       chunks.push(c);
     });
     req.on('end', async () => {
-      if (aborted) return;
+      if (aborted) {
+        if (!res.headersSent) {
+          res.status(413).json({ error: 'Clip exceeds maximum size (32MB)' });
+        }
+        return;
+      }
       try {
         await storeClipAndRespond(id, Buffer.concat(chunks), res);
       } catch (err) {

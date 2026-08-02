@@ -13,6 +13,7 @@ import { z } from 'genkit';
 import { config } from '../config/config.js';
 import { extractJsonObject, genkitGenerate, agentModelRef, type GenerateFn } from './llm.js';
 import { buildPlannerPrompt } from './prompts.js';
+import { REMEMBER_MAX_CHARS } from './workspace.js';
 import {
   AgentBlockKinds,
   type AgentBlock,
@@ -41,6 +42,8 @@ const PlannedBlockSchema = z.object({
   pose: z.enum(['stand', 'high', 'low', 'sit', 'damp']).optional(),
   text: z.string().optional(),
   seconds: z.number().optional(),
+  // `remember` only. Kept flat like every other param — see the schema note.
+  scope: z.enum(['place', 'global']).optional(),
 });
 
 export const PlanSchema = z.object({
@@ -147,6 +150,33 @@ export function coerceParams(block: PlannedBlockRaw): Record<string, unknown> {
         throw new PlanValidationError('block "wait" is missing "seconds"');
       }
       return { seconds: clamp(block.seconds, 0.1, 30) };
+    }
+    case 'remember': {
+      const text = block.text?.trim();
+      if (!text) throw new PlanValidationError('block "remember" is missing "text"');
+      // NOT clamped to the cap the way a distance is clamped to 10 m: a
+      // truncated memory is a sentence that changed meaning, and a robot that
+      // durably remembers half of what it was told is worse than one that says
+      // the line was too long.
+      if (text.length > REMEMBER_MAX_CHARS) {
+        throw new PlanValidationError(
+          `block "remember" text is ${text.length} characters, over the ` +
+            `${REMEMBER_MAX_CHARS}-character limit — say it in one shorter sentence`,
+        );
+      }
+      // Read as `unknown`: the value comes from a 4B model, and the schema is
+      // only one of two ways into this function (the raw-text reparse is the
+      // other). An unrecognised scope is a validation failure worth a retry,
+      // never a silent default to the wider one.
+      const rawScope: unknown = block.scope;
+      const scope = rawScope === undefined ? 'place' : rawScope;
+      if (scope !== 'place' && scope !== 'global') {
+        throw new PlanValidationError(
+          `block "remember" has an unknown scope ${JSON.stringify(rawScope)} — ` +
+            'use "place" or "global"',
+        );
+      }
+      return { text, scope };
     }
   }
 }

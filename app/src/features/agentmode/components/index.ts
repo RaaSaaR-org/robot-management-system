@@ -24,3 +24,23 @@ export type { EstopBannerProps } from './EstopBanner';
 
 export { AgentVoiceBar } from './AgentVoiceBar';
 export type { AgentVoiceBarProps } from './AgentVoiceBar';
+
+export { SelfHeader } from './SelfHeader';
+export type { SelfHeaderProps } from './SelfHeader';
+
+export { MemoryPanel } from './MemoryPanel';
+export type { MemoryPanelProps } from './MemoryPanel';
+
+export { IdentityDialog } from './IdentityDialog';
+export type { IdentityDialogProps } from './IdentityDialog';
+
+export { KnowledgePanel } from './KnowledgePanel';
+export type { KnowledgePanelProps } from './KnowledgePanel';
+
+export { PlaceChip } from './PlaceChip';
+export type { PlaceChipProps } from './PlaceChip';
+
+export { ConditionAnnouncer } from './ConditionAnnouncer';
+
+export { RobotDetailsDrawer } from './RobotDetailsDrawer';
+export type { RobotDetailsDrawerProps } from './RobotDetailsDrawer';

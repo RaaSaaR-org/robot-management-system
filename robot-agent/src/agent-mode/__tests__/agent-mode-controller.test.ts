@@ -68,6 +68,8 @@ function makeController(
     /** Runs inside `ServerMirror.emit` — used to crash the plan from outside. */
     onMirrorEmit?: (event: AgentModeEvent) => void;
     idleWatchIntervalMs?: number;
+    /** What `robotStateManager.getState()` reports as the battery level. */
+    batteryLevel?: number | null;
   } = {}
 ): Harness {
   const lock = opts.lock ?? new ControlOwnerLock();
@@ -131,6 +133,12 @@ function makeController(
     isEStopTriggered: () => opts.safetyLatched?.() ?? false,
     isTeleopActive: () => false,
     isVLAActive: () => false,
+    // A charged robot. The initiative gate refuses everything but `speak` and
+    // `wait` on an UNKNOWN battery, and a stub that omits this would make every
+    // proactive case below pass for the wrong reason.
+    getState: () => ({
+      batteryLevel: opts.batteryLevel === undefined ? 90 : opts.batteryLevel,
+    }),
   } as unknown as RobotStateManager);
 
   controller.subscribe((e) => events.push(e));
@@ -598,6 +606,85 @@ describe('AgentModeController — E-Stop', () => {
       h.controller.stopIdleWatcher();
       await h.controller.whenIdle();
       expect(h.controller.getState().plan!.command).toBe('(idle) a person appeared');
+    });
+
+    /**
+     * TASK-196's settled scope is "a crash-recovered robot refuses
+     * self-initiated motion", and `greet` is not speak-only: it issues a real
+     * right-arm `wave` to the sidecar. The initiative gate was asked only by
+     * `HeartbeatMonitor.runTierOne`, so a `kill -9` correctly held the heartbeat
+     * while the idle watcher waved at the first person to walk past the camera.
+     */
+    it('does not let a crash-recovered robot wave before anybody acknowledged it', async () => {
+      const watching = {
+        observation: {
+          currentView: 'eine Person steht vor mir',
+          entities: [],
+          personVisible: true,
+          raw: '{}',
+          degraded: false,
+        },
+        say: async () => true,
+        idleWatchIntervalMs: 1,
+      };
+
+      const crashed = makeController([], watching);
+      crashed.controller.recordBoot({
+        bootId: 'b-2',
+        startedAt: '2026-08-02T08:00:00.000Z',
+        seq: 2,
+        seqExact: true,
+        fromCrash: true,
+        previous: null,
+      });
+      expect(crashed.controller.isCrashAcknowledged()).toBe(false);
+
+      crashed.controller.startIdleWatcher();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      crashed.controller.stopIdleWatcher();
+
+      expect(crashed.controller.getState().plan).toBeNull();
+      expect(crashed.actions).toEqual([]);
+
+      // The control: the same harness, the same person, a CLEAN boot. It greets
+      // — which is what proves the refusal above was the unacknowledged crash
+      // and not a watcher that never ticked.
+      const clean = makeController([], watching);
+      clean.controller.recordBoot({
+        bootId: 'b-3',
+        startedAt: '2026-08-02T09:00:00.000Z',
+        seq: 3,
+        seqExact: true,
+        fromCrash: false,
+        previous: null,
+      });
+      clean.controller.startIdleWatcher();
+      await vi.waitFor(() => expect(clean.actions).toContain('wave'));
+      clean.controller.stopIdleWatcher();
+      await clean.controller.whenIdle();
+      expect(clean.controller.getState().plan!.command).toBe('(idle) a person appeared');
+    });
+
+    it('does not wave when it has no idea how much battery is left', async () => {
+      const h = makeController([], {
+        observation: {
+          currentView: 'eine Person steht vor mir',
+          entities: [],
+          personVisible: true,
+          raw: '{}',
+          degraded: false,
+        },
+        say: async () => true,
+        idleWatchIntervalMs: 1,
+        batteryLevel: null,
+      });
+
+      h.controller.startIdleWatcher();
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      h.controller.stopIdleWatcher();
+
+      expect(h.actions).toEqual([]);
+      expect(h.controller.getState().plan).toBeNull();
     });
   });
 

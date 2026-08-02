@@ -360,11 +360,37 @@ export interface DataExportResult {
  * Result of erasure operation
  */
 export interface ErasureResult {
+  /** Database ROWS deleted. Never mixed with robot files — different units. */
   deletedRecords: number;
   skippedRecords: number;
   pseudonymizedRecords: number;
+  /**
+   * FILES removed from robot memory workspaces across the fleet. Reported
+   * separately from `deletedRecords`: a file is not a record, and telling a
+   * data subject "27 records deleted" when 20 of them were `.jsonl` day files
+   * on robots is not an accurate Article 17 answer.
+   */
+  robotFilesRemoved: number;
+  /** Robots the fleet pass tried to reach. 0 when no fleet wipe ran. */
+  robotsAttempted: number;
   blockedReasons: string[];
   completedAt: Date;
+}
+
+/**
+ * Options for {@link ErasureResult}-producing execution.
+ *
+ * Robot memory workspaces are not keyed by data subject, so erasing them is
+ * necessarily a FLEET-WIDE wipe that also destroys other operators' place notes
+ * — other data subjects' personal data, deleted without their request. It
+ * therefore never happens implicitly.
+ */
+export interface ErasureExecutionOptions {
+  /**
+   * Explicit opt-in to the fleet-wide robot memory wipe. Default `false`: the
+   * limitation is reported to the requester instead.
+   */
+  eraseRobotMemory?: boolean;
 }
 
 /**

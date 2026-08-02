@@ -33,6 +33,12 @@ import type {
 } from '../robot/types.js';
 import { getJointConfig } from '../robot/joint-configs/index.js';
 import { config } from '../config/config.js';
+// The ONE radians→degrees constant in this repo. Imported rather than
+// re-declared: `LocoOdometry.yaw` is radians (DDS convention) and everything
+// above the hardware layer is degrees, and a second private conversion factor
+// is how a deg/rad seam becomes two deg/rad seams. `agent-mode/types.ts` has no
+// imports of its own, so this cannot cycle.
+import { RAD_TO_DEG } from '../agent-mode/types.js';
 
 /**
  * A single IMU reading from the robot's base, as carried in the sidecar's
@@ -239,6 +245,27 @@ export interface LocoOdometry {
   source: string;
 }
 
+/**
+ * The planar base pose cached by the 2 s poll (TASK-195), in the frame the
+ * odometry topic publishes.
+ *
+ * Yaw is DEGREES here, not radians: the conversion happens once, at the point
+ * radians enter the rest of the process, so nothing above this layer has to
+ * remember which convention a given number is in.
+ */
+export interface CachedBasePose {
+  /** Base x in metres. */
+  x: number;
+  /** Base y in metres. */
+  y: number;
+  /** Base yaw in degrees, +x = 0, CCW positive. */
+  yawDeg: number;
+  /** Where the sidecar said it came from (`rt/odommodestate`, `sim`, …). */
+  source: string;
+  /** `Date.now()` of the sample. */
+  atMs: number;
+}
+
 /** Named high-level arm/loco actions the sidecar maps onto LocoClient calls. */
 export type LocoActionName = 'wave' | 'shake' | 'stop';
 
@@ -294,6 +321,16 @@ export class HardwareClient {
   private touch: HandTouch | null = null;
   private battery: BatteryState | null = null;
   private odometry: OdometryState | null = null;
+  // TASK-195: planar base pose, refreshed on the SAME 2 s poll. Null means "no
+  // pose", which is a routine event on this stack, never "the origin".
+  private basePose: CachedBasePose | null = null;
+  private poseListeners = new Set<(pose: CachedBasePose | null) => void>();
+  /**
+   * Guard against a slow `/loco/odom` fallback stacking up: its 2 s timeout is
+   * the poll period, so without this a sidecar answering slowly would queue one
+   * outstanding request per tick forever.
+   */
+  private poseFetchInFlight = false;
 
   /**
    * Ordered list of joint names for the active embodiment (ROBOT_TYPE),
@@ -405,6 +442,9 @@ export class HardwareClient {
         this.touch = _parseTouch(data.touch);
         this.battery = _parseBattery(data.battery);
         this.odometry = _parseOdometry(data.odometry);
+        // TASK-195: same tick, no second timer. Deliberately NOT awaited — the
+        // fallback leg can take up to 2 s and the poll must not slip behind it.
+        void this.refreshBasePose();
       } catch {
         // sidecar went away — stop polling and schedule reconnect
         this.sidecarAvailable = false;
@@ -420,8 +460,93 @@ export class HardwareClient {
         this.touch = null;
         this.battery = null;
         this.odometry = null;
+        // A pose from before the sidecar vanished is not a pose. Publishing the
+        // null is the point: place awareness must go to UNKNOWN, not coast.
+        this.setBasePose(null);
       }
     }, POLL_INTERVAL_MS);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // TASK-195: planar base pose, cached on the existing 2 s poll.
+  //
+  // Sampled HERE and not in `BlockExecutor`, which is the obvious place and
+  // the wrong one: teleop and VLA rollouts drive the robot through paths that
+  // never touch a block, so a pose derived from block completions confidently
+  // asserts the robot is where the last walk left it while a human has
+  // teleoperated it three aisles away.
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * Refresh {@link basePose} from whatever odometry this tick can reach.
+   *
+   * Two sources, in cost order, both ultimately `rt/odommodestate`:
+   *  1. the `odometry` group of the `/state` response we have JUST parsed —
+   *     free, and what a real G1 behind the read-only ZMQ bridge provides;
+   *  2. `GET /loco/odom` — one extra request, and the only source that works
+   *     against the simulator, whose odometry reaches the sidecar over DDS and
+   *     therefore never appears in the ZMQ-fed `/state` group.
+   */
+  private async refreshBasePose(): Promise<void> {
+    const fromState = this.odometry;
+    if (fromState?.rpy) {
+      this.setBasePose({
+        x: fromState.position[0],
+        y: fromState.position[1],
+        yawDeg: fromState.rpy[2] * RAD_TO_DEG,
+        source: 'state',
+        atMs: Date.now(),
+      });
+      return;
+    }
+    if (this.poseFetchInFlight) return;
+    this.poseFetchInFlight = true;
+    try {
+      const odom = await this.getLocoOdometry();
+      this.setBasePose(
+        odom
+          ? { x: odom.x, y: odom.y, yawDeg: odom.yaw * RAD_TO_DEG, source: odom.source, atMs: Date.now() }
+          : null,
+      );
+    } finally {
+      this.poseFetchInFlight = false;
+    }
+  }
+
+  /** Store and publish a pose sample (or its absence). Never throws. */
+  private setBasePose(pose: CachedBasePose | null): void {
+    // Dev fault injection: report no pose while locomotion keeps working, so
+    // the honesty rule can be demonstrated mid-walk instead of only by killing
+    // the sidecar (which aborts the block and proves something else).
+    const published = config.place.faultNullPose ? null : pose;
+    this.basePose = published;
+    for (const cb of this.poseListeners) {
+      try {
+        cb(published);
+      } catch (err) {
+        console.error('[Hardware] Pose listener error:', err);
+      }
+    }
+  }
+
+  /**
+   * Subscribe to base-pose samples. Fires once per poll tick, INCLUDING with
+   * `null` — the absence of a pose is itself news, and a subscriber that only
+   * heard about successes would keep the last place forever.
+   *
+   * @returns an unsubscribe function.
+   */
+  onPoseSample(cb: (pose: CachedBasePose | null) => void): () => void {
+    this.poseListeners.add(cb);
+    return () => this.poseListeners.delete(cb);
+  }
+
+  /**
+   * Latest planar base pose, or null when there is none. Null is UNKNOWN and
+   * must never be read as (0, 0).
+   */
+  getCachedPose(): CachedBasePose | null {
+    return this.basePose;
   }
 
   stopPolling() {

@@ -266,6 +266,9 @@ export const TWIN_ZONE_COLORS: Record<string, string> = {
   workcell: '#2A5FFF',
   charging: '#18E4C3',
   speed: '#f97316',
+  // A room is the one type that means "the robot belongs here", so it reads as
+  // a calm neutral rather than joining the four warning colors.
+  room: '#8b93a7',
 };
 
 export const selectTwinZones = (state: TwinZoneStore): TwinZoneDTO[] => state.zones;

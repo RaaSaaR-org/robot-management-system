@@ -40,6 +40,17 @@ import type {
 /** Give up on a plan that never reports finishing (a lost event must not leak). */
 const NARRATION_TIMEOUT_MS = 15 * 60_000;
 
+/**
+ * Longest the voice span is held open for one closing utterance.
+ *
+ * `say` is an HTTP POST with its own 10 s timeout, so this only fires if the
+ * voice service accepts the request and never answers. It exists because the
+ * span MUTES the microphone: a promise that never settles would take the
+ * operator's stop word away permanently, which is worse than a heartbeat
+ * talking over the tail of a sentence.
+ */
+export const SPOKEN_OUTCOME_MAX_MS = 30_000;
+
 /** Longest the spoken acknowledgement waits for the planner to produce blocks. */
 export const PLAN_ACK_TIMEOUT_MS = 12_000;
 
@@ -90,6 +101,13 @@ interface Phrases {
   replacedSuffix: string;
   /** E-Stop where the hardware never confirmed StopMove/Damp. */
   estopUnconfirmed: string;
+  /**
+   * The robot saying its own name (TASK-198). `{name}` is the ONLY
+   * substitution — a template, so the name can be spoken with no LLM call on
+   * the 12 s plan-ack path, and so nothing else about the robot's persona can
+   * leak into a sentence the planner never saw.
+   */
+  selfName: string;
 }
 
 const PHRASES: Record<SpokenLanguage, Phrases> = {
@@ -126,6 +144,7 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
     estopUnconfirmed:
       'Ich habe den Plan gestoppt, aber der Roboter hat es nicht bestätigt. ' +
       'Er bewegt sich vielleicht noch — benutz den Not-Aus-Schalter.',
+    selfName: 'Ich bin {name}.',
   },
   en: {
     ackPrefix: 'Okay, I will',
@@ -160,11 +179,27 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
     estopUnconfirmed:
       'I stopped the plan, but the robot did not confirm it. ' +
       'It may still be moving — use the hardware E-Stop.',
+    selfName: 'I am {name}.',
   },
 };
 
 function phrases(language: SpokenLanguage): Phrases {
   return PHRASES[language] ?? PHRASES.en;
+}
+
+/**
+ * The robot saying its own name — the NAME ONLY, from the phrasebook.
+ *
+ * Kept here rather than in `identity.ts` for the same reason every other
+ * spoken sentence is: this is the file that owns what the robot says out loud,
+ * and it must stay a template. An empty name degrades to a bare
+ * acknowledgement rather than "I am ." — a robot with no name has to be able
+ * to say something.
+ */
+export function describeNameAloud(name: string, language: SpokenLanguage): string {
+  const clean = name.trim();
+  if (!clean) return language === 'de' ? 'Ich habe noch keinen Namen.' : 'I do not have a name yet.';
+  return phrases(language).selfName.replace('{name}', clean);
 }
 
 /** One spoken clause per block, with its parameters when they carry meaning. */
@@ -378,6 +413,27 @@ export function resetNarrationState(): void {
 }
 
 /**
+ * Whether a voice turn is still in flight — somebody spoke, and the robot still
+ * owes them an answer.
+ *
+ * This is the SAME span `narratePlanOutcome` holds: armed the moment a spoken
+ * command is accepted (before the planner has even answered) and released when
+ * the plan finishes or the narration times out. That span is exactly what an
+ * unsolicited utterance must not land inside, because the voice pipeline is
+ * half-duplex: every span of robot speech mutes the microphone through a
+ * refcount, and the microphone is where the operator's stop word ("stopp") has
+ * to go. A heartbeat that talked here would take the stop word away from a
+ * person mid-sentence.
+ *
+ * Reusing the narration set rather than adding a second flag is deliberate:
+ * two sources of truth about "is the operator mid-turn" would drift, and the
+ * one that drifts closed is the one that mutes the microphone.
+ */
+export function isVoiceTurnInFlight(): boolean {
+  return narrating.size > 0;
+}
+
+/**
  * Speak the outcome of a plan once it ends, then stop listening.
  *
  * Returns immediately — this is the half of the voice turn that outlives the
@@ -392,6 +448,14 @@ export function resetNarrationState(): void {
  * path can arm unconditionally: a spoken command folded into a plan that was
  * started by TYPING still gets its outcome spoken, and one started by voice
  * does not get it spoken twice.
+ *
+ * The span outlives the `agent:plan:finished` event by exactly the length of
+ * the closing utterance. It used to be released BEFORE `say` was called, so the
+ * flag {@link isVoiceTurnInFlight} reports was already false while the robot
+ * was still speaking — and a heartbeat landing in that window started a SECOND
+ * utterance that extended the mute on the microphone the operator's "stopp" has
+ * to reach. Listening stops immediately (the plan is over); only the flag is
+ * held.
  */
 export function narratePlanOutcome(
   planId: string,
@@ -402,24 +466,52 @@ export function narratePlanOutcome(
   narrating.add(planId);
 
   const say = deps.say ?? speakThroughVoiceService;
-  let done = false;
-  const stop = (): void => {
-    if (done) return;
-    done = true;
+  let released = false;
+  let detached = false;
+  /** Give the span back — the robot is no longer speaking for this plan. */
+  const release = (): void => {
+    if (released) return;
+    released = true;
     narrating.delete(planId);
+  };
+  /** Stop listening. Separate from {@link release}: the two end at different times. */
+  const detach = (): void => {
+    if (detached) return;
+    detached = true;
     clearTimeout(timer);
     unsubscribe();
   };
+  const stop = (): void => {
+    detach();
+    release();
+  };
   const unsubscribe = deps.subscribe((event) => {
     if (event.type !== 'agent:plan:finished' || event.plan?.id !== planId) return;
-    stop();
+    detach();
     // The plan's own language wins over the one this narrator was armed with:
     // a German interrupt folded into an English plan means the person waiting
     // for the answer is the one who spoke German, and the controller has
     // already moved `plan.language` on for exactly that reason.
     const spokenIn = event.plan.language ?? language;
     const line = describeOutcomeAloud(event.plan, spokenIn);
-    if (line) void say(line, spokenIn);
+    if (!line) {
+      release();
+      return;
+    }
+    const watchdog = setTimeout(release, SPOKEN_OUTCOME_MAX_MS);
+    watchdog.unref?.();
+    void (async () => {
+      try {
+        await say(line, spokenIn);
+      } catch {
+        // A voice service that refused the line is not a reason to hold the
+        // microphone shut — `speakThroughVoiceService` already swallows its own
+        // transport errors, and an injected `say` must not be able to wedge it.
+      } finally {
+        clearTimeout(watchdog);
+        release();
+      }
+    })();
   });
   const timer = setTimeout(stop, deps.timeoutMs ?? NARRATION_TIMEOUT_MS);
   timer.unref?.();

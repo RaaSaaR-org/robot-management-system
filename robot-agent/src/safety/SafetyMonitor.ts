@@ -19,8 +19,10 @@ import type {
   EStopState,
   OperatingMode,
   ForceReading,
+  GeofenceStatus,
+  ZoneViolation,
 } from './types.js';
-import { DEFAULT_SAFETY_CONFIG } from './types.js';
+import { DEFAULT_SAFETY_CONFIG, ZONE_VIOLATION_REASON_PREFIX, zoneViolationReason } from './types.js';
 import type { SimulatedRobotState, RobotType } from '../robot/types.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
@@ -34,6 +36,41 @@ type StateUpdater = (updater: (state: SimulatedRobotState) => void) => void;
 type ChangeNotifier = () => void;
 
 export type SafetyEventCallback = (event: SafetyEvent) => void;
+
+/**
+ * What a stop is, as handed to the {@link StopActuator}. Everything an actuator
+ * needs to decide how hard to hit the machine, and nothing it would have to ask
+ * the monitor back for (which would race the latch it is reacting to).
+ */
+export interface StopActuation {
+  /** Which check took the stop — `zone_violation`, `emergency_stop`, … */
+  type: SafetyStopType;
+  /** ISO 10218-1 stop category actually commanded. */
+  category: StopCategory;
+  /** The operator-facing reason, verbatim from the trigger. */
+  reason: string;
+}
+
+/**
+ * The hook that makes a stop ACTUATE rather than merely be recorded.
+ *
+ * Until TASK-200's review this monitor's stop path only mutated
+ * `SimulatedRobotState` (`speed = 0`, a warning string) and wrote a compliance
+ * record. Nothing commanded hardware and nothing told the thing that was
+ * DRIVING — Agent Mode's `runPlan` — to stop, so a geofence stop taken mid-walk
+ * left the running `walk` block streaming `/loco/move` into the rack for the
+ * rest of the plan. A stop that only writes a warning is a witness statement.
+ *
+ * Registered exactly once, by `RobotStateManager` (see
+ * `RobotStateManager.actuateSafetyStop`), and deliberately a SEAM rather than a
+ * direct call: `SafetyMonitor` must not know about locomotion clients or plan
+ * executors, and every existing construction of this class (tests, the arm path)
+ * keeps working with no actuator at all.
+ *
+ * Errors are logged, never thrown: a failing actuator must not prevent the latch
+ * and the event log that are the rest of the stop.
+ */
+export type StopActuator = (stop: StopActuation) => void | Promise<void>;
 
 // ============================================================================
 // HUMANOID FALL / TILT SAFETY (G1 / G1-EDU / H1)
@@ -263,6 +300,36 @@ export class SafetyMonitor {
   // Speed limiting
   private speedLimitActive = false;
   private speedLimitReason = '';
+
+  /**
+   * The keepout the current `zone_violation` stop was taken for, or null when
+   * the geofence is not holding a stop (TASK-200). Kept separately from
+   * `estopState` because the latch record can be owned by an emergency stop
+   * that cascaded over it.
+   */
+  private zoneViolation: ZoneViolation | null = null;
+
+  /**
+   * The one hook that turns a latch into an actual stop. Null = nothing is
+   * wired (tests, the bare arm path) and the monitor behaves exactly as before.
+   */
+  private stopActuator: StopActuator | null = null;
+  /**
+   * Guards the SYNCHRONOUS part of an actuator call against re-entry — an
+   * actuator that itself takes a stop (an abort that trips the comms watchdog,
+   * say) would otherwise recurse until the stack ran out. Cleared as soon as the
+   * actuator returns, so a genuinely LATER stop always actuates: swallowing the
+   * second of two stops would be the same class of bug this hook exists to fix.
+   */
+  private actuationInFlight = false;
+  /**
+   * A latch restored from disk whose HARDWARE re-assertion has not happened yet
+   * (TASK-201). See {@link restoreLatchedEmergencyStop}: the restore runs from
+   * the `RobotStateManager` CONSTRUCTOR, which is before this process knows
+   * whether it owns its port, so it may only touch memory. This holds the stop
+   * that {@link reassertRestoredEmergencyStop} then actually commands.
+   */
+  private pendingRestoredStop: StopActuation | null = null;
 
   // ── Humanoid fall/tilt safety net (G1 / G1-EDU / H1) ──────────────────────
   // Honesty: fall DETECTION → protective stop, NOT fall PREVENTION. Keeping a
@@ -744,6 +811,98 @@ export class SafetyMonitor {
   }
 
   // ============================================================================
+  // GEOFENCE — `zone_violation` (TASK-200)
+  // ============================================================================
+
+  /**
+   * Feed the geofence verdict in. This is the implementation of
+   * `SafetyStopType 'zone_violation'`, which this file has declared since it was
+   * written and never implemented — the enum was a lie until now.
+   *
+   * It deliberately adds NO new stop path: a violation goes through
+   * {@link triggerProtectiveStop}, which already has the right auto-clear vs.
+   * manual-reset distinction, the compliance logging and the event callbacks.
+   * A second path would be a second set of rules about when a robot may move.
+   *
+   * The three-state input is the safety argument, not a style choice:
+   *
+   *  - `violating` — a known, trusted pose inside a margined keepout: STOP.
+   *  - `clear`     — a known, trusted pose comfortably outside every keepout:
+   *    release, exactly like a returning heartbeat releases the comms stop.
+   *  - `unknown`   — no pose, or a pose past its drift budget: do NOTHING.
+   *    Stopping here would damp the base every time the sidecar drops a poll;
+   *    releasing here would clear a stop because we stopped being able to see
+   *    the robot. A latched violation therefore survives losing the pose and
+   *    needs either an operator reset or positive evidence of clearance.
+   */
+  updateGeofence(status: GeofenceStatus): void {
+    if (status.kind === 'unknown') return;
+
+    if (status.kind === 'clear') {
+      this.clearZoneViolationStop();
+      return;
+    }
+
+    const violation = status.violation;
+    // Already stopped for THIS keepout — do not re-trigger on every 2 s pose
+    // sample. A different keepout is a different fact and does re-trigger, so
+    // the operator's stop reason always names the fence actually being crossed.
+    if (this.zoneViolation && this.zoneViolation.placeId === violation.placeId) return;
+
+    this.zoneViolation = violation;
+    this.triggerProtectiveStop('zone_violation', zoneViolationReason(violation));
+  }
+
+  /** The keepout currently holding a stop, or null. */
+  getZoneViolation(): ZoneViolation | null {
+    return this.zoneViolation ? { ...this.zoneViolation } : null;
+  }
+
+  /**
+   * Positive evidence of clearance: un-latch the geofence protective stop.
+   *
+   * Mirrors {@link clearCommunicationLossStop} exactly, including the reason
+   * match — only a latch whose reason is OUR reason is released, so clearing the
+   * geofence can never silently release a tilt, force or comms stop that
+   * happened to be latched at the same moment. An emergency stop cannot be
+   * released here at all (`latchedByEmergencyStop`).
+   */
+  private clearZoneViolationStop(): void {
+    if (!this.zoneViolation) return;
+    const cleared = this.zoneViolation;
+    this.zoneViolation = null;
+
+    if (
+      !this.latchedByEmergencyStop &&
+      this.estopState.status === 'triggered' &&
+      this.estopState.triggeredBy === 'system' &&
+      (this.estopState.reason ?? '').startsWith(ZONE_VIOLATION_REASON_PREFIX)
+    ) {
+      this.estopState = {
+        status: 'armed',
+        stopCategory: this.config.defaultStopCategory,
+        requiresManualReset: this.config.estopRequiresManualReset,
+      };
+      console.log(
+        `[SafetyMonitor] Clear of ${cleared.placeId} — geofence protective stop released`,
+      );
+    }
+
+    // Drop the latched warning from robot state even when the latch above was
+    // owned by something else: the geofence's own warning must not outlive the
+    // condition that wrote it.
+    const state = this.stateGetter();
+    if (state.warnings.some((w) => w.includes(ZONE_VIOLATION_REASON_PREFIX))) {
+      this.stateUpdater((s) => {
+        s.warnings = s.warnings.filter((w) => !w.includes(ZONE_VIOLATION_REASON_PREFIX));
+        if (s.currentTaskName === 'Protective stop') s.currentTaskName = undefined;
+        s.updatedAt = new Date().toISOString();
+      });
+      this.changeNotifier();
+    }
+  }
+
+  // ============================================================================
   // E-STOP CONTROL
   // ============================================================================
 
@@ -782,7 +941,7 @@ export class SafetyMonitor {
 
     // Executed and logged on EVERY call, even a repeat: the record is a
     // forensic detail, but actually commanding the stop is the job.
-    this.executeStop(0);
+    this.executeStop(0, 'emergency_stop', reason);
     this.logSafetyEvent('emergency_stop', 0, triggeredBy, reason);
   }
 
@@ -807,10 +966,97 @@ export class SafetyMonitor {
     }
 
     // Execute stop with configured category
-    this.executeStop(this.config.defaultStopCategory);
+    this.executeStop(this.config.defaultStopCategory, type, reason);
 
     // Log safety event
     this.logSafetyEvent(type, this.config.defaultStopCategory, 'system', reason);
+  }
+
+  /**
+   * Re-latch an emergency stop that was still held when the process died
+   * (TASK-196). Called once, from `restorePersistedState`, BEFORE the monitor
+   * is started.
+   *
+   * The point is that the latch and the warning come back TOGETHER. Restoring
+   * the warning alone — which is what happened until now, because `warnings` is
+   * persisted and this latch was not — left a robot displaying an E-Stop it can
+   * never clear while nothing actually refused motion: a rebooted robot that is
+   * MORE willing to move than one that has been running. Sharing
+   * {@link applyStopToState} with {@link executeStop} is what makes that
+   * structural: the same mutation that sets the latch writes the warning,
+   * zeroes the speed and drops the target.
+   *
+   * It is deliberately NOT `triggerEmergencyStop`: that logs a fresh safety
+   * event and a compliance record for a stop that happened before this boot.
+   * The original cause is carried over verbatim instead.
+   *
+   * IN MEMORY ONLY (TASK-201). Its caller is the `RobotStateManager`
+   * constructor, which `index.ts` runs long before `server.listen()` calls
+   * back — so at this moment this process is a CANDIDATE that may still lose
+   * the port to the agent already driving the robot. Going through
+   * `executeStop` here meant a candidate POSTed `/loco/action {"name":"stop"}`
+   * to the shared sidecar (`HardwareClient._loco` posts unconditionally,
+   * deliberately not gated on `isConnected()`), zeroing the commanded velocity
+   * of a robot it does not own, and — through `changeNotifier()` →
+   * `persistState()` — rewrote the shared `data/state-<robotId>.json` it had
+   * just read. The in-memory half stays here, because the latch has to be TRUE
+   * from the constructor onward or a command arriving during the boot window
+   * would be accepted against a latched robot. The half that reaches the
+   * machine and the disk is {@link reassertRestoredEmergencyStop}, which runs
+   * from the port-owned start-up sequence.
+   */
+  restoreLatchedEmergencyStop(opts: {
+    reason: string;
+    triggeredAt?: string | null;
+    triggeredBy?: 'local' | 'remote' | 'server' | 'zone' | 'system';
+  }): void {
+    this.estopState = {
+      status: 'triggered',
+      triggeredAt: opts.triggeredAt ?? new Date().toISOString(),
+      triggeredBy: opts.triggeredBy ?? 'local',
+      reason: opts.reason,
+      stopCategory: 0,
+      requiresManualReset: this.config.estopRequiresManualReset,
+    };
+    // Marks the latch as an EMERGENCY one, so a returning server heartbeat
+    // cannot un-latch it through clearCommunicationLossStop().
+    this.latchedByEmergencyStop = true;
+
+    this.applyStopToState(0);
+    this.pendingRestoredStop = { type: 'emergency_stop', category: 0, reason: opts.reason };
+
+    console.warn(
+      `[SafetyMonitor] E-Stop RESTORED from persisted state (${opts.reason}) — ` +
+        'the robot comes back latched and refuses motion until an explicit reset'
+    );
+  }
+
+  /**
+   * Command the hardware stop that {@link restoreLatchedEmergencyStop} could
+   * only record (TASK-201). Runs from the port-owned start-up sequence — see
+   * `agent-runtime.ts` — i.e. once this process is definitively THIS robot.
+   *
+   * This is not an optimisation that may be skipped: a robot that comes back
+   * latched has to end up physically stopped and damped, and this is the call
+   * that tells the base so and the call that puts the restored latch (with its
+   * warning) on disk. It notifies before it actuates, exactly like
+   * {@link executeStop}, so a failing actuator can never cost us the record.
+   *
+   * @returns whether there was a restored latch to re-assert.
+   */
+  reassertRestoredEmergencyStop(): boolean {
+    const pending = this.pendingRestoredStop;
+    // Once only: a second call (an idempotent listen callback, a retry) must
+    // not re-issue a stop the operator may have just reset.
+    this.pendingRestoredStop = null;
+    if (!pending) return false;
+
+    console.warn(
+      `[SafetyMonitor] re-asserting the restored E-Stop on the hardware (${pending.reason})`
+    );
+    this.changeNotifier();
+    this.actuateStop(pending);
+    return true;
   }
 
   /**
@@ -818,9 +1064,15 @@ export class SafetyMonitor {
    */
   resetEmergencyStop(): boolean {
     if (this.estopState.status !== 'triggered') {
-      // E-stop state is not persisted, but robot warnings are: after a restart
-      // the estop boots 'armed' while a "Protective stop"/"Emergency stop"
-      // warning restored from persisted state would otherwise be uncleareable.
+      // Nothing is latched, so a remembered keepout is bookkeeping with no stop
+      // behind it — forget it here too, or the next entry would be suppressed
+      // by the re-trigger guard in updateGeofence().
+      this.zoneViolation = null;
+      // Belt and braces for a stop warning with no latch behind it. TASK-196
+      // removed the way this used to happen — the latch is persisted now, and
+      // `restorePersistedState` restores warning and latch together or neither
+      // — but a warning nothing can clear is bad enough to keep a second cure
+      // for: it is what makes an operator delete the state file.
       const state = this.stateGetter();
       if (state.warnings.some((w) => w.includes('Emergency stop') || w.includes('Protective stop'))) {
         this.stateUpdater((s) => {
@@ -856,6 +1108,14 @@ export class SafetyMonitor {
       requiresManualReset: this.config.estopRequiresManualReset,
     };
     this.latchedByEmergencyStop = false;
+    // A latch that has been RESET has nothing left to re-assert: dropping this
+    // stops a restored stop from being commanded after the operator cleared it,
+    // in the (narrow) window where a reset beats the port-owned step.
+    this.pendingRestoredStop = null;
+    // An operator reset forgets the keepout too, so re-entering it is a FRESH
+    // violation that stops again. The reset means "I have looked at the robot",
+    // not "that fence no longer applies".
+    this.zoneViolation = null;
 
     // Update robot state
     this.stateUpdater((s) => {
@@ -892,9 +1152,42 @@ export class SafetyMonitor {
   }
 
   /**
-   * Execute stop with specified category
+   * Register the hook that makes a stop reach the machine. See
+   * {@link StopActuator}; pass `null` to remove it.
    */
-  private executeStop(category: StopCategory): void {
+  setStopActuator(actuator: StopActuator | null): void {
+    this.stopActuator = actuator;
+  }
+
+  /**
+   * Execute stop with specified category.
+   *
+   * `type` and `reason` are passed in rather than read back off `estopState`
+   * because a protective stop that cascades over a latched EMERGENCY stop
+   * deliberately leaves that record alone — the actuator must be told about the
+   * stop that is happening NOW, not about the one that owns the record.
+   */
+  private executeStop(category: StopCategory, type: SafetyStopType, reason: string): void {
+    this.applyStopToState(category);
+
+    this.changeNotifier();
+
+    // …and the part that is not bookkeeping: whatever is DRIVING the robot is
+    // told to stop, and the base is commanded to stop. Last, so a failing
+    // actuator can never cost us the latch or the warning above.
+    this.actuateStop({ type, category, reason });
+  }
+
+  /**
+   * The IN-MEMORY half of a stop: target dropped, speed zeroed, the warning
+   * that belongs to the latch written.
+   *
+   * Split out of {@link executeStop} for {@link restoreLatchedEmergencyStop},
+   * which must do exactly this much and no more until the process owns its
+   * port — no `changeNotifier()` (that persists) and no actuation (that reaches
+   * a sidecar shared with the agent that really owns the robot).
+   */
+  private applyStopToState(category: StopCategory): void {
     this.stateUpdater((s) => {
       s.targetLocation = undefined;
       s.speed = 0;
@@ -912,8 +1205,28 @@ export class SafetyMonitor {
 
       s.updatedAt = new Date().toISOString();
     });
+  }
 
-    this.changeNotifier();
+  /**
+   * Invoke the registered {@link StopActuator}, swallowing everything it can
+   * throw or reject with.
+   */
+  private actuateStop(stop: StopActuation): void {
+    const actuator = this.stopActuator;
+    if (!actuator || this.actuationInFlight) return;
+    this.actuationInFlight = true;
+    try {
+      // `Promise.resolve` normalises the void|Promise return so an async
+      // actuator's rejection is caught here instead of surfacing as an
+      // unhandled rejection that kills the process during a safety stop.
+      void Promise.resolve(actuator(stop)).catch((err: unknown) => {
+        console.error('[SafetyMonitor] stop actuation failed:', err);
+      });
+    } catch (err) {
+      console.error('[SafetyMonitor] stop actuation threw:', err);
+    } finally {
+      this.actuationInFlight = false;
+    }
   }
 
   // ============================================================================

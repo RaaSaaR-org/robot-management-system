@@ -23,6 +23,12 @@ export const AgentBlockKinds = [
   'posture',
   'speak',
   'wait',
+  /**
+   * Write one operator-authored line into durable memory (TASK-197). The only
+   * block that touches the memory workspace, and the only WRITE path the
+   * planner has into it — retrieval is injection, never a planned step.
+   */
+  'remember',
 ] as const;
 export type AgentBlockKind = (typeof AgentBlockKinds)[number];
 
@@ -146,12 +152,60 @@ export interface SceneEntity {
   note?: string;
 }
 
+/**
+ * Closed vocabulary of place types (TASK-195). Industry-first; house rooms ship
+ * as `cell` until room-shaped types are added additively.
+ */
+export const PlaceTypes = [
+  'aisle',
+  'rack_face',
+  'dock',
+  'staging',
+  'cell',
+  'charging',
+  'corridor',
+  'office',
+  'unknown',
+] as const;
+export type PlaceType = (typeof PlaceTypes)[number];
+
+/** How a place's geometry was obtained — a survey, an observation, or a claim. */
+export type PlaceSource = 'surveyed' | 'observed' | 'declared';
+
+/**
+ * `stale` means the pose behind the place has drifted further than the budget
+ * without a re-anchor. The map is still right; the pose fed into it is old.
+ */
+export type PlaceConfidence = 'confident' | 'stale';
+
+/**
+ * The place the robot believes it is standing in (TASK-195).
+ *
+ * `null` means UNKNOWN and MUST render as "Place unknown", visually distinct
+ * from a known place — never as an empty string and never as the last place the
+ * robot was in.
+ */
+export interface ScenePlace {
+  /** Stable id from the robot's place graph, e.g. `AISLE-3`. */
+  id: string;
+  name: string;
+  placeType: PlaceType;
+  confidence: PlaceConfidence;
+  source: PlaceSource;
+}
+
 /** In-memory scene memory — entity list plus a free-text "what I see". */
 export interface SceneMemory {
   robotId: string;
   currentView: string;
   entities: SceneEntity[];
   personVisible: boolean;
+  /**
+   * Named place the robot is standing in, or null for UNKNOWN. Optional because
+   * an older agent omits the field entirely; absent and null are the same
+   * answer — "we do not know" — and the panel renders both as unknown.
+   */
+  place?: ScenePlace | null;
   /**
    * Nearest surface straight ahead in metres, measured, or null when unknown —
    * no range sensor present, nothing returned, or every return rejected.
@@ -166,13 +220,83 @@ export interface SceneMemory {
   updatedAt: string;
 }
 
+/**
+ * What the robot's current boot inherited from its previous one (TASK-196).
+ *
+ * The agent persists its E-Stop latch, so a robot that was stopped comes back
+ * stopped — and refuses to move until someone clears it. Non-null while that is
+ * still unacknowledged; the panel renders it as a badge with a one-click reset.
+ */
+export interface AgentRecoveryState {
+  /** The previous process never shut down cleanly: it crashed or was killed. */
+  fromCrash: boolean;
+  /** The E-Stop latch was restored from disk rather than taken in this session. */
+  estopLatched: boolean;
+  /** ISO timestamp of the boot that inherited it. */
+  at: string;
+}
+
+/**
+ * Who the robot is and what it has been through (TASK-198).
+ *
+ * Mirrored verbatim from `robot-agent/src/agent-mode/types.ts`. The robot
+ * assembles it per turn from its own `IDENTITY.md`, boot lineage and journal —
+ * every field here is read from a file on the robot's disk, so the header line
+ * this renders makes only claims an operator can go and check.
+ */
+export interface AgentSelfState {
+  /** What a person calls this robot. */
+  name: string;
+  emoji: string | null;
+  /** The machine this is — from the robot's configuration, never from the file. */
+  unit: string;
+  robotId: string;
+  operator: string | null;
+  site: string | null;
+  /** No `IDENTITY.md` yet: the robot has not been named and is asking. */
+  bootstrapRequired: boolean;
+  bootId: string | null;
+  /**
+   * Which life this is — the lifetime boot ordinal the robot writes into its
+   * lineage line, so it survives that file rotating. It never decreases.
+   */
+  incarnation: number;
+  /**
+   * Whether {@link incarnation} is exact rather than a lower bound.
+   *
+   * Optional, and absence means NOT exact: a snapshot from an agent that
+   * predates the counter carries a floor derived from a ring buffer, and a
+   * floor must not be rendered as an ordinal.
+   */
+  incarnationExact?: boolean;
+  uptimeS: number;
+  /** `exit: 'crash'` means the previous process never wrote its shutdown line. */
+  lastShutdown: { at: string | null; exit: string; place: string | null } | null;
+  place: string | null;
+  poseSource: string | null;
+  batteryPct: number | null;
+  controlOwner: ControlOwner;
+  damped: boolean;
+  estopLatched: boolean;
+  plansLast24h: number;
+  failuresLast24h: number;
+  memoryEntries: number;
+}
+
 /** Last known Agent Mode state for one robot. */
 export interface AgentModeState {
   robotId: string;
   enabled: boolean;
   controlOwner: ControlOwner;
-  plan: AgentPlan | null;
-  scene: SceneMemory | null;
+  /**
+   * The running plan, `null` when there is none — and ABSENT when the snapshot
+   * is a periodic liveness re-assertion, which says nothing about the plan at
+   * all. Absent must keep whatever the store already has; only `null` means
+   * "this robot has no plan".
+   */
+  plan?: AgentPlan | null;
+  /** Same three-way contract as {@link plan}: absent ≠ `null`. */
+  scene?: SceneMemory | null;
   /** Set while an E-Stop is latched; cleared by an explicit reset. */
   estopActive: boolean;
   /**
@@ -187,6 +311,56 @@ export interface AgentModeState {
    * E-Stop latch does NOT re-arm the base, a `posture` "stand" does.
    */
   damped?: boolean;
+  /**
+   * Set when the robot came back latched, or from an unclean shutdown; null
+   * once an operator cleared it. Optional: an older agent omits it, which means
+   * "this agent does not report recovery", never "nothing to report".
+   */
+  recovered?: AgentRecoveryState | null;
+  /**
+   * Who this robot is. Optional: an older agent omits it, which means "this
+   * agent does not report a self", never "this robot has no identity" — a
+   * robot that genuinely has none reports `self.bootstrapRequired`.
+   */
+  self?: AgentSelfState | null;
+}
+
+/**
+ * What `GET /robots/:id/agent-mode` answers: the state plus WHEN the server's
+ * in-memory mirror last heard it (TASK-200).
+ *
+ * Server metadata, not the robot's — which is why it is a separate type and not
+ * a field on {@link AgentModeState}. A pushed `agent:state:changed` carries its
+ * own timestamp and never carries this.
+ *
+ * `null` or absent means the server cannot say how old the snapshot is. That is
+ * an UNKNOWN age, and must be rendered as one: stamping the moment of the fetch
+ * instead is what made a 68-minute-old snapshot of a dead process read as
+ * "just now".
+ */
+export interface MirroredAgentModeState extends AgentModeState {
+  /**
+   * When the server last ingested ANY event for this robot — proof the pushing
+   * process was alive then, whatever it said. NOT the age of this body: a
+   * plan/block/scene event moves it and leaves the snapshot untouched.
+   */
+  mirroredAt?: string | null;
+  /**
+   * When the server last ingested a SNAPSHOT — the age of the fields in this
+   * body, `self` included. This is the one to date the header line by.
+   */
+  stateMirroredAt?: string | null;
+  /**
+   * The server's clock as it wrote this response.
+   *
+   * The stamps above are in the server's frame; this browser's is a different
+   * one. Subtracting them from `Date.now()` measures the skew between two
+   * machines as much as the age of the data — a server two minutes ahead
+   * re-hides a stale snapshot as "just now", one 90 s behind paints every fresh
+   * read as "cached". With this, the age is taken inside the server's frame and
+   * only then carried over.
+   */
+  serverNow?: string | null;
 }
 
 // ============================================================================
@@ -201,8 +375,40 @@ export const AgentModeEventTypes = [
   'agent:block:finished',
   'agent:scene:updated',
   'agent:state:changed',
+  /** The durable memory workspace changed — carries {@link AgentMemoryDigest}. */
+  'agent:memory:updated',
 ] as const;
 export type AgentModeEventType = (typeof AgentModeEventTypes)[number];
+
+/**
+ * What the robot durably remembers, as counts rather than content (TASK-197).
+ *
+ * Deliberately a DIGEST: the memory itself is operator-authored text and
+ * therefore personal data, and a fan-out event that reaches every connected
+ * WebSocket client is not where it belongs. Whoever wants the content asks the
+ * robot for it (`GET /robots/:id/memory.md`), which is a call that can be
+ * authorised and audited.
+ */
+export interface AgentMemoryDigest {
+  robotId: string;
+  /** Place the robot was in when this digest was taken, or null for UNKNOWN. */
+  place: string | null;
+  /** Bytes used by `MEMORY.md` and its hard cap. */
+  memoryBytes: number;
+  memoryMaxBytes: number;
+  /** `- …` entries in `MEMORY.md`. */
+  memoryEntries: number;
+  /** One row per place that has a note. */
+  places: Array<{ id: string; entries: number; bytes: number }>;
+  /** Journal day keys currently on disk, oldest first. */
+  journalDays: string[];
+  /**
+   * What governs journal pruning, when the platform has been asked. `null`
+   * means UNKNOWN — never "nothing is retained".
+   */
+  retention: { retentionDays: number; source: 'policy' | 'fallback'; legalHold: boolean } | null;
+  updatedAt: string;
+}
 
 /**
  * Broadcast envelope. `type`, `robotId` and `timestamp` are always present;
@@ -215,6 +421,8 @@ export interface AgentModeEvent {
   block?: AgentBlock;
   scene?: SceneMemory;
   state?: AgentModeState;
+  /** Set on `agent:memory:updated` only. */
+  memory?: AgentMemoryDigest;
   timestamp: string;
 }
 
@@ -263,6 +471,32 @@ export interface AgentEstopResponse {
 }
 
 /**
+ * Body of `POST /robots/:id/identity` — the naming ritual's non-conversational
+ * door (TASK-198).
+ *
+ * Deliberately only these four: `Robot-Id`, `Serial`, `Unit` and `BODY.md` are
+ * regenerated from the robot's configuration at every boot and the robot
+ * refuses to take them from a client. `null` clears a field; omitting it leaves
+ * it untouched. The labels are capitalised because they are the `IDENTITY.md`
+ * headings the robot writes, and the route matches on them.
+ */
+export interface AgentIdentityPatch {
+  Name?: string | null;
+  Emoji?: string | null;
+  Operator?: string | null;
+  Site?: string | null;
+}
+
+/** Response of `POST /robots/:id/identity`. */
+export interface AgentIdentityResponse {
+  ok: boolean;
+  /** The card as it now stands on the robot's disk. */
+  identity?: Record<string, unknown>;
+  /** The self the robot reports after the write — adopted verbatim. */
+  self?: AgentSelfState | null;
+}
+
+/**
  * Lifecycle of the operator's manual E-Stop, tracked separately from the latch
  * itself. Manual E-Stop is the only safety mechanism in v1, so the UI must
  * never present a stop it could not verify as a completed one.
@@ -282,6 +516,29 @@ export const AgentEstopStatuses = [
   'failed',
 ] as const;
 export type AgentEstopStatus = (typeof AgentEstopStatuses)[number];
+
+/**
+ * Whether this console actually knows the bound robot's Agent Mode state.
+ *
+ * `GET /robots/:id/agent-mode` answers three different things and the UI has to
+ * tell them apart:
+ *
+ * - `200` — a state the ROBOT asserted (server mirror hit, or a live fallback
+ *   read). Everything the page renders is backed by it → `'known'`.
+ * - `404 {error:'No agent mode state for robot'}` — this server has no such
+ *   robot. There is nothing to show and nothing to be wrong about, so the empty
+ *   state is a complete answer → also `'known'`.
+ * - `502 {code:'AGENT_STATE_UNAVAILABLE'}` — the robot EXISTS and could not be
+ *   asked: offline, timed out, refused by its personal-data gate, or answered
+ *   with something that was not a state. Mode, plan and E-Stop latch are then
+ *   ALL unknown → `'unreachable'`.
+ *
+ * The distinction is a safety one. Rendering `'unreachable'` with the defaults
+ * (`enabled:false, estopActive:false`) tells an operator "Agent Mode off,
+ * E-Stop clear" when the truth is "I have no idea what this robot is doing" —
+ * a false-safe display, and the worst direction to fail in.
+ */
+export type AgentStateReachability = 'known' | 'unreachable';
 
 // ============================================================================
 // UI TYPES
@@ -334,10 +591,83 @@ export interface AgentModeStore {
   estopStatus: AgentEstopStatus;
   /** Why the stop request failed — the evidence that it never left the browser. */
   estopError: string | null;
+  /**
+   * Whether this console knows the robot's Agent Mode state at all. While this
+   * is `'unreachable'`, `enabled`, `controlOwner`, `plan` and `estopActive` are
+   * the last thing we heard — or the initial defaults — and MUST NOT be
+   * rendered as the robot's current truth. See {@link AgentStateReachability}.
+   */
+  stateReachability: AgentStateReachability;
+  /** What the server said when it could not reach the robot; null otherwise. */
+  stateUnavailableReason: string | null;
   /** True while the base cannot locomote (damped/sit/zero-torque FSM). */
   damped: boolean;
   /** Last FSM id the base was commanded into; null when never commanded. */
   fsmId: number | null;
+  /**
+   * What the robot's current boot inherited — a latch that survived a restart,
+   * an unclean shutdown — until an operator clears it. Null when there is
+   * nothing to acknowledge.
+   */
+  recovered: AgentRecoveryState | null;
+  /**
+   * Who the bound robot is and what it has been through. Null until the agent
+   * reports one — which is not the same as a robot with no identity.
+   */
+  self: AgentSelfState | null;
+  /**
+   * When the self snapshot was TAKEN (ISO), or null when that is not known. It
+   * answers "how old is what I am looking at", which the snapshot itself
+   * cannot: nothing in `AgentSelfState` is a wall-clock timestamp.
+   *
+   * For a live answer that is the robot's own moment; for a mirror read it is
+   * the server's `stateMirroredAt` carried into THIS browser's clock frame
+   * (`now - (serverNow - stateMirroredAt)`) — never the moment this tab
+   * fetched, which is always now and therefore never an answer, and never the
+   * server's raw instant either, which is a foreign clock.
+   */
+  selfUpdatedAt: string | null;
+  /**
+   * Whether that snapshot was the robot's own answer — a pushed
+   * `agent:state:changed`, or a call the server proxied through to the robot —
+   * rather than a read of the server's in-memory mirror, which only moves when
+   * the robot pushes and can sit minutes behind it.
+   */
+  selfLive: boolean;
+  /**
+   * A mirror read arrived whose age the server did not report (TASK-200).
+   *
+   * The third answer between "fresh" and "5 min old": the snapshot is real, but
+   * how old it is cannot be known from here. Distinct from a plain
+   * `selfUpdatedAt === null`, which is the cold state before anything arrived —
+   * one renders "age unknown", the other renders nothing at all.
+   */
+  selfAgeUnknown: boolean;
+  /**
+   * `bootId` of the last self the ROBOT itself answered with, or null before
+   * one. Kept so a mirrored snapshot carrying a DIFFERENT bootId can be named
+   * for what it is: not merely stale, but a different process — the observed
+   * defect served a dead duplicate agent's identity as the running robot's.
+   */
+  selfLiveBootId: string | null;
+  /**
+   * Whether the mirrored self on screen is a LEFTOVER of a different process
+   * than the one that last answered us directly.
+   *
+   * Decided when the snapshot is written, not when it is rendered, because it
+   * needs both bootIds AND the snapshot's age — and a fresh mirror from a
+   * different bootId is not a leftover at all. It is the current process,
+   * pushing: the robot restarted while this tab was elsewhere, and it is our
+   * memory of "who last answered" that is out of date. Flagging that would
+   * point the warning at the live robot and away from the dead one.
+   */
+  selfSuperseded: boolean;
+  /**
+   * What the robot durably remembers, as counts (TASK-197). Null until a digest
+   * arrives; never the memory's content, which stays behind the robot's own
+   * personal-data gate.
+   */
+  memory: AgentMemoryDigest | null;
   plan: AgentPlan | null;
   /** Superseded plans, oldest first — keeps older block cards in the chat. */
   planHistory: AgentPlan[];
@@ -347,12 +677,26 @@ export interface AgentModeStore {
   connectionStatus: WebSocketStatus;
   isLoading: boolean;
   isSending: boolean;
+  /** True while a `POST /identity` write is in flight. */
+  isSavingIdentity: boolean;
   error: string | null;
 
   /** Bind the store to a robot (clears per-robot state on change). */
   selectRobot: (robotId: string | null) => void;
   /** Load the last known state + scene memory for a robot. */
   fetchState: (robotId: string) => Promise<void>;
+  /**
+   * Load the durable-memory digest. Best-effort by design: an unavailable
+   * digest leaves the store untouched and raises no error — "we cannot see it"
+   * is not "the robot remembers nothing".
+   */
+  fetchMemory: (robotId: string) => Promise<void>;
+  /**
+   * Write Name/Emoji/Operator/Site to the robot's `IDENTITY.md`.
+   *
+   * @returns true when the robot accepted it; false leaves the reason in `error`
+   */
+  submitIdentity: (robotId: string, patch: AgentIdentityPatch) => Promise<boolean>;
   /** Send a plain-language command; resolves once the agent accepted it. */
   sendCommand: (robotId: string, text: string) => Promise<void>;
   /** Turn Agent Mode on/off for a robot. */

@@ -910,9 +910,32 @@ describe('GDPR Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.erasureResult.deletedRecords).toBe(4);
-      expect(mockGdprRequestService.executeErasure).toHaveBeenCalledWith('owner-1');
+      // No `eraseRobotMemory` in the body ⇒ the fleet-wide robot memory wipe
+      // (which would also erase other operators' place notes) stays off.
+      expect(mockGdprRequestService.executeErasure).toHaveBeenCalledWith('owner-1', {
+        eraseRobotMemory: false,
+      });
       expect(mockGdprRequestService.completeRequest).toHaveBeenCalledWith('req-001', 'admin-7', {
         erasureResult: { deletedRecords: 4 },
+      });
+    });
+
+    it('passes the explicit fleet-wide opt-in through to the service', async () => {
+      mockGdprRequestService.getRequest.mockResolvedValue({
+        ...SAMPLE_REQUEST,
+        requestType: 'erasure',
+        status: 'in_progress',
+        userId: 'owner-1',
+      });
+      mockGdprRequestService.executeErasure.mockResolvedValue({ deletedRecords: 0 });
+      mockGdprRequestService.completeRequest.mockResolvedValue({ ...SAMPLE_REQUEST, status: 'completed' });
+
+      await request(app)
+        .post('/api/gdpr/admin/requests/req-001/execute-erasure')
+        .send({ adminId: 'admin-7', eraseRobotMemory: true });
+
+      expect(mockGdprRequestService.executeErasure).toHaveBeenCalledWith('owner-1', {
+        eraseRobotMemory: true,
       });
     });
 

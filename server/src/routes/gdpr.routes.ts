@@ -595,8 +595,13 @@ gdprRoutes.post('/admin/requests/:id/execute-erasure', async (req: Request, res:
       return res.status(400).json({ error: 'Request must be in progress to execute erasure' });
     }
 
-    // Execute erasure
-    const erasureResult = await gdprRequestService.executeErasure(existingRequest.userId);
+    // Execute erasure. The robot-side wipe is fleet-wide (robot files are not
+    // keyed by data subject), so it only runs when the admin asks for it
+    // explicitly with `eraseRobotMemory: true`; otherwise the limitation comes
+    // back in `erasureResult.blockedReasons`.
+    const erasureResult = await gdprRequestService.executeErasure(existingRequest.userId, {
+      eraseRobotMemory: req.body?.eraseRobotMemory === true,
+    });
 
     // Complete the request
     const request = await gdprRequestService.completeRequest(id, adminId, {

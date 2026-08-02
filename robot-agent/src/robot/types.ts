@@ -63,6 +63,16 @@ export interface RobotLocation {
   floor?: string;
   zone?: string;
   heading?: number;
+  /**
+   * Id of the surveyed place the robot is standing in (TASK-195), or null for
+   * UNKNOWN. Distinct from {@link RobotLocation.zone} on purpose: `zone` is a
+   * fleet `Zone` name (server-owned AABBs, unique on `[name, floor]`), `place`
+   * comes from the robot's own place graph. Writing a place id into `zone`
+   * would put a name on the fleet map that no `Zone` row has.
+   *
+   * `location` is a JSON string in Prisma, so this needs no migration.
+   */
+  place?: string | null;
 }
 
 // ============================================================================

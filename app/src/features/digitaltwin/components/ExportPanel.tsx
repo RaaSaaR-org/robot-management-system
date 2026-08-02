@@ -1,7 +1,8 @@
 /**
  * @file ExportPanel.tsx
  * @description Export controls for a built twin: download the Nav2 keep-out
- *   costmap filter (.pgm + .yaml) and the VDA5050 graph (.json). Fetches each
+ *   costmap filter (.pgm + .yaml), the VDA5050 graph (.json) and the robot's
+ *   place graph (places/_index.json, TASK-200). Fetches each
  *   artifact as a blob via the API client (so auth headers ride along) and
  *   triggers a browser download.
  * @feature digitaltwin
@@ -29,7 +30,7 @@ export interface ExportPanelProps {
 export const ExportPanel = memo(function ExportPanel({
   twinId, baseName, disabled, keepoutCount = 0, zoneCount = 0, gridSize,
 }: ExportPanelProps) {
-  const [busy, setBusy] = useState<'nav2' | 'vda5050' | null>(null);
+  const [busy, setBusy] = useState<'nav2' | 'vda5050' | 'places' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const name = baseName || twinId;
 
@@ -63,6 +64,19 @@ export const ExportPanel = memo(function ExportPanel({
     }
   }, [twinId, name]);
 
+  const exportPlaceGraph = useCallback(async () => {
+    setBusy('places');
+    setError(null);
+    try {
+      const json = await twinApi.downloadPlaceGraph(twinId);
+      downloadBlob(json, `${name}-places.json`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Place graph export failed');
+    } finally {
+      setBusy(null);
+    }
+  }, [twinId, name]);
+
   return (
     <div className="rounded-lg border border-theme bg-theme-surface p-4 space-y-3">
       <h3 className="text-sm font-semibold text-theme-primary">Export</h3>
@@ -82,6 +96,11 @@ export const ExportPanel = memo(function ExportPanel({
         </Button>
         <Button variant="secondary" size="sm" onClick={() => void exportVda5050()} disabled={disabled || busy !== null}>
           {busy === 'vda5050' ? 'Exporting…' : 'VDA5050 graph (.json)'}
+        </Button>
+        {/* Not gated on the occupancy grid: places come from the authored zones
+            alone, and a site can have a usable place graph before it has a map. */}
+        <Button variant="secondary" size="sm" onClick={() => void exportPlaceGraph()} disabled={busy !== null}>
+          {busy === 'places' ? 'Exporting…' : 'Robot place graph (.json)'}
         </Button>
       </div>
       {disabled && (

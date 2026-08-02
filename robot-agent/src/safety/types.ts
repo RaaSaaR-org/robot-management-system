@@ -30,6 +30,63 @@ export type SafetyStopType =
   | 'system_failure';     // Safety system failure
 
 // ============================================================================
+// GEOFENCE (TASK-200)
+// ============================================================================
+
+/**
+ * A keepout the robot is standing in (or within the safety margin of).
+ * Everything here is for the operator who has to understand the stop.
+ */
+export interface ZoneViolation {
+  /** Place id from the place graph, e.g. `RACK-A`. */
+  placeId: string;
+  /** Human name, e.g. `Rack A`. */
+  placeName: string;
+  /**
+   * How far past the margined boundary the robot is, in metres. 0 means "just
+   * touching the margin", larger means "deeper in".
+   */
+  depthM: number;
+  /** Where the robot was when this was decided, in the graph frame. */
+  poseM: { x: number; y: number };
+}
+
+/**
+ * What the geofence knows this instant. THREE states, not a boolean, and that
+ * is the whole point (TASK-199's fail-closed split, applied to a real boundary):
+ *
+ *  - `violating` — a KNOWN, TRUSTED pose inside a keepout. The only state that
+ *    triggers a stop.
+ *  - `clear`     — a KNOWN, TRUSTED pose comfortably outside every keepout. The
+ *    only state that releases one.
+ *  - `unknown`   — no pose, or a pose whose drift budget is spent. It does
+ *    NEITHER. Triggering here would damp the base several times an hour every
+ *    time the sidecar drops a poll; clearing here would release a stop on the
+ *    strength of having stopped being able to see the robot.
+ */
+export type GeofenceStatus =
+  | { kind: 'unknown'; reason: string }
+  | { kind: 'clear' }
+  | { kind: 'violating'; violation: ZoneViolation };
+
+/**
+ * Prefix every `zone_violation` stop reason starts with. `SafetyMonitor` matches
+ * on it to decide whether a latched protective stop is ITS geofence stop —
+ * exactly how the communication-timeout stop identifies its own latch — so that
+ * clearing the geofence can never silently release a tilt or force stop.
+ */
+export const ZONE_VIOLATION_REASON_PREFIX = 'Keepout violated';
+
+/** One-line stop reason, written for the operator who has to act on it. */
+export function zoneViolationReason(violation: ZoneViolation): string {
+  return (
+    `${ZONE_VIOLATION_REASON_PREFIX}: ${violation.placeName} (${violation.placeId}) — ` +
+    `${violation.depthM.toFixed(2)} m past the safety margin at ` +
+    `(${violation.poseM.x.toFixed(2)}, ${violation.poseM.y.toFixed(2)})`
+  );
+}
+
+// ============================================================================
 // E-STOP STATE
 // ============================================================================
 

@@ -230,17 +230,29 @@ model ScanSession {
 
 // TwinZone — L2 semantic zone (typed polygon) in the twin world frame. NEW model
 // (do NOT merge with the fleet `Zone`: that is a 2D AABB with a different enum and
-// drives the SVG FleetMap). TwinZone is the sole source for Nav2/VDA5050 export.
+// drives the SVG FleetMap). TwinZone is the sole source for Nav2/VDA5050 export
+// AND, since TASK-200, for the robot's place graph (`places/_index.json`) —
+// keepouts must never diverge between the two, so one is generated from the other.
 model TwinZone {
   id        String   @id @default(uuid())
   twinId    String
   name      String
-  type      String   @default("keepout") // keepout | workcell | charging | speed
+  // keepout | workcell | charging | speed | room
+  // 'room' (TASK-200) is a NAMED REGION OF FLOOR the robot may stand in — an
+  // aisle, a dock, a staging area. It is the opposite of a keepout and is
+  // deliberately EXCLUDED from the Nav2 keep-out raster: rasterizing rooms would
+  // turn every navigable room in the building into a lethal obstacle.
+  type      String   @default("keepout")
   points    String   @default("[]") // JSON: Array<{ x: number; y: number }> (world meters)
   minZ      Float    @default(0)
   maxZ      Float    @default(2)
   color     String? // optional hex override for the 3D volume
-  metadata  String? // JSON: Record<string, unknown> (e.g. speed limit)
+  // JSON: Record<string, unknown>. Known keys:
+  //   speedLimit  — speed zones
+  //   placeType   — TASK-200: aisle|rack_face|dock|staging|cell|charging|corridor|office|unknown
+  //   placeId     — TASK-200: stable place id override (defaults to a slug of `name`)
+  //   floor       — TASK-200: integer floor IN THE TWIN'S OWN FRAME (not the fleet storey string)
+  metadata  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

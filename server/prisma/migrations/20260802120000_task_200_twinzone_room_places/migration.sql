@@ -1,0 +1,17 @@
+-- TASK-200 (Place v2): TwinZone gains the 'room' type and the place-graph
+-- metadata keys (`placeType`, `placeId`, `floor`) that the robot's
+-- `places/_index.json` is generated from.
+--
+-- NO DDL. `TwinZone.type` is a TEXT column carrying an application-level enum
+-- and `TwinZone.metadata` is a TEXT column carrying JSON, so widening the value
+-- set is a code change, not a schema change. This migration exists so the
+-- history records WHEN the value set widened — a `type = 'room'` row appearing
+-- in a production dump is otherwise unexplainable, and the alternative (no
+-- migration at all) leaves `prisma migrate deploy` and the schema comment
+-- disagreeing about what a valid `type` is.
+--
+-- The enforcement of the widened set lives in:
+--   server/src/types/twin.types.ts      — TwinZoneTypes / isTwinZoneType
+--   server/src/routes/twin.routes.ts    — 400 on an unknown type
+--   server/src/services/TwinPlaceGraphService.ts — room|keepout → place graph
+--   server/src/services/TwinExportService.ts     — 'room' excluded from the raster

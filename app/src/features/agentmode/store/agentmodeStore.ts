@@ -7,18 +7,25 @@
  */
 
 import { createStore } from '@/store';
-import { getErrorMessage, isNotFoundError } from '@/shared/utils';
+import { getErrorMessage, getErrorStatus, isNotFoundError } from '@/shared/utils';
 import { agentmodeApi } from '../api/agentmodeApi';
 import { currentBlockOfPlan, upcomingBlocksOfPlan } from '../utils/planQuery';
 import type {
   AgentBlock,
   AgentChatMessage,
   AgentEstopStatus,
+  AgentIdentityPatch,
+  AgentMemoryDigest,
   AgentModeEvent,
   AgentModeStore,
   AgentPendingCommand,
   AgentPlan,
+  AgentPlanStatus,
+  AgentRecoveryState,
+  AgentSelfState,
+  AgentStateReachability,
   ControlOwner,
+  MirroredAgentModeState,
   SceneEntity,
   SceneMemory,
 } from '../types/agentmode.types';
@@ -35,8 +42,21 @@ const initialState = {
   estopActive: false,
   estopStatus: 'idle' as AgentEstopStatus,
   estopError: null as string | null,
+  // A cold start knows nothing either, but "this server has no state for that
+  // robot" is the documented empty case and renders as an empty page, not as a
+  // claim. Only a robot the server HAS and could not ask is UNKNOWN.
+  stateReachability: 'known' as AgentStateReachability,
+  stateUnavailableReason: null as string | null,
   damped: false,
   fsmId: null as number | null,
+  recovered: null as AgentRecoveryState | null,
+  self: null as AgentSelfState | null,
+  selfUpdatedAt: null as string | null,
+  selfLive: false,
+  selfAgeUnknown: false,
+  selfLiveBootId: null as string | null,
+  selfSuperseded: false,
+  memory: null as AgentMemoryDigest | null,
   plan: null as AgentPlan | null,
   planHistory: [] as AgentPlan[],
   scene: null as SceneMemory | null,
@@ -45,6 +65,7 @@ const initialState = {
   connectionStatus: 'disconnected' as WebSocketStatus,
   isLoading: false,
   isSending: false,
+  isSavingIdentity: false,
   error: null as string | null,
 };
 
@@ -93,6 +114,18 @@ function planSummary(plan: AgentPlan): string {
     : `Plan completed — ${done}/${total} blocks.`;
 }
 
+/**
+ * The three answers `GET /robots/:id/agent-mode` can give, kept apart.
+ *
+ * `empty` (404) and `unreachable` (502) are both "no state came back", and
+ * collapsing them into one `null` is the bug this type exists to prevent: one
+ * of them means there is nothing to show, the other means we cannot see.
+ */
+type FetchStateOutcome =
+  | { kind: 'state'; agentState: MirroredAgentModeState }
+  | { kind: 'empty' }
+  | { kind: 'unreachable'; reason: string };
+
 /** Chat line for a stop the agent latched but the hardware did not confirm. */
 function unconfirmedStopMessage(deliveryError?: string): string {
   return (
@@ -135,20 +168,48 @@ export const useAgentModeStore = createStore<AgentModeStore>(
       });
 
       try {
-        const [agentState, scene] = await Promise.all([
-          // 404 is the documented empty case: the server has never seen an
-          // `agent:state:changed` for this robot (fresh process, Agent Mode
-          // never enabled). That is a normal cold start, not a failure — the
-          // page must render its empty state, not an error banner.
-          agentmodeApi.getState(robotId).catch((error: unknown) => {
-            if (isNotFoundError(error)) return null;
-            throw error;
-          }),
+        const [outcome, scene] = await Promise.all([
+          // 404 is the documented empty case: this server has no such robot
+          // (fresh process, Agent Mode never enabled). That is a normal cold
+          // start, not a failure — the page renders its empty state.
+          // 502 AGENT_STATE_UNAVAILABLE is the opposite: the robot EXISTS and
+          // could not be asked, so nothing about it is known. Folding that into
+          // the same `null` would print "Agent Mode off, E-Stop clear".
+          agentmodeApi.getState(robotId).then(
+            (agentState): FetchStateOutcome => ({ kind: 'state', agentState }),
+            (error: unknown): FetchStateOutcome => {
+              if (isNotFoundError(error)) return { kind: 'empty' };
+              if (isStateUnavailableError(error)) {
+                return { kind: 'unreachable', reason: getErrorMessage(error) };
+              }
+              throw error;
+            }
+          ),
           agentmodeApi.getScene(robotId).catch(() => null),
         ]);
 
         set((state) => {
           if (staleResponse(state, robotId)) return;
+          state.isLoading = false;
+
+          if (outcome.kind === 'unreachable') {
+            // Deliberately writes NOTHING else. Overwriting `enabled`,
+            // `estopActive` or `plan` here would replace "unknown" with a
+            // confident default — and clearing them would be a claim of its
+            // own ("Agent Mode off", "no plan running"). What we hold is the
+            // last thing we heard; the banner says so, and every control that
+            // renders a latch position reads `stateReachability` first.
+            state.stateReachability = 'unreachable';
+            state.stateUnavailableReason = outcome.reason;
+            // The scene read is a separate route; if it answered, that part is
+            // real. An absent one leaves the last known scene alone.
+            if (scene) state.scene = scene;
+            return;
+          }
+
+          const agentState = outcome.kind === 'state' ? outcome.agentState : null;
+          state.stateReachability = 'known';
+          state.stateUnavailableReason = null;
           state.enabled = agentState?.enabled ?? false;
           state.controlOwner = agentState?.controlOwner ?? 'idle';
           state.estopActive = agentState?.estopActive ?? false;
@@ -156,9 +217,15 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           state.estopStatus = agentState?.estopActive ? 'acknowledged' : 'idle';
           state.estopError = null;
           applyBaseArming(state, agentState);
+          applyRecovery(state, agentState);
+          // Read out of the SERVER's mirror. The age that matters is when the
+          // SERVER last ingested this snapshot, never when this tab fetched —
+          // the fetch time is always now, which would make a snapshot from a
+          // process that died an hour ago read as live. A server that cannot
+          // date it leaves the age unknown, and unknown is what gets rendered.
+          applySelf(state, agentState, mirrorObservedAt(agentState), false);
           state.plan = agentState?.plan ?? null;
           state.scene = scene ?? agentState?.scene ?? null;
-          state.isLoading = false;
         });
       } catch (error) {
         const message = getErrorMessage(error);
@@ -168,6 +235,24 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           state.error = message;
         });
       }
+    },
+
+    // --------------------------------------------------------------------------
+    // Fetch the durable-memory digest
+    // --------------------------------------------------------------------------
+    fetchMemory: async (robotId: string) => {
+      // Counts, never content: `MEMORY.md` is operator-authored personal data
+      // and stays behind the robot's `personalDataGate`. Every failure mode
+      // here — no route on this server, no workspace on this robot, robot
+      // unreachable — is "we do not know", never "this robot remembers
+      // nothing", so nothing is written and no error banner is raised. The
+      // panel keeps whatever the `agent:memory:updated` digest last gave it.
+      const digest = await agentmodeApi.getMemory(robotId).catch(() => null);
+      if (!digest) return;
+      set((state) => {
+        if (staleResponse(state, robotId)) return;
+        state.memory = digest;
+      });
     },
 
     // --------------------------------------------------------------------------
@@ -225,6 +310,40 @@ export const useAgentModeStore = createStore<AgentModeStore>(
     },
 
     // --------------------------------------------------------------------------
+    // Name the robot (the bootstrap ritual's non-conversational door)
+    // --------------------------------------------------------------------------
+    submitIdentity: async (robotId: string, patch: AgentIdentityPatch) => {
+      set((state) => {
+        state.isSavingIdentity = true;
+        state.error = null;
+      });
+
+      try {
+        const response = await agentmodeApi.writeIdentity(robotId, patch);
+        set((state) => {
+          if (staleResponse(state, robotId)) {
+            state.isSavingIdentity = false;
+            return;
+          }
+          state.isSavingIdentity = false;
+          // The robot writes `IDENTITY.md` and answers with the self it now
+          // reports — adopt that rather than echoing back what was typed, so
+          // the header shows what actually landed on the robot's disk.
+          applySelf(state, response, new Date().toISOString(), true);
+        });
+        return true;
+      } catch (error) {
+        const message = getErrorMessage(error);
+        set((state) => {
+          if (staleResponse(state, robotId)) return;
+          state.isSavingIdentity = false;
+          state.error = message;
+        });
+        return false;
+      }
+    },
+
+    // --------------------------------------------------------------------------
     // Toggle Agent Mode
     // --------------------------------------------------------------------------
     toggle: async (robotId: string, enabled: boolean) => {
@@ -240,17 +359,26 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // A stale confirmation would import this robot's latch into the
           // newly selected robot's view via `applyReportedLatch`.
           if (staleResponse(state, robotId)) return;
+          markReachable(state);
           state.enabled = agentState.enabled;
           state.controlOwner = agentState.controlOwner;
           applyReportedLatch(state, agentState.estopActive);
           applyBaseArming(state, agentState);
+          applyRecovery(state, agentState);
+          // The toggle is proxied straight through to the robot, so this
+          // snapshot is the robot's own answer, taken just now.
+          applySelf(state, agentState, new Date().toISOString(), true);
         });
       } catch (error) {
         const message = getErrorMessage(error);
         set((state) => {
           if (staleResponse(state, robotId)) return;
+          // The rollback restores the value we had, which — when the robot is
+          // what could not be reached — is itself unknown. Saying so is what
+          // stops the switch from settling back into a confident "off".
           state.enabled = !enabled;
           state.error = message;
+          markUnreachableOnError(state, error);
         });
       }
     },
@@ -295,6 +423,9 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // physically still be moving. `stopped` is the narrower claim: a
           // live plan was aborted. Only that permits rewriting the plan.
           const delivered = response.delivered !== false;
+          // The agent answered: whatever else is unknown, contact exists and
+          // the latch below is its own word, not a guess.
+          markReachable(state);
           state.estopActive = true;
           state.estopStatus = delivered ? 'acknowledged' : 'unconfirmed';
           state.estopError = delivered ? null : response.deliveryError ?? null;
@@ -353,6 +484,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // see them — that is the evidence the robot is still moving.
           state.estopStatus = 'failed';
           state.estopError = message;
+          markUnreachableOnError(state, error);
           state.messages.push(
             makeMessage(
               'agent',
@@ -375,12 +507,16 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // A stale reset confirmation must never clear a latch the newly
           // selected robot's console holds.
           if (staleResponse(state, robotId)) return;
+          markReachable(state);
           state.enabled = agentState.enabled;
           state.controlOwner = agentState.controlOwner;
           state.error = null;
           // Clearing the latch does NOT re-arm the base — the robot stays
           // damped until a `posture` stand. Keep that visible across the reset.
           applyBaseArming(state, agentState);
+          applyRecovery(state, agentState);
+          // Proxied to the robot as well — a fresh answer, not the mirror.
+          applySelf(state, agentState, new Date().toISOString(), true);
           if (agentState.estopActive) {
             // The agent still holds the latch — keep it and keep saying so.
             // A hardware-unconfirmed stop stays unconfirmed until it clears.
@@ -398,6 +534,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           if (staleResponse(state, robotId)) return;
           // The latch is a safety state — never clear it on a failed reset.
           state.error = message;
+          markUnreachableOnError(state, error);
         });
       }
     },
@@ -509,12 +646,29 @@ export const useAgentModeStore = createStore<AgentModeStore>(
 
           case 'agent:state:changed': {
             if (!event.state) break;
+            // A full state the robot pushed — the one event that ends UNKNOWN.
+            // Progress events prove the robot is alive but say nothing about
+            // its mode or its latch, so they deliberately do not clear it.
+            markReachable(state);
             state.enabled = event.state.enabled;
             state.controlOwner = event.state.controlOwner;
             applyReportedLatch(state, event.state.estopActive);
             applyBaseArming(state, event.state);
+            applyRecovery(state, event.state);
+            // A pushed snapshot: the robot said this at `event.timestamp`, and
+            // the server relayed it. That is as live as this console gets.
+            applySelf(state, event.state, event.timestamp, true);
             if (event.state.scene) state.scene = event.state.scene;
-            if (event.state.plan) state.plan = event.state.plan;
+            // A snapshot may only move the plan FORWARD — see `snapshotPlanIsStale`.
+            if (event.state.plan && !snapshotPlanIsStale(state.plan, event.state.plan)) {
+              state.plan = event.state.plan;
+            }
+            break;
+          }
+
+          case 'agent:memory:updated': {
+            if (!event.memory) break;
+            state.memory = event.memory;
             break;
           }
         }
@@ -599,6 +753,49 @@ function staleResponse(state: MutableState, robotId: string): boolean {
   return state.robotId !== robotId;
 }
 
+/** The server's code for "this robot exists, but I could not ask it". */
+const STATE_UNAVAILABLE_CODE = 'AGENT_STATE_UNAVAILABLE';
+
+/**
+ * Whether an error is the server saying the robot could not be reached.
+ *
+ * Matches on either half of the contract: the `502` status, or the
+ * `AGENT_STATE_UNAVAILABLE` code. A 502 from any of the robot-facing routes
+ * means the same thing — the server is the gateway, the robot is what it could
+ * not reach — so the status alone is enough, and the code keeps working if a
+ * deployment ever puts a different status in front of it.
+ */
+function isStateUnavailableError(error: unknown): boolean {
+  if (getErrorStatus(error) === 502) return true;
+  return (error as { code?: unknown } | null | undefined)?.code === STATE_UNAVAILABLE_CODE;
+}
+
+/**
+ * Record that the robot answered — whatever it answered.
+ *
+ * Every call that lands here came back through the server FROM the robot
+ * (`toggle` and `estop/reset` are proxied straight through; `estop` is the
+ * agent's own acknowledgement), so contact exists again. Leaving the UNKNOWN
+ * banner up next to a latch the agent just confirmed would contradict itself.
+ */
+function markReachable(state: MutableState): void {
+  state.stateReachability = 'known';
+  state.stateUnavailableReason = null;
+}
+
+/**
+ * Record that a robot-facing call failed *because the robot could not be
+ * reached* — as opposed to being refused by it, which is an answer.
+ *
+ * Only the unreachable case is folded in: a 400 the agent sent back is the
+ * robot talking, and must not blank out what we know about it.
+ */
+function markUnreachableOnError(state: MutableState, error: unknown): void {
+  if (!isStateUnavailableError(error)) return;
+  state.stateReachability = 'unreachable';
+  state.stateUnavailableReason = getErrorMessage(error);
+}
+
 /** How the agent records an interrupt folded into a running plan's command. */
 const INTERRUPT_SEPARATOR = ' → ';
 
@@ -664,6 +861,19 @@ function progressSuppressed(state: MutableState): boolean {
 function applyReportedLatch(state: MutableState, reported: boolean): void {
   if (reported) {
     state.estopActive = true;
+    // A stop whose REQUEST never completed is in exactly the same position as
+    // one the hardware declined to confirm: something is latched in software
+    // and nothing has confirmed the robot. The agent reporting the latch is new
+    // information — it exists — so the status moves, but only as far as the
+    // truth goes. Upgrading it to `acknowledged` here (and clearing the reason
+    // with it) made the console LESS alarmed than reality about the one control
+    // that exists for when things go wrong: a 502 from the server proxy, whose
+    // timeout is shorter than the robot's own stop path, rendered as "The robot
+    // confirmed the stop: it is stopped and damped" ~15 s later.
+    if (state.estopStatus === 'failed') {
+      state.estopStatus = 'unconfirmed';
+      return;
+    }
     // The reported latch is the software claim we already hold — it says
     // nothing about hardware delivery and must not upgrade an unconfirmed
     // stop to "stopped and damped".
@@ -696,6 +906,153 @@ function applyBaseArming(
 }
 
 /**
+ * Fold what the robot's boot inherited (`recovered`) into the store.
+ *
+ * Same rule as `applyBaseArming`: absent is *unknown*, not "nothing happened".
+ * An older agent omits the field entirely, and clearing the badge because of
+ * that would hide exactly the thing the operator needs to see. An explicit
+ * `null` is the agent saying it has been acknowledged.
+ */
+function applyRecovery(
+  state: MutableState,
+  reported: { recovered?: AgentRecoveryState | null } | null | undefined
+): void {
+  if (!reported) return;
+  if (reported.recovered !== undefined) state.recovered = reported.recovered;
+}
+
+/**
+ * Below this, a mirrored snapshot is the CURRENT process's push rather than a
+ * leftover, whatever bootId our last direct answer carried.
+ *
+ * The agent re-asserts its state on a 15 s clock, so a mirror entry younger
+ * than this was written by a process that was alive moments ago. Matches the
+ * header's own staleness threshold, so the "different process" badge can only
+ * ever appear beside "cached" — never beside "just now", which is a
+ * self-contradicting pair of claims.
+ */
+const SELF_SUPERSEDED_MIN_AGE_MS = 60_000;
+
+/**
+ * When a mirrored snapshot was taken, expressed in THIS browser's clock.
+ *
+ * The server sends its own instants (`stateMirroredAt`) plus the frame they
+ * live in (`serverNow`), so the age is taken inside the server's clock and only
+ * the RESULT is carried over here. Subtracting the server's stamp from
+ * `Date.now()` directly would fold the skew between two machines into the age:
+ * a server two minutes ahead hides a stale snapshot as "just now" again, one 90
+ * seconds behind paints every fresh read as "cached" until nobody reads the
+ * badge at all.
+ *
+ * `stateMirroredAt`, never `mirroredAt`: the latter moves on any event, so a
+ * block event would re-date a `self` it did not touch — and only ever in the
+ * direction of looking younger. A server that sends no snapshot stamp gets
+ * `null` (unknown age) rather than a fallback to `mirroredAt`, because that
+ * fallback is exactly the wrong-direction guess.
+ */
+function mirrorObservedAt(agentState: MirroredAgentModeState | null): string | null {
+  const taken = agentState?.stateMirroredAt;
+  if (!taken) return null;
+  const takenMs = Date.parse(taken);
+  if (Number.isNaN(takenMs)) return null;
+
+  const serverNowMs = agentState?.serverNow ? Date.parse(agentState.serverNow) : NaN;
+  // A server that does not report its frame is the pre-`serverNow` build: its
+  // instant is all there is, and using it raw is still far better than the
+  // fetch time. Skew is then back, bounded and documented, instead of the age
+  // being unknowable.
+  if (Number.isNaN(serverNowMs)) return taken;
+
+  const ageMs = Math.max(0, serverNowMs - takenMs);
+  return new Date(Date.now() - ageMs).toISOString();
+}
+
+/**
+ * Fold who the robot says it is (`self`) into the store, together with how old
+ * that answer is and where it came from.
+ *
+ * Same rule again: absent is *unknown* and keeps whatever we had. An agent that
+ * does not report a self is not a robot without an identity — a robot that
+ * genuinely has none reports one with `bootstrapRequired: true`.
+ *
+ * The provenance is not decoration. `GET /agent-mode` reads the SERVER's
+ * in-memory mirror, which only moves when the robot pushes an event; it can be
+ * minutes — or a whole incarnation — behind the robot, and it has been observed
+ * to be. A pushed `agent:state:changed` and the responses to toggle/estop-reset
+ * (which the server proxies straight through to the robot) are the robot's own
+ * answer at a known instant. The header line renders the difference so nobody
+ * reads a cached battery percentage as a live one.
+ *
+ * @param observedAt - When the snapshot was taken, ISO, in THIS browser's clock.
+ *                     For a pushed event that is the event's own timestamp; for
+ *                     a mirror read it is {@link mirrorObservedAt}, and `null`
+ *                     when the server did not report one — see below.
+ * @param live - False for the server mirror, true for the robot's own answer.
+ */
+function applySelf(
+  state: MutableState,
+  reported: { self?: AgentSelfState | null } | null | undefined,
+  observedAt: string | null,
+  live: boolean
+): void {
+  if (!reported) return;
+  if (reported.self === undefined) return;
+  // Decided BEFORE `selfLiveBootId` is refreshed below, and against the
+  // snapshot that is arriving — this is a claim about that snapshot, not about
+  // whatever the store happened to hold a moment ago.
+  state.selfSuperseded = isSupersededSnapshot(state, reported.self, observedAt, live);
+  state.self = reported.self;
+  state.selfUpdatedAt = observedAt;
+  state.selfLive = live;
+  // A mirror read the server could not date is an UNKNOWN age, and it is
+  // recorded as one. The alternative — falling back to `Date.now()` — is what
+  // the defect was: the age reset to zero on every poll, so a snapshot left
+  // behind by a process that died an hour ago rendered as "just now" forever,
+  // and the staleness warning built to catch exactly that could never fire.
+  state.selfAgeUnknown = !live && observedAt === null;
+  // Remember which process last answered us DIRECTLY. A later mirror read
+  // carrying a different bootId is then knowably a different process, not just
+  // an older reading of this one.
+  if (live && reported.self) state.selfLiveBootId = reported.self.bootId;
+}
+
+/**
+ * Whether an arriving snapshot is a dead process's LEFTOVER.
+ *
+ * Two bootIds is the evidence, and it is only evidence once the robot itself
+ * has answered us at least once. But it is not evidence on its own: this store
+ * is module-level and `selectRobot` no-ops when the bound robot id is unchanged,
+ * so `selfLiveBootId` survives leaving the page and coming back. If the agent
+ * restarted in between — which a watch-mode dev box does on every saved file —
+ * a perfectly FRESH mirror read carrying the new boot would otherwise be
+ * flagged, pointing the warning at the live process and calling the dead one
+ * the reference. The snapshot's own age is what tells the two apart: a mirror
+ * younger than {@link SELF_SUPERSEDED_MIN_AGE_MS} was written by something that
+ * was alive moments ago.
+ *
+ * An UNKNOWN age counts as old. A snapshot nobody can date is precisely the
+ * case where the bootId is the only evidence left.
+ */
+function isSupersededSnapshot(
+  state: MutableState,
+  self: AgentSelfState | null,
+  observedAt: string | null,
+  live: boolean
+): boolean {
+  // The robot's own answer is, by definition, the process that is running.
+  if (live) return false;
+  if (!self?.bootId) return false;
+  if (state.selfLiveBootId === null) return false;
+  if (self.bootId === state.selfLiveBootId) return false;
+  if (observedAt === null) return true;
+  const takenMs = Date.parse(observedAt);
+  if (Number.isNaN(takenMs)) return true;
+  // Same clock on both sides: `observedAt` was carried into this browser's
+  // frame by `mirrorObservedAt` before it got here.
+  return Date.now() - takenMs >= SELF_SUPERSEDED_MIN_AGE_MS;
+}
+
+/**
  * Make sure the plan the block event refers to is the one in the store.
  *
  * `runGeneratedBlock` splices navigator-generated blocks (look/turn/walk/…)
@@ -720,6 +1077,64 @@ function adoptEventPlan(state: MutableState, event: AgentModeEvent): boolean {
   return true;
 }
 
+/** Plan lifecycles that are over — nothing will ever emit for them again. */
+const TERMINAL_PLAN_STATUSES: readonly AgentPlanStatus[] = ['done', 'failed', 'aborted'];
+
+const isTerminalPlan = (status: AgentPlanStatus): boolean =>
+  TERMINAL_PLAN_STATUSES.includes(status);
+
+/** ISO → ms, or null when the string is missing or unparsable. */
+function isoMs(iso: string | undefined): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Would this plan, carried on an `agent:state:changed`, move the timeline
+ * BACKWARDS?
+ *
+ * The robot re-asserts its state to the server mirror on a clock, and every one
+ * of those pushes is fanned out to every app client. The push is
+ * fire-and-forget, so a snapshot taken at T can arrive after an event emitted
+ * at T+ε — the classic loss being a heartbeat that still says `running`
+ * overtaking `agent:plan:finished`, after which the timeline shows a plan that
+ * finished minutes ago as still executing, because a finished plan emits
+ * nothing further. The nastier variant carries a whole PREVIOUS plan into a
+ * store that has already moved on to the next one, and the operator watches the
+ * old plan's blocks for the entire run of the new one.
+ *
+ * Newer agents leave the plan off the heartbeat entirely, which is the real
+ * fix; this guard is what makes an OLDER agent — or any other out-of-order
+ * delivery — survivable, so it is deliberately kept.
+ *
+ * Rejected when: the same plan would be resurrected out of a terminal status or
+ * rewound to an older `updatedAt`, or a DIFFERENT plan that was created before
+ * the one on screen would take it over. Anything unprovable (missing or
+ * unparsable stamps, no plan on screen) is accepted — this guard exists to
+ * catch a demonstrable rewind, not to second-guess the robot.
+ */
+function snapshotPlanIsStale(current: AgentPlan | null, incoming: AgentPlan): boolean {
+  if (!current) return false;
+
+  if (current.id !== incoming.id) {
+    // A different plan may take the timeline over only if it is the newer one.
+    const currentStart = isoMs(current.createdAt);
+    const incomingStart = isoMs(incoming.createdAt);
+    if (currentStart === null || incomingStart === null) return false;
+    return incomingStart < currentStart;
+  }
+
+  // Same plan: an ending is final. Only another terminal status (a `done` that
+  // the abort path re-reports as `aborted`) may follow one.
+  if (isTerminalPlan(current.status) && !isTerminalPlan(incoming.status)) return true;
+
+  const currentAt = isoMs(current.updatedAt);
+  const incomingAt = isoMs(incoming.updatedAt);
+  if (currentAt === null || incomingAt === null) return false;
+  return incomingAt < currentAt;
+}
+
 // ============================================================================
 // SELECTORS
 // ============================================================================
@@ -742,11 +1157,86 @@ export const selectEstopStatus = (state: AgentModeStore) => state.estopStatus;
 /** Select why the E-Stop request failed (null unless it did) */
 export const selectEstopError = (state: AgentModeStore) => state.estopError;
 
+/** Select whether the robot's state is known at all, or it could not be asked */
+export const selectStateReachability = (state: AgentModeStore) => state.stateReachability;
+
+/**
+ * Select whether this console has NO idea what the robot is doing.
+ *
+ * Every control and every badge that would otherwise render `enabled` or
+ * `estopActive` has to consult this first: while it is true those two are the
+ * initial defaults or a stale memory, and showing them says "Agent Mode off,
+ * E-Stop clear" about a robot nobody can reach.
+ */
+export const selectStateUnknown = (state: AgentModeStore): boolean =>
+  state.stateReachability === 'unreachable';
+
+/** Select what the server said when it could not reach the robot; null otherwise */
+export const selectStateUnavailableReason = (state: AgentModeStore) =>
+  state.stateUnavailableReason;
+
 /** Select whether the base is damped — it cannot walk, turn or goto while true */
 export const selectDamped = (state: AgentModeStore) => state.damped;
 
 /** Select the last FSM id the base was commanded into */
 export const selectFsmId = (state: AgentModeStore) => state.fsmId;
+
+/**
+ * Select who the bound robot is and what it has been through — null until the
+ * agent reports it.
+ */
+export const selectSelf = (state: AgentModeStore) => state.self;
+
+/**
+ * Select when this console last received a self snapshot (ISO), or null before
+ * the first one. Not "when the robot last changed" — when we last heard.
+ */
+export const selectSelfUpdatedAt = (state: AgentModeStore) => state.selfUpdatedAt;
+
+/**
+ * Select whether that snapshot was the robot's own answer (a pushed event or a
+ * proxied call) rather than a read of the server's in-memory mirror.
+ */
+export const selectSelfLive = (state: AgentModeStore) => state.selfLive;
+
+/**
+ * Select whether we hold a mirrored self whose AGE nobody could tell us.
+ *
+ * Distinct from `selfUpdatedAt === null` on its own, which is simply "nothing
+ * has arrived yet". This one means a snapshot did arrive and cannot be dated —
+ * which must be shown, not silently dressed up as fresh.
+ */
+export const selectSelfAgeUnknown = (state: AgentModeStore) => state.selfAgeUnknown;
+
+/**
+ * Select whether the self on screen came from a DIFFERENT process than the one
+ * that last answered us directly.
+ *
+ * Not a refinement of staleness — a different answer. The observed defect was a
+ * duplicate robot-agent that booted, pushed one state event, died on
+ * EADDRINUSE and left its identity in the server's mirror; the console then
+ * rendered that dead process's incarnation, uptime and battery as the running
+ * robot's. Two bootIds is the evidence, and it is only evidence once the robot
+ * itself has answered us at least once AND the snapshot is old enough that a
+ * live process cannot be the one that wrote it — see
+ * {@link isSupersededSnapshot}, which decides it as the snapshot arrives.
+ */
+export const selectSelfSuperseded = (state: AgentModeStore): boolean => state.selfSuperseded;
+
+/**
+ * Select what the robot durably remembers, as counts — null until a digest
+ * arrives. Never the memory's content: that stays on the robot.
+ */
+export const selectMemory = (state: AgentModeStore) => state.memory;
+
+/** Select whether an identity write is in flight. */
+export const selectIsSavingIdentity = (state: AgentModeStore) => state.isSavingIdentity;
+
+/**
+ * Select what the robot's boot inherited — a latch that survived a restart, an
+ * unclean shutdown — or null once an operator has cleared it.
+ */
+export const selectRecovered = (state: AgentModeStore) => state.recovered;
 
 /** Select the current plan */
 export const selectPlan = (state: AgentModeStore) => state.plan;

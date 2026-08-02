@@ -24,11 +24,20 @@ export const HTTP_TIMEOUTS = {
 // ============================================================================
 
 export class HttpClientError extends Error {
+  /**
+   * @param responseBody - The peer's own parsed response body, when it sent one.
+   *   `message` only carries a JSON-stringified copy glued behind `HTTP <code>:`,
+   *   which a proxy cannot forward without re-parsing its own error string. A
+   *   proxy that wants to hand the caller what the ROBOT said — a
+   *   `NO_MEMORY_WORKSPACE`, an `IDENTITY_REFUSED` and its reason — reads this.
+   *   Absent for network errors: there was no answer to carry.
+   */
   constructor(
     message: string,
     public readonly statusCode?: number,
     public readonly url?: string,
-    public readonly originalError?: Error
+    public readonly originalError?: Error,
+    public readonly responseBody?: unknown
   ) {
     super(message);
     this.name = 'HttpClientError';
@@ -66,15 +75,27 @@ export class HttpClientError extends Error {
 export class HttpClient {
   private axios: AxiosInstance;
 
+  /**
+   * @param baseUrl - Base URL every request is resolved against
+   * @param defaultTimeout - Per-request timeout unless overridden at the call site
+   * @param defaultHeaders - Extra headers sent on EVERY request of this client.
+   *   This is how a caller presents credentials — see `agentServiceAuthHeaders()`
+   *   for the robot-agent's personal-data gate. Without it this client sent
+   *   `Content-Type` and nothing else, so every server→agent call to a gated
+   *   route depended on the peer being loopback: fine on a single box, 401 on
+   *   any split-host deployment.
+   */
   constructor(
     private readonly baseUrl?: string,
-    private readonly defaultTimeout: number = HTTP_TIMEOUTS.MEDIUM
+    private readonly defaultTimeout: number = HTTP_TIMEOUTS.MEDIUM,
+    defaultHeaders: Record<string, string> = {}
   ) {
     this.axios = axios.create({
       baseURL: baseUrl,
       timeout: defaultTimeout,
       headers: {
         'Content-Type': 'application/json',
+        ...defaultHeaders,
       },
     });
   }
@@ -99,7 +120,13 @@ export class HttpClient {
         const message = axiosError.response?.data
           ? JSON.stringify(axiosError.response.data)
           : axiosError.message;
-        return new HttpClientError(`HTTP ${statusCode}: ${message}`, statusCode, url, error);
+        return new HttpClientError(
+          `HTTP ${statusCode}: ${message}`,
+          statusCode,
+          url,
+          error,
+          axiosError.response?.data
+        );
       }
 
       return new HttpClientError(axiosError.message, undefined, url, error);

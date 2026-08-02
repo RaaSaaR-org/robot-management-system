@@ -41,6 +41,7 @@ const BLOCK_REFERENCE = `
 - posture    {"pose": "stand"|"high"|"low"|"sit"|"damp"}
 - speak      {"text": "<what to say>"}
 - wait       {"seconds": 0.1..30}
+- remember   {"text": "<one short fact>", "scope": "place"|"global"}
 `.trim();
 
 export interface PlannerPromptInput {
@@ -117,6 +118,13 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '  target to its English noun before putting it in `goto.entity`.',
     '- Never invent a distance or a bearing you were not given; use `look` or',
     '  `scan_room` to find out instead.',
+    // ONE line, on purpose. Prompt length is a measured regression risk for
+    // gemma3:4b in this repo (planner.test.ts is the gate), and there is no
+    // matching `recall` rule to write: retrieval is injected below under
+    // "What you know about this place", never planned.
+    '- "remember X" / "merk dir X" / "memorize X" -> emit ONE `remember` block',
+    '  ("scope":"place" for something true of where the robot is, "global" for a',
+    '  standing instruction). Do not also walk or speak about it.',
     '- The robot waves with its RIGHT arm only — there is no left-hand wave. If the',
     '  operator asks for the left hand, `wave` anyway and add a `speak` block that',
     '  says the gesture is right-arm only.',
@@ -170,6 +178,28 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
 
   sections.push('', `Operator command: ${input.command}`);
   return sections.join('\n');
+}
+
+/**
+ * The durable-memory section appended to the scene summary when the robot is
+ * standing in a place it has notes about (TASK-197).
+ *
+ * Retrieval is INJECTION, not a planned step: a 4B planner cannot be trusted to
+ * plan a retrieval block, and a missed recall must never turn into a failed
+ * plan. So the notes are simply here, already loaded, whenever there are any.
+ *
+ * The provenance marker on each line (`(operator)` / `(self)`) is kept rather
+ * than stripped: "someone told me" and "I measured it" are different grounds
+ * for acting, and the planner is one of the readers that should be able to tell
+ * them apart.
+ *
+ * @param excerpt Already capped by `Workspace.placeExcerpt`. Empty means there
+ *        is nothing to say, and the section is omitted entirely — an empty
+ *        "What you know" heading reads as "nothing is true here".
+ */
+export function formatPlaceNotesSection(placeId: string, excerpt: string): string {
+  if (!excerpt.trim()) return '';
+  return [`What you know about this place (${placeId}):`, excerpt.trim()].join('\n');
 }
 
 /**

@@ -54,6 +54,13 @@ node_modules/
 
 # Robot agent persisted state
 robot-agent/data/state*.json
+# Boot lineage (TASK-196) — one line per process life, rewritten on every boot
+robot-agent/data/incarnations-*.jsonl
+# Memory workspace (TASK-197) — the robot's own durable memory, per robot id.
+# NOT covered by the `state*.json` rule above, and it must not be: a place note
+# from a customer facility is personal data with a GDPR erasure story
+# (DELETE /api/v1/robots/:id/memory), and committing it puts it in git forever.
+robot-agent/data/workspace-*/
 
 # Playwright
 app/e2e/results/

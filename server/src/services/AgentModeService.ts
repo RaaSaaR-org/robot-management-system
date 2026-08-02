@@ -59,10 +59,44 @@ export function isValidAgentModeSnapshot(state: unknown): state is AgentModeStat
 /**
  * AgentModeService — last-known Agent Mode state per robot, in memory only.
  */
-class AgentModeService {
+export class AgentModeService {
   private eventCallbacks: Set<AgentModeEventCallback> = new Set();
   private states: Map<string, AgentModeState> = new Map();
   private recentEvents: AgentModeEvent[] = [];
+  /**
+   * When this mirror last INGESTED anything for a robot, ISO (TASK-200).
+   *
+   * The mirror is event-driven, so the age of an entry is the only thing that
+   * separates "what the robot is doing" from "what a process that died an hour
+   * ago was doing". Without recording it, that age is not knowable by any
+   * downstream consumer — a client reading `GET /:id/agent-mode` could only
+   * stamp its own fetch time, which is always "just now" and always a lie about
+   * the snapshot. Observed live: the mirror served a dead duplicate agent's
+   * `self` (incarnation 200, uptime 0) for 68 minutes while the live agent ran
+   * as incarnation 199, and the page rendered it as current.
+   *
+   * This is the SERVER's clock, deliberately: it is the one clock that both
+   * ends of this contract (ingest and read) share.
+   */
+  private mirroredAt: Map<string, string> = new Map();
+  /**
+   * When this mirror last ingested a valid SNAPSHOT per robot, ISO (TASK-200).
+   *
+   * {@link mirroredAt} dates the last event of ANY kind; this one dates the
+   * last event that actually replaced the stored state. They diverge exactly
+   * when a plan/block/scene event arrives after a snapshot: the stamp moves,
+   * the `self`, `enabled` and `estopActive` in the entry do not.
+   *
+   * A consumer rendering the age of those fields has to use THIS one. Using
+   * `mirroredAt` would make a snapshot appear younger than it is every time a
+   * block event fires — the same "just now" lie, one indirection further in.
+   */
+  private stateMirroredAt: Map<string, string> = new Map();
+  private readonly now: () => number;
+
+  constructor(deps: { now?: () => number } = {}) {
+    this.now = deps.now ?? (() => Date.now());
+  }
   /**
    * Robots whose stored state came from a real snapshot (`event.state` passing
    * {@link isValidAgentModeSnapshot}), not from {@link emptyState}. Only
@@ -85,6 +119,11 @@ class AgentModeService {
    * fields → `event.block` spliced into the plan by id. Explicit `null` for
    * `plan`/`scene` clears the field, so a cleared plan is not resurrected from
    * the previous state.
+   *
+   * ABSENT is not `null`, on the snapshot as much as on the event: a periodic
+   * liveness re-assertion (TASK-200) carries neither `plan` nor `scene`, and
+   * treating that as "the plan is now gone" would blank the console's timeline
+   * four times a minute for the whole life of every plan.
    */
   ingest(event: AgentModeEvent): AgentModeState {
     const robotId = event.robotId;
@@ -95,10 +134,19 @@ class AgentModeService {
     // never marked hydrated — otherwise emptyState() defaults would be served
     // as the robot's own answer.
     const snapshot = isValidAgentModeSnapshot(event.state) ? event.state : undefined;
+    const stored = this.states.get(robotId);
     const next: AgentModeState = snapshot
       ? { ...snapshot, robotId }
-      : { ...(this.states.get(robotId) ?? this.emptyState(robotId)) };
-    if (snapshot) this.hydrated.add(robotId);
+      : { ...(stored ?? this.emptyState(robotId)) };
+    if (snapshot) {
+      this.hydrated.add(robotId);
+      // A snapshot that OMITS plan/scene says nothing about them — it is a
+      // heartbeat, not a claim that the robot has neither. Carry the stored
+      // values across; an explicit `null` still clears, which is how a robot
+      // that really has no plan says so.
+      if (snapshot.plan === undefined) next.plan = stored?.plan ?? null;
+      if (snapshot.scene === undefined) next.scene = stored?.scene ?? null;
+    }
 
     if (event.plan !== undefined) {
       next.plan = event.plan;
@@ -119,6 +167,15 @@ class AgentModeService {
     }
 
     this.states.set(robotId, next);
+    // Stamped for EVERY ingested event, not only for snapshots: a plan or block
+    // event is proof the pushing process is alive, which is exactly the
+    // question `mirroredAt` answers. It deliberately does NOT move on a read —
+    // reading a mirror does not make its contents any younger.
+    const at = new Date(this.now()).toISOString();
+    this.mirroredAt.set(robotId, at);
+    // …and separately, the age of the STATE now stored. Only a snapshot
+    // replaced it, so only a snapshot may re-date it.
+    if (snapshot) this.stateMirroredAt.set(robotId, at);
     this.logEvent(event);
     this.emitEvent(event);
 
@@ -132,6 +189,40 @@ class AgentModeService {
   /** Last known state for a robot, or null when nothing was ingested yet. */
   getState(robotId: string): AgentModeState | null {
     return this.states.get(robotId) ?? null;
+  }
+
+  /**
+   * When this mirror last ingested an event for a robot (ISO), or null when it
+   * never has. The AGE OF THE ANSWER, which the answer itself cannot carry:
+   * nothing in `AgentModeState` is a wall-clock timestamp, and the reader's own
+   * clock only records when it asked.
+   */
+  getMirroredAt(robotId: string): string | null {
+    return this.mirroredAt.get(robotId) ?? null;
+  }
+
+  /**
+   * When this mirror last ingested a SNAPSHOT for a robot (ISO), or null when
+   * it never has. The age of the state {@link getState} returns — including its
+   * `self`, which is what an operator reads as the robot's identity, battery
+   * and uptime.
+   *
+   * Never newer than {@link getMirroredAt}, and usually older: proof that the
+   * agent is alive is not proof that what it last SAID is current.
+   */
+  getStateMirroredAt(robotId: string): string | null {
+    return this.stateMirroredAt.get(robotId) ?? null;
+  }
+
+  /**
+   * This service's own clock, ISO — the frame both stamps above live in.
+   *
+   * Handed to clients so the age of a snapshot can be computed inside one
+   * clock. Subtracting `mirroredAt` from a browser's `Date.now()` measures the
+   * skew between two machines as much as the age of the data.
+   */
+  nowIso(): string {
+    return new Date(this.now()).toISOString();
   }
 
   /**

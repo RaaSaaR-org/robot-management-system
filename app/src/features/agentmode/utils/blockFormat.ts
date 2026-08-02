@@ -21,6 +21,7 @@ const BLOCK_LABELS: Record<AgentBlockKind, string> = {
   posture: 'Posture',
   speak: 'Speak',
   wait: 'Wait',
+  remember: 'Remember',
 };
 
 /** Human label for a block kind. */
@@ -40,6 +41,7 @@ const BLOCK_GLYPHS: Record<AgentBlockKind, string> = {
   posture: '⇕',
   speak: '❝',
   wait: '⏸',
+  remember: '✎',
 };
 
 /** Glyph for a block kind — a tiny, dependency-free icon. */
@@ -101,6 +103,13 @@ export function formatBlockParams(block: AgentBlock): string {
     case 'wait': {
       const seconds = num(p.seconds);
       return seconds !== null ? `${seconds} s` : '';
+    }
+    case 'remember': {
+      // The scope is what an operator has to be able to see at a glance: a
+      // "global" line outlives the place it was said in.
+      const text = str(p.text);
+      const scope = str(p.scope) === 'global' ? 'everywhere' : 'here';
+      return text ? `${scope}: “${text}”` : scope;
     }
     case 'look':
       return 'camera → scene memory';

@@ -20,6 +20,12 @@ export const AgentBlockKinds = [
   'posture',
   'speak',
   'wait',
+  /**
+   * Write one operator-authored line into durable memory (TASK-197). The only
+   * block that touches the memory workspace, and the only WRITE path the
+   * planner has into it — retrieval is injection, never a planned step.
+   */
+  'remember',
 ] as const;
 export type AgentBlockKind = (typeof AgentBlockKinds)[number];
 
@@ -83,6 +89,16 @@ export interface AgentPlan {
    * operator reading them is not necessarily the one who spoke.
    */
   language?: SpokenLanguage;
+  /**
+   * The command that started (or interrupted) this plan was SPOKEN.
+   *
+   * Separate from {@link AgentPlan.language} because a speech client that cannot
+   * identify a language still spoke: `language` is an optional label, `spoken`
+   * is the channel fact. Once true it stays true for the life of the plan —
+   * fail-closed, because a spoken turn's content is `untrusted` for durable
+   * memory and a typed follow-up must not launder it.
+   */
+  spoken?: boolean;
   blocks: AgentBlock[];
   /** Index of the running block; -1 when nothing runs. */
   cursor: number;
@@ -134,12 +150,77 @@ export interface SceneEntity {
   note?: string;
 }
 
+/**
+ * The vocabulary of places (TASK-195). Deliberately a CLOSED, industry-first
+ * set: a free-text type is a label nothing can reason about, and the first
+ * consumers of this (the initiative gate, the keepout rule) branch on it.
+ * Room-shaped types are a later additive extension — house rooms ship as
+ * `cell` until then rather than inventing a type the set does not have.
+ */
+export const PlaceTypes = [
+  'aisle',
+  'rack_face',
+  'dock',
+  'staging',
+  'cell',
+  'charging',
+  'corridor',
+  'office',
+  'unknown',
+] as const;
+export type PlaceType = (typeof PlaceTypes)[number];
+
+/**
+ * Where a place's geometry came from. `surveyed` is a hand-authored or
+ * instrument-derived map, `observed` was inferred by the robot itself,
+ * `declared` was asserted by an operator. Rendered next to the place id so a
+ * reader can tell a measured footprint from someone's say-so.
+ */
+export const PlaceSources = ['surveyed', 'observed', 'declared'] as const;
+export type PlaceSource = (typeof PlaceSources)[number];
+
+/**
+ * How much the robot's belief about its place is worth. `stale` means the pose
+ * that produced it has accumulated more translation than the drift budget
+ * without a re-anchor — the geometry still says "AISLE-3", but the pose fed
+ * into it has had no correction for a long walk.
+ */
+export const PlaceConfidences = ['confident', 'stale'] as const;
+export type PlaceConfidence = (typeof PlaceConfidences)[number];
+
+/**
+ * The place the robot believes it is standing in.
+ *
+ * `null` on {@link SceneMemory.place} means UNKNOWN, and UNKNOWN is never
+ * silently replaced by the last known place — the same honesty rule
+ * `distanceSource` and `forwardClearanceM` already live by. A consumer that
+ * renders a stale place as the current one is telling an operator the robot is
+ * somewhere it is not.
+ */
+export interface ScenePlace {
+  /** Stable id from the place graph, e.g. `AISLE-3`. */
+  id: string;
+  /** Human name, e.g. `Aisle 3`. */
+  name: string;
+  placeType: PlaceType;
+  confidence: PlaceConfidence;
+  source: PlaceSource;
+}
+
 export interface SceneMemory {
   robotId: string;
   /** Free-text "what I currently see", straight from the VLM. */
   currentView: string;
   entities: SceneEntity[];
   personVisible: boolean;
+  /**
+   * Named place the robot is standing in (TASK-195), or null for UNKNOWN.
+   *
+   * Optional so an older agent that does not resolve places stays structurally
+   * compatible; absent and null mean the same thing — "we do not know" — and
+   * neither may be rendered as the last place the robot was in.
+   */
+  place?: ScenePlace | null;
   /**
    * Nearest surface straight ahead in metres, measured, or null when unknown —
    * no range sensor present, nothing returned, or every return rejected.
@@ -151,6 +232,88 @@ export interface SceneMemory {
    */
   forwardClearanceM: number | null;
   updatedAt: string;
+}
+
+/**
+ * What this boot inherited from the last one (TASK-196).
+ *
+ * Non-null means a human has not yet acknowledged it. It exists so the panel
+ * can say "this robot came back latched / did not shut down cleanly" and offer
+ * one click to clear it — without that, the first operator who meets a robot
+ * that came back latched deletes its state file to "fix" it, which is a worse
+ * outcome than the bug durable safety state exists to prevent.
+ */
+export interface AgentRecoveryState {
+  /** The previous incarnation never wrote its `endedAt`: it crashed or was killed. */
+  fromCrash: boolean;
+  /** The E-Stop latch was read back off disk, not taken in this process. */
+  estopLatched: boolean;
+  /** ISO-8601 timestamp of the boot that inherited it. */
+  at: string;
+}
+
+/**
+ * Who the robot is and what it has been through — assembled per turn from
+ * `IDENTITY.md`, the boot lineage (`incarnations.jsonl`, TASK-196) and the
+ * journal (TASK-197), with ZERO tool calls (TASK-198).
+ *
+ * It spans restarts on purpose: a process that came up thirty seconds ago can
+ * still say which life it is on and how the last one ended, because both are on
+ * disk. That is the cheapest thing that makes a restarted agent continuous —
+ * and the reason every clause of the robot's self-description is checkable
+ * against a file rather than produced by a model.
+ */
+export interface AgentSelfState {
+  /** What a person calls this robot. Agent-writable in `IDENTITY.md`. */
+  name: string;
+  emoji: string | null;
+  /** The machine this is — model string from configuration, never the file. */
+  unit: string;
+  robotId: string;
+  operator: string | null;
+  site: string | null;
+  /**
+   * There is no `IDENTITY.md`: this robot has not been named and `name` is only
+   * the configured fallback. NOT an error — it is the state the naming ritual
+   * exists to leave.
+   */
+  bootstrapRequired: boolean;
+  /** This process's boot id, or null before the lineage was opened. */
+  bootId: string | null;
+  /**
+   * Which life this is: the lifetime boot ordinal carried in the lineage line
+   * itself, so it survives the file rotating at `INCARNATION_MAX_LINES`.
+   *
+   * It never decreases. It used to — it was the line's INDEX in a ring buffer,
+   * and it went 199 → 197 across a restart when rotation ate two lines.
+   */
+  incarnation: number;
+  /**
+   * Whether {@link incarnation} is an exact ordinal.
+   *
+   * `false` means it is a lower bound — the counter was seeded from a lineage
+   * that had already rotated without one, or the lineage was unreadable — and
+   * the number must then be rendered as "at least N starts", never as
+   * "incarnation N".
+   */
+  incarnationExact: boolean;
+  uptimeS: number;
+  /**
+   * How the PREVIOUS incarnation ended, or null when there was none.
+   * `exit: 'crash'` means the line never got an `endedAt` — a statement about
+   * the software's exit, not about the robot falling over.
+   */
+  lastShutdown: { at: string | null; exit: string; place: string | null } | null;
+  place: string | null;
+  poseSource: string | null;
+  batteryPct: number | null;
+  controlOwner: ControlOwner;
+  damped: boolean;
+  estopLatched: boolean;
+  /** Distinct plans and failed blocks journalled in the last 24 h. */
+  plansLast24h: number;
+  failuresLast24h: number;
+  memoryEntries: number;
 }
 
 export interface AgentModeState {
@@ -174,7 +337,35 @@ export interface AgentModeState {
    * re-arm the base, `posture stand` does.
    */
   damped?: boolean;
+  /**
+   * Set when this boot inherited a latch or an unclean shutdown; null once a
+   * human has cleared it (the panel's reset does that). Optional so an older
+   * server/app mirror stays structurally compatible — absent means "this agent
+   * does not report recovery", never "nothing to report".
+   */
+  recovered?: AgentRecoveryState | null;
+  /**
+   * Who this robot is and what it has been through (TASK-198). Optional so an
+   * older robot-agent stays structurally compatible; absent means "this agent
+   * does not report a self", which is not the same as a robot with no identity
+   * — that case is `bootstrapRequired` on a present `self`.
+   */
+  self?: AgentSelfState | null;
 }
+
+/**
+ * What a periodic liveness re-assertion carries: every field of {@link
+ * AgentModeState} EXCEPT `plan` and `scene` (TASK-200).
+ *
+ * The re-push exists to DATE the mirror, not to restate the plan. Its snapshot
+ * is taken on a clock and delivered fire-and-forget, so it can overtake an
+ * event emitted after it — and a snapshot that still says `status: 'running'`
+ * landing after `agent:plan:finished` reverts every downstream mirror to a plan
+ * that will never emit another event. Omitting the field entirely (as opposed
+ * to sending `null`, which means "there is no plan") is what makes the
+ * re-assertion say nothing about the plan at all.
+ */
+export type AgentModeLivenessState = Omit<AgentModeState, 'plan' | 'scene'>;
 
 /**
  * Flat-envelope event types broadcast to the server and, from there, over the
@@ -189,8 +380,48 @@ export const AgentModeEventTypes = [
   'agent:block:finished',
   'agent:scene:updated',
   'agent:state:changed',
+  /** The durable memory workspace changed — carries {@link AgentMemoryDigest}. */
+  'agent:memory:updated',
 ] as const;
 export type AgentModeEventType = (typeof AgentModeEventTypes)[number];
+
+/**
+ * What the robot durably remembers, as counts rather than content (TASK-197).
+ *
+ * Deliberately a DIGEST: the memory itself is operator-authored text and
+ * therefore personal data, and a fan-out event that reaches every connected
+ * WebSocket client is not where it belongs. Whoever wants the content asks the
+ * robot for it (`GET /robots/:id/memory.md`), which is a call that can be
+ * authorised and audited.
+ */
+export interface AgentMemoryDigest {
+  robotId: string;
+  /** Place the robot was in when this digest was taken, or null for UNKNOWN. */
+  place: string | null;
+  /** Bytes used by `MEMORY.md` and its hard cap. */
+  memoryBytes: number;
+  memoryMaxBytes: number;
+  /** `- …` entries in `MEMORY.md`. */
+  memoryEntries: number;
+  /** One row per place that has a note. */
+  places: Array<{ id: string; entries: number; bytes: number }>;
+  /** Journal day keys currently on disk, oldest first. */
+  journalDays: string[];
+  /**
+   * What governs journal pruning, when the platform has been asked. `null`
+   * means UNKNOWN — never "nothing is retained".
+   */
+  retention: {
+    retentionDays: number;
+    source: 'policy' | 'fallback';
+    legalHold: boolean;
+    /** False when the platform never answered the legal-hold question at all. */
+    legalHoldKnown?: boolean;
+    /** Why the platform's policy was not applied, when it was not. */
+    error?: string | null;
+  } | null;
+  updatedAt: string;
+}
 
 /**
  * Only the fields relevant to the event need to be present; `type`, `robotId`
@@ -202,7 +433,14 @@ export interface AgentModeEvent {
   plan?: AgentPlan;
   block?: AgentBlock;
   scene?: SceneMemory;
-  state?: AgentModeState;
+  /**
+   * A full snapshot on a real state CHANGE; the plan/scene-less {@link
+   * AgentModeLivenessState} on a periodic re-assertion. Consumers must treat an
+   * absent `state.plan` as "no opinion about the plan", never as "no plan".
+   */
+  state?: AgentModeState | AgentModeLivenessState;
+  /** Set on `agent:memory:updated` only. */
+  memory?: AgentMemoryDigest;
   timestamp: string;
 }
 
@@ -224,6 +462,12 @@ export type AgentCommandOutcome =
   | 'folded'
   /** A bare stop word — the E-Stop was taken, no planner involved. */
   | 'estop'
+  /**
+   * An operator STATEMENT about where the robot is ("you are in aisle 3"),
+   * TASK-200. The place belief was re-anchored to `source: 'declared'` and the
+   * drift budget reset; nothing was planned and nothing moved.
+   */
+  | 'reanchored'
   | 'empty'
   | 'disabled'
   /** An E-Stop latch (ours or the SafetyMonitor's) forbids driving. */

@@ -42,6 +42,59 @@ test.describe('Agent Mode page', () => {
     await expect(page.locator('text=No active plan')).toBeVisible();
   });
 
+  test('the resting page carries the rail and nothing else', async ({ page }) => {
+    await openAgentMode(page);
+
+    // Where the robot thinks it is stands in the rail, next to who it is and
+    // what it is doing — not inside the scene card, where it used to be one
+    // collapse away from invisible.
+    const timeline = page.getByTestId('agent-block-timeline');
+    await expect(timeline.getByTestId('agent-scene-place')).toBeVisible();
+    // Exactly one renderer of the belief on the whole page: two of them is two
+    // chances to disagree about what the robot knows.
+    await expect(page.getByTestId('agent-scene-place')).toHaveCount(1);
+
+    // The standalone voice bar is gone. Voice survives as an INPUT METHOD, so
+    // the testid still exists — but only inside the chat composer, never as a
+    // row of its own above the workspace.
+    await expect(page.getByTestId('agent-voice-bar')).toHaveCount(1);
+    await expect(
+      page.getByTestId('agent-chat').getByTestId('agent-voice-bar')
+    ).toBeVisible();
+
+    // The memory card no longer stacks under the scene card; it lives behind
+    // the Memory tab of the one knowledge card, and Scene is the default.
+    await expect(page.getByTestId('agent-memory-panel')).toHaveCount(0);
+
+    // The page footer is gone — the robot it is bound to is named in the rail,
+    // and 'plans are ephemeral' moved into the details drawer.
+    await expect(page.locator('text=plans are ephemeral')).toHaveCount(0);
+  });
+
+  /**
+   * The rail's `.glass-card` sets `overflow: hidden`. With a wide identity
+   * group beside it, STOPP was pushed past the card's right edge and clipped —
+   * invisible AND unclickable, with no scrollbar to get it back, at the two
+   * widths a laptop and a phone actually use. `toBeInViewport` is the assertion
+   * that catches it: a clipped element still reports a bounding box, it just
+   * reports one that is off screen.
+   */
+  test('STOPP stays reachable at laptop and phone widths', async ({ page }) => {
+    await openAgentMode(page);
+
+    for (const size of [
+      { width: 1024, height: 768 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(size);
+      const stop = page.getByTestId('agent-stop-button');
+      await expect(stop).toBeVisible();
+      await expect(stop).toBeInViewport();
+      // …and the rail wrapped instead of scrolling sideways to hide it.
+      await expect(page.getByTestId('agent-block-timeline')).toBeInViewport();
+    }
+  });
+
   test('scene panel lists the remembered entities', async ({ page }) => {
     await openAgentMode(page);
 

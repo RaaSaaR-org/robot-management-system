@@ -30,6 +30,18 @@ import type {
 // also rasterized into the keep-out mask (the contract bundles keepout+speed).
 const MASK_LETHAL = 254;
 
+/**
+ * The ONLY zone types that become lethal cells in the Nav2 mask.
+ *
+ * An ALLOW-list, deliberately, and it is the reason this is a named constant
+ * rather than an inline `!==` test: `type: 'room'` (TASK-200) is a named region
+ * of floor the robot is *supposed* to stand in, and a deny-list would quietly
+ * start rasterizing whatever zone type is invented next. Getting this wrong
+ * turns every room in the building into an obstacle and the robot simply
+ * refuses to plan anywhere — see the regression test.
+ */
+const KEEPOUT_MASK_ZONE_TYPES: ReadonlySet<string> = new Set(['keepout', 'speed']);
+
 export interface VDA5050Node {
   nodeId: string;
   x: number;
@@ -135,7 +147,7 @@ export class TwinExportService {
     const { width, height, transform } = await this.resolveGrid(twin);
     const grid = createGrid(width, height, 0, 255);
 
-    const maskZones = zones.filter((z) => z.type === 'keepout' || z.type === 'speed');
+    const maskZones = zones.filter((z) => KEEPOUT_MASK_ZONE_TYPES.has(z.type));
     for (const zone of maskZones) {
       const polygonPx: PixelXY[] = zone.points.map((p: TwinZonePoint) =>
         worldToPixel(p.x, p.y, transform),
@@ -205,7 +217,9 @@ export class TwinExportService {
 
     let i = 0;
     for (const zone of zones) {
-      // Keep-out zones are obstacles, not waypoints.
+      // Keep-out zones are obstacles, not waypoints. Everything else — including
+      // a TASK-200 `room` — contributes one: the centroid of a named region of
+      // floor is exactly the "go to the staging area" waypoint a roadmap wants.
       if (zone.type === 'keepout') continue;
       const centroid = polygonCentroid(zone.points);
       if (!centroid) continue;
