@@ -30,6 +30,12 @@ export const AgentBlockKinds = [
   'posture',
   'speak',
   'wait',
+  /**
+   * Write one operator-authored line into durable memory (TASK-197). The only
+   * block that touches the memory workspace, and the only WRITE path the
+   * planner has into it — retrieval is injection, never a planned step.
+   */
+  'remember',
 ] as const;
 export type AgentBlockKind = (typeof AgentBlockKinds)[number];
 
@@ -169,6 +175,50 @@ export interface SceneEntity {
   note?: string;
 }
 
+/**
+ * Closed vocabulary of place types (TASK-195). Industry-first: the robot
+ * reports warehouse geography, and house rooms ride along as `cell` until a
+ * later task adds room-shaped types additively.
+ */
+export const PlaceTypes = [
+  'aisle',
+  'rack_face',
+  'dock',
+  'staging',
+  'cell',
+  'charging',
+  'corridor',
+  'office',
+  'unknown',
+] as const;
+export type PlaceType = (typeof PlaceTypes)[number];
+
+/** How a place's geometry was obtained — a survey, an observation, or a claim. */
+export type PlaceSource = 'surveyed' | 'observed' | 'declared';
+
+/**
+ * `stale` means the pose behind the place has accumulated more translation than
+ * the drift budget without a re-anchor. The geometry is still right; the pose
+ * fed into it has had no correction for a long walk.
+ */
+export type PlaceConfidence = 'confident' | 'stale';
+
+/**
+ * The place a robot believes it is standing in (TASK-195).
+ *
+ * `null` means UNKNOWN, and UNKNOWN is never rendered as the last known place:
+ * a robot that has lost its pose has lost its place, and saying otherwise sends
+ * an operator to the wrong aisle.
+ */
+export interface ScenePlace {
+  /** Stable id from the robot's place graph, e.g. `AISLE-3`. */
+  id: string;
+  name: string;
+  placeType: PlaceType;
+  confidence: PlaceConfidence;
+  source: PlaceSource;
+}
+
 /** The robot's in-memory picture of the room. Never persisted. */
 export interface SceneMemory {
   robotId: string;
@@ -176,6 +226,12 @@ export interface SceneMemory {
   currentView: string;
   entities: SceneEntity[];
   personVisible: boolean;
+  /**
+   * Named place the robot is standing in, or null for UNKNOWN. Optional
+   * because an older robot-agent omits the field entirely; absent and null both
+   * mean "we do not know where it is", never "wherever it was last".
+   */
+  place?: ScenePlace | null;
   /**
    * Nearest surface straight ahead in metres, measured, or null when unknown —
    * no range sensor present, nothing returned, or every return rejected.
@@ -194,13 +250,83 @@ export interface SceneMemory {
 // AGENT MODE STATE
 // ============================================================================
 
+/**
+ * What a robot's current boot inherited from its previous one (TASK-196).
+ *
+ * Non-null while no human has acknowledged it. The robot-agent persists its
+ * E-Stop latch and its boot lineage across restarts, so a robot that was
+ * stopped comes back stopped — and this is how the operator is told, instead of
+ * meeting a robot that silently refuses to move.
+ */
+export interface AgentRecoveryState {
+  /** The previous process never shut down cleanly: it crashed or was killed. */
+  fromCrash: boolean;
+  /** The E-Stop latch was restored from disk rather than taken in this process. */
+  estopLatched: boolean;
+  /** ISO timestamp of the boot that inherited it. */
+  at: string;
+}
+
+/**
+ * Who the robot is and what it has been through (TASK-198), assembled by the
+ * agent per turn from `IDENTITY.md`, its boot lineage and its journal.
+ *
+ * Mirrored verbatim from `robot-agent/src/agent-mode/types.ts`. The server does
+ * not compute any of it: the robot is authoritative for its own identity, which
+ * is also why `RobotManager.buildIdentityUpdate` ADOPTS a reported name rather
+ * than overwriting it.
+ */
+export interface AgentSelfState {
+  /** What a person calls this robot. Agent-writable in `IDENTITY.md`. */
+  name: string;
+  emoji: string | null;
+  /** The machine this is — from the robot's configuration, never from the file. */
+  unit: string;
+  robotId: string;
+  operator: string | null;
+  site: string | null;
+  /** There is no `IDENTITY.md` yet: the robot has not been named. */
+  bootstrapRequired: boolean;
+  bootId: string | null;
+  /**
+   * Which life this is — the lifetime boot ordinal the agent carries in its
+   * lineage line, so it survives that file rotating. It never decreases.
+   */
+  incarnation: number;
+  /**
+   * Whether {@link incarnation} is exact rather than a lower bound. Optional on
+   * the wire: an agent from before this field computed a floor from a rotating
+   * ring buffer, and a missing flag is therefore read as "not exact".
+   */
+  incarnationExact?: boolean;
+  uptimeS: number;
+  /** `exit: 'crash'` means the previous line never got an `endedAt`. */
+  lastShutdown: { at: string | null; exit: string; place: string | null } | null;
+  place: string | null;
+  poseSource: string | null;
+  batteryPct: number | null;
+  controlOwner: ControlOwner;
+  damped: boolean;
+  estopLatched: boolean;
+  plansLast24h: number;
+  failuresLast24h: number;
+  memoryEntries: number;
+}
+
 /** Everything a client needs to render Agent Mode for one robot. */
 export interface AgentModeState {
   robotId: string;
   enabled: boolean;
   controlOwner: ControlOwner;
-  plan: AgentPlan | null;
-  scene: SceneMemory | null;
+  /**
+   * The running plan, `null` when there is none — and ABSENT on a robot-agent's
+   * periodic liveness re-assertion, which asserts nothing about the plan at all
+   * (TASK-200). The three cases are different and the mirror must keep them
+   * apart: absent keeps whatever it already had, `null` clears it.
+   */
+  plan?: AgentPlan | null;
+  /** Same three-way contract as {@link plan}: absent ≠ `null`. */
+  scene?: SceneMemory | null;
   /** Set while an E-Stop is latched; cleared by an explicit reset. */
   estopActive: boolean;
   /** Last FSM id the agent commanded, when known (G1: 0 zero-torque, 1 damp, 3 sit, 500 main). */
@@ -213,6 +339,62 @@ export interface AgentModeState {
    * operator has to be told rather than silently re-armed.
    */
   damped?: boolean;
+  /**
+   * Set when the robot came back from a restart still latched, or from an
+   * unclean shutdown; null once an operator has cleared it. Optional and
+   * mirrored verbatim — an older robot-agent omits it, which means "this agent
+   * does not report recovery", not "there is nothing to report".
+   */
+  recovered?: AgentRecoveryState | null;
+  /**
+   * Who this robot is and what it has been through. Optional and mirrored
+   * verbatim — an older robot-agent omits it, which means "this agent does not
+   * report a self", not "this robot has no identity". A robot that genuinely
+   * has none reports `self.bootstrapRequired`.
+   */
+  self?: AgentSelfState | null;
+}
+
+/**
+ * What `GET /api/robots/:id/agent-mode` answers: the mirrored state plus the
+ * one thing the state itself cannot carry — WHEN this server last heard from
+ * the robot (TASK-200).
+ *
+ * Transport metadata, deliberately kept OFF {@link AgentModeState}: the robot
+ * never sends it, the WebSocket relay never carries it, and a client that finds
+ * it on a pushed event would be reading the server's clock as the robot's.
+ *
+ * `null` means this server cannot say how old the snapshot is. That is a THIRD
+ * answer, not a synonym for fresh — a reader must render it as an unknown age
+ * rather than stamping its own fetch time, which is always "just now".
+ */
+export interface MirroredAgentModeState extends AgentModeState {
+  /**
+   * When this server last ingested ANY event for the robot — proof that the
+   * pushing process was alive at that instant, whatever it said.
+   */
+  mirroredAt: string | null;
+  /**
+   * When this server last ingested a valid SNAPSHOT (`agent:state:changed`
+   * carrying `enabled`/`estopActive`/`controlOwner`) — i.e. the age of the
+   * fields in this body, `self` included.
+   *
+   * Separate from `mirroredAt` on purpose: a plan/block/scene event moves the
+   * proof-of-life stamp but leaves the previous snapshot in place, so dating
+   * `self` by `mirroredAt` would make a snapshot look younger than it is —
+   * the one direction this field must never fail in.
+   */
+  stateMirroredAt: string | null;
+  /**
+   * This server's clock when it wrote the response.
+   *
+   * The two stamps above are in the SERVER's frame and the reader's clock is
+   * not that frame. Sending the frame's origin along lets a client compute the
+   * age entirely inside it (`serverNow - stateMirroredAt`) instead of
+   * subtracting a foreign clock — under skew that difference is a snapshot
+   * rendered as fresh, or every fresh read rendered as cached.
+   */
+  serverNow: string;
 }
 
 // ============================================================================
@@ -231,8 +413,40 @@ export const AgentModeEventTypes = [
   'agent:block:finished',
   'agent:scene:updated',
   'agent:state:changed',
+  /** The durable memory workspace changed — carries {@link AgentMemoryDigest}. */
+  'agent:memory:updated',
 ] as const;
 export type AgentModeEventType = (typeof AgentModeEventTypes)[number];
+
+/**
+ * What the robot durably remembers, as counts rather than content (TASK-197).
+ *
+ * Deliberately a DIGEST: the memory itself is operator-authored text and
+ * therefore personal data, and a fan-out event that reaches every connected
+ * WebSocket client is not where it belongs. Whoever wants the content asks the
+ * robot for it (`GET /robots/:id/memory.md`), which is a call that can be
+ * authorised and audited.
+ */
+export interface AgentMemoryDigest {
+  robotId: string;
+  /** Place the robot was in when this digest was taken, or null for UNKNOWN. */
+  place: string | null;
+  /** Bytes used by `MEMORY.md` and its hard cap. */
+  memoryBytes: number;
+  memoryMaxBytes: number;
+  /** `- …` entries in `MEMORY.md`. */
+  memoryEntries: number;
+  /** One row per place that has a note. */
+  places: Array<{ id: string; entries: number; bytes: number }>;
+  /** Journal day keys currently on disk, oldest first. */
+  journalDays: string[];
+  /**
+   * What governs journal pruning, when the platform has been asked. `null`
+   * means UNKNOWN — never "nothing is retained".
+   */
+  retention: { retentionDays: number; source: 'policy' | 'fallback'; legalHold: boolean } | null;
+  updatedAt: string;
+}
 
 /**
  * Event pushed by the robot-agent and re-broadcast verbatim (flat) over
@@ -246,6 +460,8 @@ export interface AgentModeEvent {
   block?: AgentBlock;
   scene?: SceneMemory;
   state?: AgentModeState;
+  /** Set on `agent:memory:updated` only. */
+  memory?: AgentMemoryDigest;
   /** ISO timestamp */
   timestamp: string;
 }

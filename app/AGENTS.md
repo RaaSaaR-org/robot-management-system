@@ -201,6 +201,43 @@ Every file should start with:
 - All pages are lazy-loaded via `React.lazy()` in `routes/lazyPages.ts`
 - Dev mode auto-login: `AuthProvider` injects `MOCK_USER` when `import.meta.env.DEV` is true
 
+### Page Invariants
+
+#### Agent Mode (`/agent`, `features/agentmode/`)
+
+**Amber and red are reserved for conditions that are true right now.** Nothing on this
+page may render an always-on warning, a permanent "Idle" pill or a status badge that is
+present whether or not anything is wrong. When the robot is calm — answering, snapshot
+fresh, nothing latched, damped, superseded or recovered — the page has no colour on it
+and the condition stack (`EstopBanner`) renders nothing at all. That is what makes the
+one amber thing on a bad day readable at a glance. A badge that always warns is a badge
+people stop reading, and the argument for demoting the old always-on badges collapses
+the moment a new feature adds its own permanent pill.
+
+Concretely, when adding anything to this page:
+
+- **New status must be conditional, or it goes behind the knowledge tabs / the robot
+  details drawer.** It does not get a row of its own above the workspace. The page owns
+  exactly two always-visible full-width bars: the `PageHeader` row and the sticky status
+  rail (`BlockTimeline`).
+- **Disclosure is a CSS clamp, never conditional rendering.** Collapsed detail text stays
+  in the DOM under `line-clamp-1`; expanding removes the clamp. `EstopBanner.test.tsx`
+  asserts the full prose via `toHaveTextContent` while collapsed, and the reason is not
+  the test: an operator's screen reader and their browser's find-in-page must be able to
+  reach the sentence explaining why a robot will not move.
+- **Alarm states render fully expanded with no collapse control** (E-Stop `failed` /
+  `unconfirmed`). "It may still be moving — use the hardware E-Stop" is an instruction,
+  not an explanation.
+- **Safety controls are never behind a disclosure, a tab, a hover or a drawer**, and keep
+  their ≥44px coarse-pointer targets: STOPP, Reset E-Stop, and the recovered-acknowledge
+  button.
+- **Never render "unknown" as a confident value.** An unknown place is `Place unknown` in
+  a dashed chip, so it *looks* different rather than merely saying something different;
+  an undated snapshot says `cached · age unknown` exactly as loudly as an old one.
+- **One renderer per belief.** `PlaceChip` owns `agent-scene-place`; `agent-self-freshness`
+  owns the snapshot age. A second copy is a second chance for them to disagree about what
+  the robot knows.
+
 ### Brand Colors (Tailwind)
 
 ```

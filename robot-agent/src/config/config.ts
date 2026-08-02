@@ -160,6 +160,112 @@ export interface Config {
     rangeMinM: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
+    /**
+     * Heartbeat (TASK-199): the robot noticing things while nobody is talking
+     * to it. Opt-IN per deployment — this is the pillar with the highest blast
+     * radius, and a robot that speaks up on its own is a decision an operator
+     * makes, not a default they discover.
+     */
+    heartbeat: {
+      /** `AGENT_HEARTBEAT_ENABLED`, default **false**. */
+      enabled: boolean;
+      /** Shortest gap between two tier-1 passes (`AGENT_HEARTBEAT_MIN_INTERVAL_MS`). */
+      minIntervalMs: number;
+      /**
+       * Local-time window in which the heartbeat may speak at all
+       * (`AGENT_HEARTBEAT_ACTIVE_HOURS`, e.g. `8-20`; `22-6` wraps midnight).
+       * Empty = always active. Kept as the RAW string: `heartbeat.ts` owns the
+       * parse, and a typo has to be reportable rather than silently disabling
+       * proactivity.
+       */
+      activeHours: string;
+      /** Below this the robot says so (`AGENT_HEARTBEAT_BATTERY_PCT`). */
+      batteryPct: number;
+      /**
+       * Self-initiated MOTION (`AGENT_HEARTBEAT_MOTION`), default **false**.
+       * Still read by nothing.
+       *
+       * TASK-200 removed the reason it could not exist — `zone_violation` is
+       * enforced now, so "the agent decided to walk somewhere" is bounded by a
+       * real fence rather than by a prompt. What is missing is the other half:
+       * a heartbeat that may WALK needs its own answer to where it is allowed
+       * to walk TO, and the allow-list in `HEARTBEAT_ALLOWED_KINDS` is
+       * deliberately still look/speak/wait/remember until it has one.
+       */
+      motion: boolean;
+    };
+  };
+  /**
+   * Place awareness (TASK-195): the robot's continuously maintained answer to
+   * "where am I?" — a metric pose from the existing 2 s hardware poll, resolved
+   * against a hand-authored place graph.
+   */
+  place: {
+    /**
+     * Path to the place graph JSON (`PLACE_GRAPH_PATH`), e.g.
+     * `hardware/sim_evaluator/places/places.warehouse.json`.
+     *
+     * Empty by default, and that default is the honest one: without a surveyed
+     * map the robot has no vocabulary of places, so every answer is UNKNOWN.
+     * Defaulting to the warehouse graph would make a robot in the room scene
+     * confidently name warehouse aisles it has never been in.
+     */
+    graphPath: string;
+    /**
+     * Accumulated translation, in metres, after which the place belief degrades
+     * to `stale` (`PLACE_DRIFT_BUDGET_M`, default 15).
+     *
+     * 15 m is roughly one length of the 20 m warehouse hall: far enough that a
+     * normal errand does not spend the budget, short enough that a robot which
+     * has crossed the building without a re-anchor says so.
+     */
+    driftBudgetM: number;
+    /**
+     * How far inside a polygon the robot must be before a place change commits
+     * (`PLACE_HYSTERESIS_MARGIN_M`, default 0.30).
+     *
+     * Sized to the shared edges in the shipped graphs — aisle mouths and dock
+     * thresholds — which is exactly where a naive resolver flaps. It is also
+     * comfortably above the G1's own footprint jitter at a standstill.
+     */
+    hysteresisMarginM: number;
+    /**
+     * DEV-ONLY fault injection (`PLACE_FAULT_NULL_POSE`): make the cached pose
+     * read as `null` while locomotion keeps working.
+     *
+     * It exists because the obvious way to demo the honesty rule — killing the
+     * sidecar — also kills `driveFor`, so the plan aborts and you get a *failed
+     * block* rather than a clean "Place unknown" rendered mid-walk.
+     */
+    faultNullPose: boolean;
+    /**
+     * `DigitalTwin` id whose zones define this robot's places (`PLACE_TWIN_ID`,
+     * TASK-200). Empty by default.
+     *
+     * Load-bearing rather than convenient: twins are NOT mutually registered —
+     * each one's origin is an arbitrary robot pose at scan start — so a graph
+     * fetched for the wrong twin is expressed about the wrong origin and is
+     * REJECTED, not adapted. `PLACE_GRAPH_PATH` still wins when both are set:
+     * an explicit local file is the sim/bench escape hatch.
+     */
+    twinId: string;
+    /**
+     * Where the fetched place graph is cached (`PLACE_GRAPH_CACHE_PATH`).
+     *
+     * The robot boots from this file, not from the network: Agent Mode's
+     * contract is that the platform being down never stalls a block, and that
+     * has to include finding out where the robot is standing.
+     */
+    cachePath: string;
+    /**
+     * How far OUTSIDE a keepout polygon still counts as a violation, in metres
+     * (`PLACE_KEEPOUT_MARGIN_M`, default 0.50).
+     *
+     * Sized to the robot, not the map — see `agent-mode/geofence.ts`. Fencing
+     * the polygon exactly means the stop fires when the robot is already in the
+     * rack.
+     */
+    keepoutMarginM: number;
   };
 }
 
@@ -277,6 +383,24 @@ export const config: Config = {
     // half of every raw MID-360 frame sits below 0.3 m.
     rangeMinM: parseFloat(process.env.AGENT_RANGE_MIN_M || '0.35'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
+    heartbeat: {
+      enabled: process.env.AGENT_HEARTBEAT_ENABLED === 'true',
+      minIntervalMs: parseInt(process.env.AGENT_HEARTBEAT_MIN_INTERVAL_MS || '300000', 10),
+      activeHours: process.env.AGENT_HEARTBEAT_ACTIVE_HOURS || '',
+      batteryPct: envFloat(process.env.AGENT_HEARTBEAT_BATTERY_PCT, 20),
+      motion: process.env.AGENT_HEARTBEAT_MOTION === 'true',
+    },
+  },
+  place: {
+    // No default map: see the interface. UNKNOWN is the honest answer for a
+    // robot nobody has handed a survey to.
+    graphPath: process.env.PLACE_GRAPH_PATH || '',
+    driftBudgetM: envFloat(process.env.PLACE_DRIFT_BUDGET_M, 15),
+    hysteresisMarginM: envFloat(process.env.PLACE_HYSTERESIS_MARGIN_M, 0.3),
+    faultNullPose: process.env.PLACE_FAULT_NULL_POSE === 'true',
+    twinId: process.env.PLACE_TWIN_ID || '',
+    cachePath: process.env.PLACE_GRAPH_CACHE_PATH || './data/place-graph-cache.json',
+    keepoutMarginM: envFloat(process.env.PLACE_KEEPOUT_MARGIN_M, 0.5),
   },
 };
 
@@ -363,6 +487,30 @@ export function validateConfig(): void {
   console.log(`    - Idle Watch Interval: ${config.agentMode.idleWatchIntervalMs}ms`);
   console.log(`    - Stop Words: ${config.agentMode.stopWords.join(', ') || '(none)'}`);
   console.log(`    - Voice Service: ${config.agentMode.voiceServiceUrl}`);
+  console.log(
+    `    - Heartbeat: ${
+      config.agentMode.heartbeat.enabled
+        ? `ENABLED (min ${config.agentMode.heartbeat.minIntervalMs}ms, ` +
+          `battery < ${config.agentMode.heartbeat.batteryPct}%, ` +
+          `hours ${config.agentMode.heartbeat.activeHours || 'always'}` +
+          `${config.agentMode.heartbeat.motion ? ', MOTION requested (v2 — ignored)' : ''})`
+        : 'disabled'
+    }`
+  );
+  console.log(
+    `  - Place Graph: ${config.place.graphPath || 'none — every place resolves as UNKNOWN'}` +
+      (config.place.graphPath
+        ? ` (drift budget ${config.place.driftBudgetM} m, hysteresis ${config.place.hysteresisMarginM} m)`
+        : '')
+  );
+  // Loud on purpose: this makes the robot report no pose at all while it walks
+  // perfectly well, which looks exactly like a broken odometry topic.
+  if (config.place.faultNullPose) {
+    console.warn(
+      '[Config] WARNING PLACE_FAULT_NULL_POSE=true — the cached base pose is forced to null. ' +
+        'Place will always read UNKNOWN. This is a DEV fault-injection switch; unset it on a real robot.'
+    );
+  }
   if (config.agentMode.enabled) {
     console.log(
       `[Config] Agent Mode is ON — inbound A2A messages are planned into blocks. ` +

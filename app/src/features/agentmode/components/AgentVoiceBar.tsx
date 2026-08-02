@@ -1,15 +1,15 @@
 /**
  * @file AgentVoiceBar.tsx
- * @description Speak-to-the-robot strip for the Agent Mode cockpit: live
- *              pipeline state, the microphone gate, and the last thing heard
- *              and said. Read-and-gate only — the words themselves become
- *              plans through the robot-agent's A2A path, and land in the
- *              timeline like any other command.
+ * @description Speak-to-the-robot control for the Agent Mode cockpit: the
+ *              microphone gate and the live pipeline state. Read-and-gate only —
+ *              the words themselves become plans through the robot-agent's A2A
+ *              path, and land in the timeline like any other command.
  * @feature agentmode
  */
 
 import { memo, useCallback, useMemo, useState } from 'react';
 import { cn } from '@/shared/utils';
+import { Tooltip } from '@/shared/components/ui/Tooltip';
 // The voice channel belongs to the robots feature (it is per-robot hardware and
 // has its own tab there). Agent Mode consumes it rather than owning a second
 // copy: one SSE relay, one store, so the mic state shown here can never
@@ -21,8 +21,32 @@ import { useVoiceStore } from '@/features/robots/store/voiceStore';
 
 export interface AgentVoiceBarProps {
   robotId: string | null;
+  /**
+   * `'bar'` — the standalone full-width strip. Still the default so any other
+   * caller keeps the rendering it was written against.
+   *
+   * `'inline'` — a single mic button for the chat composer. Voice is an INPUT
+   * METHOD, not a status: as a composer control it sits where the operator is
+   * already typing, and it costs the page no always-on row. The copy that used
+   * to be printed across that row (deaf / service unreachable) moves into
+   * tooltips on the button, so it is still one hover away but no longer
+   * permanent furniture.
+   */
+  variant?: 'bar' | 'inline';
   className?: string;
 }
+
+/** Copy shown when the service runs but cannot hear. Same sentence in both variants. */
+const DEAF_COPY =
+  'The voice service has no audio input wired — start it with a microphone backend to talk to the robot.';
+
+/**
+ * Deliberately explicit about WHICH half is missing. "Voice unavailable" sends
+ * people looking at the robot; the voice service is a separate sidecar and is
+ * nearly always the thing that is not running.
+ */
+const UNREACHABLE_COPY =
+  'Voice service not reachable — start it next to the robot agent (robot-agent/voice).';
 
 function MicIcon({ className, muted }: { className?: string; muted?: boolean }) {
   return (
@@ -49,8 +73,75 @@ function lastOf(
   return null;
 }
 
+/**
+ * Shared button shell for the inline variant.
+ *
+ * `disabled:pointer-events-none` is not cosmetic: a disabled button is inert and
+ * dispatches no mouse events, so without it the surrounding Tooltip never opens
+ * and the explanation for the disabled state becomes unreachable. The same
+ * sentence is repeated in `aria-label` because a disabled control is also not
+ * focusable, which is the other way that explanation could be lost.
+ *
+ * The tooltip opens to the RIGHT, not upwards. `Tooltip` is CSS-positioned and
+ * not portalled, and this button is the first item in the composer of a card
+ * that is `overflow-hidden` — a `side="top"` panel is centred on a 36px trigger
+ * sitting ~30px from the card's left edge, so ~110px of a 260px-wide
+ * explanation was clipped away and both sentences here started mid-word. To the
+ * right there is the whole width of the textarea, and the panel is
+ * `pointer-events-none` so it cannot swallow a click meant for it.
+ */
+function InlineMicButton({
+  testId,
+  label,
+  tooltip,
+  disabled,
+  active,
+  muted,
+  onClick,
+  dot,
+}: {
+  testId: string;
+  label: string;
+  tooltip: string;
+  disabled?: boolean;
+  active?: boolean;
+  muted?: boolean;
+  onClick?: () => void;
+  /** A true-right-now condition marker. Amber, and only when it is true. */
+  dot?: boolean;
+}) {
+  return (
+    <Tooltip content={tooltip} side="right">
+      <button
+        type="button"
+        data-testid={testId}
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={label}
+        aria-pressed={onClick ? Boolean(active) : undefined}
+        className={cn(
+          // 36px in the composer; 44px on coarse pointers (WCAG 2.5.5).
+          'relative h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11',
+          'rounded-brand flex items-center justify-center shrink-0 border transition-colors',
+          'focus:outline-none focus:ring-2 focus:ring-cobalt-500/40',
+          active
+            ? 'bg-cobalt-500 text-white border-cobalt-500 hover:bg-cobalt-600'
+            : 'glass-subtle text-theme-secondary border-glass-subtle hover:text-theme-primary',
+          'disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none'
+        )}
+      >
+        <MicIcon className="w-4 h-4" muted={muted} />
+        {dot && (
+          <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
+        )}
+      </button>
+    </Tooltip>
+  );
+}
+
 export const AgentVoiceBar = memo(function AgentVoiceBar({
   robotId,
+  variant = 'bar',
   className,
 }: AgentVoiceBarProps) {
   // The hook opens an SSE relay, so it must not run without a robot to open it
@@ -85,6 +176,65 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
       setBusy(false);
     }
   }, [robotId, setPaused]);
+
+  if (variant === 'inline') {
+    const micOpen = available && canHear && !voice.paused;
+
+    return (
+      <div
+        data-testid="agent-voice-bar"
+        className={cn('flex items-center gap-1.5 shrink-0', className)}
+      >
+        {/* The pipeline pill is a transient: it says what the voice stack is
+            doing THIS second. An 'Idle' pill parked next to the composer is the
+            kind of always-on status this page is being cleared of, so it only
+            appears once there is something to report. */}
+        {available && voice.pipelineState !== 'idle' && (
+          // Rendered at EVERY width. It used to be `hidden sm:inline-flex`, and
+          // the operator most likely to need it is the one standing next to the
+          // robot with a phone: below 640px the only remaining signal was that
+          // the mic button is cobalt, which is also its colour when the mic is
+          // merely open and idle. "Listening", "thinking" and "speaking" then
+          // had nowhere left to be said — `agent-voice-last` is gone from this
+          // variant by design. It is a small pill and the composer row wraps.
+          <VoiceStateBadge state={voice.pipelineState} />
+        )}
+
+        {!available ? (
+          <InlineMicButton
+            testId="agent-voice-unavailable"
+            label={robotId ? UNREACHABLE_COPY : 'No robot bound.'}
+            tooltip={robotId ? UNREACHABLE_COPY : 'No robot bound.'}
+            disabled
+            muted
+          />
+        ) : !canHear ? (
+          <InlineMicButton
+            testId="agent-voice-deaf"
+            label={DEAF_COPY}
+            tooltip={DEAF_COPY}
+            disabled
+            muted
+            dot
+          />
+        ) : (
+          <InlineMicButton
+            testId="agent-voice-mic-toggle"
+            label={voice.paused ? 'Open the microphone' : 'Mute the microphone'}
+            tooltip={
+              voice.paused
+                ? 'The microphone is muted. Open it to speak a command instead of typing it.'
+                : 'The microphone is open — say a command out loud and it becomes a plan like a typed one.'
+            }
+            disabled={busy}
+            active={micOpen}
+            muted={voice.paused}
+            onClick={() => void toggleMic()}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -124,7 +274,10 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
             </span>
           )}
 
-          <div className="card-meta flex-1 min-w-[12rem] truncate" data-testid="agent-voice-last">
+          {/* The heard/said readout is a lossier second copy of the transcript,
+              which already renders heard commands as user messages carrying
+              `agent-spoken-marker` — hence no testid of its own any more. */}
+          <div className="card-meta flex-1 min-w-[12rem] truncate">
             {heard ? (
               <>
                 <span className="text-theme-secondary">heard:</span> “{heard}”
@@ -138,18 +291,13 @@ export const AgentVoiceBar = memo(function AgentVoiceBar({
             ) : canHear ? (
               'Say a command out loud — it becomes a plan like a typed one.'
             ) : (
-              'The voice service has no audio input wired — start it with a microphone backend to talk to the robot.'
+              DEAF_COPY
             )}
           </div>
         </>
       ) : (
-        // Deliberately explicit about WHICH half is missing. "Voice unavailable"
-        // sends people looking at the robot; the voice service is a separate
-        // sidecar and is nearly always the thing that is not running.
         <span className="card-meta" data-testid="agent-voice-unavailable">
-          {robotId
-            ? 'Voice service not reachable — start it next to the robot agent (robot-agent/voice).'
-            : 'No robot bound.'}
+          {robotId ? UNREACHABLE_COPY : 'No robot bound.'}
         </span>
       )}
     </div>

@@ -8,7 +8,7 @@
  * @status live
  */
 
-import { normalizeDeg, type SceneEntity, type SceneMemory } from './types.js';
+import { normalizeDeg, type SceneEntity, type SceneMemory, type ScenePlace } from './types.js';
 import type { VisionEntity, VisionObservation } from './vision.js';
 
 /** Entities not re-observed for this long are dropped from the store. */
@@ -117,6 +117,14 @@ const TRANSLATION_TOLERANCE_M = 0.15;
 export type YawSource = 'odometry' | 'dead-reckoning';
 
 /**
+ * Where the robot's metric position came from — the same provenance rule the
+ * yaw and every distance in this store follow. `declared` is an operator
+ * asserting a position the robot did not measure; it is kept distinct from
+ * `odometry` precisely so it can never be spoken of as measured.
+ */
+export type PoseSource = 'odometry' | 'dead-reckoning' | 'declared';
+
+/**
  * A {@link VisionEntity} after `BlockExecutor.observeAndMerge` has offered it to
  * the range sensor. `distanceSource` is optional here and NOT in
  * {@link SceneEntity}: an observation that never passed the enrichment step (the
@@ -184,9 +192,78 @@ export class SceneMemoryStore {
    * merge is the robot looking again from where it now stands.
    */
   private translationSinceObservationM = 0;
+  /**
+   * Metric position in the place graph's frame, or null when it is not known.
+   *
+   * Null is UNKNOWN — the exact rule `forwardClearanceM` and `distanceSource`
+   * already live by — and it is NEVER backfilled with the last pose. On this
+   * stack a null pose is routine, not exceptional: `getLocoOdometry()` has a
+   * 2 s timeout and returns null on any hiccup.
+   */
+  private poseM: { x: number; y: number } | null = null;
+  private poseSource: PoseSource | null = null;
+  /** Named place the robot is standing in, or null for UNKNOWN. */
+  private place: ScenePlace | null = null;
+  /**
+   * Accumulated translation since the last re-anchor, in metres, as the place
+   * tracker measured it. Rendered next to the place so the planner (and the
+   * operator) can see how much walking the belief rests on.
+   */
+  private placeDriftM: number | null = null;
 
   constructor(robotId: string) {
     this.robotId = robotId;
+  }
+
+  /**
+   * Set the robot's metric position. Mirrors {@link setYawDeg} exactly,
+   * including the provenance rule: `source` is recorded verbatim so nothing
+   * downstream can present a dead-reckoned or declared position as a measured
+   * one.
+   */
+  setPoseM(x: number, y: number, source: PoseSource): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      this.clearPoseM();
+      return;
+    }
+    this.poseM = { x, y };
+    this.poseSource = source;
+  }
+
+  /**
+   * The pose is not known. Separate from {@link setPoseM} rather than a
+   * nullable argument so that "we have no pose" is something a caller has to
+   * say on purpose — the one thing that must never happen is a lost pose
+   * quietly leaving the previous coordinates in place.
+   */
+  clearPoseM(): void {
+    this.poseM = null;
+    this.poseSource = null;
+  }
+
+  getPoseM(): { x: number; y: number } | null {
+    return this.poseM ? { ...this.poseM } : null;
+  }
+
+  getPoseSource(): PoseSource | null {
+    return this.poseSource;
+  }
+
+  /**
+   * Set (or clear) the place the robot believes it is in.
+   *
+   * `null` means UNKNOWN and is stored as such. A caller that has lost the
+   * place must call this with `null`; there is deliberately no "leave it as it
+   * was" path, because the last place is exactly the wrong answer once the
+   * robot has been teleoperated somewhere else.
+   */
+  setPlace(place: ScenePlace | null, driftSinceAnchorM: number | null = null): void {
+    this.place = place;
+    this.placeDriftM = place === null ? null : driftSinceAnchorM;
+  }
+
+  getPlace(): ScenePlace | null {
+    return this.place;
   }
 
   /**
@@ -417,6 +494,15 @@ export class SceneMemoryStore {
   }
 
   /**
+   * The last free-text view, or `''` before the first observation. Kept as its
+   * own getter so a caller on a 3 s loop (the heartbeat's intent matcher) can
+   * read it without building a whole {@link snapshot}.
+   */
+  getCurrentView(): string {
+    return this.currentView;
+  }
+
+  /**
    * Nearest surface straight ahead in metres as of the last merge, or null.
    *
    * Null means UNKNOWN and callers must treat it as such, and there are now two
@@ -438,6 +524,7 @@ export class SceneMemoryStore {
       currentView: this.currentView,
       entities: this.listEntities(),
       personVisible: this.personVisible,
+      place: this.place,
       forwardClearanceM: this.forwardClearanceM,
       updatedAt: this.updatedAt,
     };
@@ -451,6 +538,38 @@ export class SceneMemoryStore {
     this.forwardClearanceYawDeg = null;
     this.translationSinceObservationM = 0;
     this.updatedAt = null;
+    // Pose and place deliberately SURVIVE `clear()`. This wipes what the robot
+    // has SEEN — it is called when the observations are no longer trustworthy —
+    // and where the robot is standing is not an observation of the room. The
+    // pose feed nulls them on its own when it loses the pose.
+  }
+
+  /**
+   * The one line about place handed to the planner and written at the top of
+   * `scene.md`. Kept to a single line on purpose: `gemma3:4b` sits on the
+   * latency path and prompt length is a measured regression risk here.
+   *
+   * The unknown wording is spelled out for the same reason "not measured
+   * (unknown — this does NOT mean the way is clear)" is: the planner is exactly
+   * the reader who would otherwise fill a blank with the last place it saw.
+   */
+  private placeLine(): string {
+    if (this.place === null) {
+      return this.poseM === null
+        ? 'Place unknown — no pose.'
+        : 'Place unknown — the pose is not inside any mapped place.';
+    }
+    const pose =
+      this.poseM === null || this.poseSource === null
+        ? 'pose unknown'
+        : `pose from ${this.poseSource}`;
+    const drift =
+      this.placeDriftM === null ? '' : `, ${this.placeDriftM.toFixed(1)} m since last anchor`;
+    const stale =
+      this.place.confidence === 'stale'
+        ? ' — this belief is STALE: the pose has drifted further than the budget without a re-anchor'
+        : '';
+    return `You are in ${this.place.id} (${this.place.source} map; ${pose}${drift})${stale}.`;
   }
 
   /**
@@ -458,12 +577,18 @@ export class SceneMemoryStore {
    * sees pixels — only this.
    */
   summary(): string {
-    if (this.updatedAt === null) return 'Scene memory is empty — nothing has been looked at yet.';
+    // The place line comes FIRST and is present even with no observation: where
+    // the robot stands is known from the pose feed, not from having looked, so
+    // "nothing has been looked at yet" is not the same as "nowhere".
+    if (this.updatedAt === null) {
+      return `${this.placeLine()}\nScene memory is empty — nothing has been looked at yet.`;
+    }
     const lines = this.listEntities().map(
       (e) =>
         `- ${e.label}: bearing ${Math.round(e.bearingDeg)}°, ${distancePhrase(e)}, confidence ${e.confidence.toFixed(2)}`
     );
     return [
+      this.placeLine(),
       `Current view: ${this.currentView || '(nothing recorded)'}`,
       `Robot heading: ${Math.round(this.yawDeg)}° (${this.yawSource})`,
       // Spelled out because "unknown" is the tempting thing to read as "clear",
@@ -484,8 +609,18 @@ export class SceneMemoryStore {
     const header = [
       '# Current view',
       '',
+      // Same rule as `summary()`: the place line is in the HEADER, above the
+      // "no observation yet" branch, because the pose feed knows where the
+      // robot is standing before it has looked at anything.
+      this.placeLine(),
+      '',
       `- **Robot**: ${this.robotId}`,
       `- **Heading**: ${Math.round(this.yawDeg)}° (${this.yawSource})`,
+      `- **Position**: ${
+        this.poseM === null
+          ? 'unknown (no pose — this is not the same as the origin)'
+          : `(${this.poseM.x.toFixed(2)}, ${this.poseM.y.toFixed(2)}) m (${this.poseSource})`
+      }`,
       `- **Clear ahead**: ${
         this.forwardClearanceM === null
           ? 'not measured (unknown — not the same as clear)'

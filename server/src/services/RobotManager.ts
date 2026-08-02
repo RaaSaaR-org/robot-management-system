@@ -212,6 +212,91 @@ export interface RobotEvent {
 type RobotEventCallback = (event: RobotEvent) => void;
 
 // ============================================================================
+// IDENTITY SYNC
+// ============================================================================
+
+/**
+ * A reported string worth adopting: present, a string, and not blank.
+ *
+ * The blank check is the whole point. `undefined` already meant "the agent did
+ * not say", but `''` used to mean "the agent says its name is nothing" and was
+ * written straight through — one agent booting with an unset `ROBOT_NAME` would
+ * blank the fleet's record of a robot that has a perfectly good name on disk.
+ */
+function adoptable(reported: unknown, current: unknown): string | null {
+  if (typeof reported !== 'string') return null;
+  const value = reported.trim();
+  if (!value) return null;
+  return value === current ? null : value;
+}
+
+/**
+ * Diff the identity fields the agent reports against the stored robot.
+ *
+ * OWNERSHIP (TASK-198, option **b**): **the robot is authoritative for its own
+ * identity and the fleet ADOPTS it.** The robot keeps `IDENTITY.md` in its own
+ * workspace, is named by the operator standing in front of it, and must still
+ * know what it is called when the platform is unreachable — so the platform
+ * cannot be the source of truth without handing the robot an amnesia mode the
+ * moment the network drops. This function is therefore an adoption path, not an
+ * overwrite: whatever the robot reports about ITSELF wins, and everything the
+ * robot does not assert is left exactly as the fleet has it.
+ *
+ * What changed from the plain field-diff it used to be:
+ *
+ *  - A blank or non-string reported value never clears a stored one (see
+ *    {@link adoptable}). "The agent did not say" and "the agent says it is
+ *    nothing" are different, and only the second was ever a legitimate write —
+ *    and it never is for an identity.
+ *  - A rename is logged as a rename, because it also renames the agent-card row
+ *    in `performHealthChecks` (delete-by-name, then upsert), which is the one
+ *    place an identity change has a destructive step in it.
+ *
+ * `capabilities` and `metadata` keep their JSON-equality diff: they are
+ * structured values where an empty array/object is a real assertion.
+ *
+ * @returns only the changed fields, or null when nothing changed.
+ */
+export function buildIdentityUpdate(current: Robot, reported: Robot): Partial<Robot> | null {
+  const update: Partial<Robot> = {};
+
+  const name = adoptable(reported.name, current.name);
+  if (name !== null) {
+    update.name = name;
+    console.log(
+      `[RobotManager] Robot ${current.id} renamed itself: "${current.name}" -> "${name}" — adopting.`
+    );
+  }
+
+  const model = adoptable(reported.model, current.model);
+  if (model !== null) update.model = model;
+
+  const serialNumber = adoptable(reported.serialNumber, current.serialNumber);
+  if (serialNumber !== null) update.serialNumber = serialNumber;
+
+  const firmware = adoptable(reported.firmware, current.firmware);
+  if (firmware !== null) update.firmware = firmware;
+
+  const ipAddress = adoptable(reported.ipAddress, current.ipAddress);
+  if (ipAddress !== null) update.ipAddress = ipAddress;
+
+  if (
+    reported.capabilities !== undefined &&
+    JSON.stringify(reported.capabilities) !== JSON.stringify(current.capabilities)
+  ) {
+    update.capabilities = reported.capabilities;
+  }
+  if (
+    reported.metadata !== undefined &&
+    JSON.stringify(reported.metadata) !== JSON.stringify(current.metadata)
+  ) {
+    update.metadata = reported.metadata;
+  }
+
+  return Object.keys(update).length > 0 ? update : null;
+}
+
+// ============================================================================
 // ROBOT MANAGER
 // ============================================================================
 
@@ -593,14 +678,19 @@ export class RobotManager {
           agentCardResolver.clearCache(registered.baseUrl);
           const liveCard = await agentCardResolver.fetchAgentCard(registered.baseUrl);
           if (JSON.stringify(liveCard) !== JSON.stringify(registered.agentCard)) {
-            const previousName = registered.agentCard.name;
+            // Non-destructive rename (TASK-198): keyed on the robot id, which
+            // is stable, instead of the name, which is exactly the thing that
+            // changed. The old delete-then-upsert destroyed the AgentCard row
+            // (and its uuid) first, so a failing write left the robot with NO
+            // card at all — and unrecoverably so, because the in-memory copy
+            // had already been reassigned, making the next health check see no
+            // diff and never retry.
+            //
+            // Hence also: the cache is updated only AFTER the write succeeds.
+            // A throw here lands in the catch below and the next health check
+            // finds the same diff and tries again.
+            await agentRepository.upsertByRobotId(liveCard, registered.robot.id);
             registered.agentCard = liveCard;
-            // The agent card table is keyed by name — drop the stale row
-            // before upserting when the agent renamed itself.
-            if (previousName !== liveCard.name) {
-              await agentRepository.delete(previousName);
-            }
-            await agentRepository.upsert(liveCard, registered.robot.id);
             console.log(
               `[RobotManager] Refreshed agent card for ${registered.robot.id} (${liveCard.name})`
             );
@@ -731,43 +821,9 @@ export class RobotManager {
     }
   }
 
-  /**
-   * Diff the identity fields the agent reports against the stored robot.
-   * Returns a partial update with only the changed fields, or null when
-   * nothing changed. Fields the agent omits are left untouched.
-   */
+  /** @see {@link buildIdentityUpdate} — kept as a method so the call site reads unchanged. */
   private buildIdentityUpdate(current: Robot, reported: Robot): Partial<Robot> | null {
-    const update: Partial<Robot> = {};
-
-    if (reported.name !== undefined && reported.name !== current.name) {
-      update.name = reported.name;
-    }
-    if (reported.model !== undefined && reported.model !== current.model) {
-      update.model = reported.model;
-    }
-    if (reported.serialNumber !== undefined && reported.serialNumber !== current.serialNumber) {
-      update.serialNumber = reported.serialNumber;
-    }
-    if (reported.firmware !== undefined && reported.firmware !== current.firmware) {
-      update.firmware = reported.firmware;
-    }
-    if (reported.ipAddress !== undefined && reported.ipAddress !== current.ipAddress) {
-      update.ipAddress = reported.ipAddress;
-    }
-    if (
-      reported.capabilities !== undefined &&
-      JSON.stringify(reported.capabilities) !== JSON.stringify(current.capabilities)
-    ) {
-      update.capabilities = reported.capabilities;
-    }
-    if (
-      reported.metadata !== undefined &&
-      JSON.stringify(reported.metadata) !== JSON.stringify(current.metadata)
-    ) {
-      update.metadata = reported.metadata;
-    }
-
-    return Object.keys(update).length > 0 ? update : null;
+    return buildIdentityUpdate(current, reported);
   }
 
   // ============================================================================

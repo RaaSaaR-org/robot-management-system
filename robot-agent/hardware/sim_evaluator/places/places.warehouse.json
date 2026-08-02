@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "frame": {
+    "id": "warehouse-sim",
+    "kind": "sim",
+    "units": "m",
+    "yawConvention": "deg,+x=0,CCW+"
+  },
+  "places": [
+    {
+      "id": "STAGING",
+      "name": "Staging",
+      "placeType": "staging",
+      "floor": 0,
+      "polygon": [[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "CHARGING-A",
+      "name": "Charging Bay A",
+      "placeType": "charging",
+      "floor": 0,
+      "polygon": [[-1.5, -5.5], [1.5, -5.5], [1.5, -2.0], [-1.5, -2.0]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "CROSS-AISLE",
+      "name": "Cross Aisle",
+      "placeType": "corridor",
+      "floor": 0,
+      "polygon": [[-5.5, -3.0], [-2.0, -3.0], [-2.0, 2.0], [10.0, 2.0], [10.0, 5.5], [-5.5, 5.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "AISLE-1",
+      "name": "Aisle 1",
+      "placeType": "aisle",
+      "floor": 0,
+      "polygon": [[2.0, -4.0], [4.0, -4.0], [4.0, 2.0], [2.0, 2.0]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "AISLE-2",
+      "name": "Aisle 2",
+      "placeType": "aisle",
+      "floor": 0,
+      "polygon": [[5.0, -4.0], [7.0, -4.0], [7.0, 2.0], [5.0, 2.0]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "AISLE-3",
+      "name": "Aisle 3",
+      "placeType": "aisle",
+      "floor": 0,
+      "polygon": [[8.0, -4.0], [10.0, -4.0], [10.0, 2.0], [8.0, 2.0]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "DOCK-1",
+      "name": "Dock 1",
+      "placeType": "dock",
+      "floor": 0,
+      "polygon": [[-9.0, -3.0], [-5.5, -3.0], [-5.5, 3.0], [-9.0, 3.0]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "RACK-A",
+      "name": "Rack A",
+      "placeType": "rack_face",
+      "floor": 0,
+      "polygon": [[4.0, -4.0], [5.0, -4.0], [5.0, 2.0], [4.0, 2.0]],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    },
+    {
+      "id": "RACK-B",
+      "name": "Rack B",
+      "placeType": "rack_face",
+      "floor": 0,
+      "polygon": [[7.0, -4.0], [8.0, -4.0], [8.0, 2.0], [7.0, 2.0]],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    },
+    {
+      "id": "DOCK-1-EDGE",
+      "name": "Dock 1 Edge",
+      "placeType": "dock",
+      "floor": 0,
+      "polygon": [[-9.95, -3.0], [-9.0, -3.0], [-9.0, 3.0], [-9.95, 3.0]],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    }
+  ]
+}

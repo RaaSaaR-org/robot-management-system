@@ -49,6 +49,8 @@ export class SimulationEngine {
   private cachedChargingStation: RobotLocation | null = null;
   private zoneCache: Zone[] = [];
   private previousZone: Zone | null = null;
+  /** See {@link SimulationEngine.setPoseAuthority}. Null = simulation owns the position. */
+  private poseAuthority: (() => boolean) | null = null;
   private readonly config: SimulationConfig;
   private stateGetter: () => SimulatedRobotState;
   private stateUpdater: StateUpdater;
@@ -115,6 +117,28 @@ export class SimulationEngine {
    */
   setZoneCache(zones: Zone[]): void {
     this.zoneCache = zones;
+  }
+
+  /**
+   * Tell the engine that something else owns the robot's position (TASK-195).
+   *
+   * `start()` is called unconditionally at boot, with no hardware check, so
+   * `updateZoneTracking()` used to write `location.zone` ten times a second
+   * from a FROZEN simulated position while a real robot walked — and its
+   * enter/exit events were `console.log`'d and went nowhere. Now that the place
+   * resolver derives position from real odometry, that writer must stand down
+   * whenever the resolver has an authoritative pose; otherwise the two disagree
+   * at 10 Hz and the last writer wins.
+   *
+   * The zone writer is the only thing gated. Zones and places are different
+   * vocabularies — see `RobotLocation.place` — so the resolver does not take
+   * `zone` over, it simply stops the simulation from inventing one.
+   *
+   * @param probe returns true while a real pose is driving the location; pass
+   *        null to hand zone tracking back to the simulation.
+   */
+  setPoseAuthority(probe: (() => boolean) | null): void {
+    this.poseAuthority = probe;
   }
 
   /**
@@ -243,6 +267,16 @@ export class SimulationEngine {
    * @returns true if zone changed
    */
   private updateZoneTracking(): boolean {
+    // Something else owns the position (TASK-195) — do not fabricate a zone
+    // from a simulated one. Never throws: a broken probe must not take the
+    // whole simulation tick down, and "the simulation keeps tracking" is the
+    // pre-TASK-195 behaviour, which is the safe fallback.
+    try {
+      if (this.poseAuthority?.() === true) return false;
+    } catch {
+      // fall through to simulated zone tracking
+    }
+
     const state = this.stateGetter();
     const floor = state.location.floor ?? '1';
 

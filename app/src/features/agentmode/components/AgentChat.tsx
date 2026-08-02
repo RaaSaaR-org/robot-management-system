@@ -13,6 +13,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import { cn } from '@/shared/utils';
 import {
@@ -26,12 +27,40 @@ import {
   selectPendingCommand,
 } from '../store/agentmodeStore';
 import { BlockCard } from './BlockCard';
-import type { AgentChatMessage, AgentPlan } from '../types/agentmode.types';
+import { PlaceChip } from './PlaceChip';
+import type { AgentBlockKind, AgentChatMessage, AgentPlan } from '../types/agentmode.types';
 
 export interface AgentChatProps {
   /** Robot the commands are sent to. */
   robotId: string | null;
+  /**
+   * Control rendered to the left of the textarea — the page passes the inline
+   * `AgentVoiceBar`. Left undefined the composer renders without it, which is
+   * what keeps this component's own tests free of the voice SSE hook.
+   */
+  composerLeading?: ReactNode;
+  /**
+   * The robot exists but could not be asked what it is doing.
+   *
+   * Deliberately duplicated with the condition stack above the page: that notice
+   * qualifies the PAGE, this line qualifies the ACT OF TYPING. They are the two
+   * different ways the operator is about to be wrong, and the second one is only
+   * useful where the operator meets it — right where they are about to send a
+   * command against data that may be minutes old.
+   */
+  stateUnknown?: boolean;
   className?: string;
+}
+
+/**
+ * Blocks whose outcome depends on where the robot is standing when the plan
+ * starts. A `speak` or `remember` block does not care; a `walk` does.
+ */
+const PLACE_DEPENDENT_KINDS: readonly AgentBlockKind[] = ['walk', 'turn', 'goto'];
+
+/** Whether this plan moves the robot, i.e. whether its starting place matters. */
+function movesFromWhereItStands(plan: AgentPlan): boolean {
+  return plan.blocks.some((block) => PLACE_DEPENDENT_KINDS.includes(block.kind));
 }
 
 /** Ready-made commands offered on the empty state. */
@@ -95,14 +124,30 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
 
       {/* Blocks the command produced, inline underneath its acknowledgement */}
       {message.showsPlan && plan && (
-        <div
-          data-testid="agent-plan-blocks"
-          data-plan-id={plan.id}
-          className="w-full mt-2 space-y-2"
-        >
-          {plan.blocks.map((block, index) => (
-            <BlockCard key={block.id} block={block} index={index} />
-          ))}
+        <div className="w-full mt-2 space-y-2">
+          {/* The belief asserted exactly where it becomes load-bearing: a plan
+              that walks, turns or goes somewhere is only correct relative to
+              where the robot currently thinks it stands. An unknown place is
+              not hidden here — it is the whole point of showing it. */}
+          {movesFromWhereItStands(plan) && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="card-meta">starting from</span>
+              {/* `testId={null}`: the status rail owns `agent-scene-place`, and
+                  two elements answering one selector is an ambiguity, not a
+                  second guarantee. */}
+              <PlaceChip testId={null} />
+            </div>
+          )}
+
+          <div
+            data-testid="agent-plan-blocks"
+            data-plan-id={plan.id}
+            className="space-y-2"
+          >
+            {plan.blocks.map((block, index) => (
+              <BlockCard key={block.id} block={block} index={index} />
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -113,7 +158,12 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
  * The conversation. Enter sends, Shift+Enter adds a newline — same idiom as
  * the A2A conversation panel.
  */
-export const AgentChat = memo(function AgentChat({ robotId, className }: AgentChatProps) {
+export const AgentChat = memo(function AgentChat({
+  robotId,
+  composerLeading,
+  stateUnknown,
+  className,
+}: AgentChatProps) {
   // Actions are read once — subscribing to them would re-render on every event.
   const actions = useMemo(() => {
     const store = useAgentModeStore.getState();
@@ -249,7 +299,21 @@ export const AgentChat = memo(function AgentChat({ robotId, className }: AgentCh
       </div>
 
       <form onSubmit={handleSubmit} className="shrink-0 border-t border-glass-subtle px-3 py-2.5">
+        {/* Amber, and only while it is TRUE — the page reserves this colour for
+            conditions that hold right now. Sits above the textarea rather than
+            in a page footer: an operator who never scrolls that far still meets
+            it in the moment they are about to act on stale data. */}
+        {stateUnknown && (
+          <p
+            data-testid="agent-state-unknown-note"
+            className="h-6 flex items-center text-xs text-amber-600 dark:text-amber-400"
+          >
+            not answering — everything shown is the last thing this console heard.
+          </p>
+        )}
+
         <div className="flex items-end gap-2">
+          {composerLeading}
           <textarea
             ref={inputRef}
             data-testid="agent-command-input"

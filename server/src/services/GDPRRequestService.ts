@@ -33,14 +33,155 @@ import {
   type DataExportResult,
   type ErasureResult,
   type ErasureEligibility,
+  type ErasureExecutionOptions,
   type GDPRMetrics,
   type SLAReport,
 } from '../types/gdpr.types.js';
+import type { ComplianceEventType } from '../types/compliance.types.js';
 import { legalHoldService } from './LegalHoldService.js';
+import {
+  robotMemoryErasureService,
+  type RobotMemoryErasureService,
+} from './RobotMemoryErasureService.js';
 import { v4 as uuidv4 } from 'uuid';
 
+/**
+ * Retained-category marker for "a legal hold pins some of this subject's
+ * compliance logs". Machine-readable on purpose: `executeErasure()` branches on
+ * it, and a branch must not depend on the wording of a human-facing string.
+ */
+export const RETAINED_CATEGORY_LEGAL_HOLD = 'compliance_logs_under_legal_hold';
+
+/**
+ * Why the robot-side wipe was suppressed by a legal hold.
+ *
+ * The robot's activity journal is a plaintext SECOND COPY of the same data
+ * category the hold pins (`robot-agent/src/agent-mode/journal.ts` says so, and
+ * `Journal.prune()` refuses to delete a single day file while any hold is
+ * active). Erasing the workspace would destroy exactly the evidence the hold
+ * exists to preserve — so the hold suppresses this path the same way.
+ */
+export const ROBOT_MEMORY_BLOCKED_BY_LEGAL_HOLD =
+  'Robot memory workspaces NOT erased: a legal hold is active on compliance logs of this data ' +
+  'subject, and the activity journal on the robots is a second copy of that same data category ' +
+  '(the robot suppresses its own journal prune under a hold for exactly this reason). ' +
+  'Re-run the fleet erasure once the hold is lifted.';
+
+/**
+ * Why the robot-side wipe did not run without an explicit opt-in. Erasing robot
+ * memory for one subject deletes every operator's place notes on every robot.
+ */
+/**
+ * The compliance event type the robots' activity journal duplicates.
+ *
+ * `robot-agent/src/agent-mode/journal.ts` exports the same value as
+ * `JOURNAL_EVENT_TYPE`: `ServerMirror.logBlock()` writes every finished block
+ * as `command_execution`, and the journal is the plaintext second copy of
+ * exactly those records. A hold over this category therefore pins data that
+ * lives on the robots too — see {@link ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD}.
+ */
+export const ROBOT_JOURNAL_EVENT_TYPE = 'command_execution';
+
+/**
+ * Every compliance category the fleet-wide robot wipe destroys a second copy of.
+ *
+ * The gate used to be scoped to {@link ROBOT_JOURNAL_EVENT_TYPE} alone, and the
+ * docstring called that deliberate — but `Workspace.erase()` is not scoped to
+ * anything. It deletes `MEMORY.md`, every `places/*.md`, `journal/*.jsonl`,
+ * `intents.jsonl` and `incarnations.jsonl` in one pass, so a hold that covered
+ * a category the wipe destroys while the gate looked at another let the wipe
+ * proceed over held evidence. The erase being broader than the gate is the bug;
+ * the two are aligned here by widening the gate, which is the safe direction
+ * for an Art. 17 path — a blocked wipe is retryable, a destroyed record is not.
+ *
+ * What each category has on the robots:
+ *
+ *  - `command_execution` — `journal/*.jsonl`, the plaintext tee of
+ *    `ServerMirror.logBlock()` (the robot's own `journal.ts` says so).
+ *  - `ai_decision` — the planner's reasoning, carried on every journalled block
+ *    and logged server-side by `agent-executor.ts` as this category.
+ *  - `safety_action` — E-Stops and protective stops, which reach the journal as
+ *    aborted blocks and reach `incarnations.jsonl` as a latch inherited across
+ *    a boot.
+ *  - `system_event` — `incarnations.jsonl`, up to 200 boots of "this robot was
+ *    in THIS place at THIS time"; the agent logs its boots under this category.
+ *
+ * `access_audit` is deliberately NOT here: it records reads of platform data,
+ * and no robot holds a copy. That is also what keeps this gate from degenerating
+ * into "any hold anywhere blocks the wipe forever".
+ *
+ * `MEMORY.md`, the place notes and `intents.jsonl` have no compliance category
+ * at all — operator-authored text that exists only on the robot. No category
+ * check can be proven sufficient for them, which is the second reason to widen
+ * rather than narrow.
+ */
+export const ROBOT_WIPE_HELD_EVENT_TYPES: readonly ComplianceEventType[] = [
+  'command_execution',
+  'ai_decision',
+  'safety_action',
+  'system_event',
+];
+
+/**
+ * Why the robot-side wipe was suppressed by someone ELSE's legal hold.
+ *
+ * `RETAINED_CATEGORY_LEGAL_HOLD` is subject-scoped — it only fires when the
+ * hold pins a log whose `operatorId` is the requester. The wipe it guards is
+ * not: `eraseFleetMemory()` DELETEs `/robots/:id/memory` on every robot in the
+ * fleet, destroying the journals of every operator. A hold on another
+ * operator's logs — or on the system/robot-authored logs that are the bulk of
+ * the compliance table (`operatorId` is null for autonomous operations) —
+ * covered exactly the records this wipe would destroy while the subject-scoped
+ * gate stayed silent. A fleet-wide effect needs a fleet-wide gate.
+ */
+export const ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD =
+  'Robot memory workspaces NOT erased: a legal hold is active somewhere in the fleet over ' +
+  `compliance logs of a category the robots keep a second copy of (${ROBOT_WIPE_HELD_EVENT_TYPES.join(', ')}). ` +
+  'The wipe deletes the whole workspace — journal, boot lineage, standing intents, notes — so it ' +
+  'would destroy held evidence regardless of whose logs the hold pins. ' +
+  'Re-run the fleet erasure once the hold is lifted.';
+
+/**
+ * Why the robot-side wipe was suppressed when the hold check itself failed.
+ *
+ * Not knowing whether a hold covers the robots' journals is not permission to
+ * delete them: the database erasure has still run and is reported, only the
+ * unverifiable fleet wipe is held back.
+ */
+export const ROBOT_MEMORY_HOLD_CHECK_FAILED =
+  'Robot memory workspaces NOT erased: the legal-hold check over the compliance categories the ' +
+  `robots duplicate (${ROBOT_WIPE_HELD_EVENT_TYPES.join(', ')}) could not be completed, so it is ` +
+  'unknown whether a hold covers what the wipe would destroy. Retry the fleet erasure once the ' +
+  'compliance database is reachable.';
+
+/**
+ * Why the fleet-wide wipe reported nothing: the robot list could not be read.
+ *
+ * `RobotMemoryErasureService.eraseFleetMemory()` used to return an empty result
+ * for this case, byte-identical to "this fleet has no robots with an agent
+ * URL" — an Art. 17 response claiming a complete erasure while the code never
+ * found out which robots exist.
+ */
+export const ROBOT_MEMORY_FLEET_UNKNOWN =
+  'Robot memory workspaces NOT erased: the fleet could not be enumerated, so it is unknown ' +
+  'which robots hold memory workspaces and none was reached. This is NOT an empty fleet. ' +
+  'Retry the fleet erasure once the robot inventory is readable.';
+
+export const ROBOT_MEMORY_REQUIRES_OPT_IN =
+  'Robot memory workspaces NOT erased: robot files are not keyed by data subject, so the only ' +
+  'erasure a robot can perform is a full fleet-wide wipe — which would also delete place notes ' +
+  'written by other operators (personal data of other data subjects, erased without their ' +
+  'request). Re-run with the explicit fleet-wide opt-in if that is intended.';
+
 export class GDPRRequestService {
-  constructor() {
+  /**
+   * Reaches the fleet on erasure (TASK-197). Injectable so a test can drive
+   * `executeErasure` without a robot; defaults to the singleton.
+   */
+  private readonly robotMemoryErasure: RobotMemoryErasureService;
+
+  constructor(deps: { robotMemoryErasure?: RobotMemoryErasureService } = {}) {
+    this.robotMemoryErasure = deps.robotMemoryErasure ?? robotMemoryErasureService;
     console.log('[GDPRRequestService] Initialized');
   }
 
@@ -592,7 +733,7 @@ export class GDPRRequestService {
 
     if (heldUserLogs.length > 0) {
       blockedReasons.push(`${heldUserLogs.length} logs under legal hold`);
-      retainedDataCategories.push('compliance_logs_under_legal_hold');
+      retainedDataCategories.push(RETAINED_CATEGORY_LEGAL_HOLD);
     }
 
     // Check for mandatory retention periods
@@ -624,14 +765,85 @@ export class GDPRRequestService {
   }
 
   /**
-   * Execute erasure for a user (Art. 17)
+   * Is ANY active legal hold covering a data category the robots' workspaces
+   * duplicate — no matter whose logs it pins?
+   *
+   * Scoped to {@link ROBOT_WIPE_HELD_EVENT_TYPES}: every category the wipe
+   * destroys a second copy of, not just the journal's. A gate narrower than the
+   * erase it guards is the asymmetry this method used to have — a hold pinning
+   * a `system_event` (the boot lineage the wipe deletes with
+   * `incarnations.jsonl`) let the fleet-wide wipe proceed.
+   *
+   * Deliberately NOT scoped to the data subject, unlike
+   * {@link checkErasureEligibility}: that method answers "may these rows be
+   * deleted", and rows have an `operatorId`. This one answers "may every robot
+   * in the fleet delete everything it remembers", and that wipe has no subject
+   * scope at all — the robot's files are not keyed by user. Intersecting the
+   * held log ids with the requester's own logs (which is what the
+   * subject-scoped gate does) left the wipe unguarded whenever the hold pinned
+   * another operator's logs, or the system/robot-authored logs that carry
+   * `operatorId: null` and make up the bulk of the compliance table.
+   *
+   * @returns `'held'` when a hold covers any of those categories, `'clear'`
+   *   when none does, `'unknown'` when the check itself failed — the caller
+   *   must treat `'unknown'` as blocking, since not knowing is not permission
+   *   to delete.
    */
-  async executeErasure(userId: string): Promise<ErasureResult> {
+  private async checkFleetWipeHold(): Promise<'held' | 'clear' | 'unknown'> {
+    try {
+      const heldLogIds = await legalHoldService.getLogsUnderHold();
+      if (heldLogIds.length === 0) return 'clear';
+
+      const heldWipedLogs = await prisma.complianceLog.count({
+        where: {
+          id: { in: heldLogIds },
+          eventType: { in: [...ROBOT_WIPE_HELD_EVENT_TYPES] },
+        },
+      });
+      return heldWipedLogs > 0 ? 'held' : 'clear';
+    } catch (error) {
+      console.error(
+        '[GDPRRequestService] Fleet-wide legal-hold check failed; robot memory erasure suppressed:',
+        error,
+      );
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Execute erasure for a user (Art. 17)
+   *
+   * The database half always runs. The ROBOT half (memory workspaces) is gated
+   * three times, and the gates are the point of this method rather than a detail:
+   *
+   *  1. A legal hold on THIS SUBJECT's compliance logs suppresses it — see
+   *     {@link ROBOT_MEMORY_BLOCKED_BY_LEGAL_HOLD}.
+   *  2. A legal hold ANYWHERE over any category the robots keep a second copy
+   *     of ({@link ROBOT_WIPE_HELD_EVENT_TYPES}) suppresses it too, because the
+   *     wipe is fleet-wide AND destroys the whole workspace — see
+   *     {@link ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD}.
+   *  3. Otherwise it needs `options.eraseRobotMemory === true`, because the
+   *     wipe is fleet-wide and hits other data subjects — see
+   *     {@link ROBOT_MEMORY_REQUIRES_OPT_IN}.
+   *
+   * Whatever did not happen comes back in `blockedReasons`; robot files come
+   * back in `robotFilesRemoved`, never folded into `deletedRecords`.
+   */
+  async executeErasure(
+    userId: string,
+    options: ErasureExecutionOptions = {},
+  ): Promise<ErasureResult> {
     const eligibility = await this.checkErasureEligibility(userId);
+    // Asked BEFORE the database half so a failing hold check cannot leave the
+    // fleet wiped-but-unverified; the result only gates the robot half.
+    const fleetHold = await this.checkFleetWipeHold();
 
     let deletedRecords = 0;
     let skippedRecords = 0;
     let pseudonymizedRecords = 0;
+    // Copied, not aliased: the fleet pass below appends to it, and mutating the
+    // eligibility object would make a second call see the first call's failures.
+    const blockedReasons = [...eligibility.blockedReasons];
 
     // Delete consents
     const deletedConsents = await prisma.userConsent.deleteMany({
@@ -682,6 +894,62 @@ export class GDPRRequestService {
       },
     });
 
+    // Reach the fleet (TASK-197). Robot memory workspaces hold operator-authored
+    // free text — a place note in a customer facility is personal data on a
+    // device with no Prisma, so a database-only erasure would leave it behind
+    // and make this platform's Article 17 answer false for that data.
+    //
+    // But the robot's files are not keyed by userId (there is no speaker
+    // identification — see the robot's AGENTS.md), so the only erasure a robot
+    // can perform is a full wipe of everything it remembers. That is a decision
+    // about OTHER subjects' data and about held evidence, hence the gates
+    // below. Failures inside an authorised wipe are reported as blocked reasons
+    // rather than thrown: an unreachable robot must not roll back the database
+    // erasure that already succeeded, and must not be claimed as erased either.
+    let robotFilesRemoved = 0;
+    let robotsAttempted = 0;
+
+    // Both hold gates are evaluated, not short-circuited into one branch: a
+    // subject-scoped hold and a fleet-wide one are different facts about the
+    // erasure and the response has to name whichever applies.
+    const holdReasons: string[] = [];
+    if (eligibility.retainedDataCategories.includes(RETAINED_CATEGORY_LEGAL_HOLD)) {
+      // The hold wins over the erasure request for this data category. Deleting
+      // the robots' journal here would destroy the very records the hold pins,
+      // which is what the robot's own prune refuses to do.
+      holdReasons.push(ROBOT_MEMORY_BLOCKED_BY_LEGAL_HOLD);
+    }
+    if (fleetHold === 'held') {
+      // A hold on ANY operator's — or on a system/robot-authored — log in a
+      // category the robots duplicate. The wipe below does not know how to
+      // spare it: it deletes every robot's whole workspace.
+      holdReasons.push(ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD);
+    } else if (fleetHold === 'unknown') {
+      holdReasons.push(ROBOT_MEMORY_HOLD_CHECK_FAILED);
+    }
+
+    if (holdReasons.length > 0) {
+      blockedReasons.push(...holdReasons);
+    } else if (!options.eraseRobotMemory) {
+      blockedReasons.push(ROBOT_MEMORY_REQUIRES_OPT_IN);
+    } else {
+      const fleet = await this.robotMemoryErasure.eraseFleetMemory();
+      robotFilesRemoved = fleet.removed;
+      robotsAttempted = fleet.attempted;
+      if (fleet.listError) {
+        // NOT an empty fleet: nothing was enumerated, so nothing was erased and
+        // the count of robots we failed to reach is unknown.
+        blockedReasons.push(`${ROBOT_MEMORY_FLEET_UNKNOWN} (${fleet.listError})`);
+      }
+      for (const outcome of fleet.outcomes) {
+        if (!outcome.ok) {
+          blockedReasons.push(
+            `Robot ${outcome.robotId}: memory workspace not erased (${outcome.error ?? 'unknown error'}) — retry when the robot is reachable`,
+          );
+        }
+      }
+    }
+
     // Clamp at 0: the estimate only covers user+complianceLog+userConsent, while
     // deletedRecords also includes GDPR requests and data restrictions, so the raw
     // subtraction can go negative (a logically impossible "skipped" count).
@@ -692,14 +960,17 @@ export class GDPRRequestService {
 
     console.log(
       `[GDPRRequestService] Erasure completed for user ${userId}: ` +
-        `deleted=${deletedRecords}, pseudonymized=${pseudonymizedRecords}, skipped=${skippedRecords}`,
+        `deleted=${deletedRecords}, pseudonymized=${pseudonymizedRecords}, skipped=${skippedRecords}, ` +
+        `robotFiles=${robotFilesRemoved} (from ${robotsAttempted} robot(s))`,
     );
 
     return {
       deletedRecords,
       skippedRecords,
       pseudonymizedRecords,
-      blockedReasons: eligibility.blockedReasons,
+      robotFilesRemoved,
+      robotsAttempted,
+      blockedReasons,
       completedAt: new Date(),
     };
   }

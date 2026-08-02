@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { SceneMemoryStore } from '../scene-memory.js';
+import type { ScenePlace } from '../types.js';
 import type { VisionEntity, VisionObservation } from '../vision.js';
 
 function observation(entities: Partial<VisionEntity>[], extra: Partial<VisionObservation> = {}): VisionObservation {
@@ -450,5 +451,133 @@ describe('SceneMemoryStore — reporting', () => {
 
     expect(scene.snapshot()?.personVisible).toBe(true);
     expect(scene.isPersonVisible()).toBe(true);
+  });
+});
+
+describe('SceneMemoryStore — pose and place (TASK-195)', () => {
+  const aisle3: ScenePlace = {
+    id: 'AISLE-3',
+    name: 'Aisle 3',
+    placeType: 'aisle',
+    confidence: 'confident',
+    source: 'surveyed',
+  };
+
+  it('records the pose source verbatim, exactly as setYawDeg does', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(1.5, -2.25, 'odometry');
+
+    expect(scene.getPoseM()).toEqual({ x: 1.5, y: -2.25 });
+    expect(scene.getPoseSource()).toBe('odometry');
+  });
+
+  it('clearPoseM leaves NO coordinates behind', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(1.5, -2.25, 'odometry');
+    scene.clearPoseM();
+
+    expect(scene.getPoseM()).toBeNull();
+    expect(scene.getPoseSource()).toBeNull();
+  });
+
+  it('treats a non-finite pose as no pose', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(1.5, -2.25, 'odometry');
+    scene.setPoseM(Number.NaN, 0, 'odometry');
+
+    expect(scene.getPoseM()).toBeNull();
+  });
+
+  it('puts the place line at the top of summary(), before any observation', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(9, 0, 'odometry');
+    scene.setPlace(aisle3, 3.2);
+
+    const first = scene.summary().split('\n')[0];
+    expect(first).toBe('You are in AISLE-3 (surveyed map; pose from odometry, 3.2 m since last anchor).');
+  });
+
+  it('keeps the place line after a merge', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(9, 0, 'odometry');
+    scene.setPlace(aisle3, 3.2);
+    scene.merge(observation([{ label: 'rack' }]));
+
+    expect(scene.summary().split('\n')[0]).toContain('You are in AISLE-3');
+    expect(scene.summary()).toContain('Current view:');
+  });
+
+  it('says "Place unknown — no pose." rather than the last place', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(9, 0, 'odometry');
+    scene.setPlace(aisle3, 3.2);
+    // The pose feed lost it — both halves must go.
+    scene.clearPoseM();
+    scene.setPlace(null);
+
+    expect(scene.summary()).toContain('Place unknown — no pose.');
+    expect(scene.summary()).not.toContain('AISLE-3');
+    expect(scene.toMarkdown()).toContain('Place unknown — no pose.');
+    expect(scene.toMarkdown()).not.toContain('AISLE-3');
+  });
+
+  it('distinguishes "no pose" from "pose is not on the map"', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(0, -5.9, 'odometry');
+    scene.setPlace(null);
+
+    expect(scene.summary()).toContain('Place unknown — the pose is not inside any mapped place.');
+  });
+
+  it('flags a stale belief instead of quietly presenting it as current', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(9, 0, 'odometry');
+    scene.setPlace({ ...aisle3, confidence: 'stale' }, 21.4);
+
+    expect(scene.summary()).toContain('STALE');
+  });
+
+  it('renders the place line in toMarkdown() with no observation yet', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(9, 0, 'odometry');
+    scene.setPlace(aisle3, 3.2);
+
+    const md = scene.toMarkdown();
+    expect(md).toContain('You are in AISLE-3');
+    expect(md).toContain('_No observation yet');
+    expect(md).toContain('(9.00, 0.00) m (odometry)');
+  });
+
+  it('carries the place onto the snapshot wire shape', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPlace(aisle3, 0);
+    scene.merge(observation([{ label: 'rack' }]));
+
+    expect(scene.snapshot()?.place).toEqual(aisle3);
+  });
+
+  it('adds exactly ONE line to the planner prompt', () => {
+    const withPlace = new SceneMemoryStore('robot-1');
+    withPlace.setPoseM(9, 0, 'odometry');
+    withPlace.setPlace(aisle3, 3.2);
+    withPlace.merge(observation([{ label: 'rack' }]));
+
+    const without = new SceneMemoryStore('robot-1');
+    without.merge(observation([{ label: 'rack' }]));
+
+    // The prompt-length regression gate: place costs one line, not a paragraph.
+    expect(withPlace.summary().split('\n').length).toBe(without.summary().split('\n').length);
+  });
+
+  it('keeps pose and place across clear() — where the robot stands is not an observation', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setPoseM(9, 0, 'odometry');
+    scene.setPlace(aisle3, 3.2);
+    scene.merge(observation([{ label: 'rack' }]));
+
+    scene.clear();
+
+    expect(scene.getPlace()).toEqual(aisle3);
+    expect(scene.getPoseM()).toEqual({ x: 9, y: 0 });
   });
 });

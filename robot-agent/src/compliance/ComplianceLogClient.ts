@@ -90,6 +90,34 @@ interface SessionResponse {
   startedAt: string;
 }
 
+/** Constructor knobs. Only tests pass these; production uses the defaults. */
+export interface ComplianceLogClientOptions {
+  /** Per-request deadline, ms. See {@link COMPLIANCE_REQUEST_TIMEOUT_MS}. */
+  requestTimeoutMs?: number;
+}
+
+/**
+ * Deadline on every outbound compliance request.
+ *
+ * Node's `fetch` has NO overall default timeout — undici's `headersTimeout` is
+ * 300 s, and it only starts counting once the connection is up. A fleet server
+ * that ACCEPTS the TCP connection and then stalls (paused in a debugger, a
+ * saturated event loop, a proxy holding the request) therefore parks the caller
+ * for five minutes, not for the connect timeout people assume.
+ *
+ * That is a boot-blocking bug, not a slow log: `index.ts` awaits
+ * {@link ComplianceLogClient.startSession} BEFORE `server.listen()`, so those
+ * five minutes are five minutes in which this process binds no port, writes no
+ * lineage line and never runs a single one of `PORT_OWNED_STEPS` — while the
+ * previous process has already exited, leaving the fleet mirror to age with
+ * nothing alive to correct it. Compliance logging is a record-keeping duty; it
+ * is not permitted to decide whether the robot comes up at all.
+ *
+ * 5 s matches the bound the rest of this agent puts on server-bound calls
+ * (`index.ts` registration, `rest-routes.ts`, `agent-mode/server-mirror.ts`).
+ */
+export const COMPLIANCE_REQUEST_TIMEOUT_MS = 5000;
+
 // ============================================================================
 // CLIENT CLASS
 // ============================================================================
@@ -103,14 +131,28 @@ export class ComplianceLogClient {
   private isConnected: boolean = false;
   private readonly batchSize = 10;
   private readonly flushIntervalMs = 5000;
+  private readonly requestTimeoutMs: number;
 
-  constructor(serverUrl?: string, robotId?: string) {
+  constructor(serverUrl?: string, robotId?: string, options: ComplianceLogClientOptions = {}) {
     // config.serverUrl already resolves SERVER_URL (default :3001). The previous
     // literal fallback here was :3000 — a port nothing in this repo serves — so
     // every log silently went nowhere whenever SERVER_URL was unset.
     this.serverUrl = serverUrl || config.serverUrl;
     this.robotId = robotId || config.robotId;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? COMPLIANCE_REQUEST_TIMEOUT_MS;
     console.log(`[ComplianceLogClient] Initialized for robot ${this.robotId}`);
+  }
+
+  /**
+   * The deadline every `fetch` in this file MUST carry.
+   *
+   * A helper rather than four inline literals so that "bounded" is one decision
+   * with one place to change it, and so a call site added later is obviously
+   * missing something when it does not use it. `compliance-timeout.test.ts`
+   * asserts by parsing this source that no `fetch(` here is left unbounded.
+   */
+  private requestSignal(): AbortSignal {
+    return AbortSignal.timeout(this.requestTimeoutMs);
   }
 
   // ==========================================================================
@@ -118,7 +160,12 @@ export class ComplianceLogClient {
   // ==========================================================================
 
   /**
-   * Start a compliance logging session with the server
+   * Start a compliance logging session with the server.
+   *
+   * Never throws and never blocks longer than {@link COMPLIANCE_REQUEST_TIMEOUT_MS}:
+   * an unreachable, refusing OR stalled server all end in the same place — an
+   * `offline-…` session id, `isConnected = false`, and logs accumulating in the
+   * queue for a later flush. The robot boots either way.
    */
   async startSession(): Promise<string> {
     try {
@@ -126,6 +173,7 @@ export class ComplianceLogClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ robotId: this.robotId }),
+        signal: this.requestSignal(),
       });
 
       if (!response.ok) {
@@ -167,8 +215,11 @@ export class ComplianceLogClient {
     }
 
     try {
+      // Bounded like the rest: this one runs from the SIGTERM/SIGINT path, where
+      // an unbounded wait holds the whole shutdown open behind a stalled server.
       await fetch(`${this.serverUrl}/api/compliance/sessions/${this.sessionId}`, {
         method: 'DELETE',
+        signal: this.requestSignal(),
       });
       console.log(`[ComplianceLogClient] Session ended: ${this.sessionId}`);
     } catch (error) {
@@ -319,6 +370,7 @@ export class ComplianceLogClient {
           outputHash: log.outputHash,
           decisionId: log.decisionId,
         }),
+        signal: this.requestSignal(),
       });
 
       if (!response.ok) {
@@ -334,7 +386,16 @@ export class ComplianceLogClient {
   }
 
   /**
-   * Flush all queued logs to the server
+   * Flush all queued logs to the server.
+   *
+   * Per-request deadlines alone do not bound this loop — a backlog of N logs
+   * against a stalled server costs N × the deadline, and `endSession()` awaits
+   * exactly this on the shutdown path. So the first TRANSPORT failure (network
+   * error or timeout) ends the pass and re-queues the untried remainder: when
+   * the transport is down, the next log will not fare better, and nothing is
+   * dropped by waiting for the next flush. An HTTP error response is NOT a
+   * transport failure — the server answered, this record was simply rejected, so
+   * the pass continues and only that record is re-queued.
    */
   async flush(): Promise<void> {
     if (this.logQueue.length === 0) return;
@@ -348,7 +409,7 @@ export class ComplianceLogClient {
     let successCount = 0;
     const failedLogs: QueuedLog[] = [];
 
-    for (const log of logsToSend) {
+    for (const [index, log] of logsToSend.entries()) {
       try {
         const response = await fetch(`${this.serverUrl}/api/compliance/logs`, {
           method: 'POST',
@@ -365,6 +426,7 @@ export class ComplianceLogClient {
             outputHash: log.outputHash,
             decisionId: log.decisionId,
           }),
+          signal: this.requestSignal(),
         });
 
         if (response.ok) {
@@ -373,7 +435,9 @@ export class ComplianceLogClient {
           failedLogs.push(log);
         }
       } catch {
-        failedLogs.push(log);
+        // Transport is gone: keep this one AND everything after it, untried.
+        failedLogs.push(...logsToSend.slice(index));
+        break;
       }
     }
 

@@ -390,6 +390,10 @@ export function setupWebSocket(server: Server): void {
       block: event.block,
       scene: event.scene,
       state: event.state,
+      // `agent:memory:updated` carries nothing else — without this field the
+      // event reaches the app as an empty envelope and the MemoryPanel never
+      // learns that the robot's durable memory changed.
+      memory: event.memory,
       timestamp: event.timestamp,
     });
     broadcast(clients, message);

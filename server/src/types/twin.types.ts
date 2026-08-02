@@ -12,7 +12,19 @@
 export type DigitalTwinStatus = 'draft' | 'recording' | 'processing' | 'ready' | 'failed';
 export type ScanSessionStatus = 'idle' | 'recording' | 'processing' | 'complete' | 'failed';
 export type ScanSessionStage = 'downloading' | 'merging' | 'occupancy' | 'mesh' | 'roadmap';
-export type TwinZoneType = 'keepout' | 'workcell' | 'charging' | 'speed';
+/**
+ * Closed set of L2 zone types. `'room'` (TASK-200) is a NAMED REGION OF FLOOR
+ * the robot may stand in — the opposite of a keepout — and is what the robot's
+ * place graph is built from.
+ */
+export const TwinZoneTypes = ['keepout', 'workcell', 'charging', 'speed', 'room'] as const;
+export type TwinZoneType = (typeof TwinZoneTypes)[number];
+
+/** Narrow an untrusted string to a {@link TwinZoneType}. */
+export function isTwinZoneType(value: unknown): value is TwinZoneType {
+  return typeof value === 'string' && (TwinZoneTypes as readonly string[]).includes(value);
+}
+
 export type TwinStorageBackend = 'rustfs' | 'local';
 
 // ============================================================================
@@ -224,6 +236,76 @@ export interface TwinZoneDTO {
   metadata?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// ============================================================================
+// PLACE GRAPH (TASK-200) — the robot's `places/_index.json` shape
+// ============================================================================
+
+/**
+ * WIRE CONTRACT. Mirrored verbatim by the robot agent's
+ * `agent-mode/place-resolver.ts` (`PlaceGraph`, `PlaceTypes`, `PlaceSources`).
+ * The robot does ZERO translation on this payload — it parses it with the same
+ * validator it uses for a hand-authored file on disk, so any drift between the
+ * two definitions surfaces as a REJECTED graph, not as a silently wrong place.
+ */
+export const TwinPlaceTypes = [
+  'aisle',
+  'rack_face',
+  'dock',
+  'staging',
+  'cell',
+  'charging',
+  'corridor',
+  'office',
+  'unknown',
+] as const;
+export type TwinPlaceType = (typeof TwinPlaceTypes)[number];
+
+export const TwinPlaceSources = ['surveyed', 'observed', 'declared'] as const;
+export type TwinPlaceSource = (typeof TwinPlaceSources)[number];
+
+/** Schema version of the place graph this server emits. */
+export const PLACE_GRAPH_VERSION = 1;
+/** Units every polygon coordinate is in. ASSERTED by the robot's parser. */
+export const PLACE_FRAME_UNITS = 'm';
+/** Yaw convention. ASSERTED by the robot's parser. */
+export const PLACE_FRAME_YAW_CONVENTION = 'deg,+x=0,CCW+';
+
+export interface PlaceGraphFrameDTO {
+  /** Frame id — `twin-<twinId>`. Names the map, not a unit. */
+  id: string;
+  /** `site` for a real scanned building. */
+  kind: string;
+  units: typeof PLACE_FRAME_UNITS;
+  yawConvention: typeof PLACE_FRAME_YAW_CONVENTION;
+  /**
+   * LOAD-BEARING, not decorative. Twins are NOT mutually registered: each
+   * `DigitalTwin`'s origin is an arbitrary robot pose at scan start
+   * (`ScanSession.originX/Y/Z`), so `AISLE-3` is only meaningful within ONE
+   * twin. A robot configured against twin A must refuse a graph from twin B.
+   */
+  twinId: string;
+}
+
+export interface PlaceGraphPlaceDTO {
+  id: string;
+  name: string;
+  placeType: TwinPlaceType;
+  /** Integer floor in the TWIN's frame — not the fleet's storey string. */
+  floor: number;
+  /** CCW ring, implicitly closed. */
+  polygon: [number, number][];
+  source: TwinPlaceSource;
+  /** The robot must not stand here. Generated from `type: 'keepout'` zones. */
+  keepout: boolean;
+  landmarks: never[];
+}
+
+export interface PlaceGraphDTO {
+  version: number;
+  frame: PlaceGraphFrameDTO;
+  places: PlaceGraphPlaceDTO[];
 }
 
 // ============================================================================

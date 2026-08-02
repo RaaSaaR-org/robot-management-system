@@ -190,7 +190,11 @@ describe('Incident Clip Routes (TASK-179 §6)', () => {
         .set('Content-Type', 'application/octet-stream')
         .send(Buffer.from(JSON.stringify(bigFrames)));
 
+      // The 413 must be *delivered*: if the route ends the response while the
+      // oversized body is still arriving, Node resets the socket and the
+      // client gets ECONNRESET instead of a status it can act on.
       expect(response.status).toBe(413);
+      expect(response.body.error).toMatch(/exceeds maximum size/);
       expect(mockStorage.uploadIncidentClip).not.toHaveBeenCalled();
     });
   });

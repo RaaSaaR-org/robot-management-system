@@ -6,4 +6,9 @@
  */
 
 export * from './types.js';
-export { SafetyMonitor, type SafetyEventCallback } from './SafetyMonitor.js';
+export {
+  SafetyMonitor,
+  type SafetyEventCallback,
+  type StopActuation,
+  type StopActuator,
+} from './SafetyMonitor.js';

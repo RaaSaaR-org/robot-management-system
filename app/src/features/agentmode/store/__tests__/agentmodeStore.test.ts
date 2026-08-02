@@ -14,17 +14,25 @@ import {
   selectEstopError,
   selectPlan,
   selectPlanById,
+  selectRecovered,
   selectSceneEntities,
+  selectSelfSuperseded,
   selectMessages,
+  selectStateReachability,
+  selectStateUnavailableReason,
+  selectStateUnknown,
 } from '../agentmodeStore';
 import type {
   AgentBlock,
   AgentBlockStatus,
   AgentCommandResponse,
   AgentEstopResponse,
+  AgentMemoryDigest,
   AgentModeEvent,
   AgentModeState,
   AgentPlan,
+  AgentSelfState,
+  MirroredAgentModeState,
   SceneMemory,
 } from '../../types/agentmode.types';
 
@@ -37,6 +45,8 @@ vi.mock('../../api/agentmodeApi', () => ({
     toggle: vi.fn(),
     estop: vi.fn(),
     resetEstop: vi.fn(),
+    getMemory: vi.fn(),
+    writeIdentity: vi.fn(),
   },
 }));
 
@@ -113,7 +123,44 @@ const apiError = (statusCode: number, message: string, code = 'ERR') => ({
   statusCode,
 });
 
-const makeState = (overrides: Partial<AgentModeState> = {}): AgentModeState => ({
+const makeSelf = (overrides: Partial<AgentSelfState> = {}): AgentSelfState => ({
+  name: 'G1-EDU-Bot',
+  emoji: null,
+  unit: 'Unitree G1 EDU (Dex3-1)',
+  robotId: ROBOT_ID,
+  operator: null,
+  site: null,
+  bootstrapRequired: true,
+  bootId: 'boot-1',
+  incarnation: 47,
+  uptimeS: 1500,
+  lastShutdown: null,
+  place: null,
+  poseSource: 'odometry',
+  batteryPct: 81,
+  controlOwner: 'idle',
+  damped: false,
+  estopLatched: false,
+  plansLast24h: 0,
+  failuresLast24h: 0,
+  memoryEntries: 3,
+  ...overrides,
+});
+
+const makeDigest = (overrides: Partial<AgentMemoryDigest> = {}): AgentMemoryDigest => ({
+  robotId: ROBOT_ID,
+  place: 'AISLE-3',
+  memoryBytes: 1024,
+  memoryMaxBytes: 8192,
+  memoryEntries: 3,
+  places: [{ id: 'AISLE-3', entries: 2, bytes: 220 }],
+  journalDays: ['2026-07-24', '2026-07-25'],
+  retention: { retentionDays: 30, source: 'fallback', legalHold: false },
+  updatedAt: TS,
+  ...overrides,
+});
+
+const makeState = (overrides: Partial<MirroredAgentModeState> = {}): MirroredAgentModeState => ({
   robotId: ROBOT_ID,
   enabled: true,
   controlOwner: 'idle',
@@ -156,6 +203,8 @@ describe('agentmodeStore', () => {
     expect(s.estopActive).toBe(false);
     expect(s.estopStatus).toBe('idle');
     expect(s.estopError).toBeNull();
+    expect(s.stateReachability).toBe('known');
+    expect(s.stateUnavailableReason).toBeNull();
     expect(s.damped).toBe(false);
     expect(s.fsmId).toBeNull();
     expect(s.plan).toBeNull();
@@ -467,6 +516,124 @@ describe('agentmodeStore', () => {
       expect(selectPlan(useAgentModeStore.getState())).toBeNull();
     });
 
+    describe('agent:state:changed and a stale plan', () => {
+      // The robot re-asserts its state to the server mirror on a clock and the
+      // server fans every one of those pushes out here. The push is
+      // fire-and-forget, so a snapshot taken at T can arrive AFTER an event
+      // emitted at T+ε. A snapshot must therefore never move the timeline
+      // backwards — and the app has to hold that line on its own, because it
+      // talks to robot-agents older than the fix that stopped sending the plan.
+
+      it('does not resurrect a plan that has already finished', () => {
+        const plan = makePlan();
+        apply(event({ type: 'agent:plan:started', plan }));
+        apply(
+          event({
+            type: 'agent:plan:finished',
+            plan: { ...plan, status: 'done', cursor: -1, updatedAt: '2026-07-25T10:00:30.000Z' },
+          })
+        );
+
+        // The heartbeat snapshot, taken a millisecond before the plan ended.
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({ plan: { ...plan, status: 'running', cursor: 2 } }),
+          })
+        );
+
+        const s = useAgentModeStore.getState();
+        expect(s.plan?.status).toBe('done');
+        expect(s.plan?.cursor).toBe(-1);
+      });
+
+      it('does not rewind a running plan to an older snapshot of itself', () => {
+        const plan = makePlan();
+        apply(event({ type: 'agent:plan:started', plan }));
+        apply(
+          event({
+            type: 'agent:plan:updated',
+            plan: { ...plan, cursor: 2, updatedAt: '2026-07-25T10:00:20.000Z' },
+          })
+        );
+
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({ plan: { ...plan, cursor: 0, updatedAt: TS } }),
+          })
+        );
+
+        expect(useAgentModeStore.getState().plan?.cursor).toBe(2);
+      });
+
+      it('does not let a previous plan hijack the timeline of the current one', () => {
+        // The worst variant: P1's snapshot lands after P2 started. Every later
+        // P2 block event is then rejected as belonging to another plan, and the
+        // operator watches P1's blocks for the whole execution of P2.
+        apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+        const p2 = makePlan({
+          id: 'plan-2',
+          command: 'wave',
+          createdAt: '2026-07-25T10:01:00.000Z',
+          updatedAt: '2026-07-25T10:01:00.000Z',
+        });
+        apply(event({ type: 'agent:plan:started', plan: p2 }));
+
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({ plan: makePlan({ status: 'running' }) }),
+          })
+        );
+
+        const s = useAgentModeStore.getState();
+        expect(s.plan?.id).toBe('plan-2');
+        expect(s.plan?.command).toBe('wave');
+      });
+
+      it('still adopts a newer plan this client never saw start', () => {
+        // The guard is against going BACKWARDS, not against catching up: a tab
+        // that missed `agent:plan:started` must still learn the current plan.
+        apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({
+              plan: makePlan({
+                id: 'plan-2',
+                command: 'wave',
+                createdAt: '2026-07-25T10:01:00.000Z',
+                updatedAt: '2026-07-25T10:01:00.000Z',
+              }),
+            }),
+          })
+        );
+
+        expect(useAgentModeStore.getState().plan?.id).toBe('plan-2');
+      });
+
+      it('adopts a plan when there is nothing on screen to rewind', () => {
+        apply(event({ type: 'agent:state:changed', state: makeState({ plan: makePlan() }) }));
+        expect(useAgentModeStore.getState().plan?.id).toBe('plan-1');
+      });
+
+      it('keeps the plan when a liveness snapshot omits it entirely', () => {
+        // What a current robot-agent sends: a state with no `plan` key at all.
+        apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+
+        const liveness = makeState();
+        delete liveness.plan;
+        delete liveness.scene;
+        apply(event({ type: 'agent:state:changed', state: liveness }));
+
+        const s = useAgentModeStore.getState();
+        expect(s.plan?.id).toBe('plan-1');
+        expect(s.enabled).toBe(true);
+      });
+    });
+
     it('ignores plan/block progress once the agent acknowledged an E-Stop', () => {
       apply(event({ type: 'agent:plan:started', plan: makePlan() }));
       useAgentModeStore.setState({ estopActive: true, estopStatus: 'acknowledged' });
@@ -601,6 +768,42 @@ describe('agentmodeStore', () => {
       const s = useAgentModeStore.getState();
       expect(selectEstopStatus(s)).toBe('unconfirmed');
       expect(selectEstopError(s)).toBe('StopMove timeout');
+    });
+
+    /**
+     * The mirror of the test above — and the case it did not cover.
+     *
+     * `applyReportedLatch` guarded `unconfirmed` and nothing else, while its own
+     * *absence* branch guards both `requesting` and `failed`. So a stop whose
+     * request never completed — the server proxy timing out (its 5 s budget is
+     * shorter than the robot's own stop path), the robot unreachable — was
+     * upgraded to `acknowledged` by the agent's next 15 s mirror heartbeat, and
+     * `estopError` was wiped along with it. The banner then read "The robot
+     * confirmed the stop: it is stopped and damped" about a stop this console
+     * never managed to deliver, leaving the chat's "E-Stop request FAILED" line
+     * as the only surviving trace.
+     *
+     * A reported latch is a SOFTWARE claim — this file's own docstring says so.
+     * It cannot confirm hardware for a `failed` stop any more than for an
+     * `unconfirmed` one. It IS new information (the latch exists now), so the
+     * status moves — to `unconfirmed`, which is exactly what is true: latched,
+     * not confirmed.
+     */
+    it('a reported latch does not upgrade a FAILED stop to a confirmed one', async () => {
+      mockedApi.estop.mockRejectedValue(new Error('Robot not reachable'));
+
+      await useAgentModeStore.getState().estop(ROBOT_ID);
+      expect(selectEstopStatus(useAgentModeStore.getState())).toBe('failed');
+
+      // The 15 s mirror re-push: the agent says it is latched.
+      apply(event({ type: 'agent:state:changed', state: makeState({ estopActive: true }) }));
+
+      const s = useAgentModeStore.getState();
+      expect(selectEstopActive(s)).toBe(true);
+      expect(selectEstopStatus(s)).not.toBe('acknowledged');
+      expect(selectEstopStatus(s)).toBe('unconfirmed');
+      // The reason the operator needs must survive the heartbeat.
+      expect(selectEstopError(s)).toBe('Robot not reachable');
     });
 
     it('keeps applying block events while the stop is hardware-unconfirmed', async () => {
@@ -779,6 +982,50 @@ describe('agentmodeStore', () => {
       const s = useAgentModeStore.getState();
       expect(s.damped).toBe(true);
       expect(s.fsmId).toBe(1);
+    });
+
+    it('surfaces what the robot’s boot inherited (TASK-196)', () => {
+      apply(
+        event({
+          type: 'agent:state:changed',
+          state: makeState({
+            estopActive: true,
+            recovered: { fromCrash: true, estopLatched: true, at: TS },
+          }),
+        })
+      );
+
+      expect(selectRecovered(useAgentModeStore.getState())).toEqual({
+        fromCrash: true,
+        estopLatched: true,
+        at: TS,
+      });
+    });
+
+    it('clears the recovery marker when the agent says it was acknowledged', async () => {
+      useAgentModeStore.setState({
+        estopActive: true,
+        recovered: { fromCrash: true, estopLatched: true, at: TS },
+      });
+
+      mockedApi.resetEstop.mockResolvedValue(
+        makeState({ estopActive: false, recovered: null })
+      );
+      await useAgentModeStore.getState().resetEstop(ROBOT_ID);
+
+      expect(selectRecovered(useAgentModeStore.getState())).toBeNull();
+    });
+
+    it('an older agent that omits `recovered` does not clear the badge', () => {
+      // Absent is unknown, never "nothing happened" — hiding the badge because
+      // of an old agent hides the one thing the operator has to see.
+      useAgentModeStore.setState({
+        recovered: { fromCrash: true, estopLatched: false, at: TS },
+      });
+
+      apply(event({ type: 'agent:state:changed', state: makeState({ estopActive: false }) }));
+
+      expect(selectRecovered(useAgentModeStore.getState())).not.toBeNull();
     });
 
     it('a latch the agent reports counts as acknowledged', () => {
@@ -989,6 +1236,266 @@ describe('agentmodeStore', () => {
       const s = useAgentModeStore.getState();
       expect(s.enabled).toBe(false);
       expect(s.error).toBe('toggle failed');
+    });
+  });
+
+  // ==========================================================================
+  // UNKNOWN — the robot exists and could not be asked (502)
+  //
+  // The endpoint used to answer 404 for both "no such robot" and "could not
+  // reach it", and the store folded both into `null` → `enabled:false,
+  // estopActive:false`. That renders as "Agent Mode off, E-Stop clear" about a
+  // robot nobody can see: a false-safe display on a safety surface, and the
+  // worst direction to fail in. 404 stays the empty case; 502 must not.
+  // ==========================================================================
+  describe('state UNKNOWN', () => {
+    /** The server's 502 for a robot it has but could not ask. */
+    const unavailable = () =>
+      apiError(
+        502,
+        'Agent Mode state UNKNOWN: the robot agent could not be reached or did not ' +
+          'answer with a state.',
+        'AGENT_STATE_UNAVAILABLE'
+      );
+
+    it('flags the state as unknown instead of reporting "off, E-Stop clear"', async () => {
+      mockedApi.getState.mockRejectedValue(unavailable());
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateReachability(s)).toBe('unreachable');
+      expect(selectStateUnknown(s)).toBe(true);
+      expect(selectStateUnavailableReason(s)).toContain('could not be reached');
+      expect(s.isLoading).toBe(false);
+      // Not an error banner: an unreachable robot is an ordinary condition, and
+      // a dismissible red alarm on every page open is one nobody reads.
+      expect(s.error).toBeNull();
+    });
+
+    it('does not overwrite what was last known with confident defaults', async () => {
+      // Neither direction is honest on its own: keeping the values would claim
+      // they are current, clearing them would claim "off / no plan". The values
+      // stay, the flag says they are memories, and the UI reads the flag.
+      apply(
+        event({
+          type: 'agent:state:changed',
+          state: makeState({ enabled: true, controlOwner: 'agent', plan: makePlan() }),
+        })
+      );
+      mockedApi.getState.mockRejectedValue(unavailable());
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(true);
+      expect(s.enabled).toBe(true);
+      expect(s.plan?.id).toBe('plan-1');
+    });
+
+    it('leaves a local E-Stop latch exactly as it was', async () => {
+      useAgentModeStore.setState({ estopActive: true, estopStatus: 'acknowledged' });
+      mockedApi.getState.mockRejectedValue(unavailable());
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectEstopActive(s)).toBe(true);
+      expect(selectEstopStatus(s)).toBe('acknowledged');
+      expect(selectStateUnknown(s)).toBe(true);
+    });
+
+    it('keeps 404 as the empty case, which is a complete answer', async () => {
+      mockedApi.getState.mockRejectedValue(apiError(404, 'No agent mode state for robot'));
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(false);
+      expect(s.error).toBeNull();
+    });
+
+    it('does not claim unknown for a plain server failure', async () => {
+      // A 500 is the server breaking, not the robot going quiet — that already
+      // raises a real error the operator can read.
+      mockedApi.getState.mockRejectedValue(apiError(500, 'Failed to get agent mode state'));
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(false);
+      expect(s.error).toBe('Failed to get agent mode state');
+    });
+
+    it('clears the moment the robot answers again', async () => {
+      useAgentModeStore.setState({
+        stateReachability: 'unreachable',
+        stateUnavailableReason: 'gone',
+      });
+      mockedApi.getState.mockResolvedValue(makeState({ enabled: true }));
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(false);
+      expect(selectStateUnavailableReason(s)).toBeNull();
+      expect(s.enabled).toBe(true);
+    });
+
+    it('a pushed agent:state:changed ends the unknown', () => {
+      useAgentModeStore.setState({ stateReachability: 'unreachable' });
+
+      apply(event({ type: 'agent:state:changed', state: makeState({ enabled: true }) }));
+
+      expect(selectStateUnknown(useAgentModeStore.getState())).toBe(false);
+    });
+
+    it('block progress alone does not end it — it says nothing about the latch', () => {
+      // A block event proves the robot is alive, not that this console knows
+      // its mode or its E-Stop position. Only a full state does.
+      apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+      useAgentModeStore.setState({ stateReachability: 'unreachable' });
+
+      apply(
+        event({ type: 'agent:block:started', block: makeBlock({ id: 'b1', status: 'running' }) })
+      );
+
+      expect(selectStateUnknown(useAgentModeStore.getState())).toBe(true);
+    });
+
+    it('a toggle that cannot reach the robot marks the mode unknown', async () => {
+      useAgentModeStore.setState({ enabled: false });
+      mockedApi.toggle.mockRejectedValue(unavailable());
+
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+
+      const s = useAgentModeStore.getState();
+      // The optimistic flip is rolled back, but "back to off" is not a fact
+      // either — the switch must stop claiming a position.
+      expect(selectStateUnknown(s)).toBe(true);
+      expect(s.error).toContain('could not be reached');
+    });
+
+    it('a toggle the robot refuses is the robot talking, not silence', async () => {
+      mockedApi.toggle.mockRejectedValue(apiError(400, 'enabled must be a boolean'));
+
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+
+      expect(selectStateUnknown(useAgentModeStore.getState())).toBe(false);
+    });
+
+    it('a successful toggle re-establishes what is known', async () => {
+      useAgentModeStore.setState({ stateReachability: 'unreachable' });
+      mockedApi.toggle.mockResolvedValue(makeState({ enabled: true }));
+
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+
+      expect(selectStateUnknown(useAgentModeStore.getState())).toBe(false);
+    });
+
+    it('an E-Stop the agent answers ends the unknown and gives a real latch', async () => {
+      useAgentModeStore.setState({ stateReachability: 'unreachable' });
+      mockedApi.estop.mockResolvedValue({ ok: true, stopped: false, delivered: true });
+
+      await useAgentModeStore.getState().estop(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(false);
+      expect(selectEstopStatus(s)).toBe('acknowledged');
+    });
+
+    it('an E-Stop that never reaches the robot leaves everything unknown', async () => {
+      mockedApi.estop.mockRejectedValue(unavailable());
+
+      await useAgentModeStore.getState().estop(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      // The local latch still engages, the stop is reported as unconfirmed …
+      expect(selectEstopActive(s)).toBe(true);
+      expect(selectEstopStatus(s)).toBe('failed');
+      // … and the robot's own position stays unknown.
+      expect(selectStateUnknown(s)).toBe(true);
+    });
+
+    it('a reset that cannot reach the robot keeps the latch and says so', async () => {
+      useAgentModeStore.setState({ estopActive: true, estopStatus: 'acknowledged' });
+      mockedApi.resetEstop.mockRejectedValue(unavailable());
+
+      await useAgentModeStore.getState().resetEstop(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectEstopActive(s)).toBe(true);
+      expect(selectStateUnknown(s)).toBe(true);
+    });
+
+    it('a successful reset ends the unknown', async () => {
+      useAgentModeStore.setState({ estopActive: true, stateReachability: 'unreachable' });
+      mockedApi.resetEstop.mockResolvedValue(makeState({ estopActive: false }));
+
+      await useAgentModeStore.getState().resetEstop(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(false);
+      expect(selectEstopActive(s)).toBe(false);
+    });
+
+    it('switching robot starts from the empty state, not from the old unknown', () => {
+      useAgentModeStore.setState({
+        stateReachability: 'unreachable',
+        stateUnavailableReason: 'gone',
+      });
+
+      useAgentModeStore.getState().selectRobot('other-robot');
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(false);
+      expect(selectStateUnavailableReason(s)).toBeNull();
+    });
+
+    it('drops a 502 that lands after a robot switch', async () => {
+      let fail: (error: unknown) => void = () => {};
+      mockedApi.getState.mockReturnValue(
+        new Promise<AgentModeState>((_resolve, reject) => {
+          fail = reject;
+        })
+      );
+      mockedApi.getScene.mockResolvedValue(null);
+
+      const inFlight = useAgentModeStore.getState().fetchState(ROBOT_ID);
+      useAgentModeStore.getState().selectRobot('other-robot');
+
+      fail(unavailable());
+      await inFlight;
+
+      // The robot that went quiet is not the one on screen any more.
+      expect(selectStateUnknown(useAgentModeStore.getState())).toBe(false);
+    });
+
+    it('takes a scene that did answer while the state read did not', async () => {
+      mockedApi.getState.mockRejectedValue(unavailable());
+      mockedApi.getScene.mockResolvedValue(makeScene());
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(selectStateUnknown(s)).toBe(true);
+      expect(s.scene?.currentView).toBe('A table ahead.');
+    });
+
+    it('an unanswered scene read does not erase the scene we had', async () => {
+      apply(event({ type: 'agent:scene:updated', scene: makeScene() }));
+      mockedApi.getState.mockRejectedValue(unavailable());
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().scene?.currentView).toBe('A table ahead.');
     });
   });
 
@@ -1274,6 +1781,406 @@ describe('agentmodeStore', () => {
       expect(s.scene).toBeNull();
       expect(s.planHistory).toEqual([]);
       expect(s.robotId).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // SELF: FRESHNESS & PROVENANCE
+  //
+  // The page reads state from the SERVER's mirror, which only moves when the
+  // robot pushes. It has been seen reporting a different incarnation, battery
+  // and uptime than the robot itself, so "where did this come from and when"
+  // has to be recorded next to the snapshot — a cached number on a safety
+  // surface must be distinguishable from a live one.
+  // ==========================================================================
+  describe('self freshness', () => {
+    beforeEach(() => {
+      useAgentModeStore.getState().selectRobot(ROBOT_ID);
+    });
+
+    // TASK-200. THE regression: `observedAt` used to be `Date.now()`, so every
+    // poll reset the age to zero and a snapshot from a process that died an
+    // hour ago rendered as "just now" — the staleness warning built for exactly
+    // this could never fire.
+    /** How old the store thinks the current self snapshot is, in ms. */
+    const selfAgeMs = (): number => {
+      const at = useAgentModeStore.getState().selfUpdatedAt;
+      expect(at).not.toBeNull();
+      return Date.now() - Date.parse(at as string);
+    };
+
+    it('dates a mirror read by the age the SERVER reports, not by the moment it fetched', async () => {
+      // In the server's own frame the snapshot was ingested 68 minutes before
+      // it answered. That AGE is the fact; the instant is in a clock this tab
+      // does not share.
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({
+          self: makeSelf(),
+          stateMirroredAt: '2026-08-02T05:55:00.000Z',
+          serverNow: '2026-08-02T07:03:00.000Z',
+        })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(s.self?.incarnation).toBe(47);
+      expect(s.selfLive).toBe(false);
+      expect(s.selfAgeUnknown).toBe(false);
+      expect(selfAgeMs()).toBeGreaterThanOrEqual(68 * 60_000);
+      expect(selfAgeMs()).toBeLessThan(68 * 60_000 + 10_000);
+    });
+
+    // A reviewer's find: the age used to be `Date.now() - mirroredAt`, a
+    // subtraction across two machines' clocks. A server two minutes AHEAD
+    // re-hid a stale snapshot as "just now"; one 90 s behind painted every
+    // fresh read as amber "cached" — the always-warning badge nobody reads.
+    it('is unmoved by a server clock that disagrees with this browser’s', async () => {
+      const skewMs = 2 * 60_000; // server ahead
+      const serverNowMs = Date.now() + skewMs;
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({
+          self: makeSelf(),
+          // 30 s old, measured entirely in the server's frame.
+          stateMirroredAt: new Date(serverNowMs - 30_000).toISOString(),
+          serverNow: new Date(serverNowMs).toISOString(),
+        })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(selfAgeMs()).toBeGreaterThanOrEqual(29_000);
+      expect(selfAgeMs()).toBeLessThan(35_000);
+    });
+
+    it('and by one that runs behind — a fresh read stays fresh', async () => {
+      const serverNowMs = Date.now() - 90_000; // server behind
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({
+          self: makeSelf(),
+          stateMirroredAt: new Date(serverNowMs - 2_000).toISOString(),
+          serverNow: new Date(serverNowMs).toISOString(),
+        })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(selfAgeMs()).toBeLessThan(10_000);
+    });
+
+    // A reviewer's find: `mirroredAt` moves on ANY ingested event, so a block
+    // event re-dated a `self` it never touched — and only ever in the direction
+    // of looking younger.
+    it('dates the self by the last SNAPSHOT, not by the last event of any kind', async () => {
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({
+          self: makeSelf(),
+          // The agent was alive 2 s ago (a block event)…
+          mirroredAt: '2026-08-02T07:02:58.000Z',
+          // …but what it last SAID about itself is half an hour old.
+          stateMirroredAt: '2026-08-02T06:33:00.000Z',
+          serverNow: '2026-08-02T07:03:00.000Z',
+        })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().selfAgeUnknown).toBe(false);
+      expect(selfAgeMs()).toBeGreaterThanOrEqual(30 * 60_000);
+    });
+
+    it('calls the age UNKNOWN when the server reports none, never "just now"', async () => {
+      mockedApi.getState.mockResolvedValueOnce(makeState({ self: makeSelf() }));
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      expect(s.self?.incarnation).toBe(47);
+      expect(s.selfUpdatedAt).toBeNull();
+      // The distinguishing bit: a snapshot DID arrive, its age is not knowable.
+      expect(s.selfAgeUnknown).toBe(true);
+    });
+
+    it('an explicit null stateMirroredAt is the same unknown age as an absent one', async () => {
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({ self: makeSelf(), stateMirroredAt: null, serverNow: '2026-08-02T07:03:00.000Z' })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().selfUpdatedAt).toBeNull();
+      expect(useAgentModeStore.getState().selfAgeUnknown).toBe(true);
+    });
+
+    it('will not date the self by proof-of-life alone', async () => {
+      // A server that reports only `mirroredAt` cannot say how old the SELF is,
+      // and `mirroredAt` is always the younger of the two. Guessing with it
+      // would understate the age — the one direction this must never fail in.
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({ self: makeSelf(), mirroredAt: '2026-08-02T07:02:59.000Z' })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().selfAgeUnknown).toBe(true);
+    });
+
+    it('falls back to the server’s raw instant when it reports no frame', async () => {
+      // A pre-`serverNow` server. Its instant is all there is, and it still
+      // beats stamping the fetch time.
+      const takenAt = new Date(Date.now() - 5 * 60_000).toISOString();
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({ self: makeSelf(), stateMirroredAt: takenAt })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().selfUpdatedAt).toBe(takenAt);
+      expect(useAgentModeStore.getState().selfAgeUnknown).toBe(false);
+    });
+
+    // ------------------------------------------------------------------
+    // A snapshot from a DIFFERENT process
+    // ------------------------------------------------------------------
+
+    /** The robot answers us directly once, so `selfLiveBootId` is set. */
+    const liveAnswerFrom = (bootId: string) =>
+      apply(event({ type: 'agent:state:changed', state: makeState({ self: makeSelf({ bootId }) }) }));
+
+    const mirrorRead = async (bootId: string, ageMs: number) => {
+      const serverNow = '2026-08-02T07:03:00.000Z';
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({
+          self: makeSelf({ bootId }),
+          stateMirroredAt: new Date(Date.parse(serverNow) - ageMs).toISOString(),
+          serverNow,
+        })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+    };
+
+    it('names an OLD mirror from another bootId as a different process', async () => {
+      // The observed defect: a duplicate agent booted, pushed one state event,
+      // died on EADDRINUSE, and its identity sat in the mirror for 68 minutes.
+      liveAnswerFrom('b-50a41c128583');
+      await mirrorRead('b-56cb257f5ffc', 68 * 60_000);
+
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(true);
+    });
+
+    // A reviewer's find: `selectRobot` no-ops for an unchanged robot id, so
+    // `selfLiveBootId` survives leaving /agent and coming back. If the agent
+    // restarted in between (watch mode does that on every saved file), the
+    // FRESH mirror read that follows carries the new boot — and used to be
+    // flagged, pointing the warning at the live process while treating the dead
+    // one as the reference.
+    it('does not flag a FRESH mirror from another bootId — that is the restart', async () => {
+      liveAnswerFrom('b-before-the-restart');
+      // Leaving the page and coming back re-derives the same robot id, so the
+      // store is NOT reset.
+      useAgentModeStore.getState().selectRobot(ROBOT_ID);
+      await mirrorRead('b-after-the-restart', 3_000);
+
+      const s = useAgentModeStore.getState();
+      expect(s.self?.bootId).toBe('b-after-the-restart');
+      expect(selectSelfSuperseded(s)).toBe(false);
+      // …and it is not being sold as stale either.
+      expect(selfAgeMs()).toBeLessThan(10_000);
+    });
+
+    it('treats an undatable mirror from another bootId as superseded', async () => {
+      // No age at all: the bootId is then the only evidence there is, and the
+      // quiet reading is the dangerous one.
+      liveAnswerFrom('b-A');
+      mockedApi.getState.mockResolvedValueOnce(makeState({ self: makeSelf({ bootId: 'b-B' }) }));
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(true);
+    });
+
+    it('clears the flag as soon as the robot answers for itself', async () => {
+      liveAnswerFrom('b-A');
+      await mirrorRead('b-B', 68 * 60_000);
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(true);
+
+      liveAnswerFrom('b-B');
+
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(false);
+    });
+
+
+    it('keeps stamping a LIVE answer with now, mirroredAt or not', async () => {
+      // The toggle/estop-reset/identity responses are proxied straight through
+      // to the robot, so "when I received it" IS when the robot said it.
+      const before = Date.now();
+      mockedApi.toggle.mockResolvedValueOnce(makeState({ self: makeSelf() }));
+
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+
+      const s = useAgentModeStore.getState();
+      expect(s.selfLive).toBe(true);
+      expect(s.selfAgeUnknown).toBe(false);
+      expect(Date.parse(s.selfUpdatedAt as string)).toBeGreaterThanOrEqual(before);
+    });
+
+    it('marks a pushed snapshot as live and keeps the event timestamp', () => {
+      apply(event({ type: 'agent:state:changed', state: makeState({ self: makeSelf() }) }));
+
+      const s = useAgentModeStore.getState();
+      expect(s.selfLive).toBe(true);
+      // The robot's own moment, not the moment this tab happened to render.
+      expect(s.selfUpdatedAt).toBe(TS);
+    });
+
+    it('leaves the stamp alone when an agent reports no self at all', () => {
+      apply(event({ type: 'agent:state:changed', state: makeState({ self: makeSelf() }) }));
+      apply(
+        event({
+          type: 'agent:state:changed',
+          state: makeState(),
+          timestamp: '2026-07-25T11:00:00.000Z',
+        })
+      );
+
+      // An older agent that omits `self` says nothing about the self we hold —
+      // and nothing about how old it is either.
+      expect(useAgentModeStore.getState().selfUpdatedAt).toBe(TS);
+    });
+
+    // TASK-200. The observed defect: a duplicate robot-agent booted, pushed one
+    // state event, died on EADDRINUSE — and the console showed ITS incarnation
+    // as the running robot's. A different bootId is not a degree of staleness.
+    it('knows a mirrored snapshot from a different process than last answered', async () => {
+      mockedApi.toggle.mockResolvedValueOnce(makeState({ self: makeSelf({ bootId: 'b-live' }) }));
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(false);
+
+      mockedApi.getState.mockResolvedValueOnce(
+        makeState({ self: makeSelf({ bootId: 'b-dead', incarnation: 200 }) })
+      );
+      mockedApi.getScene.mockResolvedValueOnce(null);
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(true);
+    });
+
+    it('does not cry "different process" over a mirror read of the same boot', async () => {
+      mockedApi.toggle.mockResolvedValueOnce(makeState({ self: makeSelf({ bootId: 'b-live' }) }));
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+
+      mockedApi.getState.mockResolvedValueOnce(makeState({ self: makeSelf({ bootId: 'b-live' }) }));
+      mockedApi.getScene.mockResolvedValueOnce(null);
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(false);
+    });
+
+    it('says nothing about processes before the robot has answered us once', async () => {
+      // With no live answer on record there is nothing to compare against, and
+      // an unproven accusation on a safety surface is its own kind of noise.
+      // Driven through the mirror path, because that is where the claim is
+      // decided — reading the flag back out of a hand-written state proves
+      // nothing about how it got set.
+      mockedApi.getState.mockResolvedValueOnce(makeState({ self: makeSelf({ bootId: 'b-dead' }) }));
+      mockedApi.getScene.mockResolvedValueOnce(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().selfLive).toBe(false);
+      expect(selectSelfSuperseded(useAgentModeStore.getState())).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // DURABLE MEMORY (TASK-197) — counts only, and "unknown" is never "empty"
+  // ==========================================================================
+  describe('memory digest', () => {
+    beforeEach(() => {
+      useAgentModeStore.getState().selectRobot(ROBOT_ID);
+    });
+
+    it('stores the digest an agent:memory:updated event carries', () => {
+      apply(event({ type: 'agent:memory:updated', memory: makeDigest() }));
+
+      expect(useAgentModeStore.getState().memory?.memoryEntries).toBe(3);
+    });
+
+    it('keeps the digest it has when the fetch cannot answer', async () => {
+      apply(event({ type: 'agent:memory:updated', memory: makeDigest() }));
+      mockedApi.getMemory.mockRejectedValueOnce(apiError(404, 'no memory workspace'));
+
+      await useAgentModeStore.getState().fetchMemory(ROBOT_ID);
+
+      const s = useAgentModeStore.getState();
+      // Unreadable is not empty, and it is not an error the operator can act
+      // on either — the panel must not flip to "remembers nothing".
+      expect(s.memory?.memoryEntries).toBe(3);
+      expect(s.error).toBeNull();
+    });
+
+    it('drops a digest that arrives after a robot switch', async () => {
+      let resolve: (digest: AgentMemoryDigest) => void = () => {};
+      mockedApi.getMemory.mockReturnValueOnce(
+        new Promise<AgentMemoryDigest>((r) => {
+          resolve = r;
+        })
+      );
+
+      const inFlight = useAgentModeStore.getState().fetchMemory(ROBOT_ID);
+      useAgentModeStore.getState().selectRobot('other-robot');
+      resolve(makeDigest());
+      await inFlight;
+
+      expect(useAgentModeStore.getState().memory).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // IDENTITY (TASK-198) — the naming ritual's non-conversational door
+  // ==========================================================================
+  describe('submitIdentity', () => {
+    beforeEach(() => {
+      useAgentModeStore.getState().selectRobot(ROBOT_ID);
+    });
+
+    it('adopts the self the robot reports back, not what was typed', async () => {
+      mockedApi.writeIdentity.mockResolvedValueOnce({
+        ok: true,
+        self: makeSelf({ name: 'Nova', bootstrapRequired: false, operator: 'Sam' }),
+      });
+
+      const ok = await useAgentModeStore.getState().submitIdentity(ROBOT_ID, { Name: 'Nova' });
+
+      const s = useAgentModeStore.getState();
+      expect(ok).toBe(true);
+      expect(s.self?.name).toBe('Nova');
+      expect(s.self?.operator).toBe('Sam');
+      expect(s.selfLive).toBe(true);
+      expect(s.isSavingIdentity).toBe(false);
+    });
+
+    it('reports a refusal instead of pretending the robot was renamed', async () => {
+      useAgentModeStore.setState({ self: makeSelf() });
+      mockedApi.writeIdentity.mockRejectedValueOnce(apiError(400, 'Name must be a string.'));
+
+      const ok = await useAgentModeStore.getState().submitIdentity(ROBOT_ID, { Name: 'Nova' });
+
+      const s = useAgentModeStore.getState();
+      expect(ok).toBe(false);
+      expect(s.error).toBe('Name must be a string.');
+      expect(s.self?.name).toBe('G1-EDU-Bot');
+      expect(s.isSavingIdentity).toBe(false);
     });
   });
 });

@@ -33,6 +33,9 @@ const ENDPOINTS = {
   exportKeepoutPgm: (id: string) => `/digital-twins/${id}/export/nav2-keepout.pgm`,
   exportKeepoutYaml: (id: string) => `/digital-twins/${id}/export/nav2-keepout.yaml`,
   exportVda5050: (id: string) => `/digital-twins/${id}/export/vda5050.json`,
+  // TASK-200: the robot's place graph, in the EXACT shape the robot reads off
+  // disk — the agent caches these bytes verbatim and does no translation.
+  placeGraph: (id: string) => `/digital-twins/${id}/places/_index.json`,
   importScan: (id: string) => `/digital-twins/${id}/import`,
   sessions: '/scan-sessions',
   session: (id: string) => `/scan-sessions/${id}`,
@@ -139,6 +142,16 @@ export const twinApi = {
 
   async downloadVda5050(twinId: string): Promise<Blob> {
     const res = await apiClient.get<Blob>(ENDPOINTS.exportVda5050(twinId), { responseType: 'blob' });
+    return res.data;
+  },
+
+  /**
+   * The place graph the robot will fetch and cache. Generated from this twin's
+   * `room` + `keepout` zones, so keep-outs can never diverge between the Nav2
+   * raster and what the robot's geofence enforces.
+   */
+  async downloadPlaceGraph(twinId: string): Promise<Blob> {
+    const res = await apiClient.get<Blob>(ENDPOINTS.placeGraph(twinId), { responseType: 'blob' });
     return res.data;
   },
 

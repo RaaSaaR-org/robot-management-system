@@ -14,6 +14,7 @@ import { config, getActiveModelName } from '../config/config.js';
 import { moveToLocation, stopMovement, goToCharge, returnHome } from '../tools/navigation.js';
 import { pickupObject, dropObject } from '../tools/manipulation.js';
 import { getRobotStatus, emergencyStop } from '../tools/status.js';
+import { recallMemory } from '../tools/memory.js';
 import type { RobotStateManager } from '../robot/state.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
@@ -288,11 +289,23 @@ export class RobotAgentExecutor implements AgentExecutor {
       // 4. Get current robot state for context
       const robotState = this.robotStateManager.getState();
 
+      // TASK-198 — identity, soul, body and the sensorium. Rendered rather than
+      // summarised: `BODY.md` is generated from the embodiment YAML at boot and
+      // the self-report is templated from files on this disk, so nothing here
+      // is a capability a model invented. Empty strings when this agent has no
+      // identity workspace — the prompt sections then simply do not render.
+      const identity = agentModeController.identitySnapshot();
+      const selfReport = agentModeController.selfReport('en') ?? '';
+
       // 5. Run the Genkit prompt with tools (rate-limited for free-tier providers)
       const callPrompt = () => robotAgentPrompt(
         {
+          identityCard: identity ? `${identity.name}${identity.emoji ? ` ${identity.emoji}` : ''}` : '',
+          soul: agentModeController.soulMarkdown(),
+          body: agentModeController.bodyMarkdown(),
+          self: selfReport,
           robotId: robotState.id,
-          robotName: robotState.name,
+          robotName: identity?.name ?? robotState.name,
           robotClass: robotState.robotClass,
           maxPayloadKg: robotState.maxPayloadKg,
           robotDescription: robotState.description,
@@ -314,6 +327,10 @@ export class RobotAgentExecutor implements AgentExecutor {
             dropObject,
             getRobotStatus,
             emergencyStop,
+            // Cross-place recall (TASK-197). A tool, not a planner block: this
+            // is the conversational agent, which is asked questions whose whole
+            // point is the retrieved answer.
+            recallMemory,
           ],
         }
       );
@@ -538,6 +555,21 @@ export class RobotAgentExecutor implements AgentExecutor {
       return;
     }
 
+    // TASK-198 — the wiring fix. Identity lives in `prompts/robot_agent.prompt`
+    // too, but that prompt is in the branch this method REPLACED: with Agent
+    // Mode on (which `dev:g1-edu-agent` forces) the Genkit path never runs, so
+    // "who are you?" would have been answerable only in a configuration nobody
+    // deploys. Answered here instead — before the planner, because the block
+    // planner deliberately gets no identity and no soul, and because a
+    // templated self-report costs no LLM round-trip and cannot round 43 joints
+    // down to "about forty". Whole-utterance matching, like the stop words, so
+    // a command that merely mentions the robot still goes to the planner.
+    const selfReport = agentModeController.answerIdentityQuestion(text, voice?.language ?? 'en');
+    if (selfReport) {
+      publish('completed', selfReport, true);
+      return;
+    }
+
     // Immediate acknowledgement — planning runs on a local LLM and must not
     // hold the A2A response open.
     publish('working', 'Agent Mode: understanding the command…', false);
@@ -546,6 +578,13 @@ export class RobotAgentExecutor implements AgentExecutor {
       text,
       contextId,
       ...(voice?.language ? { language: voice.language } : {}),
+      // The CHANNEL, carried independently of whether a language tag survived.
+      // `readVoiceHint()` returns `{speech: true}` with no language for a client
+      // that could not identify one, so a spoken turn can legitimately have no
+      // `language` — and the trust tier must still know it was spoken. Deriving
+      // it from `language` was how a bystander's unlabelled utterance reached
+      // durable memory as `operator`.
+      ...(voice ? { spoken: true } : {}),
     });
 
     // A spoken client gets the same fact in the language it was spoken to in;

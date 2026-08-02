@@ -10,31 +10,45 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
-const { mockAgentModeService, mockRobotManager, mockPost, mockGet, MockHttpClient } = vi.hoisted(
-  () => {
-    const mockPost = vi.fn();
-    const mockGet = vi.fn();
-    return {
-      mockAgentModeService: {
-        ingest: vi.fn(),
-        getState: vi.fn(),
-        isHydrated: vi.fn(),
-        getScene: vi.fn(),
-        getRecentEvents: vi.fn(),
-        onAgentModeEvent: vi.fn(),
-      },
-      mockRobotManager: {
-        getRegisteredRobot: vi.fn(),
-      },
-      mockPost,
-      mockGet,
-      MockHttpClient: class {
-        post = mockPost;
-        get = mockGet;
-      },
-    };
-  }
-);
+const {
+  mockAgentModeService,
+  mockRobotManager,
+  mockPost,
+  mockGet,
+  httpClientArgs,
+  MockHttpClient,
+} = vi.hoisted(() => {
+  const mockPost = vi.fn();
+  const mockGet = vi.fn();
+  /** Constructor arguments of every HttpClient the routes build. */
+  const httpClientArgs: unknown[][] = [];
+  return {
+    mockAgentModeService: {
+      ingest: vi.fn(),
+      getState: vi.fn(),
+      getMirroredAt: vi.fn(),
+      getStateMirroredAt: vi.fn(),
+      nowIso: vi.fn(() => '2026-08-02T07:10:00.000Z'),
+      isHydrated: vi.fn(),
+      getScene: vi.fn(),
+      getRecentEvents: vi.fn(),
+      onAgentModeEvent: vi.fn(),
+    },
+    mockRobotManager: {
+      getRegisteredRobot: vi.fn(),
+    },
+    mockPost,
+    mockGet,
+    httpClientArgs,
+    MockHttpClient: class {
+      post = mockPost;
+      get = mockGet;
+      constructor(...args: unknown[]) {
+        httpClientArgs.push(args);
+      }
+    },
+  };
+});
 
 // Keep the real isValidAgentModeSnapshot so the GET fallback's anti-fabrication
 // guard is exercised for real; only the stateful singleton is faked.
@@ -64,7 +78,7 @@ vi.mock('../services/HttpClient.js', async () => {
   };
 });
 
-import { agentModeRoutes } from '../routes/agent-mode.routes.js';
+import { agentModeRoutes, AGENT_STATE_UNAVAILABLE } from '../routes/agent-mode.routes.js';
 import { HttpClientError } from '../services/HttpClient.js';
 
 function createApp() {
@@ -107,10 +121,31 @@ const SCENE = {
   updatedAt: '2026-07-25T10:00:02.000Z',
 };
 
+const MEMORY_DIGEST = {
+  robotId: 'robot-001',
+  place: 'AISLE-3',
+  memoryBytes: 412,
+  memoryMaxBytes: 8192,
+  memoryEntries: 3,
+  places: [{ id: 'AISLE-3', entries: 2, bytes: 180 }],
+  journalDays: ['2026-08-01', '2026-08-02'],
+  retention: null,
+  updatedAt: '2026-08-02T10:00:00.000Z',
+};
+
+const IDENTITY = {
+  identity: { name: 'Nova', emoji: '🤖', operator: 'Sam Weber', site: 'Halle 3' },
+  self: { robotId: 'robot-001', name: 'Nova', bootstrapRequired: false },
+  report: 'I am Nova.',
+};
+
 describe('agent-mode routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    httpClientArgs.length = 0;
+    vi.unstubAllEnvs();
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   // -------------------------------------------------------------------------
@@ -193,6 +228,19 @@ describe('agent-mode routes', () => {
       expect(mockAgentModeService.ingest).not.toHaveBeenCalled();
     });
 
+    it('carries the memory digest through to the service', async () => {
+      // Dropped here, `agent:memory:updated` reached the WebSocket as an empty
+      // envelope: the robot said its durable memory changed and the app was
+      // told an event happened without being told what it was.
+      mockAgentModeService.ingest.mockReturnValue(STATE);
+
+      await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/events')
+        .send({ type: 'agent:memory:updated', robotId: 'robot-001', memory: MEMORY_DIGEST });
+
+      expect(mockAgentModeService.ingest.mock.calls[0][0].memory).toEqual(MEMORY_DIGEST);
+    });
+
     it('returns 500 when the service throws', async () => {
       mockAgentModeService.ingest.mockImplementation(() => {
         throw new Error('boom');
@@ -263,7 +311,7 @@ describe('agent-mode routes', () => {
       );
     });
 
-    it('404s when the robot answers 200 with an empty body instead of fabricating a state', async () => {
+    it('502s when the robot answers 200 with an empty body instead of fabricating a state', async () => {
       // A falsy body must not reach ingest: it would seed the mirror from
       // emptyState() and the route would return fabricated `enabled: false` /
       // `estopActive: false` with a 200.
@@ -273,24 +321,24 @@ describe('agent-mode routes', () => {
 
       const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
 
-      expect(res.status).toBe(404);
-      expect(res.body.error).toBe('No agent mode state for robot');
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
       expect(mockAgentModeService.ingest).not.toHaveBeenCalled();
     });
 
-    it('404s when the robot answers 200 with a shapeless body', async () => {
+    it('502s when the robot answers 200 with a shapeless body', async () => {
       mockAgentModeService.getState.mockReturnValue(null);
       mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
       mockGet.mockResolvedValue({ robotId: 'robot-001' }); // no enabled / estopActive
 
       const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
 
-      expect(res.status).toBe(404);
-      expect(res.body.error).toBe('No agent mode state for robot');
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
       expect(mockAgentModeService.ingest).not.toHaveBeenCalled();
     });
 
-    it('404s rather than serving an unhydrated state when the robot is unreachable', async () => {
+    it('502s rather than serving an unhydrated state when the robot is unreachable', async () => {
       mockAgentModeService.getState.mockReturnValue({ ...STATE, enabled: false });
       mockAgentModeService.isHydrated.mockReturnValue(false);
       mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
@@ -298,8 +346,181 @@ describe('agent-mode routes', () => {
 
       const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
 
-      expect(res.status).toBe(404);
-      expect(res.body.error).toBe('No agent mode state for robot');
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
+    });
+
+    it('answers a REACHABILITY failure differently from an unknown robot', async () => {
+      // THE PROBE for the false-safe display. Both used to be 404 with the same
+      // body, so a client could not tell "there is no such robot" from "nobody
+      // could ask the robot" — and rendered the second one as
+      // "Agent Mode off, E-Stop clear", which is a safety claim about a robot
+      // whose latch is unknown.
+      mockAgentModeService.getState.mockReturnValue(null);
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+      const unknownRobot = await request(createApp()).get('/api/robots/nope/agent-mode');
+
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(new HttpClientError('HTTP 401: MEMORY_TOKEN_REQUIRED', 401));
+      const unreachable = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(unknownRobot.status).toBe(404);
+      expect(unknownRobot.body.code).toBeUndefined();
+      expect(unreachable.status).toBe(502);
+      expect(unreachable.body.code).toBe('AGENT_STATE_UNAVAILABLE');
+      // The message must not read as a state — an operator seeing it has to
+      // know the E-Stop latch is unknown, not clear.
+      expect(unreachable.body.error).toContain('UNKNOWN');
+      expect(mockAgentModeService.ingest).not.toHaveBeenCalled();
+    });
+
+    it('never dates a failure — the 404 and 502 bodies stay exactly as they were', async () => {
+      // `mirroredAt` is a property of an ANSWER. Attaching it to "we could not
+      // ask the robot" would be a timestamp on nothing, and a client keying off
+      // its presence would read the 502 as a state.
+      mockAgentModeService.getState.mockReturnValue(null);
+      mockAgentModeService.getMirroredAt.mockReturnValue('2026-08-02T07:03:00.000Z');
+
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+      const notFound = await request(createApp()).get('/api/robots/nope/agent-mode');
+
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(new HttpClientError('ECONNREFUSED'));
+      const unreachable = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(notFound.status).toBe(404);
+      expect(notFound.body).toEqual({ error: 'No agent mode state for robot' });
+      expect(unreachable.status).toBe(502);
+      expect(unreachable.body).toEqual({ ...AGENT_STATE_UNAVAILABLE });
+      expect('mirroredAt' in unreachable.body).toBe(false);
+      expect('stateMirroredAt' in unreachable.body).toBe(false);
+      expect('serverNow' in unreachable.body).toBe(false);
+    });
+
+    it('presents AGENT_MEMORY_TOKEN to the robot’s personal-data gate', async () => {
+      // The agent gates this route. Off-loopback (a split-host deployment) an
+      // unauthenticated fallback is a 401, and the whole fallback — the reason
+      // this route asks the robot at all — never works there.
+      vi.stubEnv('AGENT_MEMORY_TOKEN', 'fleet-secret');
+      mockAgentModeService.getState.mockReturnValue(null);
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(STATE);
+      mockAgentModeService.ingest.mockImplementation((e) => e.state);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(httpClientArgs.at(-1)).toEqual([
+        'http://robot:41243',
+        expect.any(Number),
+        { Authorization: 'Bearer fleet-secret' },
+      ]);
+    });
+
+    it('sends no Authorization header when no shared secret is configured', async () => {
+      // The single-box default: the agent answers loopback callers without a
+      // token, and inventing an empty bearer would only make it 401.
+      vi.stubEnv('AGENT_MEMORY_TOKEN', '');
+      mockAgentModeService.getState.mockReturnValue(null);
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(STATE);
+      mockAgentModeService.ingest.mockImplementation((e) => e.state);
+
+      await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(httpClientArgs.at(-1)?.[2]).toEqual({});
+    });
+
+    // TASK-200: the age of the answer. Without it no client can tell a live
+    // robot from a snapshot a dead process left behind, and the app stamped its
+    // own fetch time — which is always "just now".
+    it('stamps the state with when the mirror last heard from the robot', async () => {
+      mockAgentModeService.getState.mockReturnValue(STATE);
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+      mockAgentModeService.getMirroredAt.mockReturnValue('2026-08-02T07:03:00.000Z');
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(res.body.mirroredAt).toBe('2026-08-02T07:03:00.000Z');
+      expect(mockAgentModeService.getMirroredAt).toHaveBeenCalledWith('robot-001');
+      // The robot's own answer is untouched beside it.
+      expect(res.body).toMatchObject({ robotId: 'robot-001', enabled: true });
+    });
+
+    it('says null rather than omitting the age it cannot report', async () => {
+      // Absent and null must not be the same wire answer: a client has to be
+      // able to see "this server cannot date the snapshot" and render an
+      // unknown age instead of inventing one.
+      mockAgentModeService.getState.mockReturnValue(STATE);
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+      mockAgentModeService.getMirroredAt.mockReturnValue(null);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(res.body.mirroredAt).toBeNull();
+      expect('mirroredAt' in res.body).toBe(true);
+    });
+
+    it('stamps the state it seeded from the robot too', async () => {
+      mockAgentModeService.getState.mockReturnValue(null);
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(STATE);
+      mockAgentModeService.ingest.mockImplementation((e) => e.state);
+      mockAgentModeService.getMirroredAt.mockReturnValue('2026-08-02T07:05:00.000Z');
+      mockAgentModeService.getStateMirroredAt.mockReturnValue('2026-08-02T07:05:00.000Z');
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(res.body.mirroredAt).toBe('2026-08-02T07:05:00.000Z');
+      expect(res.body.stateMirroredAt).toBe('2026-08-02T07:05:00.000Z');
+    });
+
+    // A reviewer's find: `mirroredAt` moves on ANY event, but the client dates
+    // the `self` inside the body by it. A block event then re-dates a snapshot
+    // it never touched.
+    it('dates the BODY by the last snapshot, not by the last event of any kind', async () => {
+      mockAgentModeService.getState.mockReturnValue(STATE);
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+      // Alive 2 s ago (a block event); but what it last SAID is 30 minutes old.
+      mockAgentModeService.getMirroredAt.mockReturnValue('2026-08-02T07:09:58.000Z');
+      mockAgentModeService.getStateMirroredAt.mockReturnValue('2026-08-02T06:40:00.000Z');
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(res.body.mirroredAt).toBe('2026-08-02T07:09:58.000Z');
+      expect(res.body.stateMirroredAt).toBe('2026-08-02T06:40:00.000Z');
+      expect(mockAgentModeService.getStateMirroredAt).toHaveBeenCalledWith('robot-001');
+    });
+
+    // A reviewer's find: the client used to subtract the server's stamp from
+    // its OWN clock. Skew then either re-hid staleness or painted every fresh
+    // read as cached. The frame the stamps live in has to travel with them.
+    it('reports its own clock, so the age can be taken in one frame', async () => {
+      mockAgentModeService.getState.mockReturnValue(STATE);
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+      mockAgentModeService.getMirroredAt.mockReturnValue('2026-08-02T07:09:45.000Z');
+      mockAgentModeService.getStateMirroredAt.mockReturnValue('2026-08-02T07:09:45.000Z');
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.body.serverNow).toBe('2026-08-02T07:10:00.000Z');
+      expect(Date.parse(res.body.serverNow) - Date.parse(res.body.stateMirroredAt)).toBe(15_000);
+    });
+
+    it('says null rather than omitting a snapshot age it cannot report', async () => {
+      mockAgentModeService.getState.mockReturnValue(STATE);
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+      mockAgentModeService.getMirroredAt.mockReturnValue('2026-08-02T07:03:00.000Z');
+      mockAgentModeService.getStateMirroredAt.mockReturnValue(null);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.body.stateMirroredAt).toBeNull();
+      expect('stateMirroredAt' in res.body).toBe(true);
     });
   });
 
@@ -320,6 +541,243 @@ describe('agent-mode routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Personal-data proxies (memory digest + identity)
+  //
+  // These MUST live on the server: the robot's `personalDataGate` strips
+  // `Access-Control-Allow-Origin` and 403s any cross-origin browser request, so
+  // the app can never reach the agent directly.
+  // -------------------------------------------------------------------------
+  describe('GET /:id/agent-mode/memory', () => {
+    it('proxies the robot’s digest with the shared secret', async () => {
+      vi.stubEnv('AGENT_MEMORY_TOKEN', 'fleet-secret');
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(MEMORY_DIGEST);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/memory');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ memoryEntries: 3, place: 'AISLE-3' });
+      expect(mockGet).toHaveBeenCalledWith('/api/v1/robots/robot-001/memory');
+      // Without the header this is a 401 on any split-host deployment — the
+      // whole reason `agentServiceAuthHeaders()` exists.
+      expect(httpClientArgs.at(-1)).toEqual([
+        'http://robot:41243',
+        expect.any(Number),
+        { Authorization: 'Bearer fleet-secret' },
+      ]);
+    });
+
+    it('404s when the robot is not registered on this server', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+
+      const res = await request(createApp()).get('/api/robots/nope/agent-mode/memory');
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('ROBOT_NOT_FOUND');
+      expect(mockGet).not.toHaveBeenCalled();
+    });
+
+    it('forwards the robot’s own NO_MEMORY_WORKSPACE 404 with its code', async () => {
+      // "This robot has no memory workspace" is something the ROBOT asserted,
+      // not a transport failure — and it is distinguishable from the server's
+      // own 404 by its code.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(
+        new HttpClientError('HTTP 404: {}', 404, undefined, undefined, {
+          code: 'NO_MEMORY_WORKSPACE',
+          message: 'This agent has no memory workspace configured.',
+        })
+      );
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/memory');
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('NO_MEMORY_WORKSPACE');
+    });
+
+    it('502s — not 404s — when the personal-data gate refuses the server', async () => {
+      // THE PROBE for the collapse the previous round fixed on `/agent-mode`:
+      // a 401 means AGENT_MEMORY_TOKEN is missing, which is a deployment fault.
+      // Answering 404 would tell the app "this robot remembers nothing".
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(
+        new HttpClientError('HTTP 401: MEMORY_TOKEN_REQUIRED', 401, undefined, undefined, {
+          code: 'MEMORY_TOKEN_REQUIRED',
+        })
+      );
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/memory');
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
+    });
+
+    it('502s when the robot is unreachable', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(new HttpClientError('Connection refused: http://robot:41243'));
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/memory');
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
+    });
+
+    it('502s on a 200 with an empty body rather than serving it', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(undefined);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/memory');
+
+      expect(res.status).toBe(502);
+    });
+  });
+
+  describe('GET /:id/agent-mode/identity', () => {
+    it('proxies the ID card, the self and the report', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(IDENTITY);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/identity');
+
+      expect(res.status).toBe(200);
+      expect(res.body.identity.name).toBe('Nova');
+      expect(res.body.self.bootstrapRequired).toBe(false);
+      expect(mockGet).toHaveBeenCalledWith('/api/v1/robots/robot-001/identity');
+    });
+
+    it('forwards the robot’s NO_IDENTITY 404', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(
+        new HttpClientError('HTTP 404: {}', 404, undefined, undefined, {
+          code: 'NO_IDENTITY',
+          problem: 'unreadable',
+        })
+      );
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/identity');
+
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({ code: 'NO_IDENTITY', problem: 'unreadable' });
+    });
+
+    it('502s on an answer that carries no identity', async () => {
+      // An empty card must not reach the naming dialog: it would present an
+      // unnamed robot as a named one.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue({ self: null });
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/identity');
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
+    });
+
+    it('404s when the robot is not registered', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+
+      const res = await request(createApp()).get('/api/robots/nope/agent-mode/identity');
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('ROBOT_NOT_FOUND');
+    });
+  });
+
+  describe('POST /:id/agent-mode/identity', () => {
+    it('forwards ONLY the labels the operator sent', async () => {
+      // THE PROBE: filling absent labels in with null looks like harmless
+      // normalisation and in fact blanks the Site of every robot renamed
+      // through the dialog.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockPost.mockResolvedValue({ ok: true, identity: { name: 'Nova' }, self: IDENTITY.self });
+
+      const res = await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/identity')
+        .send({ Name: 'Nova' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(mockPost).toHaveBeenCalledWith('/api/v1/robots/robot-001/identity', { Name: 'Nova' });
+      const sent = mockPost.mock.calls[0][1] as Record<string, unknown>;
+      expect(Object.keys(sent)).toEqual(['Name']);
+      expect('Site' in sent).toBe(false);
+    });
+
+    it('forwards an explicit null — the one way to clear a label', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockPost.mockResolvedValue({ ok: true, identity: {} });
+
+      await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/identity')
+        .send({ Site: null });
+
+      expect(mockPost).toHaveBeenCalledWith('/api/v1/robots/robot-001/identity', { Site: null });
+    });
+
+    it('400s on an empty patch without troubling the robot', async () => {
+      const res = await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/identity')
+        .send({ Serial: 'not-yours' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_IDENTITY');
+      expect(mockPost).not.toHaveBeenCalled();
+    });
+
+    it('forwards the robot’s refusal and its reason', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockPost.mockRejectedValue(
+        new HttpClientError('HTTP 400: {}', 400, undefined, undefined, {
+          code: 'IDENTITY_REFUSED',
+          message: 'Name must not be empty.',
+        })
+      );
+
+      const res = await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/identity')
+        .send({ Name: ' ' });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ code: 'IDENTITY_REFUSED', message: 'Name must not be empty.' });
+    });
+
+    it('502s on an answer that does not confirm the write', async () => {
+      // The dialog closes on `ok`; an unconfirmed write must not look like one.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockPost.mockResolvedValue({ identity: { name: 'Nova' } });
+
+      const res = await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/identity')
+        .send({ Name: 'Nova' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
+    });
+
+    it('502s when the robot is unreachable', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockPost.mockRejectedValue(new HttpClientError('ECONNREFUSED'));
+
+      const res = await request(createApp())
+        .post('/api/robots/robot-001/agent-mode/identity')
+        .send({ Name: 'Nova' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe(AGENT_STATE_UNAVAILABLE.code);
+    });
+
+    it('404s when the robot is not registered', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+
+      const res = await request(createApp())
+        .post('/api/robots/nope/agent-mode/identity')
+        .send({ Name: 'Nova' });
+
+      expect(res.status).toBe(404);
+      expect(mockPost).not.toHaveBeenCalled();
     });
   });
 

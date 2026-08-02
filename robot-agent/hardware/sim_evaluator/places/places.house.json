@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "frame": {
+    "id": "house-sim",
+    "kind": "sim",
+    "units": "m",
+    "yawConvention": "deg,+x=0,CCW+"
+  },
+  "places": [
+    {
+      "id": "HALLWAY",
+      "name": "Hallway",
+      "placeType": "corridor",
+      "floor": 0,
+      "polygon": [[-6.0, -1.5], [6.0, -1.5], [6.0, 1.5], [-6.0, 1.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "KITCHEN",
+      "name": "Kitchen",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [[-6.0, 1.5], [0.0, 1.5], [0.0, 4.5], [-6.0, 4.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "LIVING-ROOM",
+      "name": "Living Room",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [[0.0, 1.5], [6.0, 1.5], [6.0, 4.5], [0.0, 4.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "BEDROOM",
+      "name": "Bedroom",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [[-6.0, -4.5], [0.0, -4.5], [0.0, -1.5], [-6.0, -1.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "WORKSHOP",
+      "name": "Workshop",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [[0.0, -4.5], [6.0, -4.5], [6.0, -1.5], [0.0, -1.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    }
+  ]
+}

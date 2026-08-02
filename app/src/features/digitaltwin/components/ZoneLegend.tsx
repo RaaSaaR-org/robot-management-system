@@ -14,6 +14,7 @@ const ZONE_LABELS: Record<TwinZoneType, string> = {
   workcell: 'Work-cell',
   charging: 'Charging',
   speed: 'Speed limit',
+  room: 'Room / place',
 };
 
 export const ZoneLegend = memo(function ZoneLegend() {

@@ -38,8 +38,29 @@ export type SessionStatus = 'idle' | 'recording' | 'processing' | 'complete' | '
 /** Build-pipeline stage reported during processing. */
 export type SessionStage = 'downloading' | 'merging' | 'occupancy' | 'mesh' | 'roadmap';
 
-/** L2 zone classification authored on top of a twin. */
-export type TwinZoneType = 'keepout' | 'workcell' | 'charging' | 'speed';
+/**
+ * L2 zone classification authored on top of a twin. `'room'` (TASK-200) is a
+ * named region of floor the robot MAY stand in — it becomes a place in the
+ * robot's place graph and is excluded from the Nav2 keep-out raster.
+ */
+export type TwinZoneType = 'keepout' | 'workcell' | 'charging' | 'speed' | 'room';
+
+/**
+ * Place vocabulary a `room` (or `keepout`) zone can carry in `metadata.placeType`.
+ * Closed set — mirrors the robot agent's `PlaceTypes`.
+ */
+export const TWIN_PLACE_TYPES = [
+  'aisle',
+  'rack_face',
+  'dock',
+  'staging',
+  'cell',
+  'charging',
+  'corridor',
+  'office',
+  'unknown',
+] as const;
+export type TwinPlaceType = (typeof TWIN_PLACE_TYPES)[number];
 
 /** A 2D world-meters point used for zone polygons. */
 export interface TwinPoint {

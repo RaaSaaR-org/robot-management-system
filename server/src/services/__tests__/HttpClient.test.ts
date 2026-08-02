@@ -81,6 +81,24 @@ describe('HttpClient', () => {
         })
       );
     });
+
+    it('merges caller-supplied default headers, so credentials ride on every request', () => {
+      // The robot-agent's personal-data gate wants a bearer token. Before this,
+      // an HttpClient could only ever send Content-Type — so every server→agent
+      // call to a gated route worked on loopback and 401'd off-box.
+      new HttpClient('http://robot.local', HTTP_TIMEOUTS.SHORT, {
+        Authorization: 'Bearer fleet-secret',
+      });
+
+      expect(axios.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer fleet-secret',
+          },
+        })
+      );
+    });
   });
 
   describe('get', () => {

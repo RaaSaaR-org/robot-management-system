@@ -9,7 +9,11 @@ import { apiClient } from '@/api/client';
 import type {
   AgentCommandResponse,
   AgentEstopResponse,
+  AgentIdentityPatch,
+  AgentIdentityResponse,
+  AgentMemoryDigest,
   AgentModeState,
+  MirroredAgentModeState,
   SceneMemory,
 } from '../types/agentmode.types';
 
@@ -26,6 +30,17 @@ const ENDPOINTS = {
   toggle: (robotId: string) => `/robots/${robotId}/agent-mode/toggle`,
   estop: (robotId: string) => `/robots/${robotId}/agent-mode/estop`,
   estopReset: (robotId: string) => `/robots/${robotId}/agent-mode/estop/reset`,
+  /**
+   * Server-side proxies for the robot's two personal-data routes
+   * (`GET /api/v1/robots/:id/memory`, `POST /api/v1/robots/:id/identity`).
+   *
+   * They MUST go through the server: the robot's `personalDataGate` refuses
+   * cross-origin browser requests outright and strips the CORS header, so this
+   * app cannot call the agent directly no matter what token it holds — and it
+   * should not, since a bearer token in a browser bundle is not a secret.
+   */
+  memory: (robotId: string) => `/robots/${robotId}/agent-mode/memory`,
+  identity: (robotId: string) => `/robots/${robotId}/agent-mode/identity`,
 } as const;
 
 // ============================================================================
@@ -35,10 +50,16 @@ const ENDPOINTS = {
 export const agentmodeApi = {
   /**
    * Get the last known Agent Mode state the server holds for a robot.
+   *
+   * A MIRROR read, and the answer says so: `mirroredAt` is when the server last
+   * heard from the robot. Callers must carry it instead of stamping their own
+   * fetch time — the mirror only moves when the robot pushes, so "when I asked"
+   * says nothing about how old the answer is.
+   *
    * @param robotId - Robot ID
    */
-  async getState(robotId: string): Promise<AgentModeState> {
-    const response = await apiClient.get<AgentModeState>(ENDPOINTS.state(robotId));
+  async getState(robotId: string): Promise<MirroredAgentModeState> {
+    const response = await apiClient.get<MirroredAgentModeState>(ENDPOINTS.state(robotId));
     return response.data;
   },
 
@@ -49,6 +70,33 @@ export const agentmodeApi = {
   async getScene(robotId: string): Promise<SceneMemory | null> {
     const response = await apiClient.get<SceneMemory | null>(ENDPOINTS.scene(robotId));
     return response.data ?? null;
+  },
+
+  /**
+   * Get the durable-memory digest — counts and budgets, never the content of
+   * `MEMORY.md`. Null when this deployment cannot answer (no proxy, no
+   * workspace on the robot, robot unreachable), which is "unknown", not "empty".
+   * @param robotId - Robot ID
+   */
+  async getMemory(robotId: string): Promise<AgentMemoryDigest | null> {
+    const response = await apiClient.get<AgentMemoryDigest | null>(ENDPOINTS.memory(robotId));
+    return response.data ?? null;
+  },
+
+  /**
+   * Name the robot: writes Name/Emoji/Operator/Site into its `IDENTITY.md`.
+   * @param robotId - Robot ID
+   * @param patch - Fields to set; `null` clears one, omitted leaves it alone
+   */
+  async writeIdentity(
+    robotId: string,
+    patch: AgentIdentityPatch
+  ): Promise<AgentIdentityResponse> {
+    const response = await apiClient.post<AgentIdentityResponse>(
+      ENDPOINTS.identity(robotId),
+      patch
+    );
+    return response.data;
   },
 
   /**

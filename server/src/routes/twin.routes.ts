@@ -14,6 +14,7 @@ import { scanSessionService } from '../services/ScanSessionService.js';
 import { PointCloudParseError } from '../storage/pointcloud-parse.js';
 import { twinZoneService } from '../services/TwinZoneService.js';
 import { twinExportService } from '../services/TwinExportService.js';
+import { twinPlaceGraphService } from '../services/TwinPlaceGraphService.js';
 import { sensorScanService } from '../services/SensorScanService.js';
 import { digitalTwinRepository } from '../repositories/index.js';
 import { modelStorage } from '../storage/model-storage.js';
@@ -26,6 +27,7 @@ import type {
   TwinZoneType,
   TwinZonePoint,
 } from '../types/twin.types.js';
+import { TwinZoneTypes, isTwinZoneType } from '../types/twin.types.js';
 
 // ============================================================================
 // SIDECAR WORKER ROUTES — /api/twin/workers (workerAuthMiddleware)
@@ -393,6 +395,12 @@ digitalTwinRoutes.post('/:id/zones', async (req: Request, res: Response) => {
     if (typeof name !== 'string' || typeof type !== 'string' || !Array.isArray(points)) {
       return res.status(400).json({ error: 'name, type, and points[] are required' });
     }
+    // Validated, not cast. An unrecognised type used to persist verbatim and
+    // then silently miss BOTH the keep-out raster (allow-list) and the place
+    // graph (allow-list) — a polygon that exists in the UI and nowhere else.
+    if (!isTwinZoneType(type)) {
+      return res.status(400).json({ error: `type must be one of ${TwinZoneTypes.join(' | ')}` });
+    }
     const zone = await twinZoneService.createZone({
       twinId: req.params.id,
       name,
@@ -413,6 +421,9 @@ digitalTwinRoutes.post('/:id/zones', async (req: Request, res: Response) => {
 digitalTwinRoutes.put('/:id/zones/:zoneId', async (req: Request, res: Response) => {
   try {
     const { name, type, points, minZ, maxZ, color, metadata } = req.body ?? {};
+    if (type !== undefined && !isTwinZoneType(type)) {
+      return res.status(400).json({ error: `type must be one of ${TwinZoneTypes.join(' | ')}` });
+    }
     const zone = await twinZoneService.updateZone(req.params.id, req.params.zoneId, {
       name: typeof name === 'string' ? name : undefined,
       type: typeof type === 'string' ? (type as TwinZoneType) : undefined,
@@ -438,6 +449,29 @@ digitalTwinRoutes.delete('/:id/zones/:zoneId', async (req: Request, res: Respons
   } catch (error) {
     console.error('[TwinZone] delete error:', error);
     res.status(500).json({ error: 'Failed to delete zone' });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// Place graph — /api/digital-twins/:id/places/_index.json  (TASK-200)
+// ----------------------------------------------------------------------------
+
+/**
+ * GET /api/digital-twins/:id/places/_index.json
+ *
+ * The robot's place graph, in the EXACT shape the robot reads off disk — so the
+ * agent does zero translation and can cache the response bytes verbatim. Built
+ * from the twin's `room` + `keepout` zones; `TwinZone` stays the single source
+ * of truth, so a keepout can never differ between here and the Nav2 raster.
+ */
+digitalTwinRoutes.get('/:id/places/_index.json', async (req: Request, res: Response) => {
+  try {
+    const graph = await twinPlaceGraphService.exportPlaceGraph(req.params.id);
+    if (!graph) return res.status(404).json({ error: 'Digital twin not found' });
+    res.json(graph);
+  } catch (error) {
+    console.error('[TwinPlaceGraph] export error:', error);
+    res.status(500).json({ error: 'Failed to export place graph' });
   }
 });
 

@@ -85,7 +85,28 @@ vi.mock('uuid', () => ({
   v4: vi.fn(() => 'fixed-uuid-token'),
 }));
 
-import { GDPRRequestService, gdprRequestService } from '../GDPRRequestService.js';
+// TASK-197: erasure reaches the fleet. Mocked here so the DB-side assertions
+// stay about the DB — the fleet pass has its own test file.
+const { robotMemoryErasureMock } = vi.hoisted(() => ({
+  robotMemoryErasureMock: {
+    eraseFleetMemory: vi.fn(),
+  },
+}));
+
+vi.mock('../RobotMemoryErasureService.js', () => ({
+  robotMemoryErasureService: robotMemoryErasureMock,
+  RobotMemoryErasureService: class {},
+}));
+
+import {
+  GDPRRequestService,
+  gdprRequestService,
+  ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD,
+  ROBOT_MEMORY_BLOCKED_BY_LEGAL_HOLD,
+  ROBOT_MEMORY_FLEET_UNKNOWN,
+  ROBOT_MEMORY_HOLD_CHECK_FAILED,
+  ROBOT_MEMORY_REQUIRES_OPT_IN,
+} from '../GDPRRequestService.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -122,6 +143,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   // status-history writes happen on most paths; make them succeed by default
   prismaMock.gDPRRequestStatusHistory.create.mockResolvedValue({});
+  // Default: a fleet with nothing to erase.
+  robotMemoryErasureMock.eraseFleetMemory.mockResolvedValue({
+    attempted: 0,
+    succeeded: 0,
+    failed: 0,
+    removed: 0,
+    outcomes: [],
+  });
 });
 
 // ===========================================================================
@@ -735,6 +764,296 @@ describe('executeErasure', () => {
     expect(userArg.data.isActive).toBe(false);
     expect(userArg.data.passwordHash).toBe('ERASED');
     expect(userArg.data.email).toContain('gdpr-erased.local');
+  });
+
+  /** Nothing blocks, nothing to delete — the DB half of a clean erasure. */
+  function mockCleanDatabaseErasure(): void {
+    legalHoldServiceMock.getLogsUnderHold.mockResolvedValue([]);
+    prismaMock.complianceLog.findMany.mockResolvedValue([]);
+    prismaMock.complianceLog.count.mockResolvedValue(0);
+    prismaMock.user.count.mockResolvedValue(1);
+    prismaMock.userConsent.count.mockResolvedValue(0);
+    prismaMock.userConsent.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.gDPRRequest.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.complianceLog.updateMany.mockResolvedValue({ count: 0 });
+    prismaMock.complianceLog.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.dataRestriction.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.user.update.mockResolvedValue({});
+  }
+
+  it('reaches the robot fleet on an explicit opt-in — a place note is personal data no row delete touches', async () => {
+    mockCleanDatabaseErasure();
+    robotMemoryErasureMock.eraseFleetMemory.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      failed: 0,
+      removed: 4,
+      outcomes: [{ robotId: 'g1-edu-4', ok: true, removed: 4 }],
+    });
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).toHaveBeenCalledOnce();
+    // FILES are counted as files. Folding them into `deletedRecords` reported a
+    // robot file count to the data subject as if it were database rows.
+    expect(result.robotFilesRemoved).toBe(4);
+    expect(result.robotsAttempted).toBe(1);
+    expect(result.deletedRecords).toBe(0);
+    expect(result.blockedReasons).toEqual([]);
+  });
+
+  it('does NOT wipe the fleet without an explicit opt-in, and says so', async () => {
+    // One subject's Art. 17 request must not destroy 20 robots' memory —
+    // including place notes authored by other operators, i.e. other data
+    // subjects' personal data erased without their request.
+    mockCleanDatabaseErasure();
+
+    const result = await gdprRequestService.executeErasure('user-1');
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).not.toHaveBeenCalled();
+    expect(result.robotFilesRemoved).toBe(0);
+    expect(result.robotsAttempted).toBe(0);
+    expect(result.blockedReasons).toEqual([ROBOT_MEMORY_REQUIRES_OPT_IN]);
+  });
+
+  it('suppresses the robot wipe while a legal hold is active, even with the opt-in', async () => {
+    // The robots' journal is a second copy of the held data category — the
+    // robot's own `Journal.prune()` refuses to delete it under a hold, and this
+    // path used to delete every `journal/*.jsonl` anyway while still reporting
+    // the hold as a blocked reason, as if nothing had been deleted.
+    legalHoldServiceMock.getLogsUnderHold.mockResolvedValue(['log-1']);
+    prismaMock.complianceLog.findMany.mockResolvedValue([{ id: 'log-1' }]);
+    prismaMock.complianceLog.count.mockResolvedValue(0);
+    prismaMock.user.count.mockResolvedValue(1);
+    prismaMock.userConsent.count.mockResolvedValue(0);
+    prismaMock.userConsent.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.gDPRRequest.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.complianceLog.updateMany.mockResolvedValue({ count: 0 });
+    prismaMock.complianceLog.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.dataRestriction.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.user.update.mockResolvedValue({});
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).not.toHaveBeenCalled();
+    expect(result.robotFilesRemoved).toBe(0);
+    expect(result.blockedReasons).toContain('1 logs under legal hold');
+    expect(result.blockedReasons).toContain(ROBOT_MEMORY_BLOCKED_BY_LEGAL_HOLD);
+  });
+
+  it('reports an unreachable robot as blocked instead of rolling the erasure back', async () => {
+    mockCleanDatabaseErasure();
+    robotMemoryErasureMock.eraseFleetMemory.mockResolvedValue({
+      attempted: 1,
+      succeeded: 0,
+      failed: 1,
+      removed: 0,
+      outcomes: [{ robotId: 'g1-edu-4', ok: false, removed: 0, error: 'ECONNREFUSED' }],
+    });
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    // The DB erasure already happened; a robot that is switched off cannot undo
+    // it, and must not be silently counted as erased either.
+    expect(prismaMock.user.update).toHaveBeenCalledOnce();
+    expect(result.blockedReasons).toEqual([
+      expect.stringContaining('Robot g1-edu-4: memory workspace not erased (ECONNREFUSED)'),
+    ]);
+  });
+
+  /**
+   * `complianceLog.count` is asked two different questions during an erasure:
+   * the subject's mandatory-retention count (`where.operatorId`) and the
+   * fleet-wide hold check over the categories the wipe destroys
+   * (`where.eventType`). Dispatch on the where clause so a test can answer them
+   * independently.
+   */
+  function mockComplianceCounts(opts: {
+    subjectRetention?: number;
+    subjectTotal?: number;
+    heldJournalLogs?: number;
+  }): void {
+    prismaMock.complianceLog.count.mockImplementation(
+      async (args?: { where?: { eventType?: string; retentionExpiresAt?: unknown } }) => {
+        if (args?.where?.eventType !== undefined) return opts.heldJournalLogs ?? 0;
+        if (args?.where?.retentionExpiresAt !== undefined) return opts.subjectRetention ?? 0;
+        return opts.subjectTotal ?? 0;
+      },
+    );
+  }
+
+  /** The DB mutations of an erasure, all no-ops. */
+  function mockDatabaseMutations(): void {
+    prismaMock.userConsent.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.gDPRRequest.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.complianceLog.updateMany.mockResolvedValue({ count: 0 });
+    prismaMock.complianceLog.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.dataRestriction.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.user.update.mockResolvedValue({});
+    prismaMock.user.count.mockResolvedValue(1);
+    prismaMock.userConsent.count.mockResolvedValue(0);
+  }
+
+  it('suppresses the fleet wipe for a hold on ANOTHER operator’s logs', async () => {
+    // THE PROBE. An active hold pins `log-held-other-operator`; the requester
+    // owns only `log-mine`. The subject-scoped gate intersects the two sets,
+    // finds nothing, and stays silent — but `eraseFleetMemory()` DELETEs
+    // `/robots/:id/memory` on EVERY robot, destroying the journal copy of the
+    // very `command_execution` records the hold pins. Same for the
+    // system/robot-authored logs (`operatorId: null`) that are the bulk of the
+    // compliance table. A fleet-wide effect needs a fleet-wide gate.
+    legalHoldServiceMock.getLogsUnderHold.mockResolvedValue(['log-held-other-operator']);
+    prismaMock.complianceLog.findMany.mockResolvedValue([{ id: 'log-mine' }]);
+    mockComplianceCounts({ heldJournalLogs: 1 });
+    mockDatabaseMutations();
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).not.toHaveBeenCalled();
+    expect(result.robotFilesRemoved).toBe(0);
+    expect(result.robotsAttempted).toBe(0);
+    expect(result.blockedReasons).toContain(ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD);
+    // The subject-scoped gate is genuinely silent here — this is not the
+    // round-2 test passing by accident because the hold sits on the
+    // requester's own log.
+    expect(result.blockedReasons.join(' ')).not.toContain('logs under legal hold');
+    // The DB half still ran: a hold on the robots' journal does not postpone
+    // the erasure of rows that are not held.
+    expect(prismaMock.user.update).toHaveBeenCalledOnce();
+    // The fleet-wide check must not be subject-scoped.
+    const holdCountArgs = prismaMock.complianceLog.count.mock.calls
+      .map((c) => c[0] as { where?: Record<string, unknown> } | undefined)
+      .find((a) => a?.where?.eventType !== undefined);
+    expect(holdCountArgs?.where).toMatchObject({
+      id: { in: ['log-held-other-operator'] },
+      eventType: { in: expect.arrayContaining(['command_execution']) },
+    });
+    expect(holdCountArgs?.where?.operatorId).toBeUndefined();
+  });
+
+  it('covers every category the wipe destroys, not just the journal’s', async () => {
+    // THE CONTROL RUN for the round-4 asymmetry. `checkFleetWipeHold` counted
+    // held `command_execution` logs only, while `Workspace.erase()` destroys
+    // `MEMORY.md`, every place note, `intents.jsonl` AND `incarnations.jsonl`
+    // — so a hold pinning a NON-journal category the wipe still destroys let
+    // the fleet-wide wipe proceed (observed: robotFilesRemoved 12,
+    // blockedReasons []). The gate has to be at least as wide as the erase.
+    legalHoldServiceMock.getLogsUnderHold.mockResolvedValue(['log-boot-lineage']);
+    prismaMock.complianceLog.findMany.mockResolvedValue([]);
+    mockDatabaseMutations();
+
+    // Only a `system_event` hold — the category `incarnations.jsonl` (up to 200
+    // boots of "this robot was HERE at THIS time") duplicates.
+    prismaMock.complianceLog.count.mockImplementation(
+      async (args?: { where?: { eventType?: { in?: string[] }; retentionExpiresAt?: unknown } }) => {
+        const categories = args?.where?.eventType?.in;
+        if (categories) return categories.includes('system_event') ? 1 : 0;
+        return 0;
+      },
+    );
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).not.toHaveBeenCalled();
+    expect(result.robotFilesRemoved).toBe(0);
+    expect(result.blockedReasons).toContain(ROBOT_MEMORY_BLOCKED_BY_FLEET_HOLD);
+    // Not the subject-scoped gate passing by accident.
+    expect(result.blockedReasons.join(' ')).not.toContain('logs under legal hold');
+    // Every category the wipe touches is asked about, in one query.
+    const holdCountArgs = prismaMock.complianceLog.count.mock.calls
+      .map((c) => c[0] as { where?: { eventType?: { in?: string[] } } } | undefined)
+      .find((a) => a?.where?.eventType !== undefined);
+    expect(holdCountArgs?.where?.eventType?.in).toEqual(
+      expect.arrayContaining(['command_execution', 'ai_decision', 'safety_action', 'system_event']),
+    );
+  });
+
+  it('still wipes when the only active hold covers a category no robot holds', async () => {
+    // The gate must not degenerate into "any hold anywhere blocks forever":
+    // an `access_audit` hold records reads of PLATFORM data and pins nothing
+    // that lives on a robot, so it must not suppress the wipe.
+    legalHoldServiceMock.getLogsUnderHold.mockResolvedValue(['log-access-audit']);
+    prismaMock.complianceLog.findMany.mockResolvedValue([]);
+    mockComplianceCounts({ heldJournalLogs: 0 });
+    mockDatabaseMutations();
+    robotMemoryErasureMock.eraseFleetMemory.mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      failed: 0,
+      removed: 3,
+      outcomes: [{ robotId: 'g1-edu-4', ok: true, removed: 3 }],
+    });
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).toHaveBeenCalledOnce();
+    expect(result.robotFilesRemoved).toBe(3);
+    expect(result.blockedReasons).toEqual([]);
+    // `access_audit` was never in the queried set — the widening is scoped, not
+    // a blanket "any hold".
+    const holdCountArgs = prismaMock.complianceLog.count.mock.calls
+      .map((c) => c[0] as { where?: { eventType?: { in?: string[] } } } | undefined)
+      .find((a) => a?.where?.eventType !== undefined);
+    expect(holdCountArgs?.where?.eventType?.in).not.toContain('access_audit');
+  });
+
+  it('suppresses the fleet wipe when the hold check itself cannot be answered', async () => {
+    // Not knowing whether a hold covers the robots' journals is not permission
+    // to delete them.
+    legalHoldServiceMock.getLogsUnderHold
+      .mockResolvedValueOnce([]) // eligibility (DB half) succeeds
+      .mockRejectedValueOnce(new Error('legal hold table unreachable'));
+    prismaMock.complianceLog.findMany.mockResolvedValue([]);
+    mockComplianceCounts({});
+    mockDatabaseMutations();
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(robotMemoryErasureMock.eraseFleetMemory).not.toHaveBeenCalled();
+    expect(result.blockedReasons).toContain(ROBOT_MEMORY_HOLD_CHECK_FAILED);
+    expect(prismaMock.user.update).toHaveBeenCalledOnce();
+  });
+
+  it('reports a fleet that could not be enumerated as blocked, not as an empty fleet', async () => {
+    // Probe: `prisma.robot.findMany` rejects inside the erasure service. The
+    // result then looks exactly like "no robot has an agent URL", and the Art.
+    // 17 answer claimed a complete erasure while the code never found out which
+    // robots exist.
+    mockCleanDatabaseErasure();
+    robotMemoryErasureMock.eraseFleetMemory.mockResolvedValue({
+      attempted: 0,
+      succeeded: 0,
+      failed: 1,
+      removed: 0,
+      outcomes: [],
+      listError: 'db down',
+    });
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(result.robotsAttempted).toBe(0);
+    expect(result.robotFilesRemoved).toBe(0);
+    expect(result.blockedReasons).toEqual([
+      expect.stringContaining(ROBOT_MEMORY_FLEET_UNKNOWN),
+    ]);
+    expect(result.blockedReasons[0]).toContain('db down');
+  });
+
+  it('reports a genuinely empty fleet as a clean erasure', async () => {
+    // The other half of the distinction: enumerated, nothing to erase.
+    mockCleanDatabaseErasure();
+    robotMemoryErasureMock.eraseFleetMemory.mockResolvedValue({
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      removed: 0,
+      outcomes: [],
+    });
+
+    const result = await gdprRequestService.executeErasure('user-1', { eraseRobotMemory: true });
+
+    expect(result.blockedReasons).toEqual([]);
+    expect(result.robotsAttempted).toBe(0);
   });
 
   it('propagates a failure from the user soft-delete step', async () => {

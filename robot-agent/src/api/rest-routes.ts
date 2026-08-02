@@ -21,6 +21,113 @@ import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { RolloutStrategies, type RolloutStrategy } from '../vla/types.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
+import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
+import { getIdentityStore } from '../agent-mode/identity.js';
+
+/**
+ * Shared secret that unlocks the personal-data routes from off-box.
+ *
+ * Read from the environment per request, not from `config` (frozen at import):
+ * rotating this must not require a robot restart, and a test must be able to
+ * turn it on and off. Unset ⇒ loopback-only, which is the safe default for the
+ * dev profiles in this repo.
+ */
+export const MEMORY_TOKEN_ENV = 'AGENT_MEMORY_TOKEN';
+
+/** Loopback literals, in the shapes Node hands them to Express. */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const addr = address.replace(/^::ffff:/, '');
+  return addr === '127.0.0.1' || addr === '::1' || addr.startsWith('127.');
+}
+
+/**
+ * Same-origin, in the only sense that matters here: a browser page served from
+ * this very agent. Anything else — including the operator UI on another port —
+ * must present the token.
+ */
+function isSameOrigin(origin: string, host: string | undefined): boolean {
+  if (!host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The gate in front of everything that serves or destroys PERSONAL DATA:
+ * `MEMORY.md`, the memory digest, erasure, and the standing intents.
+ *
+ * The rest of this agent is deliberately open (estop, toggle, command) and this
+ * does not widen that pattern to durable operator-authored text. Three things
+ * happen, in order:
+ *
+ *  1. The permissive `Access-Control-Allow-Origin: *` that `app.use(cors())`
+ *     put on the response is REMOVED, so no browser page can read the body even
+ *     if the request itself is allowed. `Vary: Origin` keeps a cache from
+ *     serving one origin's answer to another.
+ *  2. A cross-origin request is refused outright. That is the attack in the
+ *     finding — any page on the network `fetch`ing the robot — and it is refused
+ *     whether or not the browser would have let the page read the answer.
+ *  3. Then either a matching bearer token (when `AGENT_MEMORY_TOKEN` is set) or
+ *     a loopback peer. With no token configured, off-box callers get 401 with
+ *     the variable's name in the message rather than silence.
+ *
+ * Not a substitute for real authentication of the whole agent — see the
+ * follow-up recorded with this change — but the narrowest thing that stops the
+ * cross-site read today.
+ */
+export function personalDataGate(req: Request, res: Response, next: NextFunction): void {
+  res.removeHeader('Access-Control-Allow-Origin');
+  res.setHeader('Vary', 'Origin');
+
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin && !isSameOrigin(origin, req.headers.host)) {
+    res.status(403).json({
+      code: 'CROSS_ORIGIN_FORBIDDEN',
+      message:
+        'This endpoint serves personal data and refuses cross-origin browser requests. ' +
+        'Call it from a server-side client with a bearer token.',
+    });
+    return;
+  }
+
+  const expected = process.env[MEMORY_TOKEN_ENV] ?? '';
+  if (expected) {
+    const header = req.headers.authorization ?? '';
+    const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (!presented || !timingSafeEquals(presented, expected)) {
+      res.status(401).json({
+        code: 'MEMORY_TOKEN_REQUIRED',
+        message: `This endpoint serves personal data. Present the ${MEMORY_TOKEN_ENV} as a bearer token.`,
+      });
+      return;
+    }
+    next();
+    return;
+  }
+
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    res.status(401).json({
+      code: 'MEMORY_TOKEN_REQUIRED',
+      message:
+        'This endpoint serves personal data and no shared secret is configured, so it ' +
+        `answers loopback callers only. Set ${MEMORY_TOKEN_ENV} to reach it from off-box.`,
+    });
+    return;
+  }
+
+  next();
+}
+
+/** Constant-time-ish comparison, so a token cannot be guessed byte by byte. */
+function timingSafeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
 export function createRestRoutes(
   robotStateManager: RobotStateManager,
@@ -1104,7 +1211,13 @@ export function createRestRoutes(
   };
 
   // GET /robots/:id/agent-mode — full AgentModeState
-  router.get('/robots/:id/agent-mode', (req: Request, res: Response) => {
+  //
+  // GATED: the state embeds `plan.command` — the operator's own words, verbatim
+  // — plus the scene's VLM captions of whoever is standing in front of the
+  // robot. Same data category as MEMORY.md, so the same gate. The control verbs
+  // below it (toggle, command, estop) stay open on purpose: an E-Stop that
+  // needs a bearer token is a worse failure than an ungated one.
+  router.get('/robots/:id/agent-mode', personalDataGate, (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     res.json(agentModeController.getState());
   });
@@ -1120,7 +1233,7 @@ export function createRestRoutes(
     res.json(agentModeController.setEnabled(enabled));
   });
 
-  // POST /robots/:id/agent-mode/command — {text, contextId?}
+  // POST /robots/:id/agent-mode/command — {text, contextId?, spoken?}
   router.post('/robots/:id/agent-mode/command', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     const text = req.body?.text;
@@ -1129,9 +1242,14 @@ export function createRestRoutes(
       return;
     }
     const contextId = typeof req.body?.contextId === 'string' ? req.body.contextId : undefined;
+    // `spoken: true` is honoured, `spoken: false` is not a thing: a caller may
+    // only ever LOWER the trust of its own turn (see `rememberTrust`). A REST
+    // push-to-talk bridge can declare itself; nothing can declare itself typed.
+    const spoken = req.body?.spoken === true;
     const result = await agentModeController.submitCommand({
       text,
       ...(contextId ? { contextId } : {}),
+      ...(spoken ? { spoken: true } : {}),
     });
     // A refusal is a normal, expected answer (mode off, E-Stop latched, control
     // held elsewhere) — the caller reads `accepted`, not the status code.
@@ -1155,15 +1273,252 @@ export function createRestRoutes(
   });
 
   // GET /robots/:id/agent-mode/scene — SceneMemory | null
-  router.get('/robots/:id/agent-mode/scene', (req: Request, res: Response) => {
+  // GATED: VLM captions of the people and the room in front of the robot.
+  router.get('/robots/:id/agent-mode/scene', personalDataGate, (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     res.json(agentModeController.getScene());
   });
 
   // GET /robots/:id/agent-mode/scene.md — the current_view.md dump
-  router.get('/robots/:id/agent-mode/scene.md', (req: Request, res: Response) => {
+  // GATED: same content as `/scene`, rendered.
+  router.get('/robots/:id/agent-mode/scene.md', personalDataGate, (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     res.type('text/markdown').send(agentModeController.sceneMarkdown());
+  });
+
+  // ============================================================================
+  // DURABLE MEMORY (TASK-197)
+  //
+  // Everything below the gate serves or destroys operator-authored personal
+  // data — see {@link personalDataGate}. This is the first thing in this agent
+  // that does, which is why it is the first thing with a gate.
+  // ============================================================================
+
+  router.use('/robots/:id/memory', personalDataGate);
+  router.use('/robots/:id/memory.md', personalDataGate);
+  router.use('/robots/:id/agent-mode/intents', personalDataGate);
+
+  // GET /robots/:id/memory — the digest (counts, not content)
+  router.get('/robots/:id/memory', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const digest = agentModeController.memoryDigest();
+    if (!digest) {
+      // 404 rather than an empty digest: "this robot has no memory workspace"
+      // and "this robot remembers nothing" are different answers, and only one
+      // of them is a fact about the robot's experience.
+      res.status(404).json({
+        code: 'NO_MEMORY_WORKSPACE',
+        message: 'This agent has no memory workspace configured.',
+      });
+      return;
+    }
+    res.json(digest);
+  });
+
+  // GET /robots/:id/memory.md — MEMORY.md verbatim
+  router.get('/robots/:id/memory.md', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.type('text/markdown').send(agentModeController.memoryMarkdown());
+  });
+
+  // DELETE /robots/:id/memory — GDPR Art. 17 erasure of the workspace.
+  // Wipes MEMORY.md, every place note, the journal, the standing intents, the
+  // boot lineage and every orphaned scratch file, and blanks Operator/Site on
+  // IDENTITY.md; the operating rules (AGENTS.md) and the surveyed place graph
+  // survive — they are configuration and site geometry, not anything observed
+  // about a person. See `Workspace.erase`.
+  router.delete('/robots/:id/memory', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const result = agentModeController.eraseMemory();
+    // The card was redacted ON DISK; this drops the copy this process is still
+    // holding in memory, so the very next GET /identity cannot answer with the
+    // operator's name that was just erased.
+    try {
+      getIdentityStore().load();
+    } catch (err) {
+      console.warn('[Identity] could not reload the ID card after erasure:', err);
+    }
+    // Reported, never thrown: a partial erasure that claims success is the one
+    // answer a data-subject request must not get.
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  // ============================================================================
+  // STANDING INTENTS (TASK-199)
+  //
+  // The arming path. Without one, `IntentStore.arm()` had no production caller
+  // at all: the cooldown, the fire budget, the expiry and the `intent_matched`
+  // heartbeat predicate were all reachable only by hand-writing JSONL onto the
+  // robot's disk. A REST endpoint rather than a planner block on purpose —
+  // gemma3:4b prompt length is a measured regression risk in this repo, and
+  // `planner.test.ts` is the gate that would have to be re-earned.
+  // ============================================================================
+
+  /** The store, or a 404 for an agent with no workspace to hold intents in. */
+  const intentStore = (res: Response): ReturnType<typeof agentModeController.standingIntents> => {
+    const store = agentModeController.standingIntents();
+    if (!store) {
+      res.status(404).json({
+        code: 'NO_MEMORY_WORKSPACE',
+        message: 'This agent has no workspace, so it cannot hold standing intents.',
+      });
+    }
+    return store;
+  };
+
+  // GET /robots/:id/agent-mode/intents — every intent, whatever its state
+  router.get('/robots/:id/agent-mode/intents', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const store = intentStore(res);
+    if (!store) return;
+    res.json({ intents: store.list() });
+  });
+
+  // POST /robots/:id/agent-mode/intents — arm one
+  //
+  // Origin is `operator`, and hardcoded: this route exists BECAUSE an operator
+  // is the only thing allowed to leave the robot a standing intent. An agent
+  // that could arm its own is an agent that can schedule its own wake-ups, and
+  // `IntentStore.arm` refuses that regardless of what is passed here.
+  router.post('/robots/:id/agent-mode/intents', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const store = intentStore(res);
+    if (!store) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const text = typeof body.text === 'string' ? body.text : '';
+    if (!text.trim()) {
+      res.status(400).json({
+        code: 'INVALID_INTENT',
+        message: `body must be {text: string (max ${INTENT_MAX_CHARS} chars), place?, keywords?}`,
+      });
+      return;
+    }
+    const place = typeof body.place === 'string' && body.place.trim() ? body.place : null;
+    const rawKeywords = Array.isArray(body.keywords) ? body.keywords : [];
+    if (rawKeywords.some((k) => typeof k !== 'string')) {
+      res.status(400).json({ code: 'INVALID_INTENT', message: 'keywords must be strings.' });
+      return;
+    }
+    const keywords = (rawKeywords as string[]).map((k) => k.trim()).filter(Boolean);
+
+    const numeric = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+
+    const result = store.arm(
+      {
+        trigger: { ...(place ? { place } : {}), ...(keywords.length > 0 ? { keywords } : {}) },
+        text,
+        ...(numeric(body.cooldownMs) === undefined ? {} : { cooldownMs: numeric(body.cooldownMs)! }),
+        ...(numeric(body.fires) === undefined ? {} : { fires: numeric(body.fires)! }),
+        ...(numeric(body.ttlMs) === undefined ? {} : { ttlMs: numeric(body.ttlMs)! }),
+      },
+      'operator',
+    );
+    // A refusal (no trigger, over the cap, empty text) is a normal answer with a
+    // reason in it — 400, so a caller cannot mistake it for an armed intent.
+    res.status(result.ok ? 201 : 400).json(result);
+  });
+
+  // DELETE /robots/:id/agent-mode/intents/:intentId — disarm one
+  router.delete('/robots/:id/agent-mode/intents/:intentId', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const store = intentStore(res);
+    if (!store) return;
+    const disarmed = store.disarm(req.params.intentId);
+    if (!disarmed) {
+      res.status(404).json({
+        code: 'INTENT_NOT_FOUND',
+        message: `No armed intent ${req.params.intentId}.`,
+      });
+      return;
+    }
+    res.json({ ok: true, id: req.params.intentId });
+  });
+
+  // ============================================================================
+  // IDENTITY (TASK-198)
+  //
+  // GATED, all of it. IDENTITY.md carries `Operator` and `Site` — the two labels
+  // `Workspace.IDENTITY_PERSONAL_LABELS` classifies as personal data and blanks
+  // on an Art. 17 erasure — so a route serving them is serving the same data
+  // category as MEMORY.md and gets the same gate. `POST` is gated for the second
+  // reason too: ungated, any page on the network could rename the robot and
+  // rewrite its operator. `/identity/body.md` is generated from configuration
+  // and carries no personal data, but it sits under the same prefix and a
+  // hardware inventory is not something to hand out cross-origin either.
+  // ============================================================================
+
+  router.use('/robots/:id/identity', personalDataGate);
+
+  // GET /robots/:id/identity — the ID card plus the per-turn sensorium.
+  router.get('/robots/:id/identity', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const identity = agentModeController.identitySnapshot();
+    if (!identity) {
+      // A garbled card and a missing identity store are both "no identity", and
+      // both are reported as such rather than as a generic robot — the whole
+      // point of the file split is that a robot never quietly becomes someone
+      // else. `problem` says which of the two it is.
+      res.status(404).json({
+        code: 'NO_IDENTITY',
+        message: 'This agent has no readable identity.',
+        problem: agentModeController.identityProblem(),
+      });
+      return;
+    }
+    res.json({
+      identity,
+      self: agentModeController.selfState(),
+      report: agentModeController.selfReport('en'),
+    });
+  });
+
+  // GET /robots/:id/identity/body.md — BODY.md verbatim (generated at boot)
+  router.get('/robots/:id/identity/body.md', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res
+      .type('text/markdown')
+      .send(agentModeController.bodyMarkdown() || '# Body\n\n(not generated yet)\n');
+  });
+
+  // POST /robots/:id/identity — the naming ritual's non-conversational door.
+  // Only Name / Emoji / Operator / Site; Robot-Id, Serial, Unit and BODY.md are
+  // regenerated from configuration at every boot and cannot be set here.
+  router.post('/robots/:id/identity', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Record<string, string | null> = {};
+    for (const label of ['Name', 'Emoji', 'Operator', 'Site'] as const) {
+      // Presence, not truthiness. `??` treated an explicit `{"Site": null}` —
+      // an operator CLEARING the site — as "not sent" (it fell through to the
+      // absent lower-case key), so the one way to unset a label silently did
+      // nothing and the old value stayed on the card.
+      const lower = label.toLowerCase();
+      const key = label in body ? label : lower in body ? lower : null;
+      if (key === null) continue;
+      const value = body[key];
+      if (value === undefined) continue;
+      if (value === null) patch[label] = null;
+      else if (typeof value === 'string') patch[label] = value;
+      else {
+        res.status(400).json({ code: 'INVALID_IDENTITY', message: `${label} must be a string or null.` });
+        return;
+      }
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({
+        code: 'INVALID_IDENTITY',
+        message: 'Provide at least one of Name, Emoji, Operator, Site.',
+      });
+      return;
+    }
+    const result = agentModeController.writeIdentity(patch);
+    if (!result.ok) {
+      res.status(400).json({ code: 'IDENTITY_REFUSED', message: result.message });
+      return;
+    }
+    res.json({ ok: true, identity: result.identity, self: agentModeController.selfState() });
   });
 
   // ============================================================================

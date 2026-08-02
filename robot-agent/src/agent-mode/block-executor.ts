@@ -16,6 +16,14 @@ import { hardwareClient, type LocoActionName, type LocoResult } from '../hardwar
 import { CLEARANCE_MARGIN_M, MIN_STAGE_M } from './navigator.js';
 import { RangeSensor } from './range.js';
 import { speakThroughVoiceService } from './voice-narrator.js';
+import {
+  getWorkspace,
+  oneLine,
+  type JournalRecord,
+  type PromoteResult,
+  type TrustLevel,
+  type Workspace,
+} from './workspace.js';
 import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
 import type { VisionClient, VisionObservation } from './vision.js';
 import {
@@ -78,6 +86,22 @@ const WALK_AXES: Record<WalkDirection, { fx: number; fy: number }> = {
 function locoError(result: LocoResult): string {
   const reason = result.error ?? 'unknown sidecar error';
   return result.locoDisabled ? `LOCOMOTION DISABLED — ${reason}` : reason;
+}
+
+/**
+ * Whether a MEASURED rotation shows that a commanded one did not happen.
+ *
+ * Takes a measurement, never `null`: callers must decide for themselves what an
+ * unmeasurable rotation means, and the answer is always "not a failure". A
+ * robot with no odometry can only dead-reckon, and failing its turns would
+ * ground it for a sensor it never had — so `turnMeasured` returning `null` is
+ * NOT routed here. A command small enough to sit inside the noise floor cannot
+ * be judged either, so it passes.
+ */
+function didNotTurn(commandedDeg: number, turnedDeg: number): boolean {
+  return (
+    Math.abs(normalizeDeg(commandedDeg)) > ZERO_MOTION_DEG && Math.abs(turnedDeg) < ZERO_MOTION_DEG
+  );
 }
 
 /** Minimum command duration — a sub-tick move would be swallowed by the FSM. */
@@ -182,6 +206,37 @@ export interface BlockExecutorDeps {
   language?: () => SpokenLanguage | undefined;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * Durable memory for the `remember` block (TASK-197). Defaults to the process
+   * workspace singleton; `null` disables the block with an honest refusal
+   * rather than pretending the line was stored.
+   */
+  memory?: Workspace | null;
+  /**
+   * How much a `remember` from this channel is trusted. A getter, because it is
+   * a property of WHO is talking right now, not of the executor.
+   *
+   * Default `untrusted`, NOT `operator`. The trust tier exists to keep content
+   * nobody vouched for out of durable memory, and `DURABLE_TRUST_LEVELS` is a
+   * Set precisely so an unlisted level is refused by default rather than
+   * admitted by omission — a default that hands out the most privileged tier to
+   * any construction that forgot the dep contradicts that in the same feature.
+   * The controller supplies the real answer (see `rememberTrust()` there); an
+   * executor built without one can journal, and cannot write memory.
+   */
+  rememberTrust?: () => TrustLevel;
+  /**
+   * Report the outcome of a DURABLE write (TASK-197). Called with `false` when
+   * a write to the workspace actually failed on the disk, and with `true` when
+   * one lands — the controller turns that into the `workspace_write_failed`
+   * heartbeat predicate, so "my memory silently stopped recording" becomes
+   * something the robot says instead of something only the log knows.
+   *
+   * A REFUSAL is not a failure and is deliberately not reported here: an
+   * untrusted record, a full file or a place-scoped note with no place all mean
+   * the disk is fine and the block outcome already says so.
+   */
+  onDurableWrite?: (ok: boolean, error: string | null) => void;
 }
 
 const defaultLoco: NonNullable<BlockExecutorDeps['loco']> = {
@@ -204,6 +259,9 @@ export class BlockExecutor {
   private readonly language: () => SpokenLanguage | undefined;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly memory: Workspace | null;
+  private readonly rememberTrust: () => TrustLevel;
+  private readonly onDurableWrite: (ok: boolean, error: string | null) => void;
 
   constructor(deps: BlockExecutorDeps) {
     this.deps = deps;
@@ -213,6 +271,11 @@ export class BlockExecutor {
     this.language = deps.language ?? (() => undefined);
     this.sleep = deps.sleep ?? defaultSleep;
     this.now = deps.now ?? (() => Date.now());
+    // `undefined` means "the real workspace"; an explicit `null` means "no
+    // durable memory on this agent", which must stay expressible.
+    this.memory = deps.memory === undefined ? getWorkspace() : deps.memory;
+    this.rememberTrust = deps.rememberTrust ?? ((): TrustLevel => 'untrusted');
+    this.onDurableWrite = deps.onDurableWrite ?? ((): void => {});
   }
 
   /**
@@ -243,6 +306,8 @@ export class BlockExecutor {
           return await this.speak(block);
         case 'wait':
           return await this.wait(block);
+        case 'remember':
+          return this.remember(block);
         case 'goto':
           return {
             ok: false,
@@ -351,19 +416,11 @@ export class BlockExecutor {
     const angleDeg = Number(block.params.angleDeg);
     if (!Number.isFinite(angleDeg)) return { ok: false, message: 'turn: angleDeg is not a number' };
 
-    const cmd = turnToCommand(angleDeg);
-    const before = await this.loco.odometry();
-    const result = await this.driveFor(cmd);
+    const { result, turnedDeg } = await this.turnMeasured(angleDeg);
     if (!result.ok) return { ok: false, message: `turn failed: ${locoError(result)}` };
 
-    // Keep the heading estimate current even without odometry; refreshYaw()
-    // replaces it with a measured value whenever the sidecar has one.
-    this.deps.scene.advanceYawDeg(normalizeDeg(angleDeg));
-    await this.refreshYaw();
-    const after = await this.loco.odometry();
-
     const side = angleDeg >= 0 ? 'left' : 'right';
-    if (!before || !after) {
+    if (turnedDeg === null) {
       return {
         ok: true,
         message:
@@ -373,29 +430,61 @@ export class BlockExecutor {
     }
     // Same reasoning as walk(): report the measured rotation, so a turn the
     // robot could not complete does not silently corrupt every later bearing.
-    const turned = normalizeDeg((after.yaw - before.yaw) * RAD_TO_DEG);
     // Same rule as walk(): a commanded rotation that measurably did not happen
     // is a failed block, not a turn that fell short.
-    if (Math.abs(normalizeDeg(angleDeg)) > ZERO_MOTION_DEG && Math.abs(turned) < ZERO_MOTION_DEG) {
+    if (didNotTurn(angleDeg, turnedDeg)) {
       return {
         ok: false,
         message:
-          `turn: the robot did not turn (${turned.toFixed(0)}° measured for a commanded ` +
+          `turn: the robot did not turn (${turnedDeg.toFixed(0)}° measured for a commanded ` +
           `${normalizeDeg(angleDeg).toFixed(0)}°) — ${NO_MOTION_HINT}`,
-        measured: { angleDeg: turned },
+        measured: { angleDeg: turnedDeg },
       };
     }
 
-    const shortfall = Math.abs(angleDeg) > 0 ? 1 - Math.abs(turned) / Math.abs(angleDeg) : 0;
+    const shortfall = Math.abs(angleDeg) > 0 ? 1 - Math.abs(turnedDeg) / Math.abs(angleDeg) : 0;
     const note =
       shortfall > SHORTFALL_TOLERANCE
         ? ` — ${(shortfall * 100).toFixed(0)}% short of the commanded ${normalizeDeg(angleDeg).toFixed(0)}°`
         : '';
     return {
       ok: true,
-      message: `Turned ${turned.toFixed(0)}° (${side}); heading now ${Math.round(this.deps.scene.getYawDeg())}°${note}.`,
-      measured: { angleDeg: turned },
+      message: `Turned ${turnedDeg.toFixed(0)}° (${side}); heading now ${Math.round(this.deps.scene.getYawDeg())}°${note}.`,
+      measured: { angleDeg: turnedDeg },
     };
+  }
+
+  /**
+   * One measured rotation: issue it, keep the heading estimate current, and
+   * report how far the base ACTUALLY turned.
+   *
+   * EVERY rotation in Agent Mode goes through here, so the zero-motion rule has
+   * exactly one place to live. It used to live inside `turn()` alone while
+   * `scan_room` — which rotates `steps` times — called `driveFor` directly and
+   * believed the sidecar's ACK. Observed live on a damped G1 in FSM 1: a
+   * `scan_room` reported "Scanned the room in 8 steps; found: door, bed." while
+   * sim odometry showed 0.00° of rotation across the entire block. Eight
+   * identical frames of one heading were presented to the operator as a 360°
+   * sweep, and the objects in front of the robot as the contents of the room.
+   *
+   * `turnedDeg` is null when the rotation cannot be measured — see
+   * {@link didNotTurn} for why that must not be read as "did not move".
+   */
+  private async turnMeasured(
+    angleDeg: number
+  ): Promise<{ result: LocoResult; turnedDeg: number | null }> {
+    const before = await this.loco.odometry();
+    const result = await this.driveFor(turnToCommand(angleDeg));
+    if (!result.ok) return { result, turnedDeg: null };
+
+    // Keep the heading estimate current even without odometry; refreshYaw()
+    // replaces it with a measured value whenever the sidecar has one.
+    this.deps.scene.advanceYawDeg(normalizeDeg(angleDeg));
+    await this.refreshYaw();
+    const after = await this.loco.odometry();
+    if (!before || !after) return { result, turnedDeg: null };
+
+    return { result, turnedDeg: normalizeDeg((after.yaw - before.yaw) * RAD_TO_DEG) };
   }
 
   /**
@@ -454,13 +543,24 @@ export class BlockExecutor {
       if (this.deps.isAborted()) {
         return { ok: false, message: `scan_room aborted after ${i + 1} of ${steps} steps` };
       }
-      const cmd = turnToCommand(stepDeg);
-      const result = await this.driveFor(cmd);
+      const { result, turnedDeg } = await this.turnMeasured(stepDeg);
       if (!result.ok) {
         return { ok: false, message: `scan_room failed while turning: ${locoError(result)}` };
       }
-      this.deps.scene.advanceYawDeg(stepDeg);
-      await this.refreshYaw();
+      // The block as a whole claims a 360° sweep. On a base that does not
+      // rotate that claim becomes `steps` copies of one frame, and the summary
+      // below would report whatever happens to be in front of the robot as the
+      // contents of the room. Fail, and name the one heading that WAS observed.
+      if (turnedDeg !== null && didNotTurn(stepDeg, turnedDeg)) {
+        return {
+          ok: false,
+          message:
+            `scan_room: the robot did not turn (${turnedDeg.toFixed(0)}° measured for a ` +
+            `commanded ${Math.round(stepDeg)}°) after ${i + 1} of ${steps} looks — only the ` +
+            `starting heading was observed, so this is not a 360° scan. ${NO_MOTION_HINT}`,
+          measured: { angleDeg: turnedDeg },
+        };
+      }
     }
 
     // Close the circle. The loop skips the last turn so the starting heading is
@@ -470,13 +570,13 @@ export class BlockExecutor {
     // facing somewhere else; every later `walk` would inherit the offset.
     let headingNote = '';
     if (!this.deps.isAborted()) {
-      const closing = await this.driveFor(turnToCommand(stepDeg));
-      if (closing.ok) {
-        this.deps.scene.advanceYawDeg(stepDeg);
-        await this.refreshYaw();
-      } else {
+      const { result: closing, turnedDeg } = await this.turnMeasured(stepDeg);
+      if (!closing.ok) {
         // The scan itself succeeded — say what did not, rather than failing it.
         headingNote = ` Could not turn back to the starting heading (${locoError(closing)}), so the robot is ${Math.round(stepDeg)}° short of it.`;
+      } else if (turnedDeg !== null && didNotTurn(stepDeg, turnedDeg)) {
+        // Accepted and ignored: same shape as above, but the sidecar said yes.
+        headingNote = ` The closing turn measured ${turnedDeg.toFixed(0)}° for a commanded ${Math.round(stepDeg)}°, so the robot is ${Math.round(stepDeg)}° short of the starting heading.`;
       }
     }
 
@@ -625,6 +725,66 @@ export class BlockExecutor {
       ok: true,
       message: spoken ? `Said: "${text}"` : `Said (text-only, voice service unreachable): "${text}"`,
     };
+  }
+
+  // ── memory ────────────────────────────────────────────────────────────────
+
+  /**
+   * Write one line into durable memory (TASK-197).
+   *
+   * The only write path the planner has, and it does NOT decide whether the
+   * line may be stored — {@link Workspace.promote} does, from the record's
+   * `trust`. That separation is the point: a prompt can be talked into calling
+   * this block, and no prompt can talk the chokepoint into accepting an
+   * `untrusted` record.
+   *
+   * Overflow comes back as `ok: false` carrying the entries already on disk, so
+   * the operator (and the model, on the next turn) can consolidate. The file is
+   * left exactly as it was — see the cap handling in `promote`.
+   *
+   * The `try` around `promote` is not decoration: the write itself is
+   * `atomicWrite`, which THROWS when the rename cannot land (a virus scanner or
+   * a second process holding the file open — this box has produced orphaned
+   * `*.tmp-*` files for real). Without it the failure became one red block and
+   * nothing else: `workspaceWriteFailedAtMs` stayed null, the heartbeat kept
+   * reporting a healthy workspace, and memory could stop recording indefinitely
+   * with nobody noticing. Every durable write reports through
+   * {@link BlockExecutorDeps.onDurableWrite} now, in both directions.
+   */
+  private remember(block: AgentBlock): BlockOutcome {
+    const text = oneLine(typeof block.params.text === 'string' ? block.params.text : '');
+    if (!text) return { ok: false, message: 'remember: empty text' };
+    if (!this.memory) {
+      return { ok: false, message: 'remember: this robot has no memory workspace configured.' };
+    }
+
+    const scope = block.params.scope === 'global' ? 'global' : 'place';
+    const place = this.deps.scene.getPlace()?.id ?? null;
+    // A `place` scope with no place is refused by `promote` with a message the
+    // operator can act on, rather than being quietly re-routed into MEMORY.md —
+    // "remember that THIS aisle is blocked" filed under nowhere is a fact about
+    // the wrong world.
+    const record: JournalRecord = {
+      t: new Date(this.now()).toISOString(),
+      bootId: null,
+      kind: 'note',
+      place,
+      trust: this.rememberTrust(),
+      msg: text,
+    };
+
+    let result: PromoteResult;
+    try {
+      result = this.memory.promote(record, scope === 'global' ? 'memory' : 'place');
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.onDurableWrite(false, `remember: ${reason}`);
+      return { ok: false, message: `remember: the write to durable memory failed: ${reason}` };
+    }
+    // Only a write that actually reached the disk clears the flag. A refusal
+    // touched nothing, so it must neither raise nor clear it.
+    if (result.ok) this.onDurableWrite(true, null);
+    return { ok: result.ok, message: result.ok ? result.message : `remember: ${result.message}` };
   }
 
   private async wait(block: AgentBlock): Promise<BlockOutcome> {

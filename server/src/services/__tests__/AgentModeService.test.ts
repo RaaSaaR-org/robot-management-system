@@ -196,6 +196,51 @@ describe('AgentModeService', () => {
     expect(merged.estopActive).toBe(true);
   });
 
+  it('keeps the stored plan and scene when a snapshot omits them', () => {
+    // A robot's periodic liveness re-assertion (TASK-200) carries neither: it
+    // exists to DATE the mirror, and it is delivered fire-and-forget, so it can
+    // land after the events it was taken before. Absent must therefore mean "no
+    // opinion" — reading it as "there is no plan" would blank the console's
+    // timeline four times a minute for the whole life of every plan.
+    const robotId = nextRobotId();
+    agentModeService.ingest(event({ type: 'agent:plan:started', robotId, plan: makePlan(robotId) }));
+    agentModeService.ingest(
+      event({ type: 'agent:scene:updated', robotId, scene: makeScene(robotId) })
+    );
+
+    const merged = agentModeService.ingest(
+      event({
+        type: 'agent:state:changed',
+        robotId,
+        state: { robotId, enabled: true, controlOwner: 'agent', estopActive: false },
+      })
+    );
+
+    expect(merged.plan?.id).toBe('plan-1');
+    expect(merged.scene?.currentView).toBe('Ein Tisch mit einem Hut.');
+    // …and it is still a real snapshot for every other purpose.
+    expect(merged.enabled).toBe(true);
+    expect(agentModeService.isHydrated(robotId)).toBe(true);
+    expect(agentModeService.getState(robotId)?.plan?.id).toBe('plan-1');
+  });
+
+  it('reports no plan when a plan-less snapshot is the first thing it hears', () => {
+    // Absent must not become `undefined` on the wire either — a client reading
+    // `plan` off this response has to get an answer, and the honest one is null.
+    const robotId = nextRobotId();
+
+    const merged = agentModeService.ingest(
+      event({
+        type: 'agent:state:changed',
+        robotId,
+        state: { robotId, enabled: true, controlOwner: 'idle', estopActive: false },
+      })
+    );
+
+    expect(merged.plan).toBeNull();
+    expect(merged.scene).toBeNull();
+  });
+
   it('keeps the previous plan when a scene-only event arrives', () => {
     const robotId = nextRobotId();
     agentModeService.ingest(event({ type: 'agent:plan:started', robotId, plan: makePlan(robotId) }));
