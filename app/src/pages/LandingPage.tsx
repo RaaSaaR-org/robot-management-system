@@ -1,17 +1,29 @@
+/**
+ * @file LandingPage.tsx
+ * @description Marketing landing page — an instrument panel, read top to bottom.
+ * @feature landing
+ *
+ * Order is the argument: claim → proof → mechanism → the differentiator →
+ * sovereignty → how to run it → who builds it.
+ *
+ * There is no closing CTA band. It was a full-bleed brand-colour slab whose
+ * every line already appeared earlier on the page, it failed contrast against a
+ * white-labelled primary, and it out-shouted the hero instrument the page is
+ * actually built around. The page closes on the roles ledger instead.
+ *
+ * The old page ran 15 sections and stated the six-stage lifecycle five times.
+ * Stats, Audience, Advantages, Features and the data-flywheel diagram were cut;
+ * their true claims live in the lifecycle and honesty sections now.
+ */
+
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
-import { ScreenshotsSection } from '../components/landing/ScreenshotsSection';
+import { ProofSection } from '../components/landing/ProofSection';
 import { LifecycleLoopSection } from '../components/landing/LifecycleLoopSection';
-import { StatsSection } from '../components/landing/StatsSection';
-import { FeatureSection } from '../components/landing/FeatureSection';
-import { VideoSection } from '../components/landing/VideoSection';
-import { AdvantagesSection } from '../components/landing/AdvantagesSection';
-import { DataEcosystemSection } from '../components/landing/DataEcosystemSection';
-import { SafetyPreview } from '../components/landing/SafetyPreview';
-import { AudienceSection } from '../components/landing/AudienceSection';
-import { DeploymentSection } from '../components/landing/DeploymentSection';
+import { HonestySection } from '../components/landing/HonestySection';
+import { SovereigntySection } from '../components/landing/SovereigntySection';
+import { RunItSection } from '../components/landing/RunItSection';
 import { CommunitySection } from '../components/landing/CommunitySection';
-import { CTASection } from '../components/landing/CTASection';
 import { Footer } from '../components/landing/Footer';
 
 export function LandingPage() {
@@ -20,18 +32,12 @@ export function LandingPage() {
       <Header />
       <main>
         <HeroSection />
-        <ScreenshotsSection />
+        <ProofSection />
         <LifecycleLoopSection />
-        <StatsSection />
-        <FeatureSection />
-        <VideoSection />
-        <AdvantagesSection />
-        <DataEcosystemSection />
-        <SafetyPreview />
-        <AudienceSection />
-        <DeploymentSection />
+        <HonestySection />
+        <SovereigntySection />
+        <RunItSection />
         <CommunitySection />
-        <CTASection />
       </main>
       <Footer />
     </div>

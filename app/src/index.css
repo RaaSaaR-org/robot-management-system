@@ -1,4 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Self-hosted. A page whose thesis is "no data leaving the building" cannot
+   send every visitor's IP to fonts.googleapis.com before the headline paints —
+   and for a German GmbH that request is a live GDPR exposure. These also stop
+   the render-blocking serial @import chain and work in a packaged Tauri build
+   with no network. Archivo ships the wdth axis, which the display type uses. */
+@import '@fontsource-variable/archivo/wdth.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
 
 @import "tailwindcss";
 
@@ -86,12 +93,37 @@
   --color-surface-light-400: #D8DCE4;
 
   /* Font families */
-  --font-sans: 'Inter', 'Avenir', 'Helvetica', 'Arial', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: 'Inter Variable', 'Inter', 'Avenir', 'Helvetica', 'Arial', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
+  /* Display face — Archivo variable (wdth axis). Used only for headlines and
+     readout values; the expanded width is what makes it read as equipment
+     labelling rather than another grotesk. */
+  --font-display: 'Archivo Variable', 'Archivo', 'Inter Variable', 'Helvetica', sans-serif;
 
   /* Border radius */
   --radius-brand: 8px;
   --radius-brand-lg: 16px;
+
+  /* Theme colors exposed as Tailwind color tokens so utilities that are NOT
+     hand-written below (fill-*, stroke-*, decoration-*, divide-*) resolve.
+     Before this, `fill-theme-primary` on SVG <text> emitted no CSS and the
+     lifecycle diagram's labels rendered black-on-black in dark mode. */
+  --color-theme-primary: var(--text-primary);
+  --color-theme-secondary: var(--text-secondary);
+  --color-theme-tertiary: var(--text-tertiary);
+  --color-theme-muted: var(--text-muted);
+  --color-theme-line: var(--border-color);
+  --color-theme-surface: var(--bg-elevated);
+
+  /* Signal colors — the state language of the platform. Values are set per
+     theme below; none of them ride the brand tokens. See the note there. */
+  --color-signal-measured: var(--signal-measured);
+  --color-signal-estimated: var(--signal-estimated);
+  --color-signal-unknown: var(--signal-unknown);
+  --color-signal-stopped: var(--signal-stopped);
+
+  /* Motion */
+  --ease-instrument: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 /* CSS Custom Properties for theme switching */
@@ -111,6 +143,20 @@
 
   --border-color: rgba(255, 255, 255, 0.1);
   --border-color-strong: rgba(255, 255, 255, 0.2);
+
+  /* Signal states — dark.
+     These are a language, not branding: "unknown" and "stopped" have to mean
+     the same thing on every white-label deployment, so none of them ride
+     --color-primary/--color-accent. That also keeps the Sim tag from rendering
+     in the identical hue as the primary call-to-action, which is what happened
+     when `estimated` was aliased to the brand primary.
+     Amber, not red, for unknown: missing data is not a fault, and the two must
+     never look alike on a safety surface. `estimated` is deliberately neutral —
+     "simulated" is a provenance note, not a warning. */
+  --signal-measured: #2FC7A9;
+  --signal-estimated: var(--text-secondary);
+  --signal-unknown: #D9A441;
+  --signal-stopped: #FF6B6B;
 
   /* Glass System */
   --glass-bg: rgba(18, 19, 22, 0.75);
@@ -148,6 +194,14 @@
 
   --border-color: rgba(0, 0, 0, 0.08);
   --border-color-strong: rgba(0, 0, 0, 0.15);
+
+  /* Signal states — light. Each is calibrated against --bg-tertiary (#E4E7ED),
+     the darkest surface any of them lands on, not against the page background,
+     so they still clear 4.5:1 inside a tinted panel row. */
+  --signal-measured: #0A6E5C;
+  --signal-estimated: var(--text-secondary);
+  --signal-unknown: #7A5510;
+  --signal-stopped: #B02020;
 
   /* Glass System - Light */
   --glass-bg: rgba(255, 255, 255, 0.75);
@@ -409,6 +463,272 @@
   /* Theme primary background */
   .bg-theme-primary {
     background-color: var(--bg-primary);
+  }
+}
+
+/* ==========================================================================
+   Landing surface — instrument panel
+   --------------------------------------------------------------------------
+   The marketing page is laid out as a readout, not a stack of centered cards:
+   a narrow mono legend rail on the left states what a section is and how
+   mature it is, and the wide right column carries the content. The maturity
+   tag is load-bearing copy, not decoration — the platform labels simulated
+   telemetry in-product (SimBadge) and the page holds itself to the same rule.
+   ========================================================================== */
+@layer components {
+  /* Section shell. Vertical rhythm lives here so no section sets its own
+     top/bottom padding — that is what made the old page's spacing drift. */
+  .lp-section {
+    padding-block: 5.5rem;
+    position: relative;
+  }
+  @media (min-width: 1024px) {
+    .lp-section {
+      padding-block: 7.5rem;
+    }
+  }
+
+  .lp-container {
+    width: 100%;
+    max-width: 78rem;
+    margin-inline: auto;
+    padding-inline: 1.25rem;
+  }
+  @media (min-width: 640px) {
+    .lp-container {
+      padding-inline: 2rem;
+    }
+  }
+
+  /* Legend rail + content. Stacks to a single column below lg, where the rail
+     becomes a horizontal strip above the heading. */
+  .lp-grid {
+    display: grid;
+    gap: 2rem 3rem;
+    /* minmax(0,…) not 1fr: a bare `1fr` track resolves to min-content, so one
+       <pre> of shell commands sizes the whole column — and the page — wider
+       than the viewport. */
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 1024px) {
+    .lp-grid {
+      grid-template-columns: 11rem minmax(0, 1fr);
+      gap: 0 4rem;
+    }
+  }
+
+  .lp-rail {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.875rem;
+  }
+  @media (min-width: 1024px) {
+    .lp-rail {
+      position: sticky;
+      top: 6rem;
+      align-self: start;
+      flex-direction: column;
+      gap: 0.625rem;
+      align-items: flex-start;
+    }
+  }
+
+  .lp-rail-name {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  /* Maturity tag. Four states, matching how the repo actually labels work. */
+  .lp-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.125rem 0.4375rem;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .lp-tag-live {
+    color: var(--color-signal-measured);
+  }
+  .lp-tag-sim {
+    color: var(--color-signal-estimated);
+  }
+  .lp-tag-gated {
+    color: var(--color-signal-unknown);
+  }
+  .lp-tag-stopped {
+    color: var(--color-signal-stopped);
+  }
+
+  /* Display type. Archivo's width axis is the whole point — headlines are set
+     slightly expanded and tight-leaded so they read as stamped equipment
+     labelling. Never gradient-clipped. */
+  .lp-display {
+    font-family: var(--font-display);
+    font-variation-settings: 'wdth' 112, 'wght' 700;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 0.98;
+    color: var(--text-primary);
+    text-wrap: balance;
+  }
+
+  .lp-h1 {
+    font-size: clamp(2.25rem, 4.6vw, 3.75rem);
+    line-height: 1.02;
+  }
+  .lp-h2 {
+    font-size: clamp(1.75rem, 3vw, 2.5rem);
+  }
+  .lp-h3 {
+    font-family: var(--font-display);
+    font-variation-settings: 'wdth' 105, 'wght' 600;
+    font-weight: 600;
+    font-size: 1.0625rem;
+    letter-spacing: -0.005em;
+    color: var(--text-primary);
+  }
+
+  .lp-lede {
+    font-size: clamp(1rem, 1.35vw, 1.1875rem);
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 58ch;
+  }
+
+  .lp-body {
+    font-size: 0.9375rem;
+    line-height: 1.65;
+    color: var(--text-secondary);
+    max-width: 62ch;
+  }
+
+  /* Mono readout label — units, field names, keys. Uppercase only.
+     --text-secondary, not --text-muted: at 11px this carries real content
+     (field names, provenance lines, footer column headings) and muted measures
+     2.4:1 on the dark surface. */
+  .lp-key {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  /* Sentence-case note. Previously every one of these was an `lp-key` with
+     normal-case + tracking-normal bolted on, which set running prose in 11px
+     uppercase-tuned mono at a failing contrast ratio. */
+  .lp-note {
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    /* --text-secondary, not --text-tertiary: a white-label brand may override
+       the tertiary slot with something low-contrast (the EmAI config ships
+       #78716C, which is 3.8:1 on its own dark surface). Notes carry real
+       content, so they take the slot that survives any brand. */
+    color: var(--text-secondary);
+    max-width: 64ch;
+  }
+
+  .lp-value {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Hairline rules do the dividing work that borders-on-cards used to. */
+  .lp-rule {
+    border: 0;
+    border-top: 1px solid var(--border-color);
+    margin: 0;
+  }
+
+  /* A flat panel — no glass, no blur, no shadow. The product's chrome is
+     glassy; the marketing page is deliberately matte so screenshots of the
+     app read as the glossy thing on the page. */
+  .lp-panel {
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+  }
+
+  .lp-panel-inset {
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+  }
+
+  /* Anchor targets must clear the 64px fixed header. */
+  .lp-anchor {
+    scroll-margin-top: 5.5rem;
+  }
+
+  /* Primary action. The brand primary is white-labelled at runtime, so white
+     text on the raw token is only legible by luck — the shipped cobalt passes
+     at 5.0:1, an orange brand lands at 2.9:1. Mixing toward black first makes
+     the button safe for any brand hue while still reading as the brand colour.
+     Every white-on-primary surface on the landing page uses this. */
+  .lp-btn-primary {
+    background-color: color-mix(in srgb, var(--color-primary) 74%, #000);
+    color: #FFFFFF;
+    border-radius: var(--radius-brand);
+    font-weight: 600;
+    transition: background-color 150ms var(--ease-instrument);
+  }
+  .lp-btn-primary:hover {
+    background-color: color-mix(in srgb, var(--color-primary) 62%, #000);
+  }
+
+  .lp-btn-secondary {
+    border: 1px solid var(--border-color-strong);
+    color: var(--text-primary);
+    border-radius: var(--radius-brand);
+    font-weight: 600;
+    transition: background-color 150ms var(--ease-instrument);
+  }
+  .lp-btn-secondary:hover {
+    background-color: var(--bg-elevated);
+  }
+}
+
+/* Focus ring. Tailwind's ring-offset-color is hard-coded to #fff, so a
+   focus-visible:ring-offset-2 draws a white halo that is invisible on the
+   light theme. Bind both the ring and its offset to theme tokens once. */
+@layer base {
+  *:focus-visible {
+    --tw-ring-color: var(--text-primary);
+    --tw-ring-offset-color: var(--bg-primary);
+  }
+}
+
+/* Reduced motion. The page previously ran 30+ SMIL animators, blur filters
+   and infinite CSS loops with no guard at all. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

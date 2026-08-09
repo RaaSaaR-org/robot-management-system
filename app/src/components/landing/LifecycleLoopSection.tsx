@@ -1,21 +1,30 @@
 /**
  * @file LifecycleLoopSection.tsx
- * @description Interactive DevOps-style infinity loop for the Physical AI lifecycle
+ * @description The six-stage lifecycle, drawn as a lemniscate, with a per-stage
+ *              maturity tag because the stages are not equally mature.
  * @feature landing
+ *
+ * The figure-8 geometry is deliberate and is preserved verbatim: four cubic
+ * Béziers form two teardrop loops that cross at the origin, and that crossing
+ * is the Deploy → Evaluate handoff. Everything else — colour, motion, mobile
+ * layout — was rebuilt so the graphic works in both themes, states only claims
+ * the code backs up, and never renders a 12px touch target.
  */
 
-import { useState, type ComponentType, type SVGProps } from 'react';
-import { Database, Brain, Rocket, CheckCircle2, Activity, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
 
-type Tone = 'cobalt' | 'turquoise';
+type Tone = 'dev' | 'ops';
+type Maturity = 'live' | 'sim' | 'gated';
 type LabelAnchor = 'start' | 'middle' | 'end';
 
 interface Stage {
   key: string;
+  /** 1-based position in the loop; rendered inside the node disc. */
+  index: number;
   label: string;
-  story: string;
+  maturity: Maturity;
+  /** Which half of the lemniscate the node sits on (matches the gradient split). */
   tone: Tone;
-  Icon: ComponentType<SVGProps<SVGSVGElement>>;
   /** Node center in SVG user units */
   x: number;
   y: number;
@@ -34,110 +43,113 @@ interface Stage {
 const STAGES: Stage[] = [
   {
     key: 'collect',
+    index: 1,
     label: 'Collect',
-    story: 'Input',
-    tone: 'cobalt',
-    Icon: Database,
+    maturity: 'live',
+    tone: 'dev',
     x: -102.5,
     y: -60,
     labelX: 0,
     labelY: -42,
     labelAnchor: 'middle',
-    summary: 'Capture demonstrations, teleop sessions, and sensor streams from real robots.',
+    summary: 'Demonstrations, teleop sessions and real LiDAR scans become versioned datasets.',
     bullets: [
-      'Multi-modal recording — video, joint state, force, audio',
-      'Teleop playback and human-demo capture',
-      'Dataset versioning and provenance from day one',
+      'Curation trims or deletes episodes video-aware and returns a new revision with lineage — the source dataset is never modified.',
+      'Upload a PLY or PCD and a sidecar builds a Digital Twin plus a usable MuJoCo scene, validated on a 240k-point MID-360 capture of the lab.',
+      'VR and teleop sessions record into a true LeRobot v3.0 chunked dataset — in simulation so far.',
     ],
   },
   {
     key: 'train',
+    index: 2,
     label: 'Train',
-    story: 'Intelligence',
-    tone: 'cobalt',
-    Icon: Brain,
+    maturity: 'live',
+    tone: 'dev',
     x: -160,
     y: 0,
     labelX: -44,
     labelY: 2,
     labelAnchor: 'end',
-    summary: 'Fine-tune Vision-Language-Action foundation models on your own data.',
+    summary: 'Fine-tune on your own data without leaving the LeRobot format.',
     bullets: [
-      'SmolVLA, π0.5, and GR00T adapters out of the box',
-      'LoRA fine-tuning on Mac (MPS) or GPU',
-      'Versioned model registry with lineage tracking',
+      'LeRobot-compatible in both v2.1 and v3.0, with HuggingFace Hub sync in both directions.',
+      'SmolVLA is active, GR00T N1.7 is ready, pi0.5 is a stub.',
+      'Training runs in a separate worker that polls /api/training/workers/claim; serving runs in the VLA server.',
     ],
   },
   {
     key: 'deploy',
+    index: 3,
+    // Gated, not Live: the registry, canary and rollback paths are real, but the
+    // only bridge to a real G1 refuses to move unless it is explicitly armed, so
+    // no model has ever been shipped to physical hardware. See the third bullet.
     label: 'Deploy',
-    story: 'Action',
-    tone: 'cobalt',
-    Icon: Rocket,
+    maturity: 'gated',
+    tone: 'dev',
     x: -102.5,
     y: 60,
     labelX: 0,
     labelY: 42,
     labelAnchor: 'middle',
-    summary: 'Push trained models to edge devices with staged rollouts and rollback.',
+    summary: 'Ship a model to a robot the way you would ship software.',
     bullets: [
-      'OTA rollout to Raspberry Pi, Jetson, or x86',
-      'Canary rollouts with per-stage health checks',
-      'One-click rollback to any previous version',
+      'Model registry, canary rollouts with per-stage health checks, one-click rollback.',
+      'OTA packages signed with Ed25519.',
+      'The real-G1 GR00T bridge is gated: dry-run by default, needs both G1_BRIDGE_ARMED=1 and --arm, and never commands the legs.',
     ],
   },
   {
     key: 'evaluate',
+    index: 4,
     label: 'Evaluate',
-    story: 'Quality',
-    tone: 'turquoise',
-    Icon: CheckCircle2,
+    maturity: 'sim',
+    tone: 'ops',
     x: 102.5,
     y: 60,
     labelX: 0,
     labelY: 42,
     labelAnchor: 'middle',
-    summary: 'Validate behavior in simulation and on real hardware before production.',
+    summary: 'Score a policy in MuJoCo, and try to catch yourself being optimistic.',
     bullets: [
-      'MuJoCo / Isaac Lab sim jobs with real-time metrics',
-      'Safety-envelope and drift checks',
-      'Human-in-the-loop review workflows',
+      'Sim jobs with per-episode reward scoring, success rate, error breakdown and model comparison.',
+      'A null control that must score zero and an off-instruction proxy that auto-refuses when it matches on-instruction, n=40 per cell — the first run overturned an earlier optimistic result.',
+      'A G1 + Dex3 pick-and-place environment replicates NVIDIA’s GR00T-N1.7-AppleToPlate workflow.',
     ],
   },
   {
     key: 'operate',
+    index: 5,
     label: 'Operate',
-    story: 'Scale',
-    tone: 'turquoise',
-    Icon: Activity,
+    maturity: 'sim',
+    tone: 'ops',
     x: 160,
     y: 0,
     labelX: 44,
     labelY: 2,
     labelAnchor: 'start',
-    summary: 'Manage fleets in real time with natural-language control and live telemetry.',
+    summary: 'A local model plans; the safety layer decides whether the plan gets to run.',
     bullets: [
-      'Fleet dashboard and live telemetry streams',
-      'Natural-language command interface',
-      'A2A task orchestration across robots',
+      'Agent Mode turns “geh zum Regal RACK-A” into a typed block plan run over the Unitree LocoClient — the same call path as a real G1.',
+      'An enforced geofence stopped a 2 m walk 0.48 m clear of rack RACK-A and refused the next command while latched. Reproduced twice.',
+      'The read-only telemetry path is live-verified against a powered G1; everything that moves the robot is still simulation.',
     ],
   },
   {
     key: 'comply',
+    index: 6,
     label: 'Comply',
-    story: 'Trust',
-    tone: 'turquoise',
-    Icon: ShieldCheck,
+    maturity: 'live',
+    tone: 'ops',
     x: 102.5,
     y: -60,
     labelX: 0,
     labelY: -42,
     labelAnchor: 'middle',
-    summary: 'Audit-ready for the EU AI Act, GDPR, and industry certification.',
+    summary: 'Record-keeping a regulator can check, and erasure that reaches the robot.',
     bullets: [
-      'Immutable decision logs and explainability',
-      'Human approval workflows for high-risk actions',
-      'GDPR self-service portal',
+      'Hash-chained, tamper-evident audit logs with a verify endpoint (EU AI Act Art. 12).',
+      'GDPR Art. 30 records of processing, a self-service portal for seven request types, legal holds and retention policies.',
+      'Art. 17 erasure wipes the on-robot memory workspace on every reachable robot and reports honestly about the ones that were switched off.',
     ],
   },
 ];
@@ -154,281 +166,380 @@ const INFINITY_PATH = [
   'Z',
 ].join(' ');
 
-const COBALT = '#2A5FFF';
-const TURQUOISE = '#18E4C3';
+/**
+ * Colour for the small marks that carry meaning — node rings, bullet dashes,
+ * stepper indices.
+ *
+ * These deliberately do NOT use --color-primary / --color-accent. Those are
+ * white-labellable brand tokens with no contrast floor: measured against the
+ * light theme they returned 1.64:1 for the ops dashes and 2.58:1 for the dev
+ * dashes (1.43:1 under the shipped cobalt), where small text needs 4.5:1 and a
+ * graphic needs 3:1. --text-primary and the fixed signal teal are calibrated
+ * per theme, so the marks stay legible whatever the brand is set to.
+ *
+ * dev is ink and ops is teal rather than the neutral --color-signal-estimated,
+ * because that token is now an alias of --text-secondary and is what the Sim
+ * tag renders in — reusing it on the nodes would have made the ring colour
+ * read as maturity instead of as which half of the loop the stage sits on.
+ * The lemniscate stroke itself keeps the brand gradient: it is a 4px-wide
+ * decorative flourish, not something anyone has to read.
+ */
+function toneColor(tone: Tone): string {
+  return tone === 'dev' ? 'var(--text-primary)' : 'var(--color-signal-measured)';
+}
+
+function tagClass(maturity: Maturity): string {
+  if (maturity === 'live') return 'lp-tag lp-tag-live';
+  if (maturity === 'gated') return 'lp-tag lp-tag-gated';
+  return 'lp-tag lp-tag-sim';
+}
+
+function tagLabel(maturity: Maturity): string {
+  if (maturity === 'live') return 'Live';
+  if (maturity === 'gated') return 'Gated';
+  return 'Sim';
+}
+
+/**
+ * The readout panel always exists, so the nodes can point aria-controls at it
+ * and the swap can be announced. Before this, changing stage changed the panel
+ * silently and nothing tied the two together.
+ */
+const READOUT_ID = 'lifecycle-readout';
+
+interface StageBodyProps {
+  stage: Stage;
+}
+
+/** Shared detail body — the desktop readout panel and the mobile stepper agree. */
+function StageBody({ stage }: StageBodyProps) {
+  return (
+    <>
+      <p className="lp-body">{stage.summary}</p>
+      <ul className="mt-4 space-y-3" role="list">
+        {stage.bullets.map((bullet) => (
+          <li key={bullet} className="flex gap-3">
+            <span
+              className="lp-key mt-[0.2rem] shrink-0 tabular-nums"
+              style={{ color: toneColor(stage.tone) }}
+              aria-hidden="true"
+            >
+              —
+            </span>
+            <span
+              className="text-[0.8125rem] leading-relaxed"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {bullet}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
 
 export function LifecycleLoopSection() {
   const [activeKey, setActiveKey] = useState<string>('collect');
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>('collect');
+
   const active = STAGES.find((s) => s.key === activeKey) ?? STAGES[0];
 
   return (
-    <section className="py-24 section-primary">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section header */}
-        <div className="text-center mb-12">
-          <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
-            The Lifecycle Loop
-          </p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
-            One continuous loop, six phases
-          </h2>
-          <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            Physical AI is never &ldquo;done.&rdquo; Every deployment feeds the next collection.
-            Hover a phase to see what happens inside it.
-          </p>
-        </div>
-
-        <div className="grid lg:grid-cols-5 gap-10 items-center">
-          {/* Infinity loop */}
-          <div className="lg:col-span-3">
-            <svg
-              viewBox="-300 -150 600 300"
-              className="w-full h-auto"
-              role="img"
-              aria-label="Physical AI lifecycle infinity loop"
-            >
-              <defs>
-                {/* Gradient: cobalt for left lobe, turquoise for right lobe, hard split at center */}
-                <linearGradient id="lifecycleStroke" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor={COBALT} stopOpacity="0.95" />
-                  <stop offset="50%" stopColor={COBALT} stopOpacity="0.95" />
-                  <stop offset="50.01%" stopColor={TURQUOISE} stopOpacity="0.95" />
-                  <stop offset="100%" stopColor={TURQUOISE} stopOpacity="0.95" />
-                </linearGradient>
-
-                {/* Bloom filter — wider blur on a second pass for neon aura */}
-                <filter id="lifecycleGlow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="6" result="blurBig" />
-                  <feGaussianBlur stdDeviation="2" in="SourceGraphic" result="blurSmall" />
-                  <feMerge>
-                    <feMergeNode in="blurBig" />
-                    <feMergeNode in="blurSmall" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-
-                {/* Particle glow (tighter, brighter) */}
-                <filter id="particleGlow" x="-200%" y="-200%" width="500%" height="500%">
-                  <feGaussianBlur stdDeviation="2.5" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-
-                {/* HUD grid: faint dot matrix */}
-                <pattern id="hudGrid" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
-                  <circle cx="1" cy="1" r="0.6" fill="#F5F5F4" fillOpacity="0.07" />
-                </pattern>
-
-                {/* Shared path definition — everything renders from this one source */}
-                <path id="lifecyclePath" d={INFINITY_PATH} fill="none" />
-              </defs>
-
-              {/* HUD grid background */}
-              <rect x={-300} y={-150} width={600} height={300} fill="url(#hudGrid)" />
-
-              {/* Corner brackets (command-center feel) */}
-              <g stroke="#F5F5F4" strokeOpacity={0.25} strokeWidth={1.2} fill="none">
-                <path d="M -290 -130 L -290 -140 L -280 -140" />
-                <path d="M 290 -130 L 290 -140 L 280 -140" />
-                <path d="M -290 130 L -290 140 L -280 140" />
-                <path d="M 290 130 L 290 140 L 280 140" />
-              </g>
-
-              {/* Soft outer aura */}
-              <use
-                href="#lifecyclePath"
-                stroke="url(#lifecycleStroke)"
-                strokeOpacity={0.18}
-                strokeWidth={18}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-
-              {/* Main stroke with bloom */}
-              <use
-                href="#lifecyclePath"
-                stroke="url(#lifecycleStroke)"
-                strokeWidth={4}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                filter="url(#lifecycleGlow)"
-              />
-
-              {/* Flowing energy dashes — subtle marching-ants on top of the main stroke */}
-              <use
-                href="#lifecyclePath"
-                stroke="#F5F5F4"
-                strokeOpacity={0.55}
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeDasharray="2 14"
-              >
-                <animate
-                  attributeName="stroke-dashoffset"
-                  from="0"
-                  to="-160"
-                  dur="6s"
-                  repeatCount="indefinite"
-                />
-              </use>
-
-              {/* Data particles flowing along the path */}
-              <circle r={3.5} fill="#F5F5F4" filter="url(#particleGlow)">
-                <animateMotion dur="10s" repeatCount="indefinite" rotate="auto">
-                  <mpath href="#lifecyclePath" />
-                </animateMotion>
-              </circle>
-              <circle r={2.5} fill={TURQUOISE} filter="url(#particleGlow)">
-                <animateMotion dur="10s" begin="-3.33s" repeatCount="indefinite">
-                  <mpath href="#lifecyclePath" />
-                </animateMotion>
-              </circle>
-              <circle r={2.5} fill={COBALT} filter="url(#particleGlow)">
-                <animateMotion dur="10s" begin="-6.66s" repeatCount="indefinite">
-                  <mpath href="#lifecyclePath" />
-                </animateMotion>
-              </circle>
-
-              {/* Crossover pulse rings */}
-              <circle cx={0} cy={0} r={6} fill="none" stroke="#F5F5F4" strokeWidth={1}>
-                <animate attributeName="r" values="4;24;4" dur="3s" repeatCount="indefinite" />
-                <animate attributeName="stroke-opacity" values="0.7;0;0.7" dur="3s" repeatCount="indefinite" />
-              </circle>
-              <circle cx={0} cy={0} r={6} fill="none" stroke="#F5F5F4" strokeWidth={1}>
-                <animate attributeName="r" values="4;24;4" dur="3s" begin="-1.5s" repeatCount="indefinite" />
-                <animate attributeName="stroke-opacity" values="0.7;0;0.7" dur="3s" begin="-1.5s" repeatCount="indefinite" />
-              </circle>
-              <circle cx={0} cy={0} r={3} fill="#F5F5F4" opacity={0.85} />
-
-              {/* Nodes */}
-              {STAGES.map((stage) => {
-                const isActive = stage.key === activeKey;
-                const color = stage.tone === 'cobalt' ? COBALT : TURQUOISE;
-                const nodeRadius = isActive ? 26 : 22;
-                return (
-                  <g
-                    key={stage.key}
-                    className="cursor-pointer"
-                    onMouseEnter={() => setActiveKey(stage.key)}
-                    onFocus={() => setActiveKey(stage.key)}
-                    onClick={() => setActiveKey(stage.key)}
-                    tabIndex={0}
-                    role="button"
-                    aria-label={`${stage.label} — ${stage.story}`}
-                  >
-                    {/* Halo */}
-                    {isActive && (
-                      <circle cx={stage.x} cy={stage.y} r={36} fill={color} fillOpacity={0.18}>
-                        <animate
-                          attributeName="r"
-                          values="32;40;32"
-                          dur="2s"
-                          repeatCount="indefinite"
-                        />
-                        <animate
-                          attributeName="fill-opacity"
-                          values="0.25;0.08;0.25"
-                          dur="2s"
-                          repeatCount="indefinite"
-                        />
-                      </circle>
-                    )}
-
-                    {/* Node disc */}
-                    <circle
-                      cx={stage.x}
-                      cy={stage.y}
-                      r={nodeRadius}
-                      fill="#141414"
-                      stroke={color}
-                      strokeWidth={3}
-                      className="transition-all duration-200"
-                    />
-
-                    {/* Icon */}
-                    <foreignObject
-                      x={stage.x - 13}
-                      y={stage.y - 13}
-                      width={26}
-                      height={26}
-                      style={{ pointerEvents: 'none' }}
-                    >
-                      <stage.Icon
-                        width={26}
-                        height={26}
-                        stroke={color}
-                        strokeWidth={2}
-                        fill="none"
-                      />
-                    </foreignObject>
-
-                    {/* Label */}
-                    <text
-                      x={stage.x + stage.labelX}
-                      y={stage.y + stage.labelY}
-                      textAnchor={stage.labelAnchor}
-                      className={`font-semibold text-[14px] ${
-                        isActive ? 'fill-theme-primary' : 'fill-theme-secondary'
-                      }`}
-                    >
-                      {stage.label}
-                    </text>
-                    {/* Story word */}
-                    <text
-                      x={stage.x + stage.labelX}
-                      y={stage.y + stage.labelY + (stage.labelY < 0 ? -14 : 14)}
-                      textAnchor={stage.labelAnchor}
-                      className="font-mono text-[10px] fill-theme-muted uppercase tracking-wider"
-                    >
-                      {stage.story}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
+    <section
+      id="lifecycle"
+      className="lp-section lp-anchor"
+      aria-labelledby="lifecycle-heading"
+    >
+      <div className="lp-container">
+        <div className="lp-grid">
+          <div className="lp-rail">
+            <span className="lp-rail-name">Lifecycle</span>
+            <span className="lp-tag lp-tag-live">Live</span>
           </div>
 
-          {/* Details panel */}
-          <div className="lg:col-span-2">
-            <div className="card p-6 lg:p-8 min-h-[320px]">
-              <div className="flex items-center gap-3 mb-3">
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center border-2 ${
-                    active.tone === 'cobalt'
-                      ? 'border-cobalt bg-cobalt/10 text-cobalt'
-                      : 'border-turquoise bg-turquoise/10 text-turquoise'
-                  }`}
+          <div>
+            <h2 id="lifecycle-heading" className="lp-display lp-h2">
+              The loop, and what each stage can actually do today.
+            </h2>
+
+            <p className="lp-value mt-5 break-words">
+              Collect → Train → Deploy → Evaluate → Operate → Comply
+            </p>
+
+            <p className="lp-lede mt-5">
+              Physical AI is never finished — every deployment feeds the next collection. The six
+              stages are not equally mature, so each one carries its own tag: <em>Live</em> where it
+              runs against real hardware or real data, <em>Sim</em> where it is proven in simulation
+              only, and <em>Gated</em> where the code path exists end to end but a safety interlock
+              still stands between it and a real robot.
+            </p>
+
+            {/* ---------------------------------------------------------------
+                Desktop: the lemniscate plus a readout panel. Hidden below lg,
+                where a 600-unit viewBox squeezes r=22 nodes to ~12px.
+                --------------------------------------------------------------- */}
+            <div className="mt-12 hidden gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_19rem]">
+              <div>
+                <svg
+                  viewBox="-300 -150 600 300"
+                  className="h-auto w-full"
+                  role="group"
+                  aria-label="Lifecycle loop — select a stage"
                 >
-                  <active.Icon width={20} height={20} />
+                  <defs>
+                    {/* Cobalt for the build half, turquoise for the run half,
+                        hard split at the Deploy → Evaluate crossover. */}
+                    <linearGradient id="lifecycleStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" style={{ stopColor: 'var(--color-primary)' }} />
+                      <stop offset="50%" style={{ stopColor: 'var(--color-primary)' }} />
+                      <stop offset="50.01%" style={{ stopColor: 'var(--color-accent)' }} />
+                      <stop offset="100%" style={{ stopColor: 'var(--color-accent)' }} />
+                    </linearGradient>
+
+                    {/* Faint dot matrix — a grid, not a glow. */}
+                    <pattern
+                      id="lifecycleGrid"
+                      x="0"
+                      y="0"
+                      width="24"
+                      height="24"
+                      patternUnits="userSpaceOnUse"
+                    >
+                      <circle cx="1" cy="1" r="0.6" fill="var(--text-muted)" fillOpacity="0.35" />
+                    </pattern>
+
+                    {/* One source of truth for the geometry. */}
+                    <path id="lifecyclePath" d={INFINITY_PATH} fill="none" />
+                  </defs>
+
+                  <rect x={-300} y={-150} width={600} height={300} fill="url(#lifecycleGrid)" />
+
+                  {/* Two static layers: the stroke and the measurement ticks that
+                      dash it. The 16px-wide, 14%-opacity halo that used to sit
+                      under the path was a bloom by another name, and the corner
+                      brackets were a third decorative layer on a diagram whose
+                      whole payload is six labelled nodes. Both are gone. */}
+                  <use
+                    href="#lifecyclePath"
+                    stroke="url(#lifecycleStroke)"
+                    strokeWidth={4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <use
+                    href="#lifecyclePath"
+                    stroke="var(--bg-primary)"
+                    strokeOpacity={0.7}
+                    strokeWidth={1.5}
+                    strokeLinecap="butt"
+                    strokeDasharray="2 14"
+                  />
+
+                  {/* Crossover marker — the Deploy → Evaluate handoff. */}
+                  <circle cx={0} cy={0} r={3} fill="var(--text-tertiary)" />
+
+                  {STAGES.map((stage) => {
+                    const isActive = stage.key === activeKey;
+                    const isFocused = stage.key === focusKey;
+                    const color = toneColor(stage.tone);
+                    const nodeRadius = isActive ? 25 : 21;
+
+                    return (
+                      <g
+                        key={stage.key}
+                        className="cursor-pointer"
+                        tabIndex={0}
+                        role="button"
+                        aria-pressed={isActive}
+                        aria-controls={READOUT_ID}
+                        aria-label={`${stage.label} — ${tagLabel(stage.maturity)}`}
+                        onMouseEnter={() => setActiveKey(stage.key)}
+                        onFocus={() => {
+                          setActiveKey(stage.key);
+                          setFocusKey(stage.key);
+                        }}
+                        onBlur={() => setFocusKey(null)}
+                        onClick={() => setActiveKey(stage.key)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setActiveKey(stage.key);
+                          }
+                        }}
+                      >
+                        {/* Selection ring — static; no pulsing status dots. At 0.4
+                            it measured below 3:1 against the page, so it now sits
+                            at 0.7 and still reads as secondary to the node. */}
+                        {isActive && (
+                          <circle
+                            cx={stage.x}
+                            cy={stage.y}
+                            r={33}
+                            fill="none"
+                            stroke={color}
+                            strokeOpacity={0.7}
+                            strokeWidth={1}
+                          />
+                        )}
+
+                        {/* Focus indicator — SVG can't carry a Tailwind ring. */}
+                        {isFocused && (
+                          <circle
+                            cx={stage.x}
+                            cy={stage.y}
+                            r={nodeRadius + 9}
+                            fill="none"
+                            stroke="var(--text-primary)"
+                            strokeWidth={1.5}
+                            strokeDasharray="3 3"
+                          />
+                        )}
+
+                        <circle
+                          cx={stage.x}
+                          cy={stage.y}
+                          r={nodeRadius}
+                          fill="var(--bg-primary)"
+                          stroke={color}
+                          strokeWidth={isActive ? 3 : 2}
+                        />
+
+                        {/* Position in the loop, so the order is readable. */}
+                        <text
+                          x={stage.x}
+                          y={stage.y}
+                          textAnchor="middle"
+                          dominantBaseline="central"
+                          className="fill-theme-primary font-mono text-[13px] font-medium"
+                        >
+                          {stage.index}
+                        </text>
+
+                        <text
+                          x={stage.x + stage.labelX}
+                          y={stage.y + stage.labelY}
+                          textAnchor={stage.labelAnchor}
+                          className={`text-[14px] font-semibold ${
+                            isActive ? 'fill-theme-primary' : 'fill-theme-secondary'
+                          }`}
+                        >
+                          {stage.label}
+                        </text>
+
+                        {/* Maturity, on the graphic itself. */}
+                        <text
+                          x={stage.x + stage.labelX}
+                          y={stage.y + stage.labelY + (stage.labelY < 0 ? -14 : 14)}
+                          textAnchor={stage.labelAnchor}
+                          className="fill-theme-tertiary font-mono text-[10px] tracking-wider uppercase"
+                        >
+                          {tagLabel(stage.maturity)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                <p className="lp-note mt-4">
+                  The two lobes cross at the centre: that is the Deploy → Evaluate handoff, where
+                  building a policy becomes running one. Hover, tab to or click a node to read the
+                  stage.
+                </p>
+              </div>
+
+              {/* Readout panel for the selected stage. aria-live so that moving
+                  between nodes is announced — the panel is the only thing that
+                  changes, and a screen reader had no way to know it had. */}
+              <div id={READOUT_ID} className="lp-panel self-start" aria-live="polite">
+                <div
+                  className="flex items-center justify-between gap-3 border-b px-4 py-2.5"
+                  style={{ borderColor: 'var(--border-color)' }}
+                >
+                  <span className="lp-key">
+                    Stage {active.index} / 6 · {active.label}
+                  </span>
+                  <span className={`${tagClass(active.maturity)} shrink-0`}>
+                    {tagLabel(active.maturity)}
+                  </span>
                 </div>
-                <div>
-                  <div className="text-theme-primary font-semibold text-lg leading-tight">{active.label}</div>
-                  <div className="font-mono text-xs text-theme-muted uppercase tracking-wider">
-                    {active.story}
-                  </div>
+                <div className="px-4 py-4" style={{ minHeight: '19rem' }}>
+                  <StageBody stage={active} />
                 </div>
               </div>
-              <p className="text-theme-secondary mb-5">{active.summary}</p>
-              <ul className="space-y-2">
-                {active.bullets.map((bullet) => (
-                  <li key={bullet} className="flex items-start gap-2 text-theme-secondary text-sm">
-                    <span
-                      className={
-                        active.tone === 'cobalt' ? 'text-cobalt mt-1' : 'text-turquoise mt-1'
-                      }
-                      aria-hidden
+            </div>
+
+            {/* ---------------------------------------------------------------
+                Below lg: a vertical stepper. Real buttons, real hit areas.
+                --------------------------------------------------------------- */}
+            <div className="lp-panel mt-10 overflow-hidden lg:hidden">
+              <ul role="list">
+                {STAGES.map((stage, i) => {
+                  const isOpen = stage.key === openKey;
+                  const panelId = `lifecycle-stage-${stage.key}`;
+
+                  return (
+                    <li
+                      key={stage.key}
+                      className={i === 0 ? '' : 'border-t'}
+                      style={{ borderColor: 'var(--border-color)' }}
                     >
-                      ▸
-                    </span>
-                    <span>{bullet}</span>
-                  </li>
-                ))}
+                      <button
+                        type="button"
+                        aria-expanded={isOpen}
+                        aria-controls={panelId}
+                        onClick={() => setOpenKey(isOpen ? null : stage.key)}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset"
+                        style={{ minHeight: '3rem' }}
+                      >
+                        <span
+                          className="lp-key w-4 shrink-0 tabular-nums"
+                          style={{ color: toneColor(stage.tone) }}
+                        >
+                          {stage.index}
+                        </span>
+                        <span className="lp-h3 min-w-0 flex-1">{stage.label}</span>
+                        <span className={`${tagClass(stage.maturity)} shrink-0`}>
+                          {tagLabel(stage.maturity)}
+                        </span>
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          aria-hidden="true"
+                          className={`shrink-0 transition-transform duration-200 ${
+                            isOpen ? 'rotate-180' : ''
+                          }`}
+                          style={{ color: 'var(--text-tertiary)' }}
+                        >
+                          <path
+                            d="M2.5 4.5 L6 8 L9.5 4.5"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+
+                      {/* Rendered whether or not it is open, and hidden with the
+                          attribute. Conditional rendering left the five closed
+                          buttons pointing aria-controls at IDs that were not in
+                          the document. Same pattern as RunItSection. */}
+                      <div id={panelId} hidden={!isOpen} className="px-4 pt-1 pb-4">
+                        <StageBody stage={stage} />
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
-            <p className="text-theme-muted font-mono text-xs mt-3 text-center lg:text-left">
-              Hover or tap a node to explore that phase.
+
+            <p className="lp-note mt-4 lg:hidden">
+              Stages 3 and 4 sit on either side of the handoff: Deploy builds and ships the policy,
+              Evaluate runs it.
             </p>
           </div>
         </div>
