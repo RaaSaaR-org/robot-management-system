@@ -9,6 +9,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { Logo } from '@/components/common/Logo';
 import { useThemeStore, type ThemeMode } from '@/features/settings/store/themeStore';
+import { scrollToSection } from './scrollToSection';
 
 const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 
@@ -143,7 +144,12 @@ export function Header() {
           {/* Desktop navigation — the legend rail's voice, repeated in the chrome. */}
           <nav className="hidden items-center gap-x-6 lg:flex xl:gap-x-8" aria-label="Landing page sections">
             {NAV_ITEMS.map((item) => (
-              <a key={item.href} href={item.href} className={DESKTOP_LINK}>
+              <a
+                key={item.href}
+                href={item.href}
+                onClick={(event) => scrollToSection(event, item.href)}
+                className={DESKTOP_LINK}
+              >
                 {item.label}
               </a>
             ))}
@@ -214,7 +220,15 @@ export function Header() {
       >
         <nav className="lp-container flex flex-col gap-1 py-4" aria-label="Landing page sections">
           {NAV_ITEMS.map((item) => (
-            <a key={item.href} href={item.href} onClick={closeMenu} className={MOBILE_LINK}>
+            <a
+              key={item.href}
+              href={item.href}
+              onClick={(event) => {
+                closeMenu();
+                scrollToSection(event, item.href);
+              }}
+              className={MOBILE_LINK}
+            >
               {item.label}
             </a>
           ))}

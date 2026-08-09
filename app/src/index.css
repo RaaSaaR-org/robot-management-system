@@ -1,12 +1,10 @@
-/* Self-hosted. A page whose thesis is "no data leaving the building" cannot
-   send every visitor's IP to fonts.googleapis.com before the headline paints —
-   and for a German GmbH that request is a live GDPR exposure. These also stop
-   the render-blocking serial @import chain and work in a packaged Tauri build
-   with no network. Archivo ships the wdth axis, which the display type uses. */
-@import '@fontsource-variable/archivo/wdth.css';
-@import '@fontsource-variable/inter';
-@import '@fontsource-variable/jetbrains-mono';
-
+/* The self-hosted font faces are imported from main.tsx, NOT here.
+   `@tailwindcss/postcss` inlines CSS `@import` itself, before Vite can see the
+   imported file as a dependency — so the @font-face rules landed in the bundle
+   but their `url(./files/*.woff2)` was never rebased and not one woff2 was
+   emitted. Every face 404s, silently, and only in a production build. Imported
+   from JS instead, Vite processes each stylesheet and hashes the fonts.
+   See main.tsx for why they are self-hosted at all. */
 @import "tailwindcss";
 
 /* Enable class-based dark mode for Tailwind v4 (matches ThemeProvider .dark/.light on :root) */

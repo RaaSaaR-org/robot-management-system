@@ -6,8 +6,9 @@ mkdirSync('e2e/results/screenshots', { recursive: true });
 
 /**
  * Screenshots captured in demo mode with MSW fixtures.
- * The three highlighted on the landing page are: dashboard, training, compliance —
- * one per side of the lifecycle loop (Operate, Train, Comply).
+ * The landing page embeds exactly one of these — dashboard.png, in the Proof
+ * section. It used to show three (dashboard, training, compliance) as a gallery;
+ * that gallery is gone, so the rest are captured for docs and review only.
  */
 test.describe('Demo Mode Screenshots', () => {
   test('landing page', async ({ page }) => {

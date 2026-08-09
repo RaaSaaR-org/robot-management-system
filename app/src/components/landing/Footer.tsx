@@ -4,9 +4,11 @@
  * @feature landing
  */
 
+import type { MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Logo } from '@/components/common/Logo';
 import { useBrand } from '@/brand';
+import { scrollToSection } from './scrollToSection';
 
 const GITHUB_URL = 'https://github.com/RaaSaaR-org/robot-management-system';
 const CONTACT_EMAIL = 'info@EmAI.dev';
@@ -110,7 +112,10 @@ export function Footer() {
                         href={link.href}
                         {...(link.external
                           ? { target: '_blank', rel: 'noopener noreferrer' }
-                          : {})}
+                          : {
+                              onClick: (event: MouseEvent<HTMLAnchorElement>) =>
+                                scrollToSection(event, link.href),
+                            })}
                         className={LINK_CLASS}
                       >
                         {link.name}
