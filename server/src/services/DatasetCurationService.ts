@@ -193,9 +193,10 @@ export class DatasetCurationService {
       }
       let suggestions = result.suggestions;
       let vlmEnriched = false;
-      if (this.vlmEnabled() && suggestions.length > 0) {
+      const vlm = suggestions.length > 0 ? this.vlmProvider() : null;
+      if (vlm) {
         try {
-          suggestions = await this.enrichWithVlm(suggestions, source.dir);
+          suggestions = await this.enrichWithVlm(suggestions, source.dir, vlm);
           vlmEnriched = true;
         } catch (error) {
           console.warn('[DatasetCuration] VLM enrichment failed, using heuristics only:', error);
@@ -446,11 +447,11 @@ export class DatasetCurationService {
    * The gate stays opt-in via `CURATION_VLM`, but its value now names the
    * provider family rather than being pinned to Gemini. Credentials are checked
    * by the resolver, so a local Ollama needs only `CURATION_VLM=ollama`.
+   *
+   * Resolved once per curation run and handed to {@link enrichWithVlm}, so the
+   * gate and the call that follows it cannot disagree — and the resolver logs
+   * its choice once rather than twice.
    */
-  private vlmEnabled(): boolean {
-    return this.vlmProvider() !== null;
-  }
-
   private vlmProvider(): LlmProvider | null {
     const configured = process.env.CURATION_VLM?.trim().toLowerCase();
     if (!configured || configured === 'off' || configured === 'false') return null;
@@ -471,10 +472,8 @@ export class DatasetCurationService {
   private async enrichWithVlm(
     suggestions: CurationSuggestion[],
     datasetDir: string,
+    provider: LlmProvider,
   ): Promise<CurationSuggestion[]> {
-    const provider = this.vlmProvider();
-    if (!provider) return suggestions;
-
     let info: Record<string, unknown> = {};
     try {
       info = JSON.parse(await readFile(path.join(datasetDir, 'meta', 'info.json'), 'utf8'));

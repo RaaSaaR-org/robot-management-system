@@ -6,6 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  GeminiProvider,
   OpenAICompatProvider,
   normalizeOllamaBaseUrl,
   resolveLlmProvider,
@@ -252,6 +253,38 @@ describe('OpenAICompatProvider', () => {
       false
     );
     await expect(provider.generateText({ prompt: 'x' })).rejects.toThrow(/openrouter 503/);
+  });
+});
+
+describe('GeminiProvider abort handling', () => {
+  it('rejects once the caller aborts, since the SDK takes no signal', async () => {
+    const controller = new AbortController();
+    const provider = new GeminiProvider('key', 'gemini-2.0-flash');
+    // Never settles — only the signal can end this call.
+    (provider as unknown as { client: unknown }).client = {
+      getGenerativeModel: () => ({ generateContent: () => new Promise(() => {}) }),
+    };
+
+    const pending = provider.generateText({ prompt: 'route', signal: controller.signal });
+    controller.abort();
+
+    await expect(pending).rejects.toThrow(/aborted/);
+  });
+
+  it('rejects immediately when handed an already-aborted signal', async () => {
+    const provider = new GeminiProvider('key', 'gemini-2.0-flash');
+    // Rejects only after the race is lost — the late failure must stay handled,
+    // not surface as an unhandled rejection.
+    (provider as unknown as { client: unknown }).client = {
+      getGenerativeModel: () => ({
+        generateContent: () =>
+          new Promise((_resolve, rej) => setTimeout(() => rej(new Error('upstream 503')), 5)),
+      }),
+    };
+
+    await expect(
+      provider.generateText({ prompt: 'route', signal: AbortSignal.abort() })
+    ).rejects.toThrow(/aborted/);
   });
 });
 

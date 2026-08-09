@@ -1008,6 +1008,17 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
 
       console.log(`[Orchestrator] LLM selected: "${selectedName}"`);
 
+      // An empty answer is a real outcome, not a formality: a reasoning model
+      // that spends its whole budget thinking returns nothing, and `stripThinking`
+      // deliberately yields '' for an unterminated block. `''` is a substring of
+      // every agent name, so the partial match below would pick whichever agent
+      // happens to be first and record it as a confident LLM choice. Fall through
+      // to keyword matching instead.
+      if (!selectedName) {
+        console.warn('[Orchestrator] LLM returned an empty selection, falling back');
+        return null;
+      }
+
       // Exact match
       const exact = agents.find((a) => a.name.toLowerCase() === selectedName.toLowerCase());
       if (exact) return exact;

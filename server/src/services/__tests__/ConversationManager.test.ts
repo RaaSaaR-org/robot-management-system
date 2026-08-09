@@ -592,6 +592,40 @@ describe('ConversationManager', () => {
       expect([a, b]).toContain(result);
       fetchMock.mockRestore();
     });
+
+    it('treats an empty LLM answer as no answer, not as a match on every agent', async () => {
+      // A reasoning model can spend its whole budget thinking and return ''.
+      // Since '' is a substring of every name, the partial-match branch would
+      // otherwise hand back the first agent and report it as a confident LLM
+      // choice — so this must reach keyword scoring and report `keyword`.
+      process.env.OPENROUTER_API_KEY = 'test-key';
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: '<think>weighing' } }] }),
+      } as unknown as Response);
+
+      const picker = makeAgent({
+        name: 'Picker',
+        description: 'Light nimble robot for delicate work',
+      });
+      const hauler = makeAgent({
+        name: 'Hauler',
+        description: 'Heavy industrial robot, max payload: 50 kg',
+      });
+
+      const selection = await manager.selectAgentForMessageDetailed('move a heavy pallet', [
+        picker,
+        hauler,
+      ]);
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(selection.method).toBe('keyword');
+      expect(selection.modelId).toBeUndefined();
+      // Keyword scoring, not "whichever agent was listed first".
+      expect(selection.agent).toBe(hauler);
+      fetchMock.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------
