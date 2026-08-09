@@ -180,7 +180,10 @@ export interface IConversationManager {
    * @param message - The message text
    * @param connectedAgents - Optional list of connected agents
    */
-  selectAgentForMessage(message: string, connectedAgents?: A2AAgentCard[]): A2AAgentCard | null;
+  selectAgentForMessage(
+    message: string,
+    connectedAgents?: A2AAgentCard[]
+  ): Promise<A2AAgentCard | null>;
 
   /**
    * Process an orchestrated message - select agent and route
