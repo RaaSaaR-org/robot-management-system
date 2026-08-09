@@ -3,6 +3,36 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.08.09] - 2026-08-09
+
+### Added
+
+- one LLM interface for the server, so it can run on local Ollama (#218)
+- the robot as a persistent agent — place, memory, identity, heartbeat, geofence + a cockpit you can read (#216)
+- speak with the robot - spoken commands drive Agent Mode (#215)
+- measure range with LiDAR instead of guessing it (#214)
+- real-to-sim realism pass + hold the real leg pose (#213)
+- local LLM commands the G1 EDU via LocoClient blocks (TASK-194) (#212)
+- NVIDIA GR00T apple-to-plate use case - sim env, server wiring, gated real-G1 bridge (#211)
+- G1+Dex3 pick-and-place environment - real GR00T VLA rollouts end to end (#210)
+- video-to-G1 motion mirroring (TASK-193) + review hardening (#205)
+- voice mode frontend — type-to-speak, live mic transcripts, pipeline controls (TASK-192) (#203)
+- real-time 3D robot view — 10 Hz fast channel + damped interpolation (TASK-191) (#202)
+
+### Fixed
+
+- QA-sweep findings - 43-issue cleanup across server, robot-agent, and app (#208)
+
+### Maintenance
+
+- close TASK-195..200 and file what the live warehouse run found (#217)
+- close TASK-172 - stub VLA G1-capable + deploy gate exercised at runtime (#209)
+- TASK-189 done - closed-loop eval harness (n=40, automation, honesty controls) (#207)
+- robot-day run sheet - NeoDEM Voice tab leg (TASK-181/192) (#204)
+- TASK-193 review to done - merged as PR #205 (#206)
+- TASK-190 — MID-360 frame orientation per scan session (#200)
+
+
 ## [v2026.07.17] - 2026-07-17
 
 ### Added
