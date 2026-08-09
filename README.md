@@ -1,13 +1,17 @@
-# NeoDEM — The Open Physical AI Platform
+# NeoDEM — The All-in-One Physical AI Platform
 
-The complete lifecycle for Physical AI — **Collect → Train → Deploy → Evaluate → Operate → Comply** — in one open-source platform.
+**Your own robotic cloud.** Collect the demonstrations, train the model, ship it to the robot,
+measure what it did, run the fleet and prove it to a regulator — one **full circle**, in one
+open-source system you host yourself.
+
+**Any VLA. Any world model. No vendor login.**
 
 [![Check](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/check.yml/badge.svg)](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/check.yml)
 [![Deploy Demo](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/deploy-demo.yml/badge.svg)](https://github.com/RaaSaaR-org/robot-management-system/actions/workflows/deploy-demo.yml)
 [![LeRobot compatible](https://img.shields.io/badge/LeRobot-v2.1%20%2B%20v3.0-orange?logo=huggingface)](https://github.com/huggingface/lerobot)
 [![EU AI Act](https://img.shields.io/badge/EU%20AI%20Act-Art.%2012%20%C2%B7%20Annex%20IV-blue)](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai)
 
-[Live Demo](#live-demo) · [Quick Start](#quick-start) · [Architecture](#architecture) · [What's new in 2026](#whats-new-in-2026) · [Docs](#documentation) · [Contributing](CONTRIBUTING.md) · [License](#license)
+[Live Demo](#live-demo) · [The full circle](#the-full-circle) · [Models](#models--any-brain-no-vendor-login) · [Quick Start](#quick-start) · [Architecture](#architecture) · [What's new in 2026](#whats-new-in-2026) · [Docs](#documentation) · [Contributing](CONTRIBUTING.md) · [License](#license)
 
 ---
 
@@ -28,17 +32,31 @@ is generated, and the UI labels simulated data as such. Rebuilt from `main` on e
 Physical Intelligence builds models (closed-source). NVIDIA Isaac simulates (cloud-only). No
 single platform connects it all — and none of them help you with EU AI Act record-keeping.
 
-**The solution:** NeoDEM is the integrating layer. A web-based, hardware-agnostic platform that
-covers the six stages of the Physical AI lifecycle:
+**The solution:** NeoDEM is the integrating layer — an all-in-one platform, self-hosted, that
+carries a robot's whole working life instead of one slice of it.
+
+## The full circle
+
+Physical AI is never finished. A model ships, the fleet works a shift, and what it did on that
+shift is the next training set. NeoDEM closes that loop inside one system, so there is no export
+step between the stages — there is nothing to export *to*.
+
+**Collect → Train → Deploy → Evaluate → Operate → Comply → Collect.**
 
 | Stage | What you get |
 |-------|-------------|
-| **Collect** | Record demonstrations via teleoperation or VR into a true LeRobot v3.0 chunked dataset. Curation trims and deletes episodes video-aware and returns a *new* revision with lineage, never touching the source. HuggingFace Hub sync both ways. Build a digital twin from a real LiDAR scan. |
+| **Collect** | The data engine. Record demonstrations via teleoperation or VR into a true LeRobot v3.0 chunked dataset, scan a room with a LiDAR and get a digital twin, or have a world action model generate episodes when the robots cannot make enough. Curation trims and deletes episodes video-aware and returns a *new* revision with lineage, never touching the source. HuggingFace Hub sync both ways. |
 | **Train** | Queue SmolVLA LoRA fine-tuning jobs, reward models, annotation jobs. The trainer itself runs in a separate repo that polls this server for work. |
 | **Deploy** | Model registry, canary rollouts with per-stage health checks, one-click rollback, Ed25519-signed OTA packages. You always know which model version runs on which robot. |
 | **Evaluate** | MuJoCo simulation jobs, per-episode reward scoring, success-rate and error breakdowns, model comparison. |
 | **Operate** | Fleet dashboard, natural-language control over the A2A protocol, real-time telemetry and 3D view, four layers of safety: fleet, zone, robot, and human approval. |
 | **Comply** | Hash-chained tamper-evident audit logs with a `verify` endpoint (EU AI Act Art. 12), technical documentation per Annex IV, GDPR Art. 30 RoPA, a self-service portal for data-subject requests, legal holds and retention policies. |
+
+The stages are **not equally mature**, and the platform says which is which rather than levelling
+them up in the marketing: *Live* where it runs against real hardware or real data, *Sim* where it
+is proven in simulation only, and *Gated* where the code path exists end to end but a safety
+interlock still stands between it and a real robot. The honest version is in
+[Status & limitations](#status--limitations).
 
 The platform is hardware-agnostic. Development and go-to-market focus on **cognitive humanoids,
 specialised on the Unitree G1** (including the G1 EDU with Dex3-1 hands). The SO-101 arm was the
@@ -88,7 +106,8 @@ document the unchanged API surface — the code is gone from here.
 
 ## Quick Start
 
-Five minutes, SQLite, no Docker. This is the path CI exercises.
+**About five minutes from clone to a robot reporting telemetry.** No Docker, no database to
+install, no API key and no account. This is the path CI exercises.
 
 ### Prerequisites
 
@@ -307,13 +326,53 @@ robot. That is what makes Agent Mode testable without a G1 in the room.
 
 ---
 
-## VLA models
+## Models — any brain, no vendor login
 
-**SmolVLA is active, GR00T N1.7 is ready, pi0.5 is a stub.**
+The model layer is an interface, not a supplier. Vision-language-action policies and world action
+models go into the same registry, train on the same datasets and deploy through the same canary,
+so which model you run stays a technical decision rather than a five-year commercial one.
 
-Serving runs in `../vla-server`; training runs in `../training-worker`. Datasets are
-LeRobot-compatible in both v2.1 and v3.0 layouts, with HuggingFace Hub sync in both directions.
-See [`docs/vla-integration-guide.md`](docs/vla-integration-guide.md).
+### VLA — the policy that acts
+
+Sees the scene, reads the instruction, emits the next action chunk. Six base models are in the
+registry (`BaseModels` in [`server/src/types/vla.types.ts`](server/src/types/vla.types.ts)).
+
+| Model | From | Status | Notes |
+|-------|------|--------|-------|
+| **SmolVLA** | HuggingFace / LeRobot | **Live** | Fine-tuned here, served here. MPS, CUDA or CPU — the full train → serve → evaluate circle has been walked on a Mac. |
+| **GR00T N1.7** | NVIDIA | Ready | LeRobot-native trainer path (`lerobot[groot]`). Selectable in the training wizard. |
+| **GR00T N1** | NVIDIA | Ready | Served over ZMQ to a PolicyServer on an NVIDIA GPU you supply. |
+| **π0 · π0.6** | Physical Intelligence | Registered | In the base-model registry, selectable for a training job. |
+| **OpenVLA** | Stanford | Registered | In the base-model registry, selectable for a training job. |
+| **π0.5** | Physical Intelligence | Stub | `models/pi05.py` in `../vla-server` is a stub, not wired to weights (TASK-078). |
+
+### WAM — the model that imagines
+
+Generates the experience instead of recording it, and every generated episode is registered as
+synthetic so nothing on the record pretends a dream was a recording
+([`CosmosSyntheticService.ts`](server/src/services/CosmosSyntheticService.ts)).
+
+| Generator | From | Status | Notes |
+|-----------|------|--------|-------|
+| **GR00T-Dreams** neural trajectories | NVIDIA · Cosmos-Predict2-2B LoRA | **Live** | Language-prompted trajectories for the G1 + Dex3, pseudo-labelled by an IDM (holdout MAE 0.079 rad / 5.5% norm). Registers as a real LeRobot dataset. **No token required.** |
+| **Cosmos 3** forward dynamics | NVIDIA | **Live** | Action-conditioned rollouts on the WidowX bridge embodiment, converted to LeRobot v2.1. This path runs on a HuggingFace ZeroGPU Space and wants a **PRO token**. |
+| Cosmos 3 *as a policy-ranking simulator* | — | **Ruled out** | Evaluated and rejected: visually plausible, action-conditioned, and it still misranked a do-nothing policy. Written up as a no-go in [`server/curation/README.md`](server/curation/README.md) rather than quietly deleted. |
+
+### What "no vendor login" means
+
+- **No account for the platform.** MIT, self-hosted, no licence server, no seat count, nothing
+  phones home.
+- **No account for the reasoning.** `LLM_PROVIDER=ollama` and every server-side LLM call runs on
+  a model in your own building.
+- **Open weights, open format.** Datasets are LeRobot v2.1 and v3.0 with Hub sync both ways —
+  take the data and the checkpoints and walk out.
+- **Two honest exceptions.** The Cosmos 3 forward-dynamics generator wants a HuggingFace PRO
+  token, and a hosted LLM provider needs its own key if you choose one over Ollama. Neither is
+  required to run the platform.
+
+Serving runs in `../vla-server`; training runs in `../training-worker`. How far each base model's
+trainer has been exercised is a question about those repos — the status above is what *this*
+platform carries. See [`docs/vla-integration-guide.md`](docs/vla-integration-guide.md).
 
 ---
 

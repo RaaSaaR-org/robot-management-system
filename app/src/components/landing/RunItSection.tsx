@@ -60,7 +60,7 @@ printf 'ROBOT_TYPE=g1\\nROBOT_ID=sim-robot-g1\\nPORT=41244\\n' >> .env.g1
 npm run dev:g1
 
 cd ../app && npm install && npm run dev     # http://localhost:1420`,
-    note: 'Three terminals, SQLite, no Docker and no database to install. .env.g1 is not in the repo — without it dev:g1 quietly starts an H1 on the default port, so the two lines that write it are load-bearing. About five minutes from clone to a G1 reporting live simulated telemetry.',
+    note: 'Three terminals, no Docker and no database to install — about five minutes from clone to a G1 reporting live simulated telemetry. The two lines that write .env.g1 are load-bearing: that file is not in the repo, and without it dev:g1 quietly starts a different robot on a different port.',
   },
   {
     id: 'docker',
@@ -78,20 +78,21 @@ cd ../app && npm install && npm run dev     # http://localhost:1420`,
   },
 ];
 
+// What a reader actually wants to know before pasting a command: how long,
+// what it costs, and who they have to sign up with. The runtime versions and
+// the optional infrastructure moved to the footnote below the tabs — true, but
+// not the three numbers this block should be spending its size on.
 const REQUIREMENTS: readonly { k: string; v: string; note: string }[] = [
-  // Node 22 is what CI runs the server and robot agent on; the app job builds on
-  // 20. There is no `engines` field anywhere in the repo, so 22 is a
-  // recommendation, not a floor — say so rather than stating it flatly.
   {
-    k: 'Runtime',
-    v: 'Node 22',
-    note: 'The app builds on 20+ — nvm install 22',
+    k: 'Clone to running',
+    v: '~5 minutes',
+    note: 'Three terminals, no Docker required',
   },
-  { k: 'Database', v: 'SQLite', note: 'PostgreSQL for production' },
+  { k: 'Licence', v: 'MIT', note: 'Yours to fork, ship and sell' },
   {
-    k: 'Optional',
-    v: 'NATS · RustFS',
-    note: 'Off by default, degrades gracefully',
+    k: 'Accounts needed',
+    v: 'None',
+    note: 'No key, no seat count, nothing phones home',
   },
 ];
 
@@ -163,14 +164,17 @@ export function RunItSection() {
 
           <div>
             <h2 id="runit-heading" className="lp-display lp-h2">
-              Clone it and it runs.
+              Your robotic cloud.
+              <br />
+              On your hardware.
             </h2>
 
             <p className="lp-lede mt-5">
-              One repository, three install paths. {brand.name} is MIT-licensed and self-hosted —
-              there is no managed cloud to sign up for, and nothing here phones home. Start on your
-              laptop with SQLite, move the same stack to Docker Compose, or install the Helm chart
-              that ships in <code style={{ fontFamily: 'var(--font-mono)' }}>helm/neodem</code>.
+              The same platform scales from a laptop to a cluster without changing repository.
+              Start on your own machine, move the identical stack to Docker Compose when the team
+              grows, and install the Helm chart when it becomes infrastructure. {brand.name} is
+              MIT-licensed and self-hosted — there is no managed cloud to sign up for, and nothing
+              here phones home.
             </p>
 
             {/* Tabbed command block — one panel per install path. */}
@@ -334,29 +338,21 @@ export function RunItSection() {
             </dl>
 
             <p className="lp-body mt-8">
-              Three sibling repositories do the work that is not fleet operation. The training
-              worker (<code style={{ fontFamily: 'var(--font-mono)' }}>../training-worker</code>)
-              polls{' '}
-              <code style={{ fontFamily: 'var(--font-mono)' }}>/api/training/workers/claim</code>,
-              inference runs in{' '}
-              <code style={{ fontFamily: 'var(--font-mono)' }}>../vla-server</code>, and the{' '}
-              <code style={{ fontFamily: 'var(--font-mono)' }}>../twin-builder</code> sidecar claims
-              the scan jobs that reconstruct a digital twin. Clone only this repo and you can
-              collect and operate. Fine-tuning, serving, building a twin and closed-loop evaluation
-              each reach outside it — the evaluation harness ships here, in{' '}
-              <code style={{ fontFamily: 'var(--font-mono)' }}>
-                robot-agent/hardware/sim_evaluator
-              </code>
-              , but it drives a policy served by{' '}
-              <code style={{ fontFamily: 'var(--font-mono)' }}>../vla-server</code>.
+              Training, model serving and twin reconstruction each run in their own sibling
+              repository, so a GPU box can carry the heavy work without carrying the fleet. Clone
+              this one and you can collect data and operate robots; fine-tuning, serving and
+              building a twin want their neighbours cloned alongside it. All of them are MIT, all
+              of them are linked from the README, and container images for the three services here
+              publish to the GitHub registry.
             </p>
 
-            <p className="lp-body mt-4">
-              Container images publish to{' '}
-              <code style={{ fontFamily: 'var(--font-mono)' }}>
-                ghcr.io/raasaar-org/neodem-&#123;app,server,robot-agent&#125;
-              </code>
-              .
+            {/* The spec, in the size the spec deserves. It used to be three
+                large readouts at the top of this block, which made "which
+                Node?" the loudest thing in the section. */}
+            <p className="lp-note mt-4">
+              Under the hood: Node 22 for the server and robot agent (the app builds on 20+),
+              SQLite locally and PostgreSQL in production, and NATS and object storage optional —
+              absent, the features that need them switch themselves off and say so.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">

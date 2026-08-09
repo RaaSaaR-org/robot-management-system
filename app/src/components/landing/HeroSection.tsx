@@ -19,20 +19,29 @@ export function HeroSection() {
         <div className="grid items-start gap-12 lg:grid-cols-[minmax(0,1fr)_28rem] lg:gap-16">
           <div>
             <p className="lp-key mb-6">
-              {brand.name} · Open Physical AI platform
+              {brand.name} · Self-hosted robotic cloud
             </p>
 
+            {/* nowrap on the compound: left to itself the display face breaks
+                it at a hyphen and the first line reads "The all-in-". */}
             <h1 id="hero-heading" className="lp-display lp-h1">
-              The robot tells you
+              The <span className="whitespace-nowrap">all-in-one</span>
               <br />
-              what it doesn&rsquo;t know.
+              Physical AI platform.
             </h1>
 
             <p className="lp-lede mt-7">
-              Most robotics software reports success. {brand.name} reports its state — measured,
-              estimated, or unknown — through every stage from first demonstration to a compliant
-              production fleet. When a reading is missing, it says <em>unknown</em>. When a stop
-              isn&rsquo;t acknowledged, it says <em>unconfirmed</em>. That is the whole product.
+              Collect the demonstrations, train the model, ship it to the robot, measure what it
+              did, run the fleet and prove it to a regulator. One full circle, in one system — your
+              own robotic cloud, on hardware you own. Any VLA. Any world model.{' '}
+              <span style={{ color: 'var(--text-primary)' }}>No vendor login.</span>
+            </p>
+
+            <p className="lp-body mt-5">
+              And it is built to be believed. The robot reports its state as measured, estimated or
+              unknown — when a reading is missing it says <em>unknown</em>, when a stop was never
+              acknowledged it says <em>unconfirmed</em>. Every stage on this page carries the
+              status it has actually reached.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">
@@ -40,7 +49,7 @@ export function HeroSection() {
                 to="/dashboard"
                 className="lp-btn-primary px-6 py-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
               >
-                Open the dashboard
+                Explore the live demo
               </Link>
               <a
                 href={GITHUB_URL}
@@ -52,12 +61,14 @@ export function HeroSection() {
               </a>
             </div>
 
-            {/* Three facts, stated as readings rather than badges. */}
+            {/* Three facts, stated as readings rather than badges. Each one is
+                a claim the page goes on to itemise — the loop, the model
+                registry, and the self-hosting. */}
             <dl className="mt-11 grid max-w-xl grid-cols-1 sm:grid-cols-3">
               {[
-                { k: 'Runs on', v: 'Your hardware', note: 'local LLM, no cloud key' },
-                { k: 'Focus', v: 'Unitree G1', note: 'G1 EDU + Dex3-1, 43 DOF' },
-                { k: 'Datasets', v: 'LeRobot', note: 'v2.1 · v3.0 · HF Hub' },
+                { k: 'Lifecycle', v: 'Full circle', note: 'six stages, one system' },
+                { k: 'Models', v: 'VLA + WAM', note: 'GR00T · π0 · SmolVLA · Cosmos' },
+                { k: 'Runs on', v: 'Your hardware', note: 'MIT · self-hosted · no account' },
               ].map((item, i) => (
                 <div
                   key={item.k}

@@ -676,6 +676,39 @@
     scroll-margin-top: 5.5rem;
   }
 
+  /* A section that breaks the container to sit on its own surface. Used once,
+     for the full circle — the page's centrepiece earns the only change of
+     ground colour on it. */
+  .lp-band {
+    background-color: var(--bg-secondary);
+    border-block: 1px solid var(--border-color);
+  }
+
+  /* ---- Full-circle loop motion -----------------------------------------
+     One lit segment circulates the lemniscate and every stage node pings as
+     it arrives. The path carries pathLength="1000", so the dash lengths here
+     and the per-node delays computed in FullCircleSection are the same units.
+
+     Both are only rendered when the visitor has not asked for reduced motion
+     — the component checks and omits them, rather than relying on the global
+     duration override, which would freeze the travelling dash at a random
+     point on the curve and leave a bright stub sitting there. */
+  .lp-loop-head {
+    stroke-dasharray: 44 956;
+    animation: lp-loop-head var(--lp-loop-duration) linear infinite;
+  }
+
+  .lp-loop-trail {
+    stroke-dasharray: 130 870;
+    animation: lp-loop-trail var(--lp-loop-duration) linear infinite;
+  }
+
+  /* Sits on the node ring; opacity is driven so the colour stays the stage's
+     own tone rather than flashing a second hue. */
+  .lp-node-ping {
+    animation: lp-node-ping var(--lp-loop-duration) linear infinite;
+  }
+
   /* Primary action. The brand primary is white-labelled at runtime, so white
      text on the raw token is only legible by luck — the shipped cobalt passes
      at 5.0:1, an orange brand lands at 2.9:1. Mixing toward black first makes
@@ -701,6 +734,41 @@
   }
   .lp-btn-secondary:hover {
     background-color: var(--bg-elevated);
+  }
+}
+
+/* Full-circle loop keyframes. The trail's offsets are the head's shifted by
+   +86 (130 − 44) so the two dashes share a leading edge and the longer, dimmer
+   one reads as the wake behind it rather than as a second pulse in front. */
+@keyframes lp-loop-head {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+
+@keyframes lp-loop-trail {
+  from {
+    stroke-dashoffset: 86;
+  }
+  to {
+    stroke-dashoffset: -914;
+  }
+}
+
+/* Instant on, slow decay — a sensor ping, not a throb. The delay set per node
+   puts 0% at the moment the head reaches that node. */
+@keyframes lp-node-ping {
+  0% {
+    opacity: 0.9;
+  }
+  18% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
   }
 }
 
