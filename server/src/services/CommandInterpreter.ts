@@ -1,9 +1,9 @@
 /**
  * @file CommandInterpreter.ts
- * @description Service for interpreting natural language commands using Gemini LLM
+ * @description Service for interpreting natural language commands via the configured LLM provider
  */
 
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { resolveLlmProvider, type JsonSchema, type LlmProvider } from './llm/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   commandRepository,
@@ -56,45 +56,45 @@ interface LLMInterpretationResult {
 // RESPONSE SCHEMA
 // ============================================================================
 
-const interpretationSchema = {
-  type: SchemaType.OBJECT,
+const interpretationSchema: JsonSchema = {
+  type: 'object',
   properties: {
     commandType: {
-      type: SchemaType.STRING,
+      type: 'string',
       description:
         'The type of command: navigation, manipulation, status, emergency, or custom',
       enum: ['navigation', 'manipulation', 'status', 'emergency', 'custom'],
     },
     parameters: {
-      type: SchemaType.OBJECT,
+      type: 'object',
       properties: {
         target: {
-          type: SchemaType.STRING,
+          type: 'string',
           description: 'Target object or location name',
           nullable: true,
         },
         destination: {
-          type: SchemaType.OBJECT,
+          type: 'object',
           properties: {
-            x: { type: SchemaType.NUMBER },
-            y: { type: SchemaType.NUMBER },
-            z: { type: SchemaType.NUMBER, nullable: true },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            z: { type: 'number', nullable: true },
           },
           nullable: true,
         },
         quantity: {
-          type: SchemaType.NUMBER,
+          type: 'number',
           description: 'Quantity for pickup/drop commands',
           nullable: true,
         },
         objects: {
-          type: SchemaType.ARRAY,
-          items: { type: SchemaType.STRING },
+          type: 'array',
+          items: { type: 'string' },
           description: 'Objects involved in the action',
           nullable: true,
         },
         speed: {
-          type: SchemaType.STRING,
+          type: 'string',
           description: 'Speed modifier',
           enum: ['slow', 'normal', 'fast'],
           nullable: true,
@@ -102,22 +102,22 @@ const interpretationSchema = {
       },
     },
     confidence: {
-      type: SchemaType.NUMBER,
+      type: 'number',
       description: 'Confidence score from 0.0 to 1.0',
     },
     safetyClassification: {
-      type: SchemaType.STRING,
+      type: 'string',
       description: 'Safety classification of the command',
       enum: ['safe', 'caution', 'dangerous'],
     },
     warnings: {
-      type: SchemaType.ARRAY,
-      items: { type: SchemaType.STRING },
+      type: 'array',
+      items: { type: 'string' },
       description: 'Warning messages if any',
     },
     suggestedAlternatives: {
-      type: SchemaType.ARRAY,
-      items: { type: SchemaType.STRING },
+      type: 'array',
+      items: { type: 'string' },
       description: 'Alternative command suggestions if confidence is low',
     },
   },
@@ -169,23 +169,25 @@ Your task is to interpret natural language commands and convert them into struct
 // ============================================================================
 
 export class CommandInterpreter {
-  private genAI: GoogleGenerativeAI | null = null;
-  private modelName = 'gemini-2.0-flash';
+  private provider: LlmProvider | null = null;
 
   constructor() {
-    const apiKey = process.env.GOOGLE_API_KEY;
-    if (apiKey) {
-      this.genAI = new GoogleGenerativeAI(apiKey);
-      console.log('[CommandInterpreter] Initialized with Gemini');
-    } else {
+    // Without an explicit LLM_PROVIDER this stays Gemini-only, as before.
+    this.provider = resolveLlmProvider({
+      role: 'text',
+      credentialOrder: ['gemini'],
+      label: 'CommandInterpreter',
+    });
+
+    if (!this.provider) {
       console.warn(
-        '[CommandInterpreter] GOOGLE_API_KEY not set, will use fallback interpretation'
+        '[CommandInterpreter] No LLM provider configured, will use fallback interpretation'
       );
     }
   }
 
   /**
-   * Interpret a natural language command using Gemini LLM
+   * Interpret a natural language command using the configured LLM provider
    */
   async interpretCommand(
     request: InterpretCommandRequest
@@ -194,11 +196,11 @@ export class CommandInterpreter {
 
     let interpretation: LLMInterpretationResult;
 
-    if (this.genAI) {
+    if (this.provider) {
       try {
-        interpretation = await this.interpretWithGemini(text, context);
+        interpretation = await this.interpretWithLlm(text, context);
       } catch (error) {
-        console.warn('[CommandInterpreter] Gemini failed, using fallback:', error);
+        console.warn('[CommandInterpreter] LLM failed, using fallback:', error);
         interpretation = this.fallbackInterpretation(text);
       }
     } else {
@@ -232,7 +234,7 @@ export class CommandInterpreter {
         safetyClassification: interpretation.safetyClassification as SafetyClassification,
         warnings: interpretation.warnings,
         suggestedAlternatives: interpretation.suggestedAlternatives,
-        modelUsed: this.genAI ? this.modelName : 'fallback-keyword',
+        modelUsed: this.provider?.modelId ?? 'fallback-keyword',
       });
       decisionId = decision.id;
       console.log(`[CommandInterpreter] Decision stored for explainability: ${saved.id}`);
@@ -250,7 +252,7 @@ export class CommandInterpreter {
         confidence: interpretation.confidence,
         safetyClassification: interpretation.safetyClassification as 'safe' | 'caution' | 'dangerous',
         warnings: interpretation.warnings,
-        modelUsed: this.genAI ? this.modelName : 'fallback-keyword',
+        modelUsed: this.provider?.modelId ?? 'fallback-keyword',
         decisionId: decisionId ?? saved.id, // Link to Decision or CommandInterpretation
       });
       console.log(`[CommandInterpreter] Compliance log created for: ${saved.id}`);
@@ -263,43 +265,43 @@ export class CommandInterpreter {
   }
 
   /**
-   * Interpret command using Gemini LLM
+   * Interpret command using the configured LLM provider
    */
-  private async interpretWithGemini(
+  private async interpretWithLlm(
     text: string,
     context?: Record<string, unknown>
   ): Promise<LLMInterpretationResult> {
-    if (!this.genAI) {
-      throw new Error('Gemini not initialized');
+    if (!this.provider) {
+      throw new Error('LLM provider not initialized');
     }
-
-    const model = this.genAI.getGenerativeModel({
-      model: this.modelName,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: interpretationSchema,
-      },
-      systemInstruction: SYSTEM_PROMPT,
-    });
 
     const prompt = context
       ? `Command: "${text}"\n\nContext: ${JSON.stringify(context)}`
       : `Command: "${text}"`;
 
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const responseText = response.text();
-
     try {
-      return JSON.parse(responseText) as LLMInterpretationResult;
+      return await this.provider.generateJson<LLMInterpretationResult>({
+        system: SYSTEM_PROMPT,
+        prompt,
+        schema: interpretationSchema,
+        // Schema-constrained extraction, not deliberation — and on local
+        // reasoning models thinking costs seconds while degrading adherence
+        // to the very rules the system prompt lays out.
+        reasoningEffort: 'none',
+      });
     } catch (error) {
-      console.error('[CommandInterpreter] Failed to parse Gemini response:', responseText);
-      return this.fallbackInterpretation(text);
+      // A malformed response is a parse problem, not an outage — degrade to
+      // keywords here rather than letting the caller log it as an LLM failure.
+      if (error instanceof SyntaxError) {
+        console.error('[CommandInterpreter] Failed to parse LLM response:', error);
+        return this.fallbackInterpretation(text);
+      }
+      throw error;
     }
   }
 
   /**
-   * Fallback interpretation when Gemini is not available
+   * Fallback interpretation when no LLM is available
    */
   private fallbackInterpretation(text: string): LLMInterpretationResult {
     const lowerText = text.toLowerCase();

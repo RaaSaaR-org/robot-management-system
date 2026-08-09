@@ -15,6 +15,7 @@
  */
 
 import { existsSync } from 'fs';
+import { resolveLlmProvider, type LlmProvider } from './llm/index.js';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { execFile } from 'child_process';
 import os from 'os';
@@ -438,21 +439,32 @@ export class DatasetCurationService {
   }
 
   // --------------------------------------------------------------------------
-  // Optional VLM enrichment (CURATION_VLM=gemini) — untested live on this box
+  // Optional VLM enrichment (CURATION_VLM=gemini|ollama|openrouter)
   // --------------------------------------------------------------------------
 
+  /**
+   * The gate stays opt-in via `CURATION_VLM`, but its value now names the
+   * provider family rather than being pinned to Gemini. Credentials are checked
+   * by the resolver, so a local Ollama needs only `CURATION_VLM=ollama`.
+   */
   private vlmEnabled(): boolean {
-    const key = process.env.GOOGLE_API_KEY;
-    return (
-      process.env.CURATION_VLM === 'gemini' &&
-      typeof key === 'string' &&
-      key.length > 0 &&
-      key !== 'your-api-key'
-    );
+    return this.vlmProvider() !== null;
+  }
+
+  private vlmProvider(): LlmProvider | null {
+    const configured = process.env.CURATION_VLM?.trim().toLowerCase();
+    if (!configured || configured === 'off' || configured === 'false') return null;
+
+    return resolveLlmProvider({
+      role: 'vision',
+      modelOverride: process.env.CURATION_VLM_MODEL,
+      credentialOrder: [configured as 'gemini' | 'ollama' | 'openrouter'],
+      label: 'Curation VLM',
+    });
   }
 
   /**
-   * Refine heuristic suggestions with Gemini: sampled episode video frames (when
+   * Refine heuristic suggestions with a VLM: sampled episode video frames (when
    * the dataset has local videos) + the heuristic verdict go in, a refined
    * reason/confidence comes back. Failures fall back to the pure heuristics.
    */
@@ -460,11 +472,8 @@ export class DatasetCurationService {
     suggestions: CurationSuggestion[],
     datasetDir: string,
   ): Promise<CurationSuggestion[]> {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY as string);
-    const model = genAI.getGenerativeModel({
-      model: process.env.CURATION_VLM_MODEL ?? 'gemini-2.5-flash',
-    });
+    const provider = this.vlmProvider();
+    if (!provider) return suggestions;
 
     let info: Record<string, unknown> = {};
     try {
@@ -487,13 +496,10 @@ export class DatasetCurationService {
           `${frames.length > 0 ? 'Sampled frames of the episode are attached. ' : ''}` +
           `Reply with strict JSON {"kind":"trim"|"delete","start":number?,"end":number?,` +
           `"reason":string,"confidence":number} refining or confirming the suggestion.`;
-        const parts: Array<Record<string, unknown>> = frames.map((data) => ({
-          inlineData: { mimeType: 'image/jpeg', data },
-        }));
-        parts.push({ text: prompt });
-        const result = await model.generateContent(parts as never);
-        const text = result.response.text().replace(/^```(?:json)?\s*|```\s*$/g, '');
-        const refined = JSON.parse(text) as Partial<CurationSuggestion>;
+        const refined = await provider.generateJson<Partial<CurationSuggestion>>({
+          prompt,
+          images: frames.map((data) => ({ mimeType: 'image/jpeg', base64: data })),
+        });
         enriched.push({
           ...suggestion,
           ...(refined.kind === 'trim' || refined.kind === 'delete' ? { kind: refined.kind } : {}),

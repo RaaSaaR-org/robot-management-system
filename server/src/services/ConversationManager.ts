@@ -23,8 +23,17 @@ import {
   agentRepository,
   eventRepository,
 } from '../repositories/index.js';
+import { resolveLlmProvider, type LlmProvider } from './llm/index.js';
 
 type TaskEventCallback = (event: A2ATaskEvent) => void;
+
+/** Result of routing a message to an agent, with the method actually used. */
+export interface AgentSelection {
+  agent: A2AAgentCard | null;
+  method: 'llm' | 'keyword';
+  /** Set only when `method` is `llm`. */
+  modelId?: string;
+}
 
 /**
  * ConversationManager - manages all A2A state with database persistence
@@ -39,6 +48,9 @@ export class ConversationManager {
   private agentCache: Map<string, A2AAgentCard> = new Map();
   // Message-to-task mapping for tracking which message belongs to which task
   private messageToTaskMap: Map<string, string> = new Map();
+  // Memoized orchestrator LLM provider, invalidated when its env inputs change
+  private orchestratorProviderCache: LlmProvider | null = null;
+  private orchestratorProviderKey: string | null = null;
 
   // ============================================================================
   // INITIALIZATION
@@ -838,38 +850,55 @@ export class ConversationManager {
 
   /**
    * Select the best agent for a given message based on capabilities.
-   * Uses LLM (OpenRouter) if OPENROUTER_API_KEY is set, otherwise falls back to keyword matching.
+   * Uses an LLM when one is configured (`LLM_PROVIDER`, or `OPENROUTER_API_KEY`
+   * for backwards compatibility), otherwise falls back to keyword matching.
    * Only considers connected robots (not stale registrations).
    */
   async selectAgentForMessage(message: string, connectedAgents?: A2AAgentCard[]): Promise<A2AAgentCard | null> {
+    return (await this.selectAgentForMessageDetailed(message, connectedAgents)).agent;
+  }
+
+  /**
+   * As {@link selectAgentForMessage}, but also reports how the choice was made.
+   *
+   * The orchestrator's audit trail records this, and it must reflect what
+   * actually happened rather than merely which keys are configured — a direct
+   * name match and an LLM call that timed out both end up as `keyword`.
+   */
+  async selectAgentForMessageDetailed(
+    message: string,
+    connectedAgents?: A2AAgentCard[]
+  ): Promise<AgentSelection> {
     // Use provided connected agents, or fall back to registered agents
     const agents = connectedAgents && connectedAgents.length > 0
       ? connectedAgents
       : this.listAgents();
 
-    if (agents.length === 0) return null;
-    if (agents.length === 1) return agents[0];
+    if (agents.length === 0) return { agent: null, method: 'keyword' };
+    if (agents.length === 1) return { agent: agents[0], method: 'keyword' };
 
     // Step 1: Check if user explicitly names a robot (direct match before LLM)
     const namedAgent = this.matchAgentByName(message, agents);
     if (namedAgent) {
       console.log(`[Orchestrator] Direct name match: "${namedAgent.name}"`);
-      return namedAgent;
+      return { agent: namedAgent, method: 'keyword' };
     }
 
-    // Step 2: Try LLM-based selection (if OpenRouter key is configured)
-    const openrouterKey = process.env.OPENROUTER_API_KEY;
-    if (openrouterKey) {
+    // Step 2: Try LLM-based selection (if a provider is configured)
+    const provider = this.orchestratorProvider();
+    if (provider) {
       try {
-        const llmResult = await this.selectAgentWithLLM(message, agents, openrouterKey);
-        if (llmResult) return llmResult;
+        const llmResult = await this.selectAgentWithLLM(message, agents, provider);
+        if (llmResult) {
+          return { agent: llmResult, method: 'llm', modelId: provider.modelId };
+        }
       } catch (err) {
         console.warn('[Orchestrator] LLM agent selection failed, using keyword fallback:', err);
       }
     }
 
     // Step 3: Fallback — keyword-based matching
-    return this.selectAgentByKeywords(message, agents);
+    return { agent: this.selectAgentByKeywords(message, agents), method: 'keyword' };
   }
 
   /**
@@ -899,15 +928,44 @@ export class ConversationManager {
   }
 
   /**
-   * LLM-powered agent selection via OpenRouter
+   * Resolve (and memoize) the orchestrator's LLM provider.
+   *
+   * Keyed on the environment it derives from rather than resolved once in the
+   * constructor: this class is a module-level singleton, while tests — and
+   * operators editing `.env` — change these values afterwards.
+   */
+  private orchestratorProvider(): LlmProvider | null {
+    const key = [
+      process.env.LLM_PROVIDER,
+      process.env.OPENROUTER_API_KEY,
+      process.env.ORCHESTRATOR_MODEL,
+      process.env.LLM_MODEL,
+      process.env.OLLAMA_BASE_URL,
+      process.env.GOOGLE_API_KEY,
+    ].join('|');
+
+    if (key !== this.orchestratorProviderKey) {
+      this.orchestratorProviderKey = key;
+      this.orchestratorProviderCache = resolveLlmProvider({
+        role: 'text',
+        modelOverride: process.env.ORCHESTRATOR_MODEL,
+        // Without an explicit LLM_PROVIDER this stays OpenRouter-only, as before.
+        credentialOrder: ['openrouter'],
+        label: 'Orchestrator',
+      });
+    }
+
+    return this.orchestratorProviderCache;
+  }
+
+  /**
+   * LLM-powered agent selection
    */
   private async selectAgentWithLLM(
     message: string,
     agents: A2AAgentCard[],
-    apiKey: string
+    provider: LlmProvider
   ): Promise<A2AAgentCard | null> {
-    const model = process.env.ORCHESTRATOR_MODEL || 'stepfun/step-3.5-flash:free';
-
     const agentDescriptions = agents
       .map((a, i) => `${i + 1}. ${a.name}: ${a.description}`)
       .join('\n');
@@ -926,36 +984,27 @@ Instructions:
 
 Respond with ONLY the exact agent name as shown above (nothing else).`;
 
+    // 5s suits a hosted model. A local Ollama that has just evicted this model
+    // to make room for the vision one needs ~45s to reload it from disk, so the
+    // budget is configurable — too low and routing silently degrades to keywords.
+    const timeoutMs = Number(process.env.ORCHESTRATOR_TIMEOUT_MS) || 5000;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       console.log(`[Orchestrator] LLM selecting agent for: "${message}"`);
 
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: message },
-          ],
-          max_tokens: 50,
-          temperature: 0.1,
-        }),
+      const selectedName = await provider.generateText({
+        system: systemPrompt,
+        prompt: message,
+        // Picking one name off a list needs no deliberation, and letting a
+        // reasoning model deliberate here is measurably worse: it can burn the
+        // whole token budget on thought and return nothing at all.
+        reasoningEffort: 'none',
+        maxTokens: 512,
+        temperature: 0.1,
         signal: controller.signal,
       });
-
-      if (!response.ok) {
-        throw new Error(`OpenRouter ${response.status}: ${await response.text()}`);
-      }
-
-      const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-      const selectedName = (data.choices?.[0]?.message?.content ?? '').trim();
 
       console.log(`[Orchestrator] LLM selected: "${selectedName}"`);
 
@@ -1117,15 +1166,11 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
     });
 
     // Step 2: Select agent (with timing + method tracking)
-    let selectionMethod: 'llm' | 'keyword' = 'keyword';
     const selectionStart = Date.now();
-
-    // Track which method was used — LLM if key is present, keyword otherwise
-    if (process.env.OPENROUTER_API_KEY) {
-      selectionMethod = 'llm';
-    }
-
-    const selectedAgent = await this.selectAgentForMessage(text, connectedAgents);
+    const selection = await this.selectAgentForMessageDetailed(text, connectedAgents);
+    const selectedAgent = selection.agent;
+    const selectionMethod = selection.method;
+    const selectionModelId = selection.modelId;
     const selectionMs = Date.now() - selectionStart;
 
     if (!selectedAgent) {
@@ -1200,6 +1245,7 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
       selectedAgent,
       consideredAgents,
       selectionMethod,
+      selectionModelId,
       selectionMs,
     }).catch((err) =>
       console.warn('[Orchestrator] Failed to record explainability decision:', err)
@@ -1229,6 +1275,8 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
     selectedAgent: A2AAgentCard;
     consideredAgents: Array<{ name: string; selected: boolean }>;
     selectionMethod: 'llm' | 'keyword';
+    /** Concrete model that made the choice, when one did. */
+    selectionModelId?: string;
     selectionMs: number;
   }): Promise<void> {
     // Dynamic imports to avoid circular dependencies (same pattern as robotManager use above)
@@ -1268,7 +1316,7 @@ Respond with ONLY the exact agent name as shown above (nothing else).`;
       ],
       modelUsed:
         params.selectionMethod === 'llm'
-          ? process.env.ORCHESTRATOR_MODEL || 'openrouter-llm'
+          ? params.selectionModelId ?? process.env.ORCHESTRATOR_MODEL ?? 'llm'
           : 'keyword-matcher',
       confidence: params.selectionMethod === 'llm' ? 0.9 : 0.7,
       alternatives: params.consideredAgents
