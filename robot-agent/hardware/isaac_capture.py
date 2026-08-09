@@ -42,17 +42,49 @@ Run it on the SAME DDS domain as `isaac_loco_bridge.py`, and NOT while `sim_g1_d
 Unitree's `sim_main.py` is up: two `sport` services on one domain race, and the loser's commands are
 accepted and dropped.
 
+The sensor facade (--serve)
+---------------------------
+With `--serve PORT` this also answers the sidecar contract the robot-agent already speaks, so Agent
+Mode's PERCEPTION blocks -- `look`, `scan_room`, `goto` -- run against Isaac exactly as they run
+against MuJoCo, with no branch in the TypeScript:
+
+    GET  /health, /state                      -- liveness + the integrated pose
+    GET  /cameras, /cameras/<name>/snapshot   -- head_camera, rendered in this scene
+    GET  /pointcloud/sensors                  -- ["mid360_lidar"]
+    GET  /pointcloud/mid360_lidar/snapshot    -- a real ray cast, see WarehouseRaycaster
+    POST /pointcloud/lidar/switch             -- accepted no-op, same shape as the sidecar's
+    *    /loco/*                              -- PROXIED, untouched, to --sidecar-url
+
+`/loco/*` is proxied rather than reimplemented on purpose: motion must keep traversing DDS through
+g1_sidecar.py, so nothing about the command path changes when the sensors move to Isaac. Only the
+two things this scene can answer better than a headless sidecar -- pixels and ranges -- are served
+here.
+
+What the LiDAR is, and is not
+-----------------------------
+It is a real ray cast against the warehouse's own triangles (see WarehouseRaycaster): a surface
+that is not in the USD produces no return, and no range is ever synthesised. It is NOT the robot's
+MID-360: the fan geometry is copied from `sim_g1_dds`, but the cast sees only the STATIC warehouse
+mesh, so the robot's own body produces no self-returns (nothing to filter -- it is not in the mesh)
+and neither would a second robot or a moving pallet. In this scene nothing moves except the robot,
+which is the only reason that omission is honest here.
+
 @status new -- capture rig for demo footage; not part of the shipped robot software
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import base64
+import io
 import json
 import math
 import os
 import threading
 import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -122,6 +154,54 @@ STAND_JOINT_POS = {
     r"right_shoulder_pitch_joint": 0.35,
 }
 
+# ---------------------------------------------------------------------------------- head sensors
+# Head mount, in the base frame, taken verbatim from `sim_g1_dds/sim_node.py::LIDAR_FALLBACK_OFFSET`
+# so a bearing measured here and a bearing measured in MuJoCo refer to the same point on the robot.
+# `z` is height above the FLOOR, not above the pelvis -- the contract in `robot/types.ts` puts the
+# floor at z = 0, and both the camera and the cast follow the stand height from there.
+HEAD_OFFSET_X, HEAD_OFFSET_Y, HEAD_OFFSET_Z = 0.076, 0.0, 1.271
+
+# Must match `AGENT_CAMERA_HFOV_DEG` (config.ts default 105.3): vision.ts converts a pixel column to
+# a bearing with it, and a camera whose real HFOV disagrees makes every bearing wrong by a factor,
+# which then steers the navigator into a wall while every log line still looks reasonable.
+HEAD_CAM_HFOV_DEG = 105.3
+HEAD_CAM_W, HEAD_CAM_H = 640, 480
+# Isaac's PinholeCameraCfg is specified by aperture and focal length, not by FOV.
+USD_HORIZONTAL_APERTURE = 20.955
+
+# MID-360-shaped fan, same numbers as sim_node.py. See `_ray_fan_directions` there for why the fan
+# is levelled rather than tilted with the torso.
+LIDAR_SENSOR = "mid360_lidar"
+LIDAR_AZIMUTH_RAYS = 180
+LIDAR_ELEVATION_RINGS = 32
+LIDAR_ELEV_MIN_DEG = -52.0
+LIDAR_ELEV_MAX_DEG = 7.0
+LIDAR_MIN_RANGE = 0.35
+LIDAR_MAX_RANGE = 25.0
+LIDAR_MAX_POINTS = 20000
+
+# ------------------------------------------------------------------------- keeping the room lit
+# Both cameras returning FLAT GREY, permanently, mid-run. Seen twice: once after 8469 frames, once
+# after 809 — the second within a second of Ollama loading a 9 GB model onto the same card. The
+# give-away is `RTX streaming completed in 0.0X s` in the log immediately before the first grey
+# frame, and the startup warning that geometry streaming and
+# `/rtx/hydra/readTransformsFromFabricInRenderDelegate` together break transform updates.
+#
+# The cause is the default budget: the geometry streamer is told it may use 64000 MB on a card that
+# has 32768. It therefore never plans to evict, and when a NEIGHBOURING process takes its share the
+# memory budget manager evicts the warehouse out from under the render delegate, which — with
+# transforms coming from Fabric — never streams it back. It is not our own VRAM exhaustion: the card
+# still had 10 GB free both times.
+#
+# So: give it a budget that fits beside a local LLM, and load geometry synchronously so a frame is
+# never rendered against a half-streamed scene. Do NOT "fix" this by disabling texture streaming
+# instead — `/rtx-transient/resourcemanager/enableTextureStreaming: False` turns off the service
+# while the renderer still asks for it, and every frame from the very first one is grey.
+RENDER_CARB_SETTINGS = {
+    "/rtx/hydra/geometrystreaming/gpuBudgetMB": 6000,
+    "/rtx/hydra/geometrySyncLoads": True,
+}
+
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Render Agent Mode driving the G1 base in Isaac Sim")
@@ -141,6 +221,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--dome", type=float, default=1500.0, help="dome light intensity")
     ap.add_argument("--start", default=f"{START_X},{START_Y},{math.degrees(START_YAW)}",
                     help="robot start pose x,y,yaw_deg")
+    ap.add_argument("--serve", type=int, default=0,
+                    help="serve the sidecar sensor contract on this port (0 = off)")
+    ap.add_argument("--sidecar-url", default="http://localhost:8767",
+                    help="where /loco/* is proxied — the DDS-speaking g1_sidecar.py")
+    ap.add_argument("--lidar-probe", action="store_true",
+                    help="cast once from the start pose, print ranges at 8 bearings, and exit")
     return ap
 
 
@@ -252,6 +338,352 @@ class KinematicBase:
                 self.yaw0 + self.yaw)
 
 
+# ------------------------------------------------------------------------------- sensors + facade
+
+
+def _ray_fan_directions(n_azimuth: int, n_elevation: int, elev_min_deg: float,
+                        elev_max_deg: float, yaw: float):
+    """Unit ray directions in WORLD coordinates, shape (n_azimuth*n_elevation, 3).
+
+    Line-for-line the same fan as `sim_g1_dds/sim_node.py::_ray_fan_directions`, including the
+    decision to rotate by the base YAW only. The torso's pitch and roll are not applied: the real
+    pipeline gravity-aligns the cloud before any consumer sees it, so a level fan is closer to what
+    the robot actually delivers than a tilted one. Divergence here would make ranges measured in
+    Isaac and in MuJoCo quietly incomparable, which is the whole point of copying it.
+    """
+    import numpy as np
+
+    az = np.arange(n_azimuth, dtype=np.float64) * (2.0 * math.pi / n_azimuth)
+    if n_elevation == 1:
+        el = np.array([math.radians(0.5 * (elev_min_deg + elev_max_deg))])
+    else:
+        el = np.radians(np.linspace(elev_min_deg, elev_max_deg, n_elevation))
+    a, e = np.meshgrid(az + yaw, el, indexing="ij")
+    a, e = a.ravel(), e.ravel()
+    ce = np.cos(e)
+    return np.stack([ce * np.cos(a), ce * np.sin(a), np.sin(e)], axis=1)
+
+
+class WarehouseRaycaster:
+    """A ray cast against the warehouse's own triangles, via warp on the CPU.
+
+    Why the USD triangles and not PhysX scene queries: a dressed digital twin is mostly VISUAL
+    geometry, and only some of it carries colliders. A PhysX raycast would report the racking as
+    open air wherever the artist authored no collider — a range sensor that cannot see a shelf is
+    worse than no range sensor, because it answers "clear". The triangles are what the camera sees,
+    so they are what gets cast, and camera and LiDAR then agree about the same room.
+
+    CPU on purpose. This is called from an HTTP worker while the render loop owns the CUDA context,
+    and a static BVH over a room-sized asset answers the whole 5760-ray fan in a few milliseconds.
+    Nothing here reads the stage after construction, so — unlike MuJoCo's `mj_ray`, which forced
+    `sim_node.py` to hand casts to the physics thread — a cast cannot observe a half-stepped state.
+
+    The mesh is STATIC and contains only what lives under `root_path`. The robot is not in it, so
+    there are no self-returns to filter out; equally, a second robot or a moving pallet would be
+    invisible. In this scene the robot is the only thing that moves.
+    """
+
+    def __init__(self, root_path: str) -> None:
+        import numpy as np
+        import omni.usd
+        import warp as wp
+        from pxr import Usd, UsdGeom
+
+        wp.init()
+        self._wp = wp
+        self._np = np
+        self._lock = threading.Lock()
+
+        stage = omni.usd.get_context().get_stage()
+        root = stage.GetPrimAtPath(root_path)
+        if not root or not root.IsValid():
+            raise RuntimeError(f"no prim at {root_path} to cast against")
+
+        verts: list = []
+        tris: list = []
+        base = 0
+        n_mesh = 0
+        # TraverseInstanceProxies matters: the warehouse references its shelving as instances, and
+        # the default traversal walks straight past them — leaving a cast that only ever hits the
+        # floor and the outer walls, which looks like a working sensor in an empty building.
+        for prim in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            imageable = UsdGeom.Imageable(prim)
+            if imageable.ComputeVisibility(Usd.TimeCode.Default()) == UsdGeom.Tokens.invisible:
+                continue
+            # `guide` geometry is authoring scaffolding — never rendered, must never be ranged.
+            if imageable.ComputePurpose() == UsdGeom.Tokens.guide:
+                continue
+            mesh = UsdGeom.Mesh(prim)
+            pts = mesh.GetPointsAttr().Get()
+            counts = mesh.GetFaceVertexCountsAttr().Get()
+            idx = mesh.GetFaceVertexIndicesAttr().Get()
+            if not pts or not counts or not idx:
+                continue
+            xf = np.array(
+                UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default()),
+                dtype=np.float64,
+            ).reshape(4, 4)
+            p = np.asarray(pts, dtype=np.float64)
+            # USD is row-vector: p_world = [p 1] @ M. Transposing this silently mirrors the room.
+            p = np.concatenate([p, np.ones((len(p), 1))], axis=1) @ xf
+            verts.append(p[:, :3])
+
+            counts = np.asarray(counts, dtype=np.int64)
+            idx = np.asarray(idx, dtype=np.int64)
+            starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+            # Fan-triangulate, vectorised per polygon size. A per-face Python loop over an asset
+            # this size takes minutes; this takes milliseconds.
+            for size in np.unique(counts):
+                sel = counts == size
+                face = idx[starts[sel][:, None] + np.arange(size)]
+                for k in range(1, int(size) - 1):
+                    tris.append(np.stack([face[:, 0], face[:, k], face[:, k + 1]], axis=1) + base)
+            base += len(p)
+            n_mesh += 1
+
+        if not verts:
+            raise RuntimeError(f"{root_path} contains no visible UsdGeom.Mesh — nothing to cast at")
+
+        points = np.concatenate(verts).astype(np.float32)
+        indices = np.concatenate(tris).astype(np.int32).reshape(-1)
+        self.n_meshes = n_mesh
+        self.n_triangles = len(indices) // 3
+        self._mesh = wp.Mesh(
+            points=wp.array(points, dtype=wp.vec3, device="cpu"),
+            indices=wp.array(indices, dtype=wp.int32, device="cpu"),
+        )
+
+        @wp.kernel
+        def _cast(mesh: wp.uint64, origin: wp.vec3, dirs: wp.array(dtype=wp.vec3),
+                  max_t: float, out_t: wp.array(dtype=wp.float32)):
+            i = wp.tid()
+            hit = wp.mesh_query_ray(mesh, origin, dirs[i], max_t)
+            # -1 is "no intersection", and it stays a MISSING point rather than becoming a
+            # max-range one. A ray that leaves through the roll-up door and never comes back means
+            # UNKNOWN; turning it into a return at 25 m would invent a wall out there.
+            out_t[i] = wp.where(hit.result, hit.t, -1.0)
+
+        self._kernel = _cast
+
+    def cast(self, x: float, y: float, yaw: float, sensor_z: float,
+             n_azimuth: int = LIDAR_AZIMUTH_RAYS, n_elevation: int = LIDAR_ELEVATION_RINGS,
+             elev_min_deg: float = LIDAR_ELEV_MIN_DEG, elev_max_deg: float = LIDAR_ELEV_MAX_DEG,
+             min_range: float = LIDAR_MIN_RANGE, max_range: float = LIDAR_MAX_RANGE,
+             max_points: int = LIDAR_MAX_POINTS) -> dict:
+        """One sweep, returned in the `PointCloudFrame` base_link contract.
+
+        x forward, y left, z metres above the floor — the same convention `_cast_ray_fan` emits in
+        MuJoCo, so `range.ts` needs no knowledge of which simulator produced the frame.
+        """
+        np, wp = self._np, self._wp
+        dirs = _ray_fan_directions(n_azimuth, n_elevation, elev_min_deg, elev_max_deg, yaw)
+        n_ray = dirs.shape[0]
+        c, s = math.cos(yaw), math.sin(yaw)
+        ox = x + HEAD_OFFSET_X * c - HEAD_OFFSET_Y * s
+        oy = y + HEAD_OFFSET_X * s + HEAD_OFFSET_Y * c
+
+        with self._lock:
+            d_dirs = wp.array(dirs.astype(np.float32), dtype=wp.vec3, device="cpu")
+            d_t = wp.zeros(n_ray, dtype=wp.float32, device="cpu")
+            wp.launch(self._kernel, dim=n_ray, device="cpu",
+                      inputs=[self._mesh.id, wp.vec3(float(ox), float(oy), float(sensor_z)),
+                              d_dirs, float(max_range), d_t])
+            dist = d_t.numpy().astype(np.float64)
+
+        hit = dist >= 0.0
+        near = hit & (dist < min_range)
+        far = hit & (dist > max_range)
+        keep = hit & (dist >= min_range) & (dist <= max_range)
+
+        origin_world = np.array([ox, oy, sensor_z])
+        pts_world = origin_world[None, :] + dist[keep][:, None] * dirs[keep]
+        dx = pts_world[:, 0] - x
+        dy = pts_world[:, 1] - y
+        pts = np.empty_like(pts_world)
+        pts[:, 0] = dx * c + dy * s          # rotate by -yaw into base_link
+        pts[:, 1] = -dx * s + dy * c
+        pts[:, 2] = pts_world[:, 2]          # already metres above the floor
+
+        decimated = False
+        if pts.shape[0] > max_points:
+            pts = pts[:: int(math.ceil(pts.shape[0] / max_points))]
+            decimated = True
+
+        return {
+            "positions": [round(float(v), 4) for v in pts.reshape(-1)],
+            "origin": [round(HEAD_OFFSET_X, 4), round(HEAD_OFFSET_Y, 4), round(sensor_z, 4)],
+            "point_count": int(pts.shape[0]),
+            "rays": n_ray,
+            "returns": int(hit.sum()),
+            "dropped_near": int(near.sum()),
+            "dropped_far": int(far.sum()),
+            "decimated": decimated,
+            "method": "warp.mesh_query_ray",
+            "fan": {
+                "azimuth_rays": n_azimuth,
+                "elevation_rings": n_elevation,
+                "elevation_deg": [elev_min_deg, elev_max_deg],
+                "min_range_m": min_range,
+                "max_range_m": max_range,
+            },
+        }
+
+
+class SensorState:
+    """The single hand-off between the render loop and the HTTP workers.
+
+    Everything the facade answers is a SNAPSHOT taken under this lock — never a live read of a
+    buffer the render loop is mid-write on.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pose = (0.0, 0.0, 0.0, NEUTRAL_STAND_HEIGHT)
+        self._head_rgb = None
+        self._frames = 0
+
+    def publish(self, x: float, y: float, yaw: float, height: float, head_rgb) -> None:
+        with self._lock:
+            self._pose = (x, y, yaw, height)
+            self._head_rgb = head_rgb
+            self._frames += 1
+
+    def pose(self) -> tuple[float, float, float, float]:
+        with self._lock:
+            return self._pose
+
+    def head_rgb(self):
+        with self._lock:
+            return self._head_rgb, self._frames
+
+
+def _sidecar_facade(state: SensorState, raycaster, sidecar_url: str, scene_label: str):
+    """The sidecar contract, answered from Isaac. See the module docstring for the route list."""
+
+    def proxy(method: str, path: str, body: bytes | None) -> tuple[int, dict]:
+        """Forward /loco/* verbatim. A failure here is reported AS a failure, never softened.
+
+        The robot-agent decides whether a walk happened from this answer; turning a dead sidecar
+        into `{"ok": true}` would make Agent Mode measure a walk that never left the DDS bus.
+        """
+        req = urllib.request.Request(
+            sidecar_url.rstrip("/") + path, method=method, data=body,
+            headers={"Content-Type": "application/json"} if body else {})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as res:
+                return res.status, json.loads(res.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, json.loads(exc.read() or b"{}")
+            except json.JSONDecodeError:
+                return exc.code, {"ok": False, "error": f"sidecar HTTP {exc.code}"}
+        except Exception as exc:  # noqa: BLE001
+            return 503, {"ok": False, "error": f"sidecar {sidecar_url} unreachable: {exc}"}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _send(self, code: int, payload: dict) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:  # the capture log is noisy enough
+            pass
+
+        def do_GET(self) -> None:
+            if self.path.startswith("/loco/"):
+                self._send(*proxy("GET", self.path, None))
+                return
+            if self.path == "/health":
+                self._send(200, {"status": "ok", "connected": True, "sim": True,
+                                 "scene": scene_label})
+            elif self.path == "/state" or self.path == "/state/fast":
+                x, y, yaw, _h = state.pose()
+                # No `joints`: this rig hard-writes a fixed standing pose and never reads the
+                # articulation back, so reporting joint angles would be reporting the command, not
+                # a measurement. The key is absent rather than zero-filled.
+                self._send(200, {"ok": True, "sim": True,
+                                 "odometry": {"x": x, "y": y, "yaw": yaw}})
+            elif self.path == "/cameras":
+                self._send(200, {"cameras": ["head_camera"]})
+            elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
+                name = self.path[len("/cameras/"):-len("/snapshot")]
+                if name != "head_camera":
+                    self._send(200, {"ok": False, "error": f"no camera '{name}'"})
+                    return
+                rgb, frames = state.head_rgb()
+                if rgb is None:
+                    self._send(503, {"ok": False, "error": "no head frame rendered yet"})
+                    return
+                import imageio.v3 as iio
+                buf = io.BytesIO()
+                iio.imwrite(buf, rgb, extension=".jpg", quality=88)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                # Both keys, for the same reason sim_node.py emits both: g1_sidecar.py answers
+                # `jpeg_base64` and HardwareClient historically read `image_b64`.
+                self._send(200, {"ok": True, "camera": name, "source": "isaac",
+                                 "jpeg_base64": b64, "image_b64": b64, "frame": frames})
+            elif self.path == "/pointcloud/sensors":
+                self._send(200, {"sensors": [LIDAR_SENSOR]})
+            elif self.path.startswith("/pointcloud/") and self.path.endswith("/snapshot"):
+                name = self.path[len("/pointcloud/"):-len("/snapshot")]
+                if name != LIDAR_SENSOR:
+                    self._send(200, {"ok": False, "error": f"no depth sensor '{name}'"})
+                    return
+                if raycaster is None:
+                    self._send(503, {"ok": False, "error": "raycaster failed to build"})
+                    return
+                x, y, yaw, height = state.pose()
+                try:
+                    cloud = raycaster.cast(x, y, yaw,
+                                           HEAD_OFFSET_Z + (height - NEUTRAL_STAND_HEIGHT))
+                except Exception as exc:  # noqa: BLE001
+                    # 503, never an empty cloud: `positions: []` is indistinguishable from "the
+                    # sweep found nothing", i.e. from "the way ahead is clear".
+                    self._send(503, {"ok": False, "error": f"cast failed: {exc}"})
+                    return
+                self._send(200, {
+                    "ok": True, "sensor": name, "sensor_type": "lidar",
+                    # The cast measures geometry, not reflectivity. A constant-filled intensity
+                    # channel would be a fabricated measurement.
+                    "has_intensity": False, "intensities": [],
+                    "source": "isaac-ray", "scene": scene_label, **cloud,
+                })
+            else:
+                self._send(404, {"error": "not found"})
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b""
+            if self.path.startswith("/loco/"):
+                self._send(*proxy("POST", self.path, raw or b"{}"))
+                return
+            if self.path == "/pointcloud/lidar/switch":
+                # Accepted no-op, verbatim the sidecar's success shape, so one unchanged enable
+                # sequence works against the robot, MuJoCo and this. Nothing is claimed to have
+                # been switched — the rays are always available.
+                try:
+                    on = json.loads(raw or b"{}").get("on")
+                except json.JSONDecodeError as exc:
+                    self._send(400, {"ok": False, "error": f"invalid JSON: {exc}"})
+                    return
+                if not isinstance(on, bool):
+                    self._send(400, {"ok": False, "error": 'body must be {"on": true|false}'})
+                    return
+                self._send(200, {"ok": True, "lidar": "ON" if on else "OFF", "sim": True,
+                                 "note": "isaac ray cast is always on — switch accepted, ignored"})
+                return
+            self._send(404, {"error": "not found"})
+
+    return Handler
+
+
 def main() -> int:
     args = parse_args().parse_args()
 
@@ -291,6 +723,7 @@ def main() -> int:
             antialiasing_mode="DLAA",
             enable_shadows=True,
             enable_reflections=True,
+            carb_settings=RENDER_CARB_SETTINGS,
         ),
     )
     sim = sim_utils.SimulationContext(sim_cfg)
@@ -357,6 +790,24 @@ def main() -> int:
     chase = Camera(cam_cfg)
     room = Camera(cam_cfg.replace(prim_path="/World/RoomCam"))
 
+    # The robot's own eye — what `look` / `scan_room` reason over. Its focal length is DERIVED from
+    # the HFOV the robot-agent is configured with, not chosen: vision.ts turns a pixel column into a
+    # bearing using that angle, so a mismatch here bends every bearing by a constant factor and the
+    # navigator walks confidently past its target.
+    head_focal = USD_HORIZONTAL_APERTURE / (2.0 * math.tan(math.radians(HEAD_CAM_HFOV_DEG) / 2.0))
+    head = Camera(CameraCfg(
+        prim_path="/World/HeadCam",
+        update_period=0.0,
+        width=HEAD_CAM_W,
+        height=HEAD_CAM_H,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=head_focal,
+            horizontal_aperture=USD_HORIZONTAL_APERTURE,
+            clipping_range=(0.05, 60.0),
+        ),
+    ))
+
     sim.reset()   # nothing above has a physics handle until this runs
 
     # `default_joint_pos` is a live view onto the buffer we are about to write. Clone it, or the
@@ -372,6 +823,52 @@ def main() -> int:
         torch.tensor([xyz(args.room_eye)], device=sim.device),
         torch.tensor([xyz(args.room_target)], device=sim.device),
     )
+
+    # ---- sensors ---------------------------------------------------------------------------
+    # Built AFTER sim.reset(): the warehouse's referenced payloads are not composed onto the stage
+    # before that, so an earlier traversal finds a handful of Xforms and no triangles at all.
+    raycaster = None
+    try:
+        t_mesh = time.monotonic()
+        raycaster = WarehouseRaycaster("/World/Warehouse")
+        print(f"[capture] raycaster: {raycaster.n_triangles} triangles from "
+              f"{raycaster.n_meshes} meshes in {time.monotonic() - t_mesh:.1f}s", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        # Not fatal — footage is still worth capturing without ranges. But say so loudly, because
+        # `scan_room` will then report every bearing as an unknown distance and that looks like a
+        # model failure rather than a missing sensor.
+        print(f"[capture] WARNING no LiDAR: {exc}", flush=True)
+
+    if args.lidar_probe:
+        if raycaster is None:
+            return 1
+        cloud = raycaster.cast(sx, sy, syaw, HEAD_OFFSET_Z)
+        import numpy as np
+        pts = np.array(cloud["positions"]).reshape(-1, 3)
+        print(f"[probe] pose=({sx:+.2f},{sy:+.2f}) yaw={math.degrees(syaw):+.0f}deg  "
+              f"{cloud['returns']}/{cloud['rays']} returns, {cloud['point_count']} points")
+        # Nearest surface per cardinal bearing, in the same 0.15-1.80 m band range.ts uses — so a
+        # number printed here is a number the robot would actually act on.
+        band = (pts[:, 2] >= 0.15) & (pts[:, 2] <= 1.80)
+        bearings = np.degrees(np.arctan2(pts[:, 1], pts[:, 0]))
+        rng = np.hypot(pts[:, 0], pts[:, 1])
+        for want in range(-180, 180, 45):
+            sel = band & (np.abs((bearings - want + 180) % 360 - 180) <= 8)
+            near = f"{rng[sel].min():5.2f} m" if sel.any() else "  no return"
+            print(f"[probe]  bearing {want:+4d} deg -> {near}  ({int(sel.sum())} pts)")
+        simulation_app.close()
+        return 0
+
+    state = SensorState()
+    httpd = None
+    if args.serve:
+        httpd = ThreadingHTTPServer(
+            ("0.0.0.0", args.serve),
+            _sidecar_facade(state, raycaster, args.sidecar_url, "isaac_small_warehouse"))
+        httpd.daemon_threads = True
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        print(f"[capture] sensor facade on :{args.serve} "
+              f"(/loco/* -> {args.sidecar_url})", flush=True)
 
     meta: list[dict] = []
     smooth_eye = smooth_tgt = None
@@ -419,11 +916,26 @@ def main() -> int:
             smooth_tgt = smooth_tgt + a * (tgt - smooth_tgt)
         chase.set_world_poses_from_view(smooth_eye, smooth_tgt)
 
+        # Head camera: rigidly on the base, NOT smoothed. The chase cam is cinematography and may
+        # lag; this one is the robot's eye, and a filtered eye would hand the VLM a bearing taken
+        # from a pose the robot is not in.
+        head_z = HEAD_OFFSET_Z + (height - NEUTRAL_STAND_HEIGHT)
+        hx = wx + HEAD_OFFSET_X * c - HEAD_OFFSET_Y * s
+        hy = wy + HEAD_OFFSET_X * s + HEAD_OFFSET_Y * c
+        head.set_world_poses_from_view(
+            torch.tensor([[hx, hy, head_z]], device=sim.device),
+            torch.tensor([[hx + c, hy + s, head_z]], device=sim.device))
+
         sim.step()
         chase.update(dt=sim.get_physics_dt())
         room.update(dt=sim.get_physics_dt())
+        head.update(dt=sim.get_physics_dt())
 
         odom.publish(wx, wy, wyaw, now)
+        # `.clone()` is load-bearing: the camera's output buffer is reused next frame, so handing
+        # the HTTP thread a view of it would let a snapshot change under the encoder mid-request.
+        state.publish(wx, wy, wyaw, height,
+                      head.data.output["rgb"].torch[0, ..., :3].clone().cpu().numpy())
 
         # The RTX renderer accumulates: the first frames come back flat grey regardless of what is
         # in front of the camera. Step through WARMUP_FRAMES before believing anything, and do not
@@ -439,6 +951,10 @@ def main() -> int:
                     chase.data.output["rgb"].torch[0, ..., :3].cpu().numpy(), quality=92)
         iio.imwrite(f"{args.out}/room_{i:04d}.jpg",
                     room.data.output["rgb"].torch[0, ..., :3].cpu().numpy(), quality=92)
+        # The robot's own view, saved alongside: a video about what the robot perceived is not
+        # honest if the only thing on screen is a camera the robot does not have.
+        iio.imwrite(f"{args.out}/head_{i:04d}.jpg",
+                    head.data.output["rgb"].torch[0, ..., :3].cpu().numpy(), quality=90)
         meta.append({"i": i, "t": now - t0, "wall": now, "x": wx, "y": wy, "yaw": wyaw,
                      "cmd_vx": vx, "cmd_vy": vy, "cmd_omega": omega, "height": height,
                      "cmds_seen": feed.count})
@@ -459,6 +975,8 @@ def main() -> int:
     print(f"[capture] wrote {len(meta)} frames at ~{1.0 / median_dt:.1f} fps -> {args.out}",
           flush=True)
 
+    if httpd is not None:
+        httpd.shutdown()
     simulation_app.close()
     return 0
 
