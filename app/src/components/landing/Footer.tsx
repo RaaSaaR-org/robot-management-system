@@ -30,7 +30,6 @@ interface FooterLink {
 const footerLinks: Record<string, FooterLink[]> = {
   'On this page': [
     { name: 'Full circle', href: '#circle' },
-    { name: 'Proof', href: '#proof' },
     { name: 'Data engine', href: '#data' },
     { name: 'Models', href: '#models' },
     { name: 'Safety', href: '#safety' },

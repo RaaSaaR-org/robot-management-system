@@ -4,8 +4,15 @@
  * @feature landing
  *
  * Order is the argument: claim → the loop the whole platform is built around →
- * proof it exists → what feeds it → what runs on it → the differentiator →
- * sovereignty → how to run it → who builds it.
+ * what feeds it → what runs on it → the differentiator → sovereignty → how to
+ * run it → who builds it.
+ *
+ * There is no screenshot section. It was one still of the fleet dashboard under
+ * the heading "This is the actual product" — a claim the live demo in the hero
+ * makes better, since a visitor can click into the running app instead of
+ * looking at a picture of it. A static image also dates the moment the UI moves,
+ * which is how the previous capture ended up showing a design that no longer
+ * existed.
  *
  * The full circle sits second, immediately under the hero, because it is the
  * product: six stages with nothing to export between them. It is also the one
@@ -26,7 +33,6 @@
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
 import { FullCircleSection } from '../components/landing/FullCircleSection';
-import { ProofSection } from '../components/landing/ProofSection';
 import { DataEngineSection } from '../components/landing/DataEngineSection';
 import { ModelLayerSection } from '../components/landing/ModelLayerSection';
 import { HonestySection } from '../components/landing/HonestySection';
@@ -42,7 +48,6 @@ export function LandingPage() {
       <main>
         <HeroSection />
         <FullCircleSection />
-        <ProofSection />
         <DataEngineSection />
         <ModelLayerSection />
         <HonestySection />

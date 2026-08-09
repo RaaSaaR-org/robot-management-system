@@ -6,9 +6,9 @@ mkdirSync('e2e/results/screenshots', { recursive: true });
 
 /**
  * Screenshots captured in demo mode with MSW fixtures.
- * The landing page embeds exactly one of these — dashboard.png, in the Proof
- * section. It used to show three (dashboard, training, compliance) as a gallery;
- * that gallery is gone, so the rest are captured for docs and review only.
+ * The landing page no longer embeds any of these — it used to show a gallery,
+ * then a single dashboard still, and now sends visitors to the live demo
+ * instead. These are captured for docs and review only.
  */
 test.describe('Demo Mode Screenshots', () => {
   test('landing page', async ({ page }) => {
