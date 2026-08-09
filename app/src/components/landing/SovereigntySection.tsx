@@ -20,11 +20,18 @@ interface RecordRow {
   body: string;
 }
 
+/** The three AI providers, and where each one runs. Local is the lit one. */
+const PROVIDERS: readonly { name: string; where: string; local: boolean }[] = [
+  { name: 'Gemini', where: 'Cloud', local: false },
+  { name: 'OpenRouter', where: 'Cloud', local: false },
+  { name: 'Ollama', where: 'Your hardware', local: true },
+];
+
 const RECORDS: RecordRow[] = [
   {
     cite: 'Art. 12',
     body:
-      'Hash-chained, tamper-evident audit logs. GET /api/compliance/verify re-walks the chain and names the links that no longer match.',
+      'A tamper-evident audit trail. Run the check and it re-walks every entry and names any one that no longer matches.',
   },
   {
     cite: 'Annex IV',
@@ -75,48 +82,62 @@ export function SovereigntySection() {
             </h2>
 
             <p className="lp-lede mt-5">
-              One environment variable moves the platform&rsquo;s AI onto a model running in your
-              own building. What it decides there is still on the record — hash-chained, and
-              verifiable by whoever you have to show it to.
+              One setting moves the platform&rsquo;s AI onto a model running in your own building.
+              What it decides there is still on the record — and that record can be checked by
+              whoever you have to show it to.
             </p>
 
             {/* Asymmetric: the switch is narrow, the record is wide. */}
             <div className="mt-12 grid gap-11 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)] lg:gap-14">
-              {/* ---- 1. Local inference ------------------------------------ */}
+              {/* ---- 1. Where the AI runs ---------------------------------- */}
               <div>
-                <h3 className="lp-h3">Local inference</h3>
+                <h3 className="lp-h3">Where the AI runs</h3>
 
-                <pre
-                  className="lp-panel-inset mt-4 overflow-x-auto px-3.5 py-3 text-[0.8125rem] leading-relaxed"
-                  style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}
+                {/* The switch, drawn as a switch. It used to print the
+                    environment variable verbatim, which made the whole
+                    sovereignty claim read as a config note — the point is that
+                    it is one setting, not which setting it happens to be. */}
+                <div
+                  className="lp-panel-inset mt-4 flex overflow-hidden"
+                  role="img"
+                  aria-label="AI provider setting: Gemini or OpenRouter in the cloud, or Ollama on your own hardware — currently Ollama"
                 >
-                  <code>
-                    <span style={{ color: 'var(--text-primary)' }}>LLM_PROVIDER=</span>
-                    gemini
-                    <span style={{ color: 'var(--text-muted)' }}> | </span>
-                    openrouter
-                    <span style={{ color: 'var(--text-muted)' }}> | </span>
-                    <span style={{ color: 'var(--color-signal-measured)', fontWeight: 600 }}>
-                      ollama
-                    </span>
-                  </code>
-                </pre>
+                  {PROVIDERS.map((provider, i) => (
+                    <div
+                      key={provider.name}
+                      className={`flex-1 px-2 py-2.5 text-center ${i === 0 ? '' : 'border-l'}`}
+                      style={{
+                        borderColor: 'var(--border-color)',
+                        backgroundColor: provider.local ? 'var(--bg-elevated)' : 'transparent',
+                      }}
+                    >
+                      <span
+                        className="block text-[0.8125rem]"
+                        style={{
+                          fontFamily: 'var(--font-mono)',
+                          fontWeight: provider.local ? 600 : 400,
+                          color: provider.local
+                            ? 'var(--color-signal-measured)'
+                            : 'var(--text-secondary)',
+                        }}
+                      >
+                        {provider.name}
+                      </span>
+                      <span className="lp-note mt-1 block">{provider.where}</span>
+                    </div>
+                  ))}
+                </div>
 
                 <p className="lp-body mt-4 text-[0.875rem]">
-                  Set it to <span style={{ color: 'var(--text-primary)' }}>ollama</span> and the
-                  whole {brand.name} server runs its AI on a local model: no cloud key, no data
-                  leaving the building. One provider abstraction backs command interpretation, the
-                  A2A orchestrator and dataset-curation suggestions, so the one variable moves all
-                  three.
+                  Choose the local one and the whole {brand.name} server runs its AI on a model in
+                  your own building: no cloud key, no data leaving the site. Understanding a spoken
+                  command, planning a job and suggesting what to cut from a dataset all move
+                  together — it is one switch, not three.
                 </p>
 
                 <p className="lp-body mt-3 text-[0.875rem]">
-                  Local is not off the record. The model id that produced a decision is written
-                  into the EU AI Act audit trail either way.
-                </p>
-
-                <p className="lp-key mt-4 normal-case tracking-normal">
-                  server/src/services/llm/
+                  Local is not off the record. Whichever you pick, the model that made a decision
+                  is named in the EU AI Act audit trail.
                 </p>
               </div>
 
@@ -165,21 +186,17 @@ export function SovereigntySection() {
               </h3>
 
               <p className="lp-body mt-3">
-                An operator&rsquo;s place note, written on a robot standing at a customer site, is
-                personal data that no database erasure would ever touch. So an Art. 17 request
-                doesn&rsquo;t stop at the database. It wipes the on-robot memory workspace on every
-                robot it can reach, redacts the operator and site fields on the robot&rsquo;s
-                identity card, and counts both.
+                A note an operator left on a robot standing at a customer site is personal data,
+                and no amount of clearing the database will ever touch it. So a deletion request
+                doesn&rsquo;t stop at the database. It wipes what every reachable robot remembers,
+                strips the operator and site details from the robot&rsquo;s own identity card, and
+                counts both.
               </p>
 
               <p className="lp-body mt-3">
-                A robot that was switched off is reported as unreachable — not as erased. An
-                erasure that claims success while a note survives on a robot is the one answer a
-                data-subject request must never get.
-              </p>
-
-              <p className="lp-key mt-4 normal-case tracking-normal">
-                server/src/services/RobotMemoryErasureService.ts
+                A robot that was switched off is reported as unreachable — never as erased. An
+                erasure that claims success while a note survives out on the floor is the one
+                answer a data-subject request must never get.
               </p>
             </div>
           </div>

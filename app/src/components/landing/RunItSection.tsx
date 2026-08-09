@@ -60,14 +60,14 @@ printf 'ROBOT_TYPE=g1\\nROBOT_ID=sim-robot-g1\\nPORT=41244\\n' >> .env.g1
 npm run dev:g1
 
 cd ../app && npm install && npm run dev     # http://localhost:1420`,
-    note: 'Three terminals, no Docker and no database to install — about five minutes from clone to a G1 reporting live simulated telemetry. The two lines that write .env.g1 are load-bearing: that file is not in the repo, and without it dev:g1 quietly starts a different robot on a different port.',
+    note: 'Three terminals, no Docker and no database to install — about five minutes from clone to a G1 reporting live telemetry. Do not skip the two lines that write the robot’s settings file: it is deliberately not in the repository, and without it you quietly get a different robot on a different port.',
   },
   {
     id: 'docker',
     label: 'Docker',
     header: 'bash · repo root',
     command: 'docker compose up -d',
-    note: 'The full stack in one command: server, app and robot agent on PostgreSQL, with NATS and RustFS alongside them.',
+    note: 'The whole stack in one command: the server, the app and the robot agent, with the database, messaging and object storage brought up alongside them.',
   },
   {
     id: 'kubernetes',
@@ -350,9 +350,10 @@ export function RunItSection() {
                 large readouts at the top of this block, which made "which
                 Node?" the loudest thing in the section. */}
             <p className="lp-note mt-4">
-              Under the hood: Node 22 for the server and robot agent (the app builds on 20+),
-              SQLite locally and PostgreSQL in production, and NATS and object storage optional —
-              absent, the features that need them switch themselves off and say so.
+              Under the hood it is Node and npm, a file-based database locally and PostgreSQL in
+              production, with messaging and object storage optional — leave them out and the
+              features that need them switch themselves off and say so. Exact versions are in the
+              README.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">

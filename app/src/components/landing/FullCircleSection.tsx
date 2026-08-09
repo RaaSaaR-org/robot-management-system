@@ -87,11 +87,12 @@ export const STAGES: Stage[] = [
     labelY: 42,
     labelAnchor: 'middle',
     headline: 'Every episode, versioned.',
-    summary: 'Demonstrations, teleop sessions and real LiDAR scans become versioned datasets.',
+    summary:
+      'Demonstrations, teleoperation sessions and real LiDAR scans become versioned datasets.',
     bullets: [
-      'Curation trims or deletes episodes video-aware and returns a new revision with lineage — the source dataset is never modified.',
-      'Upload a PLY or PCD and a sidecar builds a Digital Twin plus a usable MuJoCo scene, validated on a 240k-point MID-360 capture of the lab.',
-      'VR and teleop sessions record into a true LeRobot v3.0 chunked dataset — in simulation so far.',
+      'Trim the wobbly takes or drop the failed ones and you get a new version — the original recording is never touched, and every version knows where it came from.',
+      'Walk a scanner around a room and it comes back as a digital twin you can navigate and simulate in. Proven on a real scan of our own lab.',
+      'Teleoperation and VR sessions record straight into a training-ready dataset — no export step. In simulation so far.',
     ],
   },
   {
@@ -109,9 +110,9 @@ export const STAGES: Stage[] = [
     headline: 'Your data, your model.',
     summary: 'Fine-tune on your own data without leaving the LeRobot format.',
     bullets: [
-      'LeRobot-compatible in both v2.1 and v3.0, with HuggingFace Hub sync in both directions.',
-      'Six base models in the registry — SmolVLA runs the full path today, GR00T N1.7 has a LeRobot-native trainer.',
-      'Training runs in a separate worker that polls /api/training/workers/claim; serving runs in the VLA server.',
+      'Your datasets stay in the open LeRobot format and sync with HuggingFace both ways — bring them in, take them out again.',
+      'Six base models to choose from. SmolVLA walks the whole circle today; GR00T N1.7 trains natively.',
+      'The heavy lifting runs on whichever GPU box you point at it, so training never competes with the machine running your fleet.',
     ],
   },
   {
@@ -132,9 +133,9 @@ export const STAGES: Stage[] = [
     headline: 'Shipped like software.',
     summary: 'Ship a model to a robot the way you would ship software.',
     bullets: [
-      'Model registry, canary rollouts with per-stage health checks, one-click rollback.',
-      'OTA packages signed with Ed25519.',
-      'The real-G1 GR00T bridge is gated: dry-run by default, needs both G1_BRIDGE_ARMED=1 and --arm, and never commands the legs.',
+      'A model registry, staged rollouts with a health check at every step, and rollback in one click.',
+      'Updates go out over the air cryptographically signed, so a robot only ever installs what you actually shipped.',
+      'The bridge to a real G1 is deliberately locked. It rehearses without moving by default, takes two separate arming steps to go live, and never drives the legs.',
     ],
   },
   {
@@ -150,11 +151,11 @@ export const STAGES: Stage[] = [
     labelY: 42,
     labelAnchor: 'middle',
     headline: 'Scored, and second-guessed.',
-    summary: 'Score a policy in MuJoCo, and try to catch yourself being optimistic.',
+    summary: 'Score a model in simulation, and try to catch yourself being optimistic.',
     bullets: [
-      'Sim jobs with per-episode reward scoring, success rate, error breakdown and model comparison.',
-      'A null control that must score zero and an off-instruction proxy that auto-refuses when it matches on-instruction, n=40 per cell — the first run overturned an earlier optimistic result.',
-      'A G1 + Dex3 pick-and-place environment replicates NVIDIA’s GR00T-N1.7-AppleToPlate workflow.',
+      'Every run scored attempt by attempt: success rate, where it went wrong, and how it compares to the model it would replace.',
+      'Two built-in traps you are meant to fail. A do-nothing model that must score zero, and a run given the wrong instruction that must score worse. The first time we ran them, they overturned a result we liked.',
+      'A pick-and-place room for the G1 and its hands, mirroring the workflow NVIDIA ships for GR00T.',
     ],
   },
   {
@@ -172,9 +173,9 @@ export const STAGES: Stage[] = [
     headline: 'Plan first, permission second.',
     summary: 'A local model plans; the safety layer decides whether the plan gets to run.',
     bullets: [
-      'Agent Mode turns “geh zum Regal RACK-A” into a typed block plan run over the Unitree LocoClient — the same call path as a real G1.',
-      'An enforced geofence stopped a 2 m walk 0.48 m clear of rack RACK-A and refused the next command while latched. Reproduced twice.',
-      'The read-only telemetry path is live-verified against a powered G1; everything that moves the robot is still simulation.',
+      'Say “geh zum Regal RACK-A” and the robot turns it into a plan you can read step by step before it walks a single one — over the same controls a real G1 uses.',
+      'A keep-out zone stopped a two-metre walk 0.48 m clear of the rack and refused the next command until it was cleared. Reproduced twice.',
+      'Reading a real, powered G1 works today. Anything that moves one is still simulation.',
     ],
   },
   {
@@ -192,9 +193,9 @@ export const STAGES: Stage[] = [
     headline: 'Provable, not asserted.',
     summary: 'Record-keeping a regulator can check, and erasure that reaches the robot.',
     bullets: [
-      'Hash-chained, tamper-evident audit logs with a verify endpoint (EU AI Act Art. 12).',
-      'GDPR Art. 30 records of processing, a self-service portal for seven request types, legal holds and retention policies.',
-      'Art. 17 erasure wipes the on-robot memory workspace on every reachable robot and reports honestly about the ones that were switched off.',
+      'An audit trail that cannot be edited quietly — alter one entry and the check fails and names it (EU AI Act Art. 12).',
+      'Records of processing, a self-service portal covering all seven kinds of data-subject request, legal holds and retention schedules.',
+      'A deletion request reaches the robots too: it wipes what they remember, and tells you which ones were switched off rather than counting them as done.',
     ],
   },
 ];
@@ -675,8 +676,8 @@ export function FullCircleSection() {
         <p className="lp-note mx-auto mt-10 max-w-3xl text-center">
           The six stages are not equally mature, so each carries its own tag. <em>Live</em> where
           it runs against real hardware or real data, <em>Sim</em> where it is proven in
-          simulation only, and <em>Gated</em> where the code path exists end to end but a safety
-          interlock still stands between it and a real robot.
+          simulation only, and <em>Gated</em> where it works end to end but a safety interlock
+          still stands between it and a real robot.
         </p>
       </div>
     </section>

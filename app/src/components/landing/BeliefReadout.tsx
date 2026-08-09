@@ -318,7 +318,7 @@ export function BeliefReadout() {
             </span>
           </div>
         ) : (
-          <span className="lp-key">Executing over LocoClient…</span>
+          <span className="lp-key">Executing on the robot…</span>
         )}
       </div>
 

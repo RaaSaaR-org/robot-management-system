@@ -65,15 +65,10 @@ export function ProofSection() {
 
               <figcaption className="mt-4">
                 <span className="lp-value block">{STILL.title}</span>
-                <span className="lp-key mt-2 block">
-                  {STILL.width} × {STILL.height} · PNG
-                </span>
                 <span className="lp-note mt-3 block">
-                  Captured from this repo running in demo mode (
-                  <code style={{ fontFamily: 'var(--font-mono)' }}>VITE_DEMO_MODE=true</code>),
-                  with seeded robots and generated telemetry. The robots and the numbers on
-                  screen are demo data; the screens, the controls and the code paths behind them
-                  are the ones that ship.
+                  Captured from this repository running in demo mode, with seeded robots and
+                  generated telemetry. The robots and the numbers on screen are demo data; the
+                  screens, the controls and everything behind them are the ones that ship.
                 </span>
               </figcaption>
             </figure>

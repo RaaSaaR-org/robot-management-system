@@ -32,41 +32,41 @@ const SOURCES: readonly Source[] = [
   {
     name: 'Teleoperation & VR',
     status: 'sim',
-    produces: 'G1 EDU + Dex3-1 · 43 DOF',
-    note: 'Drive the robot by hand and the session records straight into a chunked LeRobot v3.0 dataset — no export step, no conversion script. Proven in simulation; the hardware path is gated.',
+    produces: 'G1 EDU + Dex3-1 · 43 joints',
+    note: 'Drive the robot by hand and the session records itself into a training-ready dataset — no export, no conversion script. Proven in simulation; the path to real hardware is still gated.',
   },
   {
     name: 'LiDAR room scan',
     status: 'live',
-    produces: 'point cloud · occupancy · mesh.glb',
-    note: 'Walk a MID-360 around the space and a sidecar rebuilds it as a digital twin plus a usable MuJoCo scene. Validated on a real 240k-point capture of the lab. The twin’s zones become the named places the robot navigates by.',
+    produces: 'digital twin · simulator-ready',
+    note: 'Walk a scanner around the space and it comes back as a digital twin you can navigate and simulate in — proven on a real 240,000-point capture of our lab. The rooms and zones you draw on the twin become the places the robot is sent to by name.',
   },
   {
     name: 'World-model synthesis',
     status: 'live',
-    produces: 'LeRobot v2.1 · tagged synthetic',
-    note: 'When the robots cannot make enough episodes, a world action model generates them — and every one is registered as synthetic, so nothing on the record pretends a dream was a recording.',
+    produces: 'generated episodes · tagged synthetic',
+    note: 'When the robots cannot make enough episodes, a world action model imagines them — and every one is labelled synthetic, so nothing on the record ever passes a dream off as a recording.',
   },
   {
     name: 'Video → motion',
     status: 'sim',
-    produces: 'retargeted G1 trajectories',
-    note: 'Pose estimation on ordinary footage, retargeted onto the G1 skeleton and played back on the live 3D robot over a real transport.',
+    produces: 'human footage → G1 motion',
+    note: 'Ordinary video of a person working, turned into motion the G1 can perform and played back on the live 3D robot.',
   },
   {
     name: 'Hub & marketplace',
     status: 'live',
     produces: 'HuggingFace · contribution credits',
-    note: 'Sync datasets with the HuggingFace Hub in both directions, or buy and sell them for contribution credits — settled atomically, downloaded through a presigned URL with a real checksum.',
+    note: 'Sync datasets with HuggingFace in both directions, or buy and sell them for contribution credits — the transfer either completes or it does not happen, and what you download is checksummed against what was sold.',
   },
 ];
 
 /** The four steps every episode takes, whichever door it came in through. */
 const PIPELINE: readonly { step: string; label: string; note: string }[] = [
-  { step: '01', label: 'Capture', note: 'Teleop, scan, synthesis or Hub' },
-  { step: '02', label: 'Validate', note: 'Schema, stats, video integrity' },
-  { step: '03', label: 'Curate', note: 'Video-aware trim and delete' },
-  { step: '04', label: 'Revision', note: 'New version, lineage kept' },
+  { step: '01', label: 'Capture', note: 'Driven, scanned, generated or imported' },
+  { step: '02', label: 'Validate', note: 'Format, statistics and video checked' },
+  { step: '03', label: 'Curate', note: 'Trim the takes, drop the failures' },
+  { step: '04', label: 'Version', note: 'New revision, original intact' },
 ];
 
 function statusTag(status: Status) {
@@ -162,10 +162,9 @@ export function DataEngineSection() {
 
               <p className="lp-body mt-3">
                 Trimming a wobbly first second off forty episodes, or dropping the six where the
-                gripper missed, produces a <em>new revision</em> with its lineage recorded — the
-                source is left exactly as it was recorded. Statistics recompute, the video is cut
-                frame-accurately rather than just re-indexed, and the model card can always name
-                the revision it was trained on.
+                gripper missed, produces a <em>new version</em> — the original is left exactly as
+                it was recorded. The statistics recompute, the video is genuinely re-cut rather
+                than just re-labelled, and every model can name the exact version it learned from.
               </p>
 
               <p className="lp-body mt-3">

@@ -38,37 +38,37 @@ const POLICIES: readonly ModelRow[] = [
     name: 'SmolVLA',
     origin: 'HuggingFace / LeRobot',
     status: 'live',
-    note: 'Fine-tuned here, served here. Runs on Apple Silicon, CUDA or plain CPU — the full train → serve → evaluate circle has been walked on a Mac.',
+    note: 'Fine-tuned here, served here. Runs on a Mac, an NVIDIA GPU or an ordinary CPU — the whole train → serve → evaluate circle has been walked end to end on a Mac.',
   },
   {
     name: 'GR00T N1.7',
     origin: 'NVIDIA',
     status: 'ready',
-    note: 'LeRobot-native trainer path (lerobot[groot]). Selectable in the training wizard; the apple-to-plate environment replicates NVIDIA’s own workflow.',
+    note: 'Trains natively, straight from the training wizard. The pick-and-place environment mirrors the workflow NVIDIA ships for it.',
   },
   {
     name: 'GR00T N1',
     origin: 'NVIDIA',
     status: 'ready',
-    note: 'Served over ZMQ to a PolicyServer on your own NVIDIA box. The adapter ships; it wants a GPU you supply.',
+    note: 'Served from your own NVIDIA box. The connection ships with the platform; you supply the GPU.',
   },
   {
     name: 'π0 · π0.6',
     origin: 'Physical Intelligence',
     status: 'registered',
-    note: 'In the base-model registry and selectable for a training job.',
+    note: 'Selectable as the starting point for a training run.',
   },
   {
     name: 'OpenVLA',
     origin: 'Stanford',
     status: 'registered',
-    note: 'In the base-model registry and selectable for a training job.',
+    note: 'Selectable as the starting point for a training run.',
   },
   {
     name: 'π0.5',
     origin: 'Physical Intelligence',
     status: 'stub',
-    note: 'The serving adapter exists as a stub and is not wired to weights. Listed because it is on the roadmap, tagged because it is not done.',
+    note: 'Scaffolded, but not yet connected to real weights. Listed because it is on the roadmap, tagged because it is not done.',
   },
 ];
 
@@ -77,13 +77,13 @@ const WORLD_MODELS: readonly ModelRow[] = [
     name: 'GR00T-Dreams',
     origin: 'NVIDIA · Cosmos-Predict2-2B',
     status: 'live',
-    note: 'Language-prompted neural trajectories for the G1 + Dex3, pseudo-labelled by an inverse dynamics model (holdout MAE 0.079 rad). Lands as a real LeRobot dataset, tagged synthetic. No token needed.',
+    note: 'Describe a task in words and it imagines the G1 and its hands doing it, then works backwards to the joint motion — within 0.08 rad of the real motion it was checked against. Lands as an ordinary dataset, tagged synthetic. No account needed.',
   },
   {
     name: 'Cosmos 3',
     origin: 'NVIDIA',
     status: 'live',
-    note: 'Action-conditioned forward-dynamics rollouts on the WidowX bridge embodiment, converted to a LeRobot v2.1 dataset and registered like any other. This one path does want a HuggingFace PRO token.',
+    note: 'Ask what happens next if the arm does this, and it generates the footage — landing as an ordinary dataset like any other. This one path does want a paid HuggingFace account.',
   },
   {
     name: 'Cosmos 3 as an evaluator',
@@ -166,24 +166,24 @@ export function ModelLayerSection() {
             </h2>
 
             <p className="lp-lede mt-5">
-              The model layer is an interface, not a supplier. Vision-language-action policies and
-              world action models plug into the same registry, train on the same datasets and
-              deploy through the same canary — so the model you pick stays a technical decision
-              rather than a five-year commercial one. Weights are yours, checkpoints are files,
-              and {brand.name} never asks a third party for permission to run one.
+              The model layer is a socket, not a supplier. Vision-language-action models and world
+              action models plug into the same place, train on the same data and ship through the
+              same staged rollout — so which brain you run stays a technical decision rather than a
+              five-year commercial one. The weights are yours, and {brand.name} never asks a third
+              party for permission to run one.
             </p>
 
             <div className="mt-12 grid gap-12 lg:grid-cols-2 lg:gap-x-14">
               <ModelTable
                 kicker="VLA · the policy that acts"
                 title="Vision-language-action"
-                blurb="Sees the scene, reads the instruction, emits the next action chunk. Six base models are in the registry; two run end to end today."
+                blurb="Sees the scene, reads the instruction, decides the next move. Six to choose from; two run the whole circle today."
                 rows={POLICIES}
               />
               <ModelTable
                 kicker="WAM · the model that imagines"
                 title="World action models"
-                blurb="Generates the experience instead of recording it — action-conditioned futures that become training data when a real robot cannot make enough of it."
+                blurb="Generates the experience instead of recording it. Show it a situation, tell it what the robot does, and it imagines what happens next — as training data, when a real robot cannot make enough of it."
                 rows={WORLD_MODELS}
               />
             </div>
@@ -212,27 +212,28 @@ export function ModelLayerSection() {
                 </p>
                 <p className="lp-body text-[0.875rem]">
                   <span style={{ color: 'var(--text-primary)' }}>No account for the reasoning.</span>{' '}
-                  Point the LLM provider at Ollama and command interpretation, orchestration and
-                  curation suggestions all run on a model in your own building.
+                  Point the platform at a model running in your own building and the language
+                  understanding, the planning and the data suggestions all run there too.
                 </p>
                 <p className="lp-body text-[0.875rem]">
                   <span style={{ color: 'var(--text-primary)' }}>Open weights, open format.</span>{' '}
-                  Datasets are LeRobot v2.1 and v3.0 with Hub sync both ways. Take the data and the
-                  checkpoints and walk out — there is no proprietary container to convert from.
+                  Datasets stay in the open LeRobot format, synced with HuggingFace both ways. Take
+                  the data and the trained models and walk out — there is nothing proprietary to
+                  convert from.
                 </p>
                 <p className="lp-body text-[0.875rem]">
                   <span style={{ color: 'var(--text-primary)' }}>Two honest exceptions.</span> The
-                  Cosmos 3 forward-dynamics generator runs on a HuggingFace ZeroGPU Space and wants
-                  a PRO token, and if you choose a hosted LLM instead of Ollama you bring that
-                  vendor&rsquo;s key. Neither is required to run the platform.
+                  Cosmos 3 generator runs on HuggingFace and wants a paid account there, and if you
+                  pick a hosted AI provider instead of a local one you bring that vendor&rsquo;s
+                  key. Neither is required to run the platform.
                 </p>
               </div>
             </div>
 
             <p className="lp-note mt-6">
-              Training executes in a sibling worker and serving in a sibling VLA server, so how far
-              each base model&rsquo;s trainer has been exercised is a question about those repos.
-              The status here is what this platform carries, not a promise about someone
+              Training and serving run on your own GPU machines rather than inside the platform, so
+              how far a given model has been pushed depends partly on the hardware you point at it.
+              The status here is what {brand.name} carries end to end — not a promise about someone
               else&rsquo;s GPU.
             </p>
           </div>

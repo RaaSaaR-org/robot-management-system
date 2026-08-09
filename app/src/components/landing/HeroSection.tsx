@@ -38,10 +38,9 @@ export function HeroSection() {
             </p>
 
             <p className="lp-body mt-5">
-              And it is built to be believed. The robot reports its state as measured, estimated or
-              unknown — when a reading is missing it says <em>unknown</em>, when a stop was never
-              acknowledged it says <em>unconfirmed</em>. Every stage on this page carries the
-              status it has actually reached.
+              And it is built to be believed. Every number a robot reports says whether it was
+              measured, estimated or simply not known — and every claim on this page carries the
+              status it has actually reached, not the one it is aiming for.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">
@@ -88,13 +87,9 @@ export function HeroSection() {
           <div className="lg:pt-2">
             <BeliefReadout />
             <p className="lp-note mt-3">
-              Replay of one logged run — the warehouse hall, 2 August 2026. A
-              <code className="mx-1" style={{ fontFamily: 'var(--font-mono)' }}>
-                walk forward 2 metres
-              </code>
-              aimed at keepout RACK-A, stopped 0.48 m clear of the rack face by the safety
-              monitor. A second approach reproduced it at 0.49 m. In simulation, over the same
-              LocoClient call path a real G1 would take.
+              Replay of one logged run — the warehouse hall, 2 August 2026. A two-metre walk aimed
+              straight at a keep-out zone, stopped 0.48 m clear of the rack. A second approach
+              reproduced it at 0.49 m. In simulation, over the same controls a real G1 uses.
             </p>
           </div>
         </div>
