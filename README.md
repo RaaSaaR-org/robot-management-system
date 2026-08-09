@@ -35,6 +35,17 @@ single platform connects it all — and none of them help you with EU AI Act rec
 **The solution:** NeoDEM is the integrating layer — an all-in-one platform, self-hosted, that
 carries a robot's whole working life instead of one slice of it.
 
+The platform is hardware-agnostic. Development and go-to-market focus on **cognitive humanoids,
+specialised on the Unitree G1** (including the G1 EDU with Dex3-1 hands). The SO-101 arm was the
+bootstrap embodiment and remains the one embodiment proven on real hardware via LeRobot; new
+feature work — sim, digital twin, RL, VLA, teleop, Agent Mode — targets the G1.
+
+Built by **EmAI Robotics GmbH**, Saarbrücken, Germany. Open source, MIT licensed. Developed with
+a 24/7 agentic crew: AI agents write code, run tests, triage issues and ship fixes while humans
+set direction.
+
+---
+
 ## The full circle
 
 Physical AI is never finished. A model ships, the fleet works a shift, and what it did on that
@@ -57,15 +68,6 @@ them up in the marketing: *Live* where it runs against real hardware or real dat
 is proven in simulation only, and *Gated* where the code path exists end to end but a safety
 interlock still stands between it and a real robot. The honest version is in
 [Status & limitations](#status--limitations).
-
-The platform is hardware-agnostic. Development and go-to-market focus on **cognitive humanoids,
-specialised on the Unitree G1** (including the G1 EDU with Dex3-1 hands). The SO-101 arm was the
-bootstrap embodiment and remains the one embodiment proven on real hardware via LeRobot; new
-feature work — sim, digital twin, RL, VLA, teleop, Agent Mode — targets the G1.
-
-Built by **EmAI Robotics GmbH**, Saarbrücken, Germany. Open source, MIT licensed. Developed with
-a 24/7 agentic crew: AI agents write code, run tests, triage issues and ship fixes while humans
-set direction.
 
 ---
 
