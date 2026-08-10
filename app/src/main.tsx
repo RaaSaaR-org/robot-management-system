@@ -25,6 +25,19 @@ import { BrowserRouter, HashRouter } from "react-router-dom";
 import { AuthProvider, ThemeProvider } from "./app/providers";
 import { BrandProvider } from "./brand";
 import { App } from "./App";
+
+// Self-hosted. A page whose thesis is "no data leaving the building" cannot send
+// every visitor's IP to fonts.googleapis.com before the headline paints — and for
+// a German GmbH that request is a live GDPR exposure. Self-hosting also removes a
+// render-blocking third-party round trip and works in a packaged Tauri build with
+// no network. Archivo ships the wdth axis, which the display type uses.
+//
+// These must be imported from JS, not via `@import` in index.css — Tailwind v4's
+// PostCSS plugin inlines CSS imports before Vite can register the woff2 files as
+// assets, which emits @font-face rules pointing at files that were never built.
+import "@fontsource-variable/archivo/wdth.css";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
 async function prepare() {

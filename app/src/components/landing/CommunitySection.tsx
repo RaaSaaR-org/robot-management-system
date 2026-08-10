@@ -1,164 +1,130 @@
 /**
  * @file CommunitySection.tsx
- * @description Open-source community + stewards section — explains the agentic model
- *              and invites new supporters (cloud host, AI infrastructure).
+ * @description Who builds NeoDEM — EmAI Robotics GmbH plus a 24/7 agentic crew,
+ *              stated as a hairline ledger of filled and open roles.
  * @feature landing
  */
 
-import type { ComponentType, SVGProps } from 'react';
-import { Bot, Cloud, Cpu, Mail } from 'lucide-react';
+import { useBrand } from '@/brand';
 
-type Status = 'active' | 'open';
+const CONTACT_EMAIL = 'info@EmAI.dev';
 
-interface Steward {
+type Slot = 'filled' | 'open';
+
+interface Party {
   key: string;
   name: string;
+  /** Mono sub-label — what this role is. */
   role: string;
+  slot: Slot;
   description: string;
-  status: Status;
-  Icon: ComponentType<SVGProps<SVGSVGElement>>;
 }
 
-const STEWARDS: Steward[] = [
+const PARTIES: Party[] = [
   {
     key: 'emai',
     name: 'EmAI Robotics GmbH',
-    role: 'Steward · Agentic Ops · Tech Direction',
+    role: 'Steward · Saarbrücken, Germany',
+    slot: 'filled',
     description:
-      'Set up the agentic development system and leads ideas plus technical direction — championing open-source software and open standards across the whole stack. Based in Saarbrücken, Germany.',
-    status: 'active',
-    Icon: Bot,
+      'Sets direction, reviews what the crew ships, and maintains the open-source release. The day-to-day work — writing code, running the test suite, triaging issues, shipping fixes — runs on AI agents around the clock.',
   },
   {
     key: 'cloud',
-    name: 'Cloud Host',
-    role: 'Looking for a partner',
+    name: 'Public cloud host',
+    role: 'Partner slot',
+    slot: 'open',
     description:
-      'Host a public NeoDEM trial so anyone can register, spin up a fleet, and drive the stack without self-hosting. No install, no friction — just click and explore Physical AI.',
-    status: 'open',
-    Icon: Cloud,
+      'There is no managed cloud. Today the only way to run it is to run it yourself. A host willing to carry a public instance would let people drive the stack without installing anything first.',
   },
   {
-    key: 'ai-infra',
-    name: 'AI Infrastructure',
-    role: 'Looking for a partner',
+    key: 'compute',
+    name: 'Compute, inference and training credits',
+    role: 'Partner slot',
+    slot: 'open',
     description:
-      'Compute, inference, and training credits to grow the agentic development team — more experiments, faster iterations, and bigger foundation models powering the fleet.',
-    status: 'open',
-    Icon: Cpu,
+      'GPU time for the agentic crew, for SmolVLA fine-tuning in the training worker, and for evaluation runs. More credits buys more experiments per week — nothing more, and we would say so.',
   },
 ];
 
 export function CommunitySection() {
+  const brand = useBrand();
+
   return (
-    <section id="community" className="py-24 section-primary relative overflow-hidden">
-      {/* Faint backdrop glow */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-turquoise/[0.04] rounded-full blur-3xl" />
-      </div>
+    <section id="who" className="lp-section lp-anchor" aria-labelledby="who-heading">
+      <div className="lp-container">
+        <div className="lp-grid">
+          <div className="lp-rail">
+            <span className="lp-rail-name">Who</span>
+            <span className="lp-tag lp-tag-live">Live</span>
+          </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-        {/* Section header */}
-        <div className="text-center mb-16">
-          <p className="text-turquoise font-mono text-sm mb-4 tracking-wider uppercase">
-            Agentic · Open Source · Community
-          </p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-theme-primary mb-4">
-            Built in the open. Maintained by agents.
-          </h2>
-          <p className="text-theme-secondary text-lg max-w-2xl mx-auto">
-            NeoDEM is an open-source community project with a 24/7 agentic crew.
-            AI agents write code, run tests, triage issues, and ship fixes — while
-            humans set direction. Agentic supported, community owned.
-          </p>
-        </div>
+          <div>
+            <h2 id="who-heading" className="lp-display lp-h2">
+              Written by agents.
+              <br />
+              Directed by people.
+            </h2>
 
-        {/* Stewards grid */}
-        <div className="grid md:grid-cols-3 gap-6">
-          {STEWARDS.map((steward) => {
-            const isActive = steward.status === 'active';
-            return (
-              <div
-                key={steward.key}
-                className={`relative rounded-2xl p-6 lg:p-8 min-h-[320px] flex flex-col transition-all ${
-                  isActive
-                    ? 'border-2 border-turquoise/60 bg-turquoise/[0.04] shadow-[0_0_40px_rgba(24,228,195,0.12)]'
-                    : 'border border-dashed border-cobalt/40 bg-cobalt/[0.02] hover:border-cobalt/70 hover:bg-cobalt/[0.05] hover:shadow-[0_0_30px_rgba(42,95,255,0.08)]'
-                }`}
-              >
-                {/* HUD corner brackets for open slots */}
-                {!isActive && (
-                  <>
-                    <div className="absolute top-0 left-0 w-5 h-5 border-t-[1.5px] border-l-[1.5px] border-cobalt/60 rounded-tl-2xl" />
-                    <div className="absolute top-0 right-0 w-5 h-5 border-t-[1.5px] border-r-[1.5px] border-cobalt/60 rounded-tr-2xl" />
-                    <div className="absolute bottom-0 left-0 w-5 h-5 border-b-[1.5px] border-l-[1.5px] border-cobalt/60 rounded-bl-2xl" />
-                    <div className="absolute bottom-0 right-0 w-5 h-5 border-b-[1.5px] border-r-[1.5px] border-cobalt/60 rounded-br-2xl" />
-                  </>
-                )}
+            <p className="lp-lede mt-5">
+              {brand.name} is built by EmAI Robotics GmbH in Saarbrücken, Germany. A 24/7 agentic crew
+              writes the code, runs the tests, triages the issues and ships the fixes. Humans set
+              direction and decide what is worth building. Everything that comes out is
+              MIT-licensed and public — including the page you are reading.
+            </p>
 
-                {/* Top row: icon + status badge */}
-                <div className="flex items-center justify-between mb-6">
-                  <div
-                    className={`w-12 h-12 rounded-xl flex items-center justify-center border ${
-                      isActive
-                        ? 'bg-turquoise/15 border-turquoise/40'
-                        : 'bg-cobalt/10 border-cobalt/30'
-                    }`}
-                  >
-                    <steward.Icon
-                      width={24}
-                      height={24}
-                      stroke={isActive ? '#18E4C3' : '#2A5FFF'}
-                      strokeWidth={2}
-                      fill="none"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isActive ? (
-                      <span className="relative flex items-center justify-center w-2 h-2">
-                        <span className="absolute inline-flex h-full w-full rounded-full bg-turquoise opacity-75 animate-ping" />
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-turquoise" />
-                      </span>
+            {/* Ledger of roles. Filled and open are told apart by the tag and the
+                hairline, not by a glowing card. */}
+            <p className="lp-key mt-12">Roles</p>
+
+            <ul
+              className="mt-3 border-b"
+              role="list"
+              style={{ borderColor: 'var(--border-color)' }}
+            >
+              {PARTIES.map((party) => (
+                <li
+                  key={party.key}
+                  className="border-t py-5"
+                  style={{ borderColor: 'var(--border-color)' }}
+                >
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+                    <h3 className="lp-h3">{party.name}</h3>
+                    {party.slot === 'filled' ? (
+                      <span className="lp-tag lp-tag-live shrink-0">Active</span>
                     ) : (
-                      <span className="inline-flex rounded-full h-2 w-2 border border-cobalt/60" />
+                      <span
+                        className="lp-tag shrink-0"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        Open
+                      </span>
                     )}
-                    <span
-                      className={`font-mono text-[10px] tracking-[0.18em] uppercase ${
-                        isActive ? 'text-turquoise' : 'text-cobalt'
-                      }`}
-                    >
-                      {isActive ? 'Active' : 'Open Slot'}
-                    </span>
                   </div>
-                </div>
+                  <p className="lp-note mt-1.5">{party.role}</p>
+                  <p className="lp-body mt-3">{party.description}</p>
+                </li>
+              ))}
+            </ul>
 
-                {/* Name + role */}
-                <h3 className="text-xl font-bold text-theme-primary mb-1">{steward.name}</h3>
-                <p className="font-mono text-[11px] text-theme-muted uppercase tracking-wider mb-4">
-                  {steward.role}
-                </p>
+            {/* Last block on the page. One line of finality and the contact action —
+                deliberately not a CTA band; the closing slab was cut for good reason. */}
+            <p className="lp-body mt-10">
+              That is the whole page. The code, the runs behind every number on it, and the gaps
+              we have not closed are all public. If you want to close one of them, write.
+            </p>
 
-                {/* Description */}
-                <p className="text-theme-secondary text-sm leading-relaxed">
-                  {steward.description}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Contact CTA */}
-        <div className="text-center mt-14">
-          <p className="text-theme-muted font-mono text-xs uppercase tracking-[0.2em] mb-4">
-            Want to help move Physical AI forward?
-          </p>
-          <a
-            href="mailto:info@EmAI.dev?subject=NeoDEM%20Supporter"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-turquoise/40 text-turquoise hover:bg-turquoise/10 hover:border-turquoise/70 transition-colors font-medium"
-          >
-            <Mail className="w-4 h-4" />
-            Become a supporter
-          </a>
+            <div className="mt-6">
+              <a
+                href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(
+                  `${brand.name} partner slot`,
+                )}`}
+                className="lp-btn-secondary inline-flex min-h-[2.75rem] items-center px-5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+              >
+                Write to {CONTACT_EMAIL}
+              </a>
+            </div>
+          </div>
         </div>
       </div>
     </section>

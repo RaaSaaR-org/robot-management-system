@@ -6,6 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="__BRAND_DESCRIPTION__" />
     <title>__BRAND_TITLE__</title>
+    <script>
+      // Stamp the theme class before first paint. ThemeProvider applies it in a
+      // useEffect, which lands after hydration — on a near-black UI that shows
+      // as a white strobe on every load.
+      (function () {
+        try {
+          var stored = localStorage.getItem('ThemeStore');
+          var theme = stored ? JSON.parse(stored).state.theme : 'system';
+          if (theme === 'system') {
+            theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          document.documentElement.classList.add(theme === 'light' ? 'light' : 'dark');
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
   </head>
 
   <body>
