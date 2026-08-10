@@ -58,6 +58,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -89,6 +90,10 @@ class IsaacLocoBridge:
         self._stop = threading.Event()
         self._last_sent: tuple[float, float, float, float] | None = None
         self._sent = 0
+        # Set by run() when the publish loop dies; main() reports it and exits non-zero.
+        self.error: Exception | None = None
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = False
 
         # Pass the interface only when asked: the SDK's default config works here, whereas
         # sim_node.py's hardcoded `lo0` is a macOS name that fails on Linux.
@@ -120,21 +125,48 @@ class IsaacLocoBridge:
                 self._last_sent = key
 
     def run(self) -> None:
-        period = 1.0 / self._rate
-        next_t = time.monotonic()
-        while not self._stop.is_set():
-            now = self._clock()
-            with self._lock:
-                vx, vy, omega = self._state.commanded_velocity(now)
-                height = self._state.stand_height
-            # Forwarded unchanged -- see the sign-convention note in the module docstring.
-            self.publish(vx, vy, omega, height)
-            next_t += period
-            time.sleep(max(0.0, next_t - time.monotonic()))
+        try:
+            period = 1.0 / self._rate
+            next_t = time.monotonic()
+            while not self._stop.is_set():
+                now = self._clock()
+                with self._lock:
+                    vx, vy, omega = self._state.commanded_velocity(now)
+                    height = self._state.stand_height
+                # Forwarded unchanged -- see the sign-convention note in the module docstring.
+                self.publish(vx, vy, omega, height)
+                next_t += period
+                time.sleep(max(0.0, next_t - time.monotonic()))
+        except Exception as exc:
+            # Zeros, not just a log line: this is the fail-safe, not defensive noise. This
+            # thread is the ONLY thing that writes rt/run_command/cmd, but LocoSimService
+            # lives on the SDK's own queue thread and keeps answering SetVelocity with
+            # RPC_OK after we die -- the same "code 0 while the robot stands still" the
+            # module docstring warns about for two services on one domain, now reachable in
+            # one process. Isaac's action provider also latches the LAST command it saw, so
+            # dying mid-walk leaves the robot walking on a velocity nobody can revoke.
+            # Stopping it is the last useful thing this thread can do; main() then reports
+            # the error and exits non-zero rather than idling as a service that lies.
+            self.error = exc
+            self._stop.set()
+            try:
+                self.shutdown()
+            except Exception as stop_exc:
+                # DDS itself may be what died, in which case the zeros cannot go out at
+                # all. Say so and keep `error` pointing at the original cause -- the
+                # secondary failure is a symptom, and main() must still exit non-zero.
+                print(f"[bridge] zero-velocity stop failed: {stop_exc!r}",
+                      file=sys.stderr, flush=True)
 
     def shutdown(self) -> None:
         """Leave the robot stopped, not coasting on the last command it was given."""
         self._stop.set()
+        # Called from run() on failure AND from main()'s finally, so it must run once:
+        # publish() is not thread-safe and the stop frames must not be sent twice.
+        with self._shutdown_lock:
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
         with self._lock:
             self._state.stop()
             height = self._state.stand_height
@@ -184,6 +216,12 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
+    # A non-positive rate is a divide-by-zero (or a negative period that busy-spins) inside
+    # the publish loop, i.e. a crashed publisher — caught here where it is still an
+    # argument mistake and not a robot that has stopped receiving commands.
+    if args.rate <= 0:
+        ap.error("--rate must be > 0")
+
     bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet, iface=args.iface)
 
     stopping = threading.Event()
@@ -205,14 +243,26 @@ def main() -> int:
             probe(bridge)
         else:
             print("[bridge] waiting for LocoClient traffic — Ctrl-C to stop", flush=True)
-            while not stopping.is_set():
+            # `worker.is_alive()` is not paranoia: without it a dead publisher leaves this
+            # process, the DDS participant and the sport service all up and looking
+            # healthy, still answering SetVelocity with RPC_OK while nothing at all reaches
+            # Isaac. Better to tear the whole thing down than to lie about accepting
+            # commands.
+            while not stopping.is_set() and worker.is_alive():
                 time.sleep(0.2)
     finally:
         # Join before the stop frames go out: publish() touches _pub, _sent and _last_sent
         # without the lock, so the worker and this thread must not both be inside it.
         bridge._stop.set()
         worker.join(timeout=1.0)
-        bridge.shutdown()
+        bridge.shutdown()   # a no-op if the worker already published its zeros
+
+    if bridge.error is not None:
+        # Non-zero and loud: an operator or systemd must see a crash, not a process that
+        # sits there having quietly stopped driving the robot.
+        print(f"[bridge] publisher thread died: {bridge.error!r}", file=sys.stderr, flush=True)
+        traceback.print_exception(type(bridge.error), bridge.error, bridge.error.__traceback__)
+        return 1
     return 0
 
 
