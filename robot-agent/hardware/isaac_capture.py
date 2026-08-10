@@ -134,11 +134,27 @@ CAM_MARGIN = 0.5
 START_X, START_Y = -3.4, -4.6
 START_YAW = math.pi / 2
 
-# Chase camera offset in the ROBOT's frame: behind, and offset to the WALL side so the racking and
-# the DGX pallets end up behind the robot rather than a blank wall. Three-quarter rather than dead
-# astern — it reads better, and a dead-astern camera in a room this size spends half the run outside
-# the building. Positive CHASE_SIDE is the robot's left.
-CHASE_BACK, CHASE_SIDE, CHASE_UP = 2.9, 1.5, 1.9
+# Chase camera placement, expressed in the frame of the camera's OWN azimuth `cam_yaw` — which is
+# deliberately NOT the robot's yaw. A camera rigidly offset in the ROBOT's frame orbits with it, so
+# an in-place turn pins the robot's silhouette to the same screen angle and sweeps the whole room
+# past behind it: the rotation becomes invisible ("the robot doesn't turn"), and the swept
+# background strobes at any time-lapse rate. Positive CHASE_FWD puts the camera AHEAD of the robot,
+# positive CHASE_SIDE to its left — a front-quarter view, so a turn shows the chest and head coming
+# round rather than the back of a jacket.
+# The distance is set by the legs, not by taste: at 24 mm on a 20.955 mm aperture the vertical
+# field covers only 1.23 m at 2.5 m, which crops the feet — unacceptable on footage whose whole
+# caveat is that the legs are not stepping. 3.4 m forward covers 1.85 m and keeps them in frame.
+CHASE_FWD, CHASE_SIDE, CHASE_UP = 3.4, 1.6, 1.5
+# Aimed below the pelvis, which tilts the camera down and lifts the robot off the bottom edge —
+# aiming at 1.0 m puts the feet on the frame border, where a single step of drift would clip them.
+CHASE_TARGET_Z = 0.75
+
+# `cam_yaw` chases the robot's heading only while the robot is TRANSLATING, and slowly. Standing
+# still and spinning — which is every `scan_room` step — therefore leaves the camera exactly where
+# it was, and the turn is rendered as the robot turning. Over a walk the camera drifts back behind
+# the new heading gently enough not to read as motion of its own.
+CHASE_YAW_TAU = 4.0          # s, time constant of that chase
+CHASE_MOVE_EPS = 0.05        # m/s, below which the camera does not re-aim at all
 
 # Standing pose, lifted from G129_CFG_WITH_DEX3_WHOLEBODY (robots/unitree.py:718-749). Regex keys,
 # applied by name -- joint ORDER differs between USD load and any list we might write down, so
@@ -872,6 +888,7 @@ def main() -> int:
 
     meta: list[dict] = []
     smooth_eye = smooth_tgt = None
+    cam_yaw = syaw               # the camera's own azimuth, seeded from the robot's start heading
     t0 = t_prev = time.monotonic()
     i = 0
     warm = 0
@@ -899,15 +916,21 @@ def main() -> int:
         robot.write_joint_position_to_sim_index(position=stand_pose)
         robot.write_joint_velocity_to_sim_index(velocity=zero_joint_vel)
 
-        # Chase cam, low-passed so it does not snap when yaw does, and clamped inside the walls —
-        # an unclamped follow cam reverses through the building the moment the robot turns.
+        # Chase cam, low-passed so it does not snap, and clamped inside the walls — an unclamped
+        # follow cam reverses through the building the moment the robot turns. Its azimuth is its
+        # own state and does NOT track `wyaw`; see CHASE_FWD for why that matters more than the
+        # framing does.
         c, s = math.cos(wyaw), math.sin(wyaw)
-        ex = wx - CHASE_BACK * c - CHASE_SIDE * s
-        ey = wy - CHASE_BACK * s + CHASE_SIDE * c
+        if math.hypot(vx, vy) > CHASE_MOVE_EPS:
+            err = math.atan2(math.sin(wyaw - cam_yaw), math.cos(wyaw - cam_yaw))
+            cam_yaw += err * min(1.0, dt / CHASE_YAW_TAU)
+        cc, cs = math.cos(cam_yaw), math.sin(cam_yaw)
+        ex = wx + CHASE_FWD * cc - CHASE_SIDE * cs
+        ey = wy + CHASE_FWD * cs + CHASE_SIDE * cc
         ex = min(max(ex, ROOM_X[0] + CAM_MARGIN), ROOM_X[1] - CAM_MARGIN)
         ey = min(max(ey, ROOM_Y[0] + CAM_MARGIN), ROOM_Y[1] - CAM_MARGIN)
         eye = torch.tensor([[ex, ey, CHASE_UP]], device=sim.device)
-        tgt = torch.tensor([[wx, wy, 1.0]], device=sim.device)
+        tgt = torch.tensor([[wx, wy, CHASE_TARGET_Z]], device=sim.device)
         if smooth_eye is None:
             smooth_eye, smooth_tgt = eye.clone(), tgt.clone()
         else:
