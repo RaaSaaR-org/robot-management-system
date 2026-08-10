@@ -532,7 +532,7 @@ export function FullCircleSection() {
                     y={stage.y}
                     textAnchor="middle"
                     dominantBaseline="central"
-                    className="fill-theme-primary font-mono text-[13px] font-medium"
+                    className="fill-ink-primary font-mono text-[13px] font-medium"
                   >
                     {stage.index}
                   </text>
@@ -542,7 +542,7 @@ export function FullCircleSection() {
                     y={stage.y + stage.labelY}
                     textAnchor={stage.labelAnchor}
                     className={`text-[14px] font-semibold ${
-                      isActive ? 'fill-theme-primary' : 'fill-theme-secondary'
+                      isActive ? 'fill-ink-primary' : 'fill-ink-secondary'
                     }`}
                   >
                     {stage.label}
@@ -553,7 +553,7 @@ export function FullCircleSection() {
                     x={stage.x + stage.labelX}
                     y={stage.y + stage.labelY + (stage.labelY < 0 ? -14 : 14)}
                     textAnchor={stage.labelAnchor}
-                    className="fill-theme-tertiary font-mono text-[10px] tracking-wider uppercase"
+                    className="fill-ink-tertiary font-mono text-[10px] tracking-wider uppercase"
                   >
                     {tagLabel(stage.maturity)}
                   </text>

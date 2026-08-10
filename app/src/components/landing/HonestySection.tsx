@@ -92,9 +92,8 @@ const ROWS: LedgerRow[] = [
         touch pads each carry their own SIM pill, because the robot itself declares which of its
         readings are simulated. The badge travels with the number, so a simulated one cannot be
         read as measured. It stops at robot telemetry, though — the seeded fleet numbers in the
-        dashboard screenshot further up this page carry no badge, because nothing there is
-        claiming to be a sensor reading. That same rule is why every section of this page is
-        tagged Live, Sim or Gated.
+        live demo carry no badge, because nothing there is claiming to be a sensor reading. That
+        same rule is why every section of this page is tagged Live, Sim or Gated.
       </>
     ),
   },

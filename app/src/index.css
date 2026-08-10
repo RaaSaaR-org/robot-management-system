@@ -102,16 +102,23 @@
   --radius-brand: 8px;
   --radius-brand-lg: 16px;
 
-  /* Theme colors exposed as Tailwind color tokens so utilities that are NOT
-     hand-written below (fill-*, stroke-*, decoration-*, divide-*) resolve.
-     Before this, `fill-theme-primary` on SVG <text> emitted no CSS and the
-     lifecycle diagram's labels rendered black-on-black in dark mode. */
-  --color-theme-primary: var(--text-primary);
-  --color-theme-secondary: var(--text-secondary);
-  --color-theme-tertiary: var(--text-tertiary);
-  --color-theme-muted: var(--text-muted);
-  --color-theme-line: var(--border-color);
-  --color-theme-surface: var(--bg-elevated);
+  /* The three text colors as real Tailwind color tokens, so the utilities we
+     never hand-wrote below — fill-*, stroke-*, decoration-* — resolve. Without
+     them `fill-ink-primary` on an SVG <text> emitted no CSS at all and the
+     lifecycle diagram's labels rendered black-on-black in dark mode.
+
+     The namespace is `ink-`, not `theme-`, and that is the whole point. A
+     @theme color token generates the ENTIRE utility family for its name, so
+     `--color-theme-secondary` would also mint bg-theme-secondary,
+     border-theme-secondary, bg-theme-surface and every /opacity variant of the
+     names hand-written further down. Those class names are already spelled out
+     in 47 files where they have always emitted nothing — switching them on
+     silently paints a text color into a background, and
+     `bg-theme-secondary text-theme-secondary` becomes #B8BBC2 on #B8BBC2.
+     Keep new color tokens out of the `theme-` namespace. */
+  --color-ink-primary: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-tertiary: var(--text-tertiary);
 
   /* Signal colors — the state language of the platform. Values are set per
      theme below; none of them ride the brand tokens. See the note there. */
