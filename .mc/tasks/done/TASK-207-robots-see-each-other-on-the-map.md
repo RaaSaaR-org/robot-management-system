@@ -4,7 +4,7 @@ aliases:
 - TASK-207
 title: Robots see each other — fleet poses flow to every agent and the map is rendered on the Agent Mode page
 slug: robots-see-each-other-on-the-map
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []

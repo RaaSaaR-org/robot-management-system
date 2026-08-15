@@ -169,13 +169,17 @@ function RobotPopup({
   position,
   onClose,
   onViewDetails,
+  onViewMap,
 }: {
   robot: RobotMapMarker;
   position: { x: number; y: number };
   onClose: () => void;
   onViewDetails: () => void;
+  /** "Open robot's map" — the robot-built occupancy map on `/agent` (TASK-207). */
+  onViewMap?: () => void;
 }) {
   const statusColor = STATUS_COLORS[robot.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.offline;
+  const height = onViewMap ? 119 : 95;
 
   return (
     <g transform={`translate(${position.x + 20}, ${position.y - 10})`}>
@@ -184,7 +188,7 @@ function RobotPopup({
         x="0"
         y="0"
         width="140"
-        height="95"
+        height={height}
         rx="8"
         fill="rgba(15, 23, 42, 0.95)"
         stroke="rgba(42, 95, 255, 0.3)"
@@ -192,7 +196,7 @@ function RobotPopup({
         filter="url(#zoneGlow)"
       />
       {/* Accent line */}
-      <rect x="0" y="0" width="3" height="95" rx="1.5" fill="url(#fleetPathGradient)" />
+      <rect x="0" y="0" width="3" height={height} rx="1.5" fill="url(#fleetPathGradient)" />
 
       {/* Close button */}
       <g
@@ -266,6 +270,41 @@ function RobotPopup({
           VIEW DETAILS →
         </text>
       </g>
+
+      {/* Open robot's map — what the robot itself has mapped, not this
+          operator map. */}
+      {onViewMap && (
+        <g
+          transform="translate(12, 92)"
+          className="cursor-pointer"
+          onClick={onViewMap}
+          role="button"
+          tabIndex={0}
+          data-testid="fleet-open-robot-map"
+        >
+          <rect
+            x="0"
+            y="0"
+            width="116"
+            height="20"
+            rx="4"
+            fill="rgba(255,255,255,0.08)"
+            stroke="rgba(24, 228, 195, 0.6)"
+            strokeWidth="1"
+          />
+          <text
+            x="58"
+            y="14"
+            textAnchor="middle"
+            fontSize="9"
+            fontWeight="600"
+            fill="#18E4C3"
+            fontFamily="monospace"
+          >
+            OPEN ROBOT'S MAP →
+          </text>
+        </g>
+      )}
     </g>
   );
 }
@@ -300,6 +339,7 @@ export function FleetMap({
   selectedFloor,
   onFloorChange,
   onRobotClick,
+  onRobotMapClick,
   editorMode: _editorMode = 'view', // ZoneEditor gets mode from store
   selectedZoneId = null,
   onSelectZone,
@@ -610,6 +650,7 @@ export function FleetMap({
                   onViewDetails={() => {
                     onRobotClick?.(selectedRobot.robotId);
                   }}
+                  onViewMap={onRobotMapClick ? () => onRobotMapClick(selectedRobot.robotId) : undefined}
                 />
               )}
             </svg>

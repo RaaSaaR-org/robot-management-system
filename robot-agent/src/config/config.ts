@@ -178,6 +178,14 @@ export interface Config {
     mapSweepHz: number;
     /** Seconds after which an un-observed cell drifts back to unknown (`AGENT_MAP_DECAY_S`, 0 = off). */
     mapDecayS: number;
+    /**
+     * How often to ask the server where the OTHER robots are, in ms
+     * (`AGENT_PEERS_POLL_MS`, default 2000 — the pose poll's cadence; 0 = off).
+     * Peers in a different odometry frame are dropped, never drawn (TASK-207).
+     */
+    peersPollMs: number;
+    /** A peer closer than this, ahead of the robot, enters scene memory (`AGENT_PEERS_NOTICE_M`, default 3). */
+    peersNoticeM: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
     /**
@@ -413,6 +421,8 @@ export const config: Config = {
     mapPath: process.env.AGENT_MAP_PATH || './data/occupancy-map.json',
     mapSweepHz: parseFloat(process.env.AGENT_MAP_SWEEP_HZ || '0'),
     mapDecayS: parseFloat(process.env.AGENT_MAP_DECAY_S || '0'),
+    peersPollMs: parseInt(process.env.AGENT_PEERS_POLL_MS || '2000', 10),
+    peersNoticeM: parseFloat(process.env.AGENT_PEERS_NOTICE_M || '3'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
     heartbeat: {
       enabled: process.env.AGENT_HEARTBEAT_ENABLED === 'true',
@@ -519,6 +529,13 @@ export function validateConfig(): void {
           `decay ${config.agentMode.mapDecayS > 0 ? `${config.agentMode.mapDecayS} s` : 'off'}, ` +
           `${config.agentMode.mapPath})`
         : 'DISABLED — clouds are used once and dropped'
+    }`
+  );
+  console.log(
+    `    - Fleet Peers: ${
+      config.agentMode.peersPollMs > 0
+        ? `polled every ${config.agentMode.peersPollMs} ms, noticed within ${config.agentMode.peersNoticeM} m`
+        : 'off — this robot never learns where the others are'
     }`
   );
   console.log(

@@ -227,3 +227,24 @@ describe('OccupancyMap', () => {
     expect(pgm.length).toBeGreaterThan(400);
   });
 });
+
+describe('OccupancyMap dynamic overlay (TASK-207)', () => {
+  it('blocks traversability inside a peer disc and frees it when the overlay is cleared, without touching the grid', () => {
+    const map = new OccupancyMap({ resolutionM: 0.1, initialSizeM: 20, maxRangeM: 10 });
+    // Wall 4 m ahead; everything between the robot and it is carved free.
+    integrateN(map, frameOf(wallAhead(4)), { x: 0, y: 0, yawDeg: 0 }, 4);
+    expect(map.isTraversable(2, 0, 0.3)).toBe(true);
+    const before = map.summary();
+
+    map.setDynamicObstacles([{ x: 2, y: 0, radiusM: 0.6, label: 'robot Bravo' }]);
+    expect(map.isTraversable(2, 0, 0.3)).toBe(false);
+    expect(map.isTraversable(2.7, 0, 0.3)).toBe(false); // discs touch: 0.7 < 0.6 + 0.3
+    expect(map.isTraversable(3.2, 0, 0.3)).toBe(true);
+    expect(map.cellAt(2, 0)).toBe('free'); // the grid does not remember the robot
+    expect(map.summary()).toEqual(before);
+    expect(map.getDynamicObstacles()).toEqual([{ x: 2, y: 0, radiusM: 0.6, label: 'robot Bravo' }]);
+
+    map.setDynamicObstacles([]);
+    expect(map.isTraversable(2, 0, 0.3)).toBe(true);
+  });
+});

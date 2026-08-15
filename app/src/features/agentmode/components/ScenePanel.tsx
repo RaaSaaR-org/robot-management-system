@@ -37,6 +37,8 @@ export interface ScenePanelProps {
  * which numbers the robot actually measured.
  *
  * - `'lidar'`      → plain value, cobalt: a real range out of the point cloud.
+ * - `'fleet'`      → plain value, cobalt: another robot's own reported pose
+ *                    (TASK-207) — a position, not a camera sighting.
  * - anything else  → `~` prefix, muted: the vision model's guess (0.94 m MAE
  *                    against known geometry), or an older agent that sent no
  *                    source at all. Unknown provenance is rendered as
@@ -59,21 +61,23 @@ function DistanceReadout({ entity }: { entity: SceneEntity }) {
     );
   }
 
-  const measured = distanceSource === 'lidar';
+  const measured = distanceSource === 'lidar' || distanceSource === 'fleet';
 
   return (
     <Tooltip
       className="shrink-0"
       side="left"
       content={
-        measured
-          ? 'Measured by LiDAR — nearest surface in a cone around this bearing. Returns carry no labels, so this is the closest thing in that direction, not necessarily this object.'
-          : 'Estimated by the vision model, not measured. Treat as a rough guess.'
+        distanceSource === 'fleet'
+          ? 'Reported by the fleet — the other robot\u2019s own position as the server relays it. Not seen by this robot\u2019s camera.'
+          : measured
+            ? 'Measured by LiDAR — nearest surface in a cone around this bearing. Returns carry no labels, so this is the closest thing in that direction, not necessarily this object.'
+            : 'Estimated by the vision model, not measured. Treat as a rough guess.'
       }
     >
       <span
         data-testid="agent-scene-distance"
-        data-distance-source={measured ? 'lidar' : (distanceSource ?? 'unknown')}
+        data-distance-source={measured ? distanceSource : (distanceSource ?? 'unknown')}
         className={cn(
           'text-xs tabular-nums',
           measured ? 'font-medium text-cobalt-600 dark:text-cobalt-400' : 'card-meta'

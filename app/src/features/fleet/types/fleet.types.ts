@@ -138,6 +138,8 @@ export interface FleetMapProps {
   onFloorChange: (floor: string) => void;
   /** Callback when robot marker is clicked */
   onRobotClick?: (robotId: string) => void;
+  /** "Open robot's map" in the marker popover — the robot-built map on `/agent` (TASK-207). */
+  onRobotMapClick?: (robotId: string) => void;
   /** Editor mode for zone manipulation */
   editorMode?: ZoneEditorMode;
   /** Currently selected zone ID */

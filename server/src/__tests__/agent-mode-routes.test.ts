@@ -545,6 +545,79 @@ describe('agent-mode routes', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Occupancy map proxy (TASK-206/207)
+  // -------------------------------------------------------------------------
+  describe('GET /:id/agent-mode/map', () => {
+    const MAP = {
+      ok: true,
+      frame: 'odom',
+      grid: { encoding: 'int8-logodds-b64', width: 2, height: 1, data: 'AAA=' },
+      pose: { x: 0, y: 0, yawDeg: 0 },
+      keepouts: [],
+      peers: [{ robotId: 'robot-002', name: 'Bravo', x: 2, y: 0, headingDeg: 90, footprintRadiusM: 0.35 }],
+      peersDropped: 1,
+    };
+
+    it('proxies the robot’s map, peers and all, with a 5 s budget', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(MAP);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(MAP);
+      expect(mockGet).toHaveBeenCalledWith('/api/v1/robots/robot-001/map');
+      expect(httpClientArgs[0][0]).toBe('http://robot:41243');
+      expect(httpClientArgs[0][1]).toBe(5000);
+    });
+
+    it('passes the robot’s own 404 through — "map disabled" is the robot’s answer', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(
+        new HttpClientError('HTTP 404: {}', 404, undefined, undefined, {
+          ok: false,
+          error: 'occupancy map is disabled on this agent (AGENT_MAP_ENABLED)',
+        })
+      );
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map');
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toContain('AGENT_MAP_ENABLED');
+    });
+
+    it('502s with the agent’s error text when the robot is unreachable — never an empty map', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(new HttpClientError('ECONNREFUSED'));
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map');
+
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('AGENT_STATE_UNAVAILABLE');
+      expect(res.body.error).toContain('ECONNREFUSED');
+    });
+
+    it('502s when the robot answers 200 without a map body', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue({});
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map');
+
+      expect(res.status).toBe(502);
+    });
+
+    it('404s an unknown robot with the server’s own code', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+
+      const res = await request(createApp()).get('/api/robots/ghost/agent-mode/map');
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('ROBOT_NOT_FOUND');
+      expect(mockGet).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Personal-data proxies (memory digest + identity)
   //
   // These MUST live on the server: the robot's `personalDataGate` strips

@@ -13,6 +13,7 @@ import type {
   AgentIdentityResponse,
   AgentMemoryDigest,
   AgentModeState,
+  RobotMapPayload,
   MirroredAgentModeState,
   SceneMemory,
 } from '../types/agentmode.types';
@@ -40,6 +41,8 @@ const ENDPOINTS = {
    * should not, since a bearer token in a browser bundle is not a secret.
    */
   memory: (robotId: string) => `/robots/${robotId}/agent-mode/memory`,
+  /** Server proxy of the agent's `GET /api/v1/robots/:id/map` (TASK-206/207). */
+  map: (robotId: string) => `/robots/${robotId}/agent-mode/map`,
   identity: (robotId: string) => `/robots/${robotId}/agent-mode/identity`,
 } as const;
 
@@ -81,6 +84,16 @@ export const agentmodeApi = {
   async getMemory(robotId: string): Promise<AgentMemoryDigest | null> {
     const response = await apiClient.get<AgentMemoryDigest | null>(ENDPOINTS.memory(robotId));
     return response.data ?? null;
+  },
+
+  /**
+   * The robot's own occupancy map with peers and keepouts. Throws on any
+   * failure — the store tells a 404 ("this robot has no map") from a 502.
+   * @param robotId - Robot ID
+   */
+  async getMap(robotId: string): Promise<RobotMapPayload> {
+    const response = await apiClient.get<RobotMapPayload>(ENDPOINTS.map(robotId));
+    return response.data;
   },
 
   /**

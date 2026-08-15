@@ -32,6 +32,19 @@ export type RobotClass = 'lightweight' | 'heavy-duty' | 'standard';
 
 export type RobotType = 'h1' | 'g1' | 'g1_edu' | 'so101' | 'generic';
 
+/**
+ * Planar footprint radius per embodiment, in metres — the disc another robot
+ * must keep clear of this one (TASK-207). Humanoids: shoulder width plus arm
+ * swing; the SO-101 is a table-top arm that never moves its base.
+ */
+export const FOOTPRINT_RADIUS_M: Record<RobotType, number> = {
+  h1: 0.4,
+  g1: 0.35,
+  g1_edu: 0.35,
+  so101: 0.25,
+  generic: 0.35,
+};
+
 // ============================================================================
 // JOINT TYPES (for 3D visualization)
 // ============================================================================
@@ -73,6 +86,13 @@ export interface RobotLocation {
    * `location` is a JSON string in Prisma, so this needs no migration.
    */
   place?: string | null;
+  /**
+   * The odometry frame `x`/`y`/`heading` are expressed in (TASK-207): `sim`
+   * (the MJCF world, id = scene) or `odom` (a real robot's per-boot odometry,
+   * id = sidecar boot id). Two robots' poses are comparable only when their
+   * frames match on kind AND id; absent/null means "comparable to nobody".
+   */
+  frame?: { kind: 'sim' | 'odom'; id: string } | null;
 }
 
 // ============================================================================

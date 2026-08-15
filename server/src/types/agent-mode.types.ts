@@ -149,7 +149,7 @@ export interface SceneEntity {
    * field, and the server mirrors what it is given rather than inventing one.
    * Consumers must treat "absent" as unverified, not as measured.
    */
-  distanceSource?: 'lidar' | 'vlm-estimate' | null;
+  distanceSource?: 'lidar' | 'vlm-estimate' | 'fleet' | null;
   /**
    * How many separate things the last look called by this label — present only
    * when it was more than one.

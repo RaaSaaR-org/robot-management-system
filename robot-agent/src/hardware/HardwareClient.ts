@@ -253,6 +253,15 @@ export interface LocoOdometry {
  * radians enter the rest of the process, so nothing above this layer has to
  * remember which convention a given number is in.
  */
+/**
+ * Where a pose lives. Two poses are comparable iff both `kind` and `id` match —
+ * see {@link HardwareClient.getOdometryFrame}.
+ */
+export interface OdometryFrame {
+  kind: 'sim' | 'odom';
+  id: string;
+}
+
 export interface CachedBasePose {
   /** Base x in metres. */
   x: number;
@@ -333,6 +342,10 @@ export class HardwareClient {
    * boot as a new frame.
    */
   private sidecarBootId: string | null = null;
+  /** `/health.sim` — the sidecar is `sim_node.py`, whose odometry IS the MJCF world frame. */
+  private sidecarIsSim = false;
+  /** `/health.scene` of the sim, when it says. */
+  private sidecarScene: string | null = null;
   /**
    * Guard against a slow `/loco/odom` fallback stacking up: its 2 s timeout is
    * the poll period, so without this a sidecar answering slowly would queue one
@@ -396,10 +409,18 @@ export class HardwareClient {
   private async _tryConnect(): Promise<boolean> {
     try {
       const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(2000) });
-      const data = (await res.json()) as { status: string; connected: boolean; boot_id?: unknown };
+      const data = (await res.json()) as {
+        status: string;
+        connected: boolean;
+        boot_id?: unknown;
+        sim?: unknown;
+        scene?: unknown;
+      };
       this.sidecarAvailable = data.status === 'ok';
       this.setConnected(data.connected);
       this.sidecarBootId = typeof data.boot_id === 'string' && data.boot_id ? data.boot_id : null;
+      this.sidecarIsSim = data.sim === true;
+      this.sidecarScene = typeof data.scene === 'string' && data.scene ? data.scene : null;
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
         if (!this.pollTimer) this.startPolling();
@@ -585,6 +606,26 @@ export class HardwareClient {
    */
   getSidecarBootId(): string | null {
     return this.sidecarBootId;
+  }
+
+  /**
+   * The frame this robot's poses (and its occupancy map, TASK-206) are
+   * expressed in — the thing two robots must share before either may draw the
+   * other (TASK-207).
+   *
+   * - `sim`: `sim_node.py`'s odometry is the MJCF world frame, so every sim of
+   *   the same scene shares one frame; the id is the scene name.
+   * - `odom`: a real robot's odometry re-zeroes per boot and is registered to
+   *   nothing, so the id is the boot id and no other robot ever matches it —
+   *   until someone builds cross-robot registration, which is the honest answer.
+   * - `null`: no sidecar at all (a pure in-process sim); poses are comparable to
+   *   nobody's.
+   */
+  getOdometryFrame(): OdometryFrame | null {
+    if (!this.sidecarAvailable) return null;
+    if (this.sidecarIsSim) return { kind: 'sim', id: this.sidecarScene ?? 'sim' };
+    if (!this.sidecarBootId) return null;
+    return { kind: 'odom', id: this.sidecarBootId };
   }
 
   stopPolling() {

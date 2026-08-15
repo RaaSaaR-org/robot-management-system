@@ -65,7 +65,45 @@ export interface RobotLocation {
   floor?: string;
   zone?: string;
   heading?: number;
+  /** Place-graph id the robot believes it stands in (TASK-195), null = unknown. */
+  place?: string | null;
+  /**
+   * The odometry frame `x`/`y`/`heading` live in, as the agent reports it
+   * (TASK-207). Two robots are drawn on each other's maps only when both frames
+   * match on kind AND id; absent means comparable to nobody. Never invented here.
+   */
+  frame?: OdometryFrame | null;
 }
+
+/** See {@link RobotLocation.frame}. */
+export interface OdometryFrame {
+  kind: 'sim' | 'odom';
+  id: string;
+}
+
+/**
+ * Another robot, as `GET /api/robots/:id/peers` hands it to a robot-agent
+ * (TASK-207). Everything the agent needs to draw and avoid it, nothing more.
+ */
+export interface FleetPeer {
+  robotId: string;
+  name: string;
+  x: number;
+  y: number;
+  headingDeg: number | null;
+  frame: OdometryFrame | null;
+  place: string | null;
+  zone: string | null;
+  /** When this pose was last synced from the peer's agent. */
+  updatedAt: string | null;
+  footprintRadiusM: number;
+}
+
+/** Fallback when the agent's metadata carries no `footprintRadiusM`. */
+export const DEFAULT_FOOTPRINT_RADIUS_M = 0.35;
+
+/** Peer poses older than this are re-fetched from the agents before answering. */
+export const PEER_POSE_MAX_AGE_MS = 1000;
 
 /** Core robot entity */
 export interface Robot {
@@ -188,6 +226,32 @@ export interface RegisteredRobot {
   lastHealthCheck: string;
   isConnected: boolean;
   registeredAt: string;
+  /** ISO time `robot.location` was last read off the agent; undefined = never. */
+  poseSyncedAt?: string;
+}
+
+/** Below this, a pose "change" is sim jitter, not motion — no event, no write. */
+export const POSE_EPSILON_M = 0.01;
+export const HEADING_EPSILON_DEG = 0.5;
+
+/** Position, heading, zone, place or frame changed (beyond the epsilons). */
+export function locationDiffers(a: RobotLocation | undefined, b: RobotLocation): boolean {
+  if (!a) return true;
+  const headingA = a.heading ?? null;
+  const headingB = b.heading ?? null;
+  const headingChanged =
+    headingA === null || headingB === null
+      ? headingA !== headingB
+      : Math.abs(headingA - headingB) > HEADING_EPSILON_DEG;
+  return (
+    Math.abs(a.x - b.x) > POSE_EPSILON_M ||
+    Math.abs(a.y - b.y) > POSE_EPSILON_M ||
+    a.zone !== b.zone ||
+    headingChanged ||
+    (a.place ?? null) !== (b.place ?? null) ||
+    (a.frame?.kind ?? null) !== (b.frame?.kind ?? null) ||
+    (a.frame?.id ?? null) !== (b.frame?.id ?? null)
+  );
 }
 
 /** Robot event types */
@@ -517,6 +581,87 @@ export class RobotManager {
   }
 
   // ============================================================================
+  // FLEET PEERS (TASK-207)
+  // ============================================================================
+
+  private poseRefreshInFlight: Promise<void> | null = null;
+
+  /**
+   * Bring every connected robot's cached pose to within `maxAgeMs`, reading
+   * `GET /api/v1/robots/:id` off each agent in parallel. The 30 s health check
+   * is far too slow for a robot that wants to avoid a colleague; this is the
+   * on-demand path `GET /:id/peers` takes. Concurrent callers share one
+   * refresh. In-memory only — the health check persists. A changed pose emits
+   * the same `robot_status_changed` the health check would, so the fleet map
+   * gets fresher too.
+   */
+  async refreshPoses(maxAgeMs: number = PEER_POSE_MAX_AGE_MS): Promise<void> {
+    if (this.poseRefreshInFlight) return this.poseRefreshInFlight;
+    const nowMs = Date.now();
+    const stale = Array.from(this.robotCache.values()).filter(
+      (r) => r.isConnected && (!r.poseSyncedAt || nowMs - Date.parse(r.poseSyncedAt) > maxAgeMs),
+    );
+    if (stale.length === 0) return;
+    this.poseRefreshInFlight = (async () => {
+      const client = new HttpClient(undefined, HTTP_TIMEOUTS.SHORT);
+      await Promise.all(
+        stale.map(async (registered) => {
+          try {
+            const data = await client.get<Robot>(registered.endpoints.robot);
+            const now = new Date().toISOString();
+            registered.poseSyncedAt = now;
+            if (data.location && locationDiffers(registered.robot.location, data.location)) {
+              registered.robot.location = data.location;
+              this.emitEvent({
+                type: 'robot_status_changed',
+                robotId: registered.robot.id,
+                robot: registered.robot,
+                timestamp: now,
+              });
+            }
+          } catch {
+            // Leave the cached pose (and its age) alone: an unreachable agent
+            // is the health check's business, and a peer with an old pose is
+            // still better than a peer that vanishes for one dropped request.
+          }
+        }),
+      );
+    })().finally(() => {
+      this.poseRefreshInFlight = null;
+    });
+    return this.poseRefreshInFlight;
+  }
+
+  /**
+   * Every OTHER connected robot, as a {@link FleetPeer}. Frames are passed
+   * through exactly as reported — the CONSUMER drops the ones it cannot
+   * compare with its own; the server never pretends two odometries agree.
+   */
+  getPeers(robotId: string): FleetPeer[] {
+    return Array.from(this.robotCache.values())
+      .filter((r) => r.isConnected && r.robot.id !== robotId)
+      .map((r) => {
+        const loc = r.robot.location;
+        const meta = r.robot.metadata ?? {};
+        const footprint = typeof meta.footprintRadiusM === 'number' && Number.isFinite(meta.footprintRadiusM)
+          ? meta.footprintRadiusM
+          : DEFAULT_FOOTPRINT_RADIUS_M;
+        return {
+          robotId: r.robot.id,
+          name: r.robot.name,
+          x: loc.x,
+          y: loc.y,
+          headingDeg: typeof loc.heading === 'number' ? loc.heading : null,
+          frame: loc.frame && loc.frame.kind && loc.frame.id ? { kind: loc.frame.kind, id: loc.frame.id } : null,
+          place: loc.place ?? null,
+          zone: loc.zone ?? null,
+          updatedAt: r.poseSyncedAt ?? null,
+          footprintRadiusM: footprint,
+        };
+      });
+  }
+
+  // ============================================================================
   // ROBOT COMMANDS
   // ============================================================================
 
@@ -647,8 +792,9 @@ export class RobotManager {
             const oldLoc = registered.robot.location;
             const newLoc = robotData.location;
             // Check if position actually changed
-            if (oldLoc.x !== newLoc.x || oldLoc.y !== newLoc.y || oldLoc.zone !== newLoc.zone) {
+            if (locationDiffers(oldLoc, newLoc)) {
               registered.robot.location = newLoc;
+              registered.poseSyncedAt = now;
               locationChanged = true;
             }
           }

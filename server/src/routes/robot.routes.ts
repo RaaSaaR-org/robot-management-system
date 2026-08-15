@@ -71,6 +71,28 @@ robotRoutes.get('/', async (_req: Request, res: Response) => {
 });
 
 /**
+ * GET /:id/peers — every OTHER online robot, for the robot-agent's peer
+ * tracker (TASK-207). Poses are refreshed from the agents when older than
+ * `PEER_POSE_MAX_AGE_MS`, so a 2 s poll from a robot sees ~1 s-old colleagues,
+ * not the 30 s health-check copy. Frames pass through as reported; the caller
+ * drops what it cannot compare with its own frame.
+ */
+robotRoutes.get('/:id/peers', async (req: Request, res: Response) => {
+  try {
+    const self = await robotManager.getRegisteredRobot(req.params.id);
+    if (!self) {
+      return res.status(404).json({ code: 'ROBOT_NOT_FOUND', error: 'Robot not found' });
+    }
+    await robotManager.refreshPoses();
+    const peers = robotManager.getPeers(req.params.id);
+    res.json({ robotId: req.params.id, peers, generatedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('Error listing peers:', error);
+    res.status(500).json({ error: 'Failed to list peers' });
+  }
+});
+
+/**
  * GET /:id - Get a single robot by ID
  */
 robotRoutes.get('/:id', async (req: Request, res: Response) => {

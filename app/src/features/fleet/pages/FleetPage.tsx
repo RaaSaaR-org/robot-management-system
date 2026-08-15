@@ -120,6 +120,14 @@ export function FleetPage({ className }: FleetPageProps) {
     [navigate]
   );
 
+  // "Open robot's map" — the map the ROBOT built, on the Agent Mode page.
+  const handleRobotMapClick = useCallback(
+    (robotId: string) => {
+      navigate(`/agent?robot=${encodeURIComponent(robotId)}&tab=map`);
+    },
+    [navigate]
+  );
+
   // Handle zone modal close
   const handleModalClose = useCallback(() => {
     setShowZoneModal(false);
@@ -200,6 +208,7 @@ export function FleetPage({ className }: FleetPageProps) {
                       selectedFloor={selectedFloor}
                       onFloorChange={setSelectedFloor}
                       onRobotClick={handleRobotClick}
+                      onRobotMapClick={handleRobotMapClick}
                       editorMode={editorMode}
                       selectedZoneId={selectedZone?.id || null}
                       onSelectZone={selectZone}

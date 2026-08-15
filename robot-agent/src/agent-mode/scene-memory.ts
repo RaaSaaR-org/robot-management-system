@@ -161,13 +161,25 @@ export interface MergeExtras {
 function distancePhrase(entity: SceneEntity): string {
   if (entity.distanceEstM === null) return 'distance unknown';
   const source =
-    entity.distanceSource === 'lidar' ? 'lidar-measured' : 'vision guess, unreliable';
+    entity.distanceSource === 'lidar'
+      ? 'lidar-measured'
+      : entity.distanceSource === 'fleet'
+        ? 'fleet-reported position'
+        : 'vision guess, unreliable';
   return `~${entity.distanceEstM.toFixed(1)} m (${source})`;
 }
 
 export class SceneMemoryStore {
   private readonly robotId: string;
   private entities = new Map<string, SceneEntity>();
+  /**
+   * Other robots the fleet says are near (TASK-207). Kept apart from the seen
+   * entities: they were never observed by the camera, so a look must not
+   * confirm, expire or re-range them — the peer feed replaces the whole set on
+   * every pull. Merged into every listing so the planner and the UI see one
+   * table.
+   */
+  private fleetEntities = new Map<string, SceneEntity>();
   private currentView = '';
   private personVisible = false;
   private updatedAt: string | null = null;
@@ -452,7 +464,7 @@ export class SceneMemoryStore {
   get(label: string): SceneEntity | undefined {
     const needle = label.trim().toLowerCase();
     if (!needle) return undefined;
-    const exact = this.entities.get(needle);
+    const exact = this.entities.get(needle) ?? this.fleetEntities.get(needle);
     if (exact) return exact;
 
     // Most specific match wins, not the first one inserted. Returning whatever
@@ -462,7 +474,7 @@ export class SceneMemoryStore {
     // a physical action chosen by iteration order.
     let best: SceneEntity | undefined;
     let bestKeyLength = -1;
-    for (const [key, entity] of this.entities) {
+    for (const [key, entity] of [...this.entities, ...this.fleetEntities]) {
       // A key contained in the needle ("tisch" in "tisch mit dem hut") is a
       // real narrowing; longer means more of the request was accounted for.
       if (needle.includes(key) && key.length > bestKeyLength) {
@@ -476,7 +488,7 @@ export class SceneMemoryStore {
     // "tischdecke"), preferring the shortest — the least extra it drags in.
     let widest: SceneEntity | undefined;
     let widestKeyLength = Infinity;
-    for (const [key, entity] of this.entities) {
+    for (const [key, entity] of [...this.entities, ...this.fleetEntities]) {
       if (key.includes(needle) && key.length < widestKeyLength) {
         widest = entity;
         widestKeyLength = key.length;
@@ -486,7 +498,24 @@ export class SceneMemoryStore {
   }
 
   listEntities(): SceneEntity[] {
-    return [...this.entities.values()].sort((a, b) => a.bearingDeg - b.bearingDeg);
+    return [...this.entities.values(), ...this.fleetEntities.values()].sort(
+      (a, b) => a.bearingDeg - b.bearingDeg,
+    );
+  }
+
+  /**
+   * Replace the fleet-reported entities (peers within notice range). A full
+   * replace: a peer that left the radius disappears at once, and nothing here
+   * touches `updatedAt` — knowing where a colleague is, is not having looked.
+   */
+  setFleetEntities(entities: readonly SceneEntity[]): void {
+    this.fleetEntities.clear();
+    for (const e of entities) this.fleetEntities.set(e.label.trim().toLowerCase(), { ...e, distanceSource: 'fleet' });
+  }
+
+  /** True when the store holds at least one fleet-reported entity. */
+  hasFleetEntities(): boolean {
+    return this.fleetEntities.size > 0;
   }
 
   isPersonVisible(): boolean {
@@ -581,7 +610,14 @@ export class SceneMemoryStore {
     // the robot stands is known from the pose feed, not from having looked, so
     // "nothing has been looked at yet" is not the same as "nowhere".
     if (this.updatedAt === null) {
-      return `${this.placeLine()}\nScene memory is empty — nothing has been looked at yet.`;
+      const fleet = [...this.fleetEntities.values()].map(
+        (e) => `- ${e.label}: bearing ${Math.round(e.bearingDeg)}°, ${distancePhrase(e)}`,
+      );
+      return [
+        this.placeLine(),
+        'Scene memory is empty — nothing has been looked at yet.',
+        ...(fleet.length > 0 ? ['Known from the fleet (not seen by the camera):', ...fleet] : []),
+      ].join('\n');
     }
     const lines = this.listEntities().map(
       (e) =>
@@ -643,7 +679,9 @@ export class SceneMemoryStore {
           ? 'lidar'
           : e.distanceSource === 'vlm-estimate'
             ? 'vision guess'
-            : '–';
+            : e.distanceSource === 'fleet'
+              ? 'fleet'
+              : '–';
       return `| ${e.label} | ${Math.round(e.bearingDeg)}° | ${dist} | ${source} | ${e.confidence.toFixed(2)} | ${e.lastSeen} | ${e.note ?? ''} |`;
     });
     return [
