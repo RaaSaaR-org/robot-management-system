@@ -351,6 +351,23 @@ export interface AgentModeState {
    * — that case is `bootstrapRequired` on a present `self`.
    */
   self?: AgentSelfState | null;
+  /**
+   * The robot's own occupancy map, in summary (TASK-206). Optional so an older
+   * robot-agent stays structurally compatible; absent means "this agent does
+   * not report a map", `null` means map building is disabled. The grid itself
+   * is NOT mirrored (too big for a 15 s re-push) — read it from the agent's
+   * `GET /api/v1/robots/:id/map`.
+   */
+  map?: AgentMapSummary | null;
+}
+
+/** Summary of the robot-built occupancy map that rides in {@link AgentModeState}. */
+export interface AgentMapSummary {
+  /** Cells classified free or occupied (the rest are unknown). */
+  knownCells: number;
+  occupiedCells: number;
+  /** ISO time of the last integrated cloud, null when nothing has been integrated. */
+  lastIntegratedAt: string | null;
 }
 
 /**

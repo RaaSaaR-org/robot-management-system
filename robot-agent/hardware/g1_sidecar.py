@@ -59,6 +59,7 @@ import os
 import struct
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from recorder import recorder
@@ -69,6 +70,13 @@ ROBOT_ID = os.environ.get("G1_ROBOT_ID", "my_g1_edu")
 # Unitree G1 talks over DDS on a network interface (see config_unitree_g1.py).
 ROBOT_IP = os.environ.get("G1_ROBOT_IP", "192.168.123.164")
 NET_INTERFACE = os.environ.get("G1_NET_INTERFACE", "eth0")
+
+# One id per process, reported on /health. Odometry re-zeroes when this sidecar
+# (or the robot's loco service behind it) restarts, so anything the agent built
+# in the odometry frame -- notably the persisted occupancy map (TASK-206) -- is
+# only valid within one boot; the agent keys its stored map on this id and
+# discards a map whose boot_id no longer matches.
+BOOT_ID = uuid.uuid4().hex
 
 # ---------------------------------------------------------------------------
 # READ-ONLY MODE (stage 1: telemetry only) — DEFAULT ON
@@ -1766,9 +1774,11 @@ class Handler(BaseHTTPRequestHandler):
             replay = bool(os.environ.get("G1_POINTCLOUD_REPLAY", "").strip())
             if READ_ONLY:
                 live = _lowstate_reader.start() and _lowstate_reader.latest() is not None
-                self._send(200, {"status": "ok", "connected": live or replay, "read_only": True})
+                self._send(200, {"status": "ok", "connected": live or replay, "read_only": True,
+                                 "boot_id": BOOT_ID})
                 return
-            self._send(200, {"status": "ok", "connected": connected or replay})
+            self._send(200, {"status": "ok", "connected": connected or replay,
+                             "boot_id": BOOT_ID})
         elif self.path == "/state":
             self._send(200, get_state())
         elif self.path == "/state/fast":

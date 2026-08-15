@@ -326,6 +326,14 @@ export class HardwareClient {
   private basePose: CachedBasePose | null = null;
   private poseListeners = new Set<(pose: CachedBasePose | null) => void>();
   /**
+   * The sidecar/sim process id from `/health.boot_id` (TASK-206). Odometry is
+   * re-zeroed when that process restarts, so anything accumulated in the
+   * odometry frame (the occupancy map) is only valid while this stays the same.
+   * Null when the sidecar predates the field — callers must then treat every
+   * boot as a new frame.
+   */
+  private sidecarBootId: string | null = null;
+  /**
    * Guard against a slow `/loco/odom` fallback stacking up: its 2 s timeout is
    * the poll period, so without this a sidecar answering slowly would queue one
    * outstanding request per tick forever.
@@ -388,9 +396,10 @@ export class HardwareClient {
   private async _tryConnect(): Promise<boolean> {
     try {
       const res = await fetch(`${getSidecarUrl()}/health`, { signal: AbortSignal.timeout(2000) });
-      const data = (await res.json()) as { status: string; connected: boolean };
+      const data = (await res.json()) as { status: string; connected: boolean; boot_id?: unknown };
       this.sidecarAvailable = data.status === 'ok';
       this.setConnected(data.connected);
+      this.sidecarBootId = typeof data.boot_id === 'string' && data.boot_id ? data.boot_id : null;
       if (this.sidecarAvailable) {
         console.log(`[Hardware] Sidecar reachable — arm connected: ${this.connected}`);
         if (!this.pollTimer) this.startPolling();
@@ -547,6 +556,35 @@ export class HardwareClient {
    */
   getCachedPose(): CachedBasePose | null {
     return this.basePose;
+  }
+
+  /**
+   * Fetch ONE pose right now, bypassing the 2 s poll cache (TASK-206). Used by
+   * the occupancy map when a cloud arrives and the cached pose is too old to
+   * pair with it. Not published to the pose listeners — the place tracker keeps
+   * its steady 2 s cadence. Same honesty rules: null on any failure, and null
+   * under `PLACE_FAULT_NULL_POSE`.
+   */
+  async samplePoseNow(): Promise<CachedBasePose | null> {
+    if (!this.sidecarAvailable) return null;
+    const fromState = this.odometry;
+    // `/state.odometry` refreshes on the poll; only trust it as "now" when the
+    // poll itself is fresh — otherwise ask `/loco/odom`, which the sim answers.
+    if (fromState?.rpy && this.basePose?.source === 'state' && Date.now() - this.basePose.atMs < 500) {
+      return config.place.faultNullPose ? null : this.basePose;
+    }
+    const odom = await this.getLocoOdometry();
+    if (!odom) return null;
+    if (config.place.faultNullPose) return null;
+    return { x: odom.x, y: odom.y, yawDeg: odom.yaw * RAD_TO_DEG, source: odom.source, atMs: Date.now() };
+  }
+
+  /**
+   * The odometry session id (`/health.boot_id` of the sidecar or sim), or null
+   * when the sidecar does not report one. See {@link sidecarBootId}.
+   */
+  getSidecarBootId(): string | null {
+    return this.sidecarBootId;
   }
 
   stopPolling() {

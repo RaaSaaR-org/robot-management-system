@@ -42,6 +42,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -85,6 +86,14 @@ TOPIC_HAND_STATE = "rt/dex3/{}/state"
 
 ODOM_PUBLISH_HZ = 50.0
 STATE_PUBLISH_HZ = 100.0
+
+# One id per process, reported on /health -- same key as g1_sidecar.py. The
+# base pose (and so /loco/odom) starts from the origin every time this node
+# starts, so anything the agent built in the odometry frame -- notably the
+# persisted occupancy map (TASK-206) -- is only valid within one boot; the agent
+# keys its stored map on this id and discards a map whose boot_id no longer
+# matches.
+BOOT_ID = uuid.uuid4().hex
 
 # --------------------------------------------------------------- ray LiDAR
 # The sim's range sensor stands in for the head-mounted Livox MID-360 of the
@@ -1160,7 +1169,8 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
             if self.path == "/health":
                 self._send(200, {"status": "ok", "connected": True, "sim": True,
                                  "scene": node.scene.name,
-                                 "behind_s": round(node.behind_s, 3)})
+                                 "behind_s": round(node.behind_s, 3),
+                                 "boot_id": BOOT_ID})
             elif self.path == "/cameras":
                 self._send(200, {"cameras": node.camera_names()})
             elif self.path == "/record":

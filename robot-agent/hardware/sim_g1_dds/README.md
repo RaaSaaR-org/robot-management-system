@@ -14,6 +14,7 @@ in simulation and on hardware. Only the DDS peer changes.
 | `loco_service.py` | Serves the `sport` RPC service on `rt/api/sport/{request,response}` |
 | `sim_node.py` | MuJoCo + DDS peer + optional sidecar-compatible HTTP facade |
 | `test_loco_state.py` | pytest for the state machine |
+| `test_lidar.py` | pytest for the ray LiDAR: range gates, table-front range against the MJCF, no self-hits |
 | `e2e_loco_check.py` | Integration check: drives the sim with a real `LocoClient` and asserts the physics |
 | `cine_recorder.py` | Cinematic MP4 recording (follow / orbit / wide / any MJCF camera) → ffmpeg; `--record` flag and `/record/*` routes |
 | `demo_clip.py` | One Agent Mode command → captioned explainer clip (records, runs the plan, burns block captions) |
@@ -54,11 +55,93 @@ default and what `.env.g1-edu-agent.example` points at); 8767 belongs to the
 real robot's `g1_sidecar.py`. Keeping them distinct means a mis-pointed
 `HARDWARE_SIDECAR_URL` fails loudly instead of quietly driving the wrong target.
 
-The facade serves `/health`, `/cameras`, `/cameras/<name>/snapshot`, `/state`
-and `/loco/*`. Its `/loco/*` routes deliberately go **out through a real
-`LocoClient` over DDS and back in through our own service** rather than poking
-the state machine directly — otherwise the demo would prove nothing about the
-wire.
+The facade serves `/health`, `/cameras`, `/cameras/<name>/snapshot`, `/state`,
+`/loco/*` and `/pointcloud/*` (see below). Its `/loco/*` routes deliberately go
+**out through a real `LocoClient` over DDS and back in through our own service**
+rather than poking the state machine directly — otherwise the demo would prove
+nothing about the wire.
+
+`/health` carries a `boot_id` (one `uuid4` hex per process, same key as
+`g1_sidecar.py`). The base pose — and so `/loco/odom` — starts from the origin
+every time the node starts, so anything the agent built in the odometry frame is
+only valid within one boot. The robot-agent keys its persisted occupancy map
+(TASK-206) on this id and throws the map away when it changes.
+
+## Point-cloud routes (ray LiDAR)
+
+The sim has no MID-360, so it stands one in: a fan of `mj_ray`s cast from the
+head-camera mount against the loaded MJCF, served under the **same sensor name
+the sidecar uses**, `mid360_lidar`. This is what the robot-agent's Agent Mode
+range sensing (`src/agent-mode/range.ts`) and the TASK-206 occupancy map consume,
+against sim and robot alike, with no branching. It is a *measurement of the
+scene*, not a model of a room: an obstacle that is not in the MJCF produces no
+return, and a missing return means **unknown**, never "clear".
+
+| Route | Answer |
+|---|---|
+| `GET /pointcloud/sensors` | `{"sensors": ["mid360_lidar"]}` — only the LiDAR; no depth camera is advertised because the scenes have no depth-cloud source, and an empty cloud for a sensor that does not exist would read as "nothing in the way" |
+| `GET /pointcloud/<name>/snapshot` | one fresh sweep (below); unknown `<name>` → `200 {"ok": false, "error": "no depth sensor '<name>'"}`, verbatim the sidecar's wording |
+| `POST /pointcloud/lidar/switch` | body `{"on": true\|false}` (else 400). **Accepted and ignored** — the ray LiDAR is always on and the snapshot casts regardless of this flag; the reply says so in `note`. Exists so a client that switches the real MID-360 on before reading works unchanged |
+
+Snapshot JSON, `200`:
+
+```jsonc
+{
+  "ok": true,
+  "sensor": "mid360_lidar",
+  "sensor_type": "lidar",
+  "has_intensity": false,       // the cast measures geometry, not reflectivity
+  "positions": [x, y, z, ...],  // flat XYZ triplets, metres, base_link: x forward,
+                                //   y left, z up, floor at z = 0 (PointCloudFrame contract)
+  "intensities": [],
+  "origin": [x, y, z],          // sensor origin in base_link (~ [0.076, 0, 1.271] at rest)
+  "source": "sim-ray",
+  // beyond the sidecar's contract, ignored by clients that don't know it:
+  "point_count": 5718,          // len(positions) / 3 (robot at the origin, defaults)
+  "rays": 5760,                 // rays cast = azimuth_rays * elevation_rings
+  "returns": 5732,              // rays that hit anything, in range or not
+  "dropped_near": 0,            // returns < min_range_m (self-return gate)
+  "dropped_far": 14,            // returns > max_range_m (e.g. floor plane out through the door)
+  "decimated": false,           // true if uniformly strided down to LIDAR_MAX_POINTS
+  "method": "mj_multiRay",      // or "mj_ray" on bindings without the batch call
+  "origin_source": "site:head_camera_site",  // or "base+offset(...)" if the scene has no site
+  "self_filter": "geom groups [2, 3] (used only by the 'pelvis' tree)",
+  "sim_time": 12.345,
+  "fan": {"azimuth_rays": 180, "elevation_rings": 32, "elevation_deg": [-52.0, 7.0],
+          "min_range_m": 0.35, "max_range_m": 25.0},
+  "scene": "g1_dex3_room_scene.xml"
+}
+```
+
+`503 {"ok": false, "error": ...}` means **no LiDAR frame** — the cast failed or
+timed out (physics loop not running). It is deliberately *not* an empty cloud:
+an empty `positions` is indistinguishable from "the sweep found nothing", i.e.
+"the way is clear", so a broken sensor fails loudly at the HTTP layer instead.
+Note the asymmetry with an unknown sensor name, which is `200` + `ok:false`
+(mirroring the sidecar).
+
+Geometry constants (`sim_node.py`, `LIDAR_*` — the reasoning behind each number
+is in the comments there):
+
+| Constant | Value | Why |
+|---|---|---|
+| `LIDAR_SENSOR` | `mid360_lidar` | the sidecar's name for the real sensor |
+| `LIDAR_SITE` | `head_camera_site` | ray origin, on `torso_link`; falls back to base + `LIDAR_FALLBACK_OFFSET` = (0.076, 0, 1.271) m and says so in `origin_source` |
+| `LIDAR_AZIMUTH_RAYS` | 180 | 2° steps over 360° |
+| `LIDAR_ELEVATION_RINGS` | 32 | measured: fewer rings let `range.ts` (≥ 6 returns in the 0.15–1.8 m band) miss the table top and answer the wall behind it |
+| `LIDAR_ELEV_MIN_DEG` / `MAX_DEG` | −52° / +7° | the real inverted MID-360's effective vertical fan on the G1 — including its blind spot at head height |
+| `LIDAR_MIN_RANGE` | 0.35 m | self-return gate, same as the sidecar's (0.3 m) but a little wider because the origin sits inside the torso shell |
+| `LIDAR_MAX_RANGE` | 25 m | over-range = no return; needed because MuJoCo's floor `plane` is infinite |
+| `LIDAR_MAX_POINTS` | 20000 | same cap as `G1_POINTCLOUD_MAX_POINTS`; uniform stride, never truncation |
+
+The fan is level (rotated by base yaw only, torso pitch/roll not applied), which
+matches what a consumer receives from the robot after the sidecar gravity-aligns
+its cloud. The robot's own geoms are masked out of the cast by geom group
+(derived per scene, reported in `self_filter`) because the origin sits inside the
+torso mesh; the price is that the sim will not show the robot's own arms the way
+the real sensor does — code that picks "the nearest surface" out of a real cloud
+still has to reject returns inside the robot's own footprint. `test_lidar.py`
+pins all of this against the room scene's MJCF.
 
 ## Recording clips (demo / social videos)
 
@@ -190,6 +273,7 @@ Run `./setup.sh` to build a working venv, or do it by hand knowing these four:
 
 ```bash
 python -m pytest test_loco_state.py -q          # state machine
+python -m pytest test_lidar.py -q               # ray LiDAR against the room scene's MJCF (needs mujoco)
 
 # integration — start BOTH in one shell, they must share a network namespace
 pkill -f sim_node.py                            # see the warning below
@@ -197,7 +281,25 @@ python sim_node.py --domain 1 --http-port 8777 --quiet &
 python e2e_loco_check.py 1 lo0                  # add --frames <dir> to keep the images
 python e2e_loco_check.py 5 lo0 --port 8779      # a node on another domain/port
 python e2e_loco_check.py 1 lo0 --idle-s 0       # skip the slow (60 s) sag check
+
+# occupancy map (TASK-206) — needs the robot-agent (:41246) running against this sim
+.venv/bin/python e2e_map_check.py --out /tmp/e2e-map            # drive (-2,0) and back, then validate
+.venv/bin/python e2e_map_check.py --no-drive                    # validate whatever the map holds now
 ```
+
+- `e2e_map_check.py` fetches `GET /api/v1/robots/<id>/map` from the robot-agent (after
+  resetting both e-stops and, unless `--no-drive`, running the Agent Mode walk
+  "turn around, walk 2 m, turn around, walk 2 m") and asserts the grid against the
+  room MJCF: every wall has an occupied cell within ±0.15 m along ≥ 90 % of its inner
+  face (≥ 80 % for the -y wall with the doorway), the table front at x=1.6 is ≥ 50 %
+  occupied, the robot's path along y=0 is 100 % free, (4, 0) outside the room is
+  unknown, at most 3 occupied cells inside the room fall outside the furniture
+  footprints, and `status.frameId` is set. `--out DIR` keeps `map.json`, `map.pgm` and
+  (with Pillow) a `map.png` cropped to ±4 m. What it looks like after that walk
+  (black = occupied, white = free, grey = unknown; north/+y up, doorway at the
+  bottom, table right, shelf top, chair bottom-right, person left):
+
+  ![occupancy map of the room scene](docs/occupancy-map-room.png)
 
 The harness is re-runnable against a long-lived node: it starts by teleporting
 the robot to a known pose via `/sim/reset-pose` (a sim-only affordance), and

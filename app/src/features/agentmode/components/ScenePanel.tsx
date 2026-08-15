@@ -13,7 +13,7 @@ import { cn } from '@/shared/utils';
 import { formatTimeAgo } from '@/shared/utils/format';
 import { EmptyState } from '@/shared/components/ui';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
-import { useAgentModeStore, selectScene } from '../store/agentmodeStore';
+import { useAgentModeStore, selectScene, selectMapSummary } from '../store/agentmodeStore';
 import type { SceneEntity } from '../types';
 import { formatBearing } from '../utils/blockFormat';
 
@@ -98,6 +98,10 @@ function DistanceReadout({ entity }: { entity: SceneEntity }) {
  */
 export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: ScenePanelProps) {
   const scene = useAgentModeStore(selectScene);
+  // The robot's own map (TASK-206). `undefined` = this agent does not report
+  // one (older agent) — the row is simply absent. `null` = disabled, also
+  // absent: an operator who turned it off does not need to be told so here.
+  const mapSummary = useAgentModeStore(selectMapSummary);
 
   const entities = scene?.entities ?? [];
 
@@ -174,6 +178,28 @@ export const ScenePanel = memo(function ScenePanel({ frameSrc, className }: Scen
           </Tooltip>
           <span className="ml-auto tabular-nums font-medium text-cobalt-600 dark:text-cobalt-400">
             {forwardClearanceM.toFixed(2)} m
+          </span>
+        </div>
+      )}
+
+      {/* The robot's own map, in one line — absent when the agent reports none. */}
+      {mapSummary && (
+        <div
+          data-testid="agent-scene-map"
+          className="flex items-center gap-2 text-[11px] text-theme-muted"
+        >
+          <Tooltip
+            side="top"
+            content="Occupancy grid the robot builds itself from its LiDAR, in its odometry frame. Known = cells it has classified free or occupied; the rest is unknown, which is not the same as clear."
+          >
+            <span>Map</span>
+          </Tooltip>
+          <span className="ml-auto tabular-nums">
+            {mapSummary.knownCells.toLocaleString()} known · {mapSummary.occupiedCells.toLocaleString()}{' '}
+            occupied
+            {mapSummary.lastIntegratedAt
+              ? ` · ${formatTimeAgo(mapSummary.lastIntegratedAt)}`
+              : ' · nothing integrated yet'}
           </span>
         </div>
       )}

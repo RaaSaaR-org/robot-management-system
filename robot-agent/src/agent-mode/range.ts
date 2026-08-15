@@ -29,7 +29,7 @@ const DEFAULT_HALF_ANGLE_DEG = 8;
  * blob; nothing useful for navigation lives inside it anyway, because the robot
  * cannot walk 0.35 m without the obstacle already being under its own feet.
  */
-const DEFAULT_MIN_RANGE_M = 0.35;
+export const DEFAULT_MIN_RANGE_M = 0.35;
 /** Beyond this, a return says nothing actionable about the current block. */
 const DEFAULT_MAX_RANGE_M = 12;
 /**
@@ -44,8 +44,8 @@ const DEFAULT_MAX_RANGE_M = 12;
  * 1.55 m. An object above the fan produces no returns — which is why a null
  * range means UNKNOWN and never "clear".
  */
-const DEFAULT_MIN_HEIGHT_M = 0.15;
-const DEFAULT_MAX_HEIGHT_M = 1.8;
+export const DEFAULT_MIN_HEIGHT_M = 0.15;
+export const DEFAULT_MAX_HEIGHT_M = 1.8;
 /** Fewer accepted returns than this is speckle, not a surface. */
 const DEFAULT_MIN_POINTS = 6;
 /**
@@ -154,6 +154,13 @@ export interface RangeSensorDeps {
   options?: RangeOptions;
   /** How long one cloud may serve all bearings of one observation (default 400). */
   cacheMs?: number;
+  /**
+   * Called with every FRESH cloud (never a cache hit) the moment it arrives —
+   * the single tap the occupancy map (TASK-206) hangs off. Runs synchronously
+   * inside `snapshot()`, so it must be cheap and must not throw; a throw is
+   * caught and logged, never surfaced to the observation.
+   */
+  onFrame?: (frame: PointCloudFrame, atMs: number) => void;
 }
 
 /** Resolved options — every field present, so the math never re-defaults. */
@@ -417,6 +424,8 @@ export class RangeSensor {
    * one `scan_room` would otherwise stall a block for twelve seconds.
    */
   private cache: { at: number; frame: PointCloudFrame | null; error: string | null } | null = null;
+  private frameListener: ((frame: PointCloudFrame, atMs: number) => void) | null;
+  private frameListenerFailedAtMs = 0;
 
   constructor(deps: RangeSensorDeps = {}) {
     const cfg = rangeConfig();
@@ -433,6 +442,32 @@ export class RangeSensor {
       ...deps.options,
     };
     this.cacheMs = deps.cacheMs ?? DEFAULT_CACHE_MS;
+    this.frameListener = deps.onFrame ?? null;
+  }
+
+  /** Install (or clear) the fresh-frame tap after construction. */
+  setFrameListener(cb: ((frame: PointCloudFrame, atMs: number) => void) | null): void {
+    this.frameListener = cb;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /**
+   * Take one snapshot for its side effect only (feeding the frame listener),
+   * honouring the cache and the failure backoff exactly like `measure()`. The
+   * background map sweep uses this; it never throws and never returns the cloud
+   * — nothing but `measure()` may hand clouds to callers.
+   */
+  async probe(): Promise<boolean> {
+    if (!this.enabled) return false;
+    try {
+      await this.snapshot();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Drop everything cached, cloud and failure alike. */
@@ -504,7 +539,19 @@ export class RangeSensor {
 
     try {
       const frame = await this.snapshotFn(this.sensor);
-      this.cache = { at: Date.now(), frame, error: null };
+      const at = Date.now();
+      this.cache = { at, frame, error: null };
+      if (this.frameListener) {
+        try {
+          this.frameListener(frame, at);
+        } catch (err) {
+          // Once a minute is enough: the map is a passenger, the observation is not.
+          if (at - this.frameListenerFailedAtMs > 60_000) {
+            this.frameListenerFailedAtMs = at;
+            console.warn('[Range] frame listener failed:', err instanceof Error ? err.message : err);
+          }
+        }
+      }
       return frame;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

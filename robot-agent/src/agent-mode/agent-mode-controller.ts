@@ -50,6 +50,8 @@ import { Navigator } from './navigator.js';
 import { Planner, type PlannedBlock } from './planner.js';
 import { formatPlaceNotesSection } from './prompts.js';
 import { RangeSensor } from './range.js';
+import { MapKeeper } from './occupancy-map-keeper.js';
+import type { OccupancyMapSnapshot } from './occupancy-map.js';
 import { SceneMemoryStore } from './scene-memory.js';
 import { ServerMirror, type BlockJournalContext } from './server-mirror.js';
 import { VisionClient, type VisionObservation } from './vision.js';
@@ -131,6 +133,12 @@ export interface AgentModeControllerDeps {
    * cache actually spans the observation instead of being rebuilt per block.
    */
   range?: RangeSensor;
+  /**
+   * The occupancy map's chaperone (TASK-206). Defaults to one built from
+   * `config.agentMode.map*` over {@link AgentModeControllerDeps.range} and the
+   * hardware client's pose/boot id; `null` runs without a map at all.
+   */
+  mapKeeper?: MapKeeper | null;
   scene?: SceneMemoryStore;
   mirror?: ServerMirror;
   lock?: ControlOwnerLock;
@@ -205,6 +213,11 @@ const defaultLoco: NonNullable<BlockExecutorDeps['loco']> = {
   odometry: () => hardwareClient.getLocoOdometry(),
 };
 
+/** Blocks during which the base moves — the only time a map sweep learns anything new. */
+function isMotionBlock(kind: AgentBlockKind): boolean {
+  return kind === 'walk' || kind === 'turn' || kind === 'goto';
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -230,6 +243,7 @@ export class AgentModeController {
   private readonly planner: Planner;
   private readonly vision: VisionClient;
   private readonly range: RangeSensor;
+  private readonly mapKeeper: MapKeeper | null;
   private readonly scene: SceneMemoryStore;
   private readonly mirror: ServerMirror;
   private readonly executor: BlockExecutor;
@@ -360,6 +374,25 @@ export class AgentModeController {
     this.planner = deps.planner ?? new Planner();
     this.vision = deps.vision ?? new VisionClient();
     this.range = deps.range ?? new RangeSensor();
+    this.mapKeeper =
+      deps.mapKeeper === undefined
+        ? new MapKeeper({
+            enabled: config.agentMode.mapEnabled && config.agentMode.rangeEnabled,
+            options: {
+              resolutionM: config.agentMode.mapResolutionM,
+              maxSizeM: config.agentMode.mapMaxM,
+              maxRangeM: config.agentMode.rangeMaxM,
+              minRangeM: config.agentMode.rangeMinM,
+              decayS: config.agentMode.mapDecayS,
+            },
+            path: config.agentMode.mapPath,
+            sweepHz: config.agentMode.mapSweepHz,
+            range: this.range,
+            getPose: () => hardwareClient.getCachedPose(),
+            samplePose: () => hardwareClient.samplePoseNow(),
+            getBootId: () => hardwareClient.getSidecarBootId(),
+          })
+        : deps.mapKeeper;
     this.scene = deps.scene ?? new SceneMemoryStore(this.robotId);
     // `undefined` means "the real one"; an explicit `null` means "none".
     this.memory = deps.memory === undefined ? getWorkspace() : deps.memory;
@@ -656,6 +689,7 @@ export class AgentModeController {
   }
 
   dispose(): void {
+    this.mapKeeper?.dispose();
     this.idleWatcher.stop();
     this.unsubscribeLock?.();
     this.unsubscribeLock = null;
@@ -685,7 +719,35 @@ export class AgentModeController {
       damped: this.isDamped(),
       recovered: this.recovered ? { ...this.recovered } : null,
       self: this.selfState(),
+      map: this.mapKeeper?.summary() ?? null,
     };
+  }
+
+  /**
+   * The full occupancy grid (TASK-206) — served by `GET /robots/:id/map`, never
+   * mirrored. Null when map building is disabled or nothing has been integrated.
+   */
+  mapSnapshot(): OccupancyMapSnapshot | null {
+    return this.mapKeeper?.snapshot() ?? null;
+  }
+
+  /** Diagnostics for `/map`: session id, skip counters, persistence. */
+  mapStatus(): ReturnType<MapKeeper['status']> | null {
+    return this.mapKeeper?.status() ?? null;
+  }
+
+  /**
+   * Write the occupancy map to disk NOW, synchronously. Called from the
+   * shutdown path next to `saveStateSync()`, before anything that can block —
+   * `dispose()` also saves, but a supervisor's SIGKILL can arrive before it.
+   */
+  persistMap(): boolean {
+    return this.mapKeeper?.save() ?? false;
+  }
+
+  /** The keeper's live map, for callers that need geometry queries (TASK-208). */
+  occupancyMap() {
+    return this.mapKeeper?.getMap() ?? null;
   }
 
   /**
@@ -1467,10 +1529,14 @@ export class AgentModeController {
     block.status = 'running';
     block.startedAt = nowIso();
     plan.updatedAt = block.startedAt;
+    // The map fills in between looks only while the robot is actually moving;
+    // a `speak` or `wait` block would just re-sample the same cloud.
+    if (isMotionBlock(block.kind)) this.mapKeeper?.setSweeping(true);
     this.emit('agent:block:started', { plan: clonePlan(plan), block: { ...block } });
   }
 
   private finishBlock(plan: AgentPlan, block: AgentBlock, outcome: BlockOutcome): void {
+    this.mapKeeper?.setSweeping(false);
     // An E-Stop that landed while this block was in flight already gave it a
     // terminal status — never overwrite it.
     if (block.status === 'aborted' || block.status === 'skipped') return;

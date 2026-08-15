@@ -522,6 +522,9 @@ async function main() {
     // phase below: this line is what makes the next boot read as clean rather
     // than as a crash, and everything after this point can block.
     incarnations.close(signal, agentModeController.incarnationSnapshot());
+    // The occupancy map (TASK-206) is the other thing worth more than the
+    // network phase: sync, atomic, and honest-null (skipped without a session).
+    if (agentModeController.persistMap()) console.log('[SimulatedRobot] Occupancy map persisted to disk');
 
     // Log shutdown and end compliance session
     try {
