@@ -46,7 +46,9 @@ import { parseReanchorUtterance } from './reanchor.js';
 import { IdleWatcher } from './idle-watcher.js';
 import { IntentStore, intentMatcher } from './intents.js';
 import { Journal, setJournalBootId, type JournalRetention } from './journal.js';
-import { Navigator } from './navigator.js';
+import { ARRIVAL_M, Navigator, type NavPlannerDeps } from './navigator.js';
+import { checkStraightSegment, planPath, type PlannerWorld, type SegmentCheck } from './path-planner.js';
+import { FOOTPRINT_RADIUS_M } from '../robot/types.js';
 import { Planner, type PlannedBlock } from './planner.js';
 import { formatPlaceNotesSection } from './prompts.js';
 import { RangeSensor } from './range.js';
@@ -74,6 +76,7 @@ import type {
   AgentModeEventType,
   AgentModeLivenessState,
   AgentModeState,
+  AgentNavPlan,
   AgentPlan,
   AgentRecoveryState,
   AgentSelfState,
@@ -144,6 +147,12 @@ export interface AgentModeControllerDeps {
   peerTracker?: PeerTracker | null;
   /** Own planar pose for peer bearings (default: the hardware client's cache). */
   getPose?: () => CachedBasePose | null;
+  /**
+   * A FRESH pose sample for planning and the pre-walk check (TASK-208) —
+   * default asks the sidecar now and falls back to the cache. Tests that pass
+   * `getPose` alone get it sampled from there.
+   */
+  samplePose?: () => Promise<CachedBasePose | null>;
   scene?: SceneMemoryStore;
   mirror?: ServerMirror;
   lock?: ControlOwnerLock;
@@ -153,6 +162,11 @@ export interface AgentModeControllerDeps {
   sleep?: BlockExecutorDeps['sleep'];
   now?: () => number;
   maxNavStages?: number;
+  /**
+   * How `goto` chooses its stages (TASK-208): `grid` plans on the occupancy
+   * map, `staged` is the pre-map loop. Default `AGENT_NAV_PLANNER`.
+   */
+  navPlanner?: 'grid' | 'staged';
   idleWatchIntervalMs?: number;
   /**
    * Durable memory (TASK-197). `null` runs the controller without one — every
@@ -251,10 +265,15 @@ export class AgentModeController {
   private readonly mapKeeper: MapKeeper | null;
   private readonly peerTracker: PeerTracker | null;
   private readonly getPose: () => CachedBasePose | null;
+  private readonly samplePose: () => Promise<CachedBasePose | null>;
   private readonly scene: SceneMemoryStore;
   private readonly mirror: ServerMirror;
   private readonly executor: BlockExecutor;
   private readonly navigator: Navigator;
+  /** The route the navigator is following right now (TASK-208), null between navigations. */
+  private navState: AgentNavPlan | null = null;
+  /** The `goto` block whose route `navState` describes, while it runs. */
+  private activeGoto: AgentBlock | null = null;
   private readonly idleWatcher: IdleWatcher;
   private readonly heartbeat: HeartbeatMonitor;
   private readonly intents: IntentStore | null;
@@ -412,6 +431,11 @@ export class AgentModeController {
           })
         : deps.peerTracker;
     this.getPose = deps.getPose ?? (() => hardwareClient.getCachedPose());
+    this.samplePose =
+      deps.samplePose ??
+      (deps.getPose
+        ? async () => this.getPose()
+        : async () => (await hardwareClient.samplePoseNow()) ?? hardwareClient.getCachedPose());
     this.scene = deps.scene ?? new SceneMemoryStore(this.robotId);
     // `undefined` means "the real one"; an explicit `null` means "none".
     this.memory = deps.memory === undefined ? getWorkspace() : deps.memory;
@@ -467,17 +491,44 @@ export class AgentModeController {
       // silently: only `writeJournal` reported, so a workspace that had stopped
       // accepting writes still looked healthy in the heartbeat.
       onDurableWrite: (ok, error) => this.noteWorkspaceWrite(ok, error),
+      // Every forward walk is checked against the map before it runs
+      // (TASK-208): keepouts, occupied cells, peers. Null when there is nothing
+      // to check against.
+      checkForwardPath: (distanceM) => this.checkForwardPath(distanceM),
     };
     if (deps.say) executorDeps.say = deps.say;
     if (deps.sleep) executorDeps.sleep = deps.sleep;
     if (deps.now) executorDeps.now = deps.now;
     this.executor = new BlockExecutor(executorDeps);
 
+    const navPlanner = deps.navPlanner ?? config.agentMode.navPlanner;
+    const plannerDeps: NavPlannerDeps | null =
+      navPlanner === 'grid'
+        ? {
+            plan: (from, goal) => {
+              const world = this.plannerWorld();
+              return planPath(world, from, goal, {
+                unknownCost: config.agentMode.navUnknownCost,
+                // The plan ends where the staged final approach can take over:
+                // the arrival distance plus the robot's own radius, so a goal
+                // ON a surface (which is where the lidar puts it) is reachable
+                // without the planner having to stand inside the table.
+                goalToleranceM: ARRIVAL_M + world.robotRadiusM + (world.map?.resolution ?? 0.1),
+              });
+            },
+            samplePose: async () => {
+              const pose = await this.samplePose();
+              return pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg } : null;
+            },
+          }
+        : null;
     this.navigator = new Navigator({
       scene: this.scene,
       isAborted: () => this.abortSignalled(),
       runGeneratedBlock: (kind, params, reasoning) =>
         this.runGeneratedBlock(kind, params, reasoning),
+      planner: plannerDeps,
+      onNav: (nav) => this.onNav(nav),
       // `maxStages` is what NavigatorDeps calls it. Spelled `maxNavStages` here
       // the override type-checked (a spread skips the excess-property check) and
       // was silently dropped, so AGENT_MAX_NAV_STAGES always won.
@@ -741,7 +792,53 @@ export class AgentModeController {
       recovered: this.recovered ? { ...this.recovered } : null,
       self: this.selfState(),
       map: this.mapKeeper?.summary() ?? null,
+      nav: this.navState ? { ...this.navState } : null,
     };
+  }
+
+  /** The navigator's current route (TASK-208), for `/map` and the state. */
+  navPlan(): AgentNavPlan | null {
+    return this.navState ? { ...this.navState } : null;
+  }
+
+  /**
+   * The world the planner and the pre-walk check see (TASK-208): the live map
+   * (may be null), and the keepouts ONLY when the place graph's frame is
+   * registered to odometry — on an unregistered frame the polygons are numbers
+   * about another origin, and the geofence, `/map` and this all say `[]`.
+   */
+  private plannerWorld(): PlannerWorld {
+    const rsm = this.robotStateManager;
+    const registered = rsm?.getPlaceFrameRegistration?.()?.registered === true;
+    const keepouts = registered ? (rsm?.getPlaces?.() ?? []).filter((p) => p.keepout && p.floor === 0) : [];
+    return {
+      map: this.mapKeeper?.getMap() ?? null,
+      keepouts,
+      keepoutMarginM: config.place.keepoutMarginM,
+      robotRadiusM: FOOTPRINT_RADIUS_M[config.robotType] ?? FOOTPRINT_RADIUS_M.generic,
+    };
+  }
+
+  /** See {@link BlockExecutorDeps.checkForwardPath}. */
+  private async checkForwardPath(distanceM: number): Promise<SegmentCheck | null> {
+    // Sampled, not cached: the walk usually follows a turn, and a pose from
+    // before that turn would check the wrong heading.
+    const pose = await this.samplePose();
+    if (!pose) return null;
+    const world = this.plannerWorld();
+    if (!(world.map?.isAllocated() ?? false) && world.keepouts.length === 0) return null;
+    return checkStraightSegment(world, { x: pose.x, y: pose.y }, pose.yawDeg, distanceM);
+  }
+
+  /** The navigator planned, re-planned or finished (TASK-208). */
+  private onNav(nav: AgentNavPlan | null): void {
+    this.navState = nav;
+    const goto = this.activeGoto;
+    if (nav && goto && this.plan) {
+      goto.nav = { planned: nav.planned, lengthM: nav.lengthM, segments: nav.segments, reason: nav.reason };
+      this.plan.updatedAt = nowIso();
+      this.emit('agent:plan:updated', { plan: clonePlan(this.plan) });
+    }
   }
 
   /**
@@ -1361,7 +1458,12 @@ export class AgentModeController {
             // The navigator splices its generated blocks in directly after the
             // `goto`, so they render in order in the timeline.
             this.generatedInsertIndex = i + 1;
-            outcome = await this.navigator.navigate(String(block.params.entity ?? ''));
+            this.activeGoto = block;
+            try {
+              outcome = await this.navigator.navigate(String(block.params.entity ?? ''));
+            } finally {
+              this.activeGoto = null;
+            }
           } else {
             outcome = await this.executor.execute(block);
           }

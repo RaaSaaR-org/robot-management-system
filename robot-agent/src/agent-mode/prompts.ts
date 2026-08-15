@@ -109,6 +109,11 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '- Use at most 12 blocks. Prefer the shortest plan that does the job.',
     '- `goto` only works for an entity that is already in the scene memory. If the',
     '  target is unknown, plan `scan_room` first, then `goto`.',
+    // TASK-208: the navigator owns routing. The planner must not try to steer
+    // around things with walk/turn — it cannot see the map, the navigator can.
+    '- `goto` plans its own route on the robot\'s map, around obstacles, other',
+    '  robots and keepout zones, and refuses a target inside a keepout. Prefer it',
+    '  over hand-written walk/turn sequences for anything more than a step.',
     // The vision model labels everything in English (see VISION_PROMPT); an
     // entity in any other language therefore matches nothing and the plan dies
     // with "not in the scene memory" after the scan already succeeded.

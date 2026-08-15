@@ -186,6 +186,19 @@ export interface Config {
     peersPollMs: number;
     /** A peer closer than this, ahead of the robot, enters scene memory (`AGENT_PEERS_NOTICE_M`, default 3). */
     peersNoticeM: number;
+    /**
+     * How `goto` chooses its stages (TASK-208): `grid` plans a path on the
+     * occupancy map and walks its segments; `staged` is the pre-map loop —
+     * turn toward the target, walk ≤ 1 m, look, repeat (`AGENT_NAV_PLANNER`,
+     * default `grid` when the map is enabled, else `staged`).
+     */
+    navPlanner: 'grid' | 'staged';
+    /** Cost multiplier for planning across UNKNOWN cells (`AGENT_NAV_UNKNOWN_COST`, default 3). */
+    navUnknownCost: number;
+    /** Longest single planned walk stage in metres (`AGENT_NAV_MAX_SEGMENT_M`, default 2). */
+    navMaxSegmentM: number;
+    /** A planned route looks (VLM + lidar) at least every this many metres (`AGENT_NAV_LOOK_EVERY_M`, default 2). */
+    navLookEveryM: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
     /**
@@ -335,6 +348,21 @@ function envFloat(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * `AGENT_NAV_PLANNER`: `grid` | `staged`. Unset follows the map — a planner
+ * without a map has nothing to plan on and would fall back to `staged` on
+ * every navigation anyway, so it is not worth pretending otherwise at boot.
+ */
+function navPlannerFromEnv(): 'grid' | 'staged' {
+  const raw = (process.env.AGENT_NAV_PLANNER || '').trim().toLowerCase();
+  if (raw === 'grid' || raw === 'staged') return raw;
+  const mapEnabled =
+    process.env.AGENT_MAP_ENABLED === undefined
+      ? process.env.AGENT_RANGE_ENABLED !== 'false'
+      : process.env.AGENT_MAP_ENABLED === 'true';
+  return mapEnabled ? 'grid' : 'staged';
+}
+
 export const config: Config = {
   port: parseInt(process.env.PORT || '41243', 10),
   robotId: process.env.ROBOT_ID || 'sim-robot-001',
@@ -423,6 +451,10 @@ export const config: Config = {
     mapDecayS: parseFloat(process.env.AGENT_MAP_DECAY_S || '0'),
     peersPollMs: parseInt(process.env.AGENT_PEERS_POLL_MS || '2000', 10),
     peersNoticeM: parseFloat(process.env.AGENT_PEERS_NOTICE_M || '3'),
+    navPlanner: navPlannerFromEnv(),
+    navUnknownCost: parseFloat(process.env.AGENT_NAV_UNKNOWN_COST || '3'),
+    navMaxSegmentM: parseFloat(process.env.AGENT_NAV_MAX_SEGMENT_M || '2'),
+    navLookEveryM: parseFloat(process.env.AGENT_NAV_LOOK_EVERY_M || '2'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
     heartbeat: {
       enabled: process.env.AGENT_HEARTBEAT_ENABLED === 'true',
@@ -542,6 +574,14 @@ export function validateConfig(): void {
     `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s`
   );
   console.log(`    - Max Nav Stages: ${config.agentMode.maxNavStages}`);
+  console.log(
+    `    - Navigator: ${
+      config.agentMode.navPlanner === 'grid'
+        ? `grid (plans on the map; ≤${config.agentMode.navMaxSegmentM} m per stage, looks every ` +
+          `${config.agentMode.navLookEveryM} m, unknown ×${config.agentMode.navUnknownCost}; falls back to staged without a path)`
+        : 'staged (turn, walk ≤1 m, look, repeat)'
+    }`
+  );
   console.log(`    - Idle Watch Interval: ${config.agentMode.idleWatchIntervalMs}ms`);
   console.log(`    - Stop Words: ${config.agentMode.stopWords.join(', ') || '(none)'}`);
   console.log(`    - Voice Service: ${config.agentMode.voiceServiceUrl}`);

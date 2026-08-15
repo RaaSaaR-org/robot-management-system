@@ -1350,6 +1350,8 @@ export function createRestRoutes(
       peers,
       peersDropped: peerStatus?.dropped ?? 0,
       peersEnabled: peerStatus?.enabled ?? false,
+      // The route the navigator is on right now (TASK-208), null between gotos.
+      nav: agentModeController.navPlan(),
       status,
     });
   });

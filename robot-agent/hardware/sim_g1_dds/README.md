@@ -334,6 +334,31 @@ G1-EDU-Bot's map, and Bravo's scene memory lists `robot G1-EDU-Bot (Agent Mode)`
 a sidecar (`npm run dev`, frame `null`) shows up as `peersDropped: 1` on both and
 is drawn by neither — the frame rule, exercised.
 
+### Planned navigation (TASK-208 — `goto` plans on the map)
+
+With `AGENT_NAV_PLANNER=grid` (the default while the map is on) a `goto` plans a
+path on the robot's own occupancy map — around walls, the peer discs and the place
+graph's keepouts — and walks it in ≤2 m segments with a look every 2 m instead of
+after every metre. Two things to try against a live node:
+
+```bash
+# Bravo in the way: A plans a two-segment route around the peer disc.
+curl -s -X POST localhost:8778/sim/reset-pose -H 'content-type: application/json' -d '{"x":0.7,"y":1.3,"yaw":0}'
+curl -s -X POST localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode/command      -H 'content-type: application/json' -d '{"text":"go to the shelf"}'
+curl -s localhost:41246/api/v1/robots/sim-robot-g1-edu/map | jq '.nav'   # {planned:true, path:[[..],[..],[..]], …}
+
+# A plain walk into the table's keepout is stopped short BEFORE the geofence fires.
+curl -s -X POST localhost:8777/sim/reset-pose -H 'content-type: application/json' -d '{"x":0,"y":0,"yaw":1.5708}'
+curl -s -X POST localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode/command      -H 'content-type: application/json' -d '{"text":"turn right by 65 degrees, then walk 3 meters forward"}'
+# → walk block: "Walked 1.38 m … Stopped 1.60 m short — Table footprint keepout ahead at 1.40 m on the map."
+```
+
+The `/agent?robot=…&tab=map` panel draws the planned polyline (cobalt, dashed)
+and a ring on the goal while the `goto` runs; the `goto` card reads
+"chair · planned 3.6 m in 1 segment". `demo_clip.py "Walk to the chair" --start
+"0.5,1.6,-51.5" --prime look --cam orbit` records it (`clips/08-chair-planned.*`:
+3 walk stages / 3 looks for 2.8 m, against `05-chair`'s 5 / 5 for 3.5 m).
+
 The harness is re-runnable against a long-lived node: it starts by teleporting
 the robot to a known pose via `/sim/reset-pose` (a sim-only affordance), and
 every translation assertion is projected into the body frame at the pose where

@@ -1,8 +1,14 @@
 /**
  * @file navigator.ts
- * @description `goto(entity)` expansion: bearing-and-correct navigation that
- *              emits VISIBLE `turn` / `walk` / `look` blocks into the running
- *              plan, up to ~1 m per stage, re-bearing after every look. Stages
+ * @description `goto(entity)` expansion: emits VISIBLE `turn` / `walk` / `look`
+ *              blocks into the running plan. With a map planner (TASK-208) the
+ *              route is planned on the occupancy map — keepouts and peers
+ *              included — and walked segment by segment (≤ AGENT_NAV_MAX_SEGMENT_M
+ *              each, a look every AGENT_NAV_LOOK_EVERY_M), re-planned from the
+ *              fresh pose after every stage; a goal inside a keepout is refused
+ *              before the first step. Without a planner, or when no path is
+ *              known, it is bearing-and-correct navigation up to ~1 m per stage,
+ *              re-bearing after every look. Stages
  *              are sized from the LiDAR range to the target when there is one
  *              and clamped by the measured clearance straight ahead; without a
  *              measurement it is the old blind stage plus arrival-by-contact.
@@ -18,8 +24,16 @@
  */
 
 import { config } from '../config/config.js';
-import type { SceneMemoryStore } from './scene-memory.js';
-import { normalizeDeg, type AgentBlock, type AgentBlockKind, type BlockOutcome } from './types.js';
+import type { PlannedPath, PlanResult } from './path-planner.js';
+import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
+import {
+  DEG_TO_RAD,
+  normalizeDeg,
+  type AgentBlock,
+  type AgentBlockKind,
+  type AgentNavPlan,
+  type BlockOutcome,
+} from './types.js';
 
 /** Below this bearing error a correction turn is not worth a stage. */
 const BEARING_DEADBAND_DEG = 8;
@@ -42,7 +56,14 @@ export const MIN_STAGE_M = 0.3;
  * and when it does not, arrival still comes from walking into the thing (see
  * the contact rule below).
  */
-const ARRIVAL_M = 0.6;
+export const ARRIVAL_M = 0.6;
+/**
+ * Slack on the arrival comparison. A stage sized to land exactly at ARRIVAL_M
+ * lands at 0.6000000001 m as often as not, and the answer to that must not be
+ * one more stage of a few micrometres. Two centimetres is below what the lidar
+ * resolves at that range and below what one walk stage achieves on purpose.
+ */
+const ARRIVAL_SLACK_M = 0.02;
 /** Distance must shrink by at least this much for a stage to count as progress. */
 const PROGRESS_EPSILON_M = 0.05;
 /**
@@ -57,7 +78,7 @@ const MAX_UNSEEN_LOOKS = 2;
  * Unchanged from the pre-LiDAR behaviour, and still what runs whenever the
  * target is outside the sensor's vertical fan.
  */
-const UNKNOWN_DISTANCE_STAGE_M = 1.0;
+export const UNKNOWN_DISTANCE_STAGE_M = 1.0;
 /**
  * How close to the nearest measured surface ahead a commanded stage may take
  * the base. Chosen, not measured, and deliberately conservative:
@@ -102,6 +123,30 @@ const CONTACT_SHORTFALL_RATIO = 0.3;
  */
 const CONTACT_MAX_DISTANCE_M = 1.5;
 
+/**
+ * The map side of navigation (TASK-208): a planner over the occupancy map and
+ * the pose the map is expressed in. Both are the controller's to supply; a
+ * navigator without them is the pre-map loop, unchanged.
+ */
+export interface NavPlannerDeps {
+  /**
+   * Plan from `from` (the pose just sampled) to `goal`, both odometry frame.
+   * The navigator does not read the map itself: what counts as a wall, a
+   * keepout or a peer is the caller's world model.
+   */
+  plan: (from: { x: number; y: number }, goal: { x: number; y: number }) => PlanResult;
+  /**
+   * The robot's odometry pose NOW — sampled, not the poll's cache, because a
+   * stage is re-planned from where the last walk actually ended and the cache
+   * can be a whole walk old. Null when there is none; then nothing is planned.
+   */
+  samplePose: () => Promise<{ x: number; y: number; yawDeg: number } | null>;
+  /** Longest single planned walk stage (default `AGENT_NAV_MAX_SEGMENT_M`). */
+  maxSegmentM?: number;
+  /** Look at least every this many metres along a planned route (default `AGENT_NAV_LOOK_EVERY_M`). */
+  lookEveryM?: number;
+}
+
 export interface NavigatorDeps {
   scene: SceneMemoryStore;
   /**
@@ -116,15 +161,79 @@ export interface NavigatorDeps {
   ) => Promise<AgentBlock>;
   isAborted: () => boolean;
   maxStages?: number;
+  /** Absent or null: no map planning, today's staged loop. */
+  planner?: NavPlannerDeps | null;
+  /**
+   * Told about every plan (and re-plan) the navigation makes, and `null` when
+   * the navigation ends — the controller mirrors it to the UI and `/map`.
+   */
+  onNav?: (nav: AgentNavPlan | null) => void;
+}
+
+/** What one stage decided to do, before the shared clamps run. */
+interface StageIntent {
+  /** Turn to make first, degrees relative, or null when inside the deadband. */
+  turnDeg: number | null;
+  turnWhy: string;
+  stageM: number;
+  walkWhy: string;
+  planned: boolean;
+  /** Planned only: whether a look is due after this walk. */
+  lookAfter: boolean;
 }
 
 export class Navigator {
   private readonly deps: NavigatorDeps;
   private readonly maxStages: number;
+  private readonly planner: NavPlannerDeps | null;
+  private readonly maxSegmentM: number;
+  private readonly lookEveryM: number;
 
   constructor(deps: NavigatorDeps) {
     this.deps = deps;
     this.maxStages = deps.maxStages ?? config.agentMode.maxNavStages;
+    this.planner = deps.planner ?? null;
+    this.maxSegmentM = deps.planner?.maxSegmentM ?? config.agentMode.navMaxSegmentM;
+    this.lookEveryM = deps.planner?.lookEveryM ?? config.agentMode.navLookEveryM;
+  }
+
+  /**
+   * Where the target is in the odometry frame, from a MEASURED distance
+   * (lidar or the fleet's own report of a peer) and the stored bearing. A
+   * `vlm-estimate` is 0.94 m MAE and does not make a pose; null then.
+   */
+  private projectGoal(
+    entity: ObservedEntity,
+    pose: { x: number; y: number; yawDeg: number },
+  ): { x: number; y: number } | null {
+    const measured =
+      (entity.distanceSource === 'lidar' || entity.distanceSource === 'fleet') && entity.distanceEstM !== null
+        ? entity.distanceEstM
+        : null;
+    if (measured === null) return null;
+    // The stored bearing is in the scene's yaw frame; the pose's yaw is the
+    // odometry's. Going through the robot-relative bearing keeps them apart.
+    const rel = normalizeDeg(entity.bearingDeg - this.deps.scene.getYawDeg());
+    const heading = (pose.yawDeg + rel) * DEG_TO_RAD;
+    return { x: pose.x + measured * Math.cos(heading), y: pose.y + measured * Math.sin(heading) };
+  }
+
+  private describeNav(
+    target: string,
+    goal: { x: number; y: number } | null,
+    path: PlannedPath | null,
+    reason: string | null,
+  ): AgentNavPlan {
+    return {
+      target,
+      planned: path !== null,
+      path: path ? path.waypoints.map(([x, y]) => [x, y] as [number, number]) : null,
+      goal: goal ? { ...goal } : null,
+      lengthM: path ? path.lengthM : null,
+      segments: path ? path.segments.length : 0,
+      reason,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   /**
@@ -136,6 +245,15 @@ export class Navigator {
    * inventing a heading.
    */
   async navigate(entityLabel: string): Promise<BlockOutcome> {
+    try {
+      return await this.navigateInner(entityLabel);
+    } finally {
+      // Whatever happened, the route is over — the map must not keep drawing it.
+      this.deps.onNav?.(null);
+    }
+  }
+
+  private async navigateInner(entityLabel: string): Promise<BlockOutcome> {
     let entity = this.deps.scene.get(entityLabel);
     let lookedAlready = false;
 
@@ -209,6 +327,17 @@ export class Navigator {
      * by design, so the distinction is load-bearing rather than theoretical.
      */
     let everMeasured = entity.distanceSource === 'lidar' && entity.distanceEstM !== null;
+    /**
+     * Where the target is in the odometry frame, from the last MEASURED
+     * distance (TASK-208). Kept across stages: a walk expires the scene's
+     * distances (see expireOnTranslation) but not this — odometry knows how
+     * far the robot has come since the fix. Refreshed on every look that
+     * measures again.
+     */
+    let goalOdom: { x: number; y: number } | null = null;
+    /** Metres walked since the last look — the planned route looks every `lookEveryM`. */
+    let metresSinceLook = 0;
+    let plannedStages = 0;
 
     while (stages < this.maxStages) {
       if (this.deps.isAborted()) {
@@ -229,7 +358,7 @@ export class Navigator {
       const measuredM = current.distanceSource === 'lidar' ? current.distanceEstM : null;
       if (measuredM !== null) everMeasured = true;
 
-      if (measuredM !== null && measuredM <= ARRIVAL_M) {
+      if (measuredM !== null && measuredM <= ARRIVAL_M + ARRIVAL_SLACK_M) {
         return {
           ok: true,
           message:
@@ -239,17 +368,135 @@ export class Navigator {
         };
       }
 
+      // 0. Where is the target in the odometry frame, and is there a path to it
+      //    on the map (TASK-208)? Only a MEASURED distance makes a goal pose;
+      //    the goal survives the walks between looks because odometry does.
+      const pose = this.planner ? await this.planner.samplePose() : null;
+      if (pose) {
+        const projected = this.projectGoal(current, pose);
+        if (projected) goalOdom = projected;
+      }
+      const goalDistM = pose && goalOdom ? Math.hypot(goalOdom.x - pose.x, goalOdom.y - pose.y) : null;
+
+      // Arrival by odometry: the lidar put the target HERE, and the base has
+      // dead-reckoned to within the arrival distance of it since. Only from a
+      // measured fix (`goalOdom` is never made from a guess), and only when no
+      // fresh measurement contradicts it — a fresh one was handled above.
+      if (measuredM === null && goalDistM !== null && goalDistM <= ARRIVAL_M + ARRIVAL_SLACK_M) {
+        return {
+          ok: true,
+          message:
+            `Arrived at "${current.label}" after ${stages} stage${stages === 1 ? '' : 's'}: ` +
+            `odometry puts the robot ${goalDistM.toFixed(2)} m from where the lidar last measured it` +
+            `${walkedTotalM > 0 ? ` (${walkedTotalM.toFixed(2)} m walked)` : ''}.`,
+        };
+      }
+
       stages++;
 
-      // 1. Re-bear: the stored bearing is world-frame, so the correction is the
-      //    difference to the robot's current heading.
-      const relativeDeg = normalizeDeg(current.bearingDeg - this.deps.scene.getYawDeg());
-      if (Math.abs(relativeDeg) > BEARING_DEADBAND_DEG) {
-        const turn = await this.deps.runGeneratedBlock(
-          'turn',
-          { angleDeg: relativeDeg },
-          `Turning ${Math.round(relativeDeg)}° towards "${current.label}" (stage ${stages}).`
-        );
+      let path: PlannedPath | null = null;
+      let planReason: string | null = null;
+      if (!this.planner) {
+        planReason = 'no map planner';
+      } else if (!pose) {
+        planReason = 'no odometry pose';
+      } else if (!goalOdom) {
+        planReason = 'the target\'s distance is not measured';
+      } else {
+        const verdict = this.planner.plan({ x: pose.x, y: pose.y }, goalOdom);
+        if (verdict.ok) {
+          path = verdict.path;
+        } else if (verdict.reason === 'goal-in-keepout') {
+          // Refused BEFORE the first step, verbatim: this is the sentence the
+          // planner and the operator get, and it names the place.
+          const fence = verdict.keepout?.name ?? 'a keepout';
+          this.deps.onNav?.(this.describeNav(current.label, goalOdom, null, `inside keepout ${fence}`));
+          return {
+            ok: false,
+            message: `"${current.label}" is inside keepout ${fence} — I won't walk there.`,
+          };
+        } else {
+          planReason = verdict.message;
+        }
+      }
+      this.deps.onNav?.(this.describeNav(current.label, goalOdom, path, planReason));
+
+      let intent: StageIntent;
+      const segment = path && path.segments.length > 0 ? path.segments[0]! : null;
+      if (path && segment && pose) {
+        // 1p. Turn onto the first planned segment, in the odometry frame.
+        const turnDeg = normalizeDeg(segment.headingDeg - pose.yawDeg);
+        const stageM = Math.min(this.maxSegmentM, segment.lengthM);
+        const remainingAfter = path.lengthM - stageM;
+        const next = path.segments[1] ?? null;
+        // A look is due when the route has gone `lookEveryM` since the last
+        // one, when the ground ahead is unknown to the map, or when the plan
+        // is about to run out — the final approach must be measured, never
+        // dead-reckoned into the target.
+        const lookAfter =
+          metresSinceLook + stageM >= this.lookEveryM ||
+          (stageM < segment.lengthM ? segment.throughUnknown : (next?.throughUnknown ?? false)) ||
+          remainingAfter < MIN_STAGE_M;
+        plannedStages++;
+        intent = {
+          turnDeg: Math.abs(turnDeg) > BEARING_DEADBAND_DEG ? turnDeg : null,
+          turnWhy:
+            `Turning ${Math.round(turnDeg)}° onto the planned path to "${current.label}" ` +
+            `(segment 1 of ${path.segments.length}, stage ${stages}).`,
+          stageM,
+          walkWhy:
+            `Walking ${stageM.toFixed(1)} m along the planned path to "${current.label}" ` +
+            `(${path.lengthM.toFixed(1)} m in ${path.segments.length} segment${path.segments.length === 1 ? '' : 's'} on the map` +
+            `${path.throughUnknown ? ', partly across unmapped floor' : ''}; stage ${stages}/${this.maxStages})`,
+          planned: true,
+          lookAfter,
+        };
+      } else {
+        // 1. Re-bear: the stored bearing is world-frame, so the correction is the
+        //    difference to the robot's current heading.
+        const relativeDeg = normalizeDeg(current.bearingDeg - this.deps.scene.getYawDeg());
+        // 2. Walk one stage — never the whole remaining distance in one go, so a
+        //    stale distance estimate cannot drive the robot into the target. With
+        //    a measured range the stage is sized to what is actually left; with
+        //    only the odometry's memory of the last fix (TASK-208) it is what
+        //    that says is left; without either it is still the blind fixed
+        //    stage, then look again.
+        const remaining =
+          measuredM !== null
+            ? Math.max(0, measuredM - ARRIVAL_M)
+            : goalDistM !== null
+              ? Math.max(0, goalDistM - ARRIVAL_M)
+              : UNKNOWN_DISTANCE_STAGE_M;
+        // The route was planned but is already inside the plan's own tolerance:
+        // that is the final approach, sized above, not "walking by sight".
+        const finalApproach = path !== null && !segment;
+        const bySight =
+          !finalApproach && this.planner
+            ? ` — no known path on the map (${planReason ?? 'unknown'}), walking by sight`
+            : '';
+        intent = {
+          turnDeg: Math.abs(relativeDeg) > BEARING_DEADBAND_DEG ? relativeDeg : null,
+          turnWhy: `Turning ${Math.round(relativeDeg)}° towards "${current.label}" (stage ${stages}).`,
+          // No MIN_STAGE_M floor here: `remaining` is already the approach that is
+          // left, so flooring it commands the robot to walk further than the lidar
+          // says it may — a target measured 0.61 m out got a 0.30 m stage, up to
+          // 0.29 m of it into the target. Clamp 2a would normally catch that, but
+          // it is gated on a live clearance, and the re-bearing turn just above
+          // expires the clearance whenever it exceeds 10° — so the same physical
+          // situation was decided by whether the correction happened to be 9° or
+          // 15°. MIN_STAGE_M keeps its real job: the stop trigger in 2b.
+          stageM: Math.min(STAGE_LENGTH_M, remaining),
+          walkWhy: '',
+          planned: false,
+          lookAfter: true,
+        };
+        intent.walkWhy =
+          `Walking ${intent.stageM.toFixed(1)} m towards "${current.label}" (stage ${stages}/${this.maxStages})` +
+          `${finalApproach ? ' — final approach' : bySight}`;
+      }
+
+      if (intent.turnDeg !== null) {
+        const turn = await this.deps.runGeneratedBlock('turn', { angleDeg: intent.turnDeg }, intent.turnWhy);
         if (turn.status !== 'done') {
           return {
             ok: false,
@@ -262,20 +509,7 @@ export class Navigator {
         return { ok: false, message: `goto "${entityLabel}" aborted after ${stages} stages` };
       }
 
-      // 2. Walk one stage — never the whole remaining distance in one go, so a
-      //    stale distance estimate cannot drive the robot into the target. With
-      //    a measured range the stage is sized to what is actually left; without
-      //    one it is still the blind fixed stage, then look again.
-      const remaining = measuredM === null ? UNKNOWN_DISTANCE_STAGE_M : Math.max(0, measuredM - ARRIVAL_M);
-      // No MIN_STAGE_M floor here: `remaining` is already the approach that is
-      // left, so flooring it commands the robot to walk further than the lidar
-      // says it may — a target measured 0.61 m out got a 0.30 m stage, up to
-      // 0.29 m of it into the target. Clamp 2a would normally catch that, but
-      // it is gated on a live clearance, and the re-bearing turn just above
-      // expires the clearance whenever it exceeds 10° — so the same physical
-      // situation was decided by whether the correction happened to be 9° or
-      // 15°. MIN_STAGE_M keeps its real job: the stop trigger in 2b.
-      let stageM = Math.min(STAGE_LENGTH_M, remaining);
+      let stageM = intent.stageM;
 
       // 2a. Never walk further than the measured way ahead allows. This is the
       //     only obstacle check the navigator has that does not require hitting
@@ -337,8 +571,10 @@ export class Navigator {
 
       const walk = await this.deps.runGeneratedBlock(
         'walk',
-        { distanceM: stageM, direction: 'forward' },
-        `Walking ${stageM.toFixed(1)} m towards "${current.label}" (stage ${stages}/${this.maxStages})` +
+        // `planned` tells the executor this segment was checked against the map
+        // (walls, peers, keepouts) — see its turn-expiry cap.
+        intent.planned ? { distanceM: stageM, direction: 'forward', planned: true } : { distanceM: stageM, direction: 'forward' },
+        intent.walkWhy +
           `${clampedToM === null ? '' : `, shortened to keep ${CLEARANCE_MARGIN_M.toFixed(2)} m clear of the surface the lidar measures ${clampedToM.toFixed(2)} m ahead`}.`
       );
       const walkedM = walk.measured?.distanceM ?? null;
@@ -382,9 +618,28 @@ export class Navigator {
       }
       if (walkedM === null || walkedM >= CONTACT_STALL_M) stagesThatMoved++;
       walkedTotalM += walkedM ?? 0;
+      metresSinceLook += walkedM ?? stageM;
+
+      // 3p. On a planned route the map already knows what is between here and
+      //     the next look; a full VLM look after every stage is what made a
+      //     3.5 m walk take six of them. Skip it until it is due, and let the
+      //     odometry carry the goal meanwhile (progress is measured against it).
+      if (intent.planned && !intent.lookAfter) {
+        const poseAfter = this.planner ? await this.planner.samplePose() : null;
+        const nowDistance =
+          poseAfter && goalOdom ? Math.hypot(goalOdom.x - poseAfter.x, goalOdom.y - poseAfter.y) : null;
+        if (nowDistance !== null && (bestDistance === null || nowDistance < bestDistance - PROGRESS_EPSILON_M)) {
+          bestDistance = nowDistance;
+          stagesWithoutProgress = 0;
+        } else {
+          stagesWithoutProgress++;
+        }
+        continue;
+      }
 
       // 3. Look again — this is what refreshes the bearing and the distance.
       const seenBefore = current.observedSeq;
+      metresSinceLook = 0;
       const look = await this.deps.runGeneratedBlock(
         'look',
         {},
@@ -405,6 +660,24 @@ export class Navigator {
       if (this.deps.scene.get(entityLabel)?.observedSeq === seenBefore) {
         unseenLooks++;
         if (unseenLooks >= MAX_UNSEEN_LOOKS) {
+          // Before giving up on the label: is the robot simply THERE? A target
+          // seen from 2 m away is often named differently from 0.6 m away (the
+          // ladder that becomes "shelf" up close), and the lidar's fix on it
+          // has been carried by odometry all the way (TASK-208). Standing
+          // within the arrival distance of that fix is arrival — said with the
+          // caveat that the last looks did not name it.
+          const poseNow = this.planner ? await this.planner.samplePose() : null;
+          const fixDistM = poseNow && goalOdom ? Math.hypot(goalOdom.x - poseNow.x, goalOdom.y - poseNow.y) : null;
+          if (fixDistM !== null && fixDistM <= ARRIVAL_M + ARRIVAL_SLACK_M) {
+            return {
+              ok: true,
+              message:
+                `Arrived where "${current.label}" was measured, after ${stages} stage${stages === 1 ? '' : 's'} and ` +
+                `${walkedTotalM.toFixed(2)} m: odometry puts the robot ${fixDistM.toFixed(2)} m from the lidar's last ` +
+                `fix on it. The last ${unseenLooks} looks did not name it — up close the camera may show only part ` +
+                `of it — so check the last look if the name matters.`,
+            };
+          }
           return {
             ok: false,
             message:
@@ -445,7 +718,8 @@ export class Navigator {
     return {
       ok: false,
       message:
-        `goto "${entityLabel}": gave up after ${this.maxStages} stages and ` +
+        `goto "${entityLabel}": gave up after ${this.maxStages} stages` +
+        `${plannedStages > 0 ? ` (${plannedStages} on a planned path)` : ''} and ` +
         `${walkedTotalM.toFixed(2)} m ` +
         `(${stagesWithoutProgress} of them without getting closer` +
         `${bestDistance === null ? ', distance never estimated' : `, best distance ~${bestDistance.toFixed(2)} m`}).`,

@@ -4,7 +4,7 @@ aliases:
 - TASK-208
 title: The navigator plans a path on the occupancy map instead of blind 1 m stages — and refuses to plan through a keepout
 slug: navigator-plans-on-the-occupancy-map
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -135,3 +135,32 @@ polyline visible in the map panel is the social clip for this feature.
 
 Regression: full vitest, pytest, typecheck; the four existing clips re-run with the same commands
 produce the same or shorter block sequences.
+
+## Implementation notes (2026-08-15)
+
+- **Goal-in-keepout semantics.** The lidar puts a target's goal ON its surface, and every piece
+  of furniture in the room scene has a fenced footprint — a literal "goal inside a keepout →
+  refuse" would refuse "go to the table". Implemented as: refuse only when no stand-off spot on
+  the ring around the goal (the plan's own tolerance, `ARRIVAL_M` + robot radius) is outside a
+  keepout; otherwise plan to that ring and finish with the measured staged approach. The refusal
+  sentence is verbatim: `"<label> is inside keepout <PLACE> — I won't walk there."`
+- **Fresh pose, not the cache.** Planning and the pre-walk check sample the pose
+  (`samplePoseNow`) — the 0.5 Hz cache is a whole turn/walk old and, on the first live run,
+  made the map check see the peer on the pre-turn heading and shorten a planned segment.
+- **The turn-then-walk escape** is closed in the executor, not by changing what `null` means:
+  scene memory remembers that a turn retired the clearance (`wasClearanceExpiredByTurn()`), and
+  a plain forward walk in that state is capped at `max(1 m, what the map knows to be free)`.
+  Navigator segments (`params.planned: true`) are exempt — the map already checked them.
+- **Arrival by odometry** from the last lidar fix (≤ 0.62 m) is accepted, and it outranks the
+  "2 looks did not name it" give-up: up close the VLM renames things (ladder → shelf).
+- **Live (sim, room scene, two agents):** "go to the shelf" with Bravo 0.7 m off the line →
+  two-segment route around the peer disc, arrived 0.56 m from the shelf; "turn 65°, walk 3 m"
+  into the TABLE footprint → "Walked 1.38 m … Stopped 1.60 m short — Table footprint keepout
+  ahead at 1.40 m on the map", no `zone_violation`; `clips/08-chair-planned.*` (same
+  `demo_clip.py` command as `05-chair`): 3 walk stages / 3 looks for 2.8 m vs 5 / 5 for 3.5 m.
+  Wall-clock 47.8 s vs 50.8 s only because a look took ~13 s on this loaded machine (two sims,
+  two agents) against ~8 s when 05 was recorded — normalised to 05's look time it is ~33 s
+  (≈35 % faster).
+- The pytest `e2e_loco_check.py` extension was NOT added (no cyclonedds venv assertion harness
+  for keepout runs yet); the keepout/planner behaviour is covered by 19 planner unit tests, 6
+  navigator-on-map tests, 8 executor tests and 3 controller plumbing tests instead.

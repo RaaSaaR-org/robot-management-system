@@ -80,7 +80,7 @@ Rate limited: 20 requests per 15 minutes.
 | POST | `/:id/command` | Send command to robot |
 | GET | `/:id/telemetry` | Get robot telemetry |
 | GET | `/:id/peers` | Every OTHER online robot as `{robotId, name, x, y, headingDeg, frame, place, zone, updatedAt, footprintRadiusM}` for the robot-agent's peer tracker (TASK-207); poses ≤1 s old (refreshed from the agents on demand). `frame` is passed through as reported — the caller drops what it cannot compare |
-| GET | `/:id/agent-mode/map` | Proxy of the agent's `GET /api/v1/robots/:id/map` (grid, pose, keepouts, peers, `peersDropped`); the agent's 404 ("map disabled") passes through, anything else is a 502 with the agent's error — never an empty map |
+| GET | `/:id/agent-mode/map` | Proxy of the agent's `GET /api/v1/robots/:id/map` (grid, pose, keepouts, peers, `peersDropped`, `nav` — the navigator's planned route, TASK-208); the agent's 404 ("map disabled") passes through, anything else is a 502 with the agent's error — never an empty map |
 
 ### A2A (`/api/a2a`)
 
@@ -203,7 +203,7 @@ Base URL: `http://localhost:41245`
 | GET | `/tasks` | Task queue |
 | DELETE | `/tasks/:taskId` | Cancel task |
 | POST | `/reset` | Reset robot state |
-| GET | `/map` | The robot's own occupancy grid (TASK-206) + accepted fleet peers and `peersDropped` (TASK-207); `location.frame` on `GET /` says which odometry frame the poses are in |
+| GET | `/map` | The robot's own occupancy grid (TASK-206) + accepted fleet peers and `peersDropped` (TASK-207) + `nav` (TASK-208: `{target, planned, path, goal, lengthM, segments, reason}` while a `goto` runs, else null); `location.frame` on `GET /` says which odometry frame the poses are in |
 
 ### Safety (`/api/v1/robots/:id/safety`)
 

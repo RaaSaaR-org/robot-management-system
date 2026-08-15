@@ -97,6 +97,13 @@ export function mapFooterText(map: RobotMapPayload | null, fetchedAt: string | n
   }
   if (map.grid?.lastIntegratedAt) parts.push(`scan ${formatTimeAgo(map.grid.lastIntegratedAt)}`);
   else parts.push('no scan yet');
+  if (map.nav) {
+    parts.push(
+      map.nav.planned && map.nav.lengthM !== null
+        ? `→ ${map.nav.target}: ${map.nav.lengthM.toFixed(1)} m planned`
+        : `→ ${map.nav.target}: by sight`,
+    );
+  }
   if (fetchedAt) parts.push(`read ${formatTimeAgo(fetchedAt)}`);
   return parts.join(' · ');
 }
@@ -173,6 +180,36 @@ export function drawMap(
       ctx.lineTo(p.x + Math.cos(a) * p.footprintRadiusM * 1.6, p.y + Math.sin(a) * p.footprintRadiusM * 1.6);
       ctx.stroke();
     }
+  }
+
+  // The navigator's planned route (TASK-208): a cobalt polyline from the robot
+  // to where the plan ends, and a ring on the goal. Only when planned — a
+  // "by sight" navigation has no line to draw, and drawing one would be a claim.
+  const nav = map.nav ?? null;
+  if (nav?.planned && nav.path && nav.path.length >= 2) {
+    ctx.beginPath();
+    ctx.moveTo(nav.path[0][0], nav.path[0][1]);
+    for (let i = 1; i < nav.path.length; i++) ctx.lineTo(nav.path[i][0], nav.path[i][1]);
+    ctx.lineWidth = 3 / pxPerM;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = COLOR_SELF;
+    ctx.setLineDash([0.25, 0.15]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (let i = 1; i < nav.path.length - 1; i++) {
+      ctx.beginPath();
+      ctx.arc(nav.path[i][0], nav.path[i][1], 3 / pxPerM, 0, Math.PI * 2);
+      ctx.fillStyle = COLOR_SELF;
+      ctx.fill();
+    }
+  }
+  if (nav?.goal) {
+    ctx.beginPath();
+    ctx.arc(nav.goal.x, nav.goal.y, 0.15, 0, Math.PI * 2);
+    ctx.lineWidth = 2 / pxPerM;
+    ctx.strokeStyle = COLOR_SELF;
+    ctx.stroke();
   }
 
   // Self: heading triangle.

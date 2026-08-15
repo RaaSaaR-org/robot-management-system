@@ -80,8 +80,18 @@ export function formatBlockParams(block: AgentBlock): string {
       if (angle === null) return '';
       return `${angle > 0 ? '+' : ''}${Math.round(angle)}° ${angle >= 0 ? 'left' : 'right'}`;
     }
-    case 'goto':
-      return str(p.entity) ?? '';
+    case 'goto': {
+      // TASK-208: how the navigator is driving it. Absent (older agent, or the
+      // route not planned yet) → just the target.
+      const entity = str(p.entity) ?? '';
+      const nav = block.nav;
+      if (!nav) return entity;
+      const how =
+        nav.planned && nav.lengthM !== null
+          ? `planned ${nav.lengthM.toFixed(1)} m in ${nav.segments} segment${nav.segments === 1 ? '' : 's'}`
+          : 'walking by sight';
+      return entity ? `${entity} · ${how}` : how;
+    }
     case 'scan_room': {
       const steps = num(p.steps);
       return `${steps ?? 8} steps · 360°`;

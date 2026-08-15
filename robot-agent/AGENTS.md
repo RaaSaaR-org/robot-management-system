@@ -248,7 +248,7 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
 | POST   | `/api/v1/robots/:id/reset` | Reset robot state |
 | GET    | `/api/v1/robots/:id/pointcloud` | Depth/LiDAR point-cloud frame (`?sensor=`, `?full=`) |
-| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `peers` + `peersDropped` (TASK-207), `frameId`, `status`; `?format=pgm` for a P5 image. 404 when `AGENT_MAP_ENABLED=false` |
+| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `peers` + `peersDropped` (TASK-207), `nav` (the navigator's planned route, TASK-208), `frameId`, `status`; `?format=pgm` for a P5 image. 404 when `AGENT_MAP_ENABLED=false` |
 | GET    | `/api/v1/register` | Registration info for server |
 | GET    | `/api/v1/health` | Health check |
 
@@ -310,6 +310,46 @@ remember a robot) and, when within `AGENT_PEERS_NOTICE_M` and inside ±90° of
 heading, into scene memory as `robot <name>` with `distanceSource: 'fleet'`, so
 the planner can talk about them. Peers are also on `/map` and, through the server
 proxy `GET /api/robots/:id/agent-mode/map`, on the `/agent` page's Map tab.
+
+### The navigator plans on the map (TASK-208)
+
+`src/agent-mode/path-planner.ts` is pure grid A* (8-connected, octile heuristic,
+no corner cutting) over the live `OccupancyMap`: occupied cells within the robot's
+footprint radius, the peers' discs and the place graph's keepouts (inflated by
+`PLACE_KEEPOUT_MARGIN_M` + one cell) are walls; UNKNOWN cells cost
+`AGENT_NAV_UNKNOWN_COST` × (default 3) so seen floor is preferred but unexplored
+floor is still crossable. Hard budget 20 000 nodes / 50 ms → "no path known",
+never a guess. The path is string-pulled so a straight corridor is one segment.
+Keepouts are only fed in when the place graph's frame is registered to odometry
+(`getPlaceFrameRegistration()`), exactly like the geofence and `/map`.
+
+`Navigator` (`navigator.ts`) with `AGENT_NAV_PLANNER=grid` (default when the map
+is on): the target's goal pose comes from a MEASURED distance (`lidar` or `fleet`;
+a `vlm-estimate` is not a pose) projected into odometry and kept across stages, so
+walks between looks are steered by odometry, not by a re-guessed bearing. Each
+stage: sample a fresh pose, re-plan, turn onto the first segment, walk ≤
+`AGENT_NAV_MAX_SEGMENT_M` (2 m; walk blocks carry `planned: true`), and look only
+when `AGENT_NAV_LOOK_EVERY_M` (2 m) has gone by, the map ahead is unknown, or the
+plan is running out — the final approach (inside the plan's stand-off tolerance,
+`ARRIVAL_M` + robot radius) is the measured staged rule. A goal is refused BEFORE
+the first step when no stand-off spot around it is outside a keepout:
+`"<label> is inside keepout <PLACE> — I won't walk there."` — a target ON a
+fenced surface ("go to the table") is fine, the robot stands 0.6 m off it. No
+path / no map / no pose → the pre-map staged loop with "walking by sight" in
+the block reasoning. Every plan is reported through `onNav` →
+`AgentModeState.nav` + `/map.nav` (the Map tab draws the polyline) and
+`AgentBlock.nav` on the `goto` block ("planned 3.2 m in 2 segments").
+
+`BlockExecutor.walk` checks EVERY forward walk — the planner's own too — against
+the same world (`checkStraightSegment`, 0.1 m samples): a keepout, occupied cell
+or peer ahead shortens the walk ("Stopped 1.60 m short — Table footprint keepout
+ahead at 1.40 m on the map") or refuses it inside `MIN_STAGE_M`; no map/pose/
+keepouts → nothing is said, never a false "clear". And the old escape is closed:
+a clearance the robot has TURNED away from is remembered as unknown-ahead
+(`SceneMemoryStore.wasClearanceExpiredByTurn()`), so "turn 45°, walk 3 m" is
+capped at the blind stage (1 m, or as far as the map knows to be free) unless the
+walk is a `planned` navigator segment. `geofence.ts` / `SafetyMonitor` are
+untouched — the reactive fence stays the last line of defence.
 
 ## Key Dependencies
 

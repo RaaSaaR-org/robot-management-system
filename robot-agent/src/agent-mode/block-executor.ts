@@ -13,7 +13,8 @@ import { hardwareClient, type LocoActionName, type LocoResult } from '../hardwar
 // The two clamp constants live in navigator.ts because that is where they are
 // justified (the 0.45 m comment is the reason the number exists). Importing
 // them is acyclic: navigator.ts imports only config, scene-memory and types.
-import { CLEARANCE_MARGIN_M, MIN_STAGE_M } from './navigator.js';
+import { CLEARANCE_MARGIN_M, MIN_STAGE_M, UNKNOWN_DISTANCE_STAGE_M } from './navigator.js';
+import type { SegmentCheck } from './path-planner.js';
 import { RangeSensor } from './range.js';
 import { speakThroughVoiceService } from './voice-narrator.js';
 import {
@@ -193,6 +194,13 @@ export interface BlockExecutorDeps {
   range?: RangeSensor;
   /** Checked between blocks and inside `wait` — never mid-motion. */
   isAborted: () => boolean;
+  /**
+   * The map's verdict on the straight line `distanceM` ahead (TASK-208):
+   * keepouts at the geofence margin, occupied cells, peers. `null` when there
+   * is nothing to say — no pose, no map and no keepouts — which clamps
+   * nothing: fail-closed on the honest side, never a false "clear".
+   */
+  checkForwardPath?: (distanceM: number) => Promise<SegmentCheck | null> | SegmentCheck | null;
   /** Called after every scene merge so the controller can mirror it. */
   onScene?: (scene: SceneMemory) => void;
   loco?: {
@@ -368,6 +376,57 @@ export class BlockExecutor {
             ` Shortened from the requested ${requestedM.toFixed(2)} m — the lidar measures ` +
             `${clearanceM.toFixed(2)} m straight ahead.`;
         }
+      }
+    }
+
+    // The MAP's check (TASK-208): the whole straight segment, sampled every
+    // 0.1 m, against the keepouts (at the geofence margin), the occupied cells
+    // and the peers. This is what turns the keepout from a fence the robot
+    // hits into a line it does not cross, and it protects EVERY forward walk,
+    // not only the navigator's. Absent map/pose → `null` → nothing changes.
+    let mapCheck: SegmentCheck | null = null;
+    if (direction === 'forward' && this.deps.checkForwardPath) {
+      mapCheck = await this.deps.checkForwardPath(distanceM);
+      if (mapCheck?.blocker && mapCheck.allowedM < distanceM) {
+        const what =
+          mapCheck.blocker.kind === 'keepout'
+            ? `${mapCheck.blocker.label} keepout`
+            : mapCheck.blocker.label;
+        if (mapCheck.allowedM < MIN_STAGE_M) {
+          return {
+            ok: false,
+            message:
+              `walk: ${what} is ${mapCheck.allowedM.toFixed(2)} m ahead on the map — refusing to walk into it. ` +
+              `Turn, or use goto so the route is planned around it.`,
+          };
+        }
+        const shortM = distanceM - mapCheck.allowedM;
+        distanceM = mapCheck.allowedM;
+        clampNote += ` Stopped ${shortM.toFixed(2)} m short — ${what} ahead at ${mapCheck.allowedM.toFixed(2)} m on the map.`;
+      }
+    }
+
+    // The turn-expiry cap (TASK-208). "turn 45°, walk 3 m" used to escape the
+    // clamp above: the turn retired the clearance, `null` clamped nothing, and
+    // the walk ran open-loop down a heading nobody had measured. Now a
+    // clearance the robot has turned away from means UNKNOWN AHEAD, and unknown
+    // ahead is the blind stage — unless something else has checked the way: a
+    // navigator segment planned on the map, or the map itself knowing the
+    // floor to be free that far. A `null` that was never a measurement (no
+    // lidar at all) still clamps nothing, exactly as before.
+    if (
+      direction === 'forward' &&
+      block.params.planned !== true &&
+      this.deps.scene.getForwardClearanceM() === null &&
+      this.deps.scene.wasClearanceExpiredByTurn()
+    ) {
+      const capM = Math.max(UNKNOWN_DISTANCE_STAGE_M, mapCheck?.knownM ?? 0);
+      if (capM < distanceM) {
+        clampNote +=
+          ` Shortened to ${capM.toFixed(2)} m of the requested ${requestedM.toFixed(2)} m — the lidar's clearance was ` +
+          `measured on a heading the robot has since turned away from, so this heading is unmeasured; ` +
+          `look, then walk on.`;
+        distanceM = capM;
       }
     }
 

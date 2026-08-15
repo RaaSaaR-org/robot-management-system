@@ -198,6 +198,15 @@ export class SceneMemoryStore {
    */
   private forwardClearanceYawDeg: number | null = null;
   /**
+   * True from the moment a turn retired the clearance until the next
+   * observation. The distinction it carries (TASK-208): "the lidar never spoke"
+   * and "the lidar spoke about a heading the robot has since left" are both
+   * `null`, but the second one is a robot that HAS a working range sensor and
+   * has simply not measured this heading yet — so a walk down it should be the
+   * blind stage and a look, never an unclamped run.
+   */
+  private clearanceExpiredByTurn = false;
+  /**
    * Distance the robot has travelled since the last observation, in metres,
    * accumulated from commanded base motion (see
    * {@link SceneMemoryStore.noteTranslationM}). Reset by every merge, because a
@@ -310,7 +319,10 @@ export class SceneMemoryStore {
    *
    * Expiring to `null` puts the navigator back on the blind stage plus the
    * arrival-by-contact rule, which is the honest fallback — `null` is UNKNOWN
-   * everywhere in this feature, never "clear".
+   * everywhere in this feature, never "clear". The expiry is also REMEMBERED
+   * (see {@link wasClearanceExpiredByTurn}), because for a plain `walk` block
+   * the executor used to read the resulting `null` as "nothing to clamp" — so
+   * "turn 45°, walk 3 m" escaped the clamp that "walk 3 m" was held to.
    */
   private expireClearanceOnTurn(): void {
     if (this.forwardClearanceM === null || this.forwardClearanceYawDeg === null) return;
@@ -319,6 +331,7 @@ export class SceneMemoryStore {
     }
     this.forwardClearanceM = null;
     this.forwardClearanceYawDeg = null;
+    this.clearanceExpiredByTurn = true;
   }
 
   /**
@@ -446,6 +459,8 @@ export class SceneMemoryStore {
     // expireClearanceOnTurn). `yaw` and not `this.yawDeg`: `scan_room` merges
     // each step against the yaw that step was observed at.
     this.forwardClearanceYawDeg = this.forwardClearanceM === null ? null : yaw;
+    // A fresh observation is a fresh answer about THIS heading, whatever it is.
+    this.clearanceExpiredByTurn = false;
     // Everything above was just measured from where the robot now stands, so
     // the distance it walked to get here is spent (see expireOnTranslation).
     this.translationSinceObservationM = 0;
@@ -545,6 +560,16 @@ export class SceneMemoryStore {
     return this.forwardClearanceM;
   }
 
+  /**
+   * True when the clearance is `null` BECAUSE a turn retired a measurement,
+   * and no observation has replaced it since (TASK-208). The executor caps a
+   * forward walk at the blind stage in that state; a plain "never measured"
+   * `null` still clamps nothing, because it may be a robot with no lidar at all.
+   */
+  wasClearanceExpiredByTurn(): boolean {
+    return this.forwardClearanceM === null && this.clearanceExpiredByTurn;
+  }
+
   /** Null until the first observation — "nothing seen yet" is not an empty scene. */
   snapshot(): SceneMemory | null {
     if (this.updatedAt === null) return null;
@@ -565,6 +590,7 @@ export class SceneMemoryStore {
     this.personVisible = false;
     this.forwardClearanceM = null;
     this.forwardClearanceYawDeg = null;
+    this.clearanceExpiredByTurn = false;
     this.translationSinceObservationM = 0;
     this.updatedAt = null;
     // Pose and place deliberately SURVIVE `clear()`. This wipes what the robot

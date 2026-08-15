@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
-import { RobotMapPanel, mapFooterText } from '../RobotMapPanel';
+import { RobotMapPanel, drawMap, mapFooterText } from '../RobotMapPanel';
 import { KnowledgePanel } from '../KnowledgePanel';
 import { useAgentModeStore } from '../../store/agentmodeStore';
 import type { RobotMapPayload } from '../../types/agentmode.types';
@@ -67,6 +67,60 @@ describe('mapFooterText', () => {
       'frame: sim · peers off · no scan yet',
     );
     expect(mapFooterText(null, null)).toBe('');
+  });
+
+  it('names the navigator\'s route when one is running (TASK-208)', () => {
+    const nav = { target: 'table', planned: true, path: [[0, 0], [2, 0]] as Array<[number, number]>, goal: { x: 3, y: 0 }, lengthM: 2.4, segments: 1, reason: null, updatedAt: '' };
+    expect(mapFooterText(payload({ nav }), null)).toContain('→ table: 2.4 m planned');
+    expect(mapFooterText(payload({ nav: { ...nav, planned: false, path: null, lengthM: null, segments: 0, reason: 'no map' } }), null)).toContain(
+      '→ table: by sight',
+    );
+    expect(mapFooterText(payload({ nav: null }), null)).not.toContain('→');
+  });
+});
+
+/** A recording 2D context: enough of the API for drawMap, and a log of the calls that matter. */
+function recordingContext() {
+  const calls: Array<{ op: string; args: unknown[] }> = [];
+  const noop = () => {};
+  const rec = (op: string) => (...args: unknown[]) => calls.push({ op, args });
+  const ctx = {
+    calls,
+    clearRect: noop, save: noop, restore: noop, translate: noop, scale: noop, rotate: noop,
+    beginPath: rec('beginPath'), moveTo: rec('moveTo'), lineTo: rec('lineTo'), closePath: noop,
+    arc: rec('arc'), fill: noop, stroke: rec('stroke'), setLineDash: rec('setLineDash'), fillText: rec('fillText'),
+    drawImage: noop, measureText: () => ({ width: 10 }),
+    lineWidth: 1, lineCap: 'butt', lineJoin: 'miter', strokeStyle: '', fillStyle: '', font: '', textAlign: '', textBaseline: '', imageSmoothingEnabled: true,
+  };
+  return ctx as unknown as CanvasRenderingContext2D & { calls: typeof calls };
+}
+
+describe('drawMap — the planned route (TASK-208)', () => {
+  const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: '#000' };
+
+  it('draws the polyline through every waypoint and a ring on the goal when planned', () => {
+    const ctx = recordingContext();
+    const nav = { target: 'table', planned: true, path: [[0, 0], [1, 0.5], [2, 0.5]] as Array<[number, number]>, goal: { x: 2.8, y: 0.5 }, lengthM: 2.1, segments: 2, reason: null, updatedAt: '' };
+    drawMap(ctx, payload({ nav, keepouts: [], peers: [] }), view, null);
+    const lineTos = ctx.calls.filter((c) => c.op === 'lineTo').map((c) => c.args);
+    expect(lineTos).toEqual(expect.arrayContaining([[1, 0.5], [2, 0.5]]));
+    const arcs = ctx.calls.filter((c) => c.op === 'arc').map((c) => c.args.slice(0, 3));
+    expect(arcs).toEqual(expect.arrayContaining([[2.8, 0.5, 0.15]]));
+  });
+
+  it('draws no route line by sight — only the goal ring, and nothing at all with no navigation', () => {
+    const ctx = recordingContext();
+    const nav = { target: 'table', planned: false, path: null, goal: { x: 2.8, y: 0.5 }, lengthM: null, segments: 0, reason: 'no map', updatedAt: '' };
+    drawMap(ctx, payload({ nav, keepouts: [], peers: [] }), view, null);
+    // The self triangle, scale bar and north arrow use lineTo too; the route would add its waypoints.
+    const base = recordingContext();
+    drawMap(base, payload({ nav: null, keepouts: [], peers: [] }), view, null);
+    expect(ctx.calls.filter((c) => c.op === 'lineTo')).toHaveLength(base.calls.filter((c) => c.op === 'lineTo').length);
+    expect(ctx.calls.filter((c) => c.op === 'arc').map((c) => c.args.slice(0, 3))).toEqual([[2.8, 0.5, 0.15]]);
+
+    const none = recordingContext();
+    drawMap(none, payload({ nav: null, keepouts: [], peers: [] }), view, null);
+    expect(none.calls.filter((c) => c.op === 'arc')).toHaveLength(0);
   });
 });
 
