@@ -39,6 +39,10 @@ const PlannedBlockSchema = z.object({
   // argument is the sidecar's documented `turn` (turn the torso toward the
   // person). See BlockExecutor.wave().
   turn: z.boolean().optional(),
+  // `look` only: say out loud what the frame shows. The planner cannot know
+  // the answer to "what is on the table" when it plans, so it must not put an
+  // answer (or the question) into `speak` — it asks the look to speak instead.
+  speak: z.boolean().optional(),
   pose: z.enum(['stand', 'high', 'low', 'sit', 'damp']).optional(),
   text: z.string().optional(),
   seconds: z.number().optional(),
@@ -124,7 +128,7 @@ export function coerceParams(block: PlannedBlockRaw): Record<string, unknown> {
       return { entity };
     }
     case 'look':
-      return {};
+      return block.speak === true ? { speak: true } : {};
     case 'scan_room': {
       const steps =
         block.steps === undefined || !Number.isFinite(block.steps)
@@ -262,6 +266,43 @@ export function enforceTurnDirection(
   });
 
   return { blocks: next, corrections };
+}
+
+/**
+ * Fold a `wave` that sits right next to a `greet` into the `greet`.
+ *
+ * `greet` already waves and speaks. Small planners answer "wave and say hello"
+ * with BOTH — `wave` then `greet` — and the robot waves twice in a row, ~8 s of
+ * arm-waving for a two-second request (measured with gemma4:e2b in the sim).
+ * Deterministic here rather than another prompt rule: prompt text that a
+ * small model ignores is dead weight on every plan, a merge is not. Only the
+ * adjacent case is touched; "wave, walk over, then greet" keeps both. When the
+ * `wave` asked for the torso turn, the merged `greet` does not lose it: its
+ * `turn` is copied onto the greet, which the executor honours.
+ */
+export function mergeAdjacentWaveIntoGreet(blocks: PlannedBlock[]): {
+  blocks: PlannedBlock[];
+  merged: number;
+} {
+  const out: PlannedBlock[] = [];
+  let merged = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const cur = blocks[i]!;
+    const next = blocks[i + 1];
+    const prev = out[out.length - 1];
+    if (cur.kind === 'wave' && next?.kind === 'greet') {
+      merged++;
+      if (cur.params.turn === true) next.params = { ...next.params, turn: true };
+      continue; // the greet that follows waves anyway
+    }
+    if (cur.kind === 'wave' && prev?.kind === 'greet') {
+      merged++;
+      if (cur.params.turn === true) prev.params = { ...prev.params, turn: true };
+      continue; // the greet before it already waved
+    }
+    out.push(cur);
+  }
+  return { blocks: out, merged };
 }
 
 /** True when a block cannot be executed as written (missing required params). */
@@ -416,8 +457,14 @@ export class Planner {
               `(${dropped.join(', ')}) that duplicated the following block's kind.`
           );
         }
+        const { blocks: deduped, merged } = mergeAdjacentWaveIntoGreet(validated);
+        if (merged > 0) {
+          console.warn(
+            `[AgentMode/Planner] dropped ${merged} wave block(s) adjacent to a greet — greet waves already.`
+          );
+        }
         // Last line of defence on the turn direction — see enforceTurnDirection.
-        const { blocks, corrections } = enforceTurnDirection(input.command, validated);
+        const { blocks, corrections } = enforceTurnDirection(input.command, deduped);
         for (const c of corrections) {
           console.warn(
             `[AgentMode/Planner] turn direction corrected: the command says ` +

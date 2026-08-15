@@ -53,5 +53,15 @@ L_SHOULDER_PITCH, L_SHOULDER_ROLL, L_ELBOW = 15, 16, 18
 R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW = 22, 23, 24
 R_ELBOW, R_WRIST_ROLL = 25, 26
 
+# Relaxed standing arm pose, keyed by BODY index (radians). The MJCF zero pose
+# holds both arms straight out in front -- fine for a joint-index table, wrong
+# for a robot that is supposed to look like it is standing in a room. The sim
+# starts here and every canned gesture ramps out of / back into it, so a wave
+# ends with the arm hanging, not pointing at the wall.
+ARM_REST: dict[int, float] = {
+    L_SHOULDER_PITCH: 0.25, L_SHOULDER_ROLL: 0.25, L_ELBOW: 0.90,
+    R_SHOULDER_PITCH: 0.25, R_SHOULDER_ROLL: -0.25, R_ELBOW: 0.90,
+}
+
 N_BODY = len(BODY)
 N_HAND = len(LHAND)

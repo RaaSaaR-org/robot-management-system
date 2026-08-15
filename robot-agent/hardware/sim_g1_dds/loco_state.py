@@ -40,12 +40,12 @@ from dataclasses import dataclass, field
 
 try:  # package import (python -m sim_g1_dds.sim_node)
     from .joints import (
-        R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW,
+        ARM_REST, R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW,
         R_WRIST_ROLL, WAIST_YAW,
     )
 except ImportError:  # plain-script import (mjpython sim_node.py)
     from joints import (  # type: ignore[no-redef]
-        R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW,
+        ARM_REST, R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW,
         R_WRIST_ROLL, WAIST_YAW,
     )
 
@@ -306,28 +306,37 @@ class LocoState:
             s = 1.0
         return s * s * (3.0 - 2.0 * s)
 
+    @staticmethod
+    def _from_rest(peaks: dict[int, float], env: float) -> dict[int, float]:
+        """Blend each joint from its ARM_REST angle (env 0) to its peak (env 1).
+
+        Joints without a rest entry (waist, wrist) blend from 0.
+        """
+        return {j: ARM_REST.get(j, 0.0) * (1.0 - env) + peak * env
+                for j, peak in peaks.items()}
+
     def _wave_targets(self, t: float, turn: bool) -> dict[int, float]:
         env = self._ramp(t, WAVE_DURATION_S)
         osc = math.sin(2.0 * math.pi * 0.9 * t)
-        targets = {
-            R_SHOULDER_PITCH: -1.35 * env,
-            R_SHOULDER_ROLL: (-0.35 + 0.40 * osc) * env,
-            R_ELBOW: 1.00 * env,
-            R_WRIST_ROLL: 0.35 * osc * env,
+        peaks = {
+            R_SHOULDER_PITCH: -1.35,
+            R_SHOULDER_ROLL: -0.35 + 0.40 * osc,
+            R_ELBOW: 1.00,
+            R_WRIST_ROLL: 0.35 * osc,
         }
         if turn:
             # turn_flag on the real robot turns the torso toward the greeted
             # person; the waist is the only DOF we have for that here.
-            targets[WAIST_YAW] = 0.35 * env
-        return targets
+            peaks[WAIST_YAW] = 0.35
+        return self._from_rest(peaks, env)
 
     def _shake_targets(self, t: float, reaching: bool) -> dict[int, float]:
         env = self._ramp(t, SHAKE_DURATION_S)
         if not reaching:
             env *= 0.35  # the return stage lowers the arm rather than extending
-        return {
-            R_SHOULDER_PITCH: -0.75 * env,
-            R_SHOULDER_ROLL: -0.18 * env,
-            R_SHOULDER_YAW: 0.10 * env,
-            R_ELBOW: 0.85 * env,
-        }
+        return self._from_rest({
+            R_SHOULDER_PITCH: -0.75,
+            R_SHOULDER_ROLL: -0.18,
+            R_SHOULDER_YAW: 0.10,
+            R_ELBOW: 0.85,
+        }, env)

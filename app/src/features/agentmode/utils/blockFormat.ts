@@ -112,7 +112,9 @@ export function formatBlockParams(block: AgentBlock): string {
       return text ? `${scope}: “${text}”` : scope;
     }
     case 'look':
-      return 'camera → scene memory';
+      // `speak: true` is the answering look ("tell me what is on the table"):
+      // the robot says what it sees, so the card should say so up front.
+      return p.speak === true ? 'camera → scene memory · says what it sees' : 'camera → scene memory';
     default: {
       const pairs = Object.entries(p).map(([k, v]) => `${k}: ${String(v)}`);
       return pairs.join(' · ');

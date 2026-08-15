@@ -131,6 +131,12 @@ const NO_MOTION_HINT =
   'Send a `posture` block with pose "stand" before moving again.';
 
 const MIN_DURATION_S = 0.2;
+
+/**
+ * How long the G1's WaveHand animation plays after SetTaskId is accepted. The
+ * sim (`sim_g1_dds/loco_state.py`, WAVE_DURATION_S) is timed to the same value.
+ */
+export const WAVE_GESTURE_MS = 4_000;
 /** Cap so a hallucinated distance cannot produce a minutes-long command. */
 const MAX_DURATION_S = 60;
 
@@ -293,7 +299,7 @@ export class BlockExecutor {
         case 'turn':
           return await this.turn(block);
         case 'look':
-          return await this.look();
+          return await this.look(block);
         case 'scan_room':
           return await this.scanRoom(block);
         case 'wave':
@@ -516,15 +522,22 @@ export class BlockExecutor {
 
   // ── perception ────────────────────────────────────────────────────────────
 
-  private async look(): Promise<BlockOutcome> {
+  private async look(block: AgentBlock): Promise<BlockOutcome> {
     const observation = await this.observeAndMerge();
     const labels = observation.entities.map((e) => e.label);
+    const seen =
+      labels.length > 0
+        ? `Looked: ${observation.currentView} (entities: ${labels.join(', ')})`
+        : `Looked: ${observation.currentView}`;
+    if (block.params.speak !== true) return { ok: true, message: seen };
+    // `speak: true` — the operator asked what the robot sees, so the
+    // observation IS the answer. A degraded observation (VLM down) is still
+    // spoken honestly: it says the model was unavailable, not something made up.
+    const text = observation.currentView.trim();
+    const spoken = text ? await this.say(text, this.language()) : false;
     return {
       ok: true,
-      message:
-        labels.length > 0
-          ? `Looked: ${observation.currentView} (entities: ${labels.join(', ')})`
-          : `Looked: ${observation.currentView}`,
+      message: `${seen} — said${spoken ? '' : ' (text-only, voice service unreachable)'}: "${text}"`,
     };
   }
 
@@ -658,6 +671,8 @@ export class BlockExecutor {
     const turn = block.params.turn === true;
     const result = await this.loco.action('wave', { turn });
     if (!result.ok) return { ok: false, message: `wave failed: ${locoError(result)}` };
+    const held = await this.holdForGesture(WAVE_GESTURE_MS);
+    if (!held.ok) return held;
     return {
       ok: true,
       message: turn
@@ -666,21 +681,50 @@ export class BlockExecutor {
     };
   }
 
+  /**
+   * Keep the block open while a canned gesture plays.
+   *
+   * `WaveHand` is `SetTaskId(0|1)` on the wire and returns as soon as the
+   * request is accepted — the robot then plays a ~4 s animation on its own.
+   * Without this hold a `wave` block finished in 2 ms (measured against the
+   * sim, whose gesture is timed to the real G1's), the plan reported `done`
+   * with the arm still in the air, and "wave, then walk" started walking
+   * mid-wave. Interruptible in 100 ms slices like `wait`: an abort lets go of
+   * the block, the gesture itself finishes on the robot either way.
+   */
+  private async holdForGesture(totalMs: number): Promise<BlockOutcome> {
+    const sliceMs = 100;
+    let elapsed = 0;
+    while (elapsed < totalMs) {
+      if (this.deps.isAborted()) {
+        return { ok: false, message: `gesture aborted after ${(elapsed / 1000).toFixed(1)} s` };
+      }
+      const step = Math.min(sliceMs, totalMs - elapsed);
+      await this.sleep(step);
+      elapsed += step;
+    }
+    return { ok: true, message: '' };
+  }
+
   private async greet(block: AgentBlock): Promise<BlockOutcome> {
     const text = typeof block.params.text === 'string' && block.params.text.trim()
       ? block.params.text.trim()
       : 'Hello! Good to see you.';
     const spoken = await this.say(text, this.language());
-    // `turn: false` — the same gesture the robot has always performed here. The
-    // torso turn is only correct when we know where the person is, and `greet`
-    // carries no bearing; the planner can ask for it explicitly via `wave`.
-    const result = await this.loco.action('wave', { turn: false });
+    // Default `turn: false` — the torso turn is only correct when we know
+    // where the person is, and `greet` carries no bearing of its own. The
+    // planner sets `turn` here when it folded a `wave {turn:true}` into this
+    // greet (see mergeAdjacentWaveIntoGreet).
+    const turn = block.params.turn === true;
+    const result = await this.loco.action('wave', { turn });
     if (!result.ok) {
       return {
         ok: false,
         message: `greet: said "${text}"${spoken ? '' : ' (text-only, voice service unreachable)'} but the wave failed: ${locoError(result)}`,
       };
     }
+    const held = await this.holdForGesture(WAVE_GESTURE_MS);
+    if (!held.ok) return held;
     return {
       ok: true,
       message: `Greeted: "${text}"${spoken ? '' : ' (text-only, voice service unreachable)'} + right-arm wave.`,
