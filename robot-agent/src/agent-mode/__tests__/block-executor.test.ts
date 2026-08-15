@@ -1102,7 +1102,7 @@ describe('BlockExecutor — the map checks every forward walk (TASK-208)', () =>
     const outcome = await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
     expect(outcome.ok).toBe(true);
     expect(h.moves[0].durationS).toBeCloseTo(1.2 / WALK_SPEED, 3);
-    expect(outcome.message).toMatch(/Stopped 1\.80 m short — TABLE keepout ahead at 1\.20 m on the map/);
+    expect(outcome.message).toMatch(/Stopped 1\.80 m short of the requested 3\.00 m — TABLE keepout ahead at 1\.20 m on the map/);
   });
 
   it('refuses when the blocker is inside the shortest useful stage', async () => {

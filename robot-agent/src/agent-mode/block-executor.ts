@@ -400,9 +400,14 @@ export class BlockExecutor {
               `Turn, or use goto so the route is planned around it.`,
           };
         }
-        const shortM = distanceM - mapCheck.allowedM;
+        // The map's stop is the tighter one and it names the reason, so it
+        // replaces the lidar's note rather than being appended to it — one
+        // sentence, measured against what was ASKED, not against the clamp.
+        const shortM = requestedM - mapCheck.allowedM;
         distanceM = mapCheck.allowedM;
-        clampNote += ` Stopped ${shortM.toFixed(2)} m short — ${what} ahead at ${mapCheck.allowedM.toFixed(2)} m on the map.`;
+        clampNote =
+          ` Stopped ${shortM.toFixed(2)} m short of the requested ${requestedM.toFixed(2)} m — ` +
+          `${what} ahead at ${mapCheck.allowedM.toFixed(2)} m on the map.`;
       }
     }
 

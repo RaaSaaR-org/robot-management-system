@@ -174,6 +174,9 @@ burns the command + each block (as it runs) + result as captions:
     --start=-0.5,-0.5,90         # x, y, yaw° to teleport to first
     --prime "look"               # a command run BEFORE recording (warms scene memory;
                                  #   Agent Mode's scene memory is per process)
+    --map                        # inset: the robot's own map — grid, keepouts (amber),
+                                 #   peers (orange), the planned route (blue), sampled
+                                 #   from GET /robots/:id/map while recording
 ```
 
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
@@ -182,6 +185,14 @@ per-block timings, for editing elsewhere). Rendering runs on the physics
 thread, so `/health` now reports `behind_s` and the sim warns when it trails
 real time — the executor waits in wall seconds, and a lagging sim under-executes
 every motion.
+
+Timing: the recorder emits one frame per SIM-time period and drops what it
+cannot render, so under load (two insets + a VLM on the same GPU) the clip is a
+time-compressed version of the wall clock. `demo_clip.py` samples the
+recorders' frame counters (`GET /record`) while recording and times every
+caption in VIDEO seconds (`t0`/`t1` in the JSON; `t0_wall`/`t1_wall` keep the
+wall clock), and re-cuts the eye-view inset onto the main stream's timeline —
+the two recorders drop frames independently and drifted apart by seconds.
 Needs the robot-agent running with `npm run dev:g1-edu-agent` (Ollama models
 pulled) and this sim on `--http-port 8777`.
 
@@ -350,7 +361,7 @@ curl -s localhost:41246/api/v1/robots/sim-robot-g1-edu/map | jq '.nav'   # {plan
 # A plain walk into the table's keepout is stopped short BEFORE the geofence fires.
 curl -s -X POST localhost:8777/sim/reset-pose -H 'content-type: application/json' -d '{"x":0,"y":0,"yaw":1.5708}'
 curl -s -X POST localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode/command      -H 'content-type: application/json' -d '{"text":"turn right by 65 degrees, then walk 3 meters forward"}'
-# → walk block: "Walked 1.38 m … Stopped 1.60 m short — Table footprint keepout ahead at 1.40 m on the map."
+# → walk block: "Walked 1.38 m … Stopped 1.60 m short of the requested 3.00 m — Table footprint keepout ahead at 1.40 m on the map."
 ```
 
 The `/agent?robot=…&tab=map` panel draws the planned polyline (cobalt, dashed)

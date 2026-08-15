@@ -342,7 +342,7 @@ the block reasoning. Every plan is reported through `onNav` →
 
 `BlockExecutor.walk` checks EVERY forward walk — the planner's own too — against
 the same world (`checkStraightSegment`, 0.1 m samples): a keepout, occupied cell
-or peer ahead shortens the walk ("Stopped 1.60 m short — Table footprint keepout
+or peer ahead shortens the walk ("Stopped 1.60 m short of the requested 3.00 m — Table footprint keepout
 ahead at 1.40 m on the map") or refuses it inside `MIN_STAGE_M`; no map/pose/
 keepouts → nothing is said, never a false "clear". And the old escape is closed:
 a clearance the robot has TURNED away from is remembered as unknown-ahead

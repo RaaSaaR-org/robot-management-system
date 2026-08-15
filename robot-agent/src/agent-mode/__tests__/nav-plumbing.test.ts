@@ -93,7 +93,7 @@ describe('nav plumbing — the keepout check on a plain walk', () => {
     const block = h.controller.getState().plan!.blocks[0]!;
     expect(block.status).toBe('done');
     // Polygon face at x = 2, margin 0.5 → fence at 1.5 m; allowed ≈ 1.3 m.
-    expect(block.result).toMatch(/Stopped 1\.[67]\d m short — TABLE keepout ahead/);
+    expect(block.result).toMatch(/Stopped 1\.[67]\d m short of the requested 3\.00 m — TABLE keepout ahead/);
     expect(h.moves[0]!.durationS).toBeLessThan(1.4 / 0.4 + 0.01);
     expect(h.moves[0]!.durationS).toBeGreaterThan(1.2 / 0.4);
   });

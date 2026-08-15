@@ -295,6 +295,22 @@ describe('checkStraightSegment', () => {
     expect(c.allowedM).toBeLessThan(1.0);
   });
 
+  it('shortens a walk that would END inside the cushion of a fence it never crosses', () => {
+    // Fence at x = 2.0 (face 2.5, margin 0.5). A 0.98 m walk from x = 1 ends
+    // 2 cm outside the line with no fenced sample inside it — exactly the walk
+    // that used to pass untouched and park the robot on the line. It is
+    // shortened to a cushion (0.2 m) short of the fence.
+    const c = checkStraightSegment(world(openMap(6), [TABLE]), { x: 1, y: 1 }, 0, 0.98);
+    expect(c.blocker).toEqual({ kind: 'keepout', label: 'TABLE' });
+    expect(c.allowedM).toBeGreaterThanOrEqual(0.75);
+    expect(c.allowedM).toBeLessThan(0.98);
+    // A walk that ends a full cushion clear of the fence stands as requested.
+    const clear = checkStraightSegment(world(openMap(6), [TABLE]), { x: 1, y: 1 }, 0, 0.75);
+    expect(clear.blocker).toBeNull();
+    expect(clear.allowedM).toBe(0.75);
+    expect(clear.knownM).toBeCloseTo(0.75, 5);
+  });
+
   it('checks keepouts even without a map, and knows nothing about the floor', () => {
     const c = checkStraightSegment(world(null, [TABLE]), { x: 1, y: 1 }, 0, 3);
     expect(c.blocker?.kind).toBe('keepout');

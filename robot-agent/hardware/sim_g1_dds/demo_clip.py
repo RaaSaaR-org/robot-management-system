@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -63,6 +64,87 @@ def http(method: str, url: str, body: dict | None = None, timeout: float = 30.0)
         raise SystemExit(f"{method} {url} -> {exc.code}: {exc.read().decode(errors='replace')[:300]}")
     except urllib.error.URLError as exc:
         raise SystemExit(f"{method} {url} failed: {exc.reason} (is it running?)")
+
+
+class SimClock:
+    """Maps wall time to VIDEO time.
+
+    The recorder emits one frame per SIM-time period and drops the frames it
+    cannot render when the sim catches up (offscreen renders + a VLM on the
+    same GPU), so the clip is a time-compressed version of the wall clock and
+    captions timed in wall seconds land late. Sampling the recorder's own frame
+    counter during the recording gives the exact mapping:
+    video_t(wall) = (frames(wall) - frames(wall0)) / fps.
+    """
+
+    def __init__(self, sim_url: str, fps: int, period: float = 0.2) -> None:
+        self.sim_url, self.fps, self.period = sim_url, fps, period
+        self.samples: list[tuple[float, int]] = []   # (wall, frames emitted so far)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self.wall0: float | None = None
+
+    def start(self) -> None:
+        self.wall0 = time.time()
+        self._sample()
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._sample()
+
+    def _sample(self) -> None:
+        try:
+            r = http("GET", f"{self.sim_url}/record", timeout=2)
+            recs = r.get("recorders") or {}
+            if not recs and r.get("current"):
+                recs = {"main": r["current"]}
+            self.samples.append((time.time(), {k: int(v.get("frames") or 0) for k, v in recs.items()}))
+        except Exception:  # noqa: BLE001 -- a missed sample is a small timing error, not a failure
+            pass
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.period):
+            self._sample()
+
+    def frames(self, wall: float, rec: str = "main") -> float:
+        pts = [(w, d.get(rec, 0)) for w, d in self.samples]
+        if not pts:
+            return 0.0
+        prev = pts[0]
+        for cur in pts:
+            if cur[0] >= wall:
+                if cur[0] == prev[0]:
+                    return float(cur[1])
+                f = (wall - prev[0]) / (cur[0] - prev[0])
+                return prev[1] + f * (cur[1] - prev[1])
+            prev = cur
+        # past the last sample: the recorder is stopped, the clip ends here
+        return float(prev[1])
+
+    def video_t(self, wall: float | None) -> float | None:
+        if wall is None or self.wall0 is None:
+            return None
+        return (self.frames(wall) - self.frames(self.wall0)) / self.fps
+
+    def wall_of_video_t(self, t: float) -> float:
+        """Inverse of video_t (main recorder): the wall time at which frame t*fps was emitted."""
+        if not self.samples or self.wall0 is None:
+            return (self.wall0 or 0.0) + t
+        target = self.frames(self.wall0) + t * self.fps
+        prev = (self.samples[0][0], self.samples[0][1].get("main", 0))
+        for w, d in self.samples:
+            cur = (w, d.get("main", 0))
+            if cur[1] >= target:
+                if cur[1] == prev[1]:
+                    return cur[0]
+                f = (target - prev[1]) / (cur[1] - prev[1])
+                return prev[0] + f * (cur[0] - prev[0])
+            prev = cur
+        return prev[0]
+
+    def has(self, rec: str) -> bool:
+        return any(rec in d for _, d in self.samples)
 
 
 def iso_to_s(stamp: str) -> float:
@@ -206,14 +288,22 @@ class CaptionSheet:
         self.items.append((path, t0, t1))
 
     def ffmpeg_args(self, raw: pathlib.Path, out: pathlib.Path, pip: pathlib.Path | None = None,
-                    pip_w: int = 0, pip_y: int = 0) -> list[str]:
+                    pip_w: int = 0, pip_y: int = 0,
+                    map_seq: tuple[pathlib.Path, int, int, int] | None = None) -> list[str]:
+        """map_seq = (png pattern, fps, x, y): a pre-rendered inset sequence."""
         args = [shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw)]
         for path, _, _ in self.items:
             args += ["-i", str(path)]
         n_cap = len(self.items)
         if pip is not None and pip_w:
             args += ["-i", str(pip)]
+        n_in = n_cap + (1 if pip is not None and pip_w else 0)
+        if map_seq is not None:
+            args += ["-framerate", str(map_seq[1]), "-i", str(map_seq[0])]
         chain, prev = [], "[0:v]"
+        if map_seq is not None:
+            chain.append(f"{prev}[{n_in + 1}:v]overlay={map_seq[2]}:{map_seq[3]}:eof_action=repeat[vm]")
+            prev = "[vm]"
         if pip is not None and pip_w:
             # Inset first so captions draw over it. Rounded look is not worth a
             # mask; a 3 px border reads fine.
@@ -232,8 +322,191 @@ class CaptionSheet:
         return args
 
 
+class MapLog:
+    """Samples the robot-agent's `/map` (grid + keepouts + peers + planned route)
+    at a few Hz while recording, so the clip can carry a live map inset."""
+
+    def __init__(self, url: str, period: float = 0.25) -> None:
+        self.url, self.period = url, period
+        self.samples: list[tuple[float, dict]] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._sample()
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _sample(self) -> None:
+        try:
+            m = http("GET", self.url, timeout=2)
+            if m.get("ok"):
+                self.samples.append((time.time(), m))
+        except Exception:  # noqa: BLE001 -- a missed sample is a stale inset frame, not a failure
+            pass
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.period):
+            self._sample()
+
+
+def _decode_grid(grid: dict) -> tuple[list[int], int, int]:
+    import base64
+    raw = base64.b64decode(grid["cells"])
+    cells = [b - 256 if b > 127 else b for b in raw]
+    return cells, int(grid["width"]), int(grid["height"])
+
+
+def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float, fps: int,
+                      size_px: int, workdir: pathlib.Path) -> tuple[pathlib.Path, dict] | None:
+    """PNG sequence of the map inset (north up, fixed window over the known
+    room), one frame per 1/fps video-seconds. Returns (pattern, window)."""
+    from PIL import Image, ImageDraw
+    if not samples:
+        return None
+    # A fixed window: the known cells plus every keepout and peer, padded.
+    xs, ys = [], []
+    for _, m in samples[-1:]:
+        g = m.get("grid")
+        if g:
+            cells, gw, gh = _decode_grid(g)
+            res, ox, oy = g["resolution"], g["originX"], g["originY"]
+            for idx, v in enumerate(cells):
+                if v >= g["occupiedAbove"] or v <= g["freeBelow"]:
+                    xs.append(ox + (idx % gw) * res); ys.append(oy + (idx // gw) * res)
+        for k in m.get("keepouts") or []:
+            for x, y in k["polygon"]:
+                xs.append(x); ys.append(y)
+    for _, m in samples:
+        p = m.get("pose")
+        if p:
+            xs.append(p["x"]); ys.append(p["y"])
+        for pr in m.get("peers") or []:
+            xs.append(pr["x"]); ys.append(pr["y"])
+    if not xs:
+        return None
+    pad = 0.6
+    x0, x1, y0, y1 = min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
+    span = max(x1 - x0, y1 - y0)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    x0, y0 = cx - span / 2, cy - span / 2
+    scale = size_px / span
+    def px(x: float, y: float) -> tuple[float, float]:
+        return ((x - x0) * scale, size_px - (y - y0) * scale)
+
+    mdir = workdir / "map"
+    mdir.mkdir(parents=True, exist_ok=True)
+    stamped = [(video_t(w), m) for w, m in samples]
+    stamped = [(t, m) for t, m in stamped if t is not None]
+    n = int(seconds * fps) + 1
+    j = 0
+    last_key, last_img = None, None
+    for f in range(n):
+        t = f / fps
+        while j + 1 < len(stamped) and stamped[j + 1][0] <= t:
+            j += 1
+        m = stamped[j][1]
+        key = id(m)
+        if key == last_key and last_img is not None:
+            last_img.save(mdir / f"{f:05d}.png")
+            continue
+        img = Image.new("RGBA", (size_px, size_px), (18, 21, 27, 235))
+        d = ImageDraw.Draw(img, "RGBA")
+        g = m.get("grid")
+        if g:
+            cells, gw, gh = _decode_grid(g)
+            res, ox, oy = g["resolution"], g["originX"], g["originY"]
+            cs = max(1.0, res * scale)
+            for idx, v in enumerate(cells):
+                if v == 0:
+                    continue
+                if v >= g["occupiedAbove"]:
+                    col = (236, 238, 242, 255)
+                elif v <= g["freeBelow"]:
+                    col = (48, 54, 64, 255)
+                else:
+                    continue
+                X, Y = px(ox + (idx % gw) * res, oy + (idx // gw) * res + res)
+                d.rectangle([X, Y, X + cs, Y + cs], fill=col)
+        for k in m.get("keepouts") or []:
+            pts = [px(x, y) for x, y in k["polygon"]]
+            d.polygon(pts, fill=(255, 170, 40, 60), outline=(255, 170, 40, 230))
+        for pr in m.get("peers") or []:
+            X, Y = px(pr["x"], pr["y"]); r = max(4.0, pr.get("footprintRadiusM", 0.35) * scale)
+            d.ellipse([X - r, Y - r, X + r, Y + r], fill=(255, 120, 60, 200), outline=(255, 200, 160, 255), width=2)
+        nav = m.get("nav")
+        if nav:
+            path = nav.get("path") or []
+            if len(path) >= 2:
+                pts = [px(x, y) for x, y in path]
+                # dashed cobalt polyline
+                import math
+                for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+                    L = math.hypot(bx - ax, by - ay)
+                    if L < 1e-6:
+                        continue
+                    n_d = max(1, int(L / 12))
+                    for k2 in range(n_d):
+                        f0, f1 = k2 / n_d, (k2 + 0.55) / n_d
+                        d.line([(ax + (bx - ax) * f0, ay + (by - ay) * f0),
+                                (ax + (bx - ax) * f1, ay + (by - ay) * f1)], fill=(42, 95, 255, 255), width=4)
+                for X, Y in pts[1:-1]:
+                    d.ellipse([X - 4, Y - 4, X + 4, Y + 4], fill=(42, 95, 255, 255))
+            goal = nav.get("goal")
+            if goal:
+                X, Y = px(goal["x"], goal["y"]); r = 0.15 * scale
+                d.ellipse([X - r, Y - r, X + r, Y + r], outline=(42, 95, 255, 255), width=3)
+        p = m.get("pose")
+        if p:
+            import math
+            X, Y = px(p["x"], p["y"]); yaw = math.radians(p["yawDeg"]); r = 0.3 * scale
+            tip = (X + r * math.cos(yaw), Y - r * math.sin(yaw))
+            l = (X + 0.5 * r * math.cos(yaw + 2.5), Y - 0.5 * r * math.sin(yaw + 2.5))
+            rr = (X + 0.5 * r * math.cos(yaw - 2.5), Y - 0.5 * r * math.sin(yaw - 2.5))
+            d.polygon([tip, l, rr], fill=(120, 230, 255, 255))
+        d.rectangle([0, 0, size_px - 1, size_px - 1], outline=(255, 255, 255, 200), width=2)
+        img.save(mdir / f"{f:05d}.png")
+        last_key, last_img = key, img
+    return mdir / "%05d.png", {"x0": x0, "y0": y0, "span": span}
+
+
+def retime_pip(pip: pathlib.Path, clock: "SimClock", pip_fps: int, seconds: float,
+               workdir: pathlib.Path) -> pathlib.Path:
+    """The eye-view recorder drops frames differently from the main one, so the
+    two streams drift apart. Re-cut the pip onto the MAIN video's timeline:
+    for every 1/pip_fps of video time, pick the pip frame that was emitted at
+    the same wall moment."""
+    fdir = workdir / "pip"
+    fdir.mkdir(parents=True, exist_ok=True)
+    subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y", "-i", str(pip),
+                    str(fdir / "%05d.png")], check=True)
+    n_src = len(list(fdir.glob("*.png")))
+    if n_src == 0:
+        return pip
+    base = clock.frames(clock.wall0 or 0.0, "pip")
+    lst = workdir / "pip.txt"
+    lines = []
+    n = int(seconds * pip_fps) + 1
+    for k in range(n):
+        wall = clock.wall_of_video_t(k / pip_fps)
+        idx = int(round(clock.frames(wall, "pip") - base))
+        idx = min(max(idx, 0), n_src - 1)
+        lines.append(f"file '{(fdir / f'{idx + 1:05d}.png').resolve()}'\nduration {1 / pip_fps:.5f}")
+    lines.append(f"file '{(fdir / f'{n_src:05d}.png').resolve()}'")
+    lst.write_text("\n".join(lines) + "\n")
+    out = workdir / "pip-retimed.mp4"
+    subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
+                    "-i", str(lst), "-fps_mode", "vfr", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", "18", str(out)], check=True)
+    return out
+
+
 def burn_captions(raw: pathlib.Path, out: pathlib.Path, meta: dict, size: tuple[int, int],
-                  title: str | None, pip: pathlib.Path | None = None) -> None:
+                  title: str | None, pip: pathlib.Path | None = None,
+                  map_samples: list[tuple[float, dict]] | None = None, clock: "SimClock | None" = None) -> None:
+    video_t = clock.video_t if clock else (lambda w: w)
     w, h = size
     vertical = h > w
     fs_cmd = int(w * (0.048 if vertical else 0.032))
@@ -284,12 +557,29 @@ def burn_captions(raw: pathlib.Path, out: pathlib.Path, meta: dict, size: tuple[
 
     if pip is not None and pip.exists():
         # "what the robot sees" inset, top-right under the command box, with a
-        # tiny label. Both streams started within a few ms of each other.
+        # tiny label. Both streams started within a few ms of each other, but
+        # drop frames independently -- so the pip is re-cut onto the main
+        # timeline when the clock saw both recorders.
+        if clock is not None and clock.has("pip") and clock.has("main"):
+            pip = retime_pip(pip, clock, 15, float(meta["recorder"].get("seconds") or 0) + 1.0, workdir)
         pip_w = int(w * (0.42 if vertical else 0.24))
         sheet.add("robot's eye view", fontsize=int(fs_title * 0.9), color="#ffffffcc",
                   y="pip-label", x_right=True, pip_w=pip_w)
+    map_seq = None
+    if map_samples:
+        # "the robot's map" inset: same band as the eye view, on the left --
+        # grid, keepouts (amber), peers (orange), the planned route (cobalt).
+        inset = int(w * (0.42 if vertical else 0.24))
+        pip_h = int(inset * 3 / 4)
+        map_y = h - sheet.pad - pip_h - int(h * 0.21) - (inset - pip_h)
+        sheet.add("the robot's map", fontsize=int(fs_title * 0.9), color="#ffffffcc",
+                  y=str(map_y - int(fs_title * 0.9) - 20 - 6))
+        rendered = render_map_frames(map_samples, video_t, float(meta["recorder"].get("seconds") or 0) + 1.0,
+                                     5, inset, workdir)
+        if rendered:
+            map_seq = (rendered[0], 5, sheet.pad, map_y)
     subprocess.run(sheet.ffmpeg_args(raw, out, pip=pip, pip_w=pip_w if pip is not None and pip.exists() else 0,
-                                     pip_y=sheet.pip_y), check=True)
+                                     pip_y=sheet.pip_y, map_seq=map_seq), check=True)
     shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -344,6 +634,9 @@ def main() -> int:
     ap.add_argument("--pip", default=None, metavar="CAMERA",
                     help="also record this MJCF camera (e.g. head_camera) and inset it "
                          "picture-in-picture -- 'what the robot sees'")
+    ap.add_argument("--map", action="store_true",
+                    help="also sample the agent's /map while recording and inset it -- "
+                         "grid, keepouts, peers and the planned route (TASK-206..208)")
     args = ap.parse_args()
 
     out = pathlib.Path(args.out)
@@ -388,7 +681,12 @@ def main() -> int:
         if not r2.get("ok"):
             http("POST", f"{SIM_URL}/record/stop")
             raise SystemExit(f"pip recorder refused: {r2}")
-    rec_t0 = time.time()
+    clock = SimClock(SIM_URL, args.fps)
+    clock.start()
+    maplog = MapLog(f"{AGENT_URL}/api/v1/robots/{ROBOT_ID}/map") if args.map else None
+    if maplog:
+        maplog.start()
+    rec_t0 = clock.wall0 or time.time()
     time.sleep(args.lead)
 
     print(f"[clip] > {args.command}")
@@ -402,6 +700,9 @@ def main() -> int:
 
     end_t = time.time()
     time.sleep(args.tail)
+    clock.stop()
+    if maplog:
+        maplog.stop()
     stop = http("POST", f"{SIM_URL}/record/stop", timeout=60)
     rec = stop.get("current") or stop.get("last") or {}
     print(f"[clip] recorder: {rec.get('frames')} frames, {rec.get('seconds')} s"
@@ -409,12 +710,16 @@ def main() -> int:
 
     blocks_meta = []
     for b in (plan or {}).get("blocks", []):
-        t0 = iso_to_s(b["startedAt"]) - rec_t0 if b.get("startedAt") else None
-        t1 = iso_to_s(b["finishedAt"]) - rec_t0 if b.get("finishedAt") else None
+        w0 = iso_to_s(b["startedAt"]) if b.get("startedAt") else None
+        w1 = iso_to_s(b["finishedAt"]) if b.get("finishedAt") else None
         blocks_meta.append({"kind": b["kind"], "params": b.get("params"), "status": b.get("status"),
                             "caption": block_caption(b), "reasoning": b.get("reasoning"),
                             "result": b.get("result"), "error": b.get("error"),
-                            "t0": t0, "t1": t1})
+                            # video seconds (what the overlays are timed in) ...
+                            "t0": clock.video_t(w0), "t1": clock.video_t(w1),
+                            # ... and wall seconds since recording started, for the record
+                            "t0_wall": (w0 - rec_t0) if w0 else None,
+                            "t1_wall": (w1 - rec_t0) if w1 else None})
     status = (plan or {}).get("status", "unknown")
     outcome = None
     if plan:
@@ -426,14 +731,17 @@ def main() -> int:
         else:
             outcome = status
     meta = {"command": args.command, "status": status, "outcome": outcome,
-            "command_t": cmd_t - rec_t0, "end_t": end_t - rec_t0, "blocks": blocks_meta,
+            "command_t": clock.video_t(cmd_t), "end_t": clock.video_t(end_t),
+            "command_t_wall": cmd_t - rec_t0, "end_t_wall": end_t - rec_t0,
+            "rec_t0_wall": rec_t0, "sim_clock": clock.samples, "blocks": blocks_meta,
             "plan": plan, "recorder": rec, "cam": args.cam, "size": args.size}
     meta_path = out.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2))
     print(f"[clip] plan {status}; wrote {meta_path}")
 
     if not args.no_captions:
-        burn_captions(raw, out, meta, (w, h), args.title, pip=pip_raw)
+        burn_captions(raw, out, meta, (w, h), args.title, pip=pip_raw,
+                      map_samples=maplog.samples if maplog else None, clock=clock)
         print(f"[clip] captioned -> {out}")
     return 0 if status == "done" else 1
 

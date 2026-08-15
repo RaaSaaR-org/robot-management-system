@@ -476,9 +476,18 @@ export function checkStraightSegment(
   const escape = { x: from.x, y: from.y, r: world.robotRadiusM + (map?.resolution ?? 0.1) };
   let knownM = 0;
   let knownStopped = map === null;
-  const steps = Math.max(1, Math.ceil(distanceM / SEGMENT_STEP_M));
+  // The samples run PAST the end of the segment by the keepout cushion. A walk
+  // is often already clamped to end just short of a fence (the lidar sees the
+  // table's legs about where the footprint's fence runs), and a segment whose
+  // last sample is 2 cm outside the line has no fenced sample inside it to
+  // shorten it — so the robot stopped ON the line. Looking one cushion beyond
+  // the end catches that: a walk is shortened whenever the fence is closer than
+  // the cushion to where it would stop.
+  const KEEPOUT_CUSHION_M = 2 * SEGMENT_STEP_M;
+  const reachM = distanceM + KEEPOUT_CUSHION_M;
+  const steps = Math.max(1, Math.ceil(reachM / SEGMENT_STEP_M));
   for (let s = 1; s <= steps; s++) {
-    const d = Math.min(distanceM, s * SEGMENT_STEP_M);
+    const d = Math.min(reachM, s * SEGMENT_STEP_M);
     const x = from.x + ux * d;
     const y = from.y + uy * d;
     const fence = keepoutAt(world, x, y);
@@ -486,7 +495,8 @@ export function checkStraightSegment(
       // One step back to the last unfenced sample, and one more as a cushion:
       // the geofence is a protective stop, and a walk that ends a centimetre
       // outside its line is a walk that ends inside it on a slow base.
-      const at = Math.max(0, d - 2 * SEGMENT_STEP_M);
+      const at = Math.min(distanceM, Math.max(0, d - KEEPOUT_CUSHION_M));
+      if (at >= distanceM) break; // the fence is beyond the cushion — the walk stands
       return {
         allowedM: at,
         knownM: Math.min(knownM, at),
@@ -494,7 +504,7 @@ export function checkStraightSegment(
         blockerAtM: at,
       };
     }
-    if (map) {
+    if (map && d <= distanceM + SEGMENT_STEP_M / 2) {
       const { cls, label } = discClass(map, x, y, world.robotRadiusM, escape);
       if (cls === BLOCKED) {
         const at = Math.max(0, d - SEGMENT_STEP_M);
@@ -506,7 +516,7 @@ export function checkStraightSegment(
         };
       }
       if (cls === UNKNOWN) knownStopped = true;
-      if (!knownStopped) knownM = d;
+      if (!knownStopped) knownM = Math.min(d, distanceM);
     }
   }
   return { allowedM: distanceM, knownM, blocker: null, blockerAtM: null };
