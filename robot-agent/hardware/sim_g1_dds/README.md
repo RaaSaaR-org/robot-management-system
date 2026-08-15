@@ -177,6 +177,12 @@ burns the command + each block (as it runs) + result as captions:
     --map                        # inset: the robot's own map — grid, keepouts (amber),
                                  #   peers (orange), the planned route (blue), sampled
                                  #   from GET /robots/:id/map while recording
+    --layout stack               # the robot's own camera full-width on top, its map
+                                 #   below, minimal text (implies --map; --cam defaults
+                                 #   to head_camera at 1080x810)
+    --recaption                  # no recording: rebuild <out> from its sidecars
+                                 #   (.raw.mp4, .json, .pip.mp4, .maplog.json) with the
+                                 #   current caption code / --layout / --title
 ```
 
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),

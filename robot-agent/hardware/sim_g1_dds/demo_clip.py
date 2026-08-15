@@ -289,8 +289,12 @@ class CaptionSheet:
 
     def ffmpeg_args(self, raw: pathlib.Path, out: pathlib.Path, pip: pathlib.Path | None = None,
                     pip_w: int = 0, pip_y: int = 0,
-                    map_seq: tuple[pathlib.Path, int, int, int] | None = None) -> list[str]:
-        """map_seq = (png pattern, fps, x, y): a pre-rendered inset sequence."""
+                    map_seq: tuple[pathlib.Path, int, int, int] | None = None,
+                    stack: tuple[int, int] | None = None) -> list[str]:
+        """map_seq = (png pattern, fps, x, y): a pre-rendered inset sequence.
+        stack = (cam_w, cam_h): the raw stream is NOT the canvas -- it is
+        scaled to cam_w x cam_h and placed at the top of a dark canvas of the
+        sheet's size (the map sequence then fills the rest)."""
         args = [shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y", "-i", str(raw)]
         for path, _, _ in self.items:
             args += ["-i", str(path)]
@@ -301,6 +305,11 @@ class CaptionSheet:
         if map_seq is not None:
             args += ["-framerate", str(map_seq[1]), "-i", str(map_seq[0])]
         chain, prev = [], "[0:v]"
+        if stack is not None:
+            chain.append(f"color=c=0x0e1117:s={self.w}x{self.h}:r=30[bg]")
+            chain.append(f"[0:v]scale={stack[0]}:{stack[1]}[cam]")
+            chain.append(f"[bg][cam]overlay={(self.w - stack[0]) // 2}:0:shortest=1[vs]")
+            prev = "[vs]"
         if map_seq is not None:
             chain.append(f"{prev}[{n_in + 1}:v]overlay={map_seq[2]}:{map_seq[3]}:eof_action=repeat[vm]")
             prev = "[vm]"
@@ -503,10 +512,75 @@ def retime_pip(pip: pathlib.Path, clock: "SimClock", pip_fps: int, seconds: floa
     return out
 
 
+def burn_stacked(raw: pathlib.Path, out: pathlib.Path, meta: dict, cam_size: tuple[int, int],
+                 title: str | None, map_samples: list[tuple[float, dict]], video_t) -> None:
+    """`--layout stack`: the robot's own camera full-width on top, its map
+    full-width below, and as little text as possible -- the command, the block
+    that is running, and the outcome."""
+    cw, ch = cam_size
+    W = 1080
+    cam_h = int(ch * W / cw)
+    band = 96
+    map_px = min(W - 2 * 30, 1920 - cam_h - band - 30)
+    H = cam_h + band + map_px + 30
+    workdir = out.parent / f".{out.stem}-captions"
+    workdir.mkdir(parents=True, exist_ok=True)
+    sheet = CaptionSheet((W, H), workdir)
+    fs_cmd, fs_blk = 46, 42
+    ytop = "top"
+    if title:
+        sheet.add(title, fontsize=34, color="#ffffffd9", y="top")
+        ytop = "top+80"
+    sheet.add(wrap(f"> {meta['command']}", 36), fontsize=fs_cmd, color="#ffffff", y=ytop)
+
+    band_y = str(cam_h + (band - fs_blk) // 2 - 6)
+    blocks = [b for b in meta["blocks"] if b.get("t0") is not None]
+    first_start = blocks[0]["t0"] if blocks else None
+    plan_t0, plan_t1 = meta["command_t"], first_start if first_start is not None else meta["end_t"]
+    if plan_t1 - plan_t0 > 0.3:
+        sheet.add("thinking (local LLM) ...", fontsize=fs_blk, color="#ffd166", y=band_y, t0=plan_t0, t1=plan_t1)
+    for i, b in enumerate(blocks):
+        t0 = b["t0"]
+        t1 = blocks[i + 1]["t0"] if i + 1 < len(blocks) else meta["end_t"]
+        color = "#ff6b6b" if b.get("status") == "failed" else "#7CFFB2"
+        sheet.add(f"› {b['caption']}", fontsize=fs_blk, color=color, y=band_y, t0=t0, t1=max(t1, t0 + 0.6))
+    # The closing line sits over the bottom of the map: the one sentence that
+    # says what happened. For a plan that ended well that is the last block's
+    # own report ("Walked 2.08 m ... Stopped 0.90 m short ... keepout ahead",
+    # "Stopped at \"chair\" after 4 stages"), not the word "done".
+    closing = meta.get("outcome")
+    if meta["status"] == "done":
+        # A goto's report outranks the looks it ran ("Stopped at \"chair\" ...").
+        last = next((b for b in reversed(meta["blocks"]) if b["kind"] == "goto" and (b.get("result") or "").strip()),
+                    None) or next((b for b in reversed(meta["blocks"])
+                                   if b["kind"] not in ("wait",) and (b.get("result") or "").strip()), None)
+        if last:
+            closing = short_result(last) if last["kind"] in ("look", "scan_room", "goto") else last["result"]
+            if last["kind"] == "goto":
+                closing = last["result"].split(":")[0].strip()
+    if closing:
+        col = "#7CFFB2" if meta["status"] == "done" else "#ff6b6b"
+        text = wrap(closing, 48)
+        n_lines = text.count("\n") + 1
+        sheet.add(text, fontsize=34, color=col, y=str(H - 30 - 30 - int(34 * 1.35) * n_lines), t0=meta["end_t"])
+
+    map_seq = None
+    rendered = render_map_frames(map_samples, video_t, float(meta["recorder"].get("seconds") or 0) + 1.0,
+                                 5, map_px, workdir) if map_samples else None
+    if rendered:
+        map_seq = (rendered[0], 5, (W - map_px) // 2, cam_h + band)
+    subprocess.run(sheet.ffmpeg_args(raw, out, map_seq=map_seq, stack=(W, cam_h)), check=True)
+    shutil.rmtree(workdir, ignore_errors=True)
+
+
 def burn_captions(raw: pathlib.Path, out: pathlib.Path, meta: dict, size: tuple[int, int],
                   title: str | None, pip: pathlib.Path | None = None,
-                  map_samples: list[tuple[float, dict]] | None = None, clock: "SimClock | None" = None) -> None:
+                  map_samples: list[tuple[float, dict]] | None = None, clock: "SimClock | None" = None,
+                  layout: str = "inset") -> None:
     video_t = clock.video_t if clock else (lambda w: w)
+    if layout == "stack":
+        burn_stacked(raw, out, meta, size, title, map_samples or [], video_t)
+        return
     w, h = size
     vertical = h > w
     fs_cmd = int(w * (0.048 if vertical else 0.032))
@@ -614,6 +688,28 @@ def wait_plan(agent: str, command: str, timeout: float, quiet: bool = False) -> 
     return plan
 
 
+def recaption(args) -> int:
+    """Re-burn captions for an existing clip from its sidecars."""
+    out = pathlib.Path(args.out)
+    meta = json.loads(out.with_suffix(".json").read_text())
+    raw = out.with_suffix(".raw.mp4")
+    if not raw.exists():
+        raise SystemExit(f"{raw} not found -- the clip was recorded with --no-captions?")
+    w, h = (int(v) for v in meta.get("size", args.size).lower().split("x"))
+    clock = SimClock(SIM_URL, int(meta.get("fps") or args.fps))
+    clock.wall0 = meta.get("rec_t0_wall")
+    clock.samples = [(t, d) for t, d in meta.get("sim_clock") or []]
+    if not clock.samples or clock.wall0 is None:
+        clock = None
+    pip = out.with_suffix(".pip.mp4")
+    mp = out.with_suffix(".maplog.json")
+    map_samples = [(t, m) for t, m in json.loads(mp.read_text())] if mp.exists() else None
+    burn_captions(raw, out, meta, (w, h), args.title, pip=pip if pip.exists() else None,
+                  map_samples=map_samples, clock=clock, layout=args.layout)
+    print(f"[clip] recaptioned -> {out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command")
@@ -634,10 +730,26 @@ def main() -> int:
     ap.add_argument("--pip", default=None, metavar="CAMERA",
                     help="also record this MJCF camera (e.g. head_camera) and inset it "
                          "picture-in-picture -- 'what the robot sees'")
+    ap.add_argument("--layout", choices=("inset", "stack"), default="inset",
+                    help="inset: the scene camera with small insets (default). stack: the robot's "
+                         "own camera full-width on top, its map below, minimal text -- implies "
+                         "--map, and --cam defaults to head_camera at 1080x810")
     ap.add_argument("--map", action="store_true",
                     help="also sample the agent's /map while recording and inset it -- "
                          "grid, keepouts, peers and the planned route (TASK-206..208)")
+    ap.add_argument("--recaption", action="store_true",
+                    help="do not record: rebuild <out> from <out>.raw.mp4 + <out>.json (+ .pip.mp4, "
+                         ".maplog.json) with the current caption code / --layout / --title")
     args = ap.parse_args()
+    if args.recaption:
+        return recaption(args)
+    if args.layout == "stack":
+        args.map = True
+        if args.cam == "follow":
+            args.cam = "head_camera"
+        if args.size == "1080x1920":
+            args.size = "1080x810"
+        args.pip = None
 
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -734,14 +846,18 @@ def main() -> int:
             "command_t": clock.video_t(cmd_t), "end_t": clock.video_t(end_t),
             "command_t_wall": cmd_t - rec_t0, "end_t_wall": end_t - rec_t0,
             "rec_t0_wall": rec_t0, "sim_clock": clock.samples, "blocks": blocks_meta,
-            "plan": plan, "recorder": rec, "cam": args.cam, "size": args.size}
+            "plan": plan, "recorder": rec, "cam": args.cam, "size": args.size, "fps": args.fps}
     meta_path = out.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2))
+    if maplog:
+        # Big (the grid rides along in every sample) but it is what makes
+        # `--recaption` possible without driving the robot again.
+        out.with_suffix(".maplog.json").write_text(json.dumps(maplog.samples))
     print(f"[clip] plan {status}; wrote {meta_path}")
 
     if not args.no_captions:
         burn_captions(raw, out, meta, (w, h), args.title, pip=pip_raw,
-                      map_samples=maplog.samples if maplog else None, clock=clock)
+                      map_samples=maplog.samples if maplog else None, clock=clock, layout=args.layout)
         print(f"[clip] captioned -> {out}")
     return 0 if status == "done" else 1
 
