@@ -152,6 +152,15 @@ describe('MapKeeper + cloud', () => {
     vi.useRealTimers();
   });
   const flush = () => new Promise((r) => setTimeout(r, 0));
+  /**
+   * The periodic save no longer blocks the lidar frame path (it is scheduled
+   * and written through `fs/promises`), so "the file is there" is now something
+   * to wait for rather than to assert in the next tick.
+   */
+  const landed = async (file: string): Promise<boolean> => {
+    for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 5));
+    return existsSync(file);
+  };
 
   it('feeds every integrated frame to the cloud, saves it beside the map, and restores it by boot id', async () => {
     const snapshot = vi.fn(async () => wallFrame(2));
@@ -169,7 +178,7 @@ describe('MapKeeper + cloud', () => {
     await flush();
     expect(keeper.getCloud()!.pointCount).toBe(41);
     expect(keeper.status().cloud).toMatchObject({ enabled: true, persisted: true, pointCount: 41, frames: 4 });
-    expect(existsSync(cloudPath)).toBe(true);
+    expect(await landed(cloudPath)).toBe(true);
     expect(JSON.parse(readFileSync(cloudPath, 'utf-8')).frameId).toBe('boot-A');
     keeper.dispose();
 

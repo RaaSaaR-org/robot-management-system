@@ -72,6 +72,18 @@ function place(id: string, polygon: Array<[number, number]>, keepout = true): Pl
   return { id, name: id, placeType: 'cell', floor: 0, polygon, source: 'surveyed', keepout, landmarks: [] };
 }
 
+/**
+ * `planPath` with a budget that cannot expire because the machine is busy.
+ *
+ * The real default is 50 ms — right for a robot that must answer while it
+ * walks, wrong for an assertion about pathfinding: under a full parallel test
+ * run this file failed with `reason: 'budget'` roughly once in ten. The one
+ * test that is ABOUT the budget calls `planPathRaw` with its own fake clock.
+ */
+const plan: typeof planPath = (w, start, goal, opts = {}) =>
+  planPath(w, start, goal, { maxMs: 5_000, ...opts });
+const planPathRaw = planPath;
+
 function world(map: OccupancyMap | null, keepouts: Place[] = []): PlannerWorld {
   return { map, keepouts, keepoutMarginM: 0.5, robotRadiusM: 0.3 };
 }
@@ -103,7 +115,7 @@ function nearestOccupied(map: OccupancyMap, x: number, y: number): number {
 
 describe('planPath — open floor', () => {
   it('plans a straight line as ONE segment', () => {
-    const r = planPath(world(openMap(6)), { x: 1, y: 1 }, { x: 5, y: 1 });
+    const r = plan(world(openMap(6)), { x: 1, y: 1 }, { x: 5, y: 1 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.path.segments).toHaveLength(1);
@@ -115,13 +127,13 @@ describe('planPath — open floor', () => {
   });
 
   it('is already there when the start is inside the goal tolerance', () => {
-    const r = planPath(world(openMap(4)), { x: 1, y: 1 }, { x: 1.4, y: 1 });
+    const r = plan(world(openMap(4)), { x: 1, y: 1 }, { x: 1.4, y: 1 });
     expect(r.ok && r.path.segments.length === 0 && r.path.lengthM === 0).toBe(true);
   });
 
   it('answers no-map when the map is missing or empty', () => {
-    expect(planPath(world(null), { x: 0, y: 0 }, { x: 1, y: 0 })).toMatchObject({ ok: false, reason: 'no-map' });
-    expect(planPath(world(new OccupancyMap()), { x: 0, y: 0 }, { x: 1, y: 0 })).toMatchObject({
+    expect(plan(world(null), { x: 0, y: 0 }, { x: 1, y: 0 })).toMatchObject({ ok: false, reason: 'no-map' });
+    expect(plan(world(new OccupancyMap()), { x: 0, y: 0 }, { x: 1, y: 0 })).toMatchObject({
       ok: false,
       reason: 'no-map',
     });
@@ -138,7 +150,7 @@ describe('planPath — walls', () => {
       rows.push('.'.repeat(30) + (gap ? '.' : '#') + '.'.repeat(29));
     }
     const map = gridMap(rows);
-    const r = planPath(world(map), { x: 1, y: 1 }, { x: 5, y: 1 });
+    const r = plan(world(map), { x: 1, y: 1 }, { x: 5, y: 1 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.path.segments.length).toBeGreaterThanOrEqual(2);
@@ -152,21 +164,21 @@ describe('planPath — walls', () => {
 
   it('answers no-path when the wall has no gap', () => {
     const rows = Array.from({ length: 40 }, () => '.'.repeat(20) + '#' + '.'.repeat(19));
-    const r = planPath(world(gridMap(rows)), { x: 1, y: 1 }, { x: 3.5, y: 1 });
+    const r = plan(world(gridMap(rows)), { x: 1, y: 1 }, { x: 3.5, y: 1 });
     expect(r).toMatchObject({ ok: false, reason: 'no-path' });
   });
 
   it('can plan away from a wall the robot is parked against', () => {
     const rows = Array.from({ length: 40 }, () => '#' + '.'.repeat(39));
     // 0.15 m from the wall face: the robot's own disc overlaps the wall.
-    const r = planPath(world(gridMap(rows)), { x: 0.25, y: 2 }, { x: 3.5, y: 2 });
+    const r = plan(world(gridMap(rows)), { x: 0.25, y: 2 }, { x: 3.5, y: 2 });
     expect(r.ok).toBe(true);
   });
 
   it('treats a peer on the dynamic overlay as a wall', () => {
     const map = openMap(6);
     map.setDynamicObstacles([{ x: 3, y: 1, radiusM: 0.6, label: 'robot Bravo' }]);
-    const r = planPath(world(map), { x: 1, y: 1 }, { x: 5, y: 1 });
+    const r = plan(world(map), { x: 1, y: 1 }, { x: 5, y: 1 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     for (const [x, y] of samples(r.path.waypoints)) {
@@ -184,7 +196,7 @@ describe('planPath — keepouts', () => {
   ]);
 
   it('goes around a keepout between start and goal, at least the margin away everywhere', () => {
-    const r = planPath(world(openMap(6), [TABLE]), { x: 1, y: 1 }, { x: 5, y: 1 });
+    const r = plan(world(openMap(6), [TABLE]), { x: 1, y: 1 }, { x: 5, y: 1 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     for (const [x, y] of samples(r.path.waypoints)) {
@@ -195,7 +207,7 @@ describe('planPath — keepouts', () => {
   });
 
   it('refuses a goal deep inside a keepout, by name, before searching', () => {
-    const r = planPath(world(openMap(6), [TABLE]), { x: 1, y: 1 }, { x: 3, y: 1 });
+    const r = plan(world(openMap(6), [TABLE]), { x: 1, y: 1 }, { x: 3, y: 1 });
     expect(r).toMatchObject({ ok: false, reason: 'goal-in-keepout', keepout: { name: 'TABLE' } });
     expect(keepoutAt(world(null, [TABLE]), 4.2, 1)).toBeNull();
     expect(keepoutAt(world(null, [TABLE]), 3.8, 1)?.name).toBe('TABLE');
@@ -204,7 +216,7 @@ describe('planPath — keepouts', () => {
   it('plans to the stand-off ring when the goal is ON a fenced surface — "go to the table"', () => {
     // The lidar puts the goal on the table's face (x = 2.5, inside the margin);
     // the robot can stand 0.6 m short of it, outside the fence.
-    const r = planPath(world(openMap(6), [TABLE]), { x: 1, y: 1 }, { x: 2.5, y: 1 }, { goalToleranceM: 0.6 + 0.3 });
+    const r = plan(world(openMap(6), [TABLE]), { x: 1, y: 1 }, { x: 2.5, y: 1 }, { goalToleranceM: 0.6 + 0.3 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const end = r.path.waypoints[r.path.waypoints.length - 1]!;
@@ -220,7 +232,7 @@ describe('planPath — unknown ground', () => {
       ...Array.from({ length: 20 }, () => '?'.repeat(60)),
       ...Array.from({ length: 20 }, () => '.'.repeat(60)),
     ];
-    const r = planPath(world(gridMap(rows)), { x: 1, y: 1 }, { x: 5, y: 1 });
+    const r = plan(world(gridMap(rows)), { x: 1, y: 1 }, { x: 5, y: 1 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.path.throughUnknown).toBe(false);
@@ -229,7 +241,7 @@ describe('planPath — unknown ground', () => {
   it('crosses unknown ground when it is the only way, and says so', () => {
     // A free corridor to x = 3, then unknown all the way.
     const rows = Array.from({ length: 30 }, () => '.'.repeat(30) + '?'.repeat(30));
-    const r = planPath(world(gridMap(rows)), { x: 1, y: 1.5 }, { x: 5, y: 1.5 });
+    const r = plan(world(gridMap(rows)), { x: 1, y: 1.5 }, { x: 5, y: 1.5 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.path.throughUnknown).toBe(true);
@@ -245,7 +257,7 @@ describe('planPath — unknown ground', () => {
       const inBlock = y > 0.4 && y < 1.6;
       rows.push(inBlock ? '.'.repeat(15) + '?'.repeat(30) + '.'.repeat(15) : '.'.repeat(60));
     }
-    const r = planPath(world(gridMap(rows)), { x: 1, y: 1 }, { x: 5, y: 1 });
+    const r = plan(world(gridMap(rows)), { x: 1, y: 1 }, { x: 5, y: 1 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.path.throughUnknown).toBe(false);
@@ -255,19 +267,120 @@ describe('planPath — unknown ground', () => {
 describe('planPath — budget', () => {
   it('gives up honestly when the node budget is exhausted', () => {
     const rows = Array.from({ length: 60 }, () => '.'.repeat(60));
-    const r = planPath(world(gridMap(rows)), { x: 0.5, y: 0.5 }, { x: 5.5, y: 5.5 }, { maxExpandedNodes: 10 });
+    const r = plan(world(gridMap(rows)), { x: 0.5, y: 0.5 }, { x: 5.5, y: 5.5 }, { maxExpandedNodes: 10 });
     expect(r).toMatchObject({ ok: false, reason: 'budget' });
   });
 
   it('gives up honestly when the time budget is exhausted', () => {
     let t = 0;
-    const r = planPath(
+    const r = planPathRaw(
       world(openMap(6)),
       { x: 0.5, y: 0.5 },
       { x: 5.5, y: 5.5 },
       { maxMs: 10, now: () => (t += 5) },
     );
     expect(r).toMatchObject({ ok: false, reason: 'budget' });
+  });
+});
+
+describe('a grid that is not aligned to world zero', () => {
+  /** `gridMap`'s picture, at an arbitrary resolution and origin. */
+  function gridMapAt(rows: string[], res: number, originX: number, originY: number): OccupancyMap {
+    const height = rows.length;
+    const width = rows[0]!.length;
+    const q = new Int8Array(width * height);
+    for (let r = 0; r < height; r++) {
+      const row = rows[r]!;
+      const cy = height - 1 - r;
+      for (let cx = 0; cx < width; cx++) {
+        q[cy * width + cx] = row[cx] === '#' ? 4 * LOGODDS_SCALE : row[cx] === '.' ? -4 * LOGODDS_SCALE : 0;
+      }
+    }
+    const r = OccupancyMap.fromSnapshot(
+      {
+        version: 1,
+        frame: 'odom',
+        frameId: 'test',
+        resolution: res,
+        originX,
+        originY,
+        width,
+        height,
+        encoding: 'int8-logodds-b64',
+        cells: Buffer.from(q.buffer).toString('base64'),
+        occupiedAbove: 1.2,
+        freeBelow: -1.2,
+        poseCount: 1,
+        lastIntegratedAt: null,
+        knownCells: 0,
+        occupiedCells: 0,
+      },
+      { frameId: 'test', resolutionM: res },
+    );
+    if (!r.map) throw new Error(r.reason);
+    return r.map;
+  }
+
+  /**
+   * `AGENT_MAP_RESOLUTION_M=0.3` makes the initial 20 m box 67 cells wide, and
+   * `allocateAround` then put the origin half a cell off world zero. The
+   * planner used to re-derive cell centres from the WORLD-zero lattice, so
+   * every footprint sample sat half a cell off in +x and +y from the point
+   * being tested: walls on the −x side went unseen, `checkStraightSegment`
+   * cleared a stop the map's own `isTraversable` refused, and the robot walked
+   * into the wall with no refusal anywhere.
+   */
+  const RES3 = 0.3;
+  const WALL_CELL = 20;
+  const wallRows = Array.from({ length: 40 }, () => '.'.repeat(WALL_CELL) + '#' + '.'.repeat(19));
+
+  /** Walk west at a wall and report where the segment check says to stop. */
+  function approachFromEast(origin: number): { stopX: number; y: number; map: OccupancyMap; toFaceM: number } {
+    const map = gridMapAt(wallRows, RES3, origin, origin);
+    const w: PlannerWorld = { map, keepouts: [], keepoutMarginM: 0.5, robotRadiusM: 0.4 };
+    const from = { x: origin + 34 * RES3 + RES3 / 2, y: origin + 20 * RES3 + RES3 / 2 };
+    const c = checkStraightSegment(w, from, 180, 6);
+    const stopX = from.x - c.allowedM;
+    const wallFaceX = origin + (WALL_CELL + 1) * RES3; // the wall's east face
+    return { stopX, y: from.y, map, toFaceM: stopX - wallFaceX };
+  }
+
+  it('stops a straight walk where the map itself says the robot still fits', () => {
+    const offset = approachFromEast(-0.15); // half a cell off world zero
+    // The safety-relevant routine and the map used to disagree about the very
+    // same point: the check allowed a stop the map called untraversable.
+    expect(offset.map.isTraversable(offset.stopX, offset.y, 0.4)).toBe(true);
+
+    // And where it stops does not depend on where the grid's origin happens to
+    // sit: the aligned grid is the same wall at the same distance.
+    const aligned = approachFromEast(0);
+    expect(aligned.map.isTraversable(aligned.stopX, aligned.y, 0.4)).toBe(true);
+    expect(offset.toFaceM).toBeCloseTo(aligned.toFaceM, 6);
+  });
+
+  it('allocates the grid on whole cells, so the lattice starts aligned', () => {
+    // Belt and braces for the same failure: 20 m at 0.3 m is an odd cell count.
+    const map = new OccupancyMap({ resolutionM: RES3, initialSizeM: 20, maxSizeM: 60 });
+    map.integrate(
+      {
+        robotId: 'r1',
+        sensor: 'mid360_lidar',
+        sensorType: 'lidar',
+        frame: 'base_link',
+        pointCount: 1,
+        positions: [2, 0, 1],
+        intensities: [],
+        hasIntensity: false,
+        sequence: 0,
+        source: 'hardware',
+        timestamp: new Date(0).toISOString(),
+      },
+      { x: 0, y: 0, yawDeg: 0 },
+      1000,
+    );
+    const b = map.bounds();
+    expect(b.originX / RES3).toBeCloseTo(Math.round(b.originX / RES3), 9);
+    expect(b.originY / RES3).toBeCloseTo(Math.round(b.originY / RES3), 9);
   });
 });
 

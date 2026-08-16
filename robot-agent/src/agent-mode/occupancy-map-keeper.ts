@@ -11,6 +11,7 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { CachedBasePose } from '../hardware/HardwareClient.js';
 import type { PointCloudFrame } from '../robot/types.js';
@@ -108,6 +109,9 @@ export class MapKeeper {
   private lastSkipReason: string | null = null;
   private lastSkipLogMs = 0;
   private lastSavedAtIntegration = 0;
+  private saveInFlight = false;
+  /** Per file, so a failing grid can never mask a failing cloud. */
+  private lastSaveErrLogMs = new Map<string, number>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private sweepInFlight = false;
   private disposed = false;
@@ -242,7 +246,7 @@ export class MapKeeper {
       // pass over ≤300k voxels is a few milliseconds.
       this.cloud.purgeFreed(map, { x: pose.x, y: pose.y, radiusM: this.cloudReachM() });
     }
-    if (this.integrations - this.lastSavedAtIntegration >= this.saveEvery) this.save();
+    if (this.integrations - this.lastSavedAtIntegration >= this.saveEvery) this.saveSoon();
   }
 
   private cloudReachM(): number {
@@ -344,27 +348,129 @@ export class MapKeeper {
     }
   }
 
-  /** Atomic write (tmp + rename). Never throws. Skipped without a session id. */
+  /**
+   * Atomic write (tmp + rename), synchronously. Never throws. Skipped without a
+   * session id.
+   *
+   * Blocking is right HERE and only here: this is the shutdown path
+   * (`dispose()`, the controller's `persistMap()` beside `saveStateSync()`) and
+   * the session change, where the old map must land before it is replaced. The
+   * periodic save goes through {@link saveSoon}, which is not on the shutdown
+   * clock and must not stall the agent.
+   */
   save(): boolean {
-    if (!this.enabled || !this.path || !this.map || !this.map.isAllocated()) return false;
-    if (this.map.frameId === null) return false;
+    const map = this.map;
+    if (!this.enabled || !this.path || !map || !map.isAllocated() || map.frameId === null) return false;
+    // Claim the watermark before writing, not after. It used to advance only on
+    // success, so a write that threw (full disk, read-only mount) left the
+    // "N integrations since the last save" guard true and the next lidar frame
+    // tried again — a multi-megabyte stringify, a failing write and an
+    // unthrottled log line per frame, for as long as the disk stayed full.
+    this.lastSavedAtIntegration = this.integrations;
+    let ok = true;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       const tmp = `${this.path}.tmp`;
-      writeFileSync(tmp, JSON.stringify(this.map.toSnapshot()), 'utf-8');
+      writeFileSync(tmp, JSON.stringify(map.toSnapshot()), 'utf-8');
       renameSync(tmp, this.path);
-      this.lastSavedAtIntegration = this.integrations;
-      if (this.cloud && this.cloudPath && this.cloud.frameId === this.map.frameId) {
-        mkdirSync(dirname(this.cloudPath), { recursive: true });
-        const ctmp = `${this.cloudPath}.tmp`;
-        writeFileSync(ctmp, JSON.stringify(this.cloud.toSnapshot()), 'utf-8');
-        renameSync(ctmp, this.cloudPath);
-      }
-      return true;
     } catch (err) {
-      this.log(`[Map] could not save ${this.path}: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      this.logSaveError(this.path, err);
+      ok = false;
     }
+    const cloud = this.cloudSaveTarget(map);
+    if (cloud) {
+      try {
+        mkdirSync(dirname(cloud.path), { recursive: true });
+        const ctmp = `${cloud.path}.tmp`;
+        writeFileSync(ctmp, JSON.stringify(cloud.cloud.toSnapshot()), 'utf-8');
+        renameSync(ctmp, cloud.path);
+      } catch (err) {
+        // Its own try/catch and its own path in the message: a failing cloud
+        // write used to be swallowed under the GRID's watermark and reported
+        // under the GRID's path, so the operator read "could not save
+        // occupancy-map.json" while that file was landing fine and the 3-D
+        // cloud was the thing quietly lost across every restart.
+        this.logSaveError(cloud.path, err);
+        ok = false;
+      }
+    }
+    return ok;
+  }
+
+  /** Nothing to write, or the cloud belongs to another session — then nothing. */
+  private cloudSaveTarget(map: OccupancyMap): { cloud: WorldCloud; path: string } | null {
+    if (!this.cloud || !this.cloudPath) return null;
+    if (this.cloud.frameId !== map.frameId) return null;
+    return { cloud: this.cloud, path: this.cloudPath };
+  }
+
+  /**
+   * The periodic save, off the lidar frame path.
+   *
+   * `onFrame` runs synchronously inside the range sensor's `snapshot()`, on the
+   * agent's only event loop — the same loop serving A2A/REST, the telemetry
+   * socket and the loco commands. At defaults the payload is a 300k-point cloud
+   * plus the grid, ~7 MB of JSON, so a `writeFileSync` there froze everything
+   * for a few hundred milliseconds mid-walk. The write now goes through
+   * `fs/promises` from a `setImmediate`, so it never runs inside the frame
+   * callback and the I/O itself leaves the loop; one save at a time, and a new
+   * request while one is in flight is dropped rather than queued (the next
+   * frames make it up anyway).
+   */
+  private saveSoon(): void {
+    const map = this.map;
+    if (!this.enabled || !this.path || !map || !map.isAllocated() || map.frameId === null) return;
+    if (this.saveInFlight) return;
+    this.saveInFlight = true;
+    // Same rule as `save()`: the watermark is claimed up front, so a failing
+    // disk is retried once per `saveEvery`, not once per frame.
+    this.lastSavedAtIntegration = this.integrations;
+    const path = this.path;
+    const cloud = this.cloudSaveTarget(map);
+    setImmediate(() => {
+      // The map is a passenger: nothing it does may outlive the agent.
+      if (this.disposed) {
+        this.saveInFlight = false;
+        return;
+      }
+      void this.writeSnapshots(map, path, cloud).finally(() => {
+        this.saveInFlight = false;
+      });
+    });
+  }
+
+  /** The async half of {@link saveSoon}. Never throws. */
+  private async writeSnapshots(
+    map: OccupancyMap,
+    path: string,
+    cloud: { cloud: WorldCloud; path: string } | null,
+  ): Promise<void> {
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      const tmp = `${path}.tmp`;
+      await writeFile(tmp, JSON.stringify(map.toSnapshot()), 'utf-8');
+      await rename(tmp, path);
+    } catch (err) {
+      this.logSaveError(path, err);
+    }
+    if (!cloud || this.disposed) return;
+    try {
+      await mkdir(dirname(cloud.path), { recursive: true });
+      const ctmp = `${cloud.path}.tmp`;
+      await writeFile(ctmp, JSON.stringify(cloud.cloud.toSnapshot()), 'utf-8');
+      await rename(ctmp, cloud.path);
+    } catch (err) {
+      this.logSaveError(cloud.path, err);
+    }
+  }
+
+  /** Once a minute per file, like {@link skip} — not once a frame. */
+  private logSaveError(path: string, err: unknown): void {
+    const t = this.now();
+    const last = this.lastSaveErrLogMs.get(path) ?? Number.NEGATIVE_INFINITY;
+    if (t - last < 60_000) return;
+    this.lastSaveErrLogMs.set(path, t);
+    this.log(`[Map] could not save ${path}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // ── sweep ─────────────────────────────────────────────────────────────────

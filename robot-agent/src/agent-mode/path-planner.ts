@@ -149,8 +149,12 @@ function discClass(
   const res = map.resolution;
   const rCells = Math.ceil(radiusM / res);
   const r2 = radiusM * radiusM;
-  const cx = Math.floor(x / res) * res + res / 2;
-  const cy = Math.floor(y / res) * res + res / 2;
+  // Snap onto the MAP's lattice, not world zero's: `originX` is only a whole
+  // number of cells from world zero when the grid's initial cell count is even,
+  // and a half-cell-offset origin (0.3 m resolution) displaced every sample of
+  // this disc by half a cell in both axes — an obstacle on the −x/−y side then
+  // went unseen by the planner while the map itself knew about it.
+  const [cx, cy] = map.cellCentre(x, y);
   let unknown = false;
   for (let dy = -rCells; dy <= rCells; dy++) {
     for (let dx = -rCells; dx <= rCells; dx++) {
@@ -520,8 +524,7 @@ export function checkStraightSegment(
       // planner approved was refused here ("obstacle 0.20 m ahead") three
       // times in a row beside the hallway crate, with nothing changing in
       // between. The two must agree, or a planned walk can never start.
-      const cxm = Math.floor(x / map.resolution) * map.resolution + map.resolution / 2;
-      const cym = Math.floor(y / map.resolution) * map.resolution + map.resolution / 2;
+      const [cxm, cym] = map.cellCentre(x, y);
       const { cls, label } = discClass(map, cxm, cym, world.robotRadiusM, escape);
       if (cls === BLOCKED) {
         const at = Math.max(0, d - SEGMENT_STEP_M);

@@ -135,6 +135,39 @@ describe('OccupancyMap', () => {
     expect(map.cellAt(3.5, 0)).toBe('unknown');
   });
 
+  it('keeps one vote per cell per frame even when a hit grows the grid mid-pass', () => {
+    // The grow used to happen inside the marking loop, so every de-dup index
+    // recorded before it named a different cell afterwards: the rest of the
+    // frame voted twice (2 × 0.85 > occupiedAbove 1.2) and a surface seen ONCE
+    // stamped in as a hard wall the planner then routes around forever.
+    //
+    // The far return must NOT be the nearest in its bearing bin, or pass 2
+    // grows the grid first and pass 3 never sees the move.
+    const build = (withFar: boolean): PointCloudFrame => {
+      const pts: Array<[number, number, number]> = [];
+      // Ring 1: inside the initial ±2 m box, 8 cells of wall.
+      for (let i = 0; i < 40; i++) pts.push([1.5, -0.4 + i * 0.02, 0.5]);
+      // Same bearing bin as the ring's centre, but outside the box → grows.
+      if (withFar) pts.push([6.0, 0.0, 0.5]);
+      // Ring 2: the same 8 cells again, from a second elevation.
+      for (let i = 0; i < 40; i++) pts.push([1.5, -0.4 + i * 0.02, 0.6]);
+      return frameOf(pts);
+    };
+    const opts = { initialSizeM: 4, maxSizeM: 32, maxRangeM: 50 };
+    const without = new OccupancyMap(opts);
+    const withGrowth = new OccupancyMap(opts);
+    const a = without.integrate(build(false), { x: 0, y: 0, yawDeg: 0 }, 1000);
+    const b = withGrowth.integrate(build(true), { x: 0, y: 0, yawDeg: 0 }, 1000);
+
+    expect(b.grew).toBe(true);
+    // Exactly one more cell than the frame without the far return: its own.
+    expect(b.hits).toBe(a.hits + 1);
+    // One frame is one vote, so nothing is occupied yet — either way.
+    expect(withGrowth.cellAt(1.5, 0)).toBe('unknown');
+    expect(without.cellAt(1.5, 0)).toBe('unknown');
+    expect(withGrowth.summary().occupiedCells).toBe(0);
+  });
+
   it('grows the grid without moving existing cells and caps at maxSizeM', () => {
     const map = new OccupancyMap({ initialSizeM: 4, maxSizeM: 16, maxRangeM: 50 });
     integrateN(map, frameOf(wallAhead(1.5, 0.5)), { x: 0, y: 0, yawDeg: 0 }, 4);
