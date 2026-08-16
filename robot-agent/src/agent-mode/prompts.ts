@@ -32,6 +32,7 @@ const BLOCK_REFERENCE = `
 - walk       {"distanceM": 0.1..10, "direction": "forward"|"backward"|"left"|"right"}
 - turn       {"angleDeg": -180..180}          (+ = left / counter-clockwise)
 - goto       {"entity": "<bare English noun, e.g. table, chair, shelf, person>"}
+             or {"place": "<a place from the "Places on the map" line, e.g. Kitchen>"}
 - look       {"speak": true|false}             (one camera frame → scene memory;
                                                 speak:true also SAYS what it sees)
 - scan_room  {"steps": 4..12}                  (default 8; full 360° sweep)
@@ -109,6 +110,14 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '- Use at most 12 blocks. Prefer the shortest plan that does the job.',
     '- `goto` only works for an entity that is already in the scene memory. If the',
     '  target is unknown, plan `scan_room` first, then `goto`.',
+    // TASK-209: rooms are not seen, they are known. A place needs no scan and no
+    // sighting — the robot plans a route to it on its map from where it stands.
+    '- A room or area listed under "Places on the map" is reached with `goto` and',
+    '  "place" (e.g. {"kind":"goto","place":"Kitchen"}) — no scan_room and no',
+    '  walk/turn needed; the robot plans the route itself, through doors it has',
+    '  not seen yet. "Go into the kitchen", "explore the workshop", "visit every',
+    '  room" are all `goto` place blocks (one per room), followed by `look` where',
+    '  the operator wants to know what is there.',
     // TASK-208: the navigator owns routing. The planner must not try to steer
     // around things with walk/turn — it cannot see the map, the navigator can.
     '- `goto` plans its own route on the robot\'s map, around obstacles, other',
@@ -137,6 +146,13 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '- "remember X" / "merk dir X" / "memorize X" -> emit ONE `remember` block',
     '  ("scope":"place" for something true of where the robot is, "global" for a',
     '  standing instruction). Do not also walk or speak about it.',
+    // Measured with gemma4:e2b (TASK-209 demo): "what do you remember about this
+    // room?" came back as a `remember` block that wrote the injected note into
+    // the file a second time. A question is answered, not filed.
+    '- A QUESTION about what you remember or know ("what do you remember about',
+    '  this room?", "what do you know here?") is answered with ONE `speak` block, in',
+    '  the first person ("I remember that …"), from the "What you know about this',
+    '  place" lines below (or saying there are none). Never answer with `remember`.',
     '- The robot waves with its RIGHT arm only — there is no left-hand wave. If the',
     '  operator asks for the left hand, `wave` anyway and add a `speak` block that',
     '  says the gesture is right-arm only.',

@@ -51,6 +51,7 @@ import { checkStraightSegment, planPath, type PlannerWorld, type SegmentCheck } 
 import { FOOTPRINT_RADIUS_M } from '../robot/types.js';
 import { Planner, type PlannedBlock } from './planner.js';
 import { formatPlaceNotesSection } from './prompts.js';
+import { resolvePlaceByName, type Place } from './place-resolver.js';
 import { RangeSensor } from './range.js';
 import { MapKeeper } from './occupancy-map-keeper.js';
 import { PeerTracker, type TrackedPeer, type PeerTrackerStatus } from './peers.js';
@@ -802,6 +803,65 @@ export class AgentModeController {
   }
 
   /**
+   * A `goto` is one of two things (TASK-209): `{"entity"}` walks to something the
+   * camera saw, `{"place"}` walks INTO a room or area of the place graph. The
+   * place is resolved here, against the graph the robot actually holds, so the
+   * navigator only ever sees a real polygon — and a name that matches nothing
+   * fails in one sentence that lists what would have matched.
+   */
+  private async runGoto(block: AgentBlock): Promise<BlockOutcome> {
+    const placeName = typeof block.params.place === 'string' ? block.params.place.trim() : '';
+    if (!placeName) return this.navigator.navigate(String(block.params.entity ?? ''));
+
+    const rsm = this.robotStateManager;
+    const registration = rsm?.getPlaceFrameRegistration?.() ?? null;
+    const places = this.knownPlaces();
+    if (places.length === 0) {
+      return {
+        ok: false,
+        message:
+          registration && !registration.registered
+            ? `goto place "${placeName}": the place graph is not registered to this robot's odometry — ${registration.reason}`
+            : `goto place "${placeName}": this robot has no place graph, so it knows no places by name.`,
+      };
+    }
+    const place = resolvePlaceByName(placeName, places);
+    if (!place) {
+      return {
+        ok: false,
+        message:
+          `goto place "${placeName}": no such place on the map. Known places: ` +
+          `${places.map((p) => p.name || p.id).join(', ')}.`,
+      };
+    }
+    return this.navigator.navigateToPlace(place);
+  }
+
+  /**
+   * The places the robot may be sent to by name: the graph's non-keepout places
+   * on the ground floor, and only while the graph's frame is registered to
+   * odometry — the same rule `plannerWorld()` applies to keepouts, for the same
+   * reason (unregistered polygons are numbers about another origin).
+   */
+  private knownPlaces(): readonly Place[] {
+    const rsm = this.robotStateManager;
+    if (rsm?.getPlaceFrameRegistration?.()?.registered !== true) return [];
+    return (rsm.getPlaces?.() ?? []).filter((p) => !p.keepout && p.floor === 0);
+  }
+
+  /** One line for the planner: which places `goto.place` accepts. Empty when none. */
+  private knownPlacesLine(): string {
+    const places = this.knownPlaces();
+    if (places.length === 0) return '';
+    const here = this.scene.getPlace()?.id ?? null;
+    return (
+      'Places on the map (use `goto` with "place" to walk into one): ' +
+      places.map((p) => `${p.name || p.id}${p.id === here ? ' (here)' : ''}`).join(', ') +
+      '.'
+    );
+  }
+
+  /**
    * The world the planner and the pre-walk check see (TASK-208): the live map
    * (may be null), and the keepouts ONLY when the place graph's frame is
    * registered to odometry — on an unregistered frame the polygons are numbers
@@ -815,7 +875,9 @@ export class AgentModeController {
       map: this.mapKeeper?.getMap() ?? null,
       keepouts,
       keepoutMarginM: config.place.keepoutMarginM,
-      robotRadiusM: FOOTPRINT_RADIUS_M[config.robotType] ?? FOOTPRINT_RADIUS_M.generic,
+      // Footprint plus the path margin — see `navPathMarginM` in config.ts for
+      // the arch post that taught us the two clamps must agree.
+      robotRadiusM: (FOOTPRINT_RADIUS_M[config.robotType] ?? FOOTPRINT_RADIUS_M.generic) + config.agentMode.navPathMarginM,
     };
   }
 
@@ -1460,7 +1522,7 @@ export class AgentModeController {
             this.generatedInsertIndex = i + 1;
             this.activeGoto = block;
             try {
-              outcome = await this.navigator.navigate(String(block.params.entity ?? ''));
+              outcome = await this.runGoto(block);
             } finally {
               this.activeGoto = null;
             }
@@ -1585,6 +1647,10 @@ export class AgentModeController {
   private plannerSceneSummary(): string {
     this.syncPlace();
     const sections = [this.scene.summary()];
+    // The place vocabulary (TASK-209): what `goto.place` will accept, so the
+    // planner names a room the robot actually knows rather than guessing one.
+    const places = this.knownPlacesLine();
+    if (places) sections.push(places);
 
     // Retrieval (TASK-197): deterministic and place-keyed, injected here rather
     // than planned. There is no `recall` block on purpose — a 4B planner cannot

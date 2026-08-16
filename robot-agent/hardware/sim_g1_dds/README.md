@@ -180,10 +180,31 @@ burns the command + each block (as it runs) + result as captions:
     --layout stack               # the robot's own camera full-width on top, its map
                                  #   below, minimal text (implies --map; --cam defaults
                                  #   to head_camera at 1080x810)
+    --layout memory              # three panes: the robot's camera (1080x648, wider than
+                                 #   its own 4:3 view -- the MJCF camera keeps its vertical
+                                 #   FOV), its map, and its DURABLE MEMORY (place notes,
+                                 #   MEMORY.md, the journal tail -- new lines flash green),
+                                 #   sampled from GET /memory(.md) and the workspace on disk
+                                 #   (WORKSPACE_DIR, default ../../data/workspace-<ROBOT_ID>)
+    --map-window=-6.4,-4.9,6.4,4.9   # fixed map frame in metres (same for every clip
+                                 #   of one video, so the map does not jump between scenes)
+    --places ../sim_evaluator/places/places.house.json   # room outlines + names on the map
     --recaption                  # no recording: rebuild <out> from its sidecars
-                                 #   (.raw.mp4, .json, .pip.mp4, .maplog.json) with the
-                                 #   current caption code / --layout / --title
+                                 #   (.raw.mp4, .json, .pip.mp4, .maplog.json, .memlog.json)
+                                 #   with the current caption code / --layout / --title
+    --card "The agent is restarted." --card-sub "Its memory is on disk." --tail 3 --out c.mp4
+    --concat c0.mp4 20-kitchen.mp4 c1.mp4 ... --out final.mp4   # cards + clips → one video
 ```
+
+`clips/demo-task209-explore-and-remember.mp4` was cut this way on the house scene
+(`sim_node.py --scene ../sim_evaluator/mjcf/g1_dex3_house_scene.xml`, agent env with
+`PLACE_GRAPH_PATH=hardware/sim_evaluator/places/places.house.json`): "Walk into the
+kitchen and describe what you see" → "Remember: the sink is at the right end of the
+counter here" → "Explore the living room, the bedroom and the workshop. Describe each
+room, then come back to the kitchen." → agent restarted → "What do you remember about
+this room?". `POST /sim/reset-pose {"body": "crate", "x": -1, "y": -0.72, "yaw": 0}`
+re-places a static prop of the scene without a restart (a restart changes the sim's
+boot id, and with it the map's session).
 
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
 `clips/table.pip.mp4` (the inset stream) and `clips/table.json` (the plan with

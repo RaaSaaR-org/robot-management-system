@@ -29,7 +29,7 @@
       |  +1.5  +====[yellow door]=====+===+======[wide arch]=======+
       |        |                                                   |
       |   0.0  |  H A L L W A Y   (robot spawns at 0,0 facing +x)  |
-      |        |                          crate                    |
+      |        |            crate                                  |
       |  -1.5  +====[violet door]=====+===+=====[orange door]======+
       |        |  BEDROOM             |   |  WORKSHOP              |
       |        |  bed, lamp           |   |  workbench, toolbox,   |
@@ -328,6 +328,13 @@
          forward cone clips it on the way past, far enough that it does not
          block the corridor. It is there so the clearance clamp has something
          real to clamp against on camera.
+
+         The crate stands mid-hallway on the south side, NOT in front of the
+         workshop door where it first was (x = 2.90): there it left a 0.63 m
+         channel between itself and the door's west post, and a 0.70 m
+         footprint cannot pass that -- the map planner (TASK-209) found no
+         route into the workshop at all. Same landmark, one that does not
+         seal a room.
          ==================================================================== -->
     <body name="shelf" pos="-1.60 1.25 0">
       <geom name="shelf_side_l" type="box" size="0.03 0.18 0.85" pos="-0.55 0 0.85"
@@ -364,7 +371,7 @@
             material="chair_blue"/>
     </body>
 
-    <body name="crate" pos="2.90 -0.72 0">
+    <body name="crate" pos="-1.00 -0.72 0">
       <geom name="crate_box" type="box" size="0.30 0.30 0.30" pos="0 0 0.30"
             material="crate" friction="0.7" condim="3"/>
       <geom name="crate_lid" type="box" size="0.32 0.32 0.03" pos="0 0 0.63"

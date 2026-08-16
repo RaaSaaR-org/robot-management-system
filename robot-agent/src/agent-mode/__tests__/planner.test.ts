@@ -178,6 +178,20 @@ describe('Planner — malformed output', () => {
 });
 
 describe('Planner — prompt contents', () => {
+  it('tells the model that a room of the place graph is a `goto` with "place" (TASK-209)', async () => {
+    const { planner, calls } = makePlanner([{ text: JSON.stringify({ blocks: [{ kind: 'goto', place: 'Kitchen' }] }) }]);
+    const result = await planner.plan({
+      command: 'walk into the kitchen',
+      sceneSummary: 'Places on the map (use `goto` with "place" to walk into one): Hallway (here), Kitchen.',
+    });
+    expect(result.blocks).toEqual([{ kind: 'goto', params: { place: 'Kitchen' } }]);
+    const prompt = promptText(calls[0]!);
+    expect(prompt).toContain('or {"place": "<a place from the "Places on the map" line');
+    expect(prompt).toMatch(/A room or area listed under "Places on the map" is reached with `goto`/);
+    // And a question about memory is a `speak`, never a `remember` (measured regression).
+    expect(prompt).toMatch(/A QUESTION about what you remember or know .* is answered with ONE `speak` block/s);
+  });
+
   it('passes the scene summary and, when re-planning, the remaining blocks', async () => {
     const { planner, calls } = makePlanner([
       { text: JSON.stringify({ blocks: [{ kind: 'look' }] }) },
@@ -282,6 +296,13 @@ describe('coerceParams / plannerFallback', () => {
 
   it('rejects a posture without a pose', () => {
     expect(() => coerceParams({ kind: 'posture' })).toThrow(/pose/);
+  });
+
+  it('goto takes an entity OR a place (TASK-209) — exactly one', () => {
+    expect(coerceParams({ kind: 'goto', entity: 'table' })).toEqual({ entity: 'table' });
+    expect(coerceParams({ kind: 'goto', place: ' Kitchen ' })).toEqual({ place: 'Kitchen' });
+    expect(() => coerceParams({ kind: 'goto' })).toThrow(/missing "entity" \(or "place"\)/);
+    expect(() => coerceParams({ kind: 'goto', entity: 'table', place: 'Kitchen' })).toThrow(/both/);
   });
 
   it('never produces a motion block in the fallback', () => {

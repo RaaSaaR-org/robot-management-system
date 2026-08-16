@@ -158,7 +158,15 @@ function discClass(
       const py = cy + dy * res;
       const ddx = px - x;
       const ddy = py - y;
-      if (ddx * ddx + ddy * ddy > r2) continue;
+      // A cell centre EXACTLY one radius away is inside the disc — with a
+      // tolerance, because "exactly" here is float arithmetic reached by two
+      // different routes (the planner's `originX + (i + 0.5) * res`, the
+      // segment check's `floor(x / res) * res + res / 2`), and the two once
+      // disagreed by one ulp on the same crate cell: the plan said free, the
+      // pre-walk check said blocked, and the robot stood still re-planning
+      // the same segment. Rounding the boundary in keeps both conservative
+      // and, more to the point, the same.
+      if (ddx * ddx + ddy * ddy > r2 + 1e-9) continue;
       const state = map.cellAt(px, py);
       if (state === 'occupied') {
         if (ignore && Math.hypot(px - ignore.x, py - ignore.y) <= ignore.r) continue;
@@ -505,7 +513,16 @@ export function checkStraightSegment(
       };
     }
     if (map && d <= distanceM + SEGMENT_STEP_M / 2) {
-      const { cls, label } = discClass(map, x, y, world.robotRadiusM, escape);
+      // Classify the CELL the sample falls in, at its centre — exactly what
+      // `planPath` does for every node and every line-of-sight sample. Testing
+      // the disc at the raw sample point instead put it up to half a cell
+      // nearer an obstacle than the planner ever tested, and a route the
+      // planner approved was refused here ("obstacle 0.20 m ahead") three
+      // times in a row beside the hallway crate, with nothing changing in
+      // between. The two must agree, or a planned walk can never start.
+      const cxm = Math.floor(x / map.resolution) * map.resolution + map.resolution / 2;
+      const cym = Math.floor(y / map.resolution) * map.resolution + map.resolution / 2;
+      const { cls, label } = discClass(map, cxm, cym, world.robotRadiusM, escape);
       if (cls === BLOCKED) {
         const at = Math.max(0, d - SEGMENT_STEP_M);
         return {

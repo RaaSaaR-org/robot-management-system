@@ -25,6 +25,7 @@
 
 import { config } from '../config/config.js';
 import type { PlannedPath, PlanResult } from './path-planner.js';
+import { distanceToBoundaryM, pointInPolygon, type Place } from './place-resolver.js';
 import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
 import {
   DEG_TO_RAD,
@@ -182,6 +183,76 @@ interface StageIntent {
   lookAfter: boolean;
 }
 
+/**
+ * A place counts as entered once the pose is this far INSIDE its polygon — the
+ * resolver's default hysteresis, so the navigator's "arrived in" and the place
+ * chip's "you are in" commit on the same line (TASK-209).
+ */
+export const PLACE_ENTRY_MARGIN_M = 0.3;
+/**
+ * How close to a place's centre the robot walks before "arrived in <place>":
+ * near enough that a look from there shows the room, not so near that a plant
+ * or a rug on the exact centre turns arrival into a stall.
+ */
+export const PLACE_ARRIVAL_M = 1.0;
+/** Stages in a row that get no closer to the centre before a place navigation stops. */
+const PLACE_MAX_STALLED_STAGES = 2;
+/**
+ * The executor's own refusals — the map or the lidar says the next step would
+ * touch something. During a place navigation these are re-plan points, not
+ * failures: see {@link Navigator.navigateToPlace}.
+ */
+const REFUSED_WALK = /refusing to walk|stopping margin|too close/i;
+
+/**
+ * Where "into the place" leads: the area centroid when that lies inside the
+ * polygon (a rectangle's centre), otherwise the sampled point deepest inside
+ * it — a concave room's centroid can fall outside the room, and "walk to a
+ * point in the corridor between the two arms of the L" is not the order. The
+ * entry test decides arrival, so a goal a little off only shortens the walk.
+ */
+export function placeGoal(place: Place): { x: number; y: number } {
+  const poly = place.polygon;
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i]!;
+    const [xj, yj] = poly[j]!;
+    const f = xj * yi - xi * yj;
+    area += f;
+    cx += (xj + xi) * f;
+    cy += (yj + yi) * f;
+  }
+  if (Math.abs(area) > 1e-9) {
+    const centroid = { x: cx / (3 * area), y: cy / (3 * area) };
+    if (pointInPolygon(centroid.x, centroid.y, poly)) return centroid;
+  }
+  // Deepest sampled interior point (a coarse pole of inaccessibility).
+  const xs = poly.map(([x]) => x);
+  const ys = poly.map(([, y]) => y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const N = 32;
+  let best: { x: number; y: number } | null = null;
+  let bestDepth = -1;
+  for (let i = 0; i <= N; i++) {
+    for (let j = 0; j <= N; j++) {
+      const x = minX + ((maxX - minX) * i) / N;
+      const y = minY + ((maxY - minY) * j) / N;
+      if (!pointInPolygon(x, y, poly)) continue;
+      const depth = distanceToBoundaryM(x, y, poly);
+      if (depth > bestDepth) {
+        bestDepth = depth;
+        best = { x, y };
+      }
+    }
+  }
+  return best ?? { x: xs.reduce((a, b) => a + b, 0) / xs.length, y: ys.reduce((a, b) => a + b, 0) / ys.length };
+}
+
 export class Navigator {
   private readonly deps: NavigatorDeps;
   private readonly maxStages: number;
@@ -251,6 +322,261 @@ export class Navigator {
       // Whatever happened, the route is over — the map must not keep drawing it.
       this.deps.onNav?.(null);
     }
+  }
+
+  /**
+   * Walk INTO `place` — a room or area of the place graph — by planning on the
+   * map towards its centre and walking the plan in stages (TASK-209).
+   *
+   * Different from {@link navigate} in what "there" means. An entity is a thing
+   * the camera saw: its position is a bearing plus a lidar range, and arrival is
+   * standing 0.6 m from its surface. A place is a polygon the robot was GIVEN,
+   * so no look is needed to know where it is, and arrival is the robot's own
+   * pose being inside the polygon — near its centre when the map allows, or as
+   * far in as the map lets it get when furniture stands on the centre. The
+   * looks along the way are not for finding the place; they fill the scene
+   * memory with what the place holds, which is what "discover the room" means.
+   *
+   * When the map has no path yet — the room has never been seen, or the goal is
+   * still off the grid — one bounded stage is walked BY SIGHT towards the
+   * centre, under the executor's own clearance and map clamps, and the plan is
+   * tried again from where that ended. The map grows with every stage, so a
+   * wall the robot walks up to is a wall the next plan goes around: that is how
+   * a doorway is found without anyone naming it.
+   */
+  async navigateToPlace(place: Place): Promise<BlockOutcome> {
+    try {
+      return await this.navigateToPlaceInner(place);
+    } finally {
+      this.deps.onNav?.(null);
+    }
+  }
+
+  private async navigateToPlaceInner(place: Place): Promise<BlockOutcome> {
+    const label = place.name || place.id;
+    if (place.keepout) {
+      return { ok: false, message: `"${label}" is a keepout — I won't walk into it.` };
+    }
+    if (!this.planner) {
+      return {
+        ok: false,
+        message: `goto place "${label}": needs the map planner (AGENT_NAV_PLANNER=grid) and an odometry pose.`,
+      };
+    }
+    const goal = placeGoal(place);
+    const inside = (p: { x: number; y: number }): boolean =>
+      pointInPolygon(p.x, p.y, place.polygon) &&
+      distanceToBoundaryM(p.x, p.y, place.polygon) >= PLACE_ENTRY_MARGIN_M;
+    const arrived = (stages: number, walkedM: number, distM: number, tail: string): BlockOutcome => ({
+      ok: true,
+      message:
+        `Arrived in ${label} after ${stages} stage${stages === 1 ? '' : 's'} and ${walkedM.toFixed(2)} m — ` +
+        `${tail.replace('%d', distM.toFixed(2))}`,
+    });
+
+    let stages = 0;
+    let walkedTotalM = 0;
+    let metresSinceLook = 0;
+    /**
+     * Progress is measured on what the robot is actually following: the
+     * remaining PLANNED length while there is a path, the straight-line
+     * distance while walking by sight. Straight-line distance alone is wrong
+     * on a route — leaving the kitchen for the living room first walks AWAY
+     * from the living room's centre, out through the kitchen door — and the
+     * measured 8.7 → 7.8 → 7.3 m plan that was ended as "no closer" is what
+     * this comment stands for. Switching between the two resets the baseline.
+     */
+    let best: number | null = null;
+    let bestKind: 'planned' | 'sight' | null = null;
+    let stagesWithoutProgress = 0;
+    let plannedStages = 0;
+    let bySightStages = 0;
+    let lookedForMap = false;
+
+    while (stages < this.maxStages) {
+      if (this.deps.isAborted()) {
+        return { ok: false, message: `goto place "${label}" aborted after ${stages} stages` };
+      }
+      const pose = await this.planner.samplePose();
+      if (!pose) {
+        return { ok: false, message: `goto place "${label}": no odometry pose — cannot tell where the robot is.` };
+      }
+      const distM = Math.hypot(goal.x - pose.x, goal.y - pose.y);
+      const isInside = inside(pose);
+      if (isInside && distM <= PLACE_ARRIVAL_M) {
+        return arrived(stages, walkedTotalM, distM, 'the pose is %d m from its centre.');
+      }
+
+      let verdict = this.planner.plan({ x: pose.x, y: pose.y }, goal);
+      if (!verdict.ok && verdict.reason === 'no-map' && !lookedForMap) {
+        // Nothing integrated yet — typically right after a restart, when the
+        // map on disk is only restored by the first lidar frame. One look
+        // costs seconds; a blind stage the wrong way costs a whole leg.
+        lookedForMap = true;
+        const look = await this.deps.runGeneratedBlock(
+          'look',
+          {},
+          `Looking around before setting off for ${label} — the map has nothing yet.`,
+        );
+        if (look.status !== 'done') {
+          return { ok: false, message: `goto place "${label}": the look failed (${look.error ?? 'unknown'})` };
+        }
+        verdict = this.planner.plan({ x: pose.x, y: pose.y }, goal);
+      }
+      let path: PlannedPath | null = null;
+      let planReason: string | null = null;
+      if (verdict.ok) {
+        path = verdict.path;
+      } else if (verdict.reason === 'goal-in-keepout') {
+        const fence = verdict.keepout?.name ?? 'a keepout';
+        this.deps.onNav?.(this.describeNav(label, goal, null, `inside keepout ${fence}`));
+        return { ok: false, message: `The centre of ${label} is inside keepout ${fence} — I won't walk there.` };
+      } else {
+        planReason = verdict.message;
+      }
+      this.deps.onNav?.(this.describeNav(label, goal, path, planReason));
+
+      const metric = path ? path.lengthM : distM;
+      const kind: 'planned' | 'sight' = path ? 'planned' : 'sight';
+      if (kind !== bestKind) {
+        bestKind = kind;
+        best = null;
+      }
+      if (best === null || metric < best - PROGRESS_EPSILON_M) {
+        best = metric;
+        stagesWithoutProgress = 0;
+      } else {
+        stagesWithoutProgress++;
+      }
+      // Inside, but not getting any nearer the centre: something stands on it,
+      // or the map has no way further in. Being in the room was the order.
+      if (isInside && stagesWithoutProgress >= PLACE_MAX_STALLED_STAGES) {
+        return arrived(
+          stages,
+          walkedTotalM,
+          distM,
+          `stopped %d m from its centre, the last ${stagesWithoutProgress} stages got no closer.`,
+        );
+      }
+      if (stagesWithoutProgress > PLACE_MAX_STALLED_STAGES) {
+        return {
+          ok: false,
+          message:
+            `goto place "${label}": stopped after ${stages} stages and ${walkedTotalM.toFixed(2)} m, still ` +
+            `${distM.toFixed(2)} m from its centre and outside it — the last ${stagesWithoutProgress} stages got no ` +
+            `closer, so the way in is blocked or not on the map.`,
+        };
+      }
+
+      stages++;
+
+      const segment = path && path.segments.length > 0 ? path.segments[0]! : null;
+      const bearingToGoalDeg = normalizeDeg((Math.atan2(goal.y - pose.y, goal.x - pose.x) * 180) / Math.PI - pose.yawDeg);
+      let turnDeg: number;
+      let stageM: number;
+      let planned: boolean;
+      let lookAfter: boolean;
+      let walkWhy: string;
+      if (path && segment) {
+        turnDeg = normalizeDeg(segment.headingDeg - pose.yawDeg);
+        stageM = Math.min(this.maxSegmentM, segment.lengthM);
+        const remainingAfter = path.lengthM - stageM;
+        const next = path.segments[1] ?? null;
+        lookAfter =
+          metresSinceLook + stageM >= this.lookEveryM ||
+          (stageM < segment.lengthM ? segment.throughUnknown : (next?.throughUnknown ?? false)) ||
+          remainingAfter < MIN_STAGE_M;
+        planned = true;
+        plannedStages++;
+        walkWhy =
+          `Walking ${stageM.toFixed(1)} m along the planned path into ${label} ` +
+          `(${path.lengthM.toFixed(1)} m in ${path.segments.length} segment${path.segments.length === 1 ? '' : 's'} on the map` +
+          `${path.throughUnknown ? ', partly across unmapped floor' : ''}; stage ${stages}/${this.maxStages})`;
+      } else if (path && !segment) {
+        // Planned to within the plan's tolerance already: the final approach,
+        // straight at the centre, sized to what is left.
+        if (isInside && distM - ARRIVAL_M < MIN_STAGE_M) {
+          return arrived(stages - 1, walkedTotalM, distM, 'the pose is %d m from its centre.');
+        }
+        turnDeg = bearingToGoalDeg;
+        stageM = Math.max(MIN_STAGE_M, Math.min(STAGE_LENGTH_M, distM - ARRIVAL_M));
+        planned = false;
+        lookAfter = true;
+        walkWhy = `Walking ${stageM.toFixed(1)} m into ${label} — final approach (stage ${stages}/${this.maxStages})`;
+      } else {
+        // No path on the map (yet): one bounded stage by sight, straight at the
+        // centre. The executor clamps it to the lidar's clearance and to what
+        // the map knows; the next plan starts from wherever that ended.
+        turnDeg = bearingToGoalDeg;
+        stageM = Math.min(UNKNOWN_DISTANCE_STAGE_M, Math.max(MIN_STAGE_M, distM - ARRIVAL_M));
+        planned = false;
+        lookAfter = true;
+        bySightStages++;
+        walkWhy =
+          `Walking ${stageM.toFixed(1)} m towards ${label} (stage ${stages}/${this.maxStages}) — no known path on ` +
+          `the map (${planReason ?? 'unknown'}), walking by sight until the map knows more`;
+      }
+
+      if (Math.abs(turnDeg) > BEARING_DEADBAND_DEG) {
+        const turn = await this.deps.runGeneratedBlock(
+          'turn',
+          { angleDeg: turnDeg },
+          planned
+            ? `Turning ${Math.round(turnDeg)}° onto the planned path into ${label} (stage ${stages}).`
+            : `Turning ${Math.round(turnDeg)}° towards the centre of ${label} (stage ${stages}).`,
+        );
+        if (turn.status !== 'done') {
+          return { ok: false, message: `goto place "${label}": turn failed (${turn.error ?? 'unknown'})` };
+        }
+      }
+      if (this.deps.isAborted()) {
+        return { ok: false, message: `goto place "${label}" aborted after ${stages} stages` };
+      }
+
+      const walk = await this.deps.runGeneratedBlock(
+        'walk',
+        planned ? { distanceM: stageM, direction: 'forward', planned: true } : { distanceM: stageM, direction: 'forward' },
+        `${walkWhy}.`,
+      );
+      if (walk.status !== 'done') {
+        // The executor refusing to walk into something it can see on the map
+        // or the lidar is a fact about the way, not a fault: the map has grown
+        // by that fact, so plan again from here. The no-progress count at the
+        // top of the loop is what ends a navigation that keeps being refused.
+        if (walk.error && REFUSED_WALK.test(walk.error)) continue;
+        return { ok: false, message: `goto place "${label}": walk failed (${walk.error ?? 'unknown'})` };
+      }
+      const walkedM = walk.measured?.distanceM ?? null;
+      walkedTotalM += walkedM ?? 0;
+      metresSinceLook += walkedM ?? stageM;
+
+      if (!lookAfter) continue;
+      metresSinceLook = 0;
+      const look = await this.deps.runGeneratedBlock(
+        'look',
+        {},
+        planned
+          ? `Looking around on the way into ${label} (stage ${stages}) — what the place holds goes into scene memory.`
+          : `Looking around before the next stage towards ${label} (stage ${stages}).`,
+      );
+      if (look.status !== 'done') {
+        return { ok: false, message: `goto place "${label}": look failed (${look.error ?? 'unknown'})` };
+      }
+    }
+
+    const how = [
+      plannedStages > 0 ? `${plannedStages} on a planned path` : '',
+      bySightStages > 0 ? `${bySightStages} by sight` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    return {
+      ok: false,
+      message:
+        `goto place "${label}": gave up after ${this.maxStages} stages${how ? ` (${how})` : ''} and ` +
+        `${walkedTotalM.toFixed(2)} m` +
+        `${best === null ? '' : `, ${bestKind === 'planned' ? 'shortest remaining route' : 'best distance to its centre'} ${best.toFixed(2)} m`}.`,
+    };
   }
 
   private async navigateInner(entityLabel: string): Promise<BlockOutcome> {

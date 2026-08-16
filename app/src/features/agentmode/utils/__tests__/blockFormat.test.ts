@@ -23,6 +23,8 @@ describe('formatBlockParams', () => {
     );
     expect(formatBlockParams(block('turn', { angleDeg: -34 }))).toBe('-34° right');
     expect(formatBlockParams(block('goto', { entity: 'table' }))).toBe('table');
+    // TASK-209: a place is a room of the place graph, and reads as one.
+    expect(formatBlockParams(block('goto', { place: 'Kitchen' }))).toBe('into Kitchen');
     expect(formatBlockParams(block('wait', { seconds: 3 }))).toBe('3 s');
     expect(formatBlockParams(block('look', {}))).toBe('camera → scene memory');
     expect(formatBlockParams(block('look', { speak: true }))).toBe(

@@ -340,6 +340,27 @@ the block reasoning. Every plan is reported through `onNav` →
 `AgentModeState.nav` + `/map.nav` (the Map tab draws the polyline) and
 `AgentBlock.nav` on the `goto` block ("planned 3.2 m in 2 segments").
 
+`goto` also takes a PLACE (TASK-209): `{"place": "Kitchen"}` — a room or area of
+the place graph, resolved by id or name (`resolvePlaceByName`, any case, `-` as
+space, "the kitchen" fine; unknown → the message lists the known places). The
+planner prompt carries `Places on the map (use goto with "place" …): Hallway
+(here), Kitchen, …` (non-keepout, floor 0, registered frame only).
+`Navigator.navigateToPlace` plans to the room's centre (`placeGoal`: centroid, or
+the deepest interior point of a concave room) and walks the plan in stages with
+a look every `AGENT_NAV_LOOK_EVERY_M`; with no path yet it walks ONE bounded
+stage by sight and re-plans (the map grew — that is how a doorway is found), and
+with an EMPTY map it looks once first (the frame restores the persisted map).
+Arrival = pose inside the polygon by 0.3 m (`PLACE_ENTRY_MARGIN_M`, the
+resolver's hysteresis) and ≤ 1.0 m (`PLACE_ARRIVAL_M`) from the centre — or
+inside and stalled, when furniture stands on the centre: `"Arrived in Kitchen
+after 7 stages and 5.01 m — the pose is 0.60 m from its centre."`. Progress is
+the REMAINING PLANNED LENGTH while a route exists (leaving the kitchen for the
+living room walks away from the living room first). Keepout places are refused
+by name; a fenced centre names the fence. The planner keeps
+`AGENT_NAV_PATH_MARGIN_M` (0.05) beyond the footprint radius and the pre-walk
+check classifies by the same cell centres — the two once disagreed by one ulp on
+a crate and the robot re-planned the same refused segment three times.
+
 `BlockExecutor.walk` checks EVERY forward walk — the planner's own too — against
 the same world (`checkStraightSegment`, 0.1 m samples): a keepout, occupied cell
 or peer ahead shortens the walk ("Stopped 1.60 m short of the requested 3.00 m — Table footprint keepout
