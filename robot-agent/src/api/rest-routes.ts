@@ -20,6 +20,7 @@ import type { SecureBootVerifier } from '../security/secure-boot.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { RolloutStrategies, type RolloutStrategy } from '../vla/types.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
+import { hardwareClient } from '../hardware/HardwareClient.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
@@ -1284,6 +1285,55 @@ export function createRestRoutes(
   router.get('/robots/:id/agent-mode/scene.md', personalDataGate, (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     res.type('text/markdown').send(agentModeController.sceneMarkdown());
+  });
+
+  // GET /robots/:id/map — the robot's own occupancy grid (TASK-206)
+  //
+  // Not gated: geometry only — no captions, no operator words. `frame: 'odom'`
+  // is stated on the payload because it is the whole caveat: the grid inherits
+  // odometry drift and is only comparable with the place graph when that graph
+  // is registered to odometry (`registered`), otherwise `keepouts` is `[]`.
+  // `?format=pgm` returns the grid as a binary PGM for eyeballing.
+  router.get('/robots/:id/map', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const status = agentModeController.mapStatus();
+    if (!status || !status.enabled) {
+      res.status(404).json({ ok: false, error: 'occupancy map is disabled on this agent (AGENT_MAP_ENABLED)' });
+      return;
+    }
+    if (req.query.format === 'pgm') {
+      const map = agentModeController.occupancyMap();
+      if (!map || !map.isAllocated()) {
+        res.status(404).json({ ok: false, error: 'no map yet — nothing has been integrated' });
+        return;
+      }
+      res.type('image/x-portable-graymap').send(map.toPgm());
+      return;
+    }
+    const grid = agentModeController.mapSnapshot();
+    // Same odometry the map was built from — never the place belief's copy,
+    // which carries no yaw and may lag a poll.
+    const pose = hardwareClient.getCachedPose();
+    const belief = robotStateManager.getPlaceBelief();
+    const registration = robotStateManager.getPlaceFrameRegistration();
+    const registered = registration?.registered === true;
+    const keepouts = registered
+      ? robotStateManager
+          .getPlaces()
+          .filter((p) => p.keepout)
+          .map((p) => ({ id: p.id, name: p.name, polygon: p.polygon.map(([x, y]) => [x, y]) }))
+      : [];
+    res.json({
+      ok: true,
+      frame: 'odom',
+      grid,
+      pose: pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg, source: pose.source, atMs: pose.atMs } : null,
+      place: belief?.place ?? null,
+      registered,
+      registrationReason: registration && !registration.registered ? registration.reason : null,
+      keepouts,
+      status,
+    });
   });
 
   // ============================================================================

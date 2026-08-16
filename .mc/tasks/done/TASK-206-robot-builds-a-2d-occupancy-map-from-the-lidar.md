@@ -4,7 +4,7 @@ aliases:
 - TASK-206
 title: The robot builds its own 2D occupancy map from the (sim) LiDAR — and knows where it is on it
 slug: robot-builds-a-2d-occupancy-map-from-the-lidar
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []

@@ -391,4 +391,57 @@ describe('RangeSensor', () => {
 
     expect((await sensor.measure([0])).readings[0]!.distanceM).toBeCloseTo(2.0, 2);
   });
+
+  // TASK-206: the occupancy map hangs off the ONE place clouds arrive.
+  it('hands every FRESH cloud to the frame listener — never a cache hit, never a failure', async () => {
+    const frame = frameOf([[2, 0, 1]]);
+    let calls = 0;
+    const snapshot = vi.fn(async () => {
+      if (calls++ === 2) throw new Error('sidecar down');
+      return frame;
+    });
+    const seen: number[] = [];
+    const sensor = new RangeSensor({ snapshot, cacheMs: 100_000, onFrame: (f, at) => seen.push(at) });
+
+    await sensor.measure([0]);
+    await sensor.measure([0]); // cache hit
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+
+    sensor.invalidate();
+    await sensor.measure([0]);
+    expect(seen).toHaveLength(2);
+
+    sensor.invalidate();
+    const m = await sensor.measure([0]); // throws inside → not handed over
+    expect(m.ok).toBe(false);
+    expect(seen).toHaveLength(2);
+  });
+
+  it('probe() takes a snapshot for the listener only, honours the cache and never throws', async () => {
+    const snapshot = vi.fn(async () => frameOf([[2, 0, 1]]));
+    const seen: number[] = [];
+    const sensor = new RangeSensor({ snapshot, cacheMs: 100_000 });
+    sensor.setFrameListener((_f, at) => seen.push(at));
+    expect(await sensor.probe()).toBe(true);
+    expect(await sensor.probe()).toBe(true); // cached — no second fetch
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+
+    const dead = new RangeSensor({ snapshot: async () => { throw new Error('nope'); } });
+    expect(await dead.probe()).toBe(false);
+    const off = new RangeSensor({ snapshot, enabled: false });
+    expect(await off.probe()).toBe(false);
+  });
+
+  it('a throwing frame listener never fails the observation', async () => {
+    const sensor = new RangeSensor({
+      snapshot: async () => frameOf([[2, 0, 1]]),
+      cacheMs: 0,
+      onFrame: () => { throw new Error('map exploded'); },
+    });
+    const m = await sensor.measure([0]);
+    expect(m.ok).toBe(true);
+    expect(m.readings).toHaveLength(1);
+  });
 });

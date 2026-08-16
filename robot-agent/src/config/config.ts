@@ -158,6 +158,26 @@ export interface Config {
      * housing at < 0.3 m, so without this every bearing reads ~0 m.
      */
     rangeMinM: number;
+    /**
+     * Occupancy map (TASK-206): the robot's own 2D grid built from the same
+     * clouds range sensing snapshots (`AGENT_MAP_ENABLED`, default = range
+     * enabled). Off, the clouds are used once per observation and dropped.
+     */
+    mapEnabled: boolean;
+    /** Cell edge in metres (`AGENT_MAP_RESOLUTION_M`, default 0.1). */
+    mapResolutionM: number;
+    /** Grid side cap in metres (`AGENT_MAP_MAX_M`, default 60). */
+    mapMaxM: number;
+    /** Where the map is persisted between processes (`AGENT_MAP_PATH`). */
+    mapPath: string;
+    /**
+     * Extra snapshots per second while a walk/turn/goto block runs so the map
+     * fills in between observations (`AGENT_MAP_SWEEP_HZ`, default 0 = off).
+     * Reuses the range sensor's cache and failure backoff.
+     */
+    mapSweepHz: number;
+    /** Seconds after which an un-observed cell drifts back to unknown (`AGENT_MAP_DECAY_S`, 0 = off). */
+    mapDecayS: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
     /**
@@ -382,6 +402,17 @@ export const config: Config = {
     // Returns nearer than this are the sensor seeing its own housing — about
     // half of every raw MID-360 frame sits below 0.3 m.
     rangeMinM: parseFloat(process.env.AGENT_RANGE_MIN_M || '0.35'),
+    // Occupancy map. Default follows range sensing: a map fed by nothing is
+    // just an empty file, so there is no point keeping it on without a sensor.
+    mapEnabled:
+      process.env.AGENT_MAP_ENABLED === undefined
+        ? process.env.AGENT_RANGE_ENABLED !== 'false'
+        : process.env.AGENT_MAP_ENABLED === 'true',
+    mapResolutionM: parseFloat(process.env.AGENT_MAP_RESOLUTION_M || '0.1'),
+    mapMaxM: parseFloat(process.env.AGENT_MAP_MAX_M || '60'),
+    mapPath: process.env.AGENT_MAP_PATH || './data/occupancy-map.json',
+    mapSweepHz: parseFloat(process.env.AGENT_MAP_SWEEP_HZ || '0'),
+    mapDecayS: parseFloat(process.env.AGENT_MAP_DECAY_S || '0'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
     heartbeat: {
       enabled: process.env.AGENT_HEARTBEAT_ENABLED === 'true',
@@ -479,6 +510,16 @@ export function validateConfig(): void {
     `    - Range Sensor: ${config.agentMode.rangeSensor} ` +
       `(${config.agentMode.rangeEnabled ? 'enabled' : 'DISABLED — distances stay VLM guesses'}, ` +
       `${config.agentMode.rangeMinM}–${config.agentMode.rangeMaxM} m, ±${config.agentMode.rangeConeDeg}° cone)`
+  );
+  console.log(
+    `    - Occupancy Map: ${
+      config.agentMode.mapEnabled
+        ? `enabled (${config.agentMode.mapResolutionM} m cells, ≤${config.agentMode.mapMaxM} m, ` +
+          `sweep ${config.agentMode.mapSweepHz > 0 ? `${config.agentMode.mapSweepHz} Hz` : 'off'}, ` +
+          `decay ${config.agentMode.mapDecayS > 0 ? `${config.agentMode.mapDecayS} s` : 'off'}, ` +
+          `${config.agentMode.mapPath})`
+        : 'DISABLED — clouds are used once and dropped'
+    }`
   );
   console.log(
     `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s`

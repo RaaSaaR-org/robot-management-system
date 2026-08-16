@@ -248,6 +248,7 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
 | POST   | `/api/v1/robots/:id/reset` | Reset robot state |
 | GET    | `/api/v1/robots/:id/pointcloud` | Depth/LiDAR point-cloud frame (`?sensor=`, `?full=`) |
+| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `status`; `?format=pgm` for a P5 image. 404 when `AGENT_MAP_ENABLED=false` |
 | GET    | `/api/v1/register` | Registration info for server |
 | GET    | `/api/v1/health` | Health check |
 
@@ -275,6 +276,21 @@ POINTCLOUD_REPLAY_DIR=data/pointclouds-real npm run dev:g1
 Parsers live in `src/robot/pointcloud-formats.ts`; replay/normalization in
 `src/robot/pointcloud-replay.ts`. The Python sidecar honors the same data via
 `G1_POINTCLOUD_REPLAY` (see `hardware/pointcloud_replay.py`).
+
+### Occupancy map (Agent Mode, TASK-206)
+
+The robot builds its own 2-D log-odds grid from the SAME clouds Agent Mode range
+sensing snapshots — `src/agent-mode/occupancy-map.ts` (pure grid),
+`occupancy-map-keeper.ts` (pose pairing, boot-id session, persistence, walk-time
+sweep), tapped from `RangeSensor.onFrame`. Firewall: the map is fed ONLY by
+`hardwareClient.snapshotPointCloud` — never by `getPointCloudFrame()`, whose sim
+fallback fabricates a room. No pose → no update; a pose older than 750 ms is
+re-sampled (`hardwareClient.samplePoseNow()`), never trusted. The grid lives in
+the odometry frame and is persisted under the sidecar's `/health.boot_id`, so a
+sidecar/sim restart (which re-zeroes odometry) starts a fresh map instead of
+lying by metres. Config: `AGENT_MAP_*` (see `.env.example`); read it at
+`GET /api/v1/robots/:id/map`; a `{knownCells, occupiedCells, lastIntegratedAt}`
+summary rides in the mirrored `AgentModeState.map`.
 
 ## Key Dependencies
 

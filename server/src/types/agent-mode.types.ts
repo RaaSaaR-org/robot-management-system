@@ -353,6 +353,19 @@ export interface AgentModeState {
    * has none reports `self.bootstrapRequired`.
    */
   self?: AgentSelfState | null;
+  /**
+   * Summary of the robot's own occupancy map (TASK-206). Optional so an older
+   * agent's snapshot still validates; `null` = map building disabled. The grid
+   * itself is never mirrored — read it from the agent's `GET /robots/:id/map`.
+   */
+  map?: AgentMapSummary | null;
+}
+
+/** Summary of the robot-built occupancy map carried in {@link AgentModeState}. */
+export interface AgentMapSummary {
+  knownCells: number;
+  occupiedCells: number;
+  lastIntegratedAt: string | null;
 }
 
 /**

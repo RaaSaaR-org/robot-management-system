@@ -323,6 +323,22 @@ export interface AgentModeState {
    * robot that genuinely has none reports `self.bootstrapRequired`.
    */
   self?: AgentSelfState | null;
+  /**
+   * Summary of the robot's own occupancy map (TASK-206). Optional: an older
+   * agent omits it ("does not report a map"); `null` means map building is
+   * disabled on that agent. The grid itself is never mirrored — it lives on
+   * the agent's `GET /robots/:id/map`.
+   */
+  map?: AgentMapSummary | null;
+}
+
+/** Summary of the robot-built occupancy map carried in {@link AgentModeState}. */
+export interface AgentMapSummary {
+  /** Cells classified free or occupied; the rest of the grid is unknown. */
+  knownCells: number;
+  occupiedCells: number;
+  /** ISO time of the last integrated LiDAR cloud, null when none yet. */
+  lastIntegratedAt: string | null;
 }
 
 /**
@@ -615,6 +631,11 @@ export interface AgentModeStore {
    * reports one — which is not the same as a robot with no identity.
    */
   self: AgentSelfState | null;
+  /**
+   * The robot's own map, in summary (TASK-206). `undefined` = the agent does
+   * not report one (older agent), `null` = map building disabled on it.
+   */
+  map: AgentMapSummary | null | undefined;
   /**
    * When the self snapshot was TAKEN (ISO), or null when that is not known. It
    * answers "how old is what I am looking at", which the snapshot itself

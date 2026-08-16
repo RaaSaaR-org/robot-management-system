@@ -23,6 +23,7 @@ import type {
   AgentPlanStatus,
   AgentRecoveryState,
   AgentSelfState,
+  AgentMapSummary,
   AgentStateReachability,
   ControlOwner,
   MirroredAgentModeState,
@@ -51,6 +52,11 @@ const initialState = {
   fsmId: null as number | null,
   recovered: null as AgentRecoveryState | null,
   self: null as AgentSelfState | null,
+  /**
+   * The robot's own map, in summary. `undefined` = the agent does not report
+   * one (older agent), `null` = map building disabled, else the counts.
+   */
+  map: undefined as AgentMapSummary | null | undefined,
   selfUpdatedAt: null as string | null,
   selfLive: false,
   selfAgeUnknown: false,
@@ -224,6 +230,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // process that died an hour ago read as live. A server that cannot
           // date it leaves the age unknown, and unknown is what gets rendered.
           applySelf(state, agentState, mirrorObservedAt(agentState), false);
+          applyMap(state, agentState);
           state.plan = agentState?.plan ?? null;
           state.scene = scene ?? agentState?.scene ?? null;
         });
@@ -368,6 +375,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // The toggle is proxied straight through to the robot, so this
           // snapshot is the robot's own answer, taken just now.
           applySelf(state, agentState, new Date().toISOString(), true);
+          applyMap(state, agentState);
         });
       } catch (error) {
         const message = getErrorMessage(error);
@@ -517,6 +525,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           applyRecovery(state, agentState);
           // Proxied to the robot as well — a fresh answer, not the mirror.
           applySelf(state, agentState, new Date().toISOString(), true);
+          applyMap(state, agentState);
           if (agentState.estopActive) {
             // The agent still holds the latch — keep it and keep saying so.
             // A hardware-unconfirmed stop stays unconfirmed until it clears.
@@ -658,6 +667,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             // A pushed snapshot: the robot said this at `event.timestamp`, and
             // the server relayed it. That is as live as this console gets.
             applySelf(state, event.state, event.timestamp, true);
+            applyMap(state, event.state);
             if (event.state.scene) state.scene = event.state.scene;
             // A snapshot may only move the plan FORWARD — see `snapshotPlanIsStale`.
             if (event.state.plan && !snapshotPlanIsStale(state.plan, event.state.plan)) {
@@ -989,6 +999,18 @@ function mirrorObservedAt(agentState: MirroredAgentModeState | null): string | n
  *                     when the server did not report one — see below.
  * @param live - False for the server mirror, true for the robot's own answer.
  */
+/**
+ * Fold the robot's map summary (TASK-206) into the store. An agent that sends
+ * no `map` field is left as it was — "does not report" is not "disabled".
+ */
+function applyMap(
+  state: MutableState,
+  reported: { map?: AgentMapSummary | null } | null | undefined
+): void {
+  if (!reported || reported.map === undefined) return;
+  state.map = reported.map;
+}
+
 function applySelf(
   state: MutableState,
   reported: { self?: AgentSelfState | null } | null | undefined,
@@ -1186,6 +1208,9 @@ export const selectFsmId = (state: AgentModeStore) => state.fsmId;
  * agent reports it.
  */
 export const selectSelf = (state: AgentModeStore) => state.self;
+
+/** Select the robot's own map summary (undefined = not reported, null = disabled) */
+export const selectMapSummary = (state: AgentModeStore) => state.map;
 
 /**
  * Select when this console last received a self snapshot (ISO), or null before
