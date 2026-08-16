@@ -342,6 +342,15 @@ export interface AgentModeState {
   /** Set while an E-Stop is latched; cleared by an explicit reset. */
   estopActive: boolean;
   /**
+   * Which latch forbids driving while `estopActive` is set: `'agent'` is Agent
+   * Mode's own STOPP / stop-word latch, `'safety'` is the SafetyMonitor's
+   * protective or fleet E-Stop (fall/tilt, keepout, `emergencyStop`, A2A). Both
+   * are cleared by the same reset. Optional for wire compat with older agents.
+   */
+  estopSource?: 'agent' | 'safety' | null;
+  /** Human-readable reason of the latch named by `estopSource`, when known. */
+  estopReason?: string | null;
+  /**
    * Last FSM id the base was commanded into, or null when it has not been
    * commanded in this process. Optional so an older agent stays compatible.
    */
@@ -696,6 +705,9 @@ export const AgentEstopStatuses = [
 ] as const;
 export type AgentEstopStatus = (typeof AgentEstopStatuses)[number];
 
+/** Which side holds the E-Stop latch — see `AgentModeState.estopSource`. */
+export type AgentEstopSource = 'agent' | 'safety' | null;
+
 /**
  * Whether this console actually knows the bound robot's Agent Mode state.
  *
@@ -770,6 +782,15 @@ export interface AgentModeStore {
   estopStatus: AgentEstopStatus;
   /** Why the stop request failed — the evidence that it never left the browser. */
   estopError: string | null;
+  /**
+   * Which latch holds the E-Stop: `'agent'` is Agent Mode's own STOPP latch,
+   * `'safety'` the robot's SafetyMonitor (protective / fleet stop) — the agent
+   * refuses commands for either, and one Reset E-Stop clears both. Null while
+   * no latch is held.
+   */
+  estopSource: AgentEstopSource;
+  /** The reason the latching side recorded, when known. */
+  estopReason: string | null;
   /**
    * Whether this console knows the robot's Agent Mode state at all. While this
    * is `'unreachable'`, `enabled`, `controlOwner`, `plan` and `estopActive` are

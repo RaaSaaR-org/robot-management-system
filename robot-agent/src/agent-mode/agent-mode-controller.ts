@@ -725,11 +725,30 @@ export class AgentModeController {
     // saying "Hallway" while the map (which reads the belief live) says
     // "Kitchen". Optional call: test doubles are partial.
     let lastPublishedPlace: string | null = robotStateManager.getState?.()?.location?.place ?? null;
+    // The SafetyMonitor's latch is part of `getState()` (`estopActive` /
+    // `estopSource`), but it changes on paths that never pass through this
+    // controller — a protective stop, a fleet E-Stop, an operator reset on the
+    // safety route. Push the state when the EFFECTIVE latch flips, so the UI
+    // shows the banner the command path is already enforcing. A safety event
+    // fires on the trip; the reset only touches robot state, so both feeds are
+    // watched. Optional calls: test doubles are partial.
+    let lastPublishedLatch = this.latchedEstop();
+    const publishLatchChange = (): boolean => {
+      const latch = this.latchedEstop();
+      if (latch === lastPublishedLatch) return false;
+      lastPublishedLatch = latch;
+      this.emit('agent:state:changed');
+      return true;
+    };
     robotStateManager.subscribe?.((state) => {
       const place = state.location?.place ?? null;
+      const latchChanged = publishLatchChange();
       if (place === lastPublishedPlace) return;
       lastPublishedPlace = place;
-      this.emit('agent:state:changed');
+      if (!latchChanged) this.emit('agent:state:changed');
+    });
+    robotStateManager.onSafetyEvent?.(() => {
+      publishLatchChange();
     });
 
     // Optional call: test doubles for RobotStateManager may be partial.
@@ -878,13 +897,25 @@ export class AgentModeController {
 
   getState(): AgentModeState {
     this.syncPlace();
+    // Report the latch the COMMAND path enforces, not just Agent Mode's own:
+    // a SafetyMonitor E-Stop (protective stop, fleet E-Stop) refuses every
+    // command through `latchedEstop()`, so a state that only mirrored
+    // `this.estopActive` showed no banner while nothing would drive.
+    const latch = this.latchedEstop();
     return {
       robotId: this.robotId,
       enabled: this.enabled,
       controlOwner: this.lock.get(),
       plan: this.plan ? clonePlan(this.plan) : null,
       scene: this.scene.snapshot(),
-      estopActive: this.estopActive,
+      estopActive: latch !== null,
+      estopSource: latch,
+      estopReason:
+        latch === 'agent'
+          ? this.estopReason
+          : latch === 'safety'
+            ? (this.robotStateManager?.getEStopState?.().reason ?? null)
+            : null,
       fsmId: this.lastFsmId,
       damped: this.isDamped(),
       recovered: this.recovered ? { ...this.recovered } : null,
@@ -2054,7 +2085,7 @@ export class AgentModeController {
       batteryPct: typeof battery === 'number' ? Math.round(battery) : null,
       controlOwner: this.lock.get(),
       damped: this.isDamped(),
-      estopLatched: this.estopActive,
+      estopLatched: this.latchedEstop() !== null,
     });
   }
 
