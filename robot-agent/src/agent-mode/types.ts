@@ -725,6 +725,8 @@ export interface PatrolLeg {
   findingIds: string[];
   /** One line for the timeline: "arrived after 4 stages", "goto failed: …". */
   message?: string;
+  /** Robot pose (odom frame) when the leg finished — lets the map overlay place the checkpoint marker. Optional; absent when unknown. */
+  pose?: { x: number; y: number; yawDeg: number } | null;
 }
 
 export interface PatrolRun {

@@ -394,6 +394,10 @@ export function setupWebSocket(server: Server): void {
       // event reaches the app as an empty envelope and the MemoryPanel never
       // learns that the robot's durable memory changed.
       memory: event.memory,
+      // Patrol (TASK-212): `agent:patrol:*` carries the run, `agent:finding:*`
+      // the finding (+ run). Absent fields drop out of the JSON as before.
+      patrol: event.patrol,
+      finding: event.finding,
       timestamp: event.timestamp,
     });
     broadcast(clients, message);

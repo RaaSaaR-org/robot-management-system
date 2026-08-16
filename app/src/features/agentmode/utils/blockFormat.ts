@@ -130,6 +130,26 @@ export function formatBlockParams(block: AgentBlock): string {
       const scope = str(p.scope) === 'global' ? 'everywhere' : 'here';
       return text ? `${scope}: “${text}”` : scope;
     }
+    case 'patrol': {
+      // TASK-212: the top-level block of a run. The runner sends the route id;
+      // `routeName` when it has it. Mode says whether this is a reference walk.
+      const name = str(p.routeName) ?? str(p.routeId) ?? '';
+      const mode = str(p.mode) === 'baseline' ? 'baseline run' : 'patrol';
+      return name ? `${name} · ${mode}` : mode;
+    }
+    case 'capture': {
+      // Control photo at a checkpoint; the heading is where the robot turns first.
+      const name = str(p.checkpointName) ?? str(p.checkpointId) ?? '';
+      const heading = num(p.headingDeg);
+      const parts = [name ? `at ${name}` : 'control photo'];
+      if (heading !== null) parts.push(`heading ${Math.round(heading)}°`);
+      return parts.join(' · ');
+    }
+    case 'inspect': {
+      // Compare the checkpoint against its baseline.
+      const name = str(p.checkpointName) ?? str(p.checkpointId) ?? '';
+      return name ? `${name} vs baseline` : 'vs baseline';
+    }
     case 'look':
       // `speak: true` is the answering look ("tell me what is on the table"):
       // the robot says what it sees, so the card should say so up front.

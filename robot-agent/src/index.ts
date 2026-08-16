@@ -451,7 +451,13 @@ async function main() {
       console.log('[SimulatedRobot] Safety monitoring started');
     },
     announceBootState: () => agentModeController.announceBootState(),
-    startIdleWatcher: () => agentModeController.startIdleWatcher(),
+    startIdleWatcher: () => {
+      agentModeController.startIdleWatcher();
+      // Patrol photo retention (TASK-212): sweep now, then hourly. Rides the
+      // same "we ARE the robot" step — a loser on the port must not delete
+      // the winner's photos.
+      agentModeController.startPatrolRetentionSweep();
+    },
     abandonIncarnation: (reason) => incarnations.abandon(reason),
   });
 

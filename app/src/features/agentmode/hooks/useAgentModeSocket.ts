@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 import { useAgentModeStore } from '../store/agentmodeStore';
+import { usePatrolStore } from '@/features/patrol/store/patrolStore';
 import { isAgentModeEvent } from '../types/agentmode.types';
 import type { AgentPlan } from '../types/agentmode.types';
 
@@ -101,6 +102,10 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
             const data: unknown = JSON.parse(event.data);
             if (isAgentModeEvent(data)) {
               actions.applyEvent(data);
+              // TASK-212: patrol/finding events also feed the patrol store so
+              // the map overlay and the announcer see them without a second
+              // socket. The patrol store ignores every other type itself.
+              usePatrolStore.getState().applyEvent(data);
             }
           } catch (err) {
             console.error('Failed to parse Agent Mode event:', err);

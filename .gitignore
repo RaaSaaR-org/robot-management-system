@@ -59,6 +59,10 @@ robot-agent/data/incarnations-*.jsonl
 # Occupancy map (TASK-206) — the robot's own grid, valid for one odometry session
 robot-agent/data/occupancy-map.json
 robot-agent/data/occupancy-map.json.tmp
+# Per-profile maps / clouds (AGENT_MAP_PATH) and the patrol route disk cache (TASK-212)
+robot-agent/data/occupancy-map-*.json
+robot-agent/data/occupancy-map-*.json.tmp
+robot-agent/data/patrol-routes-cache*.json
 # Memory workspace (TASK-197) — the robot's own durable memory, per robot id.
 # NOT covered by the `state*.json` rule above, and it must not be: a place note
 # from a customer facility is personal data with a GDPR erasure story

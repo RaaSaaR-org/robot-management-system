@@ -10,9 +10,12 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import { ConditionAnnouncer } from '../ConditionAnnouncer';
 import { useAgentModeStore } from '../../store/agentmodeStore';
+import { usePatrolStore } from '@/features/patrol/store/patrolStore';
+import type { PatrolRun } from '@/features/patrol/types/patrol.types';
 
 beforeEach(() => {
   useAgentModeStore.getState().reset();
+  usePatrolStore.getState().reset();
 });
 
 describe('ConditionAnnouncer', () => {
@@ -90,5 +93,79 @@ describe('ConditionAnnouncer', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('');
     expect(screen.getByRole('status')).not.toHaveTextContent('');
+  });
+
+  /**
+   * TASK-212: a scheduled patrol the robot refused is a change nobody watching
+   * a calm page would otherwise hear about. It is announced politely, once, as
+   * a change to the existing region — and only for the robot on this page.
+   */
+  it('announces a skipped patrol for the selected robot, politely', () => {
+    render(<ConditionAnnouncer />);
+    const polite = screen.getByRole('status');
+    expect(polite).toHaveTextContent('');
+
+    act(() => {
+      useAgentModeStore.setState({ robotId: 'g1' });
+      usePatrolStore.getState().applyEvent({
+        type: 'agent:patrol:finished',
+        robotId: 'g1',
+        timestamp: 'x',
+        patrol: {
+          runId: 'run-skip', routeId: 'r', routeName: 'Night round', robotId: 'g1', mode: 'patrol', origin: 'scheduled',
+          window: 'night', status: 'skipped', reason: 'battery 12% below the 30% minimum', startedAt: 'x', legs: [], findingCount: 0,
+        },
+      });
+    });
+    expect(polite).toHaveTextContent('Patrol Night round skipped: battery 12% below the 30% minimum');
+    expect(screen.getByRole('alert')).toHaveTextContent('');
+  });
+
+  it('keeps the skip in its own text node and drops it once the robot runs again', () => {
+    render(<ConditionAnnouncer />);
+    const polite = screen.getByRole('status');
+    const skipped: PatrolRun = {
+      runId: 'run-skip', routeId: 'r', routeName: 'Night round', robotId: 'g1', mode: 'patrol', origin: 'scheduled',
+      window: 'night', status: 'skipped', reason: 'battery low', startedAt: 'x', legs: [], findingCount: 0,
+    };
+    act(() => {
+      useAgentModeStore.setState({ robotId: 'g1' });
+      usePatrolStore.getState().applyEvent({ type: 'agent:patrol:finished', robotId: 'g1', timestamp: 'x', patrol: skipped });
+    });
+    const skipNode = polite.querySelector('span:last-child');
+    expect(skipNode).toHaveTextContent('Patrol Night round skipped: battery low');
+
+    // A later, unrelated condition change touches only the condition node.
+    act(() => {
+      useAgentModeStore.setState({ damped: true, fsmId: 1 });
+    });
+    expect(polite.querySelector('span:first-child')).toHaveTextContent(/Base arming: damped/);
+    expect(polite.querySelector('span:last-child')).toBe(skipNode);
+
+    // The robot's next run supersedes the skip.
+    act(() => {
+      usePatrolStore.getState().applyEvent({
+        type: 'agent:patrol:started', robotId: 'g1', timestamp: 'y',
+        patrol: { ...skipped, runId: 'run-2', status: 'running', reason: null },
+      });
+    });
+    expect(polite).not.toHaveTextContent(/skipped/);
+  });
+
+  it('ignores a skipped patrol of another robot', () => {
+    render(<ConditionAnnouncer />);
+    act(() => {
+      useAgentModeStore.setState({ robotId: 'g1' });
+      usePatrolStore.getState().applyEvent({
+        type: 'agent:patrol:finished',
+        robotId: 'h1',
+        timestamp: 'x',
+        patrol: {
+          runId: 'run-skip', routeId: 'r', routeName: 'Round', robotId: 'h1', mode: 'patrol', origin: 'scheduled',
+          window: null, status: 'skipped', reason: 'estop', startedAt: 'x', legs: [], findingCount: 0,
+        },
+      });
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('');
   });
 });

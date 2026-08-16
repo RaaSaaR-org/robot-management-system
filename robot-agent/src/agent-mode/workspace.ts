@@ -386,6 +386,17 @@ export class Workspace {
     return path.join(this.rootDir, 'intents.jsonl');
   }
 
+  /**
+   * Patrol data (TASK-212): `patrol/<routeId>/baseline/<window>/` (control
+   * photos, checklist answers, leg label sets, map snapshot) and
+   * `patrol/<routeId>/runs/<runId>/` (run.json, findings.json, photos). Camera
+   * frames of a private home are personal data — erasure takes the whole
+   * subtree, and the sweep walks it like the rest of the workspace.
+   */
+  get patrolDir(): string {
+    return path.join(this.rootDir, 'patrol');
+  }
+
   /** The ID card (TASK-198). See {@link IDENTITY_FILE_NAME} for the duplication. */
   get identityFile(): string {
     return path.join(this.rootDir, IDENTITY_FILE_NAME);
@@ -439,7 +450,7 @@ export class Workspace {
    * files have the same "a truncated write erases the evidence of the crash"
    * property this workspace has.
    */
-  atomicWrite(file: string, content: string): void {
+  atomicWrite(file: string, content: string | Buffer): void {
     atomicWriteFileSync(file, content);
   }
 
@@ -712,6 +723,8 @@ export class Workspace {
    *  - `MEMORY.md` and every `places/<id>.md` — operator-authored notes.
    *  - `journal/*.jsonl` — what was done, when, where, on whose instruction.
    *  - `intents.jsonl` — operator-authored free text with a trigger on it.
+   *  - `patrol/**` — control photos, baselines, runs and findings (TASK-212):
+   *    camera frames of a site plus a where-and-when log.
    *  - `incarnations.jsonl` — up to 200 boots of "this robot was in THIS place
    *    at THIS time", which is location history whether or not anyone meant it
    *    that way — plus {@link legacyIncarnationsFile}, the same data at the
@@ -780,6 +793,25 @@ export class Workspace {
     remove(this.intentsFile);
     remove(this.incarnationsFile);
     remove(this.legacyIncarnationsFile);
+    // Patrol photos, runs and baselines (TASK-212): frames of somebody's rooms
+    // and a log of when the robot was where. Every file under the subtree is
+    // listed individually so the erasure report says what went, and the
+    // directory itself goes with them.
+    try {
+      if (fs.existsSync(this.patrolDir)) {
+        const walkPatrol = (dir: string): void => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const file = path.join(dir, entry.name);
+            if (entry.isDirectory()) walkPatrol(file);
+            else if (entry.isFile()) remove(file);
+          }
+        };
+        walkPatrol(this.patrolDir);
+        fs.rmSync(this.patrolDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      errors.push(`${this.patrolDir}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     // Age 0: a leftover scratch file goes now, not in a minute.
     // `includeRescued`: a `*.rescued-*` copy is spared by the BOOT sweep (it is
     // the only surviving copy of a durable file's previous content and a human

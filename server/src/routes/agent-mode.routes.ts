@@ -18,6 +18,7 @@ import { robotManager } from '../services/RobotManager.js';
 import { agentModeService, isValidAgentModeSnapshot } from '../services/AgentModeService.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClient.js';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
+import { patrolService } from '../services/PatrolService.js';
 import {
   AgentModeEventTypes,
   type AgentModeEvent,
@@ -47,7 +48,7 @@ function respondProxyError(res: Response, error: unknown, action: string): void 
 
 /**
  * POST /:id/agent-mode/events — Ingest an Agent Mode event from the robot-agent.
- * Body: { type: AgentModeEventType, robotId, plan?, block?, scene?, state?, timestamp? }
+ * Body: { type: AgentModeEventType, robotId, plan?, block?, scene?, state?, memory?, patrol?, finding?, timestamp? }
  *
  * Unauthenticated in practice: the robot-agent pushes without an Authorization
  * header, which works because the route sits behind `authMiddleware` and dev
@@ -57,7 +58,7 @@ function respondProxyError(res: Response, error: unknown, action: string): void 
  */
 agentModeRoutes.post('/:id/agent-mode/events', (req: Request, res: Response) => {
   try {
-    const { type, robotId, plan, block, scene, state, memory, timestamp } = req.body ?? {};
+    const { type, robotId, plan, block, scene, state, memory, patrol, finding, timestamp } = req.body ?? {};
 
     if (!AgentModeEventTypes.includes(type as AgentModeEventType)) {
       return res.status(400).json({
@@ -84,10 +85,20 @@ agentModeRoutes.post('/:id/agent-mode/events', (req: Request, res: Response) => 
       // it, the server re-broadcast an event with the field missing, and the
       // MemoryPanel had nothing to show until someone re-fetched by hand.
       memory,
+      // Patrol (TASK-212): the run / finding ride the event to the WebSocket
+      // exactly like `memory` — and are ALSO persisted, below.
+      patrol,
+      finding,
       timestamp: typeof timestamp === 'string' ? timestamp : new Date().toISOString(),
     };
 
     const merged = agentModeService.ingest(event);
+    // Persist patrol runs / findings and raise their alerts. Fire-and-forget:
+    // the robot's push must not wait on Prisma, and PatrolService.ingest never
+    // throws (it logs). Only the patrol/finding families are handed over.
+    if (event.type.startsWith('agent:patrol:') || event.type.startsWith('agent:finding:')) {
+      void patrolService.ingest(event);
+    }
     res.json({ ok: true, state: merged });
   } catch (error) {
     console.error('[AgentMode] Ingest error:', error);

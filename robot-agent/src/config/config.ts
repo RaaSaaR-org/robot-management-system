@@ -261,6 +261,35 @@ export interface Config {
        */
       motion: boolean;
     };
+    /**
+     * Patrol (TASK-212): the robot walks an operator-defined route, takes
+     * control photos at checkpoints and compares what it sees against a
+     * baseline of "normal". Opt-in per deployment — a photographing robot that
+     * walks unattended is a decision an operator makes.
+     */
+    patrol: {
+      /** `AGENT_PATROL_ENABLED`, default **false**. Every start is refused (`disabled`) while off. */
+      enabled: boolean;
+      /** Disk cache of routes fetched from the server (`AGENT_PATROL_ROUTE_CACHE_PATH`). */
+      routeCachePath: string;
+      /** Confirmer: N of the last M consecutive observations must agree (`AGENT_PATROL_CONFIRM_N` / `_M`, 2 / 3). */
+      confirmN: number;
+      confirmM: number;
+      /** Smallest map-diff blob reported as an object, m² (`AGENT_PATROL_MIN_BLOB_M2`, 0.15). */
+      minBlobM2: number;
+      /** Map diff radius around the pose, m (`AGENT_PATROL_DIFF_RADIUS_M`, 6). */
+      diffRadiusM: number;
+      /** Labels a new en-route entity must contain to become a candidate (`AGENT_PATROL_WATCHLIST`). */
+      watchlist: string[];
+      /** Plain control photos are deleted after this many hours (`AGENT_PATROL_PHOTO_RETENTION_H`, 72). */
+      photoRetentionH: number;
+      /** pHash similarity at or above which a checkpoint is `unchanged` without a model call (`AGENT_PATROL_HASH_GATE`, 0.97 — measured: 0.92 let a 0.6 m crate 4.5 m ahead pass as unchanged on the house scene, similarity 0.938). */
+      hashGate: number;
+      /** Fallback home place when the route names none (`AGENT_PATROL_HOME_PLACE`, empty = stay). */
+      homePlace: string;
+      /** Language of the two spoken patrol lines (`AGENT_PATROL_LANGUAGE`, `en` | `de`, default `en`). */
+      language: 'en' | 'de';
+    };
   };
   /**
    * Place awareness (TASK-195): the robot's continuously maintained answer to
@@ -502,6 +531,22 @@ export const config: Config = {
       batteryPct: envFloat(process.env.AGENT_HEARTBEAT_BATTERY_PCT, 20),
       motion: process.env.AGENT_HEARTBEAT_MOTION === 'true',
     },
+    patrol: {
+      enabled: process.env.AGENT_PATROL_ENABLED === 'true',
+      routeCachePath: process.env.AGENT_PATROL_ROUTE_CACHE_PATH || './data/patrol-routes-cache.json',
+      confirmN: parseInt(process.env.AGENT_PATROL_CONFIRM_N || '2', 10),
+      confirmM: parseInt(process.env.AGENT_PATROL_CONFIRM_M || '3', 10),
+      minBlobM2: envFloat(process.env.AGENT_PATROL_MIN_BLOB_M2, 0.15),
+      diffRadiusM: envFloat(process.env.AGENT_PATROL_DIFF_RADIUS_M, 6),
+      watchlist: (process.env.AGENT_PATROL_WATCHLIST || 'person,box,bag,crate,bottle,puddle,ladder,cable,open door')
+        .split(',')
+        .map((w) => w.trim().toLowerCase())
+        .filter(Boolean),
+      photoRetentionH: envFloat(process.env.AGENT_PATROL_PHOTO_RETENTION_H, 72),
+      hashGate: envFloat(process.env.AGENT_PATROL_HASH_GATE, 0.97),
+      homePlace: process.env.AGENT_PATROL_HOME_PLACE || '',
+      language: process.env.AGENT_PATROL_LANGUAGE === 'de' ? 'de' : 'en',
+    },
   },
   place: {
     // No default map: see the interface. UNKNOWN is the honest answer for a
@@ -631,6 +676,15 @@ export function validateConfig(): void {
           `battery < ${config.agentMode.heartbeat.batteryPct}%, ` +
           `hours ${config.agentMode.heartbeat.activeHours || 'always'}` +
           `${config.agentMode.heartbeat.motion ? ', MOTION requested (v2 — ignored)' : ''})`
+        : 'disabled'
+    }`
+  );
+  console.log(
+    `    - Patrol: ${
+      config.agentMode.patrol.enabled
+        ? `ENABLED (confirm ${config.agentMode.patrol.confirmN}/${config.agentMode.patrol.confirmM}, ` +
+          `hash gate ${config.agentMode.patrol.hashGate}, min blob ${config.agentMode.patrol.minBlobM2} m², ` +
+          `photos ${config.agentMode.patrol.photoRetentionH} h)`
         : 'disabled'
     }`
   );

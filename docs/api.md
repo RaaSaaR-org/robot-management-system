@@ -154,6 +154,31 @@ Rate limited: 20 requests per 15 minutes.
 | POST | `/sessions` | Start logging session |
 | POST | `/export` | Export logs to JSON |
 
+### Patrol (`/api/patrol`, TASK-212)
+
+Routes are the server's record; runs, findings and photos are what the robot reports back.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET/POST | `/routes` | List / create `PatrolRoute` (checkpoints `{id?, placeId, name?, headingDeg?, actions, dwellMs?, expectations?}`, `cronExpression`, `timeWindows` (default day 07–19 / night 19–07), `homePlaceId`). Rows carry `nextRunAt`/`lastFiredAt` |
+| GET/PUT/DELETE | `/routes/:id` | Read / update / delete a route (runs + findings survive deletion) |
+| GET | `/routes/:id/export/vda5050.json` | VDA5050-style order (nodes = checkpoints, actions capturePhoto/alignHeading/wait/scanRoom/inspect) |
+| GET | `/routes/:id/baseline?window=` | `{runId, window, photos:{checkpointId:key}, robotId, finishedAt}` or 404 `NO_BASELINE` |
+| POST | `/routes/:id/start` | Body `{mode:'baseline'\|'patrol', origin?, robotId?}` → `PatrolStartResult` (200 even when `accepted:false` with `reason` battery/estop/place/running/window/disabled…; 502 when the robot is unreachable) |
+| POST | `/routes/:id/abort` | Abort the active run on the route's robot |
+| POST | `/cron/validate` | `{cronExpression}` → `{valid, nextRuns[], error?}` |
+| GET | `/runs?robotId=&routeId=&status=&limit=` | Run history (`PatrolRun` with legs) |
+| GET | `/runs/:runId` | One run incl. `findings` |
+| POST | `/runs/:runId/promote` | Make this run the baseline for its window (robot re-uploads photos as `baseline`) |
+| GET | `/findings?robotId=&status=&type=` | Findings |
+| POST | `/findings/:id/acknowledge` \| `/normal` \| `/escalate` | Operator verdicts; `/normal` folds the observation into the robot's baseline (`robotNotified`), `/escalate` opens an incident (`incidentId`) |
+| GET | `/places?robotId=` | The robot's place graph (`{places:[{id,name,placeType?,keepout?}]}`) for the route editor |
+| POST | `/api/robots/:id/agent-mode/patrol` (+`/abort`) | Alias of start/abort addressed by robot |
+| PUT | `/api/robots/:id/patrol-runs/:runId/photos/:key` | Robot → server photo upload, JSON `{imageB64, contentType, kind:'control'\|'baseline'\|'finding', checkpointId?, routeId?, capturedAt?}` (S3 bucket `patrol-photos` when RustFS is up, else `PATROL_PHOTO_DIR`) |
+| GET | `/api/robots/:id/patrol-runs/:runId/photos[/:key]` | List metadata / fetch a JPEG (`X-Patrol-Photo-Kind`) |
+
+Findings arrive through `POST /api/robots/:id/agent-mode/events` (`agent:patrol:*` / `agent:finding:*` events carry `patrol` and `finding`); the server raises one alert per finding (message tail `[finding:<id> run:<runId>]`, severity by type × time window) and one warning alert per skipped run, and fans the events out on `/api/a2a/ws`. `PatrolSchedulerService` fires enabled routes on their cron (30 s tick, one start per slot, one retry after `PATROL_RETRY_MIN`).
+
 ### Other Route Groups
 
 | Base Path | Feature |
@@ -203,7 +228,20 @@ Base URL: `http://localhost:41245`
 | GET | `/tasks` | Task queue |
 | DELETE | `/tasks/:taskId` | Cancel task |
 | POST | `/reset` | Reset robot state |
+| GET | `/places` | The robot's place graph as `{places:[…]}` (TASK-212, for the patrol route editor) |
 | GET | `/map` | The robot's own occupancy grid (TASK-206) + accepted fleet peers and `peersDropped` (TASK-207) + `nav` (TASK-208: `{target, planned, path, goal, lengthM, segments, reason}` while a `goto` runs, else null); `location.frame` on `GET /` says which odometry frame the poses are in |
+
+### Patrol (`/api/v1/robots/:id/agent-mode/patrol`, TASK-212)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/` | Start a run: `{routeId, mode:'baseline'\|'patrol', origin:'operator'\|'scheduled', route?}` (route inline; falls back to `GET {SERVER_URL}/api/patrol/routes/:id`, then the disk cache) → `PatrolStartResult`. `scheduled` passes the initiative gate + time window; a refusal is recorded as a `skipped` run |
+| POST | `/abort` | Abort the active run (`{reason}`) |
+| GET | `/` | `{enabled, active, last}` |
+| GET | `/runs?limit=` · `/runs/:runId` | Run history on this robot (incl. findings) |
+| GET | `/runs/:runId/photos/:key` · `/baseline/:routeId/:window/:key` | JPEGs (personal-data gate: loopback or `AGENT_MEMORY_TOKEN`) |
+| POST | `/findings/:findingId/normal` | "This is normal" → widens the baseline for that checkpoint × window |
+| POST | `/runs/:runId/promote` | Use this run's photos + checklist answers as the baseline |
 
 ### Safety (`/api/v1/robots/:id/safety`)
 

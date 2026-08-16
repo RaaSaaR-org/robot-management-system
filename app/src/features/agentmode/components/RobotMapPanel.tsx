@@ -18,6 +18,7 @@ import { PlaceChip } from './PlaceChip';
 import { exportCloud, exportMap, type CloudExportFormat, type MapExportFormat } from '../utils/mapExport';
 import { agentmodeApi } from '../api/agentmodeApi';
 import { WorldCloudView } from './WorldCloudView';
+import { RouteOverlay } from '@/features/patrol/components/RouteOverlay';
 
 export interface RobotMapPanelProps {
   robotId: string | null;
@@ -111,6 +112,36 @@ export function mapFooterText(map: RobotMapPayload | null, fetchedAt: string | n
   }
   if (fetchedAt) parts.push(`read ${formatTimeAgo(fetchedAt)}`);
   return parts.join(' · ');
+}
+
+/** The view parameters that fix the world→screen mapping. */
+export interface MapProjection {
+  widthPx: number;
+  heightPx: number;
+  rangeM: number;
+  orientation: Orientation;
+}
+
+/**
+ * World (odom, metres) → screen (px) for a payload and view: centred on the
+ * robot (else the grid, else origin), y up, optionally rotated heading-up.
+ * Shared by `drawMap`'s labels and by overlays drawn on top of the canvas
+ * (the patrol RouteOverlay), so both land on the same pixel.
+ */
+export function mapProjector(map: RobotMapPayload, view: MapProjection): (x: number, y: number) => [number, number] {
+  const { widthPx, heightPx, rangeM, orientation } = view;
+  const pxPerM = Math.min(widthPx, heightPx) / (2 * rangeM);
+  const grid = map.grid;
+  const cx = map.pose?.x ?? (grid ? grid.originX + (grid.width * grid.resolution) / 2 : 0);
+  const cy = map.pose?.y ?? (grid ? grid.originY + (grid.height * grid.resolution) / 2 : 0);
+  const rot = orientation === 'heading' && map.pose ? (map.pose.yawDeg - 90) * (Math.PI / 180) : 0;
+  return (x: number, y: number): [number, number] => {
+    const dx = x - cx;
+    const dy = y - cy;
+    const rx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+    const ry = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+    return [widthPx / 2 + rx * pxPerM, heightPx / 2 - ry * pxPerM];
+  };
 }
 
 /**
@@ -236,13 +267,7 @@ export function drawMap(
   ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
   ctx.textBaseline = 'bottom';
   ctx.textAlign = 'center';
-  const toScreen = (x: number, y: number): [number, number] => {
-    const dx = x - cx;
-    const dy = y - cy;
-    const rx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
-    const ry = dx * Math.sin(-rot) + dy * Math.cos(-rot);
-    return [widthPx / 2 + rx * pxPerM, heightPx / 2 - ry * pxPerM];
-  };
+  const toScreen = mapProjector(map, view);
   for (const p of map.peers) {
     const [sx, sy] = toScreen(p.x, p.y);
     ctx.fillStyle = view.occupiedColor;
@@ -427,6 +452,11 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
 
   const footer = mapFooterText(map, fetchedAt);
   const stale = status === 'unavailable' && map !== null;
+  // TASK-212: the patrol overlay shares the canvas's projection exactly.
+  const project = useMemo(
+    () => (map ? mapProjector(map, { widthPx: size.w, heightPx: size.h, rangeM, orientation }) : null),
+    [map, size, rangeM, orientation],
+  );
 
   return (
     <div className={cn('flex flex-col min-h-0 flex-1', className)} data-testid="agent-map-panel">
@@ -560,6 +590,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
               className="absolute inset-0 w-full h-full text-theme-primary"
               style={{ width: size.w || undefined, height: size.h || undefined }}
             />
+            {project && <RouteOverlay robotId={robotId} project={project} widthPx={size.w} heightPx={size.h} />}
             {/* Only a KNOWN place is repeated here; the rail's chip owns the
                 unknown state, and two "Place unknown" chips on one page would
                 be two chances to disagree. */}

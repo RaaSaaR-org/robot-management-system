@@ -75,6 +75,9 @@ BrowserRouter > ThemeProvider > AuthProvider > App
 | `/robots/:id`     | `RobotDetailPage`     | Robot detail (tabs: Telemetry, Commands, Tasks, Info, 3D Model, Chat) |
 | `/fleet`          | `FleetPage`           | Fleet map & zone management  |
 | `/alerts`         | `AlertsPage`          | Alert management             |
+| `/patrol`         | `PatrolPage`          | Patrol routes, runs, findings (TASK-212) |
+| `/patrol/routes/new`, `/patrol/routes/:id` | `RouteEditorPage` | Patrol route editor |
+| `/patrol/runs/:runId` | `RunDetailPage`   | Patrol run: legs, photo pairs, findings |
 | `/processes`      | `ProcessesPage`       | Workflow/process list        |
 | `/processes/:id`  | `ProcessDetailPage`   | Process detail               |
 | `/settings`       | `SettingsPage`        | Theme preferences            |
@@ -134,6 +137,7 @@ src/
 │   ├── gdpr/            # GDPR self-service portal (Articles 15-22)
 │   ├── incidents/       # Incident management & regulatory reporting
 │   ├── oversight/       # Human oversight dashboard
+│   ├── patrol/          # Patrol routes, scheduled runs, findings (TASK-212)
 │   ├── processes/       # Workflow/process management
 │   ├── robots/          # Robot management, telemetry, 3D viewer
 │   ├── safety/          # Safety monitoring

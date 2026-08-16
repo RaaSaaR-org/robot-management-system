@@ -280,3 +280,59 @@ Rules:
 - If you see nothing recognisable, return an empty "entities" list and say so in
   "currentView".
 `.trim();
+
+/**
+ * Checkpoint checklist prompt (TASK-212, patrol).
+ *
+ * A FIXED question list, answered for the current frame and — on the baseline
+ * run — for the reference frame, and then DIFFED item by item. Deliberately not
+ * "what changed?": multimodal models are weak at open spot-the-difference
+ * (arXiv:2501.04150) and at industrial anomaly detection (MMAD), but robust
+ * when asked the same structured questions about each image (arXiv:2309.16552,
+ * validated on a patrolling Fetch). The answer schema is what `inspector.ts`
+ * parses; keep both in step.
+ *
+ * `expectations` are operator lines for this checkpoint ("fire extinguisher on
+ * the wall left of the door") — each becomes one extra yes/no item, answered in
+ * the same order.
+ */
+export const CHECKLIST_PROMPT = `
+You are the eyes of a patrolling Unitree G1 humanoid robot. Answer a fixed
+checklist about THIS camera frame only. Never guess what is outside the frame.
+
+Answer with JSON only — no prose, no markdown fence:
+
+{
+  "personPresent": true|false,
+  "doorState": "open"|"closed"|"none",
+  "objectOnFloor": { "yes": true|false, "what": "<short English noun or empty>" },
+  "lightsOn": "yes"|"no"|"unknown",
+  "outOfPlace": ["<short English noun>", ...],
+  "expectations": [true|false, ...],
+  "oneLine": "<one sentence describing the frame>"
+}
+
+Rules:
+- "personPresent" is true only if a human being is visible. Do not identify
+  people, do not describe faces, do not guess names, ages or clothing.
+- "doorState": the state of the most prominent door in the frame; "none" when
+  no door is visible.
+- "objectOnFloor": something lying on the floor that is not furniture — a box,
+  a bag, a bottle, a puddle, a cable. "what" names it in one English noun.
+- "lightsOn": whether artificial lighting is on; "unknown" if you cannot tell.
+- "outOfPlace": at most 5 short English nouns for things that look out of
+  place (a chair on its side, a crate in a corridor). Empty list if nothing.
+- "expectations": one boolean per operator expectation listed below, in the
+  same order — true if the expectation is met in this frame. Empty list when
+  none are listed.
+- LABELS MUST BE ENGLISH, singular, always the same word for the same thing.
+`.trim();
+
+/** The prompt with the operator's expectations appended as numbered items. */
+export function buildChecklistPrompt(expectations: readonly string[]): string {
+  const clean = expectations.map((e) => e.trim()).filter(Boolean);
+  if (clean.length === 0) return `${CHECKLIST_PROMPT}\n\nOperator expectations: none.`;
+  return `${CHECKLIST_PROMPT}\n\nOperator expectations (answer each in "expectations", in order):\n${clean
+    .map((e, i) => `${i + 1}. ${e}`)
+    .join('\n')}`;
+}

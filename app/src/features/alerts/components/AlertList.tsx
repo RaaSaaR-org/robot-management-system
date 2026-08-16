@@ -15,6 +15,7 @@ import { useAlerts } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
 import { ALERT_SOURCE_LABELS } from '../types/alerts.types';
+import { findingLinkPath, parseFindingLink, stripFindingLink } from '@/features/patrol/utils/patrolFormat';
 
 // ============================================================================
 // TYPES
@@ -99,6 +100,12 @@ function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProp
   const canDismiss = alert.dismissable && (alert.acknowledged || !isCritical);
   // Degrade gracefully when the server sends a blank/broken title
   const title = alert.title?.trim() || ALERT_SOURCE_LABELS[alert.source] || 'Alert';
+  // TASK-212: a robot alert raised for a patrol finding carries
+  // `[finding:<id> run:<runId>]` in its message tail. Show it as a link into
+  // the run, and keep the machine tag out of the prose.
+  const findingLink = alert.source === 'robot' ? parseFindingLink(alert.message) ?? parseFindingLink(alert.title) : null;
+  const findingPath = findingLink ? findingLinkPath(findingLink) : null;
+  const message = findingLink ? stripFindingLink(alert.message) : alert.message;
 
   return (
     <div
@@ -124,7 +131,16 @@ function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProp
             </span>
           </div>
           <h4 className="font-medium text-theme-primary text-sm break-words">{title}</h4>
-          <p className="text-sm text-theme-secondary mt-0.5 break-words">{alert.message}</p>
+          <p className="text-sm text-theme-secondary mt-0.5 break-words">{message}</p>
+          {findingPath && (
+            <Link
+              to={findingPath}
+              className="inline-flex items-center gap-1 mt-1 text-xs text-cobalt-500 hover:underline"
+              data-testid="alert-open-finding"
+            >
+              Open finding →
+            </Link>
+          )}
           {alert.acknowledged && alert.acknowledgedAt && (
             <p className="text-xs text-theme-tertiary mt-1">
               Acknowledged {formatTimestamp(alert.acknowledgedAt)}

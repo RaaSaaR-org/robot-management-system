@@ -27,6 +27,9 @@ import {
   LazyFleetPage,
   LazyAgentModePage,
   LazyAlertsPage,
+  LazyPatrolPage,
+  LazyPatrolRouteEditorPage,
+  LazyPatrolRunDetailPage,
   LazyProcessesPage,
   LazyProcessDetailPage,
   LazyA2AChatPage,
@@ -209,6 +212,39 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyAlertsPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Patrol (TASK-212) - routes, editor, run detail */}
+          <Route
+            path="/patrol"
+            element={
+              <ProtectedAppRoute>
+                <LazyPatrolPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/patrol/routes/new"
+            element={
+              <ProtectedAppRoute>
+                <LazyPatrolRouteEditorPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/patrol/routes/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyPatrolRouteEditorPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/patrol/runs/:runId"
+            element={
+              <ProtectedAppRoute>
+                <LazyPatrolRunDetailPage />
               </ProtectedAppRoute>
             }
           />

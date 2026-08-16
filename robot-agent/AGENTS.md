@@ -390,6 +390,97 @@ capped at the blind stage (1 m, or as far as the map knows to be free) unless th
 walk is a `planned` navigator segment. `geofence.ts` / `SafetyMonitor` are
 untouched — the reactive fence stays the last line of defence.
 
+### Patrol (TASK-212)
+
+The first complete Agent Mode **use case**: an operator-defined route (checkpoints =
+place ids of the robot's place graph) walked on a server-side schedule, a control
+photo at every checkpoint, and everything the robot sees on the way compared
+against a baseline of "normal". Opt-in: `AGENT_PATROL_ENABLED=true` (the
+`.env.g1-edu-agent-house` profile has it on). Code: `src/agent-mode/patrol.ts`
+(`PatrolRunner`, `PatrolRouteSource`, `PatrolRunStore`, preconditions, leg plan),
+`baseline.ts` (`BaselineStore`), `inspector.ts` (pHash gate, checklist, label diff,
+map diff, `Confirmer`), `block-executor.ts` (`capture` / `inspect`), the controller's
+`startPatrol()` / `abortPatrol()`.
+
+**One patrol = one Agent Mode plan** (`command: "patrol: <route name>"`): a leading
+`patrol` block that stays running while the legs run and gets the summary as its
+result, the spoken start notice ("Starting patrol; I take reference photos." — the
+transparency obligation), then per checkpoint `goto{place}` → `capture` (when the
+checkpoint captures) → `inspect` (patrol mode) → `wait` (dwell) → `scan_room`
+(scan), and `goto{home}` when the route (or `AGENT_PATROL_HOME_PLACE`) names one.
+Every leg runs through the same executor as an operator `goto`, so E-Stop,
+geofence, the pre-walk map check, mirror and compliance record apply unchanged.
+**Leg semantics:** a failed leg (its `goto` failed) is skipped and reported, the run
+continues; two consecutive failed legs abort the route and still go home; an
+E-Stop / teleop takeover aborts like any plan (no home); an **operator command
+during a patrol aborts the run** and then runs as a fresh plan.
+
+**Fail closed.** `POST /robots/:id/agent-mode/patrol {routeId, mode?, origin?, route?}`
+answers `PatrolStartResult` — a refusal is `{accepted:false, reason, message}` with
+`reason ∈ disabled|estop|busy|battery|place_unknown|damped|crash_unacknowledged|window|
+route_unknown|no_places|running`, and is ALSO recorded as a `skipped` run and
+announced with `agent:patrol:finished`, so the server persists it and alerts. A
+`scheduled` run passes `mayInitiate('goto', 'scheduled', …)` (battery ≥ 20 %, place
+known and fresh, armed, not damped, crash acknowledged) plus the route's time
+window; an `operator` run passes the initiative gate but is still refused damped.
+
+**Comparison** — accurate at checkpoints, cheap in between:
+- `capture`: align to the stored heading (measured turn), one frame; in patrol
+  mode a **perceptual-hash gate** (`AGENT_PATROL_HASH_GATE`, 0.97 — at 0.92 a crate 4.5 m ahead still passed as unchanged) against the
+  baseline photo of that checkpoint × window — alike ⇒ `unchanged`, stored, **no
+  model call**; otherwise **ONE** checklist VLM call (`CHECKLIST_PROMPT`: person,
+  door, object on floor, lights, out of place, operator expectations, one line).
+  The JPEG is stored **only when `personPresent === false`** — data minimisation
+  by not storing. Baseline mode always runs the checklist and records photo +
+  answers + the leg label sets + the map snapshot at the end.
+- `inspect`: item-by-item checklist diff vs the baseline (only changes toward
+  "not normal"): personPresent→`person`, doorState→`door_open`, objectOnFloor→
+  `object_on_floor`, lightsOn→`lights_on`, outOfPlace→`out_of_place`,
+  expectations→`expectation_failed`. Confirms on its one observation.
+- En-route, hooked into every look (`BlockExecutorDeps.onLook`), zero model calls:
+  labels of the look vs the baseline leg's label set (watch-list
+  `AGENT_PATROL_WATCHLIST`, substring, case-insensitive → `unexpected_object` /
+  `person`), and cells FREE in the baseline map & OCCUPIED now within
+  `AGENT_PATROL_DIFF_RADIUS_M` (6), 8-connected clusters ≥ `AGENT_PATROL_MIN_BLOB_M2`
+  (0.15), not inside a tracked peer → `unexpected_object` at the centroid, place by
+  polygon. Both are keyed type × place, so a semantic and a geometric sighting of
+  the same crate become ONE finding (`source: 'enroute_both'`).
+- `Confirmer`: N-of-M consecutive looks (`AGENT_PATROL_CONFIRM_N/M`, 2/3); one
+  finding per type per place per run (later hits re-observe it →
+  `agent:finding:confirmed`). A confirmed person: the robot says one line ("I am
+  on patrol, please step aside." / DE) once per run and records the finding
+  **without an image**.
+
+**On disk** (`data/workspace-<robotId>/patrol/`, same atomic writes, temp sweep and
+GDPR `erase()` as the rest of the workspace):
+`<routeId>/baseline/<window>/{checkpoints.json,legs.json,map.json,accepted-blobs.json,<cp>.jpg}`
+(window `default` when the route has none) and
+`<routeId>/runs/<runId>/{run.json,findings.json,answers.json,<cp>.jpg}`. Storage
+keys: `leg.photoKey` / `evidence.currentPhotoKey` = `<runId>/<checkpointId>.jpg`,
+`evidence.baselinePhotoKey` = `<baselineRunId>/<checkpointId>.jpg`. Photos are
+also uploaded to the server (`PUT /api/robots/:id/patrol-runs/:runId/photos/<cp>.jpg`,
+JSON body, 10 s, 3 attempts; kind `control|baseline|finding`). Retention: plain
+control photos 72 h (`AGENT_PATROL_PHOTO_RETENTION_H`), finding/baseline photos 30 d,
+swept at boot and hourly.
+
+**REST** (`/api/v1`): `POST /robots/:id/agent-mode/patrol`, `POST …/patrol/abort`,
+`GET …/patrol` → `{enabled, active, lastRun}`, `GET …/patrol/runs?limit=`,
+`GET …/patrol/runs/:runId` (+ `findings`), `GET …/patrol/runs/:runId/photos/<cp>.jpg`
+and `GET …/patrol/baseline/:routeId/:window/<cp>.jpg` (both behind
+`personalDataGate`), `POST …/patrol/findings/:id/normal {runId}` ("this is normal"
+→ `BaselineStore.markNormal`), `POST …/patrol/runs/:runId/promote`, and
+`GET /robots/:id/places` → `{places:[{id,name,placeType,keepout}]}` for the route
+editor. Events: `agent:patrol:started|leg|finished` (with `patrol`),
+`agent:finding:detected|confirmed` (with `finding` + `patrol`), all mirrored to
+the server like every other Agent Mode event.
+
+**Sim demo** (house scene, place ids `HALLWAY KITCHEN LIVING-ROOM BEDROOM WORKSHOP`):
+`POST /sim/reset-pose {"body":"crate","x":4.5,"y":0.9}` moves the crate, and the
+mocap `person` can now be moved the same way (`{"body":"person",…}`); baseline run
+→ move the crate → patrol run → one finding. `demo_clip.py --layout patrol
+--patrol-route ROUTE.json [--patrol-mode baseline]` records it (camera / map with
+numbered checkpoints + red finding pins / baseline-vs-now photo pair).
+
 ## Key Dependencies
 
 | Package                 | Purpose                     |

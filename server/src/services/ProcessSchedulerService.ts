@@ -5,7 +5,12 @@
  * @feature processes
  */
 
-import { CronExpressionParser } from 'cron-parser';
+import {
+  computeNextRun as computeNextCronRun,
+  isDue as isCronDue,
+  needsInitialNextRun,
+  validateCron as validateCronExpression,
+} from '../utils/cron.js';
 import { processRepository } from '../repositories/ProcessRepository.js';
 import { processManager } from './ProcessManager.js';
 import type { ProcessDefinition } from '../types/process.types.js';
@@ -103,7 +108,7 @@ export class ProcessSchedulerService {
   private isDue(def: ProcessDefinition, now: Date): boolean {
     if (!def.cronExpression) return false;
 
-    if (!def.nextRunAt) {
+    if (needsInitialNextRun(def)) {
       // First-time scheduling — initialise nextRunAt and skip this tick.
       const next = this.computeNextRun(def.cronExpression, now);
       if (next) {
@@ -116,7 +121,7 @@ export class ProcessSchedulerService {
       return false;
     }
 
-    return new Date(def.nextRunAt) <= now;
+    return isCronDue(def, now);
   }
 
   /**
@@ -146,13 +151,7 @@ export class ProcessSchedulerService {
    * Returns null on invalid expressions (logged for visibility).
    */
   private computeNextRun(cronExpression: string, from: Date): Date | null {
-    try {
-      const interval = CronExpressionParser.parse(cronExpression, { currentDate: from });
-      return interval.next().toDate();
-    } catch (err) {
-      console.error(`[ProcessScheduler] Invalid cron expression "${cronExpression}":`, err);
-      return null;
-    }
+    return computeNextCronRun(cronExpression, from, 'ProcessScheduler');
   }
 
   /**
@@ -160,12 +159,8 @@ export class ProcessSchedulerService {
    * user feedback before saving.
    */
   static validateCron(cronExpression: string): { valid: boolean; nextRun?: string; error?: string } {
-    try {
-      const interval = CronExpressionParser.parse(cronExpression, { currentDate: new Date() });
-      return { valid: true, nextRun: interval.next().toDate().toISOString() };
-    } catch (err) {
-      return { valid: false, error: err instanceof Error ? err.message : 'Invalid cron expression' };
-    }
+    const { valid, nextRun, error } = validateCronExpression(cronExpression, 1);
+    return valid ? { valid, nextRun } : { valid, error };
   }
 }
 

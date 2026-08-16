@@ -16,6 +16,8 @@ import { hardwareClient, type LocoActionName, type LocoResult } from '../hardwar
 import { CLEARANCE_MARGIN_M, MIN_STAGE_M, UNKNOWN_DISTANCE_STAGE_M } from './navigator.js';
 import type { SegmentCheck } from './path-planner.js';
 import { RangeSensor } from './range.js';
+import { gateByHash, type ChecklistAnswers } from './inspector.js';
+import type { PatrolCaptureHost } from './patrol.js';
 import { speakThroughVoiceService } from './voice-narrator.js';
 import {
   getWorkspace,
@@ -203,6 +205,23 @@ export interface BlockExecutorDeps {
   checkForwardPath?: (distanceM: number) => Promise<SegmentCheck | null> | SegmentCheck | null;
   /** Called after every scene merge so the controller can mirror it. */
   onScene?: (scene: SceneMemory) => void;
+  /**
+   * Called after every look with the RAW observation and is AWAITED (TASK-212):
+   * the patrol's en-route comparators run here, and the one line the robot
+   * says when it confirms a person is what makes the look a pause. Absent or
+   * null-returning when no patrol is active — the executor never knows.
+   */
+  onLook?: (observation: VisionObservation) => Promise<void> | void;
+  /**
+   * The active patrol's capture/inspect host (TASK-212), or null when no
+   * patrol runs — `capture`/`inspect` then fail with a plain message. A getter,
+   * because the executor is built once and patrols come and go.
+   */
+  patrol?: () => PatrolCaptureHost | null;
+  /** Grab a base64 JPEG from a named camera. Default: the sidecar. */
+  snapshot?: (cameraName: string) => Promise<string>;
+  /** Camera used by `capture` (default `AGENT_CAMERA_NAME`). */
+  cameraName?: string;
   loco?: {
     move(vx: number, vy: number, omega: number, durationS: number): Promise<LocoResult>;
     action(name: LocoActionName, args?: Record<string, unknown>): Promise<LocoResult>;
@@ -276,6 +295,8 @@ export class BlockExecutor {
   private readonly memory: Workspace | null;
   private readonly rememberTrust: () => TrustLevel;
   private readonly onDurableWrite: (ok: boolean, error: string | null) => void;
+  private readonly snapshot: (cameraName: string) => Promise<string>;
+  private readonly cameraName: string;
 
   constructor(deps: BlockExecutorDeps) {
     this.deps = deps;
@@ -290,6 +311,8 @@ export class BlockExecutor {
     this.memory = deps.memory === undefined ? getWorkspace() : deps.memory;
     this.rememberTrust = deps.rememberTrust ?? ((): TrustLevel => 'untrusted');
     this.onDurableWrite = deps.onDurableWrite ?? ((): void => {});
+    this.snapshot = deps.snapshot ?? ((name) => hardwareClient.snapshot(name));
+    this.cameraName = deps.cameraName ?? config.agentMode.cameraName;
   }
 
   /**
@@ -327,12 +350,14 @@ export class BlockExecutor {
             ok: false,
             message: 'internal error: "goto" must be expanded by the navigator',
           };
-        case 'patrol':
         case 'capture':
+          return await this.capture(block);
         case 'inspect':
+          return await this.inspect(block);
+        case 'patrol':
           return {
             ok: false,
-            message: `internal error: "${block.kind}" must be run by PatrolRunner`,
+            message: 'internal error: "patrol" is the run itself and is driven by PatrolRunner',
           };
       }
     } catch (err) {
@@ -714,7 +739,142 @@ export class BlockExecutor {
       forwardClearanceM: measurement.clearanceM,
     });
     this.deps.onScene?.(scene);
+    // The patrol's en-route comparison (TASK-212) — awaited, so a confirmed
+    // person's one spoken line lands before the next stage moves the robot.
+    if (this.deps.onLook) {
+      try {
+        await this.deps.onLook(observation);
+      } catch (err) {
+        console.warn(`[AgentMode] onLook hook failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     return observation;
+  }
+
+  // ── patrol (TASK-212) ─────────────────────────────────────────────────────
+
+  /**
+   * The control photo at a checkpoint.
+   *
+   * Aligns to the stored heading (a measured turn), takes ONE frame, and then
+   * runs the cascade the task settled on: in patrol mode the perceptual-hash
+   * gate against the baseline photo of this checkpoint × window first — a
+   * frame that clears it is `unchanged`, stored, and costs no model call; only
+   * otherwise ONE checklist call. The frame is stored ONLY when that answer
+   * says no person is in it: data minimisation by not storing, which is
+   * stronger and simpler than blurring. In baseline mode the checklist always
+   * runs and photo + answers become the baseline (through the host).
+   */
+  private async capture(block: AgentBlock): Promise<BlockOutcome> {
+    const host = this.deps.patrol?.() ?? null;
+    const checkpointId = typeof block.params.checkpointId === 'string' ? block.params.checkpointId : '';
+    if (!host || !checkpointId) {
+      return { ok: false, message: 'capture: no patrol run is active for this checkpoint' };
+    }
+    const ctx = host.context(checkpointId);
+    if (!ctx) return { ok: false, message: `capture: checkpoint "${checkpointId}" is not part of the active patrol` };
+    const name = ctx.checkpoint.name;
+
+    // Heading alignment: a MEASURED turn onto the stored world heading, so the
+    // control photo frames the same view as the baseline. Skipped when the
+    // checkpoint stores none or the robot is already within a few degrees.
+    let alignNote = '';
+    const headingDeg = Number(block.params.headingDeg);
+    if (Number.isFinite(headingDeg)) {
+      await this.refreshYaw();
+      const delta = normalizeDeg(headingDeg - this.deps.scene.getYawDeg());
+      if (Math.abs(delta) > 5) {
+        const { result, turnedDeg } = await this.turnMeasured(delta);
+        alignNote = result.ok
+          ? ` Aligned to ${Math.round(headingDeg)}° (turned ${turnedDeg === null ? Math.round(delta) : Math.round(turnedDeg)}°).`
+          : ` Could not align to ${Math.round(headingDeg)}° (${locoError(result)}) — photo taken as is.`;
+      }
+    }
+
+    let b64: string;
+    try {
+      b64 = await this.snapshot(this.cameraName);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      host.recordCapture(checkpointId, { photo: null, photoDropped: 'error', answers: null, model: null, inspection: 'error', similarity: null, message: reason });
+      return { ok: false, message: `capture at ${name}: no frame — ${reason}` };
+    }
+    const jpeg = Buffer.from(b64, 'base64');
+
+    if (ctx.mode === 'patrol') {
+      const gate = gateByHash(jpeg, host.baselinePhoto(checkpointId), host.hashGate);
+      if (gate.unchanged) {
+        // The baseline photo held no person (it was never stored otherwise)
+        // and this frame hashes the same, so it is stored without asking.
+        const { photoKey } = host.recordCapture(checkpointId, {
+          photo: jpeg,
+          photoDropped: null,
+          answers: null,
+          model: null,
+          inspection: 'unchanged',
+          similarity: gate.similarity,
+        });
+        return {
+          ok: true,
+          message:
+            `Control photo at ${name}: unchanged against the baseline (similarity ${(gate.similarity ?? 0).toFixed(2)}) — ` +
+            `no model call.${photoKey ? ` Stored as ${photoKey}.` : ''}${alignNote}`,
+        };
+      }
+    }
+
+    let answers: ChecklistAnswers;
+    let model: string | null = null;
+    try {
+      const res = await host.checklist(b64, ctx.checkpoint.expectations ?? []);
+      answers = res.answers;
+      model = res.model;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      // No answer means no `personPresent` verdict, and without that verdict
+      // the frame is NOT stored — fail closed on the privacy side.
+      host.recordCapture(checkpointId, { photo: null, photoDropped: 'error', answers: null, model: null, inspection: 'error', similarity: null, message: reason });
+      return { ok: false, message: `capture at ${name}: the checklist model did not answer — ${reason}. The frame was not stored.` };
+    }
+    if (answers.degraded) {
+      // A garbled / prose answer carries no `personPresent` verdict. The rule
+      // is "store ONLY on personPresent === false", and a default is not a
+      // verdict — so this is the same fail-closed path as no answer at all:
+      // nothing on disk, nothing uploaded, nothing recorded as baseline.
+      const reason = `checklist answer could not be parsed (${answers.oneLine})`;
+      host.recordCapture(checkpointId, { photo: null, photoDropped: 'error', answers: null, model, inspection: 'error', similarity: null, message: reason });
+      return { ok: false, message: `capture at ${name}: ${reason}. The frame was not stored.${alignNote}` };
+    }
+    const person = answers.personPresent;
+    const { photoKey } = host.recordCapture(checkpointId, {
+      photo: person ? null : jpeg,
+      photoDropped: person ? 'person' : null,
+      answers,
+      model,
+      // Baseline mode: a person shot records nothing (the host skips it), so
+      // it must not be labelled `recorded`.
+      inspection: ctx.mode === 'baseline' ? (person ? 'skipped' : 'recorded') : null,
+      similarity: null,
+    });
+    return {
+      ok: true,
+      message:
+        `Control photo at ${name}: ${answers.oneLine}.` +
+        (person ? ' A person is in frame — the photo was NOT stored.' : photoKey ? ` Stored as ${photoKey}.` : '') +
+        (ctx.mode === 'baseline' ? (person ? ' NOT recorded as baseline — retake this checkpoint.' : ' Recorded as baseline.') : '') +
+        alignNote,
+    };
+  }
+
+  /** Compare the checkpoint against its baseline (patrol mode) — the host does the diff. */
+  private async inspect(block: AgentBlock): Promise<BlockOutcome> {
+    const host = this.deps.patrol?.() ?? null;
+    const checkpointId = typeof block.params.checkpointId === 'string' ? block.params.checkpointId : '';
+    if (!host || !checkpointId) {
+      return { ok: false, message: 'inspect: no patrol run is active for this checkpoint' };
+    }
+    const result = await host.inspect(checkpointId);
+    return { ok: result.inspection !== 'error', message: result.message };
   }
 
   /**

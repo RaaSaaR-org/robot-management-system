@@ -4,7 +4,7 @@ aliases:
 - TASK-212
 title: Patrol — the robot walks a route on a schedule, takes control photos at checkpoints, and reports what is not normal along the whole way
 slug: patrol-the-robot-walks-a-route-on-a-schedule-takes-control-photos-and-reports-what-is-not-normal
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -23,6 +23,7 @@ depends_on:
 due_date: ''
 created: 2026-08-16
 updated: 2026-08-16
+completed: 2026-08-16
 ---
 
 # Patrol — the robot walks a route on a schedule, takes control photos at checkpoints, and reports what is not normal along the whole way

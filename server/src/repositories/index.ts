@@ -122,3 +122,11 @@ export {
   skillChainRepository,
   SkillChainRepository,
 } from './VLARepository.js';
+export { patrolRepository, PatrolRepository } from './PatrolRepository.js';
+export type {
+  PatrolRouteRecord,
+  PatrolRunRecord,
+  PatrolFindingRecord,
+  CreatePatrolRouteInput,
+  UpdatePatrolRouteInput,
+} from './PatrolRepository.js';

@@ -204,7 +204,11 @@ counter here" → "Explore the living room, the bedroom and the workshop. Descri
 room, then come back to the kitchen." → agent restarted → "What do you remember about
 this room?". `POST /sim/reset-pose {"body": "crate", "x": -1, "y": -0.72, "yaw": 0}`
 re-places a static prop of the scene without a restart (a restart changes the sim's
-boot id, and with it the map's session).
+boot id, and with it the map's session); the mocap `person` figure moves the same way
+(`{"body": "person", "x": -3, "y": 3, "yaw": 0}` — TASK-212 stages "a person standing
+in a room" with it). Patrol clips: `demo_clip.py --layout patrol --patrol-route
+../sim_evaluator/patrol/route.house.json [--patrol-mode baseline]` — see
+`../sim_evaluator/patrol/README.md`.
 
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
 `clips/table.pip.mp4` (the inset stream) and `clips/table.json` (the plan with

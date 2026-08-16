@@ -86,6 +86,7 @@ describe('constants', () => {
       SENSOR_SCANS: 'sensor-scans',
       DIGITAL_TWINS: 'digital-twins',
       INCIDENT_CLIPS: 'incident-clips',
+      PATROL_PHOTOS: 'patrol-photos',
     });
   });
 
