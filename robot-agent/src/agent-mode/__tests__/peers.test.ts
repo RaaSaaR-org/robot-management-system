@@ -21,6 +21,7 @@ const peer = (over: Partial<FleetPeer> = {}): FleetPeer => ({
   place: null,
   zone: null,
   updatedAt: '2026-08-15T10:00:00.000Z',
+  poseAgeMs: null, // server says nothing about pose age unless a test says so
   footprintRadiusM: 0.35,
   ...over,
 });
@@ -121,6 +122,51 @@ describe('PeerTracker', () => {
     await tr.pollOnce();
     expect(tr.list()).toEqual([]); // > 3 polls: gone
     expect(changes.at(-1)).toBe(0);
+  });
+
+  it('expires a peer whose POSE stopped advancing, while our own polls keep succeeding', () => {
+    const { tr, tick, changes } = tracker();
+    // Robot B's link to the server drops mid-walk. The server cannot re-read
+    // B's pose, keeps the last one, and — because `isConnected` only flips on
+    // its 30 s health check — keeps LISTING B every poll. Our polls are fine,
+    // so `seenAtMs` is refreshed each time: only the pose age can catch this.
+    tr.ingest([peer({ poseAgeMs: 200 })]);
+    expect(tr.list()).toHaveLength(1);
+    tick(2000);
+    tr.ingest([peer({ poseAgeMs: 2200 })]);
+    expect(tr.list()).toHaveLength(1);
+    tick(2000);
+    tr.ingest([peer({ poseAgeMs: 4200 })]);
+    expect(tr.list()).toHaveLength(1); // still inside the 6 s budget
+    tick(2000);
+    tr.ingest([peer({ poseAgeMs: 6200 })]);
+    // Gone: no phantom disc left in the dynamic overlay for the planner to
+    // refuse to walk through, and the change is announced, not just silently
+    // dropped on the next render pull.
+    expect(tr.list()).toEqual([]);
+    expect(tr.obstacles()).toEqual([]);
+    expect(changes.at(-1)).toBe(0);
+  });
+
+  it('ages a stale pose between polls, and keeps poll-based ageing when the server reports no age', () => {
+    const fresh = tracker();
+    fresh.tr.ingest([peer({ poseAgeMs: 1000 })]);
+    fresh.tick(5100); // 1 s old at ingest + 5.1 s = past the 6 s budget
+    expect(fresh.tr.list()).toEqual([]);
+
+    // No `poseAgeMs` on the wire (older server, or a peer never pose-synced):
+    // a missing field must never delete a peer we can otherwise see.
+    const quiet = tracker();
+    quiet.tr.ingest([peer()]);
+    quiet.tick(5000);
+    quiet.tr.ingest([peer()]);
+    expect(quiet.tr.list()).toHaveLength(1);
+  });
+
+  it('reads the server-computed pose age off the wire', () => {
+    expect(parseFleetPeer({ robotId: 'r', x: 1, y: 2, poseAgeMs: 1500 })?.poseAgeMs).toBe(1500);
+    expect(parseFleetPeer({ robotId: 'r', x: 1, y: 2 })?.poseAgeMs).toBeNull();
+    expect(parseFleetPeer({ robotId: 'r', x: 1, y: 2, poseAgeMs: 'soon' })?.poseAgeMs).toBeNull();
   });
 
   it('forgets a peer the server no longer lists, at once', () => {

@@ -14,6 +14,7 @@ import type {
 import { agentCardResolver } from './A2AClient.js';
 import { conversationManager } from './ConversationManager.js';
 import { robotRepository, agentRepository } from '../repositories/index.js';
+import { getTenantId } from '../middleware/tenantContext.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 // Safe to import directly: AlertService only depends on repositories (no service cycle)
 import { alertService } from './AlertService.js';
@@ -96,6 +97,15 @@ export interface FleetPeer {
   zone: string | null;
   /** When this pose was last synced from the peer's agent. */
   updatedAt: string | null;
+  /**
+   * How old that pose is, in ms, measured on the SERVER's clock at response
+   * time; null when the peer has never been pose-synced. The consumer cannot
+   * derive this from `updatedAt` without importing agent/server clock skew,
+   * and it needs it: a peer whose agent went silent keeps being listed (its
+   * `isConnected` only flips on the 30 s health check) with a frozen pose, and
+   * an agent that trusts that pose plans around a robot that has walked away.
+   */
+  poseAgeMs: number | null;
   footprintRadiusM: number;
 }
 
@@ -112,6 +122,14 @@ export const PEER_POSE_MAX_AGE_MS = 1000;
  * A slow agent simply keeps its last pose (the catch below).
  */
 export const PEER_POSE_REFRESH_TIMEOUT_MS = 750;
+
+/**
+ * How long a tenant's visible-robot set is reused before it is re-read
+ * (multi-tenancy only). Long enough that a 2 s peers poll does not query the
+ * database on every tick, short enough that a colleague registered a moment
+ * ago shows up on the next poll.
+ */
+export const PEER_TENANT_SCOPE_TTL_MS = 2000;
 
 /** Core robot entity */
 export interface Robot {
@@ -236,6 +254,14 @@ export interface RegisteredRobot {
   registeredAt: string;
   /** ISO time `robot.location` was last read off the agent; undefined = never. */
   poseSyncedAt?: string;
+  /**
+   * The pose the DATABASE row holds, as far as we know; undefined = unknown,
+   * so the next writer persists. Both writers (the peers refresh and the
+   * health check) diff against THIS, never against `robot.location` — the
+   * cache is refreshed every peers poll (~2 s), so a cache diff is always ~0
+   * and the row would silently stop being written at all.
+   */
+  lastPersistedLocation?: RobotLocation;
 }
 
 /** Below this, a pose "change" is sim jitter, not motion — no event, no write. */
@@ -391,6 +417,10 @@ export class RobotManager {
   async initialize(): Promise<void> {
     const registeredRobots = await robotRepository.getAllRegisteredRobots();
     for (const robot of registeredRobots) {
+      // This pose came straight off the row, so cache and database agree —
+      // record that, or the first writer would waste a write re-persisting it.
+      // Mutated in place, not copied: callers hold on to this object.
+      robot.lastPersistedLocation = robot.robot.location;
       this.robotCache.set(robot.robot.id, robot);
     }
     console.log(`[RobotManager] Loaded ${registeredRobots.length} robots from database`);
@@ -454,6 +484,8 @@ export class RobotManager {
         lastHealthCheck: now,
         isConnected: true,
         registeredAt: now,
+        // `upsertWithRegistration` above wrote this pose, so cache = row.
+        lastPersistedLocation: robotWithA2A.location,
       };
 
       // Cache in memory
@@ -594,16 +626,81 @@ export class RobotManager {
 
   private poseRefreshInFlight: Promise<void> | null = null;
 
+  /** tenantId → the robot ids that tenant may see, and when we read them. */
+  private tenantPeerScope = new Map<string, { ids: Set<string>; readAtMs: number }>();
+
+  /**
+   * Refresh (at most every {@link PEER_TENANT_SCOPE_TTL_MS}) the set of robots
+   * the CALLING tenant is allowed to see.
+   *
+   * `robotCache` is a process-wide map: `initialize()` fills it at startup,
+   * outside any request, so the Prisma tenant extension is a passthrough and
+   * every tenant's robots land in one map. Reading it unfiltered in
+   * {@link getPeers} handed any authenticated user of tenant A the id, name,
+   * live pose, place and zone of every connected robot of tenant B — a bulk
+   * cross-tenant fleet enumeration. `robotRepository.findAll()` runs inside the
+   * request's tenant scope, so the extension answers the one question we need:
+   * which robots exist FOR THIS CALLER.
+   */
+  private async syncTenantPeerScope(tenantId: string): Promise<void> {
+    const cached = this.tenantPeerScope.get(tenantId);
+    if (cached && Date.now() - cached.readAtMs <= PEER_TENANT_SCOPE_TTL_MS) return;
+    try {
+      const visible = await robotRepository.findAll();
+      this.tenantPeerScope.set(tenantId, {
+        ids: new Set(visible.map((r) => r.id)),
+        readAtMs: Date.now(),
+      });
+    } catch (err) {
+      // Leave the previous (or absent) scope in place: getPeers fails closed.
+      console.warn('[RobotManager] Failed to read tenant robot scope:', err);
+    }
+  }
+
+  /**
+   * Write the cached pose to the row when the two have drifted apart.
+   *
+   * Fire-and-forget on purpose: `GET /:id/peers` waits for poses, never for the
+   * database. `lastPersistedLocation` is set optimistically so the ~1 s refresh
+   * cadence cannot turn into a write storm while a write is in flight, and is
+   * cleared again on failure so the next refresh (or the health check) retries.
+   */
+  private persistLocation(registered: RegisteredRobot): void {
+    const target = registered.robot.location;
+    if (!target || !locationDiffers(registered.lastPersistedLocation, target)) return;
+    registered.lastPersistedLocation = target;
+    void (async () => {
+      try {
+        const row = await robotRepository.update(registered.robot.id, { location: target });
+        if (!row) throw new Error('row not updated');
+      } catch (err) {
+        if (registered.lastPersistedLocation === target) {
+          registered.lastPersistedLocation = undefined;
+        }
+        console.warn(
+          `[RobotManager] Failed to persist refreshed pose for ${registered.robot.id}:`,
+          err
+        );
+      }
+    })();
+  }
+
   /**
    * Bring every connected robot's cached pose to within `maxAgeMs`, reading
    * `GET /api/v1/robots/:id` off each agent in parallel. The 30 s health check
    * is far too slow for a robot that wants to avoid a colleague; this is the
    * on-demand path `GET /:id/peers` takes. Concurrent callers share one
-   * refresh. In-memory only — the health check persists. A changed pose emits
-   * the same `robot_status_changed` the health check would, so the fleet map
-   * gets fresher too.
+   * refresh. A changed pose is written back to the row as well (see
+   * {@link persistLocation}) and emits the same `robot_status_changed` the
+   * health check would, so the fleet map gets fresher too.
    */
   async refreshPoses(maxAgeMs: number = PEER_POSE_MAX_AGE_MS): Promise<void> {
+    // Before anything else — and before the in-flight short-circuit, which a
+    // second tenant would otherwise ride — learn which robots this caller may
+    // see. `getTenantId()` is undefined with multi-tenancy off or outside a
+    // request, and then this costs nothing and changes nothing.
+    const tenantId = getTenantId();
+    if (tenantId) await this.syncTenantPeerScope(tenantId);
     if (this.poseRefreshInFlight) return this.poseRefreshInFlight;
     const nowMs = Date.now();
     const stale = Array.from(this.robotCache.values()).filter(
@@ -627,6 +724,14 @@ export class RobotManager {
                 timestamp: now,
               });
             }
+            // …and persist it. This used to be "the health check persists",
+            // but the health check diffed against this very cache, which we
+            // refresh every ~2 s — so its diff was always ~0 and `Robot.location`
+            // stopped being written the moment peer polling started. A robot
+            // that walked and stopped between two health checks then stayed on
+            // the fleet map (and in zone-scoped E-stop) at its old position
+            // indefinitely, because `GET /api/robots` reads the row, not this map.
+            this.persistLocation(registered);
           } catch {
             // Leave the cached pose (and its age) alone: an unreachable agent
             // is the health check's business, and a peer with an old pose is
@@ -646,8 +751,16 @@ export class RobotManager {
    * compare with its own; the server never pretends two odometries agree.
    */
   getPeers(robotId: string): FleetPeer[] {
+    // Multi-tenancy: never enumerate the process-wide cache for a tenant.
+    // Fails closed — a scope we have not read yet (see syncTenantPeerScope,
+    // which the peers route always awaits via refreshPoses) hides peers rather
+    // than leaking a foreign fleet.
+    const tenantId = getTenantId();
+    const visible = tenantId ? (this.tenantPeerScope.get(tenantId)?.ids ?? new Set<string>()) : null;
+    const nowMs = Date.now();
     return Array.from(this.robotCache.values())
       .filter((r) => r.isConnected && r.robot.id !== robotId)
+      .filter((r) => visible === null || visible.has(r.robot.id))
       .map((r) => {
         const loc = r.robot.location;
         const meta = r.robot.metadata ?? {};
@@ -664,6 +777,9 @@ export class RobotManager {
           place: loc.place ?? null,
           zone: loc.zone ?? null,
           updatedAt: r.poseSyncedAt ?? null,
+          // Measured here, on one clock, so the agent does not have to guess
+          // how stale a colleague's pose is from an ISO string of ours.
+          poseAgeMs: r.poseSyncedAt ? Math.max(0, nowMs - Date.parse(r.poseSyncedAt)) : null,
           footprintRadiusM: footprint,
         };
       });
@@ -797,14 +913,20 @@ export class RobotManager {
           const robotHttpClient = new HttpClient(undefined, HTTP_TIMEOUTS.SHORT);
           const robotData = await robotHttpClient.get<Robot>(registered.endpoints.robot);
           if (robotData.location) {
-            const oldLoc = registered.robot.location;
             const newLoc = robotData.location;
-            // Check if position actually changed
-            if (locationDiffers(oldLoc, newLoc)) {
+            if (locationDiffers(registered.robot.location, newLoc)) {
               registered.robot.location = newLoc;
               registered.poseSyncedAt = now;
-              locationChanged = true;
             }
+            // Diff against what the ROW holds, not against the cache: the peers
+            // refresh (refreshPoses) writes fresh poses into the cache every
+            // ~2 s, so a cache diff here is ~0 and the 30 s guaranteed write
+            // silently disappeared. This keeps the health check an honest
+            // second writer — and a retry when a refresh write failed.
+            locationChanged = locationDiffers(
+              registered.lastPersistedLocation,
+              registered.robot.location
+            );
           }
 
           // SIM-honesty: sync identity fields the agent reports (serial,
@@ -912,6 +1034,9 @@ export class RobotManager {
           newBatteryLevel,
           locationChanged ? registered.robot.location : undefined
         );
+        if (locationChanged) {
+          registered.lastPersistedLocation = registered.robot.location;
+        }
 
         // Emit event if status, battery, location, or identity changed
         if (statusChanged || batteryChanged || locationChanged || identityChanged) {
