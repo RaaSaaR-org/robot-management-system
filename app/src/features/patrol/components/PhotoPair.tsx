@@ -27,6 +27,8 @@ export interface PhotoPairProps {
   baselineKey: string | null | undefined;
   /** `side` (default) = two frames; `swipe` = current photo with the baseline revealed by a slider. */
   mode?: 'side' | 'swipe';
+  /** Placeholder for the baseline slot when no baseline is passed (default: window has none yet). */
+  baselineMissingText?: string;
   className?: string;
 }
 
@@ -138,6 +140,7 @@ export const PhotoPair = memo(function PhotoPair({
   currentKey,
   currentDropped,
   baselineRunId,
+  baselineMissingText,
   baselineRobotId,
   baselineKey,
   mode = 'side',
@@ -161,7 +164,7 @@ export const PhotoPair = memo(function PhotoPair({
           <Frame
             label="Baseline"
             state={baseline}
-            missingText={baselineRunId ? 'no baseline photo for this checkpoint' : 'no baseline for this window yet'}
+            missingText={baselineRunId ? 'no baseline photo for this checkpoint' : (baselineMissingText ?? 'no baseline for this window yet')}
             alt={`Baseline photo at ${checkpointName}`}
           />
           <Frame label="Current" state={current} missingText={currentMissing} alt={`Current photo at ${checkpointName}`} />

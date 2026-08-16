@@ -154,6 +154,17 @@ describe('RunDetail', () => {
     await waitFor(() => expect(screen.getByTestId('patrol-run-detail')).toHaveTextContent('Run promoted'));
   });
 
+  it('when this run already IS the baseline it says so, does not compare it with itself, and cannot be promoted again', async () => {
+    api.getBaseline.mockResolvedValue({ runId: 'run-1', window: 'night', photos: { 'cp-a': 'cp-a.jpg', 'cp-b': 'cp-b.jpg' } });
+    renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
+    expect(await screen.findByTestId('patrol-run-is-baseline')).toHaveTextContent(/this run is the route's baseline/i);
+    const btn = screen.getByTestId('patrol-run-promote');
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent('Current baseline');
+    // The baseline slot is a placeholder, not this run's own photo again.
+    expect(screen.getAllByText('this run is the baseline').length).toBeGreaterThan(0);
+  });
+
   it('a skipped run shows its reason and no legs to walk', async () => {
     api.getRun.mockResolvedValue({
       ...run, runId: 'run-skip', status: 'skipped', reason: 'battery 12% below the 30% minimum', legs: [], findingCount: 0, findings: [],

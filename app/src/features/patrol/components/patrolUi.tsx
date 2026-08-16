@@ -40,7 +40,15 @@ export const PATROL_ATTENTION_TEXT = 'text-amber-700 dark:text-amber-400';
  * viewport and scrolls inside itself so a long rail never gets cut off. The
  * -m/p pair leaves room for the live glow so the scroll box does not clip it.
  */
-export const PATROL_STICKY_RAIL = 'lg:sticky lg:top-[4.5rem] self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:overscroll-contain lg:-m-2 lg:p-2';
+/**
+ * A rail that follows the operator down the page (below the 56 px top bar) and
+ * scrolls inside itself when taller than the viewport. `[&>*]:shrink-0`: the rail
+ * is a flex column, and a max-height + overflow container otherwise SHRINKS its
+ * flex children — the status card was squeezed and clipped its own
+ * "Promote to baseline" button instead of the rail scrolling.
+ */
+export const PATROL_STICKY_RAIL =
+  'lg:sticky lg:top-[4.5rem] self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:overscroll-contain lg:-m-2 lg:p-2 [&>*]:shrink-0';
 
 /** 3-px left rail per finding severity — never a tinted background. */
 export const SEVERITY_RAIL: Record<PatrolFindingSeverity, string> = {

@@ -46,7 +46,7 @@ const INSPECTION_TEXT: Record<NonNullable<PatrolLeg['inspection']>, string> = {
   unchanged: 'unchanged (hash gate)',
   changed: 'changed',
   same: 'same as baseline',
-  no_baseline: 'no baseline yet',
+  no_baseline: 'no baseline at run time',
   recorded: 'baseline recorded',
   skipped: 'inspection skipped',
   error: 'inspection error',
@@ -286,7 +286,12 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
     );
   }
 
-  const canPromote = run.mode !== 'baseline' && run.status === 'done';
+  // After "Promote to baseline" the route's baseline for this window IS this
+  // run — comparing its photos against themselves would be a fake "same as
+  // baseline" on every checkpoint, so the pair collapses to the captures and
+  // says so.
+  const baselineIsThisRun = run.mode !== 'baseline' && baseline?.runId === run.runId;
+  const canPromote = run.mode !== 'baseline' && run.status === 'done' && !baselineIsThisRun;
   const photoLegs = run.legs.filter((leg) => {
     const cp = checkpointsById.get(leg.checkpointId);
     return Boolean(leg.photoKey) || Boolean(leg.photoDropped) || (cp ? cp.capture : true);
@@ -329,7 +334,11 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
           title="Control photos"
           count={photoLegs.length}
           actions={
-            run.mode !== 'baseline' ? (
+            baselineIsThisRun ? (
+              <span className="text-[11px] font-medium text-turquoise-700 dark:text-turquoise-400" data-testid="patrol-run-is-baseline">
+                This run is the route's baseline{run.window ? ` for the ${run.window} window` : ''}
+              </span>
+            ) : run.mode !== 'baseline' ? (
               <SegmentedControl options={[...PHOTO_MODES]} value={photoMode} onChange={setPhotoMode} label="Photo comparison mode" />
             ) : undefined
           }
@@ -361,9 +370,10 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
                   currentRunId={run.runId}
                   currentKey={leg.photoKey ?? null}
                   currentDropped={leg.photoDropped ?? null}
-                  baselineRunId={run.mode === 'baseline' ? null : (baseline?.runId ?? null)}
+                  baselineRunId={run.mode === 'baseline' || baselineIsThisRun ? null : (baseline?.runId ?? null)}
                   baselineRobotId={baseline?.robotId ?? run.robotId}
-                  baselineKey={run.mode === 'baseline' ? null : (baseline?.photos?.[leg.checkpointId] ?? null)}
+                  baselineKey={run.mode === 'baseline' || baselineIsThisRun ? null : (baseline?.photos?.[leg.checkpointId] ?? null)}
+                  baselineMissingText={baselineIsThisRun ? 'this run is the baseline' : undefined}
                   mode={photoMode}
                 />
               </div>
@@ -440,10 +450,16 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
               data-testid="patrol-run-promote"
               disabled={!canPromote || promoting}
               isLoading={promoting}
-              title={canPromote ? "This run's captures become the baseline for its window" : 'Only a finished patrol run can be promoted'}
+              title={
+                baselineIsThisRun
+                  ? 'This run already is the baseline for its window'
+                  : canPromote
+                    ? "This run's captures become the baseline for its window"
+                    : 'Only a finished patrol run can be promoted'
+              }
               onClick={() => void handlePromote()}
             >
-              Promote to baseline
+              {baselineIsThisRun ? 'Current baseline' : 'Promote to baseline'}
             </Button>
           </div>
         </header>
