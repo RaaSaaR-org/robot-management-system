@@ -217,6 +217,7 @@ export const MemoryPanel = memo(function MemoryPanel({
   // Showing the count from the self report beats showing nothing — but the
   // panel says which of the two it is rather than implying it knows the rest.
   const entries = memoryEntryCount(digest, self);
+  const placeNotes = digest?.places.length ?? 0;
 
   return (
     <div
@@ -237,13 +238,25 @@ export const MemoryPanel = memo(function MemoryPanel({
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-        {entries === 0 && (
+        {/* Place notes are memory too, and they live in their own files. Saying
+            "Nothing remembered yet" above a list of them was the panel
+            contradicting itself on one screen (seen live: 0 entries, one
+            KITCHEN note). The empty state is for a robot that remembers
+            NOTHING; a robot with only place notes gets told exactly that. */}
+        {entries === 0 && placeNotes === 0 && (
           <EmptyState
             size="sm"
             icon={<Brain className="w-8 h-8" />}
             title="Nothing remembered yet"
             description="A remember block, or telling the robot to remember something, writes the first line into MEMORY.md."
           />
+        )}
+
+        {entries === 0 && placeNotes > 0 && (
+          <p data-testid="agent-memory-places-only" className="card-meta">
+            Nothing in MEMORY.md yet — what this robot has written down so far belongs to
+            single places, listed below.
+          </p>
         )}
 
         {entries !== null && entries > 0 && !digest && (

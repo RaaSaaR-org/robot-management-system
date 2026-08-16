@@ -203,6 +203,13 @@ const PLACE_MAX_STALLED_STAGES = 2;
  * failures: see {@link Navigator.navigateToPlace}.
  */
 const REFUSED_WALK = /refusing to walk|stopping margin|too close/i;
+/**
+ * Refusals in a row before a `goto <entity>` gives up. Two: the first is worth
+ * a re-plan (the map has just grown by the refusal, and the next stage re-bears
+ * from a fresh pose, which is what corrects an undershot turn), a third in a
+ * row means the way really is blocked rather than mis-aimed.
+ */
+const MAX_REFUSED_STAGES = 2;
 
 /**
  * Where "into the place" leads: the area centroid when that lies inside the
@@ -635,6 +642,8 @@ export class Navigator {
 
     let stages = 0;
     let stagesWithoutProgress = 0;
+    /** Executor refusals in a row — see {@link MAX_REFUSED_STAGES}. */
+    let refusedStages = 0;
     let unseenLooks = 0;
     let stagesThatMoved = 0;
     let walkedTotalM = 0;
@@ -937,11 +946,32 @@ export class Navigator {
       }
 
       if (walk.status !== 'done') {
+        // The executor refusing to walk into something it can see on the map or
+        // the lidar is a fact about the way, not a fault — the same treatment
+        // `navigateToPlace` gives it. `goto place "kitchen"` re-planned and got
+        // there while `goto "Tisch"` died on the spot with "walk failed", from
+        // the same executor on the same map: an undershot turn (−53° for a
+        // commanded −90°) aimed the walk at the crate the route went around,
+        // and one re-plan from the corrected bearing was all it needed.
+        if (walk.error && REFUSED_WALK.test(walk.error)) {
+          refusedStages++;
+          if (refusedStages > MAX_REFUSED_STAGES) {
+            return {
+              ok: false,
+              message:
+                `goto "${entityLabel}": stopped after ${stages} stage${stages === 1 ? '' : 's'} — ` +
+                `the last ${refusedStages} were refused before the robot moved (${walk.error}), ` +
+                `so the way is blocked.`,
+            };
+          }
+          continue;
+        }
         return {
           ok: false,
           message: `goto "${entityLabel}": walk failed (${walk.error ?? 'unknown'})`,
         };
       }
+      refusedStages = 0;
       if (walkedM === null || walkedM >= CONTACT_STALL_M) stagesThatMoved++;
       walkedTotalM += walkedM ?? 0;
       metresSinceLook += walkedM ?? stageM;

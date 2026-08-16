@@ -376,6 +376,15 @@ export interface AgentModeState {
   /** Set while an E-Stop is latched; cleared only by an explicit reset. */
   estopActive: boolean;
   /**
+   * Which latch forbids driving while `estopActive` is set: `'agent'` is Agent
+   * Mode's own STOPP / stop-word latch, `'safety'` is the SafetyMonitor's
+   * protective or fleet E-Stop (fall/tilt, keepout, `emergencyStop`, A2A). Both
+   * are cleared by the same reset. Optional for wire compat with older agents.
+   */
+  estopSource?: 'agent' | 'safety' | null;
+  /** Human-readable reason of the latch named by `estopSource`, when known. */
+  estopReason?: string | null;
+  /**
    * Last FSM id the base was commanded into, or null when it has not been
    * commanded in this process. Optional so an older server/app mirror stays
    * structurally compatible.

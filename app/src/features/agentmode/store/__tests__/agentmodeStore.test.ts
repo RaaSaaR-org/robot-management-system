@@ -12,6 +12,8 @@ import {
   selectEstopActive,
   selectEstopStatus,
   selectEstopError,
+  selectEstopSource,
+  selectEstopReason,
   selectPlan,
   selectPlanById,
   selectRecovered,
@@ -1062,6 +1064,98 @@ describe('agentmodeStore', () => {
       expect(s.estopActive).toBe(false);
       expect(selectEstopStatus(s)).toBe('idle');
       expect(selectEstopError(s)).toBeNull();
+    });
+
+    describe('which latch (estopSource / estopReason)', () => {
+      it('starts with no source and no reason', () => {
+        const s = useAgentModeStore.getState();
+        expect(selectEstopSource(s)).toBeNull();
+        expect(selectEstopReason(s)).toBeNull();
+      });
+
+      it('takes the safety-monitor attribution from a pushed state', () => {
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({
+              estopActive: true,
+              estopSource: 'safety',
+              estopReason: 'Critical system error detected',
+            }),
+          })
+        );
+        const s = useAgentModeStore.getState();
+        expect(s.estopActive).toBe(true);
+        expect(selectEstopStatus(s)).toBe('acknowledged');
+        expect(selectEstopSource(s)).toBe('safety');
+        expect(selectEstopReason(s)).toBe('Critical system error detected');
+      });
+
+      it('takes it from fetchState too', async () => {
+        mockedApi.getState.mockResolvedValue(
+          makeState({ estopActive: true, estopSource: 'safety', estopReason: 'Fall detected' })
+        );
+        mockedApi.getScene.mockResolvedValue(null);
+        await useAgentModeStore.getState().fetchState(ROBOT_ID);
+        const s = useAgentModeStore.getState();
+        expect(selectEstopSource(s)).toBe('safety');
+        expect(selectEstopReason(s)).toBe('Fall detected');
+      });
+
+      it("attributes a latch an older agent reports without a source to Agent Mode", () => {
+        apply(event({ type: 'agent:state:changed', state: makeState({ estopActive: true }) }));
+        expect(selectEstopSource(useAgentModeStore.getState())).toBe('agent');
+        expect(selectEstopReason(useAgentModeStore.getState())).toBeNull();
+      });
+
+      it('marks a STOPP pressed here as our own latch', async () => {
+        mockedApi.estop.mockResolvedValue({ ok: true, stopped: true, delivered: true });
+        await useAgentModeStore.getState().estop(ROBOT_ID);
+        expect(selectEstopSource(useAgentModeStore.getState())).toBe('agent');
+      });
+
+      it('clears both when the latch clears — from a push and from resetEstop', async () => {
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({ estopActive: true, estopSource: 'safety', estopReason: 'x' }),
+          })
+        );
+        apply(event({ type: 'agent:state:changed', state: makeState({ estopActive: false }) }));
+        let s = useAgentModeStore.getState();
+        expect(s.estopActive).toBe(false);
+        expect(selectEstopSource(s)).toBeNull();
+        expect(selectEstopReason(s)).toBeNull();
+
+        useAgentModeStore.setState({
+          estopActive: true,
+          estopStatus: 'acknowledged',
+          estopSource: 'safety',
+          estopReason: 'x',
+        });
+        mockedApi.resetEstop.mockResolvedValue(makeState({ estopActive: false }));
+        await useAgentModeStore.getState().resetEstop(ROBOT_ID);
+        s = useAgentModeStore.getState();
+        expect(s.estopActive).toBe(false);
+        expect(selectEstopSource(s)).toBeNull();
+        expect(selectEstopReason(s)).toBeNull();
+      });
+
+      it('keeps the safety attribution when a refused reset leaves the latch set', async () => {
+        useAgentModeStore.setState({
+          estopActive: true,
+          estopStatus: 'acknowledged',
+          estopSource: 'safety',
+          estopReason: 'x',
+        });
+        mockedApi.resetEstop.mockResolvedValue(
+          makeState({ estopActive: true, estopSource: 'safety', estopReason: 'x' })
+        );
+        await useAgentModeStore.getState().resetEstop(ROBOT_ID);
+        const s = useAgentModeStore.getState();
+        expect(s.estopActive).toBe(true);
+        expect(selectEstopSource(s)).toBe('safety');
+      });
     });
 
     it('resetEstop keeps the latch when the call fails', async () => {

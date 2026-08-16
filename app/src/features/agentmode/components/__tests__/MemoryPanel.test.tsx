@@ -113,6 +113,19 @@ describe('MemoryPanel', () => {
     expect(screen.getByText('Nothing remembered yet')).toBeVisible();
   });
 
+  it('does not say "nothing remembered" above a list of place notes', () => {
+    // Seen live: 0 entries in MEMORY.md, one KITCHEN place note — the panel
+    // showed the empty state and the note underneath it, on one screen.
+    useAgentModeStore.setState({
+      memory: digest({ memoryEntries: 0, places: [{ id: 'KITCHEN', entries: 1, bytes: 84 }] }),
+    });
+    render(<MemoryPanel />);
+
+    expect(screen.queryByText('Nothing remembered yet')).toBeNull();
+    expect(screen.getByTestId('agent-memory-places-only')).toHaveTextContent(/Nothing in MEMORY\.md yet/);
+    expect(screen.getByTestId('agent-memory-place')).toHaveTextContent('KITCHEN');
+  });
+
   it('falls back to the count the robot reports, and says so', () => {
     // Before any digest arrives, `self.memoryEntries` is all there is. Showing
     // it beats showing nothing — as long as the panel does not imply it knows

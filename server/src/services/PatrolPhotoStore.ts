@@ -8,7 +8,9 @@
  *              (control | baseline | finding) which drives retention: control
  *              photos go after `PATROL_PHOTO_RETENTION_H` (72 h), baseline
  *              and finding photos after `PATROL_PHOTO_RETENTION_DAYS` (30 d,
- *              the platform default).
+ *              the platform default) — except the baseline frames of the run
+ *              currently serving as a baseline, which the sweep keeps for as
+ *              long as the photo pairs point at them.
  * @feature patrol
  */
 
@@ -98,7 +100,12 @@ export interface PatrolPhotoStoreOptions {
   /** Force local disk even when RustFS is initialised (tests). */
   forceLocal?: boolean;
   now?: () => number;
+  /** See {@link PatrolPhotoStore.setProtectedRuns}. */
+  protectedRuns?: ProtectedRunsResolver;
 }
+
+/** Run ids whose photos the sweep must keep, whatever their age. */
+export type ProtectedRunsResolver = () => Promise<ReadonlySet<string>>;
 
 /**
  * The store. Object keys are `<robotId>/<runId>/<key>`; the sidecar
@@ -108,11 +115,23 @@ export class PatrolPhotoStore {
   private readonly localDir: string | undefined;
   private readonly forceLocal: boolean;
   private readonly now: () => number;
+  private protectedRuns: ProtectedRunsResolver | null;
 
   constructor(opts: PatrolPhotoStoreOptions = {}) {
     this.localDir = opts.localDir;
     this.forceLocal = opts.forceLocal ?? false;
     this.now = opts.now ?? (() => Date.now());
+    this.protectedRuns = opts.protectedRuns ?? null;
+  }
+
+  /**
+   * Teach the sweep which runs must not be swept whatever their age — the runs
+   * still serving as a baseline. Registered by PatrolService (which owns the
+   * "what is the baseline" question) so the store keeps no knowledge of runs
+   * or routes; without a resolver the sweep behaves exactly as before.
+   */
+  setProtectedRuns(resolver: ProtectedRunsResolver | null): void {
+    this.protectedRuns = resolver;
   }
 
   /** True when photos go to the S3 bucket rather than local disk. */
@@ -291,20 +310,68 @@ export class PatrolPhotoStore {
   }
 
   /**
+   * The photo keys that really exist for one run (no bytes read). Lets a
+   * caller tell a live pointer from one whose bytes the sweep has taken.
+   */
+  async existingKeys(robotId: string, runId: string): Promise<Set<string>> {
+    const keys = new Set<string>();
+    if (!isSafeIdSegment(robotId) || !isSafeIdSegment(runId)) return keys;
+    if (this.usesObjectStorage()) {
+      const prefix = `${robotId}/${runId}/`;
+      for await (const obj of getRustFSClient().listAll(BUCKETS.PATROL_PHOTOS, prefix)) {
+        const key = obj.key.slice(prefix.length);
+        if (key && !key.includes('/')) keys.add(key);
+      }
+      return keys;
+    }
+    let names: string[];
+    try {
+      names = await fs.readdir(path.join(this.rootDir(), robotId, runId));
+    } catch {
+      return keys;
+    }
+    for (const name of names) if (!name.endsWith('.json')) keys.add(name);
+    return keys;
+  }
+
+  /**
    * Retention sweep: delete control photos older than `controlHours` and
    * every other kind older than `keepDays`. Age is measured from the upload
    * instant (server clock), so a backlog the robot re-pushed late is not
    * deleted the moment it lands.
    */
-  async sweep(retention: PatrolPhotoRetention = photoRetentionFromEnv()): Promise<PatrolPhotoSweepResult> {
+  async sweep(
+    retention: PatrolPhotoRetention = photoRetentionFromEnv(),
+    opts: { protectedRuns?: ReadonlySet<string> } = {},
+  ): Promise<PatrolPhotoSweepResult> {
     const result: PatrolPhotoSweepResult = { scanned: 0, deleted: 0, errors: [] };
     const now = this.now();
     const controlCutoff = now - retention.controlHours * 3600_000;
     const keepCutoff = now - retention.keepDays * 86400_000;
 
+    // Runs still serving as a baseline: their `baseline` frames are the
+    // comparison every photo pair shows, so deleting them at 30 days left
+    // `getBaseline` naming keys that can only 404. Only the baseline kind is
+    // exempt — a finding or control frame of the same run keeps its normal
+    // retention, so this never extends how long a picture of a person is kept.
+    // When the resolver itself fails we cannot tell which run is the baseline,
+    // so no baseline frame is deleted that round: a lost sweep is recoverable,
+    // a lost baseline is not.
+    let keepRuns: ReadonlySet<string> = opts.protectedRuns ?? new Set<string>();
+    let keepAllBaselines = false;
+    if (!opts.protectedRuns && this.protectedRuns) {
+      try {
+        keepRuns = await this.protectedRuns();
+      } catch (err) {
+        keepAllBaselines = true;
+        result.errors.push(`protected runs: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     const expired = (meta: PatrolPhotoMeta): boolean => {
       const t = Date.parse(meta.uploadedAt);
       if (!Number.isFinite(t)) return false;
+      if (meta.kind === 'baseline' && (keepAllBaselines || keepRuns.has(meta.runId))) return false;
       return meta.kind === 'control' ? t < controlCutoff : t < keepCutoff;
     };
 

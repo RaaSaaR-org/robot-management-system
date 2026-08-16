@@ -56,6 +56,23 @@ describe('AlertList finding link', () => {
     expect(screen.queryByText(/\[finding:/)).toBeNull();
   });
 
+  it('a skipped-run alert (bare [run:<id>]) links to the RUN and says so', async () => {
+    await renderWith(
+      alert({
+        id: 'a-3',
+        severity: 'info',
+        title: 'Patrol "Night round" was skipped',
+        message: 'Patrol "Night round" (patrol, scheduled) was skipped: battery 12% · run: run-s [run:run-s]',
+      })
+    );
+    const link = screen.getByTestId('alert-open-finding');
+    // No finding exists for a run that never walked — the label must not promise one.
+    expect(link).toHaveAttribute('href', '/patrol/runs/run-s');
+    expect(link).toHaveTextContent('Open run →');
+    expect(document.body.textContent).not.toContain('Open finding');
+    expect(document.body.textContent).not.toContain('[run:');
+  });
+
   it('shows no link for an ordinary robot alert', async () => {
     await renderWith(alert({ id: 'a-2', title: 'Battery low', message: 'Battery at 12%' }));
     expect(screen.queryByTestId('alert-open-finding')).toBeNull();

@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { RobotMapPanel, decodeGridToImage, drawMap, mapFooterText } from '../RobotMapPanel';
 import { KnowledgePanel } from '../KnowledgePanel';
 import { useAgentModeStore } from '../../store/agentmodeStore';
@@ -85,6 +85,22 @@ describe('mapFooterText', () => {
       'frame: sim · peers off · no scan yet',
     );
     expect(mapFooterText(null, null)).toBe('');
+  });
+
+  /**
+   * A robot with no sidecar (the default in-process sim) and a robot that just
+   * lost its sidecar both report `frameId: null`. Printing "frame: odom" there
+   * is byte-identical to a genuinely identified odom frame, and blaming the
+   * dropped peers on a "different frame" points the operator at a mismatch on
+   * the OTHER robot when the cause is that THIS one cannot say where it is.
+   */
+  it('says the frame is unknown — and why the peers are hidden — when the robot has no frame at all', () => {
+    const noFrame = mapFooterText(payload({ frameId: null }), null);
+    expect(noFrame).toMatch(/^frame: unknown · 1 peer · 1 dropped \(this robot has no odometry frame\)/);
+    expect(noFrame).not.toContain('frame: odom');
+    expect(noFrame).not.toContain('different frame');
+    // With a frame, the mismatch really is the reason — unchanged.
+    expect(mapFooterText(payload(), null)).toContain('1 dropped (different frame)');
   });
 
   it('names the navigator\'s route when one is running (TASK-208)', () => {
@@ -235,6 +251,69 @@ describe('RobotMapPanel', () => {
     expect(screen.getByTestId('agent-map-footer')).toHaveTextContent('stale');
   });
 
+  /**
+   * The store routes the SERVER's 404 (no agent endpoint registered for this
+   * robot) to `unavailable`, never to `disabled`, so the panel prints the
+   * reason instead of asserting "This robot does not publish a map
+   * (AGENT_MAP_ENABLED)" — a configuration claim it cannot know, and one that
+   * sends the operator to check a flag that was never off.
+   */
+  it('never names AGENT_MAP_ENABLED when the server had no agent endpoint to ask', () => {
+    useAgentModeStore.setState({
+      fetchRobotMap: async () => {},
+      robotMap: null,
+      robotMapStatus: 'unavailable',
+      robotMapError: 'the server has no agent endpoint registered for this robot',
+    });
+    render(<RobotMapPanel robotId="r1" />);
+    const empty = screen.getByTestId('agent-map-empty');
+    expect(empty).toHaveTextContent('Map unavailable: the server has no agent endpoint registered for this robot');
+    expect(empty).not.toHaveTextContent('AGENT_MAP_ENABLED');
+  });
+
+  /**
+   * The 1 Hz map poll keeps running under the 3-D view on purpose — the footer
+   * and the peer count read that payload — but the canvas is unmounted, so
+   * decoding every arriving grid was a full base64 pass plus one RGBA byte per
+   * cell, every second, for a picture nobody could see.
+   */
+  it('stops decoding the occupancy grid while the 3-D view is showing', () => {
+    let constructed = 0;
+    class CountingImageData {
+      data: Uint8ClampedArray;
+      constructor(w: number, h: number) {
+        constructed++;
+        this.data = new Uint8ClampedArray(Math.max(1, w * h * 4));
+      }
+    }
+    vi.stubGlobal('ImageData', CountingImageData);
+    try {
+      useAgentModeStore.setState({
+        fetchRobotMap: async () => {},
+        fetchRobotCloud: async () => {},
+        robotMap: payload({ grid: { ...GRID } }),
+        robotMapStatus: 'ok',
+      });
+      const { rerender } = render(<RobotMapPanel robotId="r1" pollMs={100000} />);
+      expect(constructed).toBeGreaterThan(0);
+
+      act(() => screen.getByRole('button', { name: '3D' }).click());
+      const decodedSoFar = constructed;
+      // A fresh grid object, as every poll delivers.
+      act(() => {
+        useAgentModeStore.setState({ robotMap: payload({ grid: { ...GRID } }) });
+      });
+      rerender(<RobotMapPanel robotId="r1" pollMs={100000} />);
+      expect(constructed).toBe(decodedSoFar);
+
+      // Back in 2-D the grid is decoded again — the picture must not go blank.
+      act(() => screen.getByRole('button', { name: '2D' }).click());
+      expect(constructed).toBeGreaterThan(decodedSoFar);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('says "no scan yet" over an empty grid instead of a blank canvas', () => {
     useAgentModeStore.setState({
       fetchRobotMap: async () => {},
@@ -290,8 +369,11 @@ describe('RobotMapPanel export (TASK-210)', () => {
       'PCD (CloudCompare, Open3D, PCL)',
       'PLY (MeshLab, Blender)',
     ]);
-    // No cloud has been read yet: the 3-D entries wait for the 3-D view.
-    expect(screen.getByRole('menuitem', { name: 'PCD (CloudCompare, Open3D, PCL)' })).toBeDisabled();
+    // No cloud has been read yet, and the 3-D entries do NOT wait for the 3-D
+    // view: the export fetches the full cloud itself. Gating them here made a
+    // working download look broken (live, with 32k points on the robot).
+    expect(screen.getByRole('menuitem', { name: 'PCD (CloudCompare, Open3D, PCL)' })).toBeEnabled();
+    expect(screen.getByRole('menuitem', { name: 'PLY (MeshLab, Blender)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: 'PGM + YAML (ROS map_server)' })).toBeEnabled();
   });
 
@@ -336,6 +418,72 @@ describe('RobotMapPanel export (TASK-210)', () => {
     expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
     click.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  /**
+   * `role="menu"` promises the keyboard contract, and the menu implemented none
+   * of it: focus never entered it, the arrows did nothing, and every close —
+   * Escape or a chosen format — unmounted the focused item and dropped focus to
+   * <body>, so the operator's next Tab restarted at the top of the page and
+   * they had to tab through the whole toolbar again to take a second format.
+   */
+  it('moves focus into the menu, walks it with the arrows, and gives focus back to the trigger on Escape', () => {
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    const trigger = screen.getByTestId('agent-map-export');
+    act(() => trigger.click());
+
+    const items = screen.getAllByRole('menuitem');
+    expect(document.activeElement).toBe(items[0]);
+    // Inside a menu Tab exits and the arrows move: every item is out of the tab ring.
+    expect(items.every((el) => el.getAttribute('tabindex') === '-1')).toBe(true);
+
+    const menu = screen.getByTestId('agent-map-export-menu');
+    act(() => { fireEvent.keyDown(menu, { key: 'ArrowDown' }); });
+    expect(document.activeElement).toBe(items[1]);
+    act(() => { fireEvent.keyDown(menu, { key: 'End' }); });
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    act(() => { fireEvent.keyDown(menu, { key: 'ArrowDown' }); }); // wraps to the top
+    expect(document.activeElement).toBe(items[0]);
+    act(() => { fireEvent.keyDown(menu, { key: 'ArrowUp' }); }); // and back round the bottom
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    act(() => { fireEvent.keyDown(menu, { key: 'Home' }); });
+    expect(document.activeElement).toBe(items[0]);
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('returns focus to the Export button after a format is chosen, instead of dropping it to <body>', async () => {
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    const trigger = screen.getByTestId('agent-map-export');
+    act(() => trigger.click());
+    await act(async () => {
+      screen.getByRole('menuitem', { name: 'JSON (raw grid)' }).click();
+    });
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it('closes when focus leaves the menu — the outside-close listener was mousedown-only', () => {
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    act(() => screen.getByTestId('agent-map-export').click());
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    act(() => {
+      fireEvent.focusOut(screen.getAllByRole('menuitem')[0], { relatedTarget: outside });
+    });
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+    outside.remove();
   });
 
   it('closes the export menu on Escape and on a click outside it', () => {

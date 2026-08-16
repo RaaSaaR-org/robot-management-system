@@ -7,7 +7,7 @@
  * @feature agentmode
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { cn } from '@/shared/utils';
 import { formatTimeAgo } from '@/shared/utils/format';
 import { SegmentedControl, Tooltip } from '@/shared/components/ui';
@@ -95,10 +95,24 @@ function parseRgb(color: string): [number, number, number] {
 export function mapFooterText(map: RobotMapPayload | null, fetchedAt: string | null): string {
   if (!map) return '';
   const parts: string[] = [];
-  parts.push(map.frameId ? `frame: ${map.frameId.kind}` : 'frame: odom');
+  // Never print a frame the robot does not have: "frame: odom" is
+  // byte-identical to what a genuinely identified odom frame prints, so the
+  // operator could not tell "identified" from "no frame at all" — the normal
+  // state of a pure in-process sim (no sidecar) and of a robot that just lost
+  // its sidecar. `frameId ?? 'unknown'` is what the exporter already writes.
+  parts.push(map.frameId ? `frame: ${map.frameId.kind}` : 'frame: unknown');
   if (map.peersEnabled) {
     parts.push(`${map.peers.length} ${map.peers.length === 1 ? 'peer' : 'peers'}`);
-    if (map.peersDropped > 0) parts.push(`${map.peersDropped} dropped (different frame)`);
+    // Peers are dropped for a frame MISMATCH — but also when WE have no frame,
+    // in which case the cause is local and blaming "different frame" sends the
+    // operator hunting for a mismatch on the other robot that does not exist.
+    if (map.peersDropped > 0) {
+      parts.push(
+        map.frameId
+          ? `${map.peersDropped} dropped (different frame)`
+          : `${map.peersDropped} dropped (this robot has no odometry frame)`,
+      );
+    }
   } else {
     parts.push('peers off');
   }
@@ -347,15 +361,69 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
   const [view, setView] = useState<MapView>('2d');
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement | null>(null);
+  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Close the menu and, by default, hand focus back to the Export button.
+   *
+   * Every close unmounts the menu, and React unmounts the item the operator
+   * just activated in the same commit — so without this the browser drops
+   * focus to `<body>` and the next Tab restarts at the top of the page. A
+   * keyboard operator who took the JSON grid had to tab through the whole
+   * toolbar again to also take the PNG. `restore = false` for a mouse close,
+   * where pulling focus back would fight the pointer.
+   */
+  const closeExport = useCallback((restore = true) => {
+    setExportOpen(false);
+    if (restore) exportBtnRef.current?.focus();
+  }, []);
+
+  /** The enabled items in DOM order — the ring the arrow keys walk. */
+  const menuItems = useCallback((): HTMLButtonElement[] => {
+    const root = menuRef.current;
+    if (!root) return [];
+    return Array.from(root.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).filter((b) => !b.disabled);
+  }, []);
+
+  /**
+   * `role="menu"` promises the arrow-key contract, and the menu implemented
+   * none of it: Tab walked the items (which the role says it must not) and the
+   * arrows did nothing. Up/Down wrap, Home/End jump.
+   */
+  const onMenuKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const items = menuItems();
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement as HTMLButtonElement);
+      let next: number;
+      if (e.key === 'ArrowDown') next = at < 0 ? 0 : (at + 1) % items.length;
+      else if (e.key === 'ArrowUp') next = at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = items.length - 1;
+      else return;
+      e.preventDefault(); // else Arrow/Home/End scroll the page under the open menu
+      items[next].focus();
+    },
+    [menuItems],
+  );
+
+  // Move focus INTO the menu when it opens. With the roving tabindex below,
+  // Tab leaves the menu instead of walking it, so nothing else would ever put
+  // focus on an item and the keyboard operator could not reach a format.
+  useEffect(() => {
+    if (!exportOpen) return;
+    menuItems()[0]?.focus();
+  }, [exportOpen, menuItems]);
 
   // Close the export menu on Escape or a click anywhere outside it.
   useEffect(() => {
     if (!exportOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExportOpen(false);
+      if (e.key === 'Escape') closeExport();
     };
     const onPointer = (e: MouseEvent) => {
-      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false);
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) closeExport(false);
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onPointer);
@@ -363,22 +431,23 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('mousedown', onPointer);
     };
-  }, [exportOpen]);
+  }, [exportOpen, closeExport]);
   const [exportNote, setExportNote] = useState<string | null>(null);
   const runExport = useCallback(
     async (format: MapExportFormat) => {
-      setExportOpen(false);
+      // Before the await, while the trigger is certainly still mounted.
+      closeExport();
       if (!robotId || !map?.grid) return;
       const ok = await exportMap(robotId, map.grid, format);
       setExportNote(ok ? null : 'Export failed: the grid could not be decoded.');
     },
-    [robotId, map],
+    [robotId, map, closeExport],
   );
   // The 3-D export asks the robot for EVERY point (`max=0`), not the sampled
   // view — a file is for keeps, and the sample is only for the screen.
   const runCloudExport = useCallback(
     async (format: CloudExportFormat) => {
-      setExportOpen(false);
+      closeExport();
       if (!robotId) return;
       try {
         const full = await agentmodeApi.getCloud(robotId, 0);
@@ -388,8 +457,9 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
         setExportNote(`Export failed: ${err instanceof Error ? err.message : 'the robot has no cloud'}.`);
       }
     },
-    [robotId],
+    [robotId, closeExport],
   );
+  // Only for the menu's hint copy — the export itself never depends on it.
   const cloudAvailable = useAgentModeStore((s) => s.robotCloudStatus === 'ok' && s.robotCloud !== null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -420,9 +490,13 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
     return () => ro.disconnect();
   }, []);
 
-  // Decode the grid once per payload, not once per frame.
+  // Decode the grid once per payload, not once per frame — and not at all
+  // while the 3-D view is up. The 1 Hz map poll keeps running there on purpose
+  // (the footer and the peer count are read from that payload), but the canvas
+  // is unmounted, so decoding was a full base64 pass plus one RGBA byte per
+  // cell every second for a picture nobody could see.
   const gridCanvas = useMemo(() => {
-    if (!map?.grid || typeof document === 'undefined') return null;
+    if (view !== '2d' || !map?.grid || typeof document === 'undefined') return null;
     const canvas = canvasRef.current;
     const color = canvas ? getComputedStyle(canvas).color : 'rgb(120,130,150)';
     const img = decodeGridToImage(map.grid, parseRgb(color));
@@ -434,7 +508,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
     if (!c) return null;
     c.putImageData(img, 0, 0);
     return off;
-  }, [map?.grid]);
+  }, [map?.grid, view]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -514,9 +588,21 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
               </button>
             </>
           )}
-          <div className="relative ml-1" ref={exportRef}>
+          <div
+            className="relative ml-1"
+            ref={exportRef}
+            onBlur={(e) => {
+              // Tabbing past the last item used to leave the menu floating over
+              // the map: the outside-close listener was mousedown-only, so a
+              // keyboard operator had no way to dismiss it but Escape. Only
+              // when focus actually went somewhere — a window blur must not
+              // close a menu the operator will come back to.
+              if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) setExportOpen(false);
+            }}
+          >
             <button
               type="button"
+              ref={exportBtnRef}
               data-testid="agent-map-export"
               aria-label="Export map"
               aria-haspopup="menu"
@@ -532,6 +618,8 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
               <div
                 role="menu"
                 aria-label="Export map as"
+                ref={menuRef}
+                onKeyDown={onMenuKeyDown}
                 data-testid="agent-map-export-menu"
                 className="absolute right-0 top-full mt-1 z-20 min-w-[11rem] rounded-brand border border-glass-subtle glass-elevated shadow-lg py-1 text-xs"
               >
@@ -547,6 +635,8 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     key={format}
                     type="button"
                     role="menuitem"
+                    // Roving tabindex: inside a menu, Tab exits — the arrows move.
+                    tabIndex={-1}
                     className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
                     disabled={!map?.grid}
                     onClick={() => void runExport(format)}
@@ -565,9 +655,19 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     key={format}
                     type="button"
                     role="menuitem"
+                    tabIndex={-1}
                     className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
-                    disabled={!cloudAvailable}
-                    title={cloudAvailable ? undefined : 'Open the 3D view first — the cloud is read on demand'}
+                    // NOT gated on the 3-D view having been opened: the export
+                    // fetches the full cloud itself (`max=0`), and a robot with
+                    // no cloud answers with the note below. Disabling it here
+                    // made a working download look broken until the operator
+                    // guessed to open the 3-D tab first.
+                    disabled={!robotId}
+                    title={
+                      cloudAvailable
+                        ? undefined
+                        : 'Downloads the robot’s full point cloud — it is read on demand'
+                    }
                     onClick={() => void runCloudExport(format)}
                   >
                     {label}

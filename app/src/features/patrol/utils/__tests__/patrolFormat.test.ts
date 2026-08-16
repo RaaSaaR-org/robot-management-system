@@ -21,6 +21,15 @@ describe('finding link', () => {
     expect(findingLinkPath(link!)).toBeNull();
   });
 
+  it('parses the bare `[run:<id>]` tag a skipped-run alert carries', () => {
+    // PatrolService.raiseSkippedAlert appends only a run tag — no finding exists.
+    // Before this the operator saw the raw tag in the prose and had no way in.
+    const link = parseFindingLink('Patrol "Night round" (patrol, scheduled) was skipped: battery 12% · run: run-s · at: x [run:run-s]');
+    expect(link).toEqual({ findingId: null, runId: 'run-s' });
+    expect(findingLinkPath(link!)).toBe('/patrol/runs/run-s');
+    expect(stripFindingLink('Patrol skipped: battery 12% [run:run-s]')).toBe('Patrol skipped: battery 12%');
+  });
+
   it('returns null for ordinary alerts', () => {
     expect(parseFindingLink('Battery low')).toBeNull();
     expect(parseFindingLink(null)).toBeNull();
@@ -54,6 +63,13 @@ describe('summaries', () => {
   });
   it('formats a window', () => {
     expect(formatWindow({ id: 'night', name: 'Night', startHour: 19, endHour: 7 })).toBe('19:00–07:00');
+  });
+  it('prints a window ending at midnight as 24:00, not 23:00', () => {
+    // "Add window" seeds {0,24} and the bar shades the whole day; printing 23:00
+    // told the operator the last hour was uncovered (and was the only text a
+    // screen reader got from the bar's aria-label).
+    expect(formatWindow({ id: 'all', name: 'All day', startHour: 0, endHour: 24 })).toBe('00:00–24:00');
+    expect(formatWindow({ id: 'eve', name: 'Evening', startHour: 20, endHour: 24 })).toBe('20:00–24:00');
   });
   it('sorts findings high first, then newest', () => {
     const f = (id: string, severity: PatrolFinding['severity'], at: string): PatrolFinding => ({

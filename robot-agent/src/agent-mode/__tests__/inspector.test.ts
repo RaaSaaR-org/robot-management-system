@@ -134,6 +134,12 @@ describe('checklistCompare', () => {
     expect(items.map((i) => i.type)).toEqual(['person', 'door_open', 'object_on_floor', 'lights_on', 'out_of_place', 'expectation_failed']);
     expect(items.find((i) => i.type === 'object_on_floor')!.summary).toMatch(/bag on the floor at Hallway door/);
     expect(items.find((i) => i.type === 'expectation_failed')!.summary).toMatch(/fire extinguisher/);
+    // The checkpoint name and the place say different things here, so both are named.
+    expect(items[0]!.summary).toBe('person at Hallway door (Hallway)');
+    // …and when they say the same thing, the parenthetical is dropped: a
+    // checkpoint named after its own place read "Living room (Living Room)".
+    const sameName = checklistCompare(cur, ANSWERS, { ...CP, placeId: 'LIVING-ROOM', name: 'Living Room' });
+    expect(sameName[0]!.summary).toBe('person at Living Room');
     // The reverse direction — baseline open, now closed; baseline lit, now dark — is not a finding.
     expect(checklistCompare(ANSWERS, { ...ANSWERS, doorState: 'open', lightsOn: 'yes' }, CP)).toEqual([]);
   });

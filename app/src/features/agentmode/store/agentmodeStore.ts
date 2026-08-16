@@ -13,10 +13,12 @@ import { currentBlockOfPlan, upcomingBlocksOfPlan } from '../utils/planQuery';
 import type {
   AgentBlock,
   AgentChatMessage,
+  AgentEstopSource,
   AgentEstopStatus,
   AgentIdentityPatch,
   AgentMemoryDigest,
   AgentModeEvent,
+  AgentModeState,
   AgentModeStore,
   AgentPendingCommand,
   AgentPlan,
@@ -47,6 +49,8 @@ const initialState = {
   estopActive: false,
   estopStatus: 'idle' as AgentEstopStatus,
   estopError: null as string | null,
+  estopSource: null as AgentEstopSource,
+  estopReason: null as string | null,
   // A cold start knows nothing either, but "this server has no state for that
   // robot" is the documented empty case and renders as an empty page, not as a
   // claim. Only a robot the server HAS and could not ask is UNKNOWN.
@@ -239,6 +243,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // A latch the agent itself reports is already acknowledged by it.
           state.estopStatus = agentState?.estopActive ? 'acknowledged' : 'idle';
           state.estopError = null;
+          applyLatchSource(state, agentState);
           applyBaseArming(state, agentState);
           applyRecovery(state, agentState);
           // Read out of the SERVER's mirror. The age that matters is when the
@@ -297,10 +302,11 @@ export const useAgentModeStore = createStore<AgentModeStore>(
         // 404 is the ROBOT's answer ("map disabled", "older agent without the
         // route", "nothing integrated yet"); anything else means we could not
         // ask, which leaves the last map on screen and says so in the footer.
-        const why = getErrorMessage(err, 'map unavailable');
+        const notRegistered = isRobotNotRegisteredError(err);
+        const why = notRegistered ? NOT_REGISTERED_WHY : getErrorMessage(err, 'map unavailable');
         set((state) => {
           if (staleResponse(state, robotId)) return;
-          if (isNotFoundError(err)) {
+          if (isNotFoundError(err) && !notRegistered) {
             state.robotMap = null;
             state.robotMapStatus = 'disabled';
           } else {
@@ -319,15 +325,31 @@ export const useAgentModeStore = createStore<AgentModeStore>(
         const cloud = await agentmodeApi.getCloud(robotId, maxPoints);
         set((state) => {
           if (staleResponse(state, robotId)) return;
-          state.robotCloud = cloud;
           state.robotCloudStatus = 'ok';
           state.robotCloudError = null;
+          // Keep the object identity when the robot integrated nothing since
+          // the last poll. A fresh object every 3 s costs the view a ~1.3 MB
+          // base64 decode, two ~1 MB Float32Array allocations and a whole new
+          // three.js geometry on the main thread — for identical points. An
+          // idle robot should cost the browser nothing.
+          const prev = state.robotCloud;
+          if (
+            prev &&
+            prev.positions === cloud.positions &&
+            prev.frames === cloud.frames &&
+            prev.returned === cloud.returned &&
+            prev.pose?.atMs === cloud.pose?.atMs
+          ) {
+            return;
+          }
+          state.robotCloud = cloud;
         });
       } catch (err) {
-        const why = getErrorMessage(err, 'cloud unavailable');
+        const notRegistered = isRobotNotRegisteredError(err);
+        const why = notRegistered ? NOT_REGISTERED_WHY : getErrorMessage(err, 'cloud unavailable');
         set((state) => {
           if (staleResponse(state, robotId)) return;
-          if (isNotFoundError(err)) {
+          if (isNotFoundError(err) && !notRegistered) {
             state.robotCloud = null;
             state.robotCloudStatus = 'disabled';
           } else {
@@ -446,6 +468,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           state.enabled = agentState.enabled;
           state.controlOwner = agentState.controlOwner;
           applyReportedLatch(state, agentState.estopActive);
+          applyLatchSource(state, agentState);
           applyBaseArming(state, agentState);
           applyRecovery(state, agentState);
           // The toggle is proxied straight through to the robot, so this
@@ -481,6 +504,9 @@ export const useAgentModeStore = createStore<AgentModeStore>(
         state.estopActive = true;
         state.estopStatus = 'requesting';
         state.estopError = null;
+        // A STOPP pressed here is Agent Mode's own latch until the agent says
+        // otherwise (a safety-monitor latch may already be underneath it).
+        if (state.estopSource === null) state.estopSource = 'agent';
         state.controlOwner = 'idle';
         state.pendingCommand = null;
         state.isSending = false;
@@ -614,6 +640,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             state.estopStatus = 'idle';
             state.estopError = null;
           }
+          applyLatchSource(state, agentState);
         });
       } catch (error) {
         const message = getErrorMessage(error);
@@ -740,6 +767,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             state.enabled = event.state.enabled;
             state.controlOwner = event.state.controlOwner;
             applyReportedLatch(state, event.state.estopActive);
+            applyLatchSource(state, event.state);
             applyBaseArming(state, event.state);
             applyRecovery(state, event.state);
             // A pushed snapshot: the robot said this at `event.timestamp`, and
@@ -844,6 +872,31 @@ function staleResponse(state: MutableState, robotId: string): boolean {
 
 /** The server's code for "this robot exists, but I could not ask it". */
 const STATE_UNAVAILABLE_CODE = 'AGENT_STATE_UNAVAILABLE';
+
+/** The server's code for "I have no agent endpoint for this robot at all". */
+const ROBOT_NOT_FOUND_CODE = 'ROBOT_NOT_FOUND';
+
+/**
+ * What to say instead of a flag name when the SERVER had nobody to ask.
+ *
+ * The robot's own 404 and the server proxy's 404 are the same status but
+ * opposite claims: the robot's is an answer ("my map is off"), the server's is
+ * "this robot has never registered an agent endpoint with me" — true for a
+ * cloned/seeded robot row, or one whose agent has not started yet, both of
+ * which still appear in the /agent robot select. Folding the second into
+ * `disabled` told the operator "This robot does not publish a map
+ * (AGENT_MAP_ENABLED)" — a false statement about that robot's configuration
+ * that sends them to SSH in and check a flag that was never off. `unavailable`
+ * is the honest bucket: we could not ask, and the panel prints the reason.
+ */
+const NOT_REGISTERED_WHY = 'the server has no agent endpoint registered for this robot';
+
+function isRobotNotRegisteredError(error: unknown): boolean {
+  return (
+    isNotFoundError(error) &&
+    (error as { code?: unknown } | null | undefined)?.code === ROBOT_NOT_FOUND_CODE
+  );
+}
 
 /**
  * Whether an error is the server saying the robot could not be reached.
@@ -976,6 +1029,37 @@ function applyReportedLatch(state: MutableState, reported: boolean): void {
   state.estopActive = false;
   state.estopStatus = 'idle';
   state.estopError = null;
+}
+
+/**
+ * Fold WHICH latch the agent reports (`estopSource` / `estopReason`) into the
+ * local state — Agent Mode's own STOPP latch or the SafetyMonitor's protective
+ * / fleet E-Stop, which the agent enforces on every command but which older
+ * agents did not put in the wire state. Runs after the boolean latch has been
+ * applied: while the local latch is held, a source-less report keeps the
+ * `'agent'` attribution a local STOPP set; once the latch is clear, both go.
+ */
+function applyLatchSource(
+  state: MutableState,
+  agentState: Pick<AgentModeState, 'estopActive' | 'estopSource' | 'estopReason'> | null | undefined,
+): void {
+  if (!state.estopActive) {
+    state.estopSource = null;
+    state.estopReason = null;
+    return;
+  }
+  const source = agentState?.estopSource ?? null;
+  if (source !== null) {
+    state.estopSource = source;
+    state.estopReason = agentState?.estopReason ?? null;
+    return;
+  }
+  // No attribution from the agent (older wire, or a stop we hold locally that
+  // the agent has not confirmed): keep whatever we know, default to our own.
+  if (state.estopSource === null && agentState?.estopActive) state.estopSource = 'agent';
+  if (agentState?.estopReason !== undefined && agentState.estopReason !== null) {
+    state.estopReason = agentState.estopReason;
+  }
 }
 
 /**
@@ -1260,6 +1344,12 @@ export const selectControlOwner = (state: AgentModeStore) => state.controlOwner;
 
 /** Select whether an E-Stop is latched */
 export const selectEstopActive = (state: AgentModeStore) => state.estopActive;
+
+/** Select which latch holds the E-Stop: Agent Mode's own or the safety monitor's */
+export const selectEstopSource = (state: AgentModeStore) => state.estopSource;
+
+/** Select the reason the reporting latch recorded, when known */
+export const selectEstopReason = (state: AgentModeStore) => state.estopReason;
 
 /** Select how far the E-Stop request got: requested, acknowledged or failed */
 export const selectEstopStatus = (state: AgentModeStore) => state.estopStatus;

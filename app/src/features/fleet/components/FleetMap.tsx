@@ -12,6 +12,7 @@ import { MAP_CANVAS_SIZE, MOCK_ZONES } from '../types/fleet.types';
 import { RobotMarker } from './RobotMarker';
 import { ZoneEditor } from './ZoneEditor';
 import { clusterRobots } from '../utils/markerClustering';
+import { activateOnKey } from '../utils/svgButton';
 import type { Cluster } from '../utils/markerClustering';
 
 // ============================================================================
@@ -203,8 +204,11 @@ function RobotPopup({
         transform="translate(122, 8)"
         className="cursor-pointer"
         onClick={onClose}
+        onKeyDown={activateOnKey(onClose)}
         role="button"
         tabIndex={0}
+        aria-label="Close robot popup"
+        data-testid="fleet-close-popup"
       >
         <circle cx="6" cy="6" r="8" fill="rgba(255,255,255,0.1)" />
         <path d="M4 4 L8 8 M8 4 L4 8" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" />
@@ -245,8 +249,11 @@ function RobotPopup({
         transform="translate(12, 68)"
         className="cursor-pointer"
         onClick={onViewDetails}
+        onKeyDown={activateOnKey(onViewDetails)}
         role="button"
         tabIndex={0}
+        aria-label={`View ${robot.name} details`}
+        data-testid="fleet-view-details"
       >
         <rect
           x="0"
@@ -278,15 +285,7 @@ function RobotPopup({
           transform="translate(12, 92)"
           className="cursor-pointer"
           onClick={onViewMap}
-          onKeyDown={(e) => {
-            // Keyboard-operable like a real button: Enter and Space activate,
-            // Space must not scroll the page.
-            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-              e.preventDefault();
-              e.stopPropagation();
-              onViewMap();
-            }
-          }}
+          onKeyDown={activateOnKey(onViewMap)}
           role="button"
           tabIndex={0}
           aria-label={`Open ${robot.name}'s map`}

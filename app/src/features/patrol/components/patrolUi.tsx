@@ -46,9 +46,14 @@ export const PATROL_ATTENTION_TEXT = 'text-amber-700 dark:text-amber-400';
  * is a flex column, and a max-height + overflow container otherwise SHRINKS its
  * flex children — the status card was squeezed and clipped its own
  * "Promote to baseline" button instead of the rail scrolling.
+ * `lg:self-start`, never bare `self-start`: below lg both consumers stack the
+ * rail in a COLUMN flexbox, where align-self governs the HORIZONTAL axis, so an
+ * unprefixed token shrank the rail to its content width and left a ragged,
+ * left-hugging column next to full-width siblings on phones and tablets. At lg
+ * it is still needed — a stretched grid item cannot behave as sticky.
  */
 export const PATROL_STICKY_RAIL =
-  'lg:sticky lg:top-[4.5rem] self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:overscroll-contain lg:-m-2 lg:p-2 [&>*]:shrink-0';
+  'lg:sticky lg:top-[4.5rem] lg:self-start lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:overscroll-contain lg:-m-2 lg:p-2 [&>*]:shrink-0';
 
 /** 3-px left rail per finding severity — never a tinted background. */
 export const SEVERITY_RAIL: Record<PatrolFindingSeverity, string> = {

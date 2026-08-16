@@ -3,7 +3,8 @@
  * @description Where the OTHER robots are (TASK-207). Polls the server's
  *              `GET /api/robots/:id/peers`, keeps the last pose per peer, drops
  *              every peer whose odometry frame is not ours (and counts it), and
- *              expires a peer that goes quiet. Pure state + one fetch; no LLM,
+ *              expires a peer that goes quiet — quiet on OUR clock (polls
+ *              failing) or on the peer's (a pose the server keeps repeating). Pure state + one fetch; no LLM,
  *              no map writes — the controller reads {@link PeerTracker.obstacles}
  *              into the map's dynamic overlay.
  * @feature agentmode
@@ -27,12 +28,24 @@ export interface FleetPeer {
   zone: string | null;
   /** ISO time the SERVER last saw this pose. */
   updatedAt: string | null;
+  /**
+   * How old that pose was when the server answered, in ms — measured on the
+   * server's clock, so it carries no agent/server skew. Null when the server
+   * does not say (older server, or a peer never pose-synced), and then we can
+   * only age the peer by our own polling as before.
+   */
+  poseAgeMs: number | null;
   footprintRadiusM: number;
 }
 
 /** A peer we accepted, plus when WE last heard of it. */
 export interface TrackedPeer extends FleetPeer {
   seenAtMs: number;
+  /**
+   * When the peer's pose was taken, translated onto OUR clock at ingest
+   * (`now - poseAgeMs`). Null when the server reported no age.
+   */
+  poseAtMs: number | null;
 }
 
 export interface PeerTrackerStatus {
@@ -57,7 +70,12 @@ export interface PeerTrackerDeps {
   getFrame: () => OdometryFrame | null;
   /** Added to a peer's footprint radius when it becomes an obstacle (default 0.25 m). */
   marginM?: number;
-  /** Silence after which a peer is forgotten (default 3 × pollMs). */
+  /**
+   * Silence after which a peer is forgotten (default 3 × pollMs). Silence
+   * means EITHER: our polls stopped arriving, or the pose the server keeps
+   * handing us stopped advancing. Both mean the same thing — nobody knows
+   * where that robot is any more.
+   */
   expireMs?: number;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -107,6 +125,7 @@ export function parseFleetPeer(raw: unknown): FleetPeer | null {
     place: str(o.place),
     zone: str(o.zone),
     updatedAt: str(o.updatedAt),
+    poseAgeMs: num(o.poseAgeMs),
     footprintRadiusM: num(o.footprintRadiusM) ?? DEFAULT_FOOTPRINT_M,
   };
 }
@@ -256,7 +275,14 @@ export class PeerTracker {
       if (!prev || prev.x !== p.x || prev.y !== p.y || prev.headingDeg !== p.headingDeg || prev.name !== p.name) {
         changed = true;
       }
-      this.peers.set(p.robotId, { ...p, seenAtMs: t });
+      this.peers.set(p.robotId, {
+        ...p,
+        seenAtMs: t,
+        // Anchor the server-reported pose age on our clock once, at ingest, so
+        // expire() can age it further without parsing timestamps or trusting
+        // that our clock agrees with the server's.
+        poseAtMs: p.poseAgeMs === null ? null : t - p.poseAgeMs,
+      });
     }
     // A peer the server no longer lists (offline, unregistered) leaves now, not
     // after the expiry — the server is authoritative for who exists.
@@ -266,18 +292,33 @@ export class PeerTracker {
         changed = true;
       }
     }
+    // Age the set here too, not only on a failed poll: a peer whose agent went
+    // silent is still LISTED by the server (its `isConnected` only flips on the
+    // 30 s health check) at a frozen pose, so nothing above marks it changed
+    // and it would sit in the map's dynamic overlay as a phantom obstacle,
+    // blocking the planner over floor the robot has long left.
+    if (this.expire()) changed = true;
     if (dropped !== this.dropped) changed = true;
     this.dropped = dropped;
     if (changed) this.onChange?.(this.list());
   }
 
-  /** Forget peers silent for longer than `expireMs`. Returns whether any left. */
+  /**
+   * Forget peers silent for longer than `expireMs` — on either clock: OUR
+   * polls (`seenAtMs`) and the PEER's pose (`poseAtMs`). The second is the one
+   * that matters when the network drops on the far side: our polls keep
+   * succeeding, the server keeps listing the peer, and only the age of the
+   * pose it carries reveals that nobody has heard from that robot in a while.
+   * A peer whose age the server does not report keeps the old poll-only
+   * behaviour rather than being dropped for a missing field.
+   */
   private expire(): boolean {
     if (this.expireMs <= 0) return false;
     const t = this.now();
     let removed = false;
     for (const [id, p] of this.peers) {
-      if (t - p.seenAtMs > this.expireMs) {
+      const poseStale = p.poseAtMs !== null && t - p.poseAtMs > this.expireMs;
+      if (t - p.seenAtMs > this.expireMs || poseStale) {
         this.peers.delete(id);
         removed = true;
       }

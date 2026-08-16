@@ -78,6 +78,14 @@ interface WorldOptions {
   vlmGuessLookIndex?: number;
   /** What the model guesses on that look, in metres. The truth is `distanceM`. */
   vlmGuessM?: number;
+  /**
+   * How many walks the executor REFUSES before the first one runs — its own
+   * map/keepout guard (`checkForwardPath`), which fails the block without ever
+   * moving the base and therefore without a `measured` distance. This is what a
+   * turn that undershot the commanded angle produces: the walk is re-checked on
+   * the ACTUAL heading and finds the crate the route went around.
+   */
+  refusedWalks?: number;
 }
 
 /**
@@ -151,6 +159,19 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOptions) {
     if (kind === 'turn') {
       scene.advanceYawDeg(Number(params.angleDeg));
     } else if (kind === 'walk') {
+      // A refusal happens BEFORE any motion: no translation to note, and no
+      // `measured` on the block — the base never got the command.
+      if (opts.refusedWalks !== undefined && walks < opts.refusedWalks) {
+        walks++;
+        return {
+          id: `gen-${ran.length}`,
+          kind,
+          params,
+          status: 'failed',
+          reasoning,
+          error: 'walk: an obstacle on the map is 0.20 m ahead on the map — refusing to walk into it.',
+        };
+      }
       // What BlockExecutor.driveFor does for every base motion: tell the store
       // the robot is no longer where it measured from. Unconditional, and before
       // the blocked branch below, because a walk that fails may still have moved.
@@ -888,5 +909,67 @@ describe('Navigator — measured range', () => {
     const walks = world.ran.filter((b) => b.kind === 'walk');
     expect(walks).toHaveLength(1);
     expect(Number(walks[0].params.distanceM)).toBeCloseTo(0.1, 6);
+  });
+});
+
+describe('Navigator — the executor refuses a stage', () => {
+  function navigatorFor(opts: Parameters<typeof makeWorld>[1], maxStages = 12) {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, opts);
+    world.look();
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages,
+    });
+    return { navigator, world };
+  }
+
+  it('re-plans after a refused walk instead of failing the whole goto', async () => {
+    // `goto place "kitchen"` has always treated this as a re-plan point; `goto
+    // "table"` used to die on the spot with "walk failed" — same executor, same
+    // map, two answers for the operator. The refusal carries no `measured`, so
+    // the contact-arrival rule above it cannot catch it either.
+    const { navigator, world } = navigatorFor({
+      worldBearingDeg: 0,
+      distanceM: 2.0,
+      refusedWalks: 1,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/Arrived at "table"/);
+    // The refused stage plus the ones that actually walked.
+    expect(world.ran.filter((b) => b.kind === 'walk').length).toBeGreaterThan(1);
+  });
+
+  it('gives up when the refusals keep coming, without burning every stage', async () => {
+    const { navigator, world } = navigatorFor({
+      worldBearingDeg: 0,
+      distanceM: 2.0,
+      refusedWalks: 99,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/refused/);
+    expect(outcome.message).toMatch(/the way is blocked/);
+    expect(world.ran.filter((b) => b.kind === 'walk')).toHaveLength(3);
+  });
+
+  it('still fails a walk that the base accepted and did not act on', async () => {
+    // The refusal branch must not swallow a dead loco service: "did not move"
+    // is not a refusal, and the first stalled walk still ends the navigation.
+    const { navigator } = navigatorFor({ worldBearingDeg: 0, distanceM: 2.0, blockedAfterWalks: 0 });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/walk failed/);
+    expect(outcome.message).toMatch(/did not move/);
   });
 });

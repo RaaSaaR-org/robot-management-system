@@ -44,6 +44,9 @@ interface Harness {
   estopCalls: Array<{ by: string; reason: string }>;
   /** How often the SafetyMonitor's own latch was asked to clear. */
   estopResets: number;
+  /** Fire the SafetyMonitor's `onSafetyEvent` feed / the state `subscribe` feed. */
+  fireSafetyEvent: () => void;
+  fireStateChange: () => void;
 }
 
 type LocoStub = { ok: boolean; error?: string };
@@ -65,6 +68,8 @@ function makeController(
     estopResetResult?: boolean;
     /** What `robotStateManager.isEStopTriggered()` answers. */
     safetyLatched?: () => boolean;
+    /** What `robotStateManager.getEStopState().reason` answers. */
+    safetyReason?: string;
     /** Runs inside `ServerMirror.emit` — used to crash the plan from outside. */
     onMirrorEmit?: (event: AgentModeEvent) => void;
     idleWatchIntervalMs?: number;
@@ -79,6 +84,8 @@ function makeController(
   const actions: string[] = [];
   const estopCalls: Harness['estopCalls'] = [];
   const resets = { count: 0 };
+  const safetyListeners: Array<() => void> = [];
+  const stateListeners: Array<(state: unknown) => void> = [];
 
   const planner = {
     plan: opts.plan ?? (async () => ({ blocks, fallback: false, attempts: 1 })),
@@ -131,6 +138,18 @@ function makeController(
       return opts.estopResetResult ?? true;
     },
     isEStopTriggered: () => opts.safetyLatched?.() ?? false,
+    getEStopState: () => ({
+      status: opts.safetyLatched?.() ? 'triggered' : 'armed',
+      reason: opts.safetyLatched?.() ? opts.safetyReason : undefined,
+    }),
+    onSafetyEvent: (cb: () => void) => {
+      safetyListeners.push(cb);
+      return () => {};
+    },
+    subscribe: (cb: (state: unknown) => void) => {
+      stateListeners.push(cb);
+      return () => {};
+    },
     isTeleopActive: () => false,
     isVLAActive: () => false,
     // A charged robot. The initiative gate refuses everything but `speak` and
@@ -154,6 +173,8 @@ function makeController(
     get estopResets() {
       return resets.count;
     },
+    fireSafetyEvent: () => safetyListeners.forEach((cb) => cb()),
+    fireStateChange: () => stateListeners.forEach((cb) => cb({ location: null })),
   };
 }
 
@@ -555,8 +576,11 @@ describe('AgentModeController — E-Stop', () => {
       const refused = await h.controller.submitCommand({ text: 'geh 2 Meter vorwaerts' });
 
       expect(refused.accepted).toBe(false);
-      // Our own latch is NOT set — the message must say where to clear it.
-      expect(h.controller.getState().estopActive).toBe(false);
+      // Our own latch is NOT set, but the state reports the latch the command
+      // path enforces — and says whose it is, so the message and the banner
+      // agree on where to clear it.
+      expect(h.controller.getState().estopActive).toBe(true);
+      expect(h.controller.getState().estopSource).toBe('safety');
       expect(refused.message).toMatch(/safety monitor/i);
       expect(refused.message).toMatch(/safety\/estop\/reset/);
       expect(plan).not.toHaveBeenCalled();
@@ -567,6 +591,76 @@ describe('AgentModeController — E-Stop', () => {
       const accepted = await h.controller.submitCommand({ text: 'geh 2 Meter vorwaerts' });
       await h.controller.whenIdle();
       expect(accepted.accepted).toBe(true);
+    });
+
+    it('reports the safety monitor latch as the active E-Stop, with its reason', () => {
+      let latched = false;
+      const h = makeController([], {
+        safetyLatched: () => latched,
+        safetyReason: 'Critical system error detected',
+      });
+      expect(h.controller.getState()).toMatchObject({
+        estopActive: false,
+        estopSource: null,
+        estopReason: null,
+      });
+
+      latched = true;
+      expect(h.controller.getState()).toMatchObject({
+        estopActive: true,
+        estopSource: 'safety',
+        estopReason: 'Critical system error detected',
+      });
+
+      latched = false;
+      expect(h.controller.getState()).toMatchObject({
+        estopActive: false,
+        estopSource: null,
+        estopReason: null,
+      });
+    });
+
+    it('names our own latch (and its reason) when that is the one that is set', async () => {
+      const h = makeController([speakBlock('eins')]);
+      await h.controller.estop('operator pressed STOPP');
+
+      expect(h.controller.getState()).toMatchObject({
+        estopActive: true,
+        estopSource: 'agent',
+        estopReason: 'operator pressed STOPP',
+      });
+    });
+
+    it('pushes the state when the safety monitor latches or clears behind its back', () => {
+      let latched = false;
+      const h = makeController([], { safetyLatched: () => latched });
+      const changes = () => h.events.filter((e) => e.type === 'agent:state:changed').length;
+      const before = changes();
+
+      // A safety event with the latch unchanged is not a state change.
+      h.fireSafetyEvent();
+      expect(changes()).toBe(before);
+
+      // The protective stop trips: one push, carrying the safety latch.
+      latched = true;
+      h.fireSafetyEvent();
+      expect(changes()).toBe(before + 1);
+      const pushed = h.events.filter((e) => e.type === 'agent:state:changed').at(-1);
+      expect(pushed && 'state' in pushed ? pushed.state : null).toMatchObject({
+        estopActive: true,
+        estopSource: 'safety',
+      });
+      // The same event again, still latched: nothing new to say.
+      h.fireSafetyEvent();
+      expect(changes()).toBe(before + 1);
+
+      // The operator resets it on the safety route — that only touches robot
+      // state, so the state feed is what carries the clear.
+      latched = false;
+      h.fireStateChange();
+      expect(changes()).toBe(before + 2);
+      h.fireStateChange();
+      expect(changes()).toBe(before + 2);
     });
 
     it('names our own latch when that is the one that is set', async () => {

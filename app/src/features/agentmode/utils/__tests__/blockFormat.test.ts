@@ -65,6 +65,14 @@ describe('formatBlockParams', () => {
       nav: { planned: false, lengthM: null, segments: 0, reason: 'no map yet' },
     };
     expect(formatBlockParams(sight)).toBe('table · walking by sight');
+    // Arrived: the navigator's last re-plan is from the goal, so it has no
+    // segments left. The card must not read "planned 0.0 m in 0 segments"
+    // (seen live on 2026-08-16 after a `walk into the kitchen` finished).
+    const arrived: AgentBlock = {
+      ...block('goto', { place: 'Kitchen' }),
+      nav: { planned: true, lengthM: 0, segments: 0, reason: null },
+    };
+    expect(formatBlockParams(arrived)).toBe('into Kitchen');
   });
 
   it('falls back to key: value pairs for params v1 does not model', () => {

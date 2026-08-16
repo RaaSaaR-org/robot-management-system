@@ -1123,6 +1123,12 @@ export class SafetyMonitor {
       s.warnings = s.warnings.filter(
         (w) => !w.includes('Emergency stop') && !w.includes('Protective stop')
       );
+      // The stop wrote its own name into the task slot; a reset robot that still
+      // says "Protective stop" on every status card is reporting a stop that
+      // no longer exists.
+      if (s.currentTaskName === 'Protective stop' || s.currentTaskName === 'EMERGENCY STOP') {
+        s.currentTaskName = undefined;
+      }
       s.updatedAt = new Date().toISOString();
     });
 

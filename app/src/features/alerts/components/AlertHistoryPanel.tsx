@@ -14,6 +14,7 @@ import { useAlertHistory } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
 import { ALERT_SOURCE_LABELS } from '../types/alerts.types';
+import { parseFindingLink, stripFindingLink } from '@/features/patrol/utils/patrolFormat';
 
 // ============================================================================
 // TYPES
@@ -57,6 +58,10 @@ interface HistoryItemProps {
 }
 
 function HistoryItem({ alert }: HistoryItemProps) {
+  // TASK-212: keep the `[finding:<id> run:<runId>]` machine tag out of the
+  // prose. This compact list carries no link — AlertList/AlertBanner do.
+  const message = parseFindingLink(alert.message) ? stripFindingLink(alert.message) : alert.message;
+
   return (
     <div
       className={cn(
@@ -76,7 +81,7 @@ function HistoryItem({ alert }: HistoryItemProps) {
             </span>
           </div>
           <h4 className="text-sm font-medium text-theme-primary truncate">{alert.title}</h4>
-          <p className="text-xs text-theme-secondary mt-0.5 line-clamp-2">{alert.message}</p>
+          <p className="text-xs text-theme-secondary mt-0.5 line-clamp-2">{message}</p>
         </div>
         <div className="flex items-center gap-2 sm:flex-col sm:items-end sm:gap-1 flex-shrink-0">
           <span className="text-xs text-theme-tertiary whitespace-nowrap">

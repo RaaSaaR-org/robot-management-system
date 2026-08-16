@@ -3,7 +3,9 @@
  * @description The patrol scheduler (TASK-212) fires a due route once per
  *              slot with origin 'scheduled' / mode 'patrol', initialises a
  *              fresh schedule without back-fill, retries exactly once after
- *              PATROL_RETRY_MIN on refusal/unreachable, and honours the env
+ *              PATROL_RETRY_MIN on refusal/unreachable (a stale 'running' row
+ *              no longer blocks that retry), reconciles stale runs each tick,
+ *              records a skip when the start throws, and honours the env
  *              switch.
  * @feature patrol
  */
@@ -14,17 +16,22 @@ import { FakePatrolRepository } from './patrol-test-fakes.js';
 
 const T0 = Date.parse('2026-08-16T21:59:00.000Z');
 
+const STALE_MS = 60 * 60_000;
+
 function build(startImpl?: (routeId: string, opts: any) => Promise<any>) {
   const repo = new FakePatrolRepository();
   let now = T0;
   const startRun = vi.fn(startImpl ?? (async () => ({ result: { accepted: true, runId: 'r' }, unreachable: false })));
+  const recordFailedStart = vi.fn(async () => {});
+  const reconcileStaleRuns = vi.fn(async () => 0);
   const svc = new PatrolSchedulerService({
     repo: repo.asRepo(),
-    starter: { startRun: startRun as any },
+    starter: { startRun: startRun as any, recordFailedStart: recordFailedStart as any, reconcileStaleRuns: reconcileStaleRuns as any },
     now: () => now,
     retryMinutes: () => 10,
+    staleRunMs: () => STALE_MS,
   });
-  return { repo, svc, startRun, setNow: (t: number) => { now = t; }, at: () => new Date(now) };
+  return { repo, svc, startRun, recordFailedStart, reconcileStaleRuns, setNow: (t: number) => { now = t; }, at: () => new Date(now) };
 }
 
 describe('PatrolSchedulerService', () => {
@@ -217,6 +224,51 @@ describe('PatrolSchedulerService', () => {
     await svc.tick(at());
     expect(startRun).toHaveBeenCalledTimes(1); // no retry fired
     expect(svc.pendingRetries()).toEqual([]);
+  });
+
+  it('a run stuck at "running" past the stale bound stops blocking the retry forever', async () => {
+    const answers = [{ result: { accepted: false, reason: 'busy' }, unreachable: false }];
+    const { repo, svc, startRun, setNow, at } = build(async () => answers.shift() ?? { result: { accepted: true, runId: 'r' }, unreachable: false });
+    const r = repo.seedRoute({ cronExpression: '0 * * * *' });
+    await svc.tick(at());
+    const slot = Date.parse(repo.routes.get(r.id)!.nextRunAt!);
+    setNow(slot);
+    await svc.tick(at());
+    expect(svc.pendingRetries()).toHaveLength(1);
+    // A `finished` event that never arrived (agent restart, dropped push) left
+    // this row at 'running' a day ago. Unbounded, it dropped EVERY retry for
+    // the route for the rest of the process lifetime, with only a console.log.
+    await repo.upsertRun({
+      runId: 'run-lost', routeId: r.id, routeName: r.name, robotId: r.robotId!, mode: 'patrol', origin: 'scheduled',
+      window: null, status: 'running', startedAt: new Date(slot - 24 * 3600_000).toISOString(), legs: [], findingCount: 0,
+    } as any);
+    setNow(slot + 10 * 60_000);
+    await svc.tick(at());
+    expect(startRun).toHaveBeenCalledTimes(2); // the retry fires anyway
+  });
+
+  it('every tick asks the service to reconcile stale runs, and a failure there does not stop the tick', async () => {
+    const { svc, reconcileStaleRuns, at } = build();
+    await svc.tick(at());
+    expect(reconcileStaleRuns).toHaveBeenCalledTimes(1);
+    reconcileStaleRuns.mockRejectedValueOnce(new Error('robot down'));
+    await expect(svc.tick(at())).resolves.toBeUndefined();
+    expect(reconcileStaleRuns).toHaveBeenCalledTimes(2);
+  });
+
+  it('a start that throws (robot answered 4xx) still leaves a recorded skip for the slot', async () => {
+    const { repo, svc, startRun, recordFailedStart, setNow, at } = build(async () => {
+      throw new Error('HTTP 404: {"code":"ROBOT_NOT_FOUND"}');
+    });
+    const r = repo.seedRoute({ cronExpression: '0 * * * *' });
+    await svc.tick(at());
+    setNow(Date.parse(repo.routes.get(r.id)!.nextRunAt!));
+    await svc.tick(at());
+    expect(startRun).toHaveBeenCalledTimes(1);
+    // Nobody is watching a scheduled slot: without this the round would have
+    // silently not happened, with only a console.error on the server.
+    expect(recordFailedStart).toHaveBeenCalledWith(r.id, r.robotId, 'patrol', 'scheduled', expect.stringContaining('ROBOT_NOT_FOUND'));
+    expect(svc.pendingRetries()).toHaveLength(1); // and the slot still gets its one retry
   });
 
   it('a retry is dropped when the route stops being schedulable', async () => {

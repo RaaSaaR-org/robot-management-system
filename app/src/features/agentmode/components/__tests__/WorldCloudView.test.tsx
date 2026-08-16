@@ -51,7 +51,100 @@ beforeEach(() => {
   viewerProps.mockClear();
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  delete (document as unknown as { visibilityState?: unknown }).visibilityState;
+});
+
+/** Take over `document.visibilityState`; the afterEach hands it back. */
+function stubVisibility(get: () => DocumentVisibilityState): void {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get });
+}
+
+describe('WorldCloudView polling', () => {
+  /**
+   * One poll is ~1.3 MB of base64 off the robot. The grid poll has always
+   * skipped hidden tabs; this one did not, so an operator who left the Map tab
+   * on 3-D and switched browser tabs had the robot encode full clouds for ten
+   * minutes for a view nobody was looking at.
+   */
+  it('does not poll while the tab is hidden, and catches up the moment it comes back', async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = 'visible';
+    stubVisibility(() => visibility);
+    const fetchRobotCloud = vi.fn(async () => {});
+    useAgentModeStore.setState({ fetchRobotCloud });
+
+    render(<WorldCloudView robotId="g1" pollMs={3000} />);
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(1); // the first load is still immediate
+
+    visibility = 'hidden';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9500);
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(1);
+
+    visibility = 'visible';
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(2);
+
+    // …and the cadence resumes with the tab.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(3);
+  });
+
+  it('never stacks two cloud reads: a slow one is skipped, not queued', async () => {
+    // On a slow link the bare interval piled up 1.3 MB requests, and an
+    // out-of-order response flipped the view back to an older cloud.
+    vi.useFakeTimers();
+    stubVisibility(() => 'visible');
+    let release: () => void = () => {};
+    const fetchRobotCloud = vi.fn(
+      (_robotId: string, _maxPoints?: number) =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    useAgentModeStore.setState({ fetchRobotCloud });
+
+    render(<WorldCloudView robotId="g1" pollMs={1000} />);
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops polling on unmount', async () => {
+    vi.useFakeTimers();
+    stubVisibility(() => 'visible');
+    const fetchRobotCloud = vi.fn(async () => {});
+    useAgentModeStore.setState({ fetchRobotCloud });
+    const { unmount } = render(<WorldCloudView robotId="g1" pollMs={1000} />);
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(1);
+    // The visibility listener leaves with it: a return to the tab must not
+    // wake a view that is gone.
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(fetchRobotCloud).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('WorldCloudView', () => {

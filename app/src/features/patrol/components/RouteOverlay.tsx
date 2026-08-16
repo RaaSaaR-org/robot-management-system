@@ -5,8 +5,10 @@
  *              route as a walked (solid) / remaining (dashed) path, a ping on
  *              the running leg and severity-tinted pins for its findings, drawn
  *              as SVG over the map canvas in the panel's own world→screen
- *              projection; a glass legend in the corner. Renders nothing when
- *              the robot has no run — the map must not carry a permanent pill.
+ *              projection; a glass legend sitting one step ABOVE the canvas's
+ *              own bottom-left "1 m" scale bar (see the legend below — do not
+ *              move it back down). Renders nothing when the robot has no run —
+ *              the map must not carry a permanent pill.
  * @feature patrol
  */
 
@@ -140,20 +142,39 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
   }
 
   return (
+    // The root stays inert so panning/clicking the map below is untouched, but
+    // `pointer-events` INHERITS: with only that rule, the browser never
+    // hit-tests a marker, so every <title> here was a tooltip that could not
+    // fire. The informative groups (and the legend) opt back in individually.
     <div className={cn('absolute inset-0 pointer-events-none', className)} data-testid="patrol-route-overlay" data-run-id={run.runId}>
-      <svg width={widthPx} height={heightPx} className="absolute inset-0" aria-hidden="true">
+      {/* Presentational wrapper, not aria-hidden: hiding the whole <svg> also
+          hid every marker's name, leaving the operator's only clue to a red
+          "high" pin the legend's aggregate count. */}
+      <svg width={widthPx} height={heightPx} className="absolute inset-0" role="presentation">
         {doneSegments.map((pts, i) => (
-          <polyline key={`done-${i}`} points={pts} fill="none" stroke={OVERLAY_COLOR.done} strokeOpacity={0.8} strokeWidth={2} strokeLinecap="round" />
+          <polyline key={`done-${i}`} aria-hidden="true" points={pts} fill="none" stroke={OVERLAY_COLOR.done} strokeOpacity={0.8} strokeWidth={2} strokeLinecap="round" />
         ))}
         {remainingSegments.map((pts, i) => (
-          <polyline key={`rest-${i}`} points={pts} fill="none" stroke={OVERLAY_COLOR.path} strokeOpacity={0.5} strokeWidth={1.5} strokeDasharray="4 3" strokeLinecap="round" />
+          <polyline key={`rest-${i}`} aria-hidden="true" points={pts} fill="none" stroke={OVERLAY_COLOR.path} strokeOpacity={0.5} strokeWidth={1.5} strokeDasharray="4 3" strokeLinecap="round" />
         ))}
         {projected.map(({ c, p: [sx, sy] }) => {
           if (!inView(sx, sy)) return null;
           const fill = nodeFill(c.status);
           const running = c.status === 'running';
           return (
-            <g key={`cp-${c.index}`} data-testid="patrol-overlay-checkpoint" data-index={c.index} data-status={c.status}>
+            <g
+              key={`cp-${c.index}`}
+              data-testid="patrol-overlay-checkpoint"
+              data-index={c.index}
+              data-status={c.status}
+              className="group pointer-events-auto focus:outline-none"
+              tabIndex={0}
+              role="img"
+              aria-label={`Checkpoint ${c.index + 1}: ${c.label} — ${c.status}`}
+            >
+              {/* First child: the hover tooltip. A marker is a dot with a number
+                  on it — without this the operator cannot tell WHICH place it is. */}
+              <title>{`${c.index + 1}. ${c.label} — ${c.status}`}</title>
               <circle cx={sx} cy={sy} r={9} fill={fill} fillOpacity={0.92} stroke="white" strokeWidth={1.5} />
               {running && (
                 <circle
@@ -170,7 +191,9 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
               <text x={sx} y={sy + 3.5} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" fontFamily="ui-sans-serif, system-ui, sans-serif">
                 {c.index + 1}
               </text>
-              <title>{`${c.index + 1}. ${c.label} — ${c.status}`}</title>
+              {/* Drawn ring, not `outline`: an outline on an SVG <g> is not
+                  reliably painted, and an invisible focus stop is a trap. */}
+              <circle cx={sx} cy={sy} r={13} fill="none" stroke={OVERLAY_COLOR.running} strokeWidth={2} className="opacity-0 group-focus-visible:opacity-100" />
             </g>
           );
         })}
@@ -183,18 +206,32 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
               data-testid="patrol-overlay-finding"
               data-severity={p.severity}
               transform={`translate(${sx} ${sy})`}
+              className="group pointer-events-auto focus:outline-none"
+              tabIndex={0}
+              role="img"
+              aria-label={`${p.severity} severity finding: ${p.summary}`}
               style={p.severity === 'high' ? { filter: 'drop-shadow(0 0 4px color-mix(in srgb, var(--color-signal-stopped) 50%, transparent))' } : undefined}
             >
+              {/* A pin is a coloured teardrop and nothing else: this summary is
+                  the only place the map ever says WHAT the robot flagged. */}
+              <title>{p.summary}</title>
               <path d="M0 0 C-6 -8 -7 -12 -7 -14 A7 7 0 1 1 7 -14 C7 -12 6 -8 0 0 Z" fill={pinFill(p.severity)} stroke="white" strokeWidth={1.2} />
               <circle cx={0} cy={-14} r={2.5} fill="white" />
-              <title>{p.summary}</title>
+              <circle cx={0} cy={-11} r={15} fill="none" stroke={OVERLAY_COLOR.running} strokeWidth={2} className="opacity-0 group-focus-visible:opacity-100" />
             </g>
           );
         })}
       </svg>
+      {/* bottom-8, not bottom-2: the map canvas draws its only distance
+          reference — the 1 m scale bar and its label — in the bottom-left strip
+          (y = height-24 … height-10), and this glass pill is ~90 % opaque, so at
+          bottom-2 it erased the scale for every robot that has ever patrolled.
+          Up, not sideways: bottom-right holds the "keep-outs not shown" note,
+          top-left the place chip, top-right the canvas north arrow.
+          `pointer-events-auto` so the title below can reveal the truncated text. */}
       <div
         className={cn(
-          'absolute left-2 bottom-2 max-w-[calc(100%-1rem)] flex items-center gap-2 glass-elevated rounded-brand px-2.5 py-1.5 text-[11px] font-mono tabular-nums',
+          'absolute left-2 bottom-8 max-w-[calc(100%-1rem)] pointer-events-auto flex items-center gap-2 glass-elevated rounded-brand px-2.5 py-1.5 text-[11px] font-mono tabular-nums',
           PATROL_MOTION,
           isRunning && cn(PATROL_LIVE_BORDER, PATROL_GLOW_LIVE),
           style.className

@@ -7,6 +7,7 @@
 
 import type { RobotMarkerProps } from '../types/fleet.types';
 import { MAINTENANCE_COLOR } from '../types/fleet.types';
+import { activateOnKey } from '../utils/svgButton';
 
 // ============================================================================
 // CONSTANTS
@@ -53,6 +54,7 @@ export function RobotMarker({ robot, position, isSelected, onClick }: RobotMarke
       className="cursor-pointer"
       transform={`translate(${position.x}, ${position.y})`}
       onClick={onClick}
+      onKeyDown={activateOnKey(() => onClick?.())}
       role="button"
       tabIndex={0}
       aria-label={`${robot.name} - ${robot.status}`}

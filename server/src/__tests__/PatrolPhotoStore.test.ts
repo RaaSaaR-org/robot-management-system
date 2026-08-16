@@ -1,8 +1,9 @@
 /**
  * @file PatrolPhotoStore.test.ts
  * @description Local-disk patrol photo store (TASK-212): put/get round trip
- *              with metadata, path-segment safety, listRun, and the retention
- *              sweep (control 72 h, baseline/finding 30 d).
+ *              with metadata, path-segment safety, listRun/existingKeys, and
+ *              the retention sweep (control 72 h, baseline/finding 30 d, the
+ *              live baseline exempt).
  * @feature patrol
  */
 
@@ -84,6 +85,48 @@ describe('PatrolPhotoStore (local disk)', () => {
     expect(await store.listRun('robot-001', 'base')).toEqual([]);
     // empty run dirs are pruned
     expect(await fs.readdir(path.join(dir, 'robot-001'))).toEqual([]);
+  });
+
+  it('existingKeys lists the photos a run really still has (sidecars excluded)', async () => {
+    await store.put({ robotId: 'robot-001', runId: 'run-1', key: 'cp-1.jpg', data: JPEG, kind: 'baseline' });
+    await store.put({ robotId: 'robot-001', runId: 'run-1', key: 'cp-2.jpg', data: JPEG, kind: 'baseline' });
+    expect([...(await store.existingKeys('robot-001', 'run-1'))].sort()).toEqual(['cp-1.jpg', 'cp-2.jpg']);
+    await store.delete('robot-001', 'run-1', 'cp-2.jpg');
+    expect([...(await store.existingKeys('robot-001', 'run-1'))]).toEqual(['cp-1.jpg']);
+    expect(await store.existingKeys('robot-001', 'run-9')).toEqual(new Set());
+  });
+
+  it('sweep keeps the photos of the run still serving as a baseline, and lets a superseded one age out', async () => {
+    // The baseline pointer (PatrolService.getBaseline) has no age bound, so a
+    // site that baselined in January and patrols nightly used to lose the
+    // frames on day 31 while the route still reported a baseline — every
+    // photo pair then showed "photo unavailable" on its baseline half.
+    const live = new PatrolPhotoStore({ localDir: dir, forceLocal: true, now: () => now, protectedRuns: async () => new Set(['base-live']) });
+    await live.put({ robotId: 'robot-001', runId: 'base-live', key: 'cp-1.jpg', data: JPEG, kind: 'baseline' });
+    await live.put({ robotId: 'robot-001', runId: 'base-old', key: 'cp-1.jpg', data: JPEG, kind: 'baseline' });
+    await live.put({ robotId: 'robot-001', runId: 'base-live', key: 'ctrl.jpg', data: JPEG, kind: 'control' });
+
+    now += 31 * 86400_000;
+    const r = await live.sweep({ controlHours: 72, keepDays: 30 });
+    expect(r.deleted).toBe(2); // the superseded baseline and the live run's control frame
+    // Only the baseline kind is exempt: a control frame of the same run still
+    // goes at 72 h, so nothing keeps a picture of a person longer than before.
+    expect(r.errors).toEqual([]);
+    expect(await live.get('robot-001', 'base-live', 'cp-1.jpg')).not.toBeNull();
+    expect(await live.get('robot-001', 'base-old', 'cp-1.jpg')).toBeNull();
+    expect(await live.get('robot-001', 'base-live', 'ctrl.jpg')).toBeNull();
+  });
+
+  it('sweep keeps every baseline photo when it cannot find out which run is the baseline', async () => {
+    const blind = new PatrolPhotoStore({ localDir: dir, forceLocal: true, now: () => now, protectedRuns: async () => { throw new Error('db down'); } });
+    await blind.put({ robotId: 'robot-001', runId: 'base', key: 'cp-1.jpg', data: JPEG, kind: 'baseline' });
+    await blind.put({ robotId: 'robot-001', runId: 'run-1', key: 'find.jpg', data: JPEG, kind: 'finding' });
+    now += 31 * 86400_000;
+    const r = await blind.sweep({ controlHours: 72, keepDays: 30 });
+    // A lost sweep round is recoverable; a lost baseline is not.
+    expect(await blind.get('robot-001', 'base', 'cp-1.jpg')).not.toBeNull();
+    expect(await blind.get('robot-001', 'run-1', 'find.jpg')).toBeNull();
+    expect(r.errors[0]).toMatch(/protected runs: db down/);
   });
 
   it('sweep on an empty root is a no-op; retention env parsing has defaults', async () => {

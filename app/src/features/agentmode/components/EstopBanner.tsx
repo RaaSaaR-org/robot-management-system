@@ -18,13 +18,19 @@ import {
   selectEstopActive,
   selectEstopStatus,
   selectEstopError,
+  selectEstopSource,
+  selectEstopReason,
   selectFsmId,
   selectRecovered,
   selectStateUnavailableReason,
   selectStateUnknown,
 } from '../store/agentmodeStore';
 import { CONDITION_ORDER, type ConditionKey } from '../utils/conditions';
-import type { AgentEstopStatus, AgentRecoveryState } from '../types/agentmode.types';
+import type {
+  AgentEstopSource,
+  AgentEstopStatus,
+  AgentRecoveryState,
+} from '../types/agentmode.types';
 
 export interface EstopBannerProps {
   /** Clear the latch. Wired to the store's `resetEstop` by the page. */
@@ -58,11 +64,20 @@ interface BannerCopy {
  *                       it gave earlier still happened, but it is history: the
  *                       present tense ("it is stopped and damped") is no longer
  *                       something this console can back.
+ * @param source       - Which latch holds the stop. The SafetyMonitor's
+ *                       protective / fleet E-Stop refuses every Agent Mode
+ *                       command exactly like Agent Mode's own STOPP latch, but
+ *                       nobody on this console pressed anything — so the banner
+ *                       has to say who stopped the robot and why, or the
+ *                       operator sees a refusal with no cause on the page.
+ * @param reason       - The reason the latching side recorded, when known.
  */
 function copyFor(
   status: AgentEstopStatus,
   error: string | null,
-  stateUnknown: boolean
+  stateUnknown: boolean,
+  source: AgentEstopSource = null,
+  reason: string | null = null
 ): BannerCopy {
   if (stateUnknown && (status === 'acknowledged' || status === 'idle')) {
     return {
@@ -123,10 +138,22 @@ function copyFor(
     case 'idle':
     case 'acknowledged':
     default:
+      if (source === 'safety') {
+        return {
+          title: 'E-Stop latched by the safety monitor',
+          detail:
+            `The robot's safety monitor stopped it${reason ? ` (${reason})` : ''}. ` +
+            'Commands are refused until the latch is cleared — Reset E-Stop clears the ' +
+            "safety monitor's latch and Agent Mode's together.",
+          accent: 'text-red-600 dark:text-red-400',
+          dot: 'bg-red-500',
+          border: 'border-red-500/40',
+        };
+      }
       return {
         title: 'E-Stop latched',
         detail:
-          'The robot confirmed the stop: it is stopped and damped. ' +
+          `The robot confirmed the stop${reason ? ` (${reason})` : ''}: it is stopped and damped. ` +
           'Commands are refused until the latch is cleared.',
         accent: 'text-red-600 dark:text-red-400',
         dot: 'bg-red-500',
@@ -502,14 +529,18 @@ function EstopNotice({
   status,
   error,
   stateUnknown,
+  source,
+  reason,
   onReset,
 }: {
   status: AgentEstopStatus;
   error: string | null;
   stateUnknown: boolean;
+  source: AgentEstopSource;
+  reason: string | null;
   onReset: () => void;
 }) {
-  const copy = copyFor(status, error, stateUnknown);
+  const copy = copyFor(status, error, stateUnknown, source, reason);
   const unverified =
     stateUnknown || status === 'requesting' || status === 'unconfirmed' || status === 'failed';
   // A stop that is not confirmed on the hardware is an alarm, not a status.
@@ -518,7 +549,7 @@ function EstopNotice({
   return (
     <Notice
       testId="agent-estop-banner"
-      dataAttrs={{ 'data-estop-status': status }}
+      dataAttrs={{ 'data-estop-status': status, 'data-estop-source': source ?? '' }}
       role={alarm ? 'alert' : 'status'}
       dot={cn(copy.dot, status !== 'acknowledged' && 'animate-pulse')}
       card={cn(copy.border, alarm && 'bg-red-500/10')}
@@ -608,6 +639,8 @@ export const EstopBanner = memo(function EstopBanner({
   const estopActive = useAgentModeStore(selectEstopActive);
   const status = useAgentModeStore(selectEstopStatus);
   const estopError = useAgentModeStore(selectEstopError);
+  const estopSource = useAgentModeStore(selectEstopSource);
+  const estopReason = useAgentModeStore(selectEstopReason);
   const damped = useAgentModeStore(selectDamped);
   const fsmId = useAgentModeStore(selectFsmId);
   const recovered = useAgentModeStore(selectRecovered);
@@ -624,6 +657,8 @@ export const EstopBanner = memo(function EstopBanner({
         status={status}
         error={estopError}
         stateUnknown={stateUnknown}
+        source={estopSource}
+        reason={estopReason}
         onReset={onReset}
       />
     );

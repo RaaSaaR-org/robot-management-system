@@ -7,7 +7,7 @@
  */
 
 import { memo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { EmptyState } from '@/shared/components/ui/EmptyState';
 import type { PatrolLegStatus, PatrolRun } from '../types/patrol.types';
@@ -66,6 +66,7 @@ function showReason(run: PatrolRun): boolean {
 }
 
 export const RunHistory = memo(function RunHistory({ runs, robotNames, hideRoute, className }: RunHistoryProps) {
+  const navigate = useNavigate();
   if (runs.length === 0) {
     return (
       <div className={cn('glass-card rounded-brand-lg p-4', className)} data-testid="patrol-run-history">
@@ -95,10 +96,21 @@ export const RunHistory = memo(function RunHistory({ runs, robotNames, hideRoute
               {runs.map((run) => (
                 <tr
                   key={run.runId}
-                  className={cn('border-b border-glass-subtle last:border-b-0 hover:bg-theme-hover', PATROL_MOTION)}
+                  className={cn(
+                    'border-b border-glass-subtle last:border-b-0 hover:bg-theme-hover cursor-pointer',
+                    PATROL_MOTION,
+                  )}
                   data-testid="patrol-run-row"
                   data-run-id={run.runId}
                   data-status={run.status}
+                  // The row already highlights under the pointer, so it has to
+                  // do what that promises. The timestamp stays a real <Link>:
+                  // it is what keyboard and screen-reader users tab to, and
+                  // what "open in a new tab" needs.
+                  onClick={(event) => {
+                    if ((event.target as HTMLElement).closest('a,button')) return;
+                    navigate(`/patrol/runs/${encodeURIComponent(run.runId)}`);
+                  }}
                 >
                   <td className="px-3 py-2 min-w-0">
                     <RunStatusChip status={run.status} />

@@ -93,12 +93,37 @@ describe('BaselineStore', () => {
     expect(fs.existsSync(path.join(root, 'patrol', 'route-a', 'baseline', 'day', 'checkpoints.json'))).toBe(true);
   });
 
-  it('a retake without a photo (person in frame) removes the older photo rather than keeping it', () => {
+  it('an EXPLICIT removal (keepPhoto: false) drops the older photo rather than keeping it', () => {
     store.recordCheckpoint('route-a', null, { checkpointId: 'cp-1', runId: 'run-1', photo: Buffer.from('OLD'), answers: ANSWERS, model: null });
-    store.recordCheckpoint('route-a', null, { checkpointId: 'cp-1', runId: 'run-2', photo: null, answers: { ...ANSWERS, personPresent: true }, model: null });
+    store.recordCheckpoint('route-a', null, {
+      checkpointId: 'cp-1',
+      runId: 'run-2',
+      photo: null,
+      answers: { ...ANSWERS, personPresent: true },
+      model: null,
+      keepPhoto: false,
+    });
     expect(store.readPhoto('route-a', null, 'cp-1')).toBeNull();
     expect(store.checkpoint('route-a', null, 'cp-1')?.photoKey).toBeNull();
     expect(store.load('route-a', null).window).toBe(DEFAULT_WINDOW);
+  });
+
+  it('a write without a photo keeps the stored one and its key — a failed capture must not destroy the baseline', () => {
+    store.recordCheckpoint('route-a', 'day', { checkpointId: 'cp-1', runId: 'base-run', photo: Buffer.from('GOOD'), answers: ANSWERS, model: 'm' });
+    // The caller has answers but no frame (camera/sidecar down, or a promotion
+    // that found no photo beside the run). Before `keepPhoto` this call deleted
+    // the JPEG the baseline still needed and left a photo-less "normal" behind.
+    const rec = store.recordCheckpoint('route-a', 'day', {
+      checkpointId: 'cp-1',
+      runId: 'run-2',
+      photo: null,
+      answers: { ...ANSWERS, lightsOn: 'yes' },
+      model: 'm2',
+    });
+    expect(rec.photoKey).toBe('base-run/cp-1.jpg');
+    expect(store.readPhoto('route-a', 'day', 'cp-1')?.toString()).toBe('GOOD');
+    expect(store.checkpoint('route-a', 'day', 'cp-1')?.answers?.lightsOn).toBe('yes');
+    expect(store.checkpoint('route-a', 'day', 'cp-1')?.photoKey).toBe('base-run/cp-1.jpg');
   });
 
   it('keeps windows apart: a day baseline is not a night baseline', () => {

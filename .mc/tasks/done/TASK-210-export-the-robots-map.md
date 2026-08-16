@@ -20,6 +20,7 @@ updated: 2026-08-16
 completed: 2026-08-16
 status_note: |
   DONE 2026-08-16 — PR #228 (with TASK-211). Verified 2026-08-16: OccupancyMap.toPgm in map_server greys + toMapServerYaml, robot `GET /map?format=pgm|yaml` attachments, app mapExport (PGM+YAML two-file, PNG, JSON) behind the Map tab's Export menu, disabled without a grid; unit tests in app + robot-agent pass. Manual nav2 map_server load not repeated in this pass.
+  POST-MERGE PASS 2026-08-16: PGM+YAML exported live and checked — P5 200x200 @ 0.1 m, origin (-10,-10), rows flipped for map_server, walls land on the surveyed geometry. Fixed here: the export menu had no focus management despite role="menu" (roving tabindex, arrows/Home/End, Escape, focus returned to the trigger).
 ---
 
 ## Description

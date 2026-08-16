@@ -700,6 +700,8 @@ interface Session {
   lastMap: OccupancyMapSnapshot | null;
   /** The map-diff refusal already logged for this run (frame mismatch etc.). */
   mapReasonLogged: string | null;
+  /** Legs whose en-route label diff was skipped for want of baseline labels. */
+  labelSkipLegs: Set<number>;
 }
 
 /**
@@ -809,6 +811,7 @@ export class PatrolRunner {
       spokenPerson: false,
       lastMap: null,
       mapReasonLogged: null,
+      labelSkipLegs: new Set<number>(),
     };
     this.abortRequest = null;
     this.persist(run, []);
@@ -832,6 +835,13 @@ export class PatrolRunner {
     this.deps.emit('agent:patrol:started', cloneRun(run));
     const aborted = (): boolean => exec.isAborted() || this.runnerAborted() !== null;
     const abortReason = (): string => exec.abortReason() ?? this.runnerAborted() ?? 'aborted';
+    // Checkpoints the robot reached but could NOT inspect: no control photo,
+    // or no checklist answer (camera/sidecar down, checklist model down or
+    // unparseable). Only a failed `goto` fails a leg, so these legs end
+    // 'done' — without counting them a completely blind patrol would report
+    // "3/3 checkpoint(s), 0 finding(s)" and read to an operator as "normal".
+    const blindLegs = (): PatrolRun['legs'] =>
+      run.legs.filter((l) => l.status === 'done' && (l.photoDropped === 'error' || l.inspection === 'error'));
 
     const patrolBlock = s.blocks[0]?.block;
     let twoFailuresAbort: string | null = null;
@@ -953,7 +963,17 @@ export class PatrolRunner {
         run.status = 'failed';
         run.reason = 'every leg failed';
       } else {
-        run.status = 'done';
+        const blind = blindLegs();
+        const walked = run.legs.filter((l) => l.status === 'done');
+        if (blind.length > 0 && blind.length === walked.length) {
+          // Walked the whole route and compared nothing: that is a failed
+          // patrol, not a clean one.
+          run.status = 'failed';
+          run.reason = 'no control photo or checklist answer at any checkpoint';
+        } else {
+          run.status = 'done';
+          if (blind.length > 0) run.reason = `${blind.length} checkpoint(s) not inspected`;
+        }
       }
     } catch (err) {
       run.status = 'failed';
@@ -967,11 +987,21 @@ export class PatrolRunner {
         const done = run.legs.filter((l) => l.status === 'done').length;
         const noBaseline =
           run.mode === 'baseline' ? run.legs.filter((l) => l.status === 'done' && l.photoDropped === 'person').map((l) => l.name) : [];
+        const blind = blindLegs().map((l) => l.name);
+        // Legs walked without a baseline label set: their en-route object diff
+        // was skipped, so fewer findings were possible than the count suggests.
+        const uncompared = [...s.labelSkipLegs].map((i) => run.legs[i]?.name ?? `leg ${i + 1}`);
         const summary =
           `${run.mode === 'baseline' ? 'Baseline' : 'Patrol'} ${run.status}: ${done}/${run.legs.length} checkpoint(s), ` +
           `${s.findings.length} finding(s)${run.reason ? ` — ${run.reason}` : ''}.` +
           (noBaseline.length > 0
             ? ` No baseline for ${noBaseline.join(', ')} — a person was in frame, so nothing was recorded there; retake those checkpoints.`
+            : '') +
+          (blind.length > 0
+            ? ` No control photo or checklist answer for ${blind.join(', ')} — those checkpoints were not inspected.`
+            : '') +
+          (uncompared.length > 0
+            ? ` No baseline in window ${run.window ?? DEFAULT_WINDOW} for ${uncompared.join(', ')} — walked but not compared en route; run a baseline (or promote this run).`
             : '');
         exec.finish(patrolBlock, { ok: run.status === 'done', message: summary });
       }
@@ -1134,8 +1164,22 @@ export class PatrolRunner {
 
     const place = input.place;
     const baselineLabels = this.baseline.legLabels(s.run.routeId, s.run.window, legIndex);
-    const semantic = labelSetDiff(input.labels, baselineLabels, place, this.watchlist);
-    const candidates: Candidate[] = [...semantic.candidates];
+    const candidates: Candidate[] = [];
+    if (baselineLabels.length > 0) {
+      candidates.push(...labelSetDiff(input.labels, baselineLabels, place, this.watchlist).candidates);
+    } else if (!s.labelSkipLegs.has(legIndex)) {
+      // No baseline labels for this leg — the route × window was never walked
+      // as a baseline, or that baseline run recorded nothing here. Diffing
+      // against an empty set makes EVERY watch-listed label "new", so a normal
+      // room would raise "unexpected crate/cable/box…" findings. The checkpoint
+      // path refuses the same way (`no_baseline`) and the map diff too; the
+      // person candidate below stays, since a person is a finding regardless.
+      s.labelSkipLegs.add(legIndex);
+      this.log(
+        `label diff skipped for run ${s.run.runId}: no baseline labels for leg ${legIndex + 1} ` +
+          `(${s.run.legs[legIndex]?.name ?? '?'}) in window ${s.run.window ?? DEFAULT_WINDOW}`,
+      );
+    }
     if (input.personVisible && !candidates.some((c) => c.type === 'person')) {
       candidates.push({
         key: `person|${place ?? '?'}`,
@@ -1316,8 +1360,18 @@ export class PatrolRunner {
     const run = this.runs.findRun(runId);
     if (!run) return { ok: false, message: `no run ${runId} on this robot` };
     let promoted = 0;
+    let skipped = 0;
     for (const leg of run.legs) {
-      if (leg.status !== 'done' || leg.photoDropped === 'person') continue;
+      if (leg.status !== 'done') continue;
+      // Any dropped frame — a person in view, or a capture that errored — means
+      // this run has no usable picture of the checkpoint. Promoting it anyway
+      // would call recordCheckpoint with photo=null, which DELETES the existing
+      // baseline JPEG (baseline.ts) while the answers fall back to the previous
+      // entry, so one flaky frame would destroy a good baseline photo.
+      if (leg.photoDropped) {
+        skipped++;
+        continue;
+      }
       const photo = this.runs.readPhoto(runId, leg.checkpointId);
       // The checklist answers ride beside the run in `answers.json` (model
       // text, kept out of run.json); the promoted baseline takes the photo and
@@ -1349,9 +1403,13 @@ export class PatrolRunner {
       }
       promoted++;
     }
+    const skippedNote = skipped > 0 ? ` — ${skipped} checkpoint(s) skipped (no usable capture), their baseline is unchanged` : '';
     return promoted > 0
-      ? { ok: true, message: `promoted ${promoted} checkpoint(s) of run ${runId} to the ${run.window ?? DEFAULT_WINDOW} baseline of ${run.routeName}` }
-      : { ok: false, message: 'nothing to promote — the run kept no photos or answers' };
+      ? {
+          ok: true,
+          message: `promoted ${promoted} checkpoint(s) of run ${runId} to the ${run.window ?? DEFAULT_WINDOW} baseline of ${run.routeName}${skippedNote}`,
+        }
+      : { ok: false, message: `nothing to promote — the run kept no photos or answers${skippedNote}` };
   }
 
   /** Checklist answers of a run's checkpoint, kept beside the run for promotion. */
@@ -1384,9 +1442,32 @@ export class PatrolRunner {
     }
   }
 
+  /**
+   * Runs left `status:'running'` on disk by a crash, a redeploy or a reboot.
+   * Nothing else ever rewrites them, so without this the robot keeps serving a
+   * run that is not running: the app shows a pulsing live-run card forever, its
+   * abort button hits no session, and the server's scheduler treats the route
+   * as busy and drops every later slot.
+   */
+  reconcileInterruptedRuns(): void {
+    if (!this.runs) return;
+    for (const run of this.runs.listRuns(Number.MAX_SAFE_INTEGER)) {
+      if (run.status !== 'running') continue;
+      if (this.session?.run.runId === run.runId) continue; // never touch the live run
+      run.status = 'aborted';
+      run.reason = 'interrupted by an agent restart';
+      run.finishedAt = this.stamp();
+      for (const leg of run.legs) if (leg.status === 'pending' || leg.status === 'running') leg.status = 'skipped';
+      this.persist(run, this.runs.findings(run.routeId, run.runId));
+      this.log(`run ${run.runId} was left running by a restart — closed as aborted`);
+      this.deps.emit('agent:patrol:finished', cloneRun(run));
+    }
+  }
+
   /** Retention sweep at boot + hourly. `unref()`ed — never holds shutdown open. */
   startRetentionSweep(): void {
     if (!this.runs || this.sweepTimer) return;
+    this.reconcileInterruptedRuns();
     const tick = (): void => {
       try {
         const removed = this.runs!.sweep();

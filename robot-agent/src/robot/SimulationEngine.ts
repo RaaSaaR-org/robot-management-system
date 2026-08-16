@@ -44,6 +44,11 @@ const DEFAULT_CONFIG: SimulationConfig = {
 /**
  * Handles the simulation loop for robot movement, battery, and position
  */
+/** 'Critical battery level' (raised below 5 %) is dropped again from here up. */
+const CRITICAL_BATTERY_CLEAR_PCT = 10;
+/** 'Low battery' (raised below 20 %) is dropped again from here up. */
+const LOW_BATTERY_CLEAR_PCT = 25;
+
 export class SimulationEngine {
   private simulationInterval: NodeJS.Timeout | null = null;
   private cachedChargingStation: RobotLocation | null = null;
@@ -345,6 +350,12 @@ export class SimulationEngine {
 
     const newState = this.stateGetter();
 
+    // A flag that outlived its cause is a lie the SafetyMonitor acts on: it
+    // treats any error containing 'Critical' as a system failure and latches a
+    // protective stop — again after every reset — so a robot restored from disk
+    // with 62 % battery and a stale 'Critical battery level' could never move.
+    if (this.clearRecoveredBatteryFlags(newState)) return true;
+
     // Check low battery warning
     if (newState.batteryLevel < 20 && !newState.warnings.includes('Low battery')) {
       this.stateUpdater((s) => {
@@ -429,13 +440,12 @@ export class SimulationEngine {
    * @returns true if fully charged
    */
   private chargeBattery(deltaTime: number): boolean {
-    const state = this.stateGetter();
-
     this.stateUpdater((s) => {
       s.batteryLevel = Math.min(100, s.batteryLevel + this.config.batteryChargePerSecond * deltaTime);
     });
 
     const newState = this.stateGetter();
+    const flagsCleared = this.clearRecoveredBatteryFlags(newState);
 
     if (newState.batteryLevel >= 100) {
       this.stateUpdater((s) => {
@@ -446,6 +456,23 @@ export class SimulationEngine {
       return true;
     }
 
-    return false;
+    return flagsCleared;
+  }
+
+  /**
+   * Drop 'Critical battery level' / 'Low battery' once the battery is clearly
+   * above the level that raised them (hysteresis so a level hovering at the
+   * threshold does not flap). Returns true when something was removed.
+   */
+  private clearRecoveredBatteryFlags(state: SimulatedRobotState): boolean {
+    const dropCritical =
+      state.batteryLevel >= CRITICAL_BATTERY_CLEAR_PCT && state.errors.includes('Critical battery level');
+    const dropLow = state.batteryLevel >= LOW_BATTERY_CLEAR_PCT && state.warnings.includes('Low battery');
+    if (!dropCritical && !dropLow) return false;
+    this.stateUpdater((s) => {
+      if (dropCritical) s.errors = s.errors.filter((e) => e !== 'Critical battery level');
+      if (dropLow) s.warnings = s.warnings.filter((w) => w !== 'Low battery');
+    });
+    return true;
   }
 }

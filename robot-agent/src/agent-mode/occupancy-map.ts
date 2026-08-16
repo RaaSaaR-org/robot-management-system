@@ -210,6 +210,23 @@ export class OccupancyMap {
     return [Math.floor((x - this.originX) / this.resolution), Math.floor((y - this.originY) / this.resolution)];
   }
 
+  /**
+   * The centre of the cell `(x, y)` falls in, in world metres.
+   *
+   * Public because the planner samples the map on cell centres and used to
+   * re-derive them from the WORLD-zero lattice (`floor(x / res) * res + res/2`),
+   * which only agrees with the grid while `originX` happens to sit on that
+   * lattice. At `AGENT_MAP_RESOLUTION_M=0.3` the initial box is an odd number
+   * of cells, the origin lands half a cell off, and every footprint sample was
+   * displaced by half a cell in both axes — A* approved nodes whose real disc
+   * clipped a wall and `checkStraightSegment` agreed, while the map's own
+   * `isTraversable` said no. One lattice, one helper, no drift.
+   */
+  cellCentre(x: number, y: number): [number, number] {
+    const [cx, cy] = this.toCell(x, y);
+    return [this.originX + (cx + 0.5) * this.resolution, this.originY + (cy + 0.5) * this.resolution];
+  }
+
   private inBounds(cx: number, cy: number): boolean {
     return cx >= 0 && cy >= 0 && cx < this.width && cy < this.height;
   }
@@ -218,9 +235,12 @@ export class OccupancyMap {
     const n = this.initialCells;
     this.width = n;
     this.height = n;
-    // Snap the origin to the resolution so cell edges are stable across grows.
-    this.originX = Math.floor(x / this.resolution) * this.resolution - (n / 2) * this.resolution;
-    this.originY = Math.floor(y / this.resolution) * this.resolution - (n / 2) * this.resolution;
+    // Snap the origin to the resolution so cell edges are stable across grows —
+    // whole cells only: an odd `n` (e.g. 20 m at 0.3 m resolution = 67) used to
+    // put the lattice half a cell off world zero, which every consumer that
+    // derives cell centres from world coordinates then has to know about.
+    this.originX = Math.floor(x / this.resolution) * this.resolution - Math.floor(n / 2) * this.resolution;
+    this.originY = Math.floor(y / this.resolution) * this.resolution - Math.floor(n / 2) * this.resolution;
     this.cells = new Float32Array(n * n);
     if (this.decayS > 0) this.seenS = new Uint32Array(n * n);
   }
@@ -402,12 +422,24 @@ export class OccupancyMap {
     // each would let ONE frame saturate a cell (and a single stray return then
     // never gets outvoted). One vote per cell per frame keeps hit and miss
     // evidence on the same scale.
-    const seenCells = new Set<number>();
+    //
+    // Growing the grid comes FIRST, in its own loop: `ensureContains` moves
+    // `width` and `origin`, and a grow in the middle of the marking loop
+    // silently re-pointed every index already in the Set — cells then got two
+    // votes in one frame (2 × 0.85 > `occupiedAbove`), so half a frame's worth
+    // of surface, a passing person included, stamped in as a hard wall from a
+    // single look. Pass 2 dodges this by recomputing `toCell` after each grow;
+    // here the Set outlives the iteration, so the grid has to stand still.
+    const keep: number[] = [];
     for (let i = 0; i < hitX.length; i++) {
       if (!this.ensureContains(hitX[i], hitY[i])) {
         dropped++;
         continue;
       }
+      keep.push(i);
+    }
+    const seenCells = new Set<number>();
+    for (const i of keep) {
       const [tx, ty] = this.toCell(hitX[i], hitY[i]);
       const idx = ty * this.width + tx;
       if (seenCells.has(idx)) continue;

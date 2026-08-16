@@ -79,6 +79,59 @@ describe('EstopBanner', () => {
     expect(screen.queryByText(/stopped and damped/i)).toBeNull();
   });
 
+  describe('latched by the safety monitor', () => {
+    it('says who stopped the robot and why, and that one reset clears both latches', () => {
+      useAgentModeStore.setState({
+        estopActive: true,
+        estopStatus: 'acknowledged',
+        estopSource: 'safety',
+        estopReason: 'Critical system error detected',
+      });
+      render(<EstopBanner onReset={() => {}} />);
+
+      expect(screen.getByTestId('agent-estop-banner')).toHaveAttribute(
+        'data-estop-source',
+        'safety'
+      );
+      expect(screen.getByTestId('agent-estop-title')).toHaveTextContent(
+        'E-Stop latched by the safety monitor'
+      );
+      const detail = screen.getByTestId('agent-estop-detail');
+      expect(detail).toHaveTextContent(/safety monitor stopped it \(Critical system error detected\)/);
+      expect(detail).toHaveTextContent(/clears the safety monitor's latch and Agent Mode's together/);
+      // Nobody on this console confirmed anything — no "stopped and damped" claim.
+      expect(screen.queryByText(/stopped and damped/i)).toBeNull();
+      expect(screen.getByTestId('agent-estop-reset')).toBeInTheDocument();
+    });
+
+    it('works without a reason', () => {
+      useAgentModeStore.setState({
+        estopActive: true,
+        estopStatus: 'acknowledged',
+        estopSource: 'safety',
+        estopReason: null,
+      });
+      render(<EstopBanner onReset={() => {}} />);
+      expect(screen.getByTestId('agent-estop-detail')).toHaveTextContent(
+        /safety monitor stopped it\. Commands are refused/
+      );
+    });
+
+    it('appends the reason to Agent Mode\'s own latch when known', () => {
+      useAgentModeStore.setState({
+        estopActive: true,
+        estopStatus: 'acknowledged',
+        estopSource: 'agent',
+        estopReason: 'operator pressed STOPP',
+      });
+      render(<EstopBanner onReset={() => {}} />);
+      expect(screen.getByTestId('agent-estop-title')).toHaveTextContent(/^E-Stop latched$/);
+      expect(screen.getByTestId('agent-estop-detail')).toHaveTextContent(
+        /confirmed the stop \(operator pressed STOPP\): it is stopped and damped/
+      );
+    });
+  });
+
   it('still offers the reset control', async () => {
     const onReset = vi.fn();
     latch('failed', 'Robot agent unreachable');

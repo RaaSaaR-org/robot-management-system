@@ -103,4 +103,17 @@ describe('SafetyMonitor E-stop latch', () => {
     monitor.triggerEmergencyStop('zone', 'entered a no-go zone');
     expect(monitor.getEStopState().reason).toBe('entered a no-go zone');
   });
+
+  it('a reset takes the stop out of the task slot too', () => {
+    const { monitor, state } = makeMonitor();
+    monitor.triggerProtectiveStop('system_failure', 'Critical system error detected');
+    monitor.updateServerHeartbeat();
+    expect(state.currentTaskName).toBe('Protective stop');
+
+    expect(monitor.resetEmergencyStop()).toBe(true);
+    // A reset robot still saying "Protective stop" on every status card reports
+    // a stop that no longer exists.
+    expect(state.currentTaskName).toBeUndefined();
+    expect(state.status).toBe('online');
+  });
 });

@@ -69,22 +69,29 @@ export function severityStyle(severity: PatrolFindingSeverity): ChipStyle {
 // ============================================================================
 
 /**
- * The server appends `[finding:<id> run:<runId>]` to the message of the alert
- * it raises for a confirmed finding. This pulls it back out.
+ * The server appends `[finding:<id> run:<runId>]` to the message of the alert it
+ * raises for a confirmed finding, and a bare `[run:<runId>]` to the one it raises
+ * for a skipped run (PatrolService.raiseSkippedAlert). This pulls either back out.
  */
 export interface FindingLink {
-  findingId: string;
+  /** Null for a run-only tag: a skipped run has no finding to jump to. */
+  findingId: string | null;
   runId: string | null;
 }
 
-const FINDING_LINK_RE = /\[finding:([^\s\]]+)(?:\s+run:([^\s\]]+))?\]/;
+/**
+ * Both shapes of the machine tag. The bare `[run:…]` alternative is second so a
+ * full `[finding:… run:…]` tag still parses as one link. Without it the skipped-run
+ * alert reached the operator with a raw `[run:…]` in the prose and no way into the run.
+ */
+const FINDING_LINK_RE = /\[(?:finding:([^\s\]]+)(?:\s+run:([^\s\]]+))?|run:([^\s\]]+))\]/;
 
-/** Parse the finding link out of an alert message/title; null when absent. */
+/** Parse the finding/run link out of an alert message/title; null when absent. */
 export function parseFindingLink(text: string | null | undefined): FindingLink | null {
   if (!text) return null;
   const m = FINDING_LINK_RE.exec(text);
   if (!m) return null;
-  return { findingId: m[1], runId: m[2] ?? null };
+  return { findingId: m[1] ?? null, runId: m[2] ?? m[3] ?? null };
 }
 
 /** The message with the machine tag removed (for display). */
@@ -92,10 +99,14 @@ export function stripFindingLink(text: string): string {
   return text.replace(FINDING_LINK_RE, '').replace(/\s{2,}/g, ' ').trim();
 }
 
-/** Route to the finding inside RunDetail. Null when the link has no run. */
+/**
+ * Route into RunDetail: to the finding when the tag names one, to the run itself
+ * for a run-only tag. Null when the link has no run — nowhere to go then.
+ */
 export function findingLinkPath(link: FindingLink): string | null {
   if (!link.runId) return null;
-  return `/patrol/runs/${encodeURIComponent(link.runId)}#finding-${link.findingId}`;
+  const runPath = `/patrol/runs/${encodeURIComponent(link.runId)}`;
+  return link.findingId ? `${runPath}#finding-${link.findingId}` : runPath;
 }
 
 // ============================================================================
@@ -115,7 +126,12 @@ export function runProgressText(run: PatrolRun): string {
 
 /** "07:00–19:00" for a time window. */
 export function formatWindow(w: PatrolTimeWindow): string {
-  const hh = (h: number) => `${String(Math.max(0, Math.min(23, Math.round(h)))).padStart(2, '0')}:00`;
+  // Clamped to 24, not 23: hour 24 is a legal end (RouteEditor's clampHour, the
+  // `max={24}` inputs, the 24-column band and the `00 06 12 18 24` axis all allow
+  // it). Clamping to 23 printed an all-day window as "00:00–23:00" in the legend,
+  // the Preview rail and the bar's aria-label — the only text a screen reader gets —
+  // telling the operator the last hour of the day was uncovered when it was not.
+  const hh = (h: number) => `${String(Math.max(0, Math.min(24, Math.round(h)))).padStart(2, '0')}:00`;
   return `${hh(w.startHour)}–${hh(w.endHour)}`;
 }
 
