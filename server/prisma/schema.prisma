@@ -2602,6 +2602,105 @@ model VlaSession {
 }
 
 // ============================================================================
+// PATROL (TASK-212) — routes are the source of record, runs + findings are the
+// persisted history of what the robot reported (`agent:patrol:*` /
+// `agent:finding:*`). JSON columns are TEXT (SQLite locally); (de)serialised in
+// PatrolRepository. tenantId-scoped like Alert.
+// ============================================================================
+
+model PatrolRoute {
+  id             String    @id @default(uuid())
+  name           String
+  robotId        String? // robot the route is bound to; null = any robot the operator starts it on
+  twinId         String? // DigitalTwin whose place graph the checkpoints reference
+  checkpoints    String    @default("[]") // JSON PatrolCheckpoint[]
+  cronExpression String? // 5-field cron, server local time; null = manual only
+  enabled        Boolean   @default(true)
+  timeWindows    String    @default("[]") // JSON PatrolTimeWindow[]
+  homePlaceId    String?
+  lastFiredAt    DateTime? // scheduler: last slot that fired
+  nextRunAt      DateTime? // scheduler: next planned slot (null = not initialised / manual)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([robotId])
+  @@index([enabled])
+  @@index([createdAt])
+}
+
+model PatrolRun {
+  id           String    @id // = PatrolRun.runId minted by the robot (or the server for 'unreachable' skips)
+  routeId      String // plain column, NO FK: history must survive route deletion and runs the robot reports for routes the server does not know (disk cache, route_unknown)
+  routeName    String
+  robotId      String
+  mode         String // PatrolRunMode: 'baseline' | 'patrol'
+  origin       String // PatrolRunOrigin: 'operator' | 'scheduled'
+  window       String? // PatrolTimeWindow.id the run matched
+  status       String // PatrolRunStatus: running|done|aborted|failed|skipped
+  reason       String?
+  startedAt    DateTime
+  finishedAt   DateTime?
+  legs         String    @default("[]") // JSON PatrolLeg[]
+  findingCount Int       @default(0)
+  planId       String?
+  alertId      String? // alert raised for a skipped run (idempotency)
+  promotedAt   DateTime? // when an operator promoted this run to the route's baseline (latest wins per route+window)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  findings PatrolFinding[]
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([routeId])
+  @@index([robotId])
+  @@index([status])
+  @@index([startedAt])
+  @@index([promotedAt])
+  @@index([createdAt])
+}
+
+model PatrolFinding {
+  id           String   @id // minted by the robot
+  runId        String
+  routeId      String
+  robotId      String
+  checkpointId String?
+  legIndex     Int      @default(0)
+  type         String // PatrolFindingType
+  severity     String // PatrolFindingSeverity (server-derived by type × window)
+  source       String // PatrolFindingSource
+  place        String?
+  pose         String? // JSON {x,y,yawDeg}
+  at           DateTime
+  summary      String
+  evidence     String   @default("{}") // JSON PatrolFindingEvidence
+  model        String?
+  confidence   Float    @default(0)
+  status       String   @default("open") // PatrolFindingStatus
+  alertId      String?
+  incidentId   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  run PatrolRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([runId])
+  @@index([routeId])
+  @@index([robotId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ============================================================================
 // MULTI-TENANCY (TASK-155)
 // ============================================================================
 //
@@ -2652,6 +2751,11 @@ model Tenant {
 
   // Relations (Wave 3e — service accounts)
   apiTokens ApiToken[]
+
+  // Relations (TASK-212 patrol)
+  patrolRoutes   PatrolRoute[]
+  patrolRuns     PatrolRun[]
+  patrolFindings PatrolFinding[]
 
   @@index([slug])
 }

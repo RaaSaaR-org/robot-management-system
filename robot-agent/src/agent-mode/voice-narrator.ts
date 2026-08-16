@@ -131,6 +131,9 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
       posture: 'ändere meine Haltung',
       speak: 'sage etwas',
       wait: 'warte kurz',
+      patrol: 'gehe die Patrouille ab',
+      capture: 'mache ein Kontrollfoto',
+      inspect: 'vergleiche mit der Referenz',
     },
     outcomes: {
       estop: 'Gestoppt.',
@@ -166,6 +169,9 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
       posture: 'change my posture',
       speak: 'say something',
       wait: 'wait a moment',
+      patrol: 'walk the patrol route',
+      capture: 'take a control photo',
+      inspect: 'compare with the reference',
     },
     outcomes: {
       estop: 'Stopped.',
@@ -185,6 +191,32 @@ const PHRASES: Record<SpokenLanguage, Phrases> = {
 
 function phrases(language: SpokenLanguage): Phrases {
   return PHRASES[language] ?? PHRASES.en;
+}
+
+/**
+ * The two things a patrol says out loud (TASK-212), and nothing else. The
+ * start-of-run notice is the transparency obligation — a robot that is about
+ * to photograph rooms says so; the person line is spoken ONCE per run when a
+ * person is confirmed on the route (Orbit 5.1 pattern: pause, one line,
+ * record without an image, resume). Templates, no model call.
+ */
+export type PatrolPhraseKind = 'startPatrol' | 'startBaseline' | 'person';
+
+const PATROL_PHRASES: Record<SpokenLanguage, Record<PatrolPhraseKind, string>> = {
+  en: {
+    startPatrol: 'Starting patrol; I take reference photos.',
+    startBaseline: 'Starting the baseline walk; I take reference photos.',
+    person: 'I am on patrol, please step aside.',
+  },
+  de: {
+    startPatrol: 'Ich beginne die Patrouille und mache Referenzfotos.',
+    startBaseline: 'Ich beginne den Referenzlauf und mache Referenzfotos.',
+    person: 'Ich bin auf Patrouille, bitte treten Sie zur Seite.',
+  },
+};
+
+export function patrolPhrase(kind: PatrolPhraseKind, language: SpokenLanguage = 'en'): string {
+  return (PATROL_PHRASES[language] ?? PATROL_PHRASES.en)[kind];
 }
 
 /**

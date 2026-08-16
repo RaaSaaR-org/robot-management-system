@@ -56,10 +56,17 @@ import { RangeSensor } from './range.js';
 import { MapKeeper } from './occupancy-map-keeper.js';
 import { PeerTracker, type TrackedPeer, type PeerTrackerStatus } from './peers.js';
 import type { OccupancyMapSnapshot } from './occupancy-map.js';
+import {
+  PatrolRouteSource,
+  PatrolRunner,
+  checkPatrolPreconditions,
+  parsePatrolRoute,
+  type PatrolExecution,
+} from './patrol.js';
 import { SceneMemoryStore } from './scene-memory.js';
 import { ServerMirror, type BlockJournalContext } from './server-mirror.js';
 import { VisionClient, type VisionObservation } from './vision.js';
-import { isVoiceTurnInFlight } from './voice-narrator.js';
+import { isVoiceTurnInFlight, speakThroughVoiceService } from './voice-narrator.js';
 import {
   getWorkspace,
   listEntries,
@@ -82,9 +89,24 @@ import type {
   AgentRecoveryState,
   AgentSelfState,
   BlockOutcome,
+  PatrolFinding,
+  PatrolRoute,
+  PatrolRun,
+  PatrolRunMode,
+  PatrolRunOrigin,
+  PatrolStartResult,
   SceneMemory,
   SpokenLanguage,
 } from './types.js';
+
+/** `POST /robots/:id/agent-mode/patrol` body, after validation by the route. */
+export interface StartPatrolInput {
+  routeId: string;
+  mode?: PatrolRunMode;
+  origin?: PatrolRunOrigin;
+  /** The route inline (the normal case — the server always sends it). */
+  route?: unknown;
+}
 
 export interface SubmitCommandInput {
   text: string;
@@ -205,6 +227,19 @@ export interface AgentModeControllerDeps {
    * drive the boundary deterministically.
    */
   mirrorRepushIntervalMs?: number;
+  /**
+   * Patrol (TASK-212). `undefined` = the real runner over the workspace;
+   * `null` = no patrol on this controller (every start is refused as `disabled`).
+   */
+  patrol?: PatrolRunner | null;
+  /** Route fetch + cache when a start carries no route inline. */
+  patrolRoutes?: PatrolRouteSource;
+  /** `AGENT_PATROL_ENABLED` override (tests). */
+  patrolEnabled?: boolean;
+  /** Camera snapshot for `capture` (tests inject a frame). */
+  snapshot?: BlockExecutorDeps['snapshot'];
+  /** ONE checklist VLM call for `capture` (tests inject answers). */
+  checklist?: ConstructorParameters<typeof PatrolRunner>[0]['checklist'];
 }
 
 /**
@@ -271,6 +306,10 @@ export class AgentModeController {
   private readonly mirror: ServerMirror;
   private readonly executor: BlockExecutor;
   private readonly navigator: Navigator;
+  /** Patrol (TASK-212); null when this controller runs without one. */
+  private readonly patrol: PatrolRunner | null;
+  private readonly patrolRoutes: PatrolRouteSource;
+  private readonly patrolEnabled: boolean;
   /** The route the navigator is following right now (TASK-208), null between navigations. */
   private navState: AgentNavPlan | null = null;
   /** The `goto` block whose route `navState` describes, while it runs. */
@@ -485,12 +524,45 @@ export class AgentModeController {
       odometry: () => this.loco.odometry(),
     };
 
+    this.patrolEnabled = deps.patrolEnabled ?? config.agentMode.patrol.enabled;
+    this.patrolRoutes =
+      deps.patrolRoutes ??
+      new PatrolRouteSource({ serverUrl: config.serverUrl, cachePath: config.agentMode.patrol.routeCachePath });
+    this.patrol =
+      deps.patrol === undefined
+        ? new PatrolRunner({
+            robotId: this.robotId,
+            workspace: this.memory,
+            emit: (type, run, finding) => this.emitPatrol(type, run, finding),
+            uploadPhoto: (input) => this.mirror.uploadPatrolPhoto(input),
+            language: () => config.agentMode.patrol.language,
+            mapSnapshot: () => {
+              const map = this.mapKeeper?.getMap();
+              return map && map.isAllocated() ? map.toSnapshot() : null;
+            },
+            getPose: () => {
+              const pose = this.getPose();
+              return pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg } : null;
+            },
+            // Same default as the BlockExecutor: without an injected `say` the
+            // person line still goes out through the voice service on a real robot.
+            say: deps.say ?? speakThroughVoiceService,
+            ...(deps.checklist ? { checklist: deps.checklist } : {}),
+            ...(deps.now ? { now: deps.now } : {}),
+          })
+        : deps.patrol;
+
     const executorDeps: BlockExecutorDeps = {
       scene: this.scene,
       vision: this.vision,
       range: this.range,
       isAborted: () => this.abortSignalled(),
       onScene: (scene) => this.emit('agent:scene:updated', { scene }),
+      // The patrol's en-route comparison rides every look, ONLY while a
+      // patrol is active (TASK-212); the executor never knows.
+      onLook: (observation) => this.onPatrolLook(observation),
+      patrol: () => (this.patrol?.active() ? this.patrol.captureHost() : null),
+      ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
       loco: trackedLoco,
       // The blocks of the RUNNING plan speak the language its operator used;
       // typed commands leave it undefined and the voice service falls back to
@@ -646,6 +718,20 @@ export class AgentModeController {
       this.abortPlan(`Safety stop (${stop.type}): ${stop.reason}`),
     );
 
+    // The place belief changes as the robot WALKS, between blocks and long
+    // before the next look or the periodic re-push. RobotStateManager
+    // publishes only on a place CHANGE, so pushing the state on it is one
+    // event per doorway, not one per pose sample — and the status rail stops
+    // saying "Hallway" while the map (which reads the belief live) says
+    // "Kitchen". Optional call: test doubles are partial.
+    let lastPublishedPlace: string | null = robotStateManager.getState?.()?.location?.place ?? null;
+    robotStateManager.subscribe?.((state) => {
+      const place = state.location?.place ?? null;
+      if (place === lastPublishedPlace) return;
+      lastPublishedPlace = place;
+      this.emit('agent:state:changed');
+    });
+
     // Optional call: test doubles for RobotStateManager may be partial.
     const restored = robotStateManager.getRestoredAgentState?.();
     if (!restored) return;
@@ -771,6 +857,7 @@ export class AgentModeController {
   }
 
   dispose(): void {
+    this.patrol?.dispose();
     this.peerTracker?.dispose();
     this.mapKeeper?.dispose();
     this.idleWatcher.stop();
@@ -803,6 +890,7 @@ export class AgentModeController {
       recovered: this.recovered ? { ...this.recovered } : null,
       self: this.selfState(),
       map: this.mapKeeper?.summary() ?? null,
+      place: this.scene.getPlace(),
       nav: this.navState ? { ...this.navState } : null,
     };
   }
@@ -1280,6 +1368,30 @@ export class AgentModeController {
         accepted: false,
         outcome: 'winding_down',
         message: 'The stopped plan is still winding down — send the command again in a moment.',
+      };
+    }
+
+    // A command during a PATROL (TASK-212) aborts the run — the robot was
+    // walking unattended and a human just asked for something else — and the
+    // command is then run as a fresh plan the moment the patrol has wound down
+    // (see `runPatrolPlan`'s hand-off). It is not folded into the patrol plan:
+    // those blocks are the route, and re-planning "the rest of the route" with
+    // an LLM is exactly the thing a patrol must never do.
+    if (this.isRunning() && this.plan && this.patrol?.active()) {
+      const replaced = this.pendingCommand;
+      this.pendingCommand = {
+        text,
+        ...(input.contextId ? { contextId: input.contextId } : {}),
+        ...(input.language ? { language: input.language } : {}),
+        ...(input.spoken ? { spoken: true } : {}),
+      };
+      this.abortPatrol('operator command');
+      return {
+        accepted: true,
+        outcome: 'folded',
+        planId: this.plan.id,
+        ...(replaced ? { replacedCommand: replaced.text } : {}),
+        message: 'Understood — I am stopping the patrol and will do that next.',
       };
     }
 
@@ -2410,6 +2522,292 @@ export class AgentModeController {
     else if (plan.status === 'done' || plan.status === 'aborted') this.lastPlanFailedAtMs = null;
   }
 
+  // ── patrol (TASK-212) ─────────────────────────────────────────────────────
+
+  /**
+   * Start a patrol or baseline run. Refusals are answers, not errors: every
+   * unmet precondition comes back as `{accepted:false, reason}` AND is recorded
+   * as a `skipped` run (with `agent:patrol:finished`), so the server persists
+   * it and can alert — a scheduled fire that quietly did nothing is the
+   * failure mode this fails closed against.
+   */
+  async startPatrol(input: StartPatrolInput): Promise<PatrolStartResult> {
+    const mode: PatrolRunMode = input.mode === 'baseline' ? 'baseline' : 'patrol';
+    const origin: PatrolRunOrigin = input.origin === 'scheduled' ? 'scheduled' : 'operator';
+    if (origin === 'operator') this.noteOperatorTurn();
+    const runner = this.patrol;
+    if (!runner) {
+      return { accepted: false, reason: 'disabled', message: 'This robot has no patrol runner (no workspace).' };
+    }
+
+    // The route: inline (the server always sends it), else fetched, else the
+    // cache. Without any route there is nothing to record a run against but a
+    // stub, and that stub is what the skipped run says.
+    let route: PatrolRoute | null = null;
+    if (input.route !== undefined && input.route !== null) {
+      try {
+        route = parsePatrolRoute(input.route, 'route');
+        this.patrolRoutes.remember(route);
+      } catch (err) {
+        const stub = stubRoute(input.routeId);
+        return runner.refuse(stub, mode, origin, 'route_unknown', `The route sent inline is invalid: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      const fetched = await this.patrolRoutes.fetch(input.routeId);
+      route = fetched.route;
+      if (!route) {
+        return runner.refuse(stubRoute(input.routeId), mode, origin, 'route_unknown', `Route ${input.routeId} is unknown here and could not be fetched (${fetched.error ?? 'no server'}).`);
+      }
+    }
+
+    const rsm = this.robotStateManager;
+    const verdict = checkPatrolPreconditions({
+      patrolEnabled: this.patrolEnabled,
+      agentModeEnabled: this.enabled,
+      estopLatched: this.latchedEstop() !== null,
+      patrolActive: runner.active() !== null,
+      planRunning: this.isRunning(),
+      controlOwner: this.lock.get(),
+      teleopOrVlaActive: !!rsm && ((rsm.isTeleopActive?.() ?? false) || (rsm.isVLAActive?.() ?? false)),
+      initiative: this.initiativeContext(),
+      origin,
+      route,
+      knownPlaceIds: this.knownPlaces().map((p) => p.id),
+      now: new Date(this.now()),
+    });
+    if (!verdict.ok) return runner.refuse(route, mode, origin, verdict.reason, verdict.message);
+
+    const claim = this.lock.claim('agent');
+    if (!claim.ok) return runner.refuse(route, mode, origin, 'busy', claim.reason ?? 'control is busy.', verdict.window);
+
+    const { run, blocks } = runner.begin(route, mode, origin, verdict.window);
+    const plan: AgentPlan = {
+      id: uuidv4(),
+      robotId: this.robotId,
+      command: `patrol: ${route.name}`,
+      blocks: blocks.map((b) => b.block),
+      cursor: -1,
+      status: 'running',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.plan = plan;
+    this.abortRequested = false;
+    this.abortReason = null;
+    this.planFinalized = false;
+    // Nobody stands in front of the robot on a scheduled run: whatever it
+    // could write to durable memory is `untrusted` (nothing in the patrol
+    // vocabulary writes memory, but the rule holds anyway).
+    if (origin === 'scheduled') this.selfInitiatedPlanId = plan.id;
+    this.emit('agent:plan:started', { plan: clonePlan(plan) });
+    this.writeJournal(
+      heartbeatJournalRecord({
+        at: nowIso(),
+        place: this.scene.getPlace()?.id ?? null,
+        trust: origin === 'scheduled' ? 'self' : 'operator',
+        msg: `${mode} run of patrol route "${route.name}" started (${origin}, run ${run.runId})`,
+      }),
+    );
+
+    this.runPromise = this.runPatrolPlan(plan).finally(() => {
+      this.runPromise = null;
+      if (this.selfInitiatedPlanId === plan.id) this.selfInitiatedPlanId = null;
+      // The operator's command that aborted the patrol runs now, as a fresh
+      // plan — the lock is free and the patrol's plan is terminal.
+      const pending = this.pendingCommand;
+      if (pending) {
+        this.pendingCommand = null;
+        void this.submitCommand(pending);
+      }
+    });
+    return {
+      accepted: true,
+      runId: run.runId,
+      message: `${mode === 'baseline' ? 'Baseline' : 'Patrol'} run of "${route.name}" started (${route.checkpoints.length} checkpoint(s)).`,
+    };
+  }
+
+  /** Abort the active patrol (the plan aborts with it). */
+  abortPatrol(reason: string): { ok: boolean; runId?: string } {
+    const runId = this.patrol?.requestAbort(reason) ?? null;
+    if (!runId) return { ok: false };
+    this.abortPlan(`Patrol aborted: ${reason}`);
+    return { ok: true, runId };
+  }
+
+  /** `GET /robots/:id/agent-mode/patrol`. */
+  patrolStatus(): { enabled: boolean; active: PatrolRun | null; lastRun: PatrolRun | null } {
+    return {
+      enabled: this.patrolEnabled && this.patrol !== null,
+      active: this.patrol?.active() ?? null,
+      lastRun: this.patrol?.lastRun() ?? null,
+    };
+  }
+
+  patrolRuns(limit = 20): PatrolRun[] {
+    return this.patrol?.runs?.listRuns(limit) ?? [];
+  }
+
+  patrolRun(runId: string): (PatrolRun & { findings: PatrolFinding[] }) | null {
+    const runner = this.patrol;
+    if (!runner) return null;
+    const active = runner.active();
+    if (active && active.runId === runId) return { ...active, findings: runner.activeFindings() };
+    const run = runner.runs?.findRun(runId) ?? null;
+    if (!run) return null;
+    return { ...run, findings: runner.runs?.findings(run.routeId, runId) ?? [] };
+  }
+
+  patrolPhoto(runId: string, checkpointId: string): Buffer | null {
+    return this.patrol?.runs?.readPhoto(runId, checkpointId) ?? null;
+  }
+
+  patrolBaselinePhoto(routeId: string, window: string, checkpointId: string): Buffer | null {
+    return this.patrol?.baseline?.readPhoto(routeId, window, checkpointId) ?? null;
+  }
+
+  patrolMarkNormal(findingId: string, runId: string): { ok: boolean; message: string } {
+    return this.patrol?.markNormal(findingId, runId) ?? { ok: false, message: 'no patrol runner' };
+  }
+
+  patrolPromote(runId: string): { ok: boolean; message: string } {
+    return this.patrol?.promoteRun(runId) ?? { ok: false, message: 'no patrol runner' };
+  }
+
+  /** Photo retention sweep — boot path, then hourly. */
+  startPatrolRetentionSweep(): void {
+    this.patrol?.startRetentionSweep();
+  }
+
+  /** The place graph as the route editor needs it (`GET /robots/:id/places`). */
+  placesForApi(): Array<{ id: string; name: string; placeType: string; keepout: boolean }> {
+    const rsm = this.robotStateManager;
+    const registered = rsm?.getPlaceFrameRegistration?.()?.registered === true;
+    if (!registered) return [];
+    return (rsm?.getPlaces?.() ?? [])
+      .filter((p) => p.floor === 0)
+      .map((p) => ({ id: p.id, name: p.name, placeType: p.placeType, keepout: p.keepout }));
+  }
+
+  /**
+   * Drive the patrol plan. Same shape as {@link runPlan}, but the ORDER and the
+   * skip/abort semantics belong to the runner (a failed leg is skipped, two in
+   * a row abort the route and go home); this side only runs one block at a
+   * time through the same start/execute/finish path every other plan uses.
+   */
+  private async runPatrolPlan(plan: AgentPlan): Promise<void> {
+    const runner = this.patrol!;
+    const exec: PatrolExecution = {
+      begin: (block) => {
+        plan.cursor = plan.blocks.indexOf(block);
+        this.startBlock(plan, block);
+      },
+      execute: async (block) => {
+        if (block.kind !== 'goto') return this.executor.execute(block);
+        this.generatedInsertIndex = plan.blocks.indexOf(block) + 1;
+        this.activeGoto = block;
+        try {
+          return await this.runGoto(block);
+        } finally {
+          this.activeGoto = null;
+        }
+      },
+      finish: (block, outcome) => this.finishBlock(plan, block, outcome),
+      skip: (block, reason) => {
+        if (block.status !== 'pending') return;
+        block.status = 'skipped';
+        block.error = reason;
+        plan.updatedAt = nowIso();
+        this.emit('agent:plan:updated', { plan: clonePlan(plan) });
+      },
+      isAborted: () => this.abortSignalled(),
+      abortReason: () => this.abortReason,
+    };
+    let run: PatrolRun | null = null;
+    try {
+      run = await runner.drive(plan.id, exec);
+      if (!this.planFinalized) {
+        for (const block of plan.blocks) {
+          if (block.status === 'pending') {
+            block.status = 'skipped';
+            block.error = run.reason ?? 'not run';
+          }
+        }
+        plan.status = run.status === 'done' ? 'done' : run.status === 'aborted' ? 'aborted' : 'failed';
+      }
+    } catch (err) {
+      plan.status = 'failed';
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[AgentMode] patrol plan ${plan.id} crashed: ${message}`);
+      for (const block of plan.blocks) {
+        if (block.status === 'pending') block.status = 'skipped';
+        else if (block.status === 'running') {
+          block.status = 'failed';
+          block.error = message;
+          block.finishedAt = nowIso();
+        }
+      }
+    } finally {
+      plan.cursor = -1;
+      plan.updatedAt = nowIso();
+      this.notePlanOutcome(plan);
+      if (run) {
+        this.writeJournal(
+          heartbeatJournalRecord({
+            at: nowIso(),
+            place: this.scene.getPlace()?.id ?? null,
+            trust: 'self',
+            msg: `patrol run ${run.runId} ${run.status}: ${run.legs.filter((l) => l.status === 'done').length}/${run.legs.length} checkpoint(s), ${run.findingCount} finding(s)${run.reason ? ` — ${run.reason}` : ''}`,
+          }),
+        );
+      }
+      if (!this.planFinalized) {
+        this.lock.release('agent');
+        this.emit('agent:plan:finished', { plan: clonePlan(plan) });
+      }
+    }
+  }
+
+  /** Every look, while a patrol is active: hand the runner what the comparators need. */
+  private async onPatrolLook(observation: VisionObservation): Promise<void> {
+    const runner = this.patrol;
+    if (!runner || !runner.active()) return;
+    const pose = this.getPose();
+    const rsm = this.robotStateManager;
+    const registered = rsm?.getPlaceFrameRegistration?.()?.registered === true;
+    const map = this.mapKeeper?.getMap();
+    await runner.onLook({
+      labels: observation.entities.map((e) => e.label),
+      personVisible: observation.personVisible,
+      pose: pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg } : null,
+      place: rsm?.getPlaceBelief?.()?.place?.id ?? this.scene.getPlace()?.id ?? null,
+      map: map && map.isAllocated() ? map.toSnapshot() : null,
+      peers: this.peerTracker?.obstacles() ?? [],
+      places: registered ? (rsm?.getPlaces?.() ?? []).filter((p) => p.floor === 0) : [],
+    });
+  }
+
+  /** Patrol/finding events: local listeners + mirror, and one journal line per finding. */
+  private emitPatrol(
+    type: 'agent:patrol:started' | 'agent:patrol:leg' | 'agent:patrol:finished' | 'agent:finding:detected' | 'agent:finding:confirmed',
+    run: PatrolRun,
+    finding?: PatrolFinding,
+  ): void {
+    if (type === 'agent:finding:detected' && finding) {
+      this.writeJournal(
+        heartbeatJournalRecord({
+          at: finding.at,
+          place: finding.place,
+          // The finding is the robot's own measurement; the model's words
+          // inside it stay labelled by the finding's `model` field.
+          trust: 'self',
+          msg: `patrol finding ${finding.type} (${finding.severity}, ${finding.source}): ${finding.summary} [finding:${finding.id} run:${finding.runId}]`,
+        }),
+      );
+    }
+    this.emit(type, { patrol: run, ...(finding ? { finding } : {}) });
+  }
+
   // ── events ────────────────────────────────────────────────────────────────
 
   /**
@@ -2468,7 +2866,7 @@ export class AgentModeController {
 
   private emit(
     type: AgentModeEventType,
-    extra: Partial<Pick<AgentModeEvent, 'plan' | 'block' | 'scene' | 'memory'>> = {}
+    extra: Partial<Pick<AgentModeEvent, 'plan' | 'block' | 'scene' | 'memory' | 'patrol' | 'finding'>> = {}
   ): void {
     const event: AgentModeEvent = {
       type,
@@ -2493,6 +2891,24 @@ export class AgentModeController {
     }
     this.mirror.emit(event);
   }
+}
+
+/** A route we know only by id — what a refused start is recorded against. */
+function stubRoute(routeId: string): PatrolRoute {
+  const at = nowIso();
+  return {
+    id: routeId,
+    name: routeId,
+    robotId: null,
+    twinId: null,
+    checkpoints: [],
+    cronExpression: null,
+    enabled: false,
+    timeWindows: [],
+    homePlaceId: null,
+    createdAt: at,
+    updatedAt: at,
+  };
 }
 
 /**

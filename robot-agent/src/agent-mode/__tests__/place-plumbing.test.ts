@@ -207,6 +207,74 @@ function makeReanchorController(opts: { places?: Place[] } = {}) {
   return { controller, declared, scene };
 }
 
+describe('place → the state push', () => {
+  it('carries the belief at the top level of the state, before anything was seen', () => {
+    const { controller, scene } = makeController(() => ({
+      place: AISLE_3,
+      poseM: { x: 9, y: 0 },
+      poseSource: 'odometry',
+      driftSinceAnchorM: 0,
+      ageMs: 40,
+      insideKeepout: false,
+    }));
+    const state = controller.getState();
+    // No observation yet: the scene snapshot is null, the belief is not.
+    expect(scene.snapshot()).toBeNull();
+    expect(state.scene).toBeNull();
+    expect(state.place?.id).toBe('AISLE-3');
+  });
+
+  it('pushes the state once per place CHANGE the state manager publishes — not per pose sample', () => {
+    let placeId: string | null = 'AISLE-3';
+    let listener: ((s: { location: { place: string | null } }) => void) | null = null;
+    const scene = new SceneMemoryStore('robot-1');
+    const controller = new AgentModeController({
+      robotId: 'robot-1',
+      enabled: false,
+      scene,
+      lock: new ControlOwnerLock(),
+      planner: { plan: async () => ({ blocks: [] }) } as unknown as Planner,
+      vision: { observe: async () => null } as unknown as VisionClient,
+      mirror: { logBlock: async () => {}, pushState: async () => {}, logPlan: async () => {}, emit: () => {} } as unknown as ServerMirror,
+    });
+    controller.attach({
+      getPlaceBelief: () => ({
+        place: placeId ? { ...AISLE_3, id: placeId, name: placeId } : null,
+        poseM: { x: 0, y: 0 },
+        poseSource: 'odometry',
+        driftSinceAnchorM: 0,
+        ageMs: 1,
+        insideKeepout: false,
+      }),
+      getState: () => ({ location: { place: placeId } }),
+      subscribe: (l: (s: { location: { place: string | null } }) => void) => {
+        listener = l;
+        return () => {};
+      },
+    } as unknown as RobotStateManager);
+
+    const pushed: Array<string | null | undefined> = [];
+    controller.subscribe((event) => {
+      if (event.type === 'agent:state:changed') pushed.push(event.state?.place?.id ?? null);
+    });
+
+    // Same place, many samples: silence.
+    listener!({ location: { place: 'AISLE-3' } });
+    listener!({ location: { place: 'AISLE-3' } });
+    expect(pushed).toEqual([]);
+
+    // A doorway: one push, carrying the new place.
+    placeId = 'DOCK-1';
+    listener!({ location: { place: 'DOCK-1' } });
+    expect(pushed).toEqual(['DOCK-1']);
+
+    // Losing the place is a change too — and it is pushed as unknown, not held.
+    placeId = null;
+    listener!({ location: { place: null } });
+    expect(pushed).toEqual(['DOCK-1', null]);
+  });
+});
+
 describe('operator re-anchor (TASK-200)', () => {
   it('"you are in aisle 3" re-anchors instead of planning', async () => {
     const { controller, declared } = makeReanchorController();

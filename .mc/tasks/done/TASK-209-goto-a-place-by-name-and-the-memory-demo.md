@@ -19,6 +19,10 @@ depends_on:
 due_date: ''
 created: 2026-08-16
 updated: 2026-08-16
+completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #227. Verified 2026-08-16: `goto {"place"}` → Navigator.navigateToPlace (centroid / deepest interior point, staged planned walking, by-sight fallback, honest stop), resolvePlaceByName with a one-sentence "known places" refusal, planner vocabulary line, entity XOR place, memory question → speak. Live on the house scene: "walk into the kitchen" planned on the map and arrived (place chip → Kitchen). Demo clip `robot-agent/hardware/sim_g1_dds/clips/demo-task209-explore-and-remember.mp4` exists locally (clips/ is gitignored — publish it as a release asset if the video is a deliverable).
+  FIXED IN REVIEW (9523325/08c5aff): the status-rail PlaceChip said "Place unknown" before the first look (scene snapshot null) while the map said "Hallway" — the state now carries the belief at the top level and is pushed on every place change, so the rail follows the robot through doorways.
 ---
 
 

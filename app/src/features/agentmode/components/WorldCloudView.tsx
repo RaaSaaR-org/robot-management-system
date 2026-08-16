@@ -8,7 +8,7 @@
  * @feature agentmode
  */
 
-import { memo, useEffect, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { cn } from '@/shared/utils';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 import { PointCloudViewer } from '@/features/robots/components/visualization/PointCloudViewer';
@@ -70,6 +70,17 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
 
   const built = useMemo(() => (robotId && cloud ? cloudToFrame(robotId, cloud) : null), [robotId, cloud]);
 
+  // The store hands us a fresh cloud object every poll, so `built.centre` is a
+  // fresh array every poll too — and a fresh OrbitControls target snaps the
+  // camera back to the centroid while the operator is orbiting. Freeze the
+  // target per robot: taken from the first cloud that decodes, kept until the
+  // robot changes. The points still refresh; only the pivot stays put.
+  const orbitRef = useRef<{ robotId: string; centre: [number, number, number] } | null>(null);
+  if (built && robotId && orbitRef.current?.robotId !== robotId) {
+    orbitRef.current = { robotId, centre: built.centre };
+  }
+  const orbitTarget = orbitRef.current?.robotId === robotId ? orbitRef.current.centre : built?.centre;
+
   if (!built || !cloud) {
     return (
       <div className={cn('absolute inset-0 flex items-center justify-center p-4 text-center', className)} data-testid="agent-cloud-empty">
@@ -94,7 +105,7 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
         frame={built.frame}
         showRobotModel={false}
         robotPose={cloud.pose ? { x: cloud.pose.x, y: cloud.pose.y, yawDeg: cloud.pose.yawDeg } : null}
-        orbitTarget={built.centre}
+        orbitTarget={orbitTarget}
         label="world cloud"
         pointSize={0.04}
         className="rounded-none min-h-0"

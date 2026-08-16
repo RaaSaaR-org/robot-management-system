@@ -1289,6 +1289,126 @@ export function createRestRoutes(
     res.type('text/markdown').send(agentModeController.sceneMarkdown());
   });
 
+  // ============================================================================
+  // PATROL (TASK-212)
+  // ============================================================================
+
+  // POST /robots/:id/agent-mode/patrol — {routeId, mode?, origin?, route?}
+  // Refusals are NOT HTTP errors: {accepted:false, reason, message} — and are
+  // recorded as a skipped run (agent:patrol:finished) so the server can alert.
+  router.post('/robots/:id/agent-mode/patrol', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const routeId = req.body?.routeId;
+    if (typeof routeId !== 'string' || !routeId.trim()) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {routeId: string, mode?, origin?, route?}' });
+      return;
+    }
+    const mode = req.body?.mode === 'baseline' ? 'baseline' : 'patrol';
+    const origin = req.body?.origin === 'scheduled' ? 'scheduled' : 'operator';
+    const result = await agentModeController.startPatrol({
+      routeId: routeId.trim(),
+      mode,
+      origin,
+      ...(req.body?.route !== undefined ? { route: req.body.route } : {}),
+    });
+    res.json(result);
+  });
+
+  // POST /robots/:id/agent-mode/patrol/abort — {reason?}
+  router.post('/robots/:id/agent-mode/patrol/abort', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const reason =
+      typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'operator abort';
+    res.json(agentModeController.abortPatrol(reason));
+  });
+
+  // GET /robots/:id/agent-mode/patrol — {enabled, active, lastRun}
+  router.get('/robots/:id/agent-mode/patrol', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json(agentModeController.patrolStatus());
+  });
+
+  // GET /robots/:id/agent-mode/patrol/runs?limit=20 — newest first, from the workspace
+  router.get('/robots/:id/agent-mode/patrol/runs', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const raw = Number(req.query.limit);
+    const limit = Number.isFinite(raw) && raw > 0 ? Math.min(200, Math.floor(raw)) : 20;
+    res.json({ runs: agentModeController.patrolRuns(limit) });
+  });
+
+  // GET /robots/:id/agent-mode/patrol/runs/:runId — PatrolRun & {findings}
+  router.get('/robots/:id/agent-mode/patrol/runs/:runId', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const run = agentModeController.patrolRun(String(req.params.runId));
+    if (!run) {
+      res.status(404).json({ code: 'NOT_FOUND', message: `no patrol run ${req.params.runId} on this robot` });
+      return;
+    }
+    res.json(run);
+  });
+
+  // GET /robots/:id/agent-mode/patrol/runs/:runId/photos/:key — image/jpeg
+  // GATED: a camera frame of somebody's rooms is personal data. `key` is
+  // `<checkpointId>.jpg`.
+  router.get('/robots/:id/agent-mode/patrol/runs/:runId/photos/:key', personalDataGate, (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const key = String(req.params.key);
+    if (!key.endsWith('.jpg')) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'key must be <checkpointId>.jpg' });
+      return;
+    }
+    const jpeg = agentModeController.patrolPhoto(String(req.params.runId), key.slice(0, -4));
+    if (!jpeg) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'no such photo (never stored, or swept by retention)' });
+      return;
+    }
+    res.type('image/jpeg').send(jpeg);
+  });
+
+  // GET /robots/:id/agent-mode/patrol/baseline/:routeId/:window/:key — image/jpeg (gated)
+  router.get('/robots/:id/agent-mode/patrol/baseline/:routeId/:window/:key', personalDataGate, (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const key = String(req.params.key);
+    if (!key.endsWith('.jpg')) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'key must be <checkpointId>.jpg' });
+      return;
+    }
+    const jpeg = agentModeController.patrolBaselinePhoto(String(req.params.routeId), String(req.params.window), key.slice(0, -4));
+    if (!jpeg) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'no baseline photo for this route/window/checkpoint' });
+      return;
+    }
+    res.type('image/jpeg').send(jpeg);
+  });
+
+  // POST /robots/:id/agent-mode/patrol/findings/:findingId/normal — {runId} → {ok}
+  router.post('/robots/:id/agent-mode/patrol/findings/:findingId/normal', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const runId = req.body?.runId;
+    if (typeof runId !== 'string' || !runId.trim()) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {runId: string}' });
+      return;
+    }
+    const result = agentModeController.patrolMarkNormal(String(req.params.findingId), runId.trim());
+    res.status(result.ok ? 200 : 404).json(result);
+  });
+
+  // POST /robots/:id/agent-mode/patrol/runs/:runId/promote → {ok}
+  router.post('/robots/:id/agent-mode/patrol/runs/:runId/promote', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const result = agentModeController.patrolPromote(String(req.params.runId));
+    res.status(result.ok ? 200 : 409).json(result);
+  });
+
+  // GET /robots/:id/places — the known place graph, for the route editor:
+  // {places:[{id, name, placeType, keepout}]}. Empty until the graph's frame is
+  // registered to this robot's odometry (then the names are about this robot's
+  // world). Not gated: site geometry, not personal data.
+  router.get('/robots/:id/places', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json({ places: agentModeController.placesForApi() });
+  });
+
   // GET /robots/:id/map/cloud — the robot's own 3-D world cloud (TASK-211):
   // the lidar frames the grid integrated, kept one point per voxel in the
   // ODOMETRY frame. `?format=json` (default) returns base64 Float32 xyz

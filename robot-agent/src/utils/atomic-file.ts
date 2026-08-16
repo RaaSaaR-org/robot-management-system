@@ -191,11 +191,13 @@ function replaceViaSideline(tmp: string, file: string, cause: unknown, attempts:
  * RESCUE copy is the deliberate opposite and carries
  * {@link RESCUE_SUFFIX_PREFIX} instead — the sweep must not collect that one.
  */
-export function atomicWriteFileSync(file: string, content: string): void {
+export function atomicWriteFileSync(file: string, content: string | Buffer): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${nextTmpSeq()}`;
   try {
-    fs.writeFileSync(tmp, content, 'utf-8');
+    // A Buffer (a JPEG, TASK-212) is written as-is; text stays UTF-8.
+    if (typeof content === 'string') fs.writeFileSync(tmp, content, 'utf-8');
+    else fs.writeFileSync(tmp, content);
     renameWithRetry(tmp, file);
   } finally {
     try {

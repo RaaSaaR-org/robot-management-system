@@ -168,10 +168,16 @@ command to the robot-agent's Agent Mode, waits for the plan, stops recording and
 burns the command + each block (as it runs) + result as captions:
 
 ```bash
+# --pip head_camera: inset with what the robot's own camera sees;
+# --start x,y,yaw°: teleport there first (a "=" keeps the leading minus out of argparse)
 .venv/bin/python demo_clip.py "Go to the table and tell me what is on it" \
     --out clips/table.mp4 --cam follow --title "NeoDEM · Agent Mode" \
-    --pip head_camera            # inset: what the robot's own camera sees
-    --start=-0.5,-0.5,90         # x, y, yaw° to teleport to first
+    --pip head_camera --start=-0.5,-0.5,90
+```
+
+Further flags (each line is one option, not a continuation of the command above):
+
+```text
     --prime "look"               # a command run BEFORE recording (warms scene memory;
                                  #   Agent Mode's scene memory is per process)
     --map                        # inset: the robot's own map — grid, keepouts (amber),
@@ -204,7 +210,11 @@ counter here" → "Explore the living room, the bedroom and the workshop. Descri
 room, then come back to the kitchen." → agent restarted → "What do you remember about
 this room?". `POST /sim/reset-pose {"body": "crate", "x": -1, "y": -0.72, "yaw": 0}`
 re-places a static prop of the scene without a restart (a restart changes the sim's
-boot id, and with it the map's session).
+boot id, and with it the map's session); the mocap `person` figure moves the same way
+(`{"body": "person", "x": -3, "y": 3, "yaw": 0}` — TASK-212 stages "a person standing
+in a room" with it). Patrol clips: `demo_clip.py --layout patrol --patrol-route
+../sim_evaluator/patrol/route.house.json [--patrol-mode baseline]` — see
+`../sim_evaluator/patrol/README.md`.
 
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
 `clips/table.pip.mp4` (the inset stream) and `clips/table.json` (the plan with

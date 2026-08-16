@@ -303,7 +303,8 @@ export class AlertService {
     robotId: string,
     severity: AlertSeverity,
     title: string,
-    message: string
+    message: string,
+    options: { persistent?: boolean } = {}
   ): Promise<Alert> {
     return this.createAlert({
       severity,
@@ -312,7 +313,9 @@ export class AlertService {
       source: 'robot',
       sourceId: robotId,
       dismissable: severity !== 'critical',
-      autoDismissMs: severity === 'info' ? 10000 : undefined,
+      // `persistent`: an info alert that must wait for a human (a patrol
+      // finding rated low) instead of auto-dismissing after 10 s.
+      autoDismissMs: severity === 'info' && !options.persistent ? 10000 : undefined,
     });
   }
 

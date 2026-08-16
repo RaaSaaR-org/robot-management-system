@@ -19,7 +19,12 @@ depends_on:
 - '[[TASK-206]]'
 due_date: ''
 created: 2026-08-15
-updated: 2026-08-15
+updated: 2026-08-16
+completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #225. Verified 2026-08-16: `GET /api/robots/:id/peers` + on-demand pose refresh, `location.frame`, PeerTracker (frame gate, expiry, drop count), dynamic-obstacle overlay, fleet scene entities, server map proxy, RobotMapPanel on /agent (Map tab of the Knowledge card, not a separate panel — functionally the spec), fleet-map deep link. Tests pass in all three packages.
+  FIXED IN REVIEW (08c5aff): `refreshPoses` awaited every agent with the generic 5 s budget while PeerTracker's client timeout is 2 s — one hung agent blanked every other robot's peers; now its own 750 ms budget. Fleet-map "Open robot's map" is keyboard-operable. The Zone (fleet AABB) vs TwinZone/keepout (polygon) reconciliation gap the task asked to note is now in robot-agent/AGENTS.md.
+  NOT RE-RUN: the two-sim-robots recipe (README) — the peers path is covered by unit tests + the server route tests only in this pass.
 ---
 
 

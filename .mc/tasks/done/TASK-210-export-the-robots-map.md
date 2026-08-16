@@ -1,11 +1,25 @@
 ---
 id: TASK-210
+aliases:
+- TASK-210
 title: Export the robot's map (PGM+YAML for ROS map_server, PNG, JSON)
+slug: export-the-robots-map
 status: done
 priority: 3
-tags: [core, agent-mode]
+owner: ''
+projects: []
+customers: []
+tags:
+- core
+- agent-mode
+sprint: ''
+depends_on: []
+due_date: ''
 created: 2026-08-16
+updated: 2026-08-16
 completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #228 (with TASK-211). Verified 2026-08-16: OccupancyMap.toPgm in map_server greys + toMapServerYaml, robot `GET /map?format=pgm|yaml` attachments, app mapExport (PGM+YAML two-file, PNG, JSON) behind the Map tab's Export menu, disabled without a grid; unit tests in app + robot-agent pass. Manual nav2 map_server load not repeated in this pass.
 ---
 
 ## Description

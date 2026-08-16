@@ -805,23 +805,40 @@ class SimNode:
             )
 
     def _apply_body_move(self, name: str, x: float, y: float, yaw: float) -> None:
-        """Re-place a static scene body (a prop with no joint of its own) at
-        (x, y, yaw), keeping its height. It edits the MODEL's body_pos/quat,
-        which is what mj_kinematics reads for a world-attached body, so the
-        geoms, the lidar rays and the cameras all see it move on the next step.
-        A body with a joint (the robot, a free object) is refused: its pose is
-        state, not model, and belongs to qpos."""
+        """Re-place a scene body at (x, y, yaw), keeping its height.
+
+        Two kinds of body can be moved, by two different paths:
+
+        * a STATIC prop (a crate, a chair -- no joint, not mocap): it edits the
+          MODEL's body_pos/quat, which is what mj_kinematics reads for a
+          world-attached body, so the geoms, the lidar rays and the cameras all
+          see it move on the next step;
+        * a MOCAP body (the `person` figure, TASK-212): its pose is DATA, not
+          model -- `data.mocap_pos/mocap_quat` -- and that is what is set. This
+          is how the patrol demo stages "a person standing in a room".
+
+        A body with a joint of its own (the robot, a free object) is refused:
+        its pose belongs to qpos."""
         bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
         if bid < 0:
             raise ValueError(f"no body named {name!r} in the scene")
-        if self.model.body_jntnum[bid] > 0 or self.model.body_mocapid[bid] >= 0:
-            raise ValueError(f"body {name!r} is not a static prop (it has a joint or is mocap)")
+        quat = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
+        mocap_id = int(self.model.body_mocapid[bid])
+        if mocap_id >= 0:
+            with self.lock:
+                self.data.mocap_pos[mocap_id][0] = x
+                self.data.mocap_pos[mocap_id][1] = y
+                self.data.mocap_quat[mocap_id][:] = quat
+                mujoco.mj_forward(self.model, self.data)
+            return
+        if self.model.body_jntnum[bid] > 0:
+            raise ValueError(f"body {name!r} is not a static prop (it has a joint of its own)")
         if self.model.body_parentid[bid] != 0:
             raise ValueError(f"body {name!r} is not attached to the world")
         with self.lock:
             self.model.body_pos[bid][0] = x
             self.model.body_pos[bid][1] = y
-            self.model.body_quat[bid][:] = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
+            self.model.body_quat[bid][:] = quat
             mujoco.mj_forward(self.model, self.data)
 
     # -------------------------------------------------------------- rendering
@@ -1354,7 +1371,8 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                         })
                         return
                     target[key] = v
-                # Optional "body": re-place a static prop instead of the robot
+                # Optional "body": re-place a static prop -- or the mocap
+                # `person` (TASK-212) -- instead of the robot
                 # (e.g. {"body": "crate", "x": -1, "y": -0.72}) -- demo tooling.
                 prop = body.get("body")
                 if prop is not None and not isinstance(prop, str):

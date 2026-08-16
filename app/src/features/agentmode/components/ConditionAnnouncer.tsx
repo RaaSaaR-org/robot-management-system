@@ -7,7 +7,8 @@
  */
 
 import { memo } from 'react';
-import { useAgentModeStore } from '../store/agentmodeStore';
+import { useAgentModeStore, selectRobotId } from '../store/agentmodeStore';
+import { usePatrolStore, selectLastSkipped } from '@/features/patrol/store/patrolStore';
 import {
   CONDITION_ACTIVE_HEADLINE,
   CONDITION_LABELS,
@@ -40,6 +41,13 @@ import {
  */
 export const ConditionAnnouncer = memo(function ConditionAnnouncer() {
   const conditions = useAgentModeStore(selectConditions);
+  // TASK-212: a scheduled patrol the robot refused is something that became
+  // true and that nobody watching a calm page would otherwise hear about. It
+  // is announced (polite) once, as a change to this region — not rendered as
+  // a badge, which would violate the page's no-permanent-pill rule.
+  const robotId = useAgentModeStore(selectRobotId);
+  const skipped = usePatrolStore(selectLastSkipped(robotId));
+  const skippedSentence = skipped ? patrolSkippedSentence(skipped.routeName, skipped.reason) : '';
 
   const active = conditions.filter((condition) => condition.active);
   // Each condition says what it is ABOUT and which of its two values it has —
@@ -50,11 +58,16 @@ export const ConditionAnnouncer = memo(function ConditionAnnouncer() {
     .join('. ');
 
   const alarm = conditionLevel(conditions) >= 3;
+  const polite = alarm ? '' : sentence;
 
   return (
     <>
       <div role="status" aria-live="polite" className="sr-only">
-        {alarm ? '' : sentence}
+        {/* Two separate text nodes on purpose: the region is not aria-atomic, so a
+            condition change re-announces only the condition span — a skip that was
+            already read is not repeated with every later condition change. */}
+        <span>{polite}</span>
+        <span>{skippedSentence}</span>
       </div>
       <div role="alert" aria-live="assertive" className="sr-only">
         {alarm ? sentence : ''}
@@ -62,3 +75,8 @@ export const ConditionAnnouncer = memo(function ConditionAnnouncer() {
     </>
   );
 });
+
+/** "Patrol Night round skipped: battery" — one sentence, the reason as the robot gave it. */
+export function patrolSkippedSentence(routeName: string, reason: string | null | undefined): string {
+  return `Patrol ${routeName || 'run'} skipped: ${reason || 'precondition not met'}`;
+}

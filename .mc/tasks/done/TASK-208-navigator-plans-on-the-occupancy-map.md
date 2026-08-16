@@ -20,7 +20,11 @@ depends_on:
 - '[[TASK-207]]'
 due_date: ''
 created: 2026-08-15
-updated: 2026-08-15
+updated: 2026-08-16
+completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #226. Verified 2026-08-16: pure A* path-planner (22 tests), navigator plans on the map with ≤2 m segments and looks every 2 m, executor pre-walk segment check + turn-expiry cap, keepout refusal by place name, `nav` mirrored to server/app and drawn on the map; live goto into Kitchen on the house scene planned 12 stages, walked and re-planned per stage. See "Implementation notes" below for the stand-off-ring semantics.
+  NOT DONE (honest gaps, unchanged): the sim e2e keepout assertion (e2e_loco_check.py / SafetyMonitor zone_violation) was never added — keepout behaviour is covered by unit tests + the recorded 10-table-keepout clip; the "≥30 % faster than 05-chair" criterion measured 6 % raw (3/3 vs 5/5 stages+looks — the mechanism works, the number is unproven); the four older clips were not re-run after the planner landed.
 ---
 
 

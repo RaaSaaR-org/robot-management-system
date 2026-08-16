@@ -71,4 +71,19 @@ describe('formatBlockParams', () => {
     expect(formatBlockParams(block('greet', { text: 'Hallo!' }))).toBe('Hallo!');
     expect(formatBlockParams(block('speak', { text: 'Ich bin da.' }))).toBe('“Ich bin da.”');
   });
+
+  it('summarises the patrol blocks (TASK-212) by route / checkpoint name', () => {
+    expect(blockKindLabel('patrol')).toBe('Patrol');
+    expect(formatBlockParams(block('patrol', { routeId: 'r-1', routeName: 'Night round', mode: 'patrol' }))).toBe(
+      'Night round · patrol'
+    );
+    expect(formatBlockParams(block('patrol', { routeId: 'r-1', mode: 'baseline' }))).toBe('r-1 · baseline run');
+    expect(formatBlockParams(block('capture', { checkpointId: 'cp-1', checkpointName: 'Hall', headingDeg: 90.4 }))).toBe(
+      'at Hall · heading 90°'
+    );
+    expect(formatBlockParams(block('capture', { checkpointId: 'cp-1' }))).toBe('at cp-1');
+    expect(formatBlockParams(block('capture', {}))).toBe('control photo');
+    expect(formatBlockParams(block('inspect', { checkpointId: 'cp-1', checkpointName: 'Hall' }))).toBe('Hall vs baseline');
+    expect(formatBlockParams(block('inspect', {}))).toBe('vs baseline');
+  });
 });

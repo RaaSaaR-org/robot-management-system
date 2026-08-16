@@ -59,6 +59,10 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   // Wave 3f (TASK-179 LeRobot 0.6.0 adoption)
   'EpisodeReward',
   'InterventionEpisode',
+  // TASK-212 patrol
+  'PatrolRoute',
+  'PatrolRun',
+  'PatrolFinding',
 ]);
 
 const globalForPrisma = globalThis as unknown as {

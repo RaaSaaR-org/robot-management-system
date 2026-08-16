@@ -18,7 +18,13 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-08-15
-updated: 2026-08-15
+updated: 2026-08-16
+completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #224 (stacked; merged bottom-up with #223..#229). Verified in review pass 2026-08-16: OccupancyMap/MapKeeper/`GET /robots/:id/map`, sweep, persistence keyed on boot_id, config + banner, ScenePanel summary; vitest 54/54 (occupancy-map, keeper, range), sim test_lidar 5/5, e2e_map_check evidence PNG in repo. Live on the house scene: turn+walk fills 3.3k known cells, walls land on y=±1.5/±4.5, x=±6 as surveyed.
+  DEVIATION: the state carries `map?: {knownCells, occupiedCells, lastIntegratedAt}` instead of `mapCells`/`mapAge` — same content, one field.
+  FIXED IN REVIEW (08c5aff): the app drew the grid vertically mirrored (double y-flip in RobotMapPanel.drawMap); the Map tab crashed the whole /agent page on a fresh session's 0×0 grid (ImageData width 0).
+  OPEN FOLLOW-UP (not fixed here, needs a real G1): `g1_sidecar.py` mints BOOT_ID once per sidecar process and never rolls it — a real robot whose odometry resets without a sidecar restart would restore a map into the wrong frame. Roll BOOT_ID on an odometry discontinuity (jump > ~2 m between consecutive samples) or on source re-establishment.
 ---
 
 

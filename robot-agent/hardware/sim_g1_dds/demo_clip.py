@@ -20,6 +20,13 @@ python. Timings come from the blocks' own
 startedAt/finishedAt stamps, offset by when the recorder started, so the
 captions line up with what the robot is doing on screen.
 
+`--layout patrol --patrol-route ROUTE.json [--patrol-mode baseline|patrol]`
+(TASK-212) starts a patrol run instead of a command (POST .../agent-mode/patrol
+with the route inline) and lays out camera / map with numbered checkpoints and
+red finding pins / baseline-vs-now photo pair. Stage the anomaly between the
+baseline and the patrol clip with the sim facade, e.g.
+`POST /sim/reset-pose {"body":"crate","x":4.5,"y":0.9}`.
+
 Env: SIM_URL (default http://localhost:8777), AGENT_URL
 (default http://localhost:41246), ROBOT_ID (default sim-robot-g1-edu).
 """
@@ -54,6 +61,7 @@ BLOCK_LABELS = {
     "walk": "walk", "turn": "turn", "goto": "go to", "look": "look",
     "scan_room": "scan the room", "wave": "wave", "greet": "greet",
     "posture": "posture", "speak": "say", "wait": "wait", "remember": "remember",
+    "patrol": "patrol", "capture": "control photo", "inspect": "inspect",
 }
 
 
@@ -379,7 +387,8 @@ def _decode_grid(grid: dict) -> tuple[list[int], int, int]:
 def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float, fps: int,
                       size_px: "int | tuple[int, int]", workdir: pathlib.Path,
                       window: "tuple[float, float, float, float] | None" = None,
-                      places: "list[dict] | None" = None) -> tuple[pathlib.Path, dict] | None:
+                      places: "list[dict] | None" = None,
+                      patrol_samples: "list[tuple[float, dict]] | None" = None) -> tuple[pathlib.Path, dict] | None:
     """PNG sequence of the map inset (north up, fixed window over the known
     room -- or `window` = (x0, y0, x1, y1) metres when given, so several clips
     share one frame), one frame per 1/fps video-seconds. `places` (the place
@@ -426,15 +435,21 @@ def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float
     mdir.mkdir(parents=True, exist_ok=True)
     stamped = [(video_t(w), m) for w, m in samples]
     stamped = [(t, m) for t, m in stamped if t is not None]
+    pstamped = [(video_t(w), p) for w, p in (patrol_samples or [])]
+    pstamped = [(t, p) for t, p in pstamped if t is not None]
     n = int(seconds * fps) + 1
     j = 0
+    jp = 0
     last_key, last_img = None, None
     for f in range(n):
         t = f / fps
         while j + 1 < len(stamped) and stamped[j + 1][0] <= t:
             j += 1
         m = stamped[j][1]
-        key = id(m)
+        while jp + 1 < len(pstamped) and pstamped[jp + 1][0] <= t:
+            jp += 1
+        pat = pstamped[jp][1] if pstamped and pstamped[jp][0] <= t else None
+        key = (id(m), id(pat))
         if key == last_key and last_img is not None:
             last_img.save(mdir / f"{f:05d}.png")
             continue
@@ -499,10 +514,55 @@ def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float
             l = (X + 0.5 * r * math.cos(yaw + 2.5), Y - 0.5 * r * math.sin(yaw + 2.5))
             rr = (X + 0.5 * r * math.cos(yaw - 2.5), Y - 0.5 * r * math.sin(yaw - 2.5))
             d.polygon([tip, l, rr], fill=(120, 230, 255, 255))
+        if pat:
+            _draw_patrol_overlay(d, px, scale, pat, places or [])
         d.rectangle([0, 0, Wpx - 1, Hpx - 1], outline=(255, 255, 255, 200), width=2)
         img.save(mdir / f"{f:05d}.png")
         last_key, last_img = key, img
     return mdir / "%05d.png", {"x0": x0, "y0": y0, "span": span}
+
+
+def _place_centroid(place_id: str, places: list[dict]) -> "tuple[float, float] | None":
+    for pl in places:
+        if pl.get("id") == place_id and pl.get("polygon"):
+            pts = pl["polygon"]
+            return sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts)
+    return None
+
+
+def _draw_patrol_overlay(d, px, scale: float, pat: dict, places: list[dict]) -> None:
+    """Numbered checkpoints (coloured by leg status) and red pins for the
+    run's findings (TASK-212) over the map inset."""
+    run = pat.get("run") or {}
+    LEG_COL = {"done": (124, 255, 178, 255), "failed": (255, 107, 107, 255),
+               "running": (255, 209, 102, 255), "skipped": (150, 158, 172, 255)}
+    fnt = _font(24)
+    for leg in run.get("legs") or []:
+        # Where the robot actually stood when the leg finished, else the room's centre.
+        c = (leg["pose"]["x"], leg["pose"]["y"]) if leg.get("pose") else _place_centroid(leg.get("placeId", ""), places)
+        if not c:
+            continue
+        X, Y = px(*c)
+        r = 16
+        col = LEG_COL.get(leg.get("status"), (200, 205, 215, 255))
+        d.ellipse([X - r, Y - r, X + r, Y + r], fill=(18, 21, 27, 230), outline=col, width=3)
+        lab = str(int(leg.get("index", 0)) + 1)
+        d.text((X - d.textlength(lab, font=fnt) / 2, Y - 14), lab, font=fnt, fill=col)
+    for fnd in pat.get("findings") or []:
+        pos = None
+        blob = (fnd.get("evidence") or {}).get("blob")
+        if blob:
+            pos = (blob["x"], blob["y"])
+        elif fnd.get("pose"):
+            pos = (fnd["pose"]["x"], fnd["pose"]["y"])
+        elif fnd.get("place"):
+            pos = _place_centroid(fnd["place"], places)
+        if not pos:
+            continue
+        X, Y = px(*pos)
+        # a pin: red disc on a short stem
+        d.line([(X, Y), (X, Y - 22)], fill=(255, 70, 70, 255), width=3)
+        d.ellipse([X - 10, Y - 32, X + 10, Y - 12], fill=(255, 70, 70, 255), outline=(255, 220, 220, 255), width=2)
 
 
 class MemLog:
@@ -705,6 +765,173 @@ def render_memory_frames(samples: list[tuple[float, dict]], video_t, seconds: fl
     return mdir / "%05d.png"
 
 
+class PatrolLog:
+    """Samples the robot-agent's patrol state while recording (TASK-212):
+    `GET .../agent-mode/patrol` for the active/last run, then the run's own
+    endpoint for its findings. Keeps a sample only when something changed."""
+
+    def __init__(self, agent_mode_url: str, period: float = 0.5) -> None:
+        self.url, self.period = agent_mode_url, period
+        self.samples: list[tuple[float, dict]] = []
+        self._last_key: str | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._sample(force=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._sample(force=True)
+
+    def read(self) -> dict:
+        st = http("GET", f"{self.url}/patrol", timeout=2)
+        run = st.get("active") or st.get("lastRun") or {}
+        findings: list[dict] = []
+        if run.get("runId"):
+            try:
+                detail = http("GET", f"{self.url}/patrol/runs/{run['runId']}", timeout=2)
+                findings = detail.get("findings") or []
+                run = {k: v for k, v in detail.items() if k != "findings"} or run
+            except Exception:  # noqa: BLE001
+                pass
+        return {"run": run, "findings": findings, "enabled": st.get("enabled")}
+
+    def _sample(self, force: bool = False) -> None:
+        try:
+            m = self.read()
+        except Exception:  # noqa: BLE001
+            return
+        run = m.get("run") or {}
+        key = json.dumps({"id": run.get("runId"), "st": run.get("status"),
+                          "legs": [(l.get("status"), l.get("inspection")) for l in run.get("legs") or []],
+                          "f": [f.get("id") for f in m["findings"]]}, sort_keys=True)
+        if force or key != self._last_key:
+            self._last_key = key
+            self.samples.append((time.time(), m))
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.period):
+            self._sample()
+
+
+def _fetch_jpeg(url: str) -> "bytes | None":
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=3) as r:
+            return r.read()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def render_patrol_pane_frames(samples: list[tuple[float, dict]], video_t, seconds: float, fps: int,
+                              size: tuple[int, int], workdir: pathlib.Path,
+                              agent_mode_url: str) -> pathlib.Path | None:
+    """PNG sequence of the patrol pane (TASK-212): the run's legs as one line
+    each, and — once a finding with a stored photo exists — the baseline and
+    current control photos side by side under the finding's summary."""
+    import io
+    from PIL import Image, ImageDraw
+    if not samples:
+        return None
+    W, H = size
+    fs, fs_small = 27, 22
+    lh = int(fs * 1.3)
+    font, small = _font(fs), _font(fs_small)
+    pdir = workdir / "patrol"
+    pdir.mkdir(parents=True, exist_ok=True)
+    stamped = [(video_t(w), m) for w, m in samples]
+    stamped = [(t, m) for t, m in stamped if t is not None]
+    if not stamped:
+        return None
+    photos: dict[str, "Image.Image | None"] = {}
+
+    def photo(url: str) -> "Image.Image | None":
+        if url not in photos:
+            raw = _fetch_jpeg(url)
+            photos[url] = Image.open(io.BytesIO(raw)).convert("RGB") if raw else None
+        return photos[url]
+
+    def fit(d, text: str, width: int, f) -> str:
+        if d.textlength(text, font=f) <= width:
+            return text
+        while text and d.textlength(text + "…", font=f) > width:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
+    pad = 30
+    n = int(seconds * fps) + 1
+    j = 0
+    last_key, last_img = None, None
+    col_txt, col_dim, col_ok, col_bad, col_run = (236, 238, 242, 255), (150, 158, 172, 255), (124, 255, 178, 255), (255, 107, 107, 255), (255, 209, 102, 255)
+    for fi in range(n):
+        t = fi / fps
+        while j + 1 < len(stamped) and stamped[j + 1][0] <= t:
+            j += 1
+        m = stamped[j][1]
+        key = id(m)
+        if key == last_key and last_img is not None:
+            last_img.save(pdir / f"{fi:05d}.png")
+            continue
+        img = Image.new("RGBA", (W, H), (14, 17, 23, 255))
+        d = ImageDraw.Draw(img, "RGBA")
+        d.line([(0, 0), (W, 0)], fill=(60, 66, 78, 255), width=2)
+        run = m.get("run") or {}
+        findings = m.get("findings") or []
+        head = f"patrol · {run.get('routeName', '')} · {run.get('mode', '')} · {run.get('status', '')}"
+        d.text((pad, 10), head, font=small, fill=(140, 150, 165, 255))
+        right = f"{len(findings)} finding{'s' if len(findings) != 1 else ''}"
+        d.text((W - pad - d.textlength(right, font=small), 10), right, font=small, fill=col_bad if findings else col_dim)
+        y = 10 + fs_small + 14
+        # Legs: one line each (index, name, status, inspection).
+        for leg in (run.get("legs") or [])[:6]:
+            st = leg.get("status", "pending")
+            col = col_ok if st == "done" else col_bad if st == "failed" else col_run if st == "running" else col_dim
+            insp = leg.get("inspection") or ""
+            line = f"{leg.get('index', 0) + 1}. {leg.get('name', '')}  {st}" + (f"  · {insp}" if insp else "")
+            if leg.get("photoDropped") == "person":
+                line += "  · photo not stored (person)"
+            d.text((pad, y), fit(d, line, W - 2 * pad, font), font=font, fill=col)
+            y += lh
+        # The photo pair for the first finding that has a stored current photo.
+        shown = next((f for f in findings if (f.get("evidence") or {}).get("currentPhotoKey")), None)
+        if shown:
+            ev = shown["evidence"]
+            y += 6
+            d.text((pad, y), fit(d, f"finding: {shown.get('summary', '')}", W - 2 * pad, font), font=font, fill=col_bad)
+            y += lh
+            cur_key = ev["currentPhotoKey"].split("/")[-1]
+            base_key = ev.get("baselinePhotoKey")
+            cur = photo(f"{agent_mode_url}/patrol/runs/{shown['runId']}/photos/{cur_key}")
+            base = None
+            if base_key:
+                base_run, _, base_name = base_key.rpartition("/")
+                if base_run:
+                    base = photo(f"{agent_mode_url}/patrol/runs/{base_run}/photos/{base_name}")
+                if base is None and run.get("routeId"):
+                    base = photo(f"{agent_mode_url}/patrol/baseline/{run['routeId']}/{run.get('window') or 'default'}/{base_name or cur_key}")
+            th = max(60, H - y - 12 - fs_small - 8)
+            tw = (W - 3 * pad) // 2
+            for k, (im, lab) in enumerate(((base, "baseline"), (cur, "now"))):
+                x0 = pad + k * (tw + pad)
+                d.text((x0, y), lab, font=small, fill=col_dim)
+                box = [x0, y + fs_small + 6, x0 + tw, y + fs_small + 6 + th]
+                if im is not None:
+                    fitted = im.copy()
+                    fitted.thumbnail((tw, th))
+                    img.paste(fitted, (box[0], box[1]))
+                else:
+                    d.rectangle(box, outline=(60, 66, 78, 255), width=2)
+                    d.text((x0 + 12, box[1] + 12), "no photo", font=small, fill=col_dim)
+        elif findings:
+            d.text((pad, y + 6), fit(d, f"finding: {findings[0].get('summary', '')} (no stored image)", W - 2 * pad, font), font=font, fill=col_bad)
+        else:
+            d.text((pad, y + 6), "no findings so far", font=font, fill=col_dim)
+        img.save(pdir / f"{fi:05d}.png")
+        last_key, last_img = key, img
+    return pdir / "%05d.png"
+
+
 def retime_pip(pip: pathlib.Path, clock: "SimClock", pip_fps: int, seconds: float,
                workdir: pathlib.Path) -> pathlib.Path:
     """The eye-view recorder drops frames differently from the main one, so the
@@ -884,15 +1111,76 @@ def burn_memory_layout(raw: pathlib.Path, out: pathlib.Path, meta: dict, cam_siz
     shutil.rmtree(workdir, ignore_errors=True)
 
 
+def burn_patrol_layout(raw: pathlib.Path, out: pathlib.Path, meta: dict, cam_size: tuple[int, int],
+                       title: str | None, map_samples: list[tuple[float, dict]],
+                       patrol_samples: list[tuple[float, dict]], video_t,
+                       map_window: "tuple[float, float, float, float] | None" = None,
+                       places: "list[dict] | None" = None) -> None:
+    """`--layout patrol` (TASK-212): the robot's camera on top, its map with the
+    route's numbered checkpoints and red finding pins in the middle, the run's
+    legs and the baseline/current photo pair at the bottom. Same geometry as
+    the memory layout, so multi-clip videos line up."""
+    cw, ch = cam_size
+    W, H = 1080, 1920
+    cam_h = int(ch * W / cw)
+    band = 96
+    pane_h = 520
+    map_h = H - cam_h - band - pane_h
+    map_w = W - 2 * 30
+    workdir = out.parent / f".{out.stem}-captions"
+    workdir.mkdir(parents=True, exist_ok=True)
+    sheet = CaptionSheet((W, H), workdir)
+    fs_cmd, fs_blk = 44, 38
+    ytop = "top"
+    if title:
+        sheet.add(title, fontsize=32, color="#ffffffd9", y="top")
+        ytop = "top+76"
+    sheet.add(wrap(f"> {meta['command']}", 38), fontsize=fs_cmd, color="#ffffff", y=ytop)
+    band_y = str(cam_h + (band - fs_blk) // 2 - 8)
+    blocks = [b for b in meta["blocks"] if b.get("t0") is not None and b["kind"] != "patrol"]
+    for i, b in enumerate(blocks):
+        t0 = b["t0"]
+        t1 = blocks[i + 1]["t0"] if i + 1 < len(blocks) else meta["end_t"]
+        color = "#ff6b6b" if b.get("status") == "failed" else "#7CFFB2"
+        t1 = min(max(t1, t0 + 0.05), meta["end_t"] - 0.05)
+        if t1 <= t0:
+            continue
+        sheet.add(f"› {wrap(b['caption'], 46)}", fontsize=fs_blk, color=color, y=band_y, t0=t0, t1=t1)
+    closing = None
+    patrol_block = next((b for b in meta["blocks"] if b["kind"] == "patrol"), None)
+    if patrol_block and (patrol_block.get("result") or patrol_block.get("error")):
+        closing = patrol_block.get("result") or patrol_block.get("error")
+    if closing:
+        col = "#7CFFB2" if meta["status"] == "done" else "#ff6b6b"
+        sheet.add(wrap(closing, 52), fontsize=32, color=col, y=str(cam_h + 22), t0=meta["end_t"])
+    seconds = float(meta["recorder"].get("seconds") or 0) + 1.0
+    seqs = []
+    rendered = render_map_frames(map_samples, video_t, seconds, 5, (map_w, map_h - 8), workdir,
+                                 window=map_window, places=places, patrol_samples=patrol_samples) if map_samples else None
+    if rendered:
+        seqs.append((rendered[0], 5, (W - map_w) // 2, cam_h + band))
+    pane = render_patrol_pane_frames(patrol_samples, video_t, seconds, 5, (W, pane_h), workdir,
+                                     f"{AGENT_URL}/api/v1/robots/{ROBOT_ID}/agent-mode") if patrol_samples else None
+    if pane:
+        seqs.append((pane, 5, 0, H - pane_h))
+    subprocess.run(sheet.ffmpeg_args(raw, out, stack=(W, cam_h), extra_seqs=seqs), check=True)
+    shutil.rmtree(workdir, ignore_errors=True)
+
+
 def burn_captions(raw: pathlib.Path, out: pathlib.Path, meta: dict, size: tuple[int, int],
                   title: str | None, pip: pathlib.Path | None = None,
                   map_samples: list[tuple[float, dict]] | None = None, clock: "SimClock | None" = None,
                   layout: str = "inset", mem_samples: list[tuple[float, dict]] | None = None,
                   map_window: "tuple[float, float, float, float] | None" = None,
-                  places: "list[dict] | None" = None) -> None:
+                  places: "list[dict] | None" = None,
+                  patrol_samples: "list[tuple[float, dict]] | None" = None) -> None:
     video_t = clock.video_t if clock else (lambda w: w)
     if layout == "stack":
         burn_stacked(raw, out, meta, size, title, map_samples or [], video_t)
+        return
+    if layout == "patrol":
+        burn_patrol_layout(raw, out, meta, size, title, map_samples or [], patrol_samples or [], video_t,
+                           map_window=map_window, places=places)
         return
     if layout == "memory":
         burn_memory_layout(raw, out, meta, size, title, map_samples or [], mem_samples or [], video_t,
@@ -1079,9 +1367,12 @@ def recaption(args) -> int:
     map_samples = [(t, m) for t, m in json.loads(mp.read_text())] if mp.exists() else None
     ml = out.with_suffix(".memlog.json")
     mem_samples = [(t, m) for t, m in json.loads(ml.read_text())] if ml.exists() else None
+    pl = out.with_suffix(".patrollog.json")
+    patrol_samples = [(t, m) for t, m in json.loads(pl.read_text())] if pl.exists() else None
     burn_captions(raw, out, meta, (w, h), args.title, pip=pip if pip.exists() else None,
                   map_samples=map_samples, clock=clock, layout=args.layout, mem_samples=mem_samples,
-                  map_window=parse_window(args.map_window), places=load_places(args.places))
+                  map_window=parse_window(args.map_window), places=load_places(args.places),
+                  patrol_samples=patrol_samples)
     print(f"[clip] recaptioned -> {out}")
     return 0
 
@@ -1106,12 +1397,20 @@ def main() -> int:
     ap.add_argument("--pip", default=None, metavar="CAMERA",
                     help="also record this MJCF camera (e.g. head_camera) and inset it "
                          "picture-in-picture -- 'what the robot sees'")
-    ap.add_argument("--layout", choices=("inset", "stack", "memory"), default="inset",
+    ap.add_argument("--layout", choices=("inset", "stack", "memory", "patrol"), default="inset",
                     help="inset: the scene camera with small insets (default). stack: the robot's "
                          "own camera full-width on top, its map below, minimal text -- implies "
                          "--map, and --cam defaults to head_camera at 1080x810. memory: like stack "
                          "with a third pane at the bottom showing the robot's durable memory (place "
-                         "notes, MEMORY.md, journal tail) sampled while recording")
+                         "notes, MEMORY.md, journal tail) sampled while recording. patrol: camera / "
+                         "map with numbered checkpoints + finding pins / baseline-vs-now photo pair "
+                         "(TASK-212, needs --patrol-route)")
+    ap.add_argument("--patrol-route", default=None, metavar="ROUTE.json",
+                    help="start a PATROL run of this route (PatrolRoute JSON: id, name, checkpoints "
+                         "[{id, placeId, name, headingDeg?, actions, dwellMs?}], homePlaceId?, timeWindows?) "
+                         "instead of a command; the command positional is then optional")
+    ap.add_argument("--patrol-mode", choices=("baseline", "patrol"), default="patrol",
+                    help="mode of the run started by --patrol-route (default patrol)")
     ap.add_argument("--map-window", default=None, metavar="X0,Y0,X1,Y1",
                     help="fixed map window in metres (default: fit the known area) -- give the same "
                          "one to every clip of a multi-clip video so the map does not jump")
@@ -1140,9 +1439,19 @@ def main() -> int:
         return 0
     if args.recaption:
         return recaption(args)
+    patrol_route = None
+    if args.patrol_route:
+        patrol_route = json.loads(pathlib.Path(args.patrol_route).read_text())
+        if not patrol_route.get("id") or not patrol_route.get("checkpoints"):
+            ap.error("--patrol-route needs a PatrolRoute JSON with id and checkpoints")
+        patrol_route.setdefault("name", patrol_route["id"])
+        # The plan the runner creates is named after the route; poll_plan matches on it.
+        args.command = f"patrol: {patrol_route['name']}"
+    elif args.layout == "patrol":
+        ap.error("--layout patrol needs --patrol-route ROUTE.json")
     if not args.command:
-        ap.error("command is required (or use --card / --concat / --recaption)")
-    if args.layout in ("stack", "memory"):
+        ap.error("command is required (or use --card / --concat / --recaption / --patrol-route)")
+    if args.layout in ("stack", "memory", "patrol"):
         args.map = True
         if args.cam == "follow":
             args.cam = "head_camera"
@@ -1150,7 +1459,7 @@ def main() -> int:
             # The memory layout renders the head camera wider (5:3): the MJCF
             # camera keeps its vertical FOV, so a wider frame simply sees more
             # to the sides -- and leaves room for the map and the memory pane.
-            args.size = "1080x648" if args.layout == "memory" else "1080x810"
+            args.size = "1080x648" if args.layout in ("memory", "patrol") else "1080x810"
         args.pip = None
 
     out = pathlib.Path(args.out)
@@ -1203,15 +1512,22 @@ def main() -> int:
     memlog = MemLog(f"{AGENT_URL}/api/v1/robots/{ROBOT_ID}", WORKSPACE_DIR) if args.layout == "memory" else None
     if memlog:
         memlog.start()
+    patrollog = PatrolLog(agent) if patrol_route else None
+    if patrollog:
+        patrollog.start()
     rec_t0 = clock.wall0 or time.time()
     time.sleep(args.lead)
 
     print(f"[clip] > {args.command}")
     cmd_t = time.time()
-    res = http("POST", f"{agent}/command", {"text": args.command})
+    if patrol_route:
+        res = http("POST", f"{agent}/patrol", {"routeId": patrol_route["id"], "mode": args.patrol_mode,
+                                              "origin": "operator", "route": patrol_route})
+    else:
+        res = http("POST", f"{agent}/command", {"text": args.command})
     if not res.get("accepted", True) and res.get("accepted") is False:
         http("POST", f"{SIM_URL}/record/stop")
-        raise SystemExit(f"command refused: {res}")
+        raise SystemExit(f"{'patrol' if patrol_route else 'command'} refused: {res}")
 
     plan = poll_plan(agent, args.command, args.timeout)
 
@@ -1222,6 +1538,8 @@ def main() -> int:
         maplog.stop()
     if memlog:
         memlog.stop()
+    if patrollog:
+        patrollog.stop()
     stop = http("POST", f"{SIM_URL}/record/stop", timeout=60)
     rec = stop.get("current") or stop.get("last") or {}
     print(f"[clip] recorder: {rec.get('frames')} frames, {rec.get('seconds')} s"
@@ -1262,13 +1580,19 @@ def main() -> int:
         out.with_suffix(".maplog.json").write_text(json.dumps(maplog.samples))
     if memlog:
         out.with_suffix(".memlog.json").write_text(json.dumps(memlog.samples))
+    if patrollog:
+        out.with_suffix(".patrollog.json").write_text(json.dumps(patrollog.samples))
+        last = patrollog.samples[-1][1] if patrollog.samples else {}
+        run = last.get("run") or {}
+        print(f"[clip] patrol run {run.get('runId')} {run.get('status')}: {len(last.get('findings') or [])} finding(s)")
     print(f"[clip] plan {status}; wrote {meta_path}")
 
     if not args.no_captions:
         burn_captions(raw, out, meta, (w, h), args.title, pip=pip_raw,
                       map_samples=maplog.samples if maplog else None, clock=clock, layout=args.layout,
                       mem_samples=memlog.samples if memlog else None,
-                      map_window=parse_window(args.map_window), places=load_places(args.places))
+                      map_window=parse_window(args.map_window), places=load_places(args.places),
+                      patrol_samples=patrollog.samples if patrollog else None)
         print(f"[clip] captioned -> {out}")
     return 0 if status == "done" else 1
 

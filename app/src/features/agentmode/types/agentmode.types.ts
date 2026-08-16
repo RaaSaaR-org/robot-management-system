@@ -29,6 +29,16 @@ export const AgentBlockKinds = [
    * planner has into it — retrieval is injection, never a planned step.
    */
   'remember',
+  /**
+   * Patrol (TASK-212). `patrol` is the top-level block the controller expands
+   * into legs (like `scan_room` expands into turns); `capture` takes the
+   * control photo at a checkpoint (stored only when no person is in frame);
+   * `inspect` compares the checkpoint against its baseline. Never planned by
+   * the LLM — only `PatrolRunner` emits them.
+   */
+  'patrol',
+  'capture',
+  'inspect',
 ] as const;
 export type AgentBlockKind = (typeof AgentBlockKinds)[number];
 
@@ -363,6 +373,14 @@ export interface AgentModeState {
    */
   map?: AgentMapSummary | null;
   /**
+   * Where the robot believes it is standing (TASK-195), carried at the top
+   * level so it does not depend on the scene having been observed: before the
+   * first `look` the scene snapshot is null, yet the place belief may already
+   * be confident. Optional so an older agent stays structurally compatible;
+   * `null` = unknown.
+   */
+  place?: ScenePlace | null;
+  /**
    * The route the navigator is currently following (TASK-208), or null when
    * no `goto` is running. Optional so an older robot-agent stays compatible.
    */
@@ -527,6 +545,13 @@ export const AgentModeEventTypes = [
   'agent:state:changed',
   /** The durable memory workspace changed — carries {@link AgentMemoryDigest}. */
   'agent:memory:updated',
+  /** Patrol run lifecycle (TASK-212) — carries {@link AgentModeEvent.patrol}. */
+  'agent:patrol:started',
+  'agent:patrol:leg',
+  'agent:patrol:finished',
+  /** A confirmed finding (TASK-212) — carries {@link AgentModeEvent.finding} (+ `patrol`). */
+  'agent:finding:detected',
+  'agent:finding:confirmed',
 ] as const;
 export type AgentModeEventType = (typeof AgentModeEventTypes)[number];
 
@@ -573,6 +598,10 @@ export interface AgentModeEvent {
   state?: AgentModeState;
   /** Set on `agent:memory:updated` only. */
   memory?: AgentMemoryDigest;
+  /** Set on `agent:patrol:*` and `agent:finding:*` (TASK-212): the run as of this event. */
+  patrol?: PatrolRun;
+  /** Set on `agent:finding:*` only. */
+  finding?: PatrolFinding;
   timestamp: string;
 }
 
@@ -770,6 +799,8 @@ export interface AgentModeStore {
    * not report one (older agent), `null` = map building disabled on it.
    */
   map: AgentMapSummary | null | undefined;
+  /** Where the robot believes it stands (undefined = not reported, null = unknown) */
+  place: ScenePlace | null | undefined;
   /** The full map (grid, peers, keepouts) as last fetched by the map panel; null before / when unavailable. */
   robotMap: RobotMapPayload | null;
   robotMapStatus: RobotMapStatus;
@@ -887,4 +918,222 @@ export interface AgentModeStore {
   setConnectionStatus: (status: WebSocketStatus) => void;
   clearError: () => void;
   reset: () => void;
+}
+
+// ============================================================================
+// PATROL (TASK-212) — routes, runs, findings. Wire contract shared verbatim by
+// robot-agent / server / app. Server is the source of record for routes and the
+// persisted history of runs + findings; the robot executes and reports.
+// ============================================================================
+
+/** What the robot does at a checkpoint after arriving and aligning. */
+export const PatrolCheckpointActions = ['capture', 'dwell', 'scan'] as const;
+export type PatrolCheckpointAction = (typeof PatrolCheckpointActions)[number];
+
+export interface PatrolCheckpoint {
+  id: string;
+  /** Place id from the place graph the robot resolves (`goto.place` accepts it). */
+  placeId: string;
+  /** Display name — defaults to the place name. */
+  name: string;
+  /** World heading (deg, +x = 0, CCW+) to align to before the control photo; null = keep arrival heading. */
+  headingDeg?: number | null;
+  actions: PatrolCheckpointAction[];
+  /** How long `dwell` waits, ms. */
+  dwellMs?: number;
+  /**
+   * Operator expectations at this checkpoint, e.g. "fire extinguisher on the
+   * wall left of the door". Each becomes an extra checklist item.
+   */
+  expectations?: string[];
+}
+
+/**
+ * A named local-time window, e.g. `day` 07–19 or `night` 19–07 (wraps
+ * midnight when `endHour <= startHour`). Baselines are kept PER window: a lit
+ * lamp is normal at 09:00 and a finding at 03:00.
+ */
+export interface PatrolTimeWindow {
+  id: string;
+  name: string;
+  startHour: number;
+  endHour: number;
+}
+
+export interface PatrolRoute {
+  id: string;
+  name: string;
+  /** Robot this route is bound to; null = any robot the operator starts it on. */
+  robotId: string | null;
+  /** DigitalTwin whose place graph the checkpoints reference; null for a robot with a local graph (sim). */
+  twinId: string | null;
+  checkpoints: PatrolCheckpoint[];
+  /** 5-field cron in server local time; null = manual only. */
+  cronExpression: string | null;
+  enabled: boolean;
+  timeWindows: PatrolTimeWindow[];
+  /** Place to return to when the route is done; null = stay at the last checkpoint. */
+  homePlaceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `baseline` = supervised reference run (records normal); `patrol` = compare against it. */
+export const PatrolRunModes = ['baseline', 'patrol'] as const;
+export type PatrolRunMode = (typeof PatrolRunModes)[number];
+
+/** Who started the run. `scheduled` runs are the ones the initiative gate must clear. */
+export const PatrolRunOrigins = ['operator', 'scheduled'] as const;
+export type PatrolRunOrigin = (typeof PatrolRunOrigins)[number];
+
+/** `skipped` = refused before the robot moved (precondition), `reason` says why. */
+export const PatrolRunStatuses = ['running', 'done', 'aborted', 'failed', 'skipped'] as const;
+export type PatrolRunStatus = (typeof PatrolRunStatuses)[number];
+
+export const PatrolLegStatuses = ['pending', 'running', 'done', 'failed', 'skipped'] as const;
+export type PatrolLegStatus = (typeof PatrolLegStatuses)[number];
+
+/** Outcome of the checkpoint inspection cascade for one leg. */
+export type PatrolInspection =
+  /** Hash gate said the frame equals the baseline photo — no model call. */
+  | 'unchanged'
+  /** Checklist answered and differed on ≥1 item (findings carry the diff). */
+  | 'changed'
+  /** Checklist answered, no difference. */
+  | 'same'
+  /** No baseline for this checkpoint × window yet. */
+  | 'no_baseline'
+  /** Baseline mode: this leg RECORDED the baseline. */
+  | 'recorded'
+  | 'skipped'
+  | 'error';
+
+export interface PatrolLeg {
+  index: number;
+  checkpointId: string;
+  placeId: string;
+  name: string;
+  status: PatrolLegStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  /** Storage key of the control photo (`<runId>/<checkpointId>.jpg`), null when none. */
+  photoKey?: string | null;
+  /** Why no photo was stored, when it was not: a person was in frame, or the capture failed. */
+  photoDropped?: 'person' | 'error' | null;
+  inspection?: PatrolInspection | null;
+  findingIds: string[];
+  /** One line for the timeline: "arrived after 4 stages", "goto failed: …". */
+  message?: string;
+  /** Robot pose (odom frame) when the leg finished — lets the map overlay place the checkpoint marker. Optional; absent when unknown. */
+  pose?: { x: number; y: number; yawDeg: number } | null;
+}
+
+export interface PatrolRun {
+  runId: string;
+  routeId: string;
+  routeName: string;
+  robotId: string;
+  mode: PatrolRunMode;
+  origin: PatrolRunOrigin;
+  /** Time-window id the run was matched to (`PatrolTimeWindow.id`), null when the route has none. */
+  window: string | null;
+  status: PatrolRunStatus;
+  /** Why the run was skipped/aborted/failed, in one sentence. */
+  reason?: string | null;
+  startedAt: string;
+  finishedAt?: string | null;
+  legs: PatrolLeg[];
+  findingCount: number;
+  /** Agent Mode plan the run executed as, when it did. */
+  planId?: string | null;
+}
+
+/** What is not normal. Severity is derived from type × window on the server. */
+export const PatrolFindingTypes = [
+  'person',
+  'unexpected_object',
+  'missing_object',
+  'object_on_floor',
+  'door_open',
+  'lights_on',
+  'out_of_place',
+  'expectation_failed',
+  'other',
+] as const;
+export type PatrolFindingType = (typeof PatrolFindingTypes)[number];
+
+export const PatrolFindingSeverities = ['low', 'medium', 'high'] as const;
+export type PatrolFindingSeverity = (typeof PatrolFindingSeverities)[number];
+
+/**
+ * `candidate` never leaves the robot; it becomes `open` once the confirmer
+ * (N-of-M / revisit) agrees, and that is the first status the server sees.
+ */
+export const PatrolFindingStatuses = [
+  'candidate',
+  'open',
+  'acknowledged',
+  'dismissed_normal',
+  'escalated',
+] as const;
+export type PatrolFindingStatus = (typeof PatrolFindingStatuses)[number];
+
+/** Which comparator produced the finding. */
+export type PatrolFindingSource =
+  /** Checkpoint checklist diff (one VLM call). */
+  | 'checkpoint'
+  /** En-route entity-label diff vs the baseline leg (no model call). */
+  | 'enroute_semantic'
+  /** En-route occupancy-map diff vs the baseline map (no model call). */
+  | 'enroute_geometric'
+  /** Semantic AND geometric agreed on the same object — merged into one finding. */
+  | 'enroute_both';
+
+export interface PatrolFindingEvidence {
+  baselinePhotoKey?: string | null;
+  currentPhotoKey?: string | null;
+  /** Checklist items whose answers differ, baseline vs current. */
+  checklistDiff?: Array<{ item: string; baseline: string; current: string }>;
+  /** Geometric blob: cells OCCUPIED now that were FREE in the baseline map. Odom frame. */
+  blob?: { x: number; y: number; areaM2: number; cells: number };
+  /** Semantic diff: labels new against the baseline leg / labels the baseline had that are gone. */
+  labels?: { added: string[]; missing: string[] };
+  /** How many consecutive observations agreed before this was confirmed. */
+  observations?: number;
+}
+
+export interface PatrolFinding {
+  id: string;
+  runId: string;
+  routeId: string;
+  robotId: string;
+  checkpointId?: string | null;
+  legIndex: number;
+  type: PatrolFindingType;
+  severity: PatrolFindingSeverity;
+  source: PatrolFindingSource;
+  /** Place id where it was seen, null when unknown. */
+  place: string | null;
+  /** Robot pose (odom frame) when confirmed. */
+  pose: { x: number; y: number; yawDeg: number } | null;
+  at: string;
+  /** One line for the alert title / list: "unexpected object in Hallway (0.4 m²)". */
+  summary: string;
+  evidence: PatrolFindingEvidence;
+  /** Model that answered, when a model was involved; null for pure grid/label diffs. */
+  model: string | null;
+  confidence: number;
+  status: PatrolFindingStatus;
+  /** Server-side: the alert raised for it. */
+  alertId?: string | null;
+  incidentId?: string | null;
+}
+
+/** Response of `POST /robots/:id/agent-mode/patrol`. */
+export interface PatrolStartResult {
+  accepted: boolean;
+  runId?: string;
+  message: string;
+  /** Machine-readable refusal, e.g. `disabled`, `battery`, `place_unknown`, `busy`, `estop`, `window`, `damped`, `crash_unacknowledged`. */
+  reason?: string;
 }

@@ -71,6 +71,7 @@ server/src/
 │   ├── zone.routes.ts         # Zone/facility management
 │   ├── command.routes.ts      # NL command interpretation
 │   ├── process.routes.ts      # Process/workflow management
+│   ├── patrol.routes.ts       # Patrol routes/runs/findings + photos (TASK-212)
 │   ├── safety.routes.ts       # Safety monitoring
 │   ├── conversation.routes.ts # A2A conversations
 │   ├── message.routes.ts      # A2A messages
@@ -110,6 +111,9 @@ server/src/
 │   ├── ZoneService.ts         # Zone CRUD + geometry
 │   ├── CommandInterpreter.ts  # NL → structured command (Gemini)
 │   ├── ProcessManager.ts      # Multi-step workflow engine
+│   ├── PatrolService.ts       # Patrol CRUD, ingest → alerts, proxies (TASK-212)
+│   ├── PatrolSchedulerService.ts # Cron-fired patrols (utils/cron.ts shared with ProcessScheduler)
+│   ├── PatrolPhotoStore.ts    # Patrol photos (S3 bucket or local dir)
 │   ├── TaskDistributor.ts     # Push-model task scheduler
 │   ├── SafetyService.ts       # Safety monitoring
 │   ├── ComplianceLogService.ts     # Audit logging
@@ -255,6 +259,48 @@ server/src/
 | PUT    | `/api/processes/tasks/:id/status`       | Update task status       |
 | GET    | `/api/processes/tasks/queue/stats`      | Queue statistics         |
 
+### Patrol (`/api/patrol` + `/api/robots`, TASK-212) — auth required
+
+Routes are the source of record (Prisma `PatrolRoute`/`PatrolRun`/`PatrolFinding`, tenant-scoped);
+the robot executes and reports via `POST /api/robots/:id/agent-mode/events` (`agent:patrol:*`,
+`agent:finding:*`), which `PatrolService.ingest` persists and turns into alerts (one per finding,
+one warning per skipped run) + compliance `system_event`s. Ingest is serialised per `runId` and
+refuses stale run snapshots (a late `leg` can never move a finished run back to `running`).
+`PatrolSchedulerService` fires
+cron-scheduled routes every 30 s (`PATROL_SCHEDULER_ENABLED`, retry once after `PATROL_RETRY_MIN`).
+
+| Method | Path                                                  | Description                                            |
+| ------ | ----------------------------------------------------- | ------------------------------------------------------ |
+| GET    | `/api/patrol/routes?robotId=`                         | List routes                                            |
+| POST   | `/api/patrol/routes`                                  | Create route (name, robotId?, checkpoints, cronExpression?, enabled?, timeWindows?, homePlaceId?) |
+| GET    | `/api/patrol/routes/:id`                              | Get route                                              |
+| PUT    | `/api/patrol/routes/:id`                              | Update route (partial)                                 |
+| DELETE | `/api/patrol/routes/:id`                              | Delete route (runs + findings are kept: `PatrolRun.routeId` has no FK) |
+| GET    | `/api/patrol/routes/:id/export/vda5050.json`          | VDA5050-style order (nodes = checkpoints, edges)       |
+| GET    | `/api/patrol/routes/:id/baseline?window=`             | Latest baseline run + photo keys per checkpoint        |
+| POST   | `/api/patrol/routes/:id/start`                        | `{robotId?, mode, origin?}` → PatrolStartResult (502 + skipped run when unreachable) |
+| POST   | `/api/patrol/routes/:id/abort`                        | `{robotId?, reason?}` → `{ok, runId?}`                 |
+| POST   | `/api/patrol/cron/validate`                           | `{cronExpression}` → `{valid, nextRuns[5], error?}`    |
+| GET    | `/api/patrol/places?robotId=`                         | Robot's known places (proxy `GET /api/v1/robots/:id/places`) |
+| GET    | `/api/patrol/runs?routeId=&robotId=&status=&limit=`   | Runs, newest first                                     |
+| GET    | `/api/patrol/runs/:runId`                             | Run + findings                                         |
+| POST   | `/api/patrol/runs/:runId/promote`                     | Make this run the baseline (proxy to robot)            |
+| GET    | `/api/patrol/findings?status=&routeId=&robotId=&runId=` | Findings                                             |
+| GET    | `/api/patrol/findings/:id`                            | Finding                                                |
+| POST   | `/api/patrol/findings/:id/acknowledge`                | Status acknowledged (+ its alert)                      |
+| POST   | `/api/patrol/findings/:id/normal`                     | Status dismissed_normal, robot baseline taught (`robotNotified`) |
+| POST   | `/api/patrol/findings/:id/escalate`                   | Status escalated (+ incident when available)           |
+| POST   | `/api/robots/:id/agent-mode/patrol`                   | `{routeId, mode?, origin?}` — spec-named start alias   |
+| POST   | `/api/robots/:id/agent-mode/patrol/abort`             | Abort on that robot                                    |
+| PUT    | `/api/robots/:id/patrol-runs/:runId/photos/:key`      | Robot photo upload `{imageB64, contentType, kind, checkpointId, routeId, capturedAt}` |
+| GET    | `/api/robots/:id/patrol-runs/:runId/photos/:key`      | Photo (image/jpeg) for the UI                          |
+| GET    | `/api/robots/:id/patrol-runs/:runId/photos`           | Photo metadata list for a run                          |
+
+Photos: `PatrolPhotoStore` — S3 bucket `patrol-photos` when RustFS is configured, else
+`PATROL_PHOTO_DIR` (default `./data/patrol-photos`). Retention sweep hourly
+(`src/jobs/patrol-photo-cleanup.ts`): control 72 h (`PATROL_PHOTO_RETENTION_H`), baseline/finding
+30 d (`PATROL_PHOTO_RETENTION_DAYS`).
+
 ### A2A Protocol (`/api/a2a/*`) — auth required
 
 | Method | Path                              | Description                  |
@@ -317,7 +363,7 @@ server/src/
 
 - `ws://localhost:3001/api/a2a/ws` - Real-time event streaming
 
-**Outbound events**: `robot_registered`, `robot_unregistered`, `robot_status_changed`, `robot_telemetry`, `robot_health_check`, `alert_created`, `alert_acknowledged`, `alert_deleted`, `zone_created`, `zone_updated`, `zone_deleted`, `task_event`, `process:*`, `task:*`, `robot:work_assigned`
+**Outbound events**: `robot_registered`, `robot_unregistered`, `robot_status_changed`, `robot_telemetry`, `robot_health_check`, `alert_created`, `alert_acknowledged`, `alert_deleted`, `zone_created`, `zone_updated`, `zone_deleted`, `task_event`, `process:*`, `task:*`, `robot:work_assigned`, `agent:*` (incl. `agent:patrol:started|leg|finished` carrying `patrol`, `agent:finding:detected|confirmed` carrying `finding` + `patrol`)
 
 **Inbound messages**: `ping` (returns pong), `subscribe` (subscribes to all events)
 
@@ -398,6 +444,11 @@ Typed error hierarchy in `utils/errors.ts`: `BadRequestError`, `AuthenticationEr
 | `AUTH_DISABLED`    | `true` (dev)                      | Bypass JWT auth in development |
 | `GOOGLE_API_KEY`   | —                                 | Gemini API key (NL commands)   |
 | `CORS_ORIGINS`     | `localhost:1420,5173,3000`        | Comma-separated CORS origins   |
+| `PATROL_SCHEDULER_ENABLED` | `true`                    | Cron-fired patrol runs (TASK-212) |
+| `PATROL_RETRY_MIN` | `10`                              | Retry once after N min when a scheduled patrol was refused/unreachable |
+| `PATROL_PHOTO_DIR` | `./data/patrol-photos`            | Local patrol photo dir (no RustFS) |
+| `PATROL_PHOTO_RETENTION_H` | `72`                      | Control-photo retention, hours |
+| `PATROL_PHOTO_RETENTION_DAYS` | `30`                   | Baseline/finding photo retention, days |
 
 ## Related Documentation
 

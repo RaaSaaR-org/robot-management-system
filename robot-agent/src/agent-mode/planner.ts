@@ -15,7 +15,7 @@ import { extractJsonObject, genkitGenerate, agentModelRef, type GenerateFn } fro
 import { buildPlannerPrompt } from './prompts.js';
 import { REMEMBER_MAX_CHARS } from './workspace.js';
 import {
-  AgentBlockKinds,
+  PlannerBlockKinds,
   type AgentBlock,
   type AgentBlockKind,
   type SpokenLanguage,
@@ -28,7 +28,7 @@ import {
  * the real per-kind validation anyway.
  */
 const PlannedBlockSchema = z.object({
-  kind: z.enum(AgentBlockKinds),
+  kind: z.enum(PlannerBlockKinds),
   reasoning: z.string().optional(),
   distanceM: z.number().optional(),
   direction: z.enum(['forward', 'backward', 'left', 'right']).optional(),

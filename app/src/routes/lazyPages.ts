@@ -70,6 +70,19 @@ export const LazyAgentModePage = lazy(() =>
 );
 
 /**
+ * Patrol pages (TASK-212) - routes, editor, run detail
+ */
+export const LazyPatrolPage = lazy(() =>
+  import('@/features/patrol').then((m) => ({ default: m.PatrolPage }))
+);
+export const LazyPatrolRouteEditorPage = lazy(() =>
+  import('@/features/patrol').then((m) => ({ default: m.RouteEditorPage }))
+);
+export const LazyPatrolRunDetailPage = lazy(() =>
+  import('@/features/patrol').then((m) => ({ default: m.RunDetailPage }))
+);
+
+/**
  * Alerts page - Alert history and management
  */
 export const LazyAlertsPage = lazy(() =>

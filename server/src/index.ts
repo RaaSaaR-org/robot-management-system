@@ -30,6 +30,8 @@ import { storageCleanupJob } from './jobs/storage-cleanup.js';
 import { trainingOrchestrator } from './services/TrainingOrchestrator.js';
 import { digitalTwinService } from './services/DigitalTwinService.js';
 import { processSchedulerService } from './services/ProcessSchedulerService.js';
+import { patrolSchedulerService } from './services/PatrolSchedulerService.js';
+import { patrolPhotoCleanupJob } from './jobs/patrol-photo-cleanup.js';
 import { MULTI_TENANCY_ENABLED } from './config/features.js';
 
 const PORT = process.env.PORT || 3001;
@@ -80,6 +82,12 @@ async function main() {
 
   // Start process scheduler (TASK-143) — fires scheduled ProcessDefinitions
   processSchedulerService.start();
+
+  // Start patrol scheduler (TASK-212) — fires cron-scheduled PatrolRoutes on
+  // their robot (PATROL_SCHEDULER_ENABLED, default true) and the hourly photo
+  // retention sweep (control 72 h, baseline/finding 30 d).
+  patrolSchedulerService.start();
+  patrolPhotoCleanupJob.startSchedule(1);
 
   // Initialize digital-twin build orchestrator (TASK-170) — reaps any scan
   // sessions left stuck in 'processing' from a prior run. No NATS dependency:
@@ -145,6 +153,8 @@ async function main() {
   const shutdown = async () => {
     logger.info('Shutting down...');
     processSchedulerService.stop();
+    patrolSchedulerService.stop();
+    patrolPhotoCleanupJob.stopSchedule();
     telemetryIngestionService.stopAll();
     retentionCleanupJob.stopSchedule();
     telemetryCleanupJob.stopSchedule();

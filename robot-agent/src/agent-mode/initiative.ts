@@ -12,8 +12,18 @@
 import { PLACE_STALE_MS } from '../robot/StatePersistence.js';
 import type { AgentBlockKind } from './types.js';
 
-/** Where the impulse came from. */
-export type InitiativeOrigin = 'self' | 'operator';
+/**
+ * Where the impulse came from.
+ *
+ * `scheduled` (TASK-212) is a patrol fired by the server's cron: nobody is
+ * standing in front of the robot, so it is gated EXACTLY like `self` — battery,
+ * known and fresh place, armed base, not damped, crash acknowledged — with one
+ * difference: a scheduled patrol is the one sanctioned way the robot walks
+ * unattended, so the `SELF_LOCOMOTION_KINDS` refusal for `goto` does not apply
+ * to it (the other locomotion checks still do). An operator-started patrol
+ * uses `operator`, like any other command.
+ */
+export type InitiativeOrigin = 'self' | 'operator' | 'scheduled';
 
 /**
  * Below this the robot stops volunteering for work. An operator can still send
@@ -105,6 +115,10 @@ export function mayInitiate(
   if (origin === 'operator') {
     return allow('An operator asked for it.');
   }
+  // `scheduled` falls through: from here on it is judged exactly like `self`.
+  // The place/battery/damped checks below are the whole point of routing a
+  // cron-fired patrol through this gate — a robot that does not know where it
+  // is must not set off on a route by itself.
 
   if (context.estopLatched) {
     return refuse('I did nothing on my own because an E-Stop is still latched.');

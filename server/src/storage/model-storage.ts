@@ -21,6 +21,8 @@ export const BUCKETS = {
   SENSOR_SCANS: 'sensor-scans',
   DIGITAL_TWINS: 'digital-twins',
   INCIDENT_CLIPS: 'incident-clips',
+  /** Patrol control/baseline/finding photos (TASK-212) — see PatrolPhotoStore. */
+  PATROL_PHOTOS: 'patrol-photos',
 } as const;
 
 export type BucketName = typeof BUCKETS[keyof typeof BUCKETS];

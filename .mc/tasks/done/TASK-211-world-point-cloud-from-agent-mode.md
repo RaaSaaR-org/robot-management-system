@@ -1,11 +1,26 @@
 ---
 id: TASK-211
+aliases:
+- TASK-211
 title: Keep a 3-D world point cloud from every Agent Mode run (view + export)
+slug: world-point-cloud-from-agent-mode
 status: done
 priority: 2
-tags: [core, agent-mode]
+owner: ''
+projects: []
+customers: []
+tags:
+- core
+- agent-mode
+sprint: ''
+depends_on: []
+due_date: ''
 created: 2026-08-16
+updated: 2026-08-16
 completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #228 (with TASK-210). Verified 2026-08-16: bounded voxel WorldCloud fed by the map keeper, persisted beside the grid under the boot_id rules, `GET /map/cloud` (JSON/PCD/PLY) + server proxy, 2D/3D switch on the Map tab with a Three.js cloud view, PCD/PLY in the Export menu.
+  FIXED IN REVIEW (08c5aff): the orbit target was re-applied from every 3 s poll and snapped the camera back while orbiting — frozen per robot now. Known UX: PCD/PLY export needs the 3D view opened once (the menu says so).
 ---
 
 ## Description
