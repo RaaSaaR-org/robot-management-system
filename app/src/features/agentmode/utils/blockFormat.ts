@@ -22,6 +22,9 @@ const BLOCK_LABELS: Record<AgentBlockKind, string> = {
   speak: 'Speak',
   wait: 'Wait',
   remember: 'Remember',
+  patrol: 'Patrol',
+  capture: 'Capture',
+  inspect: 'Inspect',
 };
 
 /** Human label for a block kind. */
@@ -42,6 +45,9 @@ const BLOCK_GLYPHS: Record<AgentBlockKind, string> = {
   speak: '❝',
   wait: '⏸',
   remember: '✎',
+  patrol: '⛨',
+  capture: '📷',
+  inspect: '🔍',
 };
 
 /** Glyph for a block kind — a tiny, dependency-free icon. */

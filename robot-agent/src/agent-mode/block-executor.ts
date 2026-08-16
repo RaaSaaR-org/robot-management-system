@@ -327,6 +327,13 @@ export class BlockExecutor {
             ok: false,
             message: 'internal error: "goto" must be expanded by the navigator',
           };
+        case 'patrol':
+        case 'capture':
+        case 'inspect':
+          return {
+            ok: false,
+            message: `internal error: "${block.kind}" must be run by PatrolRunner`,
+          };
       }
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
