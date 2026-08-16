@@ -168,10 +168,16 @@ command to the robot-agent's Agent Mode, waits for the plan, stops recording and
 burns the command + each block (as it runs) + result as captions:
 
 ```bash
+# --pip head_camera: inset with what the robot's own camera sees;
+# --start x,y,yaw°: teleport there first (a "=" keeps the leading minus out of argparse)
 .venv/bin/python demo_clip.py "Go to the table and tell me what is on it" \
     --out clips/table.mp4 --cam follow --title "NeoDEM · Agent Mode" \
-    --pip head_camera            # inset: what the robot's own camera sees
-    --start=-0.5,-0.5,90         # x, y, yaw° to teleport to first
+    --pip head_camera --start=-0.5,-0.5,90
+```
+
+Further flags (each line is one option, not a continuation of the command above):
+
+```text
     --prime "look"               # a command run BEFORE recording (warms scene memory;
                                  #   Agent Mode's scene memory is per process)
     --map                        # inset: the robot's own map — grid, keepouts (amber),

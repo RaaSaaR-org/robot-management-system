@@ -405,4 +405,47 @@ describe('PatrolService — finding actions', () => {
     expect((await service.getBaseline('route-1', 'day'))?.runId).toBe('base-day');
     expect(await service.getBaseline('route-1', 'nope')).toBeNull();
   });
+
+  it('promoteRun persists promotedAt once the robot answered ok, and getBaseline prefers the promoted run', async () => {
+    const post = vi.fn(async () => ({ ok: true }));
+    const { service, repo } = build({ post });
+    repo.seedRoute({ id: 'route-1' });
+    await repo.upsertRun(makeRun({ runId: 'base-old', mode: 'baseline', status: 'done', startedAt: '2026-08-10T01:00:00.000Z' }));
+    await repo.upsertRun(makeRun({
+      runId: 'patrol-2', mode: 'patrol', status: 'done', startedAt: '2026-08-14T01:00:00.000Z',
+      legs: [
+        { index: 0, checkpointId: 'cp-1', placeId: 'hallway', name: 'Hallway', status: 'done', photoKey: 'patrol-2/cp-1.jpg', findingIds: [] },
+        { index: 1, checkpointId: 'cp-2', placeId: 'kitchen', name: 'Kitchen', status: 'done', photoKey: 'patrol-2/cp-2.jpg', findingIds: [] },
+      ],
+    }));
+    expect((await service.getBaseline('route-1', 'night'))?.runId).toBe('base-old');
+
+    const out = await service.promoteRun('patrol-2');
+    expect(out).toEqual({ ok: true });
+    expect(post).toHaveBeenCalledWith('/api/v1/robots/robot-001/agent-mode/patrol/runs/patrol-2/promote', {});
+    expect((await repo.findRunById('patrol-2'))?.promotedAt).toBe('2026-08-16T01:00:00.000Z');
+    expect((await repo.findRunById('base-old'))?.promotedAt).toBeNull();
+
+    // A later run snapshot from the robot must not wipe the promotion.
+    await repo.upsertRun(makeRun({ runId: 'patrol-2', mode: 'patrol', status: 'done', startedAt: '2026-08-14T01:00:00.000Z' }));
+    expect((await repo.findRunById('patrol-2'))?.promotedAt).toBe('2026-08-16T01:00:00.000Z');
+
+    const b = await service.getBaseline('route-1', 'night');
+    expect(b?.runId).toBe('patrol-2');
+    expect(b?.photos).toEqual({ 'cp-1': 'cp-1.jpg' });
+    // Other windows still fall back to their baseline-mode runs.
+    await repo.upsertRun(makeRun({ runId: 'base-day', mode: 'baseline', status: 'done', window: 'day', startedAt: '2026-08-13T01:00:00.000Z' }));
+    expect((await service.getBaseline('route-1', 'day'))?.runId).toBe('base-day');
+    // No window filter → the promoted run wins over any baseline run.
+    expect((await service.getBaseline('route-1'))?.runId).toBe('patrol-2');
+  });
+
+  it('promoteRun does not persist promotedAt when the robot refuses', async () => {
+    const post = vi.fn(async () => ({ ok: false }));
+    const { service, repo } = build({ post });
+    repo.seedRoute({ id: 'route-1' });
+    await repo.upsertRun(makeRun({ runId: 'patrol-2', mode: 'patrol', status: 'done' }));
+    expect(await service.promoteRun('patrol-2')).toEqual({ ok: false });
+    expect((await repo.findRunById('patrol-2'))?.promotedAt).toBeNull();
+  });
 });

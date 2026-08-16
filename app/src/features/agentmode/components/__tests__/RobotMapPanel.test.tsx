@@ -113,6 +113,32 @@ function recordingContext() {
   return ctx as unknown as CanvasRenderingContext2D & { calls: typeof calls };
 }
 
+describe('drawMap — the occupancy grid orientation (TASK-206/207)', () => {
+  const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: '#000' };
+
+  /**
+   * Cell index = row*width+col with row = floor((y-originY)/res): image row 0 is
+   * the LOWEST world y. The outer world→screen transform already flips y (north
+   * up), so the image is drawn straight at the grid origin. A second flip inside
+   * that transform mirrored the whole grid top-to-bottom — walls the robot saw
+   * to its north were painted to its south.
+   */
+  it('draws the grid image once, at the grid origin, without a second y-flip', () => {
+    const ctx = recordingContext();
+    const scales: unknown[][] = [];
+    const draws: unknown[][] = [];
+    (ctx as unknown as { scale: (...a: unknown[]) => void }).scale = (...a) => { scales.push(a); };
+    (ctx as unknown as { drawImage: (...a: unknown[]) => void }).drawImage = (...a) => { draws.push(a); };
+    const image = {} as HTMLCanvasElement;
+    const grid = { ...GRID, originX: -1, originY: 2, width: 4, height: 3 };
+    drawMap(ctx, payload({ grid, keepouts: [], peers: [] }), view, image);
+
+    expect(draws).toEqual([[image, -1, 2, 4 * GRID.resolution, 3 * GRID.resolution]]);
+    // Only the world→screen scale (px per metre, y flipped): no scale(1, -1).
+    expect(scales.some(([sx, sy]) => sx === 1 && sy === -1)).toBe(false);
+  });
+});
+
 describe('drawMap — the planned route (TASK-208)', () => {
   const view = { widthPx: 300, heightPx: 300, rangeM: 3, orientation: 'north' as const, occupiedColor: '#000' };
 

@@ -16,10 +16,20 @@ server starts the robot with the route inline) plus the sim facade's
 
 Baseline and patrol must run under the SAME sim boot for the geometric (map)
 comparison; the checklist and label comparisons do not care. Prints the run
-progress, the findings and the newest alerts, and dumps the run JSON to
-/tmp/e2e_patrol_result.json. Measured 2026-08-16: baseline ~150 s, patrol
-~135 s wall clock, findings out_of_place at the Hallway checkpoint (the crate,
-which qwen2.5vl:7b calls a table) + missing_object "box missing in Hallway".
+progress, the findings (with their sources) and the newest alerts, and dumps
+the run JSON to /tmp/e2e_patrol_result.json.
+
+Asserted on the patrol run, read back via GET /api/patrol/runs/:id (the
+TASK-212 acceptance shape):
+  (a) the run status is "done";
+  (b) the moved crate yields exactly ONE finding in HALLWAY whose type is
+      unexpected_object or out_of_place. Zero such findings always fails;
+      more than one is a WARNING by default and a failure with --strict
+      (the comparator is still being tuned; missing_object findings en route
+      are reported but not counted).
+Measured 2026-08-16: baseline ~150 s, patrol ~135 s wall clock, findings
+out_of_place at the Hallway checkpoint (the crate, which qwen2.5vl:7b calls a
+table) + missing_object "box missing in Hallway".
 """
 import json, sys, time, urllib.request, argparse
 
@@ -66,6 +76,8 @@ def main():
     ap.add_argument("--checkpoints", default="KITCHEN,LIVING-ROOM")
     ap.add_argument("--home", default="HALLWAY")
     ap.add_argument("--route-file", default=None)
+    ap.add_argument("--strict", action="store_true",
+                    help="fail (not warn) when the crate yields more than one Hallway finding")
     args = ap.parse_args()
 
     route_id = args.route_id
@@ -104,11 +116,29 @@ def main():
     assert st == 200 and res.get("accepted"), res
     run = wait_run(res["runId"])
     st, full = http("GET", f"{SERVER}/api/patrol/runs/{run['runId']}")
+    assert st == 200 and full, (st, full)
     findings = full.get("findings", [])
-    print("PATROL:", run["status"], "findings:", [(f["type"], f["place"], f["source"], f["summary"]) for f in findings])
+    print("PATROL:", full.get("status"), "findings:", [(f["type"], f["place"], f["source"], f["summary"]) for f in findings])
+    for f in findings:
+        print(f"  finding {f['type']:<18} place={f.get('place')!s:<14} source={f.get('source')} "
+              f"severity={f.get('severity')} conf={f.get('confidence')} :: {f.get('summary')}")
     st, alerts = http("GET", f"{SERVER}/api/alerts?limit=10")
     print("alerts:", st, [a.get("title") for a in (alerts if isinstance(alerts, list) else alerts.get("alerts", alerts.get("data", [])) )][:5] if st == 200 else alerts)
     json.dump({"routeId": route_id, "run": full}, open("/tmp/e2e_patrol_result.json", "w"), indent=1)
+
+    # --- acceptance shape (TASK-212 Test Strategy) -----------------------------
+    assert full.get("status") == "done", f"patrol run status {full.get('status')!r} (reason: {full.get('reason')!r})"
+    crate = [f for f in findings
+             if (f.get("place") or "").upper() == args.home.upper()
+             and f["type"] in ("unexpected_object", "out_of_place")]
+    print(f"crate findings in {args.home}: {len(crate)} sources={[f['source'] for f in crate]}")
+    assert crate, f"no unexpected_object/out_of_place finding in {args.home} for the moved crate; got {[(f['type'], f['place']) for f in findings]}"
+    if len(crate) != 1:
+        msg = f"expected exactly one crate finding in {args.home}, got {len(crate)}: {[(f['type'], f['source'], f['summary']) for f in crate]}"
+        if args.strict:
+            raise AssertionError(msg)
+        print("WARNING:", msg, "(pass --strict to fail on this)")
+    print("OK: patrol run done, crate detected in", args.home)
 
 if __name__ == "__main__":
     main()

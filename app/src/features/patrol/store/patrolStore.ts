@@ -57,6 +57,12 @@ export interface PatrolStore {
   startingRouteId: string | null;
   lastStartResult: (PatrolStartResult & { routeId: string }) | null;
   busyFindingId: string | null;
+  /**
+   * Per finding id: whether the robot took the "This is normal" lesson.
+   * `false` means the finding was dismissed on the server only — the robot was
+   * unreachable, its baseline was not updated and it will flag this again.
+   */
+  findingRobotNotified: Record<string, boolean>;
   error: string | null;
 
   // Actions — routes
@@ -113,6 +119,7 @@ const initialState = {
   startingRouteId: null as string | null,
   lastStartResult: null as (PatrolStartResult & { routeId: string }) | null,
   busyFindingId: null as string | null,
+  findingRobotNotified: {} as Record<string, boolean>,
   error: null as string | null,
 };
 
@@ -404,9 +411,11 @@ export const usePatrolStore = createStore<PatrolStore>(
         state.busyFindingId = id;
       });
       try {
-        const { finding } = await patrolApi.markFindingNormal(id);
+        const { finding, robotNotified } = await patrolApi.markFindingNormal(id);
         set((state) => {
           if (finding && finding.id) replaceFinding(state, finding);
+          // Keep the server's answer: `false` = dismissed here, robot not taught.
+          if (typeof robotNotified === 'boolean') state.findingRobotNotified[finding?.id ?? id] = robotNotified;
           state.busyFindingId = null;
         });
         return true;

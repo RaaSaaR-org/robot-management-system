@@ -73,13 +73,24 @@ export class FakePatrolRepository {
 
   async upsertRun(run: PatrolRun): Promise<PatrolRunRecord> {
     const prev = this.runs.get(run.runId);
-    const rec: PatrolRunRecord = { ...run, alertId: prev?.alertId ?? null };
+    const rec: PatrolRunRecord = { ...run, alertId: prev?.alertId ?? null, promotedAt: prev?.promotedAt ?? null };
     this.runs.set(run.runId, rec);
     return rec;
   }
   async setRunAlert(runId: string, alertId: string | null) {
     const r = this.runs.get(runId);
     if (r) r.alertId = alertId;
+  }
+  async setRunPromoted(runId: string, promotedAt: Date | null) {
+    const r = this.runs.get(runId);
+    if (!r) return null;
+    r.promotedAt = promotedAt ? promotedAt.toISOString() : null;
+    return r;
+  }
+  async findLatestPromotedRun(routeId: string, window?: string | null) {
+    return [...this.runs.values()]
+      .filter((r) => r.routeId === routeId && r.promotedAt && (window ? r.window === window : true))
+      .sort((a, b) => (b.promotedAt as string).localeCompare(a.promotedAt as string))[0] ?? null;
   }
   async findRunById(runId: string) { return this.runs.get(runId) ?? null; }
   async listRuns(f: any = {}) {

@@ -177,11 +177,17 @@ export function drawMap(
   if (grid && gridImage) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    // The image's row 0 is the LOWEST y; with the y-flip above we draw it
-    // flipped once more so it lands right side up.
-    ctx.translate(grid.originX, grid.originY + grid.height * grid.resolution);
-    ctx.scale(1, -1);
-    ctx.drawImage(gridImage, 0, 0, grid.width * grid.resolution, grid.height * grid.resolution);
+    // Image row 0 is the LOWEST world y (agent cell index = row*width+col with
+    // row = floor((y-originY)/res)). The outer y-up transform already puts
+    // higher rows further up the screen, so the image is drawn straight at the
+    // grid origin — a second flip here mirrored the whole grid top-to-bottom.
+    ctx.drawImage(
+      gridImage,
+      grid.originX,
+      grid.originY,
+      grid.width * grid.resolution,
+      grid.height * grid.resolution,
+    );
     ctx.restore();
   }
 

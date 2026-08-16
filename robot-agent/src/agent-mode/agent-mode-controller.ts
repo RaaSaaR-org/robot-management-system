@@ -718,6 +718,20 @@ export class AgentModeController {
       this.abortPlan(`Safety stop (${stop.type}): ${stop.reason}`),
     );
 
+    // The place belief changes as the robot WALKS, between blocks and long
+    // before the next look or the periodic re-push. RobotStateManager
+    // publishes only on a place CHANGE, so pushing the state on it is one
+    // event per doorway, not one per pose sample — and the status rail stops
+    // saying "Hallway" while the map (which reads the belief live) says
+    // "Kitchen". Optional call: test doubles are partial.
+    let lastPublishedPlace: string | null = robotStateManager.getState?.()?.location?.place ?? null;
+    robotStateManager.subscribe?.((state) => {
+      const place = state.location?.place ?? null;
+      if (place === lastPublishedPlace) return;
+      lastPublishedPlace = place;
+      this.emit('agent:state:changed');
+    });
+
     // Optional call: test doubles for RobotStateManager may be partial.
     const restored = robotStateManager.getRestoredAgentState?.();
     if (!restored) return;

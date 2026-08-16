@@ -671,7 +671,11 @@ export class PatrolService {
       `/api/v1/robots/${encodeURIComponent(run.robotId)}/agent-mode/patrol/runs/${encodeURIComponent(runId)}/promote`,
       {},
     );
-    return { ok: isRecord(answer) && answer.ok === true };
+    const ok = isRecord(answer) && answer.ok === true;
+    // The robot rewrote its per-checkpoint baseline for this route+window; remember
+    // it here too so getBaseline (and the app's photo pairs) follow the promotion.
+    if (ok) await this.repo.setRunPromoted(runId, new Date(this.now()));
+    return { ok };
   }
 
   /** The robot's known places, for the route editor. */
@@ -700,15 +704,19 @@ export class PatrolService {
   }
 
   /**
-   * The baseline for a route (+ window): the latest finished `baseline` run
-   * (any non-skipped one when none finished). Photos keyed by checkpoint id,
-   * values are keys relative to that run (`<checkpointId>.jpg`).
+   * The baseline for a route (+ window): the most recently promoted run when
+   * an operator promoted one ("Promote to baseline"), else the latest finished
+   * `baseline` run (any non-skipped one when none finished). Photos keyed by
+   * checkpoint id, values are keys relative to that run (`<checkpointId>.jpg`).
    */
   async getBaseline(routeId: string, window?: string | null): Promise<PatrolBaselineInfo | null> {
     await this.getRoute(routeId);
-    const runs = await this.repo.listRuns({ routeId, mode: 'baseline', limit: 100 });
-    const candidates = runs.filter((r) => r.status !== 'skipped' && (window ? r.window === window : true));
-    const pick = candidates.find((r) => r.status === 'done') ?? candidates[0];
+    let pick: PatrolRunRecord | null = await this.repo.findLatestPromotedRun(routeId, window ?? null);
+    if (!pick) {
+      const runs = await this.repo.listRuns({ routeId, mode: 'baseline', limit: 100 });
+      const candidates = runs.filter((r) => r.status !== 'skipped' && (window ? r.window === window : true));
+      pick = candidates.find((r) => r.status === 'done') ?? candidates[0] ?? null;
+    }
     if (!pick) return null;
     const photos: Record<string, string> = {};
     for (const leg of pick.legs) {

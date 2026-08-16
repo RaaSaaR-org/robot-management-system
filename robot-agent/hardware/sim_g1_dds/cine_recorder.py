@@ -170,8 +170,12 @@ class Recorder:
             if self._proc is not None and self._proc.stderr is not None:
                 err = self._proc.stderr.read()
             self.error = f"ffmpeg pipe closed: {err.decode(errors='replace')[-400:]}"
+            self.close()
         except Exception as exc:  # noqa: BLE001 -- a broken clip must never stop the sim
             self.error = f"{type(exc).__name__}: {exc}"
+            # Release the renderer / reap ffmpeg right away so status() stops
+            # saying recording:true and the slot can be reused for this id.
+            self.close()
 
     def _aim(self, node) -> None:
         cam = self._cam
@@ -320,8 +324,15 @@ class RecorderSlot:
                   f"{cfg.width}x{cfg.height}@{cfg.fps}")
         with self._lock:
             live = list(self._current.items())
-        for _, rec in live:
+        for rid, rec in live:
             rec.tick(node)
+            if rec._closed:  # errored mid-frame: retire it like a stopped one
+                last = rec.status()
+                print(f"[Recorder:{rid}] aborted {last['path']} after {last['frames']} frames"
+                      f" ERROR {last['error']}")
+                with self._lock:
+                    self._last[rid] = last
+                    self._current.pop(rid, None)
 
     def close(self) -> None:
         with self._lock:

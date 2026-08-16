@@ -207,6 +207,16 @@ describe('patrolStore actions', () => {
     api.markFindingNormal.mockResolvedValue({ finding: finding({ status: 'dismissed_normal' }), robotNotified: true });
     await usePatrolStore.getState().markFindingNormal('f-1');
     expect(usePatrolStore.getState().findingsByRun['run-1'][0].status).toBe('dismissed_normal');
+    expect(usePatrolStore.getState().findingRobotNotified['f-1']).toBe(true);
+  });
+
+  it('markFindingNormal keeps robotNotified:false so the UI can say the robot was not taught', async () => {
+    api.getRun.mockResolvedValue({ ...run({ status: 'done', findingCount: 1 }), findings: [finding()] });
+    await usePatrolStore.getState().fetchRun('run-1');
+    api.markFindingNormal.mockResolvedValue({ finding: finding({ status: 'dismissed_normal' }), robotNotified: false });
+    await usePatrolStore.getState().markFindingNormal('f-1');
+    expect(usePatrolStore.getState().findingsByRun['run-1'][0].status).toBe('dismissed_normal');
+    expect(usePatrolStore.getState().findingRobotNotified['f-1']).toBe(false);
   });
 
   it('a refused start is a result, not an error', async () => {

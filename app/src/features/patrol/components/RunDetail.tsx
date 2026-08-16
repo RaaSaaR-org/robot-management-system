@@ -86,12 +86,14 @@ type PhotoMode = (typeof PHOTO_MODES)[number]['value'];
 interface FindingRowProps {
   finding: PatrolFinding;
   busy: boolean;
+  /** `false` when "This is normal" reached the server but not the robot. */
+  robotNotified?: boolean;
   onAck: (id: string) => void;
   onNormal: (id: string) => void;
   onEscalate: (id: string) => void;
 }
 
-const FindingRow = memo(function FindingRow({ finding, busy, onAck, onNormal, onEscalate }: FindingRowProps) {
+const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAck, onNormal, onEscalate }: FindingRowProps) {
   const ev = finding.evidence ?? {};
   const closed = finding.status === 'dismissed_normal' || finding.status === 'escalated';
   const confidencePct = Math.round(finding.confidence * 100);
@@ -145,6 +147,15 @@ const FindingRow = memo(function FindingRow({ finding, busy, onAck, onNormal, on
           blob {ev.blob.areaM2.toFixed(2)} m² at ({ev.blob.x.toFixed(1)}, {ev.blob.y.toFixed(1)})
         </p>
       )}
+      {finding.status === 'dismissed_normal' && robotNotified === false && (
+        <p
+          className={cn(PATROL_ATTENTION_TEXT, 'text-xs break-words min-w-0 border-l-2 border-l-amber-500/60 pl-2')}
+          role="status"
+          data-testid="patrol-finding-robot-not-notified"
+        >
+          Marked normal here — the robot was offline, so its baseline was not updated. It will flag this again until it is taught.
+        </p>
+      )}
       <div className="flex flex-wrap gap-1.5 sm:justify-end [&>button]:flex-1 sm:[&>button]:flex-none">
         <Button
           size="sm"
@@ -192,6 +203,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
   const route = usePatrolStore(selectRouteById(run?.routeId));
   const baseline = usePatrolStore((s) => (run ? s.baselineByRoute[`${run.routeId}|${run.window ?? ''}`] : undefined));
   const busyFindingId = usePatrolStore((s) => s.busyFindingId);
+  const findingRobotNotified = usePatrolStore((s) => s.findingRobotNotified);
   const error = usePatrolStore((s) => s.error);
 
   const fetchRun = usePatrolStore((s) => s.fetchRun);
@@ -298,6 +310,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
               key={f.id}
               finding={f}
               busy={busyFindingId === f.id}
+              robotNotified={findingRobotNotified[f.id]}
               onAck={(id) => void acknowledgeFinding(id)}
               onNormal={(id) => void markFindingNormal(id)}
               onEscalate={(id) => void escalateFinding(id)}

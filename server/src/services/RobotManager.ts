@@ -104,6 +104,14 @@ export const DEFAULT_FOOTPRINT_RADIUS_M = 0.35;
 
 /** Peer poses older than this are re-fetched from the agents before answering. */
 export const PEER_POSE_MAX_AGE_MS = 1000;
+/**
+ * Budget for ONE agent's pose read inside `refreshPoses` (TASK-207). The
+ * request is awaited by `GET /robots/:id/peers`, which every robot's
+ * PeerTracker polls with a 2 s client timeout — so a single hung agent with
+ * the generic 5 s budget blanked the peers of every OTHER robot in the fleet.
+ * A slow agent simply keeps its last pose (the catch below).
+ */
+export const PEER_POSE_REFRESH_TIMEOUT_MS = 750;
 
 /** Core robot entity */
 export interface Robot {
@@ -603,7 +611,7 @@ export class RobotManager {
     );
     if (stale.length === 0) return;
     this.poseRefreshInFlight = (async () => {
-      const client = new HttpClient(undefined, HTTP_TIMEOUTS.SHORT);
+      const client = new HttpClient(undefined, PEER_POSE_REFRESH_TIMEOUT_MS);
       await Promise.all(
         stale.map(async (registered) => {
           try {

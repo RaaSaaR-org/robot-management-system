@@ -278,8 +278,18 @@ function RobotPopup({
           transform="translate(12, 92)"
           className="cursor-pointer"
           onClick={onViewMap}
+          onKeyDown={(e) => {
+            // Keyboard-operable like a real button: Enter and Space activate,
+            // Space must not scroll the page.
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+              e.preventDefault();
+              e.stopPropagation();
+              onViewMap();
+            }
+          }}
           role="button"
           tabIndex={0}
+          aria-label={`Open ${robot.name}'s map`}
           data-testid="fleet-open-robot-map"
         >
           <rect

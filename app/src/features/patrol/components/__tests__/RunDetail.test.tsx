@@ -118,6 +118,21 @@ describe('RunDetail', () => {
     await waitFor(() => expect(api.markFindingNormal).toHaveBeenCalledWith('f-1'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
     expect(screen.getByTestId('patrol-finding-escalate')).toBeDisabled();
+    // The robot took the lesson: no warning.
+    expect(screen.queryByTestId('patrol-finding-robot-not-notified')).not.toBeInTheDocument();
+  });
+
+  it('This is normal tells the operator when the robot could not be taught (robotNotified: false)', async () => {
+    api.markFindingNormal.mockResolvedValue({ finding: { ...finding, status: 'dismissed_normal' }, robotNotified: false });
+    renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
+    await screen.findAllByTestId('patrol-finding');
+    expect(screen.queryByTestId('patrol-finding-robot-not-notified')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('patrol-finding-normal'));
+    await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
+    const note = await screen.findByTestId('patrol-finding-robot-not-notified');
+    expect(note).toHaveTextContent(/robot was offline/i);
+    expect(note).toHaveTextContent(/baseline was not updated/i);
   });
 
   it('Escalate marks the finding escalated', async () => {

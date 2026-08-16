@@ -2647,6 +2647,7 @@ model PatrolRun {
   findingCount Int       @default(0)
   planId       String?
   alertId      String? // alert raised for a skipped run (idempotency)
+  promotedAt   DateTime? // when an operator promoted this run to the route's baseline (latest wins per route+window)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -2659,6 +2660,7 @@ model PatrolRun {
   @@index([robotId])
   @@index([status])
   @@index([startedAt])
+  @@index([promotedAt])
   @@index([createdAt])
 }
 

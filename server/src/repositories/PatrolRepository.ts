@@ -45,9 +45,14 @@ export interface PatrolRouteRecord extends PatrolRoute {
   nextRunAt: string | null;
 }
 
-/** A run as stored — the wire `PatrolRun` plus the skipped-run alert id. */
+/**
+ * A run as stored — the wire `PatrolRun` plus the skipped-run alert id and
+ * `promotedAt` (set when an operator promoted the run to the route's baseline;
+ * the most recently promoted run per route+window is what `getBaseline` prefers).
+ */
 export interface PatrolRunRecord extends PatrolRun {
   alertId: string | null;
+  promotedAt: string | null;
 }
 
 export interface CreatePatrolRouteInput {
@@ -144,6 +149,7 @@ export function dbRunToDomain(row: PrismaPatrolRun): PatrolRunRecord {
     findingCount: row.findingCount,
     planId: row.planId ?? null,
     alertId: row.alertId ?? null,
+    promotedAt: toIso(row.promotedAt),
   };
 }
 
@@ -292,6 +298,23 @@ export class PatrolRepository {
 
   async setRunAlert(runId: string, alertId: string | null): Promise<void> {
     await prisma.patrolRun.update({ where: { id: runId }, data: { alertId } });
+  }
+
+  /** Server-owned: mark a run as promoted to the baseline (survives upserts like `alertId`). */
+  async setRunPromoted(runId: string, promotedAt: Date | null): Promise<PatrolRunRecord | null> {
+    const row = await prisma.patrolRun.update({ where: { id: runId }, data: { promotedAt } });
+    return row ? dbRunToDomain(row) : null;
+  }
+
+  /**
+   * The most recently promoted run for a route (+ window, when given), or null
+   * when no run of that route/window was ever promoted.
+   */
+  async findLatestPromotedRun(routeId: string, window?: string | null): Promise<PatrolRunRecord | null> {
+    const where: Record<string, unknown> = { routeId, promotedAt: { not: null } };
+    if (window !== undefined && window !== null) where.window = window;
+    const row = await prisma.patrolRun.findFirst({ where, orderBy: { promotedAt: 'desc' } });
+    return row ? dbRunToDomain(row) : null;
   }
 
   async findRunById(runId: string): Promise<PatrolRunRecord | null> {
