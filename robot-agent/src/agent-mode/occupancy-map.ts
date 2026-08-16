@@ -193,6 +193,11 @@ export class OccupancyMap {
   // ── geometry ──────────────────────────────────────────────────────────────
 
   /** True once the grid has been allocated (first integration or restore). */
+  /** The z band the 2-D grid classifies (points outside it never mark cells). */
+  heightBand(): { minM: number; maxM: number } {
+    return { minM: this.minHeightM, maxM: this.maxHeightM };
+  }
+
   isAllocated(): boolean {
     return this.width > 0;
   }

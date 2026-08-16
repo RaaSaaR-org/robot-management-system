@@ -617,6 +617,31 @@ describe('agent-mode routes', () => {
     });
   });
 
+  describe('GET /:id/agent-mode/map/cloud (TASK-211)', () => {
+    const CLOUD = { ok: true, frame: 'odom', frameId: 'b', voxelM: 0.05, pointCount: 3, returned: 3, encoding: 'f32-xyz-b64', positions: 'AAAA' };
+
+    it('proxies the robot’s cloud with `max` and a 15 s budget', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockResolvedValue(CLOUD);
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map/cloud?max=500');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(CLOUD);
+      expect(mockGet).toHaveBeenCalledWith('/api/v1/robots/robot-001/map/cloud', { params: { max: '500' } });
+      expect(httpClientArgs[0][1]).toBe(15000);
+    });
+
+    it('passes the robot’s own 404 through and 502s when unreachable', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      mockGet.mockRejectedValue(new HttpClientError('HTTP 404: {}', 404, undefined, undefined, { ok: false, error: 'no cloud yet' }));
+      let res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map/cloud');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('no cloud yet');
+      mockGet.mockRejectedValue(new HttpClientError('ECONNREFUSED'));
+      res = await request(createApp()).get('/api/robots/robot-001/agent-mode/map/cloud');
+      expect(res.status).toBe(502);
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Personal-data proxies (memory digest + identity)
   //

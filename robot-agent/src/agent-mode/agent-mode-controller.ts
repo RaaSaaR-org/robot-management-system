@@ -413,6 +413,16 @@ export class AgentModeController {
               decayS: config.agentMode.mapDecayS,
             },
             path: config.agentMode.mapPath,
+            cloud: {
+              enabled: config.agentMode.cloudEnabled,
+              path: config.agentMode.cloudPath,
+              options: {
+                voxelM: config.agentMode.cloudVoxelM,
+                maxPoints: config.agentMode.cloudMaxPoints,
+                minRangeM: config.agentMode.rangeMinM,
+                maxRangeM: config.agentMode.rangeMaxM,
+              },
+            },
             sweepHz: config.agentMode.mapSweepHz,
             range: this.range,
             getPose: () => hardwareClient.getCachedPose(),
@@ -928,6 +938,15 @@ export class AgentModeController {
   /** The keeper's live map, for callers that need geometry queries (TASK-208). */
   occupancyMap() {
     return this.mapKeeper?.getMap() ?? null;
+  }
+
+  /** The keeper's world cloud (TASK-211) — `GET /robots/:id/map/cloud`. Null when off. */
+  worldCloud() {
+    return this.mapKeeper?.getCloud() ?? null;
+  }
+
+  worldCloudEnabled(): boolean {
+    return this.mapKeeper?.isCloudEnabled() ?? false;
   }
 
   /** Accepted (same-frame, unexpired) peers, for `/map` and the scene (TASK-207). */

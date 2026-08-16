@@ -248,6 +248,7 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
 | POST   | `/api/v1/robots/:id/reset` | Reset robot state |
 | GET    | `/api/v1/robots/:id/pointcloud` | Depth/LiDAR point-cloud frame (`?sensor=`, `?full=`) |
+| GET    | `/api/v1/robots/:id/map/cloud` | The robot's own 3-D world cloud (TASK-211): the lidar frames the grid integrated, one point per voxel, ODOMETRY frame. `?max=N` even-stride sample (default 80000, 0 = all) as base64 Float32 xyz; `?format=pcd` / `?format=ply` download the whole cloud. Also on the `/agent` Map tab (3D view + Export). 404 when `AGENT_CLOUD_ENABLED=false` or nothing integrated |
 | GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `peers` + `peersDropped` (TASK-207), `nav` (the navigator's planned route, TASK-208), `frameId`, `status`; `?format=pgm` / `?format=yaml` for a ROS `map_server` pair (save both as `map.pgm` + `map.yaml`; loads in RViz / Nav2 / Foxglove) — the `/agent` page's Map tab has the same as an **Export** menu (PGM+YAML, PNG, JSON), computed in the browser from the JSON grid (TASK-210). 404 when `AGENT_MAP_ENABLED=false` |
 | GET    | `/api/v1/register` | Registration info for server |
 | GET    | `/api/v1/health` | Health check |
@@ -291,6 +292,23 @@ sidecar/sim restart (which re-zeroes odometry) starts a fresh map instead of
 lying by metres. Config: `AGENT_MAP_*` (see `.env.example`); read it at
 `GET /api/v1/robots/:id/map`; a `{knownCells, occupiedCells, lastIntegratedAt}`
 summary rides in the mirrored `AgentModeState.map`.
+
+### World point cloud (TASK-211)
+
+`src/agent-mode/world-cloud.ts` (`WorldCloud`) rides on the same keeper: every
+frame the grid integrates is also placed in the odometry frame (planar pose, z
+as measured, floor at 0) and merged one point per 5 cm voxel — the voxel CENTRE
+is stored, so the float32 snapshot round-trips exactly. It never carves; a
+voxel disappears only when (a) the cloud is over `AGENT_CLOUD_MAX_POINTS` and
+it is the oldest-seen, or (b) `purgeFreed()` — every 5th integration, within
+lidar reach — finds its (x, y) cell now confidently FREE in the grid and its z
+inside the grid's height band. That is how a carried-away crate leaves the
+cloud while a ceiling point over free floor stays. Persisted as
+`AGENT_CLOUD_PATH` next to the map, same boot-id rules, restored on first
+read; served by `GET /map/cloud` (JSON sample / PCD / PLY), proxied by the
+server at `GET /api/robots/:id/agent-mode/map/cloud`, shown on the `/agent`
+Map tab's 3D view. It replaces the hand-driven digital-twin scan sessions for
+Agent Mode robots — the cloud is a by-product of every run.
 
 ### Fleet peers on the map (TASK-207)
 

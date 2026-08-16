@@ -14,6 +14,7 @@ import type {
   AgentMemoryDigest,
   AgentModeState,
   RobotMapPayload,
+  RobotCloudPayload,
   MirroredAgentModeState,
   SceneMemory,
 } from '../types/agentmode.types';
@@ -43,6 +44,8 @@ const ENDPOINTS = {
   memory: (robotId: string) => `/robots/${robotId}/agent-mode/memory`,
   /** Server proxy of the agent's `GET /api/v1/robots/:id/map` (TASK-206/207). */
   map: (robotId: string) => `/robots/${robotId}/agent-mode/map`,
+  /** Server proxy of the agent's `GET /api/v1/robots/:id/map/cloud` (TASK-211). */
+  cloud: (robotId: string) => `/robots/${robotId}/agent-mode/map/cloud`,
   identity: (robotId: string) => `/robots/${robotId}/agent-mode/identity`,
 } as const;
 
@@ -93,6 +96,19 @@ export const agentmodeApi = {
    */
   async getMap(robotId: string): Promise<RobotMapPayload> {
     const response = await apiClient.get<RobotMapPayload>(ENDPOINTS.map(robotId));
+    return response.data;
+  },
+
+  /**
+   * The robot's own 3-D world cloud (TASK-211). `maxPoints` caps the sample
+   * (0 = every point, for exports). Same error contract as `getMap`.
+   * @param robotId - Robot ID
+   * @param maxPoints - Points to return; undefined = the agent's default
+   */
+  async getCloud(robotId: string, maxPoints?: number): Promise<RobotCloudPayload> {
+    const response = await apiClient.get<RobotCloudPayload>(ENDPOINTS.cloud(robotId), {
+      params: maxPoints === undefined ? undefined : { max: maxPoints },
+    });
     return response.data;
   },
 

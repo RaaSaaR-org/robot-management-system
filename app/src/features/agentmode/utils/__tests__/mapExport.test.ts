@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { RobotMapGrid } from '../../types/agentmode.types';
-import { gridToPgm, gridToPgmBody, gridToMapServerYaml, exportMap, PGM_OCCUPIED, PGM_FREE, PGM_UNKNOWN } from '../mapExport';
+import { gridToPgm, gridToPgmBody, gridToMapServerYaml, exportMap, PGM_OCCUPIED, PGM_FREE, PGM_UNKNOWN, decodeCloudPositions, cloudToPcd, cloudToPly, exportCloud } from '../mapExport';
 
 // 3 wide × 2 high. Cell (0,0) = bottom-left. Row y=0: occupied, free, unknown; row y=1: unknown ×3.
 const cells = new Int8Array([127, -127, 0, 0, 0, 0]);
@@ -72,5 +72,42 @@ describe('exportMap', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     expect(await exportMap('g1', { ...grid, cells: 'AAA=' }, 'pgm')).toBe(false);
     expect(click).not.toHaveBeenCalled();
+  });
+});
+
+describe('world cloud export (TASK-211)', () => {
+  const pts = new Float32Array([1, 2, 0.5, -1, 0, 1.25]);
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(pts.buffer)));
+  const cloud = {
+    ok: true as const, frame: 'odom' as const, frameId: 'boot', voxelM: 0.05, pointCount: 2, returned: 2,
+    encoding: 'f32-xyz-b64' as const, positions: b64, frames: 3, lastIntegratedAt: '2026-08-16T00:20:52.118Z', pose: null,
+  };
+
+  it('decodes the positions and writes PCD/PLY headers with the count, floats after', async () => {
+    const dec = decodeCloudPositions(cloud)!;
+    expect(Array.from(dec)).toEqual([1, 2, 0.5, -1, 0, 1.25]);
+    const pcd = new Uint8Array(await cloudToPcd(dec, 'c').arrayBuffer());
+    const text = new TextDecoder().decode(pcd);
+    expect(text).toContain('POINTS 2\nDATA binary\n');
+    const off = text.indexOf('DATA binary\n') + 'DATA binary\n'.length;
+    expect(new DataView(pcd.buffer).getFloat32(off, true)).toBe(1);
+    expect(pcd.length).toBe(off + 24);
+    const ply = new TextDecoder().decode(await cloudToPly(dec, 'c').arrayBuffer());
+    expect(ply).toContain('element vertex 2\n');
+    expect(decodeCloudPositions({ ...cloud, positions: 'AAAA' })).toBeNull();
+  });
+
+  it('exportCloud saves one file named after the robot and refuses a broken payload', () => {
+    const saved: string[] = [];
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push(this.download);
+    });
+    expect(exportCloud('g1', cloud, 'pcd')).toBe(true);
+    expect(exportCloud('g1', cloud, 'ply')).toBe(true);
+    expect(saved).toEqual(['cloud-g1-2026-08-16T00-20-52.pcd', 'cloud-g1-2026-08-16T00-20-52.ply']);
+    expect(exportCloud('g1', { ...cloud, positions: 'AAAA' }, 'pcd')).toBe(false);
+    click.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

@@ -46,6 +46,16 @@ export interface PointCloudViewerProps {
    */
   hideCeiling?: boolean;
   className?: string;
+  /**
+   * A world-frame cloud (TASK-211): draw the robot as a pose marker at this
+   * odom pose instead of a model at the origin, and orbit around the cloud's
+   * centre. `yawDeg` follows the robotics convention (0 = +x, CCW).
+   */
+  robotPose?: { x: number; y: number; yawDeg: number } | null;
+  /** Where the orbit camera looks (robotics frame, metres); default the origin. */
+  orbitTarget?: [number, number, number];
+  /** Overlay label instead of the frame's sensor name. */
+  label?: string;
 }
 
 /** Room-band clip: everything above this height is treated as ceiling. */
@@ -173,6 +183,33 @@ function PointCloudPoints({ frame, colorMode, pointSize, floorY }: PointCloudPoi
 }
 
 // ============================================================================
+// POSE MARKER — a flat arrow at the robot's odom pose (world clouds)
+// ============================================================================
+
+function PoseMarker({ pose, floorY }: { pose: { x: number; y: number; yawDeg: number }; floorY: number }) {
+  const geometry = useMemo(() => {
+    // Triangle in the robotics XY plane pointing +x; rotated by yaw below.
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0.35, 0, 0, -0.2, 0.2, 0, -0.2, -0.2, 0]), 3));
+    return g;
+  }, []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  const yaw = (pose.yawDeg * Math.PI) / 180;
+  // Robotics z-up → three.js y-up: (x, y, z) → (x, z, -y).
+  return (
+    <group position={[pose.x, floorY + 0.05, -pose.y]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh geometry={geometry} rotation={[0, 0, yaw]}>
+        <meshBasicMaterial color="#2A5FFF" side={THREE.DoubleSide} />
+      </mesh>
+      <mesh rotation={[0, 0, yaw]}>
+        <ringGeometry args={[0.32, 0.36, 32]} />
+        <meshBasicMaterial color="#2A5FFF" side={THREE.DoubleSide} transparent opacity={0.6} />
+      </mesh>
+    </group>
+  );
+}
+
+// ============================================================================
 // VIEWER
 // ============================================================================
 
@@ -186,6 +223,9 @@ export const PointCloudViewer = memo(function PointCloudViewer({
   pointSize = 0.025,
   hideCeiling = false,
   className,
+  robotPose = null,
+  orbitTarget,
+  label,
 }: PointCloudViewerProps) {
   const colors = brandColors();
   const floorY = showRobotModel ? -0.75 : 0;
@@ -201,7 +241,10 @@ export const PointCloudViewer = memo(function PointCloudViewer({
   return (
     <div className={cn('relative w-full h-full min-h-[300px] rounded-lg overflow-hidden', className)}>
       <Canvas
-        camera={{ position: [3, 2.2, 3], fov: 50 }}
+        camera={{
+          position: orbitTarget ? [orbitTarget[0] + 6, orbitTarget[2] + 7, -orbitTarget[1] + 6] : [3, 2.2, 3],
+          fov: 50,
+        }}
         gl={{ antialias: true }}
         style={{
           background: `linear-gradient(180deg, var(--bg-secondary, #1E1F24) 0%, var(--bg-tertiary, #0C1440) 100%)`,
@@ -215,6 +258,8 @@ export const PointCloudViewer = memo(function PointCloudViewer({
           {displayFrame && displayFrame.pointCount > 0 && (
             <PointCloudPoints frame={displayFrame} colorMode={colorMode} pointSize={pointSize} floorY={floorY} />
           )}
+
+          {robotPose && <PoseMarker pose={robotPose} floorY={floorY} />}
 
           {showRobotModel && (
             <Center>
@@ -240,7 +285,8 @@ export const PointCloudViewer = memo(function PointCloudViewer({
             enableRotate
             maxPolarAngle={Math.PI / 2}
             minDistance={0.8}
-            maxDistance={20}
+            maxDistance={orbitTarget ? 40 : 20}
+            target={orbitTarget ? [orbitTarget[0], floorY + orbitTarget[2], -orbitTarget[1]] : undefined}
           />
         </Suspense>
       </Canvas>
@@ -248,7 +294,7 @@ export const PointCloudViewer = memo(function PointCloudViewer({
       {/* Overlay info */}
       <div className="absolute bottom-2 left-2 text-xs text-theme-tertiary bg-surface-900/80 px-2 py-1 rounded font-mono">
         {frame && displayFrame
-          ? `${frame.sensor.replace(/_/g, ' ').toUpperCase()} · ${
+          ? `${(label ?? frame.sensor.replace(/_/g, ' ')).toUpperCase()} · ${
               clippedCount > 0
                 ? `${displayFrame.pointCount.toLocaleString(UI_DATE_LOCALE)} of ${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts · clipped`
                 : `${frame.pointCount.toLocaleString(UI_DATE_LOCALE)} pts`

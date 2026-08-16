@@ -21,6 +21,7 @@ import {
   type OccupancyMapSummary,
 } from './occupancy-map.js';
 import type { RangeSensor } from './range.js';
+import { WorldCloud, type WorldCloudOptions } from './world-cloud.js';
 
 export interface MapKeeperDeps {
   /** Off: nothing is integrated, nothing is written, `summary()` is null. */
@@ -54,6 +55,11 @@ export interface MapKeeperDeps {
    */
   poseFreshMs?: number;
   log?: (msg: string) => void;
+  /**
+   * The 3-D world cloud (TASK-211) fed by the same frames. Off by default in
+   * tests; the controller turns it on with the map. `path` null = memory only.
+   */
+  cloud?: { enabled: boolean; path?: string | null; options?: WorldCloudOptions };
 }
 
 /** What `/map` and the state summary read. */
@@ -65,6 +71,8 @@ export interface MapKeeperStatus {
   skippedNoPose: number;
   skippedStalePose: number;
   lastSkipReason: string | null;
+  /** The world cloud (TASK-211): null when off. */
+  cloud: { enabled: boolean; persisted: boolean; pointCount: number; frames: number; voxelM: number; lastIntegratedAt: string | null } | null;
 }
 
 /**
@@ -87,6 +95,10 @@ export class MapKeeper {
   private readonly log: (msg: string) => void;
 
   private map: OccupancyMap | null = null;
+  private readonly cloudEnabled: boolean;
+  private readonly cloudPath: string | null;
+  private readonly cloudOptions: WorldCloudOptions;
+  private cloud: WorldCloud | null = null;
   /** Boot ids we already tried to restore from disk — restore once per session. */
   private restoreTried = new Set<string>();
   private warnedNoBootId = false;
@@ -116,6 +128,11 @@ export class MapKeeper {
     this.poseMaxAgeMs = deps.poseMaxAgeMs ?? 750;
     this.poseFreshMs = deps.poseFreshMs ?? 150;
     this.log = deps.log ?? ((m) => console.log(m));
+    this.cloudEnabled = this.enabled && deps.cloud?.enabled === true;
+    this.cloudPath = deps.cloud?.path && deps.cloud.path.trim() ? deps.cloud.path : null;
+    const { frameId: _cf, ...cloudRest } = deps.cloud?.options ?? {};
+    void _cf;
+    this.cloudOptions = cloudRest;
     if (this.enabled) this.range.setFrameListener((frame, at) => this.onFrame(frame, at));
   }
 
@@ -140,6 +157,17 @@ export class MapKeeper {
     return this.map;
   }
 
+  /** The live world cloud (TASK-211), or null when off / no session yet. Same restore-on-read as the grid. */
+  getCloud(): WorldCloud | null {
+    if (!this.cloudEnabled) return null;
+    if (!this.cloud && this.getBootId() !== null) this.ensureSession();
+    return this.cloud;
+  }
+
+  isCloudEnabled(): boolean {
+    return this.cloudEnabled;
+  }
+
   summary(): OccupancyMapSummary | null {
     if (!this.enabled) return null;
     return this.getMap()?.summary() ?? { knownCells: 0, occupiedCells: 0, lastIntegratedAt: null };
@@ -159,6 +187,13 @@ export class MapKeeper {
       skippedNoPose: this.skippedNoPose,
       skippedStalePose: this.skippedStalePose,
       lastSkipReason: this.lastSkipReason,
+      cloud: this.cloudEnabled
+        ? {
+            enabled: true,
+            persisted: this.cloudPath !== null,
+            ...(this.getCloud()?.summary() ?? { pointCount: 0, frames: 0, voxelM: this.cloudOptions.voxelM ?? 0.05, lastIntegratedAt: null }),
+          }
+        : null,
     };
   }
 
@@ -197,7 +232,21 @@ export class MapKeeper {
     if (!report.integrated) return;
     this.integrations++;
     this.lastSkipReason = null;
+    if (this.cloud) {
+      this.cloud.integrate(frame, { x: pose.x, y: pose.y, yawDeg: pose.yawDeg }, atMs);
+      // What the grid has since carved free within lidar reach is gone from
+      // the cloud too — that is how a moved chair leaves the picture. Every
+      // frame, not every N-th: the carving that frees a cell is usually the
+      // LAST look before the robot stands still, and a purge that waits for
+      // more frames would leave the ghost standing exactly then. One linear
+      // pass over ≤300k voxels is a few milliseconds.
+      this.cloud.purgeFreed(map, { x: pose.x, y: pose.y, radiusM: this.cloudReachM() });
+    }
     if (this.integrations - this.lastSavedAtIntegration >= this.saveEvery) this.save();
+  }
+
+  private cloudReachM(): number {
+    return this.options.maxRangeM ?? 12;
   }
 
   /** Once a minute, not once a frame. */
@@ -231,16 +280,42 @@ export class MapKeeper {
         this.log('[Map] sidecar reports no boot_id — the map lives in memory only and is never restored');
       }
       this.map = new OccupancyMap({ ...this.options, frameId: null });
+      this.cloud = this.cloudEnabled ? new WorldCloud({ ...this.cloudOptions, frameId: null }) : null;
       return this.map;
     }
 
     let restored: OccupancyMap | null = null;
-    if (this.path && !this.restoreTried.has(bootId)) {
+    let restoredCloud: WorldCloud | null = null;
+    if (!this.restoreTried.has(bootId)) {
       this.restoreTried.add(bootId);
-      restored = this.load(bootId);
+      if (this.path) restored = this.load(bootId);
+      if (this.cloudEnabled && this.cloudPath) restoredCloud = this.loadCloud(bootId);
     }
     this.map = restored ?? new OccupancyMap({ ...this.options, frameId: bootId });
+    this.cloud = this.cloudEnabled ? (restoredCloud ?? new WorldCloud({ ...this.cloudOptions, frameId: bootId })) : null;
     return this.map;
+  }
+
+  private loadCloud(bootId: string): WorldCloud | null {
+    if (!this.cloudPath) return null;
+    let raw: string;
+    try {
+      raw = readFileSync(this.cloudPath, 'utf-8');
+    } catch {
+      return null;
+    }
+    try {
+      const result = WorldCloud.fromSnapshot(JSON.parse(raw) as unknown, { ...this.cloudOptions, frameId: bootId });
+      if (!result.cloud) {
+        this.log(`[Map] not restoring cloud ${this.cloudPath}: ${result.reason}`);
+        return null;
+      }
+      this.log(`[Map] restored ${result.cloud.pointCount} cloud points from ${this.cloudPath}`);
+      return result.cloud;
+    } catch (err) {
+      this.log(`[Map] not restoring cloud ${this.cloudPath}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
   }
 
   // ── persistence ───────────────────────────────────────────────────────────
@@ -279,6 +354,12 @@ export class MapKeeper {
       writeFileSync(tmp, JSON.stringify(this.map.toSnapshot()), 'utf-8');
       renameSync(tmp, this.path);
       this.lastSavedAtIntegration = this.integrations;
+      if (this.cloud && this.cloudPath && this.cloud.frameId === this.map.frameId) {
+        mkdirSync(dirname(this.cloudPath), { recursive: true });
+        const ctmp = `${this.cloudPath}.tmp`;
+        writeFileSync(ctmp, JSON.stringify(this.cloud.toSnapshot()), 'utf-8');
+        renameSync(ctmp, this.cloudPath);
+      }
       return true;
     } catch (err) {
       this.log(`[Map] could not save ${this.path}: ${err instanceof Error ? err.message : String(err)}`);
