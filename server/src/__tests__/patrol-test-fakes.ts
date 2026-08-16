@@ -142,6 +142,24 @@ export function fakeAlerts() {
   };
 }
 
+/**
+ * Photo-store double for `PatrolServiceDeps.photos`: a run's photo keys exist
+ * as long as its legs name them. `expire(runId)` takes the bytes away while
+ * the run record keeps pointing at them — exactly what the 30-day retention
+ * sweep does to a baseline.
+ */
+export function fakePhotos(repo: FakePatrolRepository) {
+  const expired = new Set<string>();
+  return {
+    expire(runId: string) { expired.add(runId); },
+    existingKeys: vi.fn(async (_robotId: string, runId: string) => {
+      if (expired.has(runId)) return new Set<string>();
+      const legs = repo.runs.get(runId)?.legs ?? [];
+      return new Set(legs.flatMap((l) => (l.photoKey ? [l.photoKey.split('/').pop() as string] : [])));
+    }),
+  };
+}
+
 export function fakeCompliance() {
   return { logSystemEvent: vi.fn(async (p: any) => ({ id: 'log', ...p })) as any };
 }

@@ -6,13 +6,15 @@
  *              route, advanced after the fire) through the same start path an
  *              operator uses — origin 'scheduled', mode 'patrol' — and, when
  *              the robot refused or was unreachable, retries ONCE after
- *              `PATROL_RETRY_MIN` (default 10) minutes. Enabled by default;
+ *              `PATROL_RETRY_MIN` (default 10) minutes. Every tick also asks
+ *              PatrolService to close runs stuck at 'running' past
+ *              `PATROL_RUN_STALE_MIN` (default 60). Enabled by default;
  *              `PATROL_SCHEDULER_ENABLED=false` turns it off.
  * @feature patrol
  */
 
 import { patrolRepository as defaultRepo, type PatrolRepository, type PatrolRouteRecord } from '../repositories/PatrolRepository.js';
-import { patrolService as defaultPatrolService, type StartRunOutcome } from './PatrolService.js';
+import { patrolService as defaultPatrolService, patrolRunStaleMs, type StartRunOutcome } from './PatrolService.js';
 import { computeNextRun, isDue, needsInitialNextRun } from '../utils/cron.js';
 
 const TICK_INTERVAL_MS = 30_000;
@@ -36,10 +38,16 @@ interface PendingRetry {
 
 export interface PatrolSchedulerDeps {
   repo?: PatrolRepository;
-  /** Only `startRun` is needed; PatrolService satisfies it. */
-  starter?: { startRun: typeof defaultPatrolService.startRun };
+  /** `startRun` drives the tick; the rest is optional so a test can pass a bare fake. */
+  starter?: {
+    startRun: typeof defaultPatrolService.startRun;
+    recordFailedStart?: typeof defaultPatrolService.recordFailedStart;
+    reconcileStaleRuns?: typeof defaultPatrolService.reconcileStaleRuns;
+  };
   now?: () => number;
   retryMinutes?: () => number;
+  /** How long a 'running' run may go quiet before it stops blocking retries. */
+  staleRunMs?: () => number;
 }
 
 export class PatrolSchedulerService {
@@ -50,6 +58,7 @@ export class PatrolSchedulerService {
   private readonly starter: NonNullable<PatrolSchedulerDeps['starter']>;
   private readonly now: () => number;
   private readonly retryMinutes: () => number;
+  private readonly staleRunMs: () => number;
   /** routeId → pending retry (in memory: a restart forgets it, which is fine). */
   private readonly retries = new Map<string, PendingRetry>();
 
@@ -58,6 +67,7 @@ export class PatrolSchedulerService {
     this.starter = deps.starter ?? defaultPatrolService;
     this.now = deps.now ?? (() => Date.now());
     this.retryMinutes = deps.retryMinutes ?? (() => patrolRetryMinutes());
+    this.staleRunMs = deps.staleRunMs ?? (() => patrolRunStaleMs());
   }
 
   /** Start the polling loop. Idempotent; a no-op when disabled by env. */
@@ -119,6 +129,16 @@ export class PatrolSchedulerService {
       for (const routeId of [...this.retries.keys()]) {
         if (!seen.has(routeId)) this.retries.delete(routeId);
       }
+      // A lost `agent:patrol:finished` (agent restart, dropped push) leaves a
+      // run at 'running' forever — a live banner that never ends for the
+      // operator and, here, a `hasRunningRun` guard that would drop every
+      // future retry for that route. Ask the robot and close what it no
+      // longer knows.
+      try {
+        await this.starter.reconcileStaleRuns?.();
+      } catch (err) {
+        console.error('[PatrolScheduler] Stale-run reconciliation failed:', err);
+      }
     } finally {
       this.ticking = false;
     }
@@ -160,11 +180,25 @@ export class PatrolSchedulerService {
     await this.fire(route, slot, false);
   }
 
-  /** True when the server already holds a run in status 'running' for this route. */
+  /**
+   * True when the server holds a run for this route that is plausibly still in
+   * progress. Bounded on purpose: an unbounded "any row says running" answer
+   * meant a single stale row (a `finished` event that never arrived) silently
+   * dropped EVERY retry for that route for the rest of the process lifetime,
+   * with only a console.log. A run that has gone quiet past the stale bound no
+   * longer blocks the retry — reconciliation closes it, and even if that could
+   * not run, the route keeps being patrolled.
+   */
   private async hasRunningRun(routeId: string): Promise<boolean> {
     try {
-      const runs = await this.repo.listRuns({ routeId, status: 'running', limit: 1 });
-      return runs.length > 0;
+      const runs = await this.repo.listRuns({ routeId, status: 'running', limit: 5 });
+      const bound = this.staleRunMs();
+      const now = this.now();
+      return runs.some((r) => {
+        const started = Date.parse(r.startedAt);
+        // An unparseable stamp is treated as in progress: never double-start a robot on a parse failure.
+        return !Number.isFinite(started) || now - started < bound;
+      });
     } catch (err) {
       console.warn(`[PatrolScheduler] running-run lookup for ${routeId} failed:`, err instanceof Error ? err.message : err);
       return false;
@@ -178,7 +212,13 @@ export class PatrolSchedulerService {
       outcome = await this.starter.startRun(route.id, { robotId: route.robotId, mode: 'patrol', origin: 'scheduled' });
     } catch (err) {
       failed = true;
-      console.error(`[PatrolScheduler] start "${route.name}" threw:`, err instanceof Error ? err.message : err);
+      const why = err instanceof Error ? err.message : String(err);
+      console.error(`[PatrolScheduler] start "${route.name}" threw:`, why);
+      // The robot answered 4xx (id mismatch, agent too old) or the lookup
+      // failed: startRun re-throws those instead of minting a phantom
+      // 'unreachable' run. Nobody is watching a scheduled slot, so record the
+      // skip here — otherwise the nightly round would silently not happen.
+      await this.starter.recordFailedStart?.(route.id, route.robotId, 'patrol', 'scheduled', why);
     }
     const refused = outcome ? !outcome.result.accepted : true;
     if (!refused) {

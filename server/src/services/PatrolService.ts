@@ -5,7 +5,10 @@
  *              `agent:finding:*` events (persist + exactly one alert per
  *              finding + one warning per skipped run + compliance trail), the
  *              start/abort/promote/normal proxies to the robot, the VDA5050
- *              export and the baseline lookup for the photo pairs.
+ *              export, the baseline lookup for the photo pairs (which also
+ *              names the runs the photo retention sweep must keep) and the
+ *              reconciliation that closes `running` runs the robot no longer
+ *              knows about.
  * @feature patrol
  */
 
@@ -15,6 +18,7 @@ import { complianceLogService as defaultComplianceLogService } from './Complianc
 import { incidentService as defaultIncidentService } from './IncidentService.js';
 import { robotManager as defaultRobotManager } from './RobotManager.js';
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
+import { patrolPhotoStore as defaultPatrolPhotoStore } from './PatrolPhotoStore.js';
 import { agentServiceAuthHeaders } from './agentServiceAuth.js';
 import {
   patrolRepository as defaultPatrolRepository,
@@ -77,11 +81,14 @@ export interface StartRunOptions {
 }
 
 /**
- * Outcome of a start attempt. `unreachable` = the robot could not be asked
- * (502 to the caller): the server itself has recorded a `skipped` run with
- * reason 'unreachable' and raised the warning alert. Otherwise `result` is
- * the robot's own {@link PatrolStartResult} (HTTP 200 even when refused —
- * the robot emits the skipped run + the server alerts on ingest).
+ * Outcome of a start attempt. `unreachable` = the robot never gave a usable
+ * answer — no answer at all (transport), or a 5xx (502 to the caller): the
+ * server itself has then recorded the `skipped` run and raised the warning
+ * alert. Otherwise `result` is the robot's own {@link PatrolStartResult}
+ * (HTTP 200 even when refused — the robot emits the skipped run and the
+ * server alerts on ingest). A 4xx is neither: the robot answered and told us
+ * what is misconfigured, so `startRun` re-throws the {@link HttpClientError}
+ * and the caller forwards the robot's own status and body.
  */
 export interface StartRunOutcome {
   result: PatrolStartResult;
@@ -129,6 +136,25 @@ export interface PatrolBaselineInfo {
   photos: Record<string, string>;
   robotId: string;
   finishedAt: string | null;
+  /**
+   * True when at least one checkpoint of the baseline run has lost its bytes
+   * (retention sweep, or the upload never arrived) and was dropped from
+   * `photos`. The UI can then say "baseline expired — re-run or promote a
+   * run" instead of rendering a photo request that can only 404.
+   */
+  photosExpired: boolean;
+}
+
+/** The slice of the photo store {@link PatrolService.getBaseline} needs to tell a live pointer from a dangling one. */
+export interface PatrolPhotoLookup {
+  existingKeys(robotId: string, runId: string): Promise<Set<string>>;
+}
+
+/** The robot's own view of patrol — `GET /api/v1/robots/:id/agent-mode/patrol`. */
+export interface PatrolRobotStatus {
+  enabled: boolean;
+  active: PatrolRun | null;
+  lastRun: PatrolRun | null;
 }
 
 /** Minimal robot lookup the service needs; RobotManager satisfies it. */
@@ -142,6 +168,7 @@ export interface PatrolServiceDeps {
   compliance?: Pick<typeof defaultComplianceLogService, 'logSystemEvent'>;
   incidents?: Pick<typeof defaultIncidentService, 'createIncident'> | null;
   robots?: PatrolRobotLookup;
+  photos?: PatrolPhotoLookup;
   /** Factory so tests can fake the transport. */
   httpClient?: (baseUrl: string, timeoutMs: number, headers?: Record<string, string>) => Pick<HttpClient, 'get' | 'post'>;
   now?: () => number;
@@ -159,6 +186,15 @@ export const DEFAULT_TIME_WINDOWS: PatrolTimeWindow[] = [
 
 /** Robot answers "accepted/refused" fast; the walk itself is asynchronous. */
 const START_TIMEOUT_MS = HTTP_TIMEOUTS.MEDIUM;
+
+/** How long a run may sit in 'running' without a sign of life before it is checked against the robot. */
+const DEFAULT_RUN_STALE_MIN = 60;
+
+/** `PATROL_RUN_STALE_MIN` (minutes, default 60) as milliseconds. */
+export function patrolRunStaleMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.PATROL_RUN_STALE_MIN);
+  return (Number.isFinite(n) && n > 0 ? n : DEFAULT_RUN_STALE_MIN) * 60_000;
+}
 
 // ============================================================================
 // PURE HELPERS (exported for tests)
@@ -221,10 +257,17 @@ export function findingAlertTail(findingId: string, runId: string): string {
   return `[finding:${findingId} run:${runId}]`;
 }
 
-/** Build the alert message for a finding (route/run/place/time + the link tail). */
+/** The alert title for a finding — the summary, prefixed so it reads as a patrol alert in any list. */
+export function findingAlertTitle(finding: PatrolFinding): string {
+  return `Patrol finding: ${finding.summary}`;
+}
+
+/**
+ * Build the alert message for a finding (route/run/place/time + the link tail).
+ * The summary is the alert's title, so it is not repeated here.
+ */
 export function findingAlertMessage(finding: PatrolFinding, run: PatrolRun | null): string {
   const parts = [
-    finding.summary,
     `route: ${run?.routeName ?? finding.routeId}`,
     `run: ${finding.runId}`,
     `place: ${finding.place ?? 'unknown'}`,
@@ -242,6 +285,24 @@ const SETTLED_LEG_STATUSES: ReadonlySet<PatrolLegStatus> = new Set(['done', 'fai
 
 function settledLegCount(legs: PatrolLeg[] | undefined): number {
   return (legs ?? []).filter((l) => SETTLED_LEG_STATUSES.has(l.status)).length;
+}
+
+/**
+ * The newest instant the run showed a sign of life: its start, or the last leg
+ * stamp the robot pushed. A long route that is genuinely still walking keeps
+ * moving this forward, so {@link PatrolService.reconcileStaleRuns} only looks
+ * at runs that have gone quiet — not merely at runs that started long ago.
+ */
+export function lastRunSignalMs(run: PatrolRun): number {
+  let t = Date.parse(run.startedAt);
+  if (!Number.isFinite(t)) t = 0;
+  for (const leg of run.legs ?? []) {
+    for (const stamp of [leg.finishedAt, leg.startedAt]) {
+      const p = stamp ? Date.parse(stamp) : NaN;
+      if (Number.isFinite(p) && p > t) t = p;
+    }
+  }
+  return t;
 }
 
 /**
@@ -380,6 +441,7 @@ export class PatrolService {
   private readonly compliance: NonNullable<PatrolServiceDeps['compliance']>;
   private readonly incidents: PatrolServiceDeps['incidents'];
   private readonly robots: PatrolRobotLookup;
+  private readonly photos: PatrolPhotoLookup;
   private readonly httpClient: NonNullable<PatrolServiceDeps['httpClient']>;
   private readonly now: () => number;
   /** runId → tail of the ingest chain: events for one run are applied in arrival order, never interleaved. */
@@ -391,6 +453,7 @@ export class PatrolService {
     this.compliance = deps.compliance ?? defaultComplianceLogService;
     this.incidents = deps.incidents === undefined ? defaultIncidentService : deps.incidents;
     this.robots = deps.robots ?? (defaultRobotManager as unknown as PatrolRobotLookup);
+    this.photos = deps.photos ?? defaultPatrolPhotoStore;
     this.httpClient =
       deps.httpClient ?? ((baseUrl, timeoutMs, headers) => new HttpClient(baseUrl, timeoutMs, headers));
     this.now = deps.now ?? (() => Date.now());
@@ -601,10 +664,28 @@ export class PatrolService {
       return { result, unreachable: false, robotId, route };
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
+      const status = error instanceof HttpClientError ? error.statusCode : undefined;
+      // The robot ANSWERED, with a 4xx: an id mismatch ("this agent serves
+      // robot g1-edu-01"), an agent too old to know the route, a rejected
+      // body. That is a configuration error, not a missed patrol. Recording a
+      // phantom 'unreachable' run + warning alert for it buried the one
+      // diagnostic that explains the failure and, on a cron route, repeated
+      // that pair every slot forever. Re-throw so the caller sees the robot's
+      // own status and body (patrol.routes' respondError forwards both).
+      if (status !== undefined && status >= 400 && status < 500) throw error;
       console.warn(`[Patrol] start ${route.name} on ${robotId} failed: ${why}`);
-      await this.recordUnreachableRun(route, robotId, mode, origin, why);
+      // No answer at all = unreachable; a 5xx = the robot is up but broken.
+      // Both mean the patrol did not happen, so both leave a skipped run and
+      // one warning alert — but with an honest reason, never "unreachable"
+      // for a robot that replied in 20 ms.
+      const answered = status !== undefined;
+      await this.recordSkippedStart(route, robotId, mode, origin, answered ? `robot rejected start: ${why}` : `unreachable: ${why}`);
       return {
-        result: { accepted: false, reason: 'unreachable', message: `Robot ${robotId} could not be reached: ${why}` },
+        result: {
+          accepted: false,
+          reason: answered ? 'robot_error' : 'unreachable',
+          message: answered ? `Robot ${robotId} rejected the start: ${why}` : `Robot ${robotId} could not be reached: ${why}`,
+        },
         unreachable: true,
         robotId,
         route,
@@ -612,13 +693,17 @@ export class PatrolService {
     }
   }
 
-  /** The server's own record of a start that never reached the robot. */
-  private async recordUnreachableRun(
+  /**
+   * The server's own record of a start that never produced a run on the robot.
+   * `reason` is the full sentence stored on the run (and shown in the alert):
+   * `unreachable: …`, `robot rejected start: …`, `start rejected: …`.
+   */
+  private async recordSkippedStart(
     route: PatrolRouteRecord,
     robotId: string,
     mode: PatrolRunMode,
     origin: PatrolRunOrigin,
-    why: string,
+    reason: string,
   ): Promise<PatrolRunRecord> {
     const nowIso = new Date(this.now()).toISOString();
     const run: PatrolRun = {
@@ -630,7 +715,7 @@ export class PatrolService {
       origin,
       window: null,
       status: 'skipped',
-      reason: `unreachable: ${why}`,
+      reason,
       startedAt: nowIso,
       finishedAt: nowIso,
       legs: skippedLegsFor(route),
@@ -639,10 +724,35 @@ export class PatrolService {
     };
     const stored = await this.repo.upsertRun(run);
     await this.raiseSkippedAlert(stored);
-    await this.audit(robotId, run.runId, 'patrol.run.skipped', `Patrol "${route.name}" skipped: unreachable`, {
+    await this.audit(robotId, run.runId, 'patrol.run.skipped', `Patrol "${route.name}" skipped: ${reason.split(':')[0]}`, {
       routeId: route.id, mode, origin, reason: run.reason,
     }, 'warning');
     return stored;
+  }
+
+  /**
+   * Record that a start attempt failed before the robot ever created a run —
+   * the robot answered 4xx and {@link startRun} re-threw, the route lost its
+   * robot, the lookup failed. An operator start reports that synchronously in
+   * the response; a SCHEDULED start has nobody to tell, so without this the
+   * slot would vanish with only a `console.error` and the operator would see
+   * no trace at all that the nightly round did not happen.
+   */
+  async recordFailedStart(
+    routeId: string,
+    robotId: string | null | undefined,
+    mode: PatrolRunMode,
+    origin: PatrolRunOrigin,
+    why: string,
+  ): Promise<void> {
+    try {
+      const route = await this.getRoute(routeId);
+      const rid = (robotId && robotId.trim()) || route.robotId;
+      if (!rid) return;
+      await this.recordSkippedStart(route, rid, mode, origin, `start rejected: ${why}`);
+    } catch (err) {
+      console.error('[Patrol] recording a failed start failed:', err instanceof Error ? err.message : err);
+    }
   }
 
   async abortRun(routeId: string, robotId?: string | null, reason?: string): Promise<{ ok: boolean; runId?: string }> {
@@ -678,6 +788,90 @@ export class PatrolService {
     return { ok };
   }
 
+  /**
+   * The robot's own patrol status (`GET …/agent-mode/patrol`). Never throws:
+   * null means "could not ask" (robot unknown, unreachable, wrong-robot 404),
+   * which is NOT the same as "the run is over".
+   */
+  async patrolStatus(robotId: string): Promise<PatrolRobotStatus | null> {
+    try {
+      const client = await this.robotClient(robotId, HTTP_TIMEOUTS.SHORT);
+      if (!client) return null;
+      const answer = await client.get<unknown>(`/api/v1/robots/${encodeURIComponent(robotId)}/agent-mode/patrol`);
+      if (!isRecord(answer)) return null;
+      return {
+        enabled: answer.enabled === true,
+        active: isPatrolRun(answer.active) ? answer.active : null,
+        lastRun: isPatrolRun(answer.lastRun) ? answer.lastRun : null,
+      };
+    } catch (err) {
+      console.warn(`[Patrol] patrol status for ${robotId} failed:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  /**
+   * Close `running` runs the robot no longer knows about.
+   *
+   * `agent:patrol:finished` is pushed once, fire-and-forget: an agent restart
+   * mid-patrol, a 3 s timeout or a brief partition loses it and the row then
+   * sits at `running` with `finishedAt` null FOREVER. The operator sees a live
+   * banner counting into days with a dead Abort button, and the scheduler's
+   * `hasRunningRun` guard silently drops every future retry for that route.
+   * So: for every run that has gone quiet for `maxAgeMs`, ask the robot. Only
+   * a robot that ANSWERS and does not know the run closes it — being
+   * unreachable is no proof that a run ended. Returns how many were closed.
+   */
+  async reconcileStaleRuns(maxAgeMs = patrolRunStaleMs()): Promise<number> {
+    let runs: PatrolRunRecord[];
+    try {
+      runs = await this.repo.listRuns({ status: 'running', limit: 200 });
+    } catch (err) {
+      console.warn('[Patrol] stale-run lookup failed:', err instanceof Error ? err.message : err);
+      return 0;
+    }
+    const nowMs = this.now();
+    const asked = new Map<string, PatrolRobotStatus | null>();
+    let closed = 0;
+    for (const run of runs) {
+      if (nowMs - lastRunSignalMs(run) < maxAgeMs) continue;
+      if (!asked.has(run.robotId)) asked.set(run.robotId, await this.patrolStatus(run.robotId));
+      const status = asked.get(run.robotId) ?? null;
+      if (!status) continue; // could not ask — leave it alone
+      if (status.active?.runId === run.runId) continue; // genuinely still walking
+      // The robot's own terminal copy wins when it has one (it knows the real
+      // legs and reason); its own stale 'running' copy — a restart leaves one
+      // behind too — does not.
+      const robotCopy =
+        status.lastRun && status.lastRun.runId === run.runId && TERMINAL_RUN_STATUSES.has(status.lastRun.status)
+          ? status.lastRun
+          : null;
+      const closedRun: PatrolRun = robotCopy ?? {
+        ...run,
+        status: 'failed',
+        finishedAt: new Date(nowMs).toISOString(),
+        reason: 'lost contact: the robot no longer knows this run',
+        legs: run.legs.map((l) => (l.status === 'pending' || l.status === 'running' ? { ...l, status: 'skipped' as PatrolLegStatus } : l)),
+      };
+      try {
+        await this.repo.upsertRun({ ...closedRun, robotId: run.robotId });
+        closed++;
+        await this.audit(
+          run.robotId,
+          run.runId,
+          'patrol.run.finished',
+          `Patrol "${run.routeName}" ${closedRun.status} (reconciled: the robot no longer knows this run)`,
+          { routeId: run.routeId, mode: run.mode, origin: run.origin, status: closedRun.status, reason: closedRun.reason ?? null, reconciled: true },
+          'warning',
+        );
+      } catch (err) {
+        console.error(`[Patrol] closing stale run ${run.runId} failed:`, err instanceof Error ? err.message : err);
+      }
+    }
+    if (closed > 0) console.warn(`[Patrol] reconciled ${closed} stale running run(s)`);
+    return closed;
+  }
+
   /** The robot's known places, for the route editor. */
   async listPlaces(robotId: string): Promise<{ places: unknown[] }> {
     const client = await this.robotClient(robotId, HTTP_TIMEOUTS.SHORT);
@@ -711,18 +905,70 @@ export class PatrolService {
    */
   async getBaseline(routeId: string, window?: string | null): Promise<PatrolBaselineInfo | null> {
     await this.getRoute(routeId);
-    let pick: PatrolRunRecord | null = await this.repo.findLatestPromotedRun(routeId, window ?? null);
-    if (!pick) {
-      const runs = await this.repo.listRuns({ routeId, mode: 'baseline', limit: 100 });
-      const candidates = runs.filter((r) => r.status !== 'skipped' && (window ? r.window === window : true));
-      pick = candidates.find((r) => r.status === 'done') ?? candidates[0] ?? null;
-    }
+    const pick = await this.pickBaselineRun(routeId, window);
     if (!pick) return null;
     const photos: Record<string, string> = {};
     for (const leg of pick.legs) {
       if (leg.photoKey) photos[leg.checkpointId] = leg.photoKey.split('/').pop() ?? leg.photoKey;
     }
-    return { runId: pick.runId, window: pick.window, photos, robotId: pick.robotId, finishedAt: pick.finishedAt ?? null };
+    // The run row outlives the bytes: the retention sweep can delete a
+    // baseline photo (30 d) while this pointer names it forever. Advertising a
+    // key the photo route can only answer 404 to made the baseline half of
+    // every photo pair read "photo unavailable" — indistinguishable from a
+    // network blip — with nothing telling the operator to re-run the baseline.
+    let photosExpired = false;
+    if (Object.keys(photos).length > 0) {
+      try {
+        const present = await this.photos.existingKeys(pick.robotId, pick.runId);
+        for (const [checkpointId, key] of Object.entries(photos)) {
+          if (!present.has(key)) {
+            delete photos[checkpointId];
+            photosExpired = true;
+          }
+        }
+      } catch (err) {
+        // A store hiccup must not look like an expired baseline: keep the pointer.
+        console.warn('[Patrol] baseline photo check failed:', err instanceof Error ? err.message : err);
+      }
+    }
+    return {
+      runId: pick.runId,
+      window: pick.window,
+      photos,
+      robotId: pick.robotId,
+      finishedAt: pick.finishedAt ?? null,
+      photosExpired,
+    };
+  }
+
+  /** The run serving as the baseline for a route (+window): promoted first, else the latest baseline-mode run. */
+  private async pickBaselineRun(routeId: string, window?: string | null): Promise<PatrolRunRecord | null> {
+    const promoted = await this.repo.findLatestPromotedRun(routeId, window ?? null);
+    if (promoted) return promoted;
+    const runs = await this.repo.listRuns({ routeId, mode: 'baseline', limit: 100 });
+    const candidates = runs.filter((r) => r.status !== 'skipped' && (window ? r.window === window : true));
+    return candidates.find((r) => r.status === 'done') ?? candidates[0] ?? null;
+  }
+
+  /**
+   * Every run id that is serving as a baseline right now — promoted, or the
+   * latest baseline-mode run — across all routes and all their windows. The
+   * retention sweep exempts these: a site that baselined in January and
+   * patrols nightly used to lose the January frames on day 31 while
+   * {@link getBaseline} kept pointing at them. A baseline superseded by a
+   * newer one drops out of this set and ages out normally.
+   */
+  async currentBaselineRunIds(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    const routes = await this.repo.listRoutes({});
+    for (const route of routes) {
+      const windows: Array<string | null> = [null, ...(route.timeWindows ?? []).map((w) => w.id)];
+      for (const w of windows) {
+        const pick = await this.pickBaselineRun(route.id, w).catch(() => null);
+        if (pick) ids.add(pick.runId);
+      }
+    }
+    return ids;
   }
 
   async listFindings(filters: PatrolFindingFilters = {}): Promise<PatrolFindingRecord[]> {
@@ -794,7 +1040,7 @@ export class PatrolService {
         const incident = await this.incidents.createIncident({
           type,
           severity,
-          title: `Patrol finding: ${f.summary}`,
+          title: findingAlertTitle(f),
           description: findingAlertMessage(f, run),
           robotId: f.robotId,
           alertIds: f.alertId ? [f.alertId] : [],
@@ -908,7 +1154,12 @@ export class PatrolService {
         run.robotId,
         'warning',
         `Patrol ${run.routeName} skipped: ${run.reason ?? 'unknown reason'}`,
-        `Patrol "${run.routeName}" (${run.mode}, ${run.origin}) was skipped: ${run.reason ?? 'unknown reason'} · run: ${run.runId} · at: ${run.startedAt} [run:${run.runId}]`,
+        // The `[run:<id>]` tail is the app's machine tag (patrolFormat's
+        // FINDING_LINK_RE, which takes `[finding:… run:…]` and this run-only
+        // shape): AlertList strips it from the prose and renders "Open run →"
+        // into RunDetail. The run id is therefore NOT repeated in the prose —
+        // it used to be printed twice, once as the raw bracketed uuid.
+        `Patrol "${run.routeName}" (${run.mode}, ${run.origin}) was skipped: ${run.reason ?? 'unknown reason'} · at: ${run.startedAt} [run:${run.runId}]`,
       );
       await this.repo.setRunAlert(run.runId, alert.id);
     } catch (err) {
@@ -967,7 +1218,7 @@ export class PatrolService {
       const alert = await this.alerts.createRobotAlert(
         stored.robotId,
         alertSeverityFor(stored.severity),
-        stored.summary,
+        findingAlertTitle(stored),
         findingAlertMessage(stored, run ?? null),
         { persistent: true },
       );
@@ -1008,3 +1259,9 @@ export class PatrolService {
 }
 
 export const patrolService = new PatrolService();
+
+// The hourly retention sweep deletes baseline photos after 30 days while the
+// run record pointing at them lives forever. Teaching the store which runs are
+// CURRENTLY serving as a baseline keeps those frames as long as they are the
+// comparison an operator is shown; superseded baselines still age out.
+defaultPatrolPhotoStore.setProtectedRuns(() => patrolService.currentBaselineRunIds());

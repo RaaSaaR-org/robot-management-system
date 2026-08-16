@@ -175,6 +175,16 @@ describe('patrol routes', () => {
     expect((await request(app).post('/api/patrol/routes/route-1/start').send({ robotId: 'ghost' })).status).toBe(404);
   });
 
+  it('a 4xx from the robot reaches the operator verbatim instead of a phantom 502 "could not be reached"', async () => {
+    // Agent id mismatch: the robot answered instantly and said exactly what is
+    // wrong. startRun re-throws instead of recording an 'unreachable' run.
+    const body = { code: 'ROBOT_NOT_FOUND', message: 'This agent serves robot g1-edu-01' };
+    mockPatrolService.startRun.mockRejectedValue(new HttpClientError(`HTTP 404: ${JSON.stringify(body)}`, 404, '/x', undefined, body));
+    const res = await request(app).post('/api/patrol/routes/route-1/start').send({ mode: 'patrol' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(body);
+  });
+
   it('POST /api/robots/:id/agent-mode/patrol (+/abort) aliases', async () => {
     mockPatrolService.startRun.mockResolvedValue({ result: { accepted: true, runId: 'run-9', message: 'ok' }, unreachable: false });
     const res = await request(app).post('/api/robots/robot-001/agent-mode/patrol').send({ routeId: 'route-1', mode: 'baseline' });

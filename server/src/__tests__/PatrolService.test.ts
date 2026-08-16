@@ -3,8 +3,9 @@
  * @description PatrolService (TASK-212): ingest persists runs/findings, raises
  *              exactly one alert per finding and one per skipped run, is
  *              idempotent; severity by type × window; route validation; the
- *              start proxy records an 'unreachable' skipped run; VDA5050
- *              export; finding actions.
+ *              start proxy (unreachable vs. a robot 4xx/5xx answer); stale-run
+ *              reconciliation; VDA5050 export; finding actions; baseline
+ *              lookup incl. expired photos.
  * @feature patrol
  */
 
@@ -20,7 +21,7 @@ import {
   DEFAULT_TIME_WINDOWS,
 } from '../services/PatrolService.js';
 import { HttpClientError } from '../services/HttpClient.js';
-import { FakePatrolRepository, fakeAlerts, fakeCompliance, makeRun, makeFinding } from './patrol-test-fakes.js';
+import { FakePatrolRepository, fakeAlerts, fakeCompliance, fakePhotos, makeRun, makeFinding } from './patrol-test-fakes.js';
 import type { AgentModeEvent } from '../types/agent-mode.types.js';
 
 function build(opts: { post?: ReturnType<typeof vi.fn>; get?: ReturnType<typeof vi.fn>; robot?: boolean; incidents?: any } = {}) {
@@ -29,11 +30,13 @@ function build(opts: { post?: ReturnType<typeof vi.fn>; get?: ReturnType<typeof 
   const compliance = fakeCompliance();
   const post = opts.post ?? vi.fn(async () => ({ accepted: true, runId: 'run-x', message: 'ok' }));
   const get = opts.get ?? vi.fn(async () => ({ places: [] }));
+  const photos = fakePhotos(repo);
   const httpCalls: Array<{ baseUrl: string; timeout: number }> = [];
   const service = new PatrolService({
     repo: repo.asRepo(),
     alerts,
     compliance,
+    photos,
     incidents: opts.incidents === undefined ? null : opts.incidents,
     robots: { getRegisteredRobot: async () => (opts.robot === false ? null : { baseUrl: 'http://robot:41243' }) },
     httpClient: (baseUrl, timeout) => {
@@ -42,7 +45,7 @@ function build(opts: { post?: ReturnType<typeof vi.fn>; get?: ReturnType<typeof 
     },
     now: () => Date.parse('2026-08-16T01:00:00.000Z'),
   });
-  return { repo, alerts, compliance, post, get, service, httpCalls };
+  return { repo, alerts, compliance, photos, post, get, service, httpCalls };
 }
 
 function ev(type: AgentModeEvent['type'], extra: Partial<AgentModeEvent>): AgentModeEvent {
@@ -202,6 +205,49 @@ describe('PatrolService — start proxy', () => {
     expect(compliance.logSystemEvent).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ eventName: 'patrol.run.skipped' }) }));
   });
 
+  it('a robot 4xx is an ANSWER, not "unreachable": it rejects out, with no phantom run and no alert', async () => {
+    // The agent serves another robot id (re-provisioned box, mixed fleet):
+    // 404 {code:'ROBOT_NOT_FOUND'}. Recording that as an unreachable skipped
+    // run buried the diagnostic and, on a cron route, minted a phantom run +
+    // warning alert every slot forever.
+    const body = { code: 'ROBOT_NOT_FOUND', message: 'This agent serves robot g1-edu-01' };
+    const post = vi.fn(async () => { throw new HttpClientError(`HTTP 404: ${JSON.stringify(body)}`, 404, '/x', undefined, body); });
+    const { service, repo, alerts, compliance } = build({ post });
+    const r = repo.seedRoute({});
+    await expect(service.startRun(r.id, { origin: 'scheduled' })).rejects.toMatchObject({ statusCode: 404, responseBody: body });
+    expect(repo.runs.size).toBe(0);
+    expect(alerts.createRobotAlert).not.toHaveBeenCalled();
+    expect(compliance.logSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it('a robot 5xx still records the skipped run + alert, but not as "unreachable"', async () => {
+    const post = vi.fn(async () => { throw new HttpClientError('HTTP 500: {"error":"boom"}', 500, '/x', undefined, { error: 'boom' }); });
+    const { service, repo, alerts } = build({ post });
+    const r = repo.seedRoute({});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = await service.startRun(r.id, { origin: 'scheduled' });
+    expect(out.result.reason).toBe('robot_error');
+    expect(out.result.message).toMatch(/rejected the start/);
+    const runs = [...repo.runs.values()];
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe('skipped');
+    expect(runs[0].reason).toMatch(/^robot rejected start: HTTP 500/);
+    expect(runs[0].reason).not.toMatch(/unreachable/);
+    expect(alerts.createRobotAlert).toHaveBeenCalledTimes(1);
+    expect(alerts.createRobotAlert.mock.calls[0][2]).toMatch(/^Patrol Night round skipped: robot rejected start/);
+  });
+
+  it('recordFailedStart leaves a trace for a scheduled slot whose start threw', async () => {
+    const { service, repo, alerts } = build();
+    const r = repo.seedRoute({});
+    await service.recordFailedStart(r.id, null, 'patrol', 'scheduled', 'HTTP 404: {"code":"ROBOT_NOT_FOUND"}');
+    const runs = [...repo.runs.values()];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'skipped', origin: 'scheduled', robotId: 'robot-001' });
+    expect(runs[0].reason).toMatch(/^start rejected: HTTP 404/);
+    expect(alerts.createRobotAlert).toHaveBeenCalledTimes(1);
+  });
+
   it('needs a robot: 400 when the route is unbound and none given, 404 when unknown', async () => {
     const { service, repo } = build({ robot: false });
     const r = repo.seedRoute({ robotId: null });
@@ -238,7 +284,14 @@ describe('PatrolService — ingest', () => {
     await service.ingest(ev('agent:patrol:finished', { patrol: skipped }));
     await service.ingest(ev('agent:patrol:finished', { patrol: skipped }));
     expect(alerts.createRobotAlert).toHaveBeenCalledTimes(1);
-    expect(alerts.createRobotAlert.mock.calls[0]).toEqual(['robot-001', 'warning', 'Patrol Night round skipped: battery', expect.stringContaining('[run:run-s]')]);
+    // The `[run:<id>]` tag is what the app parses into "Open run →" and
+    // strips from the prose — so the run id must appear ONCE, in the tag: it
+    // used to be printed twice, the second time as a raw bracketed uuid.
+    const [, , title, message] = alerts.createRobotAlert.mock.calls[0];
+    expect(title).toBe('Patrol Night round skipped: battery');
+    expect(message.endsWith('[run:run-s]')).toBe(true);
+    expect(message.match(/run-s/g)).toHaveLength(1);
+    expect(message).not.toMatch(/run: run-s/);
     expect(repo.runs.get('run-s')?.alertId).toBe('alert-1');
   });
 
@@ -261,7 +314,8 @@ describe('PatrolService — ingest', () => {
     const [robotId, sev, title, message] = alerts.createRobotAlert.mock.calls[0];
     expect(robotId).toBe('robot-001');
     expect(sev).toBe('error');
-    expect(title).toBe(f.summary);
+    expect(title).toBe(`Patrol finding: ${f.summary}`);
+    expect(message).not.toContain(f.summary); // the title carries it — the banner used to read it twice
     expect(message).toContain('[finding:finding-1 run:run-1]');
     expect(message).toContain('place: kitchen');
     expect(compliance.logSystemEvent.mock.calls.map((c: any[]) => c[0].payload.eventName)).toContain('patrol.finding.confirmed');
@@ -345,6 +399,64 @@ describe('PatrolService — ingest', () => {
   });
 });
 
+describe('PatrolService — stale run reconciliation', () => {
+  const T0 = Date.parse('2026-08-16T01:00:00.000Z');
+  /** A run that started three hours ago and never finished — the lost `finished` event. */
+  function stale(over: Record<string, unknown> = {}) {
+    return makeRun({ runId: 'run-lost', status: 'running', startedAt: '2026-08-15T22:00:00.000Z', finishedAt: null, ...over });
+  }
+
+  it('closes a run the robot no longer knows, so the live banner and the retry guard let go', async () => {
+    const get = vi.fn(async () => ({ enabled: true, active: null, lastRun: null }));
+    const { service, repo, compliance } = build({ get });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await repo.upsertRun(stale());
+    expect(await service.reconcileStaleRuns(60 * 60_000)).toBe(1);
+    const run = repo.runs.get('run-lost')!;
+    expect(run.status).toBe('failed');
+    expect(run.finishedAt).toBe(new Date(T0).toISOString());
+    expect(run.reason).toMatch(/lost contact/);
+    expect(run.legs.map((l) => l.status)).toEqual(['done', 'skipped']); // pending legs settle
+    expect(compliance.logSystemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ eventName: 'patrol.run.finished' }) }),
+    );
+  });
+
+  it('adopts the robot\'s own terminal copy when it still has one', async () => {
+    const robotCopy = makeRun({ runId: 'run-lost', status: 'done', startedAt: '2026-08-15T22:00:00.000Z', finishedAt: '2026-08-15T22:30:00.000Z', findingCount: 2 });
+    const get = vi.fn(async () => ({ enabled: true, active: null, lastRun: robotCopy }));
+    const { service, repo } = build({ get });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await repo.upsertRun(stale());
+    expect(await service.reconcileStaleRuns(60 * 60_000)).toBe(1);
+    expect(repo.runs.get('run-lost')).toMatchObject({ status: 'done', finishedAt: '2026-08-15T22:30:00.000Z', findingCount: 2 });
+  });
+
+  it('leaves a run alone when the robot is still walking it, when it cannot be asked, or when it is fresh', async () => {
+    // Still active on the robot.
+    const active = build({ get: vi.fn(async () => ({ enabled: true, active: makeRun({ runId: 'run-lost' }), lastRun: null })) });
+    await active.repo.upsertRun(stale());
+    expect(await active.service.reconcileStaleRuns(60 * 60_000)).toBe(0);
+    expect(active.repo.runs.get('run-lost')?.status).toBe('running');
+
+    // Robot unreachable: silence is not proof the run ended.
+    const down = build({ get: vi.fn(async () => { throw new HttpClientError('Connection refused: /x'); }) });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await down.repo.upsertRun(stale());
+    expect(await down.service.reconcileStaleRuns(60 * 60_000)).toBe(0);
+    expect(down.repo.runs.get('run-lost')?.status).toBe('running');
+
+    // A long route that pushed a leg two minutes ago is not stale, and is never asked about.
+    const walking = build({ get: vi.fn(async () => ({ enabled: true, active: null, lastRun: null })) });
+    await walking.repo.upsertRun(stale({
+      legs: [{ index: 0, checkpointId: 'cp-1', placeId: 'hallway', name: 'Hallway', status: 'done', finishedAt: '2026-08-16T00:58:00.000Z', findingIds: [] }],
+    }));
+    expect(await walking.service.reconcileStaleRuns(60 * 60_000)).toBe(0);
+    expect(walking.get).not.toHaveBeenCalled();
+    expect(walking.repo.runs.get('run-lost')?.status).toBe('running');
+  });
+});
+
 describe('PatrolService — finding actions', () => {
   async function seeded(extra: Parameters<typeof build>[0] = {}) {
     const c = build(extra);
@@ -404,6 +516,28 @@ describe('PatrolService — finding actions', () => {
     expect(b?.photos).toEqual({ 'cp-1': 'cp-1.jpg' });
     expect((await service.getBaseline('route-1', 'day'))?.runId).toBe('base-day');
     expect(await service.getBaseline('route-1', 'nope')).toBeNull();
+  });
+
+  it('getBaseline drops checkpoints whose photo the retention sweep took, and says so', async () => {
+    const { service, repo, photos } = build();
+    repo.seedRoute({ id: 'route-1' });
+    await repo.upsertRun(makeRun({ runId: 'base-old', mode: 'baseline', status: 'done', startedAt: '2026-01-10T01:00:00.000Z' }));
+    expect(await service.getBaseline('route-1', 'night')).toMatchObject({ photos: { 'cp-1': 'cp-1.jpg' }, photosExpired: false });
+    // Day 31: the sweep deleted the bytes, the run record still names them.
+    // Advertising that key made the baseline half of every photo pair 404 and
+    // read "photo unavailable", with nothing telling the operator to re-baseline.
+    photos.expire('base-old');
+    expect(await service.getBaseline('route-1', 'night')).toMatchObject({ runId: 'base-old', photos: {}, photosExpired: true });
+  });
+
+  it('currentBaselineRunIds names the runs the retention sweep must keep', async () => {
+    const { service, repo } = build();
+    repo.seedRoute({ id: 'route-1' });
+    await repo.upsertRun(makeRun({ runId: 'base-old', mode: 'baseline', status: 'done', startedAt: '2026-01-10T01:00:00.000Z' }));
+    await repo.upsertRun(makeRun({ runId: 'base-new', mode: 'baseline', status: 'done', startedAt: '2026-02-10T01:00:00.000Z' }));
+    await repo.upsertRun(makeRun({ runId: 'base-day', mode: 'baseline', status: 'done', window: 'day', startedAt: '2026-02-11T01:00:00.000Z' }));
+    const ids = await service.currentBaselineRunIds();
+    expect([...ids].sort()).toEqual(['base-day', 'base-new']); // the superseded January run ages out
   });
 
   it('promoteRun persists promotedAt once the robot answered ok, and getBaseline prefers the promoted run', async () => {
