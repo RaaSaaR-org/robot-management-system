@@ -25,6 +25,7 @@ status_note: |
   DEVIATION: the state carries `map?: {knownCells, occupiedCells, lastIntegratedAt}` instead of `mapCells`/`mapAge` — same content, one field.
   FIXED IN REVIEW (08c5aff): the app drew the grid vertically mirrored (double y-flip in RobotMapPanel.drawMap); the Map tab crashed the whole /agent page on a fresh session's 0×0 grid (ImageData width 0).
   OPEN FOLLOW-UP (not fixed here, needs a real G1): `g1_sidecar.py` mints BOOT_ID once per sidecar process and never rolls it — a real robot whose odometry resets without a sidecar restart would restore a map into the wrong frame. Roll BOOT_ID on an odometry discontinuity (jump > ~2 m between consecutive samples) or on source re-establishment.
+  POST-MERGE PASS 2026-08-16 (branch fix/post-merge-review-206-212): live re-verified on the house scene + a 26-finding review of the merged code. Fixed here: integrate() could grow the grid mid-frame while the per-cell de-dup Set was keyed on the old width (double votes, a wall left unknown for a frame); MapKeeper wrote grid+cloud SYNCHRONOUSLY inside the lidar frame listener and retried on every frame after a write error (now async off the frame path, per-file errors, sync write kept for shutdown); the map footer claimed "frame: odom" for a robot with no frame; a server 404 for an unregistered robot was reported as "does not publish a map (AGENT_MAP_ENABLED)".
 ---
 
 

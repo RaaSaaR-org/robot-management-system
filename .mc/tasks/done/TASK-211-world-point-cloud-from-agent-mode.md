@@ -21,6 +21,7 @@ completed: 2026-08-16
 status_note: |
   DONE 2026-08-16 — PR #228 (with TASK-210). Verified 2026-08-16: bounded voxel WorldCloud fed by the map keeper, persisted beside the grid under the boot_id rules, `GET /map/cloud` (JSON/PCD/PLY) + server proxy, 2D/3D switch on the Map tab with a Three.js cloud view, PCD/PLY in the Export menu.
   FIXED IN REVIEW (08c5aff): the orbit target was re-applied from every 3 s poll and snapped the camera back while orbiting — frozen per robot now. Known UX: PCD/PLY export needs the 3D view opened once (the menu says so).
+  POST-MERGE PASS 2026-08-16: 3-D cloud (32,083 pts) and a real PCD download (385 KB, 32,083 points) verified live. Fixed here: PCD/PLY were disabled until the 3-D view had been opened even though the export fetches the full cloud itself — the earlier "known UX" note is resolved; the 3-D view re-downloaded the whole cloud every 3 s regardless of tab visibility and stacked slow reads, and the 2-D grid was decoded underneath it.
 ---
 
 ## Description

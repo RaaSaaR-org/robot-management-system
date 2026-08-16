@@ -25,6 +25,7 @@ status_note: |
   DONE 2026-08-16 — PR #225. Verified 2026-08-16: `GET /api/robots/:id/peers` + on-demand pose refresh, `location.frame`, PeerTracker (frame gate, expiry, drop count), dynamic-obstacle overlay, fleet scene entities, server map proxy, RobotMapPanel on /agent (Map tab of the Knowledge card, not a separate panel — functionally the spec), fleet-map deep link. Tests pass in all three packages.
   FIXED IN REVIEW (08c5aff): `refreshPoses` awaited every agent with the generic 5 s budget while PeerTracker's client timeout is 2 s — one hung agent blanked every other robot's peers; now its own 750 ms budget. Fleet-map "Open robot's map" is keyboard-operable. The Zone (fleet AABB) vs TwinZone/keepout (polygon) reconciliation gap the task asked to note is now in robot-agent/AGENTS.md.
   NOT RE-RUN: the two-sim-robots recipe (README) — the peers path is covered by unit tests + the server route tests only in this pass.
+  POST-MERGE PASS 2026-08-16: peers verified live with a SECOND robot (Bravo on :41247 + a second MuJoCo sim on :8778) — A sees B on its map with the new poseAgeMs. Fixed here: refreshPoses starved the health check's DB write so Robot.location stopped being persisted (fleet map stale after reload); getPeers read the tenant-unscoped startup cache (cross-tenant enumeration with MULTI_TENANCY on) and now fails closed; a peer whose agent went silent stayed a phantom obstacle ~30 s (expiry now on the pose's own age); the fleet map's SVG buttons (marker, popup close, VIEW DETAILS) were mouse-only despite role=button/tabIndex.
 ---
 
 
