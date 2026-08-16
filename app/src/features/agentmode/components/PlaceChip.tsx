@@ -8,7 +8,7 @@
 import { memo } from 'react';
 import { cn } from '@/shared/utils';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
-import { useAgentModeStore, selectScene } from '../store/agentmodeStore';
+import { useAgentModeStore, selectPlace } from '../store/agentmodeStore';
 import type { ScenePlace } from '../types';
 
 export interface PlaceChipProps {
@@ -65,10 +65,10 @@ export const PlaceChip = memo(function PlaceChip({
   testId = 'agent-scene-place',
   className,
 }: PlaceChipProps) {
-  const scene = useAgentModeStore(selectScene);
+  const believed = useAgentModeStore(selectPlace);
   // `undefined` = "no opinion, use the store"; `null` = "unknown", which is an
   // answer and must not fall back to the store's older, better-looking one.
-  const resolved = place === undefined ? (scene?.place ?? null) : place;
+  const resolved = place === undefined ? believed : place;
 
   if (!resolved) {
     return (

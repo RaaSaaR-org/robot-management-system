@@ -24,6 +24,7 @@ import type {
   AgentRecoveryState,
   AgentSelfState,
   AgentMapSummary,
+  ScenePlace,
   AgentStateReachability,
   RobotMapPayload,
   RobotCloudPayload,
@@ -60,6 +61,12 @@ const initialState = {
    * one (older agent), `null` = map building disabled, else the counts.
    */
   map: undefined as AgentMapSummary | null | undefined,
+  /**
+   * Where the robot believes it stands, from the agent state (TASK-195).
+   * `undefined` = the agent does not report it (older agent); `null` = unknown.
+   * Independent of `scene`, which is null until the first observation.
+   */
+  place: undefined as ScenePlace | null | undefined,
   robotMap: null as RobotMapPayload | null,
   robotMapStatus: 'idle' as RobotMapStatus,
   robotMapError: null as string | null,
@@ -241,6 +248,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // date it leaves the age unknown, and unknown is what gets rendered.
           applySelf(state, agentState, mirrorObservedAt(agentState), false);
           applyMap(state, agentState);
+          applyPlace(state, agentState);
           state.plan = agentState?.plan ?? null;
           state.scene = scene ?? agentState?.scene ?? null;
         });
@@ -444,6 +452,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // snapshot is the robot's own answer, taken just now.
           applySelf(state, agentState, new Date().toISOString(), true);
           applyMap(state, agentState);
+          applyPlace(state, agentState);
         });
       } catch (error) {
         const message = getErrorMessage(error);
@@ -594,6 +603,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           // Proxied to the robot as well — a fresh answer, not the mirror.
           applySelf(state, agentState, new Date().toISOString(), true);
           applyMap(state, agentState);
+          applyPlace(state, agentState);
           if (agentState.estopActive) {
             // The agent still holds the latch — keep it and keep saying so.
             // A hardware-unconfirmed stop stays unconfirmed until it clears.
@@ -736,6 +746,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             // the server relayed it. That is as live as this console gets.
             applySelf(state, event.state, event.timestamp, true);
             applyMap(state, event.state);
+            applyPlace(state, event.state);
             if (event.state.scene) state.scene = event.state.scene;
             // A snapshot may only move the plan FORWARD — see `snapshotPlanIsStale`.
             if (event.state.plan && !snapshotPlanIsStale(state.plan, event.state.plan)) {
@@ -1079,6 +1090,15 @@ function applyMap(
   state.map = reported.map;
 }
 
+/** Fold the robot's place belief into the store; an agent that omits it is left as it was. */
+function applyPlace(
+  state: MutableState,
+  reported: { place?: ScenePlace | null } | null | undefined
+): void {
+  if (!reported || reported.place === undefined) return;
+  state.place = reported.place;
+}
+
 function applySelf(
   state: MutableState,
   reported: { self?: AgentSelfState | null } | null | undefined,
@@ -1339,6 +1359,14 @@ export const selectPlanHistory = (state: AgentModeStore) => state.planHistory;
 
 /** Select the scene memory */
 export const selectScene = (state: AgentModeStore) => state.scene;
+
+/**
+ * Where the robot believes it stands: the live scene's place when a scene has
+ * been observed, else the agent state's own belief (known before the first
+ * look), else null = unknown.
+ */
+export const selectPlace = (state: AgentModeStore): ScenePlace | null =>
+  state.scene?.place ?? state.place ?? null;
 
 /** Select the scene entity list (a shared empty array when nothing was seen yet) */
 export const selectSceneEntities = (state: AgentModeStore): SceneEntity[] =>

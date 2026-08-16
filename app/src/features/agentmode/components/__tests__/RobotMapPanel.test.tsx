@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
-import { RobotMapPanel, drawMap, mapFooterText } from '../RobotMapPanel';
+import { RobotMapPanel, decodeGridToImage, drawMap, mapFooterText } from '../RobotMapPanel';
 import { KnowledgePanel } from '../KnowledgePanel';
 import { useAgentModeStore } from '../../store/agentmodeStore';
 import type { RobotMapPayload } from '../../types/agentmode.types';
@@ -58,6 +58,24 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('decodeGridToImage', () => {
+  it('returns null for a 0×0 grid instead of constructing an ImageData of width 0 (which throws in browsers)', () => {
+    // Browsers throw IndexSizeError for `new ImageData(0, 0)`; jsdom has no ImageData at all.
+    class ThrowingImageData {
+      constructor(w: number, h: number) {
+        if (!w || !h) throw new DOMException('The source width is zero or not a number.', 'IndexSizeError');
+      }
+    }
+    vi.stubGlobal('ImageData', ThrowingImageData);
+    try {
+      const empty = { ...GRID, width: 0, height: 0, cells: '' };
+      expect(decodeGridToImage(empty, [1, 2, 3])).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('mapFooterText', () => {

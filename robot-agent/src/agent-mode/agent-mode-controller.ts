@@ -876,6 +876,7 @@ export class AgentModeController {
       recovered: this.recovered ? { ...this.recovered } : null,
       self: this.selfState(),
       map: this.mapKeeper?.summary() ?? null,
+      place: this.scene.getPlace(),
       nav: this.navState ? { ...this.navState } : null,
     };
   }

@@ -60,7 +60,8 @@ export function decodeGridToImage(grid: RobotMapGrid, occupiedRgb: [number, numb
     return null;
   }
   const n = grid.width * grid.height;
-  if (bytes.length !== n) return null;
+  // An empty grid (nothing integrated yet) has width 0 — ImageData would throw.
+  if (n <= 0 || bytes.length !== n) return null;
   const cells = new Int8Array(bytes.buffer, bytes.byteOffset, n);
   const occ = Math.round(grid.occupiedAbove * 25);
   const free = Math.round(grid.freeBelow * 25);
@@ -599,7 +600,7 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                 <PlaceChip place={map.place} testId={null} />
               </div>
             )}
-            {!map.grid && (
+            {(!map.grid || map.grid.knownCells === 0) && (
               <p
                 data-testid="agent-map-empty"
                 className="absolute inset-x-0 bottom-8 text-center card-meta px-4"

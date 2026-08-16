@@ -411,6 +411,14 @@ export interface AgentModeState {
    */
   map?: AgentMapSummary | null;
   /**
+   * Where the robot believes it is standing (TASK-195), carried at the top
+   * level so it does not depend on the scene having been observed: before the
+   * first `look` the scene snapshot is null, yet the place belief may already
+   * be confident. Optional so an older agent stays structurally compatible;
+   * `null` = unknown.
+   */
+  place?: ScenePlace | null;
+  /**
    * The route the navigator is currently following (TASK-208), or null when
    * no `goto` is running. Optional so an older robot-agent stays structurally
    * compatible.

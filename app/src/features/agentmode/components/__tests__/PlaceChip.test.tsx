@@ -115,6 +115,31 @@ describe('PlaceChip', () => {
   });
 
   /**
+   * Before the first `look` the scene snapshot is null, but the place belief
+   * (surveyed graph + odometry) can already be confident. The chip used to say
+   * "Place unknown" then — the exact wrong-aisle failure it exists to prevent —
+   * while the map panel, reading the belief directly, said "Hallway".
+   */
+  it('shows the believed place before anything was seen — the belief does not wait for a scene', () => {
+    useAgentModeStore.setState({ scene: null, place: place({ id: 'HALLWAY', name: 'Hallway' }) });
+    render(<PlaceChip />);
+
+    const chip = screen.getByTestId('agent-scene-place');
+    expect(chip).toHaveAttribute('data-place-known', 'yes');
+    expect(chip).toHaveAttribute('data-place-id', 'HALLWAY');
+    expect(chip).toHaveTextContent('Hallway');
+  });
+
+  it('prefers the live scene\'s place over the mirrored belief when both are held', () => {
+    useAgentModeStore.setState({
+      scene: scene({ place: place({ id: 'AISLE-3', name: 'Aisle 3' }) }),
+      place: place({ id: 'HALLWAY', name: 'Hallway' }),
+    });
+    render(<PlaceChip />);
+    expect(screen.getByTestId('agent-scene-place')).toHaveAttribute('data-place-id', 'AISLE-3');
+  });
+
+  /**
    * A drifted place used to differ from a current one by TEXT COLOUR ALONE —
    * muted instead of cobalt — with the word only reachable through a hover
    * tooltip that the 44px rail clipped away. WCAG 1.4.1, and the page's own
