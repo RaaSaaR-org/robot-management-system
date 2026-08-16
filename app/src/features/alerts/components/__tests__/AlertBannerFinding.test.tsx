@@ -96,3 +96,19 @@ describe('AlertBanner finding link', () => {
     expect(screen.getByText('Battery at 12%')).toBeInTheDocument();
   });
 });
+
+describe('AlertBanner sticky plate', () => {
+  it('paints an opaque plate under the translucent severity tint', async () => {
+    await renderWith(alert());
+
+    // The bar sticks under the TopBar while the page scrolls beneath it. Every
+    // dark-mode severity tint is `dark:bg-*-900/20`, so without an opaque plate
+    // the page content shows straight through the alert.
+    const sticky = screen.getByRole('alert');
+    expect(sticky.className).toContain('sticky');
+    expect(sticky.className).toContain('bg-theme-primary');
+
+    const tinted = sticky.firstElementChild as HTMLElement;
+    expect(tinted.className).toMatch(/dark:bg-yellow-900\/20/);
+  });
+});

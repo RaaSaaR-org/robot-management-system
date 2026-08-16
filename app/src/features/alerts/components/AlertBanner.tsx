@@ -170,21 +170,27 @@ export function AlertBanner({ className }: AlertBannerProps) {
 
   // In normal layout flow (rendered by AppLayout above the page content) so it
   // never overlaps page titles; sticks below the 56px TopBar while scrolling.
+  // The severity tints are translucent in dark mode (`dark:bg-*-900/20`), so the
+  // sticky bar needs an opaque plate under it — without one the page scrolls
+  // *through* the alert and neither the alert nor the content stays readable.
   return (
     <div
       role="alert"
       aria-live="assertive"
-      className={cn(
-        'sticky top-14 z-30 border rounded-brand transition-all duration-300 animate-fade-in',
-        SEVERITY_STYLES[mostCriticalAlert.severity],
-        className
-      )}
+      className={cn('sticky top-14 z-30 rounded-brand bg-theme-primary', className)}
     >
-      <AlertBannerContent
-        alert={mostCriticalAlert}
-        onAcknowledge={handleAcknowledge}
-        onDismiss={handleDismiss}
-      />
+      <div
+        className={cn(
+          'border rounded-brand transition-all duration-300 animate-fade-in',
+          SEVERITY_STYLES[mostCriticalAlert.severity]
+        )}
+      >
+        <AlertBannerContent
+          alert={mostCriticalAlert}
+          onAcknowledge={handleAcknowledge}
+          onDismiss={handleDismiss}
+        />
+      </div>
     </div>
   );
 }
