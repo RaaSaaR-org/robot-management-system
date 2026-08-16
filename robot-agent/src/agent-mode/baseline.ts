@@ -172,9 +172,8 @@ export class BaselineStore {
 
   /**
    * Record one checkpoint's normal (baseline run, or a promotion). A photo is
-   * only written when one is passed — a frame with a person in it never
-   * reaches this call, and the previous photo (if any) is removed so a
-   * person-free retake cannot silently keep an older picture.
+   * only written when one is passed; when none is, the stored one is KEPT by
+   * default (see `keepPhoto`) and its key carried forward.
    */
   recordCheckpoint(
     routeId: string,
@@ -185,6 +184,16 @@ export class BaselineStore {
       photo: Buffer | null;
       answers: ChecklistAnswers | null;
       model: string | null;
+      /**
+       * What happens to the stored JPEG when `photo` is null. Defaults to
+       * keeping it: a caller that only refreshes the checklist answers — or
+       * whose capture simply failed — must not destroy a good picture. That is
+       * exactly how one flaky frame used to wipe a checkpoint's baseline photo
+       * (promoteRun read no photo, fell back to the previous answers, and the
+       * write deleted the JPEG the baseline still needed). Pass `false` for an
+       * explicit removal: the stored photo is no longer normal.
+       */
+      keepPhoto?: boolean;
     },
   ): BaselineCheckpoint {
     const all = this.readJson<Record<string, BaselineCheckpoint>>(this.file(routeId, window, 'checkpoints.json'), {});
@@ -195,8 +204,12 @@ export class BaselineStore {
       if (input.photo) {
         this.ws.atomicWrite(photoFile, input.photo);
         photoKey = `${input.runId}/${input.checkpointId}.jpg`;
+      } else if (input.keepPhoto === false) {
+        if (fs.existsSync(photoFile)) fs.rmSync(photoFile, { force: true });
       } else if (fs.existsSync(photoFile)) {
-        fs.rmSync(photoFile, { force: true });
+        // Kept: the bytes still belong to the run that took them, so the key
+        // must stay that run's — not this call's, which brought no photo.
+        photoKey = prev?.photoKey ?? null;
       }
     }
     const rec: BaselineCheckpoint = {

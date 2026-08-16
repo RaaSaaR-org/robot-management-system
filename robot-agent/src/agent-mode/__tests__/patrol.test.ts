@@ -6,7 +6,10 @@
  *              route and still go home), the fail-closed preconditions with their
  *              machine reasons, time-window gating, the route source's cache, the
  *              capture host (a frame with a person is never stored; the hash gate
- *              spares the model), and the run store's retention sweep.
+ *              spares the model), the regressions around a blind run (dead
+ *              camera / dead checklist model), promotion of a run with a failed
+ *              capture, the en-route diff on a leg that has no baseline, a run
+ *              left `running` by a restart, and the run store's retention sweep.
  * @feature agentmode
  * @status test
  */
@@ -409,6 +412,86 @@ describe('PatrolRunner — leg semantics', () => {
     expect(h.runner.baseline!.checkpoint('house-night', 'night', 'cp-kitchen')).toBeNull();
   });
 
+  // A capture that fails does NOT fail its leg (only a failed goto does), so
+  // without the blind-leg accounting these runs read as "all clear".
+  it('a run whose captures all fail ends failed — never "done, 0 finding(s)" — and the summary names the uninspected checkpoints', async () => {
+    h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
+    const host = h.runner.captureHost();
+    let summary = '';
+    const s = scriptedExec((b) => {
+      if (b.kind === 'capture') {
+        // What the block executor records when the camera sidecar or the
+        // checklist model is down: no photo, no answers, ok:false.
+        host.recordCapture(String(b.params.checkpointId), { photo: null, photoDropped: 'error', answers: null, model: null, inspection: 'error', similarity: null });
+        return { ok: false, message: 'the checklist model did not answer' };
+      }
+      return { ok: true, message: `${label(b)} ok` };
+    });
+    const finish = s.exec.finish;
+    s.exec.finish = (b, out) => {
+      if (b.kind === 'patrol') summary = out.message;
+      finish(b, out);
+    };
+    const done = await h.runner.drive('plan-blind', s.exec);
+    expect(done.status).toBe('failed');
+    expect(done.reason).toBe('no control photo or checklist answer at any checkpoint');
+    expect(done.findingCount).toBe(0);
+    expect(summary).not.toMatch(/^Patrol done/);
+    expect(summary).toMatch(/No control photo or checklist answer for Hallway, Kitchen, Living room — those checkpoints were not inspected/);
+    expect(s.skipped).toContain('inspect:cp-hall: capture failed');
+  });
+
+  it('one blind checkpoint keeps the run done but is named in the reason and the summary', async () => {
+    h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
+    const host = h.runner.captureHost();
+    let summary = '';
+    const s = scriptedExec((b) => {
+      if (b.kind === 'capture') {
+        const cp = String(b.params.checkpointId);
+        if (cp === 'cp-kitchen') {
+          host.recordCapture(cp, { photo: null, photoDropped: 'error', answers: null, model: null, inspection: 'error', similarity: null });
+          return { ok: false, message: 'no camera frame' };
+        }
+        host.recordCapture(cp, { photo: jpeg(1), photoDropped: null, answers: ANSWERS, model: 'test-vlm', inspection: null, similarity: null });
+      }
+      return { ok: true, message: `${label(b)} ok` };
+    });
+    const finish = s.exec.finish;
+    s.exec.finish = (b, out) => {
+      if (b.kind === 'patrol') summary = out.message;
+      finish(b, out);
+    };
+    const done = await h.runner.drive('plan-half-blind', s.exec);
+    expect(done.status).toBe('done');
+    expect(done.reason).toBe('1 checkpoint(s) not inspected');
+    expect(summary).toMatch(/No control photo or checklist answer for Kitchen — those checkpoints were not inspected/);
+  });
+
+  it('promoteRun never promotes a checkpoint whose capture failed — the baseline photo it already has survives', async () => {
+    h.runner.baseline!.recordCheckpoint('house-night', 'night', { checkpointId: 'cp-kitchen', runId: 'base-run', photo: jpeg(4), answers: ANSWERS, model: 'm' });
+    const { run } = h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
+    const host = h.runner.captureHost();
+    const s = scriptedExec((b) => {
+      if (b.kind === 'capture') {
+        const cp = String(b.params.checkpointId);
+        if (cp === 'cp-kitchen') {
+          host.recordCapture(cp, { photo: null, photoDropped: 'error', answers: null, model: null, inspection: 'error', similarity: null });
+          return { ok: false, message: 'camera sidecar is down' };
+        }
+        host.recordCapture(cp, { photo: jpeg(1), photoDropped: null, answers: ANSWERS, model: 'test-vlm', inspection: null, similarity: null });
+      }
+      return { ok: true, message: `${label(b)} ok` };
+    });
+    await h.runner.drive('plan-promote-blind', s.exec);
+    const res = h.runner.promoteRun(run.runId);
+    expect(res.ok).toBe(true);
+    expect(res.message).toMatch(/promoted 2 checkpoint\(s\)/);
+    expect(res.message).toMatch(/1 checkpoint\(s\) skipped \(no usable capture\)/);
+    // The kitchen keeps the baseline it had: the photo on disk and its key.
+    expect(h.runner.baseline!.checkpoint('house-night', 'night', 'cp-kitchen')?.photoKey).toBe('base-run/cp-kitchen.jpg');
+    expect(h.runner.baseline!.readPhoto('house-night', 'night', 'cp-kitchen')).not.toBeNull();
+  });
+
   it('a failed leg is skipped and reported; the run continues and still finishes done', async () => {
     h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
     const s = scriptedExec((b) => (label(b) === 'goto:KITCHEN' ? { ok: false, message: 'goto place "Kitchen": no path known' } : { ok: true, message: 'ok' }));
@@ -737,8 +820,11 @@ describe('PatrolRunner — en-route comparison', () => {
     expect(missing.evidence.labels?.missing).toEqual(['crate']);
 
     // Same again, but the crate shows up (new) on the living-room leg: one
-    // unexpected_object there, and NOT a missing_object in the kitchen.
+    // unexpected_object there, and NOT a missing_object in the kitchen. The
+    // living-room leg needs its own baseline label set — an unbaselined leg is
+    // not compared at all (see "no baseline labels for the leg" below).
     h.events.length = 0;
+    h.runner.baseline!.recordLegLabels('house-night', 'night', 2, ['sofa']);
     h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
     const livingLook = { labels: ['crate'], personVisible: false, pose: null, place: 'LIVING-ROOM', map: null, peers: [], places: [] };
     const s = scriptedExec(async (b) => {
@@ -773,6 +859,89 @@ describe('PatrolRunner — en-route comparison', () => {
       { labels: ['crate'], personVisible: false, pose: null, place: 'KITCHEN', map: null, peers: [], places: [] },
     ]);
     expect(done.findingCount).toBe(0);
+  });
+});
+
+describe('PatrolRunner — en-route without a baseline', () => {
+  let h: ReturnType<typeof rig>;
+  const say = vi.fn(async (_text: string, _language?: string) => true);
+  beforeEach(() => {
+    say.mockClear();
+    h = rig({ say }); // deliberately no recordLegLabels: this window was never baselined
+  });
+  afterEach(() => {
+    h.runner.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+  });
+
+  async function driveWithLooks(looks: Array<Parameters<PatrolRunner['onLook']>[0]>): Promise<{ run: PatrolRun; summary: string }> {
+    h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
+    let summary = '';
+    const s = scriptedExec(async (b) => {
+      if (label(b) === 'goto:KITCHEN') {
+        for (const look of looks) await h.runner.onLook(look);
+      }
+      return { ok: true, message: 'ok' };
+    });
+    const finish = s.exec.finish;
+    s.exec.finish = (b, out) => {
+      if (b.kind === 'patrol') summary = out.message;
+      finish(b, out);
+    };
+    const run = await h.runner.drive('plan-nb', s.exec);
+    return { run, summary };
+  }
+
+  it('does not call every watch-listed label unexpected when the leg has no baseline labels, and says so in the summary', async () => {
+    const look = { labels: ['wall', 'crate', 'box'], personVisible: false, pose: null, place: 'KITCHEN', map: null, peers: [], places: [] };
+    const { run, summary } = await driveWithLooks([look, look, look]);
+    expect(run.findingCount).toBe(0);
+    expect(h.events.some((e) => e.type === 'agent:finding:detected')).toBe(false);
+    expect(summary).toMatch(/No baseline in window night for Kitchen — walked but not compared en route/);
+  });
+
+  it('still raises the person finding on an unbaselined leg — a person is not normal whatever the baseline says', async () => {
+    const look = { labels: ['person'], personVisible: true, pose: null, place: 'KITCHEN', map: null, peers: [], places: [] };
+    const { run } = await driveWithLooks([look, look, look]);
+    expect(run.findingCount).toBe(1);
+    const finding = h.events.find((e) => e.type === 'agent:finding:detected')!.finding!;
+    expect(finding.type).toBe('person');
+    expect(say).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PatrolRunner — a run interrupted by a restart', () => {
+  it('closes a run left running on disk at boot and emits agent:patrol:finished so the server and the UI settle', () => {
+    const h = rig();
+    // The agent dies mid-run: run.json stays `running`, nothing ever rewrites it.
+    const { run } = h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
+    expect(h.runner.runs!.findRun(run.runId)?.status).toBe('running');
+    // The live run is never touched by its own runner's reconciliation.
+    h.runner.reconcileInterruptedRuns();
+    expect(h.runner.runs!.findRun(run.runId)?.status).toBe('running');
+
+    const events: Emitted[] = [];
+    const rebooted = new PatrolRunner({
+      robotId: 'robot-1',
+      workspace: h.ws,
+      emit: (type, r, finding) => events.push({ type, run: r, ...(finding ? { finding } : {}) }),
+      log: () => {},
+    });
+    rebooted.startRetentionSweep(); // the boot hook
+    const closed = rebooted.runs!.findRun(run.runId)!;
+    expect(closed.status).toBe('aborted');
+    expect(closed.reason).toBe('interrupted by an agent restart');
+    expect(closed.finishedAt).toBeTruthy();
+    expect(closed.legs.every((l) => l.status === 'skipped')).toBe(true);
+    expect(events.map((e) => e.type)).toEqual(['agent:patrol:finished']);
+    expect(events[0]!.run.status).toBe('aborted');
+    // A second pass leaves it alone — it is no longer running.
+    rebooted.reconcileInterruptedRuns();
+    expect(events).toHaveLength(1);
+
+    rebooted.dispose();
+    h.runner.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
   });
 });
 

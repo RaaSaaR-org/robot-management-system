@@ -325,13 +325,18 @@ export function checklistCompare(
   const items: ChecklistDiffItem[] = [];
   const accepted = (item: string, value: string): boolean =>
     (acceptedAnswers[item] ?? []).map(normLabel).includes(normLabel(value));
-  const where = placeLabel(checkpoint.placeId);
+  // "Living room (Living Room)" is what naming a checkpoint after its own place
+  // produced — the parenthetical only earns its place when it says something
+  // the checkpoint name does not (seen live on 2026-08-16).
+  const place = placeLabel(checkpoint.placeId);
+  const where =
+    normLabel(checkpoint.name) === normLabel(place) ? checkpoint.name : `${checkpoint.name} (${place})`;
 
   if (current.personPresent && !baseline.personPresent && !accepted('personPresent', 'true')) {
-    items.push({ item: 'personPresent', baseline: 'false', current: 'true', type: 'person', summary: `person at ${checkpoint.name} (${where})` });
+    items.push({ item: 'personPresent', baseline: 'false', current: 'true', type: 'person', summary: `person at ${where}` });
   }
   if (current.doorState === 'open' && baseline.doorState !== 'open' && !accepted('doorState', 'open')) {
-    items.push({ item: 'doorState', baseline: baseline.doorState, current: 'open', type: 'door_open', summary: `door open at ${checkpoint.name} (${where})` });
+    items.push({ item: 'doorState', baseline: baseline.doorState, current: 'open', type: 'door_open', summary: `door open at ${where}` });
   }
   if (current.objectOnFloor.yes && !baseline.objectOnFloor.yes) {
     const what = current.objectOnFloor.what || 'object';
@@ -341,12 +346,12 @@ export function checklistCompare(
         baseline: 'no',
         current: what === 'object' ? 'yes' : `yes: ${what}`,
         type: 'object_on_floor',
-        summary: `${what} on the floor at ${checkpoint.name} (${where})`,
+        summary: `${what} on the floor at ${where}`,
       });
     }
   }
   if (current.lightsOn === 'yes' && baseline.lightsOn === 'no' && !accepted('lightsOn', 'yes')) {
-    items.push({ item: 'lightsOn', baseline: 'no', current: 'yes', type: 'lights_on', summary: `lights on at ${checkpoint.name} (${where})` });
+    items.push({ item: 'lightsOn', baseline: 'no', current: 'yes', type: 'lights_on', summary: `lights on at ${where}` });
   }
   const baseOut = new Set(baseline.outOfPlace.map(normLabel));
   const added = current.outOfPlace.map(normLabel).filter((l) => !baseOut.has(l) && !accepted('outOfPlace', l));
@@ -356,7 +361,7 @@ export function checklistCompare(
       baseline: baseline.outOfPlace.join(', ') || '(none)',
       current: added.join(', '),
       type: 'out_of_place',
-      summary: `out of place at ${checkpoint.name} (${where}): ${added.join(', ')}`,
+      summary: `out of place at ${where}: ${added.join(', ')}`,
     });
   }
   const expectations = checkpoint.expectations ?? [];
@@ -369,7 +374,7 @@ export function checklistCompare(
       baseline: String(baseline.expectations[i] ?? 'unknown'),
       current: 'false',
       type: 'expectation_failed',
-      summary: `expectation not met at ${checkpoint.name} (${where}): ${text}`,
+      summary: `expectation not met at ${where}: ${text}`,
     });
   });
   return items;
