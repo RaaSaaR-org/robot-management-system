@@ -87,6 +87,7 @@ function makeExecutor(
     say?: (text: string) => Promise<boolean>;
     range?: RangeSensor;
     sleep?: (ms: number) => Promise<void>;
+    checkForwardPath?: BlockExecutorDeps['checkForwardPath'];
   } = {}
 ) {
   const moves: MoveCall[] = [];
@@ -135,6 +136,7 @@ function makeExecutor(
     sleep: overrides.sleep ?? (async () => {}),
     now: () => 1e12,
   };
+  if (overrides.checkForwardPath) deps.checkForwardPath = overrides.checkForwardPath;
 
   return { executor: new BlockExecutor(deps), moves, actions, fsms, standHeights, scene };
 }
@@ -1040,5 +1042,91 @@ describe('BlockExecutor — a planner-written walk is clamped by the measurement
 
     expect(outcome.ok).toBe(true);
     expect(h.moves[0].durationS).toBeCloseTo(2.0 / WALK_SPEED, 3);
+  });
+});
+
+describe('BlockExecutor — turn, then walk: the clearance the turn retired is UNKNOWN AHEAD (TASK-208)', () => {
+  const SEEN: VisionObservation = { currentView: 'a room', entities: [], personVisible: false, raw: '{}', degraded: false };
+
+  function afterTurn(checkForwardPath?: BlockExecutorDeps['checkForwardPath']) {
+    const h = makeExecutor({ observation: SEEN, ...(checkForwardPath ? { checkForwardPath } : {}) });
+    h.scene.merge(SEEN, undefined, { forwardClearanceM: 3.0 });
+    // What a `turn` block does to the store: the yaw moves past the 10° tolerance.
+    h.scene.advanceYawDeg(45);
+    expect(h.scene.getForwardClearanceM()).toBeNull();
+    expect(h.scene.wasClearanceExpiredByTurn()).toBe(true);
+    return h;
+  }
+
+  it('caps a plain walk at the blind stage instead of running it unclamped', async () => {
+    const h = afterTurn();
+    const outcome = await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
+    expect(outcome.ok).toBe(true);
+    expect(h.moves[0].durationS).toBeCloseTo(1.0 / WALK_SPEED, 3);
+    expect(outcome.message).toMatch(/turned away from/);
+  });
+
+  it('lets the map extend the cap to what it KNOWS is free', async () => {
+    const h = afterTurn(() => ({ allowedM: 3.0, knownM: 2.2, blocker: null, blockerAtM: null }));
+    await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
+    expect(h.moves[0].durationS).toBeCloseTo(2.2 / WALK_SPEED, 3);
+  });
+
+  it('does not cap a navigator segment planned on the map', async () => {
+    const h = afterTurn();
+    await h.executor.execute(block('walk', { distanceM: 2.0, direction: 'forward', planned: true }));
+    expect(h.moves[0].durationS).toBeCloseTo(2.0 / WALK_SPEED, 3);
+  });
+
+  it('a clearance that was never measured still clamps nothing', async () => {
+    const h = makeExecutor({ observation: SEEN });
+    h.scene.merge(SEEN, undefined, { forwardClearanceM: null });
+    h.scene.advanceYawDeg(45);
+    expect(h.scene.wasClearanceExpiredByTurn()).toBe(false);
+    await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
+    expect(h.moves[0].durationS).toBeCloseTo(3.0 / WALK_SPEED, 3);
+  });
+
+  it('a fresh look clears the flag', async () => {
+    const h = afterTurn();
+    h.scene.merge(SEEN, undefined, { forwardClearanceM: null });
+    expect(h.scene.wasClearanceExpiredByTurn()).toBe(false);
+  });
+});
+
+describe('BlockExecutor — the map checks every forward walk (TASK-208)', () => {
+  it('stops short of a keepout, and says which and how far', async () => {
+    const h = makeExecutor({
+      checkForwardPath: (d) => ({ allowedM: 1.2, knownM: 1.2, blocker: { kind: 'keepout', label: 'TABLE' }, blockerAtM: 1.2 }),
+    });
+    const outcome = await h.executor.execute(block('walk', { distanceM: 3.0, direction: 'forward' }));
+    expect(outcome.ok).toBe(true);
+    expect(h.moves[0].durationS).toBeCloseTo(1.2 / WALK_SPEED, 3);
+    expect(outcome.message).toMatch(/Stopped 1\.80 m short of the requested 3\.00 m — TABLE keepout ahead at 1\.20 m on the map/);
+  });
+
+  it('refuses when the blocker is inside the shortest useful stage', async () => {
+    const h = makeExecutor({
+      checkForwardPath: () => ({ allowedM: 0.1, knownM: 0.1, blocker: { kind: 'robot', label: 'robot Bravo' }, blockerAtM: 0.1 }),
+    });
+    const outcome = await h.executor.execute(block('walk', { distanceM: 2.0, direction: 'forward' }));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/robot Bravo is 0\.10 m ahead on the map — refusing/);
+    expect(h.moves).toHaveLength(0);
+  });
+
+  it('says nothing new when the map has nothing to say (null), and never checks sideways', async () => {
+    let calls = 0;
+    const h = makeExecutor({
+      checkForwardPath: () => {
+        calls++;
+        return null;
+      },
+    });
+    const fwd = await h.executor.execute(block('walk', { distanceM: 2.0, direction: 'forward' }));
+    expect(fwd.ok).toBe(true);
+    expect(h.moves[0].durationS).toBeCloseTo(2.0 / WALK_SPEED, 3);
+    await h.executor.execute(block('walk', { distanceM: 1.0, direction: 'left' }));
+    expect(calls).toBe(1);
   });
 });

@@ -174,6 +174,15 @@ burns the command + each block (as it runs) + result as captions:
     --start=-0.5,-0.5,90         # x, y, yaw° to teleport to first
     --prime "look"               # a command run BEFORE recording (warms scene memory;
                                  #   Agent Mode's scene memory is per process)
+    --map                        # inset: the robot's own map — grid, keepouts (amber),
+                                 #   peers (orange), the planned route (blue), sampled
+                                 #   from GET /robots/:id/map while recording
+    --layout stack               # the robot's own camera full-width on top, its map
+                                 #   below, minimal text (implies --map; --cam defaults
+                                 #   to head_camera at 1080x810)
+    --recaption                  # no recording: rebuild <out> from its sidecars
+                                 #   (.raw.mp4, .json, .pip.mp4, .maplog.json) with the
+                                 #   current caption code / --layout / --title
 ```
 
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
@@ -182,6 +191,14 @@ per-block timings, for editing elsewhere). Rendering runs on the physics
 thread, so `/health` now reports `behind_s` and the sim warns when it trails
 real time — the executor waits in wall seconds, and a lagging sim under-executes
 every motion.
+
+Timing: the recorder emits one frame per SIM-time period and drops what it
+cannot render, so under load (two insets + a VLM on the same GPU) the clip is a
+time-compressed version of the wall clock. `demo_clip.py` samples the
+recorders' frame counters (`GET /record`) while recording and times every
+caption in VIDEO seconds (`t0`/`t1` in the JSON; `t0_wall`/`t1_wall` keep the
+wall clock), and re-cuts the eye-view inset onto the main stream's timeline —
+the two recorders drop frames independently and drifted apart by seconds.
 Needs the robot-agent running with `npm run dev:g1-edu-agent` (Ollama models
 pulled) and this sim on `--http-port 8777`.
 
@@ -333,6 +350,31 @@ G1-EDU-Bot's map, and Bravo's scene memory lists `robot G1-EDU-Bot (Agent Mode)`
 (`distanceSource: 'fleet'`) once it is within 3 m and ahead. A third agent without
 a sidecar (`npm run dev`, frame `null`) shows up as `peersDropped: 1` on both and
 is drawn by neither — the frame rule, exercised.
+
+### Planned navigation (TASK-208 — `goto` plans on the map)
+
+With `AGENT_NAV_PLANNER=grid` (the default while the map is on) a `goto` plans a
+path on the robot's own occupancy map — around walls, the peer discs and the place
+graph's keepouts — and walks it in ≤2 m segments with a look every 2 m instead of
+after every metre. Two things to try against a live node:
+
+```bash
+# Bravo in the way: A plans a two-segment route around the peer disc.
+curl -s -X POST localhost:8778/sim/reset-pose -H 'content-type: application/json' -d '{"x":0.7,"y":1.3,"yaw":0}'
+curl -s -X POST localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode/command      -H 'content-type: application/json' -d '{"text":"go to the shelf"}'
+curl -s localhost:41246/api/v1/robots/sim-robot-g1-edu/map | jq '.nav'   # {planned:true, path:[[..],[..],[..]], …}
+
+# A plain walk into the table's keepout is stopped short BEFORE the geofence fires.
+curl -s -X POST localhost:8777/sim/reset-pose -H 'content-type: application/json' -d '{"x":0,"y":0,"yaw":1.5708}'
+curl -s -X POST localhost:41246/api/v1/robots/sim-robot-g1-edu/agent-mode/command      -H 'content-type: application/json' -d '{"text":"turn right by 65 degrees, then walk 3 meters forward"}'
+# → walk block: "Walked 1.38 m … Stopped 1.60 m short of the requested 3.00 m — Table footprint keepout ahead at 1.40 m on the map."
+```
+
+The `/agent?robot=…&tab=map` panel draws the planned polyline (cobalt, dashed)
+and a ring on the goal while the `goto` runs; the `goto` card reads
+"chair · planned 3.6 m in 1 segment". `demo_clip.py "Walk to the chair" --start
+"0.5,1.6,-51.5" --prime look --cam orbit` records it (`clips/08-chair-planned.*`:
+3 walk stages / 3 looks for 2.8 m, against `05-chair`'s 5 / 5 for 3.5 m).
 
 The harness is re-runnable against a long-lived node: it starts by teleporting
 the robot to a known pose via `/sim/reset-pose` (a sim-only affordance), and

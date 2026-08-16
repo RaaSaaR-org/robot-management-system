@@ -47,6 +47,24 @@ describe('formatBlockParams', () => {
     });
   });
 
+  it('says how a goto is being driven once the navigator has reported it (TASK-208)', () => {
+    const planned: AgentBlock = {
+      ...block('goto', { entity: 'table' }),
+      nav: { planned: true, lengthM: 3.24, segments: 2, reason: null },
+    };
+    expect(formatBlockParams(planned)).toBe('table · planned 3.2 m in 2 segments');
+    const one: AgentBlock = {
+      ...block('goto', { entity: 'chair' }),
+      nav: { planned: true, lengthM: 1.9, segments: 1, reason: null },
+    };
+    expect(formatBlockParams(one)).toBe('chair · planned 1.9 m in 1 segment');
+    const sight: AgentBlock = {
+      ...block('goto', { entity: 'table' }),
+      nav: { planned: false, lengthM: null, segments: 0, reason: 'no map yet' },
+    };
+    expect(formatBlockParams(sight)).toBe('table · walking by sight');
+  });
+
   it('falls back to key: value pairs for params v1 does not model', () => {
     expect(formatBlockParams(block('greet', { text: 'Hallo!' }))).toBe('Hallo!');
     expect(formatBlockParams(block('speak', { text: 'Ich bin da.' }))).toBe('“Ich bin da.”');

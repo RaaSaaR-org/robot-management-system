@@ -71,6 +71,38 @@ export interface AgentBlock {
    * without parsing the message.
    */
   measured?: { distanceM?: number; angleDeg?: number };
+  /**
+   * For a `goto` block: whether the navigator planned its route on the
+   * occupancy map or is walking by sight (TASK-208). Set when the first plan
+   * is made, updated on every re-plan. Optional — older agents never set it.
+   */
+  nav?: AgentBlockNav;
+}
+
+/** How a `goto` is being driven — the card's "planned 3.2 m in 2 segments" / "walking by sight". */
+export interface AgentBlockNav {
+  planned: boolean;
+  /** Planned path length in metres, null when walking by sight. */
+  lengthM: number | null;
+  /** Number of straight segments in the plan (0 when walking by sight). */
+  segments: number;
+  /** Why the route is not planned, or null when it is. */
+  reason: string | null;
+}
+
+/**
+ * The navigator's current route (TASK-208): mirrored into {@link AgentModeState}
+ * and served on `/map`, where the map panel draws the polyline. Null between
+ * navigations. Coordinates are the odometry frame the map is in.
+ */
+export interface AgentNavPlan extends AgentBlockNav {
+  /** The entity being walked to. */
+  target: string;
+  /** Odometry-frame polyline, robot first; null when walking by sight. */
+  path: Array<[number, number]> | null;
+  /** Where the target is believed to be, in the odometry frame; null when unmeasured. */
+  goal: { x: number; y: number } | null;
+  updatedAt: string;
 }
 
 export interface AgentPlan {
@@ -360,6 +392,12 @@ export interface AgentModeState {
    * `GET /api/v1/robots/:id/map`.
    */
   map?: AgentMapSummary | null;
+  /**
+   * The route the navigator is currently following (TASK-208), or null when
+   * no `goto` is running. Optional so an older robot-agent stays structurally
+   * compatible.
+   */
+  nav?: AgentNavPlan | null;
 }
 
 /** Summary of the robot-built occupancy map that rides in {@link AgentModeState}. */
