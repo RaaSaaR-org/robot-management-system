@@ -34,6 +34,8 @@ const PlannedBlockSchema = z.object({
   direction: z.enum(['forward', 'backward', 'left', 'right']).optional(),
   angleDeg: z.number().optional(),
   entity: z.string().optional(),
+  // `goto` only: a room/area of the place graph, instead of a seen entity (TASK-209).
+  place: z.string().optional(),
   steps: z.number().optional(),
   // `wave` has NO hand selector — the G1 gesture is right-arm only. Its single
   // argument is the sidecar's documented `turn` (turn the torso toward the
@@ -124,7 +126,14 @@ export function coerceParams(block: PlannedBlockRaw): Record<string, unknown> {
     }
     case 'goto': {
       const entity = block.entity?.trim();
-      if (!entity) throw new PlanValidationError('block "goto" is missing "entity"');
+      const place = block.place?.trim();
+      // One or the other, never both: a block that names a thing AND a room
+      // is two orders, and the navigator would silently obey only one.
+      if (entity && place) {
+        throw new PlanValidationError('block "goto" has both "entity" and "place" — give exactly one');
+      }
+      if (place) return { place };
+      if (!entity) throw new PlanValidationError('block "goto" is missing "entity" (or "place")');
       return { entity };
     }
     case 'look':

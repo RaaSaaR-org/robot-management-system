@@ -199,6 +199,20 @@ export interface Config {
     navMaxSegmentM: number;
     /** A planned route looks (VLM + lidar) at least every this many metres (`AGENT_NAV_LOOK_EVERY_M`, default 2). */
     navLookEveryM: number;
+    /**
+     * Extra clearance, in metres, the map planner keeps beyond the robot's own
+     * footprint radius (`AGENT_NAV_PATH_MARGIN_M`, default 0.05).
+     *
+     * Measured (TASK-209, house scene): a path string-pulled past the living-room
+     * arch post at 0.353 m — a hair outside the 0.35 m footprint disc — was then
+     * refused by the executor, whose lidar corridor is the same 0.35 m half-width
+     * plus a 0.45 m stopping margin, and every re-plan gave the same segment. The
+     * planner has to keep paths where the walk clamps will let the robot go.
+     * As small as it is because the house's 1.1 m doorways map as a 1.0 m free
+     * gap (post cells plus beam width): 0.10 already found "no path" through
+     * the bedroom door on the live map, 0.05 passes it and clears the post.
+     */
+    navPathMarginM: number;
     /** Voice service for `speak`; text-only when unreachable (`VOICE_SERVICE_URL`). */
     voiceServiceUrl: string;
     /**
@@ -455,6 +469,7 @@ export const config: Config = {
     navUnknownCost: parseFloat(process.env.AGENT_NAV_UNKNOWN_COST || '3'),
     navMaxSegmentM: parseFloat(process.env.AGENT_NAV_MAX_SEGMENT_M || '2'),
     navLookEveryM: parseFloat(process.env.AGENT_NAV_LOOK_EVERY_M || '2'),
+    navPathMarginM: parseFloat(process.env.AGENT_NAV_PATH_MARGIN_M || '0.05'),
     voiceServiceUrl: process.env.VOICE_SERVICE_URL || 'http://localhost:8768',
     heartbeat: {
       enabled: process.env.AGENT_HEARTBEAT_ENABLED === 'true',

@@ -44,8 +44,22 @@ const VIEW: VisionObservation = {
   degraded: false,
 };
 
-function rig(blocks: PlannedBlock[], registered: boolean) {
+const KITCHEN: Place = {
+  ...TABLE,
+  id: 'KITCHEN',
+  name: 'Kitchen',
+  keepout: false,
+  polygon: [
+    [4, -2],
+    [8, -2],
+    [8, 2],
+    [4, 2],
+  ],
+};
+
+function rig(blocks: PlannedBlock[], registered: boolean, places: Place[] = [TABLE]) {
   const moves: Array<{ vx: number; durationS: number }> = [];
+  const summaries: string[] = [];
   const scene = new SceneMemoryStore('robot-1');
   const controller = new AgentModeController({
     robotId: 'robot-1',
@@ -56,7 +70,12 @@ function rig(blocks: PlannedBlock[], registered: boolean) {
     peerTracker: null,
     navPlanner: 'grid',
     getPose: () => ({ x: 0, y: 0, yawDeg: 0, source: 'sim', atMs: 1e12 }),
-    planner: { plan: async () => ({ blocks, fallback: false, attempts: 1 }) } as unknown as Planner,
+    planner: {
+      plan: async (input: { sceneSummary: string }) => {
+        summaries.push(input.sceneSummary);
+        return { blocks, fallback: false, attempts: 1 };
+      },
+    } as unknown as Planner,
     mirror: { emit: () => {}, push: async () => {}, logBlock: async () => {} } as unknown as ServerMirror,
     vision: { observe: async () => VIEW } as unknown as VisionClient,
     range: new RangeSensor({ enabled: false }),
@@ -79,10 +98,10 @@ function rig(blocks: PlannedBlock[], registered: boolean) {
     isVLAActive: () => false,
     getState: () => ({ batteryLevel: 90 }),
     getPlaceBelief: () => null,
-    getPlaces: () => [TABLE],
+    getPlaces: () => places,
     getPlaceFrameRegistration: () => (registered ? { registered: true, how: 'identity' } : { registered: false, reason: 'twin frame' }),
   } as unknown as RobotStateManager);
-  return { controller, moves, scene };
+  return { controller, moves, scene, summaries };
 }
 
 describe('nav plumbing — the keepout check on a plain walk', () => {
@@ -128,5 +147,43 @@ describe('nav plumbing — the goto block says how it is driven', () => {
     expect(goto.nav!.reason).toMatch(/no map/);
     // The route is over: nothing left to draw.
     expect(h.controller.getState().nav).toBeNull();
+  });
+});
+
+describe('nav plumbing — goto a place of the graph (TASK-209)', () => {
+  it('resolves the place by name, drives the navigator under that name, and tells the planner which places exist', async () => {
+    const h = rig([{ kind: 'goto', params: { place: 'kitchen' } }], true, [TABLE, KITCHEN]);
+    await h.controller.submitCommand({ text: 'walk into the kitchen' });
+    await h.controller.whenIdle();
+    const goto = h.controller.getState().plan!.blocks[0]!;
+    expect(goto.kind).toBe('goto');
+    // No map in this rig: the navigator walks by sight and says so under the place's name.
+    expect(goto.nav).toBeDefined();
+    expect(goto.nav!.planned).toBe(false);
+    expect(h.moves.length).toBeGreaterThan(0);
+    // The planner was told the vocabulary — keepouts are not places to go.
+    expect(h.summaries[0]).toContain('Places on the map (use `goto` with "place" to walk into one): Kitchen.');
+    expect(h.summaries[0]).not.toContain('TABLE');
+  });
+
+  it('fails in one sentence naming the known places when the name matches nothing', async () => {
+    const h = rig([{ kind: 'goto', params: { place: 'garage' } }], true, [TABLE, KITCHEN]);
+    await h.controller.submitCommand({ text: 'go to the garage' });
+    await h.controller.whenIdle();
+    const goto = h.controller.getState().plan!.blocks[0]!;
+    expect(goto.status).toBe('failed');
+    expect(goto.error).toMatch(/no such place on the map\. Known places: Kitchen\./);
+    expect(h.moves).toHaveLength(0);
+  });
+
+  it('refuses on an unregistered frame — the polygons are about another origin', async () => {
+    const h = rig([{ kind: 'goto', params: { place: 'kitchen' } }], false, [TABLE, KITCHEN]);
+    await h.controller.submitCommand({ text: 'walk into the kitchen' });
+    await h.controller.whenIdle();
+    const goto = h.controller.getState().plan!.blocks[0]!;
+    expect(goto.status).toBe('failed');
+    expect(goto.error).toMatch(/not registered to this robot's odometry — twin frame/);
+    expect(h.summaries[0]).not.toContain('Places on the map');
+    expect(h.moves).toHaveLength(0);
   });
 });

@@ -170,6 +170,25 @@ describe('MapKeeper', () => {
     expect(again.getMap()!.getPoseCount()).toBe(5);
     expect(again.getMap()!.cellAt(2, 0)).toBe('occupied');
 
+    // Same session, no frame yet: a plain READ restores it (TASK-209) — an
+    // agent that just restarted answers `/map` and plans on yesterday's grid
+    // before it has moved. Without a boot id, a read creates nothing.
+    const { range: rangeC } = makeRange();
+    let bootKnown = false;
+    const cold = new MapKeeper({
+      enabled: true,
+      range: rangeC,
+      path,
+      getPose: () => poseAt(Date.now()),
+      getBootId: () => (bootKnown ? 'boot-A' : null),
+      log: () => {},
+    });
+    expect(cold.getMap()).toBeNull();
+    expect(cold.snapshot()).toBeNull();
+    bootKnown = true;
+    expect(cold.getMap()!.getPoseCount()).toBe(4); // what was on disk, untouched
+    expect(cold.snapshot()!.knownCells).toBeGreaterThan(0);
+
     // Different session: refused with a reason, starts empty.
     const logsB: string[] = [];
     const { range: rangeB } = makeRange();

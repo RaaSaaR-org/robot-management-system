@@ -611,3 +611,28 @@ export class PlaceTracker {
     };
   }
 }
+
+/**
+ * The place a human (or the planner) means by `name` (TASK-209): the graph's
+ * id or name, compared case-insensitively with `-`/`_` read as spaces, so
+ * "living room", "Living Room" and "LIVING-ROOM" are all the same place. An
+ * article in front is ignored ("the kitchen"). Exact matches win; failing one,
+ * the single place whose name contains the words is taken ("living" → Living
+ * Room), and an ambiguous or empty match is `null` — the caller lists what it
+ * would have accepted, which is more use than a guess.
+ */
+export function resolvePlaceByName(name: string, places: readonly Place[]): Place | null {
+  const norm = (s: string): string =>
+    s
+      .toLowerCase()
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const wanted = norm(name).replace(/^(the|a|an|into|in|to)\s+/g, '');
+  if (!wanted) return null;
+  const exact = places.filter((p) => norm(p.id) === wanted || norm(p.name) === wanted);
+  if (exact.length === 1) return exact[0]!;
+  if (exact.length > 1) return null;
+  const partial = places.filter((p) => norm(p.name).includes(wanted) || norm(p.id).includes(wanted));
+  return partial.length === 1 ? partial[0]! : null;
+}

@@ -83,7 +83,10 @@ export function formatBlockParams(block: AgentBlock): string {
     case 'goto': {
       // TASK-208: how the navigator is driving it. Absent (older agent, or the
       // route not planned yet) → just the target.
-      const entity = str(p.entity) ?? '';
+      // TASK-209: a `place` is a room of the place graph, an `entity` a thing
+      // the camera saw. One `goto` carries exactly one of them.
+      const place = str(p.place);
+      const entity = place ? `into ${place}` : (str(p.entity) ?? '');
       const nav = block.nav;
       if (!nav) return entity;
       const how =

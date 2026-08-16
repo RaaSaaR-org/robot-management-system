@@ -123,19 +123,31 @@ export class MapKeeper {
     return this.enabled;
   }
 
-  /** The live map, or null when disabled / nothing integrated yet. */
+  /**
+   * The live map, or null when disabled / nothing integrated yet.
+   *
+   * A first read after a restart RESTORES the persisted map, provided the
+   * sidecar's boot id is already known — the map on disk used to come back only
+   * with the first lidar frame, i.e. the first motion block, so an agent that
+   * had just restarted answered `/map` with nothing and planned "no map yet"
+   * although the grid was sitting in `AGENT_MAP_PATH` (TASK-209). With no boot
+   * id yet nothing is created here: a null-frame map could never be restored
+   * into, and the first frame does the right thing anyway.
+   */
   getMap(): OccupancyMap | null {
-    return this.enabled ? this.map : null;
+    if (!this.enabled) return null;
+    if (!this.map && this.getBootId() !== null) this.ensureSession();
+    return this.map;
   }
 
   summary(): OccupancyMapSummary | null {
     if (!this.enabled) return null;
-    return this.map?.summary() ?? { knownCells: 0, occupiedCells: 0, lastIntegratedAt: null };
+    return this.getMap()?.summary() ?? { knownCells: 0, occupiedCells: 0, lastIntegratedAt: null };
   }
 
   snapshot(): OccupancyMapSnapshot | null {
-    if (!this.enabled || !this.map) return null;
-    return this.map.toSnapshot();
+    const map = this.getMap();
+    return map ? map.toSnapshot() : null;
   }
 
   status(): MapKeeperStatus {

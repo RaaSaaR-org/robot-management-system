@@ -239,8 +239,11 @@ class PoseResetRequest:
     the robot.
     """
 
-    def __init__(self, x: float, y: float, yaw: float) -> None:
+    def __init__(self, x: float, y: float, yaw: float, body: str | None = None) -> None:
         self.x, self.y, self.yaw = x, y, yaw
+        # None = the robot's planar base; a name = a STATIC prop of the scene
+        # (a crate, a chair) to be re-placed -- see SimNode._apply_body_move.
+        self.body = body
         self.done = threading.Event()
         self.error: str | None = None
 
@@ -740,8 +743,9 @@ class SimNode:
     # ------------------------------------------------------------ pose reset
 
     def request_pose_reset(self, x: float, y: float, yaw: float,
-                           timeout: float = 5.0) -> str | None:
-        """Teleport the base back to a known pose. SIM ONLY -- no real robot can.
+                           timeout: float = 5.0, body: str | None = None) -> str | None:
+        """Teleport the base back to a known pose -- or, with `body`, re-place a
+        static prop of the scene there. SIM ONLY -- no real robot can.
 
         Queued for the physics loop rather than applied here: this runs on an
         HTTP thread, and writing qpos underneath mj_step is how you get a
@@ -749,9 +753,9 @@ class SimNode:
 
         Returns None on success, an error string otherwise.
         """
-        if not self.has_base:
+        if body is None and not self.has_base:
             return "scene has no planar base to reset"
-        req = PoseResetRequest(x, y, yaw)
+        req = PoseResetRequest(x, y, yaw, body)
         with self.lock:
             self._reset_queue.append(req)
         if not req.done.wait(timeout):
@@ -763,7 +767,10 @@ class SimNode:
             pending, self._reset_queue = self._reset_queue, []
         for req in pending:
             try:
-                self._apply_pose_reset(req.x, req.y, req.yaw)
+                if req.body is not None:
+                    self._apply_body_move(req.body, req.x, req.y, req.yaw)
+                else:
+                    self._apply_pose_reset(req.x, req.y, req.yaw)
             except Exception as exc:  # noqa: BLE001
                 req.error = str(exc)
             finally:
@@ -796,6 +803,26 @@ class SimNode:
             self.loco.sync_pose(
                 float(q[self.base_qadr[0]]), float(q[self.base_qadr[1]]), float(q[self.base_qadr[2]])
             )
+
+    def _apply_body_move(self, name: str, x: float, y: float, yaw: float) -> None:
+        """Re-place a static scene body (a prop with no joint of its own) at
+        (x, y, yaw), keeping its height. It edits the MODEL's body_pos/quat,
+        which is what mj_kinematics reads for a world-attached body, so the
+        geoms, the lidar rays and the cameras all see it move on the next step.
+        A body with a joint (the robot, a free object) is refused: its pose is
+        state, not model, and belongs to qpos."""
+        bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
+        if bid < 0:
+            raise ValueError(f"no body named {name!r} in the scene")
+        if self.model.body_jntnum[bid] > 0 or self.model.body_mocapid[bid] >= 0:
+            raise ValueError(f"body {name!r} is not a static prop (it has a joint or is mocap)")
+        if self.model.body_parentid[bid] != 0:
+            raise ValueError(f"body {name!r} is not attached to the world")
+        with self.lock:
+            self.model.body_pos[bid][0] = x
+            self.model.body_pos[bid][1] = y
+            self.model.body_quat[bid][:] = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
+            mujoco.mj_forward(self.model, self.data)
 
     # -------------------------------------------------------------- rendering
 
@@ -1327,9 +1354,17 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                         })
                         return
                     target[key] = v
-                err = node.request_pose_reset(target["x"], target["y"], target["yaw"])
+                # Optional "body": re-place a static prop instead of the robot
+                # (e.g. {"body": "crate", "x": -1, "y": -0.72}) -- demo tooling.
+                prop = body.get("body")
+                if prop is not None and not isinstance(prop, str):
+                    self._send(400, {"ok": False, "error": "'body' must be a string (a scene body name)"})
+                    return
+                err = node.request_pose_reset(target["x"], target["y"], target["yaw"], body=prop)
                 if err:
-                    self._send(503, {"ok": False, "error": err})
+                    self._send(503 if prop is None else 400, {"ok": False, "error": err})
+                elif prop is not None:
+                    self._send(200, {"ok": True, "body": prop, **target})
                 else:
                     x, y, yaw = node.measured_pose()
                     self._send(200, {"ok": True, "x": x, "y": y, "yaw": yaw})

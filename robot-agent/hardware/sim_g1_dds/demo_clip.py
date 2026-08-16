@@ -43,6 +43,10 @@ from datetime import datetime
 SIM_URL = os.environ.get("SIM_URL", "http://localhost:8777")
 AGENT_URL = os.environ.get("AGENT_URL", "http://localhost:41246")
 ROBOT_ID = os.environ.get("ROBOT_ID", "sim-robot-g1-edu")
+# The robot's durable memory on disk (`--layout memory` reads the place notes
+# and the journal straight from the workspace -- see robot-agent/src/agent-mode/workspace.ts).
+WORKSPACE_DIR = pathlib.Path(os.environ.get(
+    "WORKSPACE_DIR", str(pathlib.Path(__file__).resolve().parents[2] / "data" / f"workspace-{ROBOT_ID}")))
 
 # Block kind -> short caption verb + emoji-free glyph (drawtext fonts rarely
 # have emoji; keep it to ASCII so it renders everywhere).
@@ -162,6 +166,8 @@ def block_caption(b: dict) -> str:
         a = float(p.get("angleDeg", 0))
         return f"{verb} {abs(a):.0f} deg {'left' if a > 0 else 'right'}"
     if kind == "goto":
+        if p.get("place"):
+            return f"go into the {p['place']}"
         return f"{verb} the {p.get('entity', '?')}"
     if kind in ("speak", "greet"):
         return f'{verb}: "{p.get("text", "")}"'
@@ -290,7 +296,8 @@ class CaptionSheet:
     def ffmpeg_args(self, raw: pathlib.Path, out: pathlib.Path, pip: pathlib.Path | None = None,
                     pip_w: int = 0, pip_y: int = 0,
                     map_seq: tuple[pathlib.Path, int, int, int] | None = None,
-                    stack: tuple[int, int] | None = None) -> list[str]:
+                    stack: tuple[int, int] | None = None,
+                    extra_seqs: "list[tuple[pathlib.Path, int, int, int]] | None" = None) -> list[str]:
         """map_seq = (png pattern, fps, x, y): a pre-rendered inset sequence.
         stack = (cam_w, cam_h): the raw stream is NOT the canvas -- it is
         scaled to cam_w x cam_h and placed at the top of a dark canvas of the
@@ -302,17 +309,18 @@ class CaptionSheet:
         if pip is not None and pip_w:
             args += ["-i", str(pip)]
         n_in = n_cap + (1 if pip is not None and pip_w else 0)
-        if map_seq is not None:
-            args += ["-framerate", str(map_seq[1]), "-i", str(map_seq[0])]
+        seqs = ([map_seq] if map_seq is not None else []) + list(extra_seqs or [])
+        for seq in seqs:
+            args += ["-framerate", str(seq[1]), "-i", str(seq[0])]
         chain, prev = [], "[0:v]"
         if stack is not None:
             chain.append(f"color=c=0x0e1117:s={self.w}x{self.h}:r=30[bg]")
             chain.append(f"[0:v]scale={stack[0]}:{stack[1]}[cam]")
             chain.append(f"[bg][cam]overlay={(self.w - stack[0]) // 2}:0:shortest=1[vs]")
             prev = "[vs]"
-        if map_seq is not None:
-            chain.append(f"{prev}[{n_in + 1}:v]overlay={map_seq[2]}:{map_seq[3]}:eof_action=repeat[vm]")
-            prev = "[vm]"
+        for k, seq in enumerate(seqs):
+            chain.append(f"{prev}[{n_in + 1 + k}:v]overlay={seq[2]}:{seq[3]}:eof_action=repeat[vm{k}]")
+            prev = f"[vm{k}]"
         if pip is not None and pip_w:
             # Inset first so captions draw over it. Rounded look is not worth a
             # mask; a 3 px border reads fine.
@@ -369,12 +377,18 @@ def _decode_grid(grid: dict) -> tuple[list[int], int, int]:
 
 
 def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float, fps: int,
-                      size_px: int, workdir: pathlib.Path) -> tuple[pathlib.Path, dict] | None:
+                      size_px: "int | tuple[int, int]", workdir: pathlib.Path,
+                      window: "tuple[float, float, float, float] | None" = None,
+                      places: "list[dict] | None" = None) -> tuple[pathlib.Path, dict] | None:
     """PNG sequence of the map inset (north up, fixed window over the known
-    room), one frame per 1/fps video-seconds. Returns (pattern, window)."""
+    room -- or `window` = (x0, y0, x1, y1) metres when given, so several clips
+    share one frame), one frame per 1/fps video-seconds. `places` (the place
+    graph's non-keepout polygons) are drawn as faint outlines with their names.
+    Returns (pattern, window)."""
     from PIL import Image, ImageDraw
     if not samples:
         return None
+    Wpx, Hpx = (size_px, size_px) if isinstance(size_px, int) else size_px
     # A fixed window: the known cells plus every keepout and peer, padded.
     xs, ys = [], []
     for _, m in samples[-1:]:
@@ -394,16 +408,19 @@ def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float
             xs.append(p["x"]); ys.append(p["y"])
         for pr in m.get("peers") or []:
             xs.append(pr["x"]); ys.append(pr["y"])
-    if not xs:
+    if window is not None:
+        x0, y0, x1, y1 = window
+    elif xs:
+        pad = 0.6
+        x0, x1, y0, y1 = min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
+    else:
         return None
-    pad = 0.6
-    x0, x1, y0, y1 = min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
+    scale = min(Wpx / (x1 - x0), Hpx / (y1 - y0))
     span = max(x1 - x0, y1 - y0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    x0, y0 = cx - span / 2, cy - span / 2
-    scale = size_px / span
+    x0, y0 = cx - Wpx / scale / 2, cy - Hpx / scale / 2
     def px(x: float, y: float) -> tuple[float, float]:
-        return ((x - x0) * scale, size_px - (y - y0) * scale)
+        return ((x - x0) * scale, Hpx - (y - y0) * scale)
 
     mdir = workdir / "map"
     mdir.mkdir(parents=True, exist_ok=True)
@@ -421,7 +438,7 @@ def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float
         if key == last_key and last_img is not None:
             last_img.save(mdir / f"{f:05d}.png")
             continue
-        img = Image.new("RGBA", (size_px, size_px), (18, 21, 27, 235))
+        img = Image.new("RGBA", (Wpx, Hpx), (18, 21, 27, 235))
         d = ImageDraw.Draw(img, "RGBA")
         g = m.get("grid")
         if g:
@@ -439,6 +456,13 @@ def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float
                     continue
                 X, Y = px(ox + (idx % gw) * res, oy + (idx // gw) * res + res)
                 d.rectangle([X, Y, X + cs, Y + cs], fill=col)
+        for pl in places or []:
+            pts = [px(x, y) for x, y in pl["polygon"]]
+            d.polygon(pts, outline=(90, 100, 120, 160))
+            nx = sum(x for x, _ in pts) / len(pts); ny = sum(y for _, y in pts) / len(pts)
+            lab = pl.get("name") or pl.get("id") or ""
+            fnt = _font(22)
+            d.text((nx - d.textlength(lab, font=fnt) / 2, ny - 14), lab, font=fnt, fill=(150, 160, 180, 230))
         for k in m.get("keepouts") or []:
             pts = [px(x, y) for x, y in k["polygon"]]
             d.polygon(pts, fill=(255, 170, 40, 60), outline=(255, 170, 40, 230))
@@ -475,10 +499,210 @@ def render_map_frames(samples: list[tuple[float, dict]], video_t, seconds: float
             l = (X + 0.5 * r * math.cos(yaw + 2.5), Y - 0.5 * r * math.sin(yaw + 2.5))
             rr = (X + 0.5 * r * math.cos(yaw - 2.5), Y - 0.5 * r * math.sin(yaw - 2.5))
             d.polygon([tip, l, rr], fill=(120, 230, 255, 255))
-        d.rectangle([0, 0, size_px - 1, size_px - 1], outline=(255, 255, 255, 200), width=2)
+        d.rectangle([0, 0, Wpx - 1, Hpx - 1], outline=(255, 255, 255, 200), width=2)
         img.save(mdir / f"{f:05d}.png")
         last_key, last_img = key, img
     return mdir / "%05d.png", {"x0": x0, "y0": y0, "span": span}
+
+
+class MemLog:
+    """Samples the robot's durable memory while recording -- `MEMORY.md` and the
+    digest over HTTP, the place notes and today's journal from the workspace on
+    disk -- and keeps a sample only when something changed."""
+
+    def __init__(self, agent_robot_url: str, workspace: pathlib.Path, period: float = 0.5) -> None:
+        self.url, self.workspace, self.period = agent_robot_url, workspace, period
+        self.samples: list[tuple[float, dict]] = []
+        self._last_key: str | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._sample(force=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._sample(force=True)
+
+    def read(self) -> dict:
+        digest: dict = {}
+        memory_md = ""
+        try:
+            digest = http("GET", f"{self.url}/memory", timeout=2)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            req = urllib.request.Request(f"{self.url}/memory.md")
+            with urllib.request.urlopen(req, timeout=2) as r:
+                memory_md = r.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            pass
+        places: dict[str, str] = {}
+        pdir = self.workspace / "places"
+        if pdir.is_dir():
+            for f in sorted(pdir.glob("*.md"), key=lambda f: f.stat().st_mtime):
+                try:
+                    places[f.stem] = f.read_text()
+                except OSError:
+                    pass
+        journal: list[dict] = []
+        jdir = self.workspace / "journal"
+        if jdir.is_dir():
+            files = sorted(jdir.glob("*.jsonl"))[-2:]
+            for f in files:
+                try:
+                    for ln in f.read_text().splitlines():
+                        try:
+                            journal.append(json.loads(ln))
+                        except ValueError:
+                            pass
+                except OSError:
+                    pass
+        return {"digest": digest, "memory_md": memory_md, "places": places, "journal": journal[-60:]}
+
+    def _sample(self, force: bool = False) -> None:
+        try:
+            m = self.read()
+        except Exception:  # noqa: BLE001
+            return
+        key = json.dumps({k: m[k] for k in ("memory_md", "places")}, sort_keys=True) + str(len(m["journal"])) + (
+            m["journal"][-1].get("t", "") if m["journal"] else "")
+        if force or key != self._last_key:
+            self._last_key = key
+            self.samples.append((time.time(), m))
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.period):
+            self._sample()
+
+
+def _local_hms(stamp: str) -> str:
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return "--:--:--"
+
+
+def render_memory_frames(samples: list[tuple[float, dict]], video_t, seconds: float, fps: int,
+                         size: tuple[int, int], workdir: pathlib.Path) -> pathlib.Path | None:
+    """PNG sequence of the memory pane: place notes (durable, from
+    `places/<ID>.md`), MEMORY.md entries, and the tail of the journal. A line
+    that has just appeared is drawn green for a moment, then white."""
+    from PIL import Image, ImageDraw
+    if not samples:
+        return None
+    W, H = size
+    fs, fs_small = 27, 22
+    lh = int(fs * 1.3)
+    font, small = _font(fs), _font(fs_small)
+    mdir = workdir / "mem"
+    mdir.mkdir(parents=True, exist_ok=True)
+    stamped = [(video_t(w), m) for w, m in samples]
+    stamped = [(t, m) for t, m in stamped if t is not None]
+    if not stamped:
+        return None
+    # When each journal record / note line first showed up (video seconds), for the flash.
+    first_seen: dict[str, float] = {}
+    for i, (t, m) in enumerate(stamped):
+        if i == 0:
+            t = -1e9  # what was already there when the clip began never flashes
+        for rec in m["journal"]:
+            first_seen.setdefault(f"j:{rec.get('t')}:{rec.get('block')}", t)
+        for pid, text in m["places"].items():
+            for ln in text.splitlines():
+                if ln.startswith("- "):
+                    first_seen.setdefault(f"p:{pid}:{ln}", t)
+        for ln in m["memory_md"].splitlines():
+            if ln.startswith("- "):
+                first_seen.setdefault(f"g:{ln}", t)
+    FLASH_S = 2.5
+    pad = 30
+    n = int(seconds * fps) + 1
+    j = 0
+    last_key, last_img = None, None
+
+    def fit(d, text: str, width: int, f) -> str:
+        if d.textlength(text, font=f) <= width:
+            return text
+        while text and d.textlength(text + "…", font=f) > width:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
+    for fi in range(n):
+        t = fi / fps
+        while j + 1 < len(stamped) and stamped[j + 1][0] <= t:
+            j += 1
+        m = stamped[j][1]
+        # Frames only differ when the sample or a flash state changes; bucket time by 0.5 s for the flash.
+        key = (id(m), int(t * 2))
+        if key == last_key and last_img is not None:
+            last_img.save(mdir / f"{fi:05d}.png")
+            continue
+        img = Image.new("RGBA", (W, H), (14, 17, 23, 255))
+        d = ImageDraw.Draw(img, "RGBA")
+        d.line([(0, 0), (W, 0)], fill=(60, 66, 78, 255), width=2)
+        d.text((pad, 10), "memory", font=small, fill=(140, 150, 165, 255))
+        dg = m.get("digest") or {}
+        right = ""
+        if dg:
+            nplaces = len(dg.get("places") or [])
+            right = f"{dg.get('memoryEntries', 0)} global · {nplaces} place{'s' if nplaces != 1 else ''} with notes · journal {len(m['journal'])}"
+            d.text((W - pad - d.textlength(right, font=small), 10), right, font=small, fill=(140, 150, 165, 255))
+        y = 10 + fs_small + 14
+        col_new, col_txt, col_dim, col_place = (124, 255, 178, 255), (236, 238, 242, 255), (150, 158, 172, 255), (120, 230, 255, 255)
+
+        # 1. place notes (durable) -- most recent places last, at most 6 lines
+        lines: list[tuple[str, tuple, object]] = []
+        for pid, text in m["places"].items():
+            notes = [ln[2:] for ln in text.splitlines() if ln.startswith("- ")]
+            if not notes:
+                continue
+            lines.append((pid.replace("-", " ").title(), col_place, font))
+            for ln, raw in zip(notes, [l for l in text.splitlines() if l.startswith("- ")]):
+                # "2026-08-15 (operator) the red hat is on the table" -> "(operator) the red hat ..."
+                ln = re.sub(r"^\d{4}-\d{2}-\d{2}\s+", "", ln)
+                fresh = t - first_seen.get(f"p:{pid}:{raw}", 0.0) < FLASH_S
+                lines.append(("   " + ln, col_new if fresh else col_txt, font))
+        for ln in m["memory_md"].splitlines():
+            if ln.startswith("- "):
+                fresh = t - first_seen.get(f"g:{ln}", 0.0) < FLASH_S
+                lines.append(("global  " + re.sub(r"^\d{4}-\d{2}-\d{2}\s+", "", ln[2:]), col_new if fresh else col_txt, font))
+        if not lines:
+            lines.append(("no notes yet — nothing has been remembered", col_dim, font))
+        max_note_lines = 7
+        if len(lines) > max_note_lines:
+            lines = lines[-max_note_lines:]
+        for text, col, f in lines:
+            d.text((pad, y), fit(d, text, W - 2 * pad, f), font=f, fill=col)
+            y += lh
+
+        # 2. the journal tail: what the robot did, one line each, newest last
+        y += 8
+        d.text((pad, y), "journal", font=small, fill=(140, 150, 165, 255))
+        y += fs_small + 8
+        room = max(1, (H - y - 10) // lh)
+        recs = [r for r in m["journal"] if r.get("kind") == "block"][-room:]
+        for rec in recs:
+            fresh = t - first_seen.get(f"j:{rec.get('t')}:{rec.get('block')}", 0.0) < FLASH_S
+            place = (rec.get("place") or "?").replace("-", " ").title()
+            msg = (rec.get("msg") or "").replace("\n", " ")
+            msg = re.sub(r"\s*\(entities:.*?\)", "", msg)
+            msg = re.sub(r"^(Looked|Scanned[^;]*;)\s*:?\s*", "", msg)
+            msg = re.sub(r"^Said \([^)]*\):\s*", "Said: ", msg)
+            head = f"{_local_hms(rec.get('t', ''))}  {place:<12} "
+            kind = f"{rec.get('block', ''):<9} "
+            col = col_new if fresh else (col_dim if rec.get("trust") == "untrusted" else col_txt)
+            hx = d.textlength(head, font=font)
+            kx = d.textlength(kind, font=font)
+            d.text((pad, y), head, font=font, fill=col if fresh else col_dim)
+            d.text((pad + hx, y), kind, font=font,
+                   fill=(255, 107, 107, 255) if not rec.get("ok") else (col_new if fresh else col_place))
+            d.text((pad + hx + kx, y), fit(d, msg, W - 2 * pad - hx - kx, font), font=font, fill=col)
+            y += lh
+        img.save(mdir / f"{fi:05d}.png")
+        last_key, last_img = key, img
+    return mdir / "%05d.png"
 
 
 def retime_pip(pip: pathlib.Path, clock: "SimClock", pip_fps: int, seconds: float,
@@ -573,13 +797,106 @@ def burn_stacked(raw: pathlib.Path, out: pathlib.Path, meta: dict, cam_size: tup
     shutil.rmtree(workdir, ignore_errors=True)
 
 
+def burn_memory_layout(raw: pathlib.Path, out: pathlib.Path, meta: dict, cam_size: tuple[int, int],
+                       title: str | None, map_samples: list[tuple[float, dict]],
+                       mem_samples: list[tuple[float, dict]], video_t,
+                       map_window: "tuple[float, float, float, float] | None" = None,
+                       places: "list[dict] | None" = None) -> None:
+    """`--layout memory`: three panes on a 1080x1920 canvas -- the robot's own
+    camera on top, its map in the middle, its durable memory at the bottom.
+    Text stays minimal: the command, the running block, one closing line."""
+    cw, ch = cam_size
+    W, H = 1080, 1920
+    cam_h = int(ch * W / cw)            # 648 for the 5:3 head-camera render this layout asks for
+    band = 96
+    mem_h = 520
+    map_h = H - cam_h - band - mem_h    # 656
+    map_w = W - 2 * 30
+    workdir = out.parent / f".{out.stem}-captions"
+    workdir.mkdir(parents=True, exist_ok=True)
+    sheet = CaptionSheet((W, H), workdir)
+    fs_cmd, fs_blk = 44, 38
+    ytop = "top"
+    if title:
+        sheet.add(title, fontsize=32, color="#ffffffd9", y="top")
+        ytop = "top+76"
+    sheet.add(wrap(f"> {meta['command']}", 38), fontsize=fs_cmd, color="#ffffff", y=ytop)
+
+    band_y = str(cam_h + (band - fs_blk) // 2 - 8)
+    blocks = [b for b in meta["blocks"] if b.get("t0") is not None]
+    first_start = blocks[0]["t0"] if blocks else None
+    plan_t0, plan_t1 = meta["command_t"], first_start if first_start is not None else meta["end_t"]
+    if plan_t1 - plan_t0 > 0.3:
+        sheet.add("thinking (local LLM) ...", fontsize=fs_blk, color="#ffd166", y=band_y, t0=plan_t0, t1=plan_t1)
+    for i, b in enumerate(blocks):
+        t0 = b["t0"]
+        t1 = blocks[i + 1]["t0"] if i + 1 < len(blocks) else meta["end_t"]
+        color = "#ff6b6b" if b.get("status") == "failed" else "#7CFFB2"
+        # No two captions in the band at once, and the closing line (from
+        # end_t) never shares a frame with the last block's caption.
+        t1 = min(max(t1, t0 + 0.05), meta["end_t"] - 0.05)
+        if t1 <= t0:
+            continue
+        sheet.add(f"› {wrap(b['caption'], 46)}", fontsize=fs_blk, color=color, y=band_y, t0=t0, t1=t1)
+    closing = meta.get("outcome")
+    if meta["status"] == "done":
+        # What the plan amounted to: a spoken answer if there was one (the
+        # "tell me what you see"), else the goto's own report, else the last
+        # block's line.
+        # The LAST thing of consequence the plan did: a remember, something
+        # said, or a goto's arrival -- whichever came last, so a plan that
+        # ends with "come back to the kitchen" closes on the arrival, not on
+        # a description spoken two rooms earlier.
+        for b in reversed(meta["blocks"]):
+            res = (b.get("result") or "").strip()
+            if not res:
+                continue
+            if b["kind"] == "remember":
+                closing = res
+                break
+            if b["kind"] in ("speak", "look", "greet") and spoken_text(res):
+                closing = f"“{spoken_text(res)}”"
+                break
+            if b["kind"] == "goto":
+                closing = res.split(":")[0].strip()
+                break
+        else:
+            last = next((b for b in reversed(meta["blocks"]) if b["kind"] != "wait" and (b.get("result") or "").strip()), None)
+            if last:
+                closing = short_result(last) or last["result"]
+    if closing:
+        # In the band, where the running block was: the plan is over, so the
+        # one line that says how it went takes that spot (a long line runs
+        # down over the top of the map, which is dark there anyway).
+        col = "#7CFFB2" if meta["status"] == "done" else "#ff6b6b"
+        sheet.add(wrap(closing, 52), fontsize=32, color=col, y=str(cam_h + 22), t0=meta["end_t"])
+
+    seconds = float(meta["recorder"].get("seconds") or 0) + 1.0
+    seqs = []
+    rendered = render_map_frames(map_samples, video_t, seconds, 5, (map_w, map_h - 8), workdir,
+                                 window=map_window, places=places) if map_samples else None
+    if rendered:
+        seqs.append((rendered[0], 5, (W - map_w) // 2, cam_h + band))
+    mem = render_memory_frames(mem_samples, video_t, seconds, 5, (W, mem_h), workdir) if mem_samples else None
+    if mem:
+        seqs.append((mem, 5, 0, H - mem_h))
+    subprocess.run(sheet.ffmpeg_args(raw, out, stack=(W, cam_h), extra_seqs=seqs), check=True)
+    shutil.rmtree(workdir, ignore_errors=True)
+
+
 def burn_captions(raw: pathlib.Path, out: pathlib.Path, meta: dict, size: tuple[int, int],
                   title: str | None, pip: pathlib.Path | None = None,
                   map_samples: list[tuple[float, dict]] | None = None, clock: "SimClock | None" = None,
-                  layout: str = "inset") -> None:
+                  layout: str = "inset", mem_samples: list[tuple[float, dict]] | None = None,
+                  map_window: "tuple[float, float, float, float] | None" = None,
+                  places: "list[dict] | None" = None) -> None:
     video_t = clock.video_t if clock else (lambda w: w)
     if layout == "stack":
         burn_stacked(raw, out, meta, size, title, map_samples or [], video_t)
+        return
+    if layout == "memory":
+        burn_memory_layout(raw, out, meta, size, title, map_samples or [], mem_samples or [], video_t,
+                           map_window=map_window, places=places)
         return
     w, h = size
     vertical = h > w
@@ -688,6 +1005,62 @@ def wait_plan(agent: str, command: str, timeout: float, quiet: bool = False) -> 
     return plan
 
 
+def parse_window(text: str | None) -> "tuple[float, float, float, float] | None":
+    if not text:
+        return None
+    x0, y0, x1, y1 = (float(v) for v in text.split(","))
+    return x0, y0, x1, y1
+
+
+def load_places(path: str | None) -> "list[dict] | None":
+    """The place graph's rooms (non-keepout polygons) for the map's outlines."""
+    if not path:
+        return None
+    data = json.loads(pathlib.Path(path).read_text())
+    return [p for p in data.get("places", []) if not p.get("keepout") and p.get("polygon")]
+
+
+def make_card(text: str, out: pathlib.Path, seconds: float, size: tuple[int, int] = (1080, 1920),
+              fontsize: int = 54, sub: str | None = None) -> None:
+    """A title card: `text` centred on the dark canvas for `seconds`."""
+    from PIL import Image, ImageDraw
+    W, H = size
+    img = Image.new("RGB", (W, H), (14, 17, 23))
+    d = ImageDraw.Draw(img)
+    lines = wrap(text, 30).split("\n") if len(text) > 30 else [text]
+    f = _font(fontsize)
+    lh = int(fontsize * 1.4)
+    total = lh * len(lines) + (int(fontsize * 0.7) * 2 if sub else 0)
+    y = H // 2 - total // 2
+    for ln in lines:
+        d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill=(236, 238, 242))
+        y += lh
+    if sub:
+        fs = _font(int(fontsize * 0.55))
+        y += int(fontsize * 0.4)
+        for ln in sub.split("\n"):
+            d.text(((W - d.textlength(ln, font=fs)) / 2, y), ln, font=fs, fill=(150, 158, 172))
+            y += int(fontsize * 0.8)
+    png = out.with_suffix(".png")
+    img.save(png)
+    subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y", "-loop", "1", "-i", str(png),
+                    "-t", f"{seconds:.2f}", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium",
+                    "-crf", "18", str(out)], check=True)
+
+
+def concat(parts: list[pathlib.Path], out: pathlib.Path) -> None:
+    """Concatenate clips of the same size (re-encoded, so cards and clips mix)."""
+    args = [shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y"]
+    for p in parts:
+        args += ["-i", str(p)]
+    n = len(parts)
+    chain = "".join(f"[{i}:v]scale=1080:1920,setsar=1,fps=30,format=yuv420p[v{i}];" for i in range(n))
+    chain += "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[v]"
+    args += ["-filter_complex", chain, "-map", "[v]", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
+    subprocess.run(args, check=True)
+
+
 def recaption(args) -> int:
     """Re-burn captions for an existing clip from its sidecars."""
     out = pathlib.Path(args.out)
@@ -704,15 +1077,18 @@ def recaption(args) -> int:
     pip = out.with_suffix(".pip.mp4")
     mp = out.with_suffix(".maplog.json")
     map_samples = [(t, m) for t, m in json.loads(mp.read_text())] if mp.exists() else None
+    ml = out.with_suffix(".memlog.json")
+    mem_samples = [(t, m) for t, m in json.loads(ml.read_text())] if ml.exists() else None
     burn_captions(raw, out, meta, (w, h), args.title, pip=pip if pip.exists() else None,
-                  map_samples=map_samples, clock=clock, layout=args.layout)
+                  map_samples=map_samples, clock=clock, layout=args.layout, mem_samples=mem_samples,
+                  map_window=parse_window(args.map_window), places=load_places(args.places))
     print(f"[clip] recaptioned -> {out}")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command")
+    ap.add_argument("command", nargs="?", default=None)
     ap.add_argument("--out", default="clip.mp4")
     ap.add_argument("--cam", default="follow")
     ap.add_argument("--size", default="1080x1920")
@@ -730,10 +1106,23 @@ def main() -> int:
     ap.add_argument("--pip", default=None, metavar="CAMERA",
                     help="also record this MJCF camera (e.g. head_camera) and inset it "
                          "picture-in-picture -- 'what the robot sees'")
-    ap.add_argument("--layout", choices=("inset", "stack"), default="inset",
+    ap.add_argument("--layout", choices=("inset", "stack", "memory"), default="inset",
                     help="inset: the scene camera with small insets (default). stack: the robot's "
                          "own camera full-width on top, its map below, minimal text -- implies "
-                         "--map, and --cam defaults to head_camera at 1080x810")
+                         "--map, and --cam defaults to head_camera at 1080x810. memory: like stack "
+                         "with a third pane at the bottom showing the robot's durable memory (place "
+                         "notes, MEMORY.md, journal tail) sampled while recording")
+    ap.add_argument("--map-window", default=None, metavar="X0,Y0,X1,Y1",
+                    help="fixed map window in metres (default: fit the known area) -- give the same "
+                         "one to every clip of a multi-clip video so the map does not jump")
+    ap.add_argument("--places", default=None, metavar="GRAPH.json",
+                    help="place graph whose rooms are outlined + named on the map "
+                         "(e.g. ../sim_evaluator/places/places.house.json)")
+    ap.add_argument("--card", default=None, metavar="TEXT",
+                    help="do not record: write a title card (TEXT centred, --tail seconds long) to --out")
+    ap.add_argument("--card-sub", default=None, help="smaller second line for --card")
+    ap.add_argument("--concat", nargs="+", default=None, metavar="CLIP",
+                    help="do not record: concatenate these clips/cards (1080x1920) into --out")
     ap.add_argument("--map", action="store_true",
                     help="also sample the agent's /map while recording and inset it -- "
                          "grid, keepouts, peers and the planned route (TASK-206..208)")
@@ -741,14 +1130,27 @@ def main() -> int:
                     help="do not record: rebuild <out> from <out>.raw.mp4 + <out>.json (+ .pip.mp4, "
                          ".maplog.json) with the current caption code / --layout / --title")
     args = ap.parse_args()
+    if args.card is not None:
+        make_card(args.card, pathlib.Path(args.out), args.tail, sub=args.card_sub)
+        print(f"[clip] card -> {args.out}")
+        return 0
+    if args.concat:
+        concat([pathlib.Path(p) for p in args.concat], pathlib.Path(args.out))
+        print(f"[clip] concatenated {len(args.concat)} parts -> {args.out}")
+        return 0
     if args.recaption:
         return recaption(args)
-    if args.layout == "stack":
+    if not args.command:
+        ap.error("command is required (or use --card / --concat / --recaption)")
+    if args.layout in ("stack", "memory"):
         args.map = True
         if args.cam == "follow":
             args.cam = "head_camera"
         if args.size == "1080x1920":
-            args.size = "1080x810"
+            # The memory layout renders the head camera wider (5:3): the MJCF
+            # camera keeps its vertical FOV, so a wider frame simply sees more
+            # to the sides -- and leaves room for the map and the memory pane.
+            args.size = "1080x648" if args.layout == "memory" else "1080x810"
         args.pip = None
 
     out = pathlib.Path(args.out)
@@ -798,6 +1200,9 @@ def main() -> int:
     maplog = MapLog(f"{AGENT_URL}/api/v1/robots/{ROBOT_ID}/map") if args.map else None
     if maplog:
         maplog.start()
+    memlog = MemLog(f"{AGENT_URL}/api/v1/robots/{ROBOT_ID}", WORKSPACE_DIR) if args.layout == "memory" else None
+    if memlog:
+        memlog.start()
     rec_t0 = clock.wall0 or time.time()
     time.sleep(args.lead)
 
@@ -815,6 +1220,8 @@ def main() -> int:
     clock.stop()
     if maplog:
         maplog.stop()
+    if memlog:
+        memlog.stop()
     stop = http("POST", f"{SIM_URL}/record/stop", timeout=60)
     rec = stop.get("current") or stop.get("last") or {}
     print(f"[clip] recorder: {rec.get('frames')} frames, {rec.get('seconds')} s"
@@ -853,11 +1260,15 @@ def main() -> int:
         # Big (the grid rides along in every sample) but it is what makes
         # `--recaption` possible without driving the robot again.
         out.with_suffix(".maplog.json").write_text(json.dumps(maplog.samples))
+    if memlog:
+        out.with_suffix(".memlog.json").write_text(json.dumps(memlog.samples))
     print(f"[clip] plan {status}; wrote {meta_path}")
 
     if not args.no_captions:
         burn_captions(raw, out, meta, (w, h), args.title, pip=pip_raw,
-                      map_samples=maplog.samples if maplog else None, clock=clock, layout=args.layout)
+                      map_samples=maplog.samples if maplog else None, clock=clock, layout=args.layout,
+                      mem_samples=memlog.samples if memlog else None,
+                      map_window=parse_window(args.map_window), places=load_places(args.places))
         print(f"[clip] captioned -> {out}")
     return 0 if status == "done" else 1
 

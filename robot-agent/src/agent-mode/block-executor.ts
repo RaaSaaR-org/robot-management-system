@@ -12,7 +12,7 @@ import { config } from '../config/config.js';
 import { hardwareClient, type LocoActionName, type LocoResult } from '../hardware/HardwareClient.js';
 // The two clamp constants live in navigator.ts because that is where they are
 // justified (the 0.45 m comment is the reason the number exists). Importing
-// them is acyclic: navigator.ts imports only config, scene-memory and types.
+// them is acyclic: navigator.ts imports only config, place-resolver, scene-memory and types.
 import { CLEARANCE_MARGIN_M, MIN_STAGE_M, UNKNOWN_DISTANCE_STAGE_M } from './navigator.js';
 import type { SegmentCheck } from './path-planner.js';
 import { RangeSensor } from './range.js';

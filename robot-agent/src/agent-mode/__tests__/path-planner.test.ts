@@ -346,3 +346,36 @@ describe('checkStraightSegment', () => {
     expect(c.allowedM).toBe(2);
   });
 });
+
+describe('planPath and checkStraightSegment agree', () => {
+  it('a route the planner approves is not refused by the pre-walk check, even at the disc boundary (TASK-209)', () => {
+    // A 6 m × 4 m room with a crate-sized block whose top face sits exactly one
+    // robot radius (0.4 m) below the cell row a route past it would use — the
+    // hallway crate, measured. Origin (0, 0); rows are top = high y.
+    const rows: string[] = [];
+    for (let r = 0; r < 40; r++) {
+      const y = (39 - r) * RES + RES / 2; // cell centre y
+      let row = '';
+      for (let c = 0; c < 60; c++) {
+        const x = c * RES + RES / 2;
+        row += x >= 2.6 && x <= 3.4 && y >= 1.0 && y <= 1.6 ? '#' : '.';
+      }
+      rows.push(row);
+    }
+    const map = gridMap(rows);
+    const w: PlannerWorld = { map, keepouts: [], keepoutMarginM: 0.25, robotRadiusM: 0.4 };
+    // Start a hair off a cell centre and a hair inside the "escape" radius of
+    // the block, heading past it, as the robot did.
+    const from = { x: 2.2648, y: 1.9792 };
+    for (const goal of [{ x: 5.5, y: 2.0 }, { x: 5.5, y: 1.0 }, { x: 5.5, y: 3.5 }]) {
+      const v = planPath(w, from, goal, { unknownCost: 3, goalToleranceM: 0.6 });
+      expect(v.ok).toBe(true);
+      if (!v.ok) continue;
+      for (const seg of v.path.segments.slice(0, 2)) {
+        const c = checkStraightSegment(w, { x: seg.from[0], y: seg.from[1] }, seg.headingDeg, seg.lengthM);
+        expect(c.blocker).toBeNull();
+        expect(c.allowedM).toBeCloseTo(seg.lengthM, 5);
+      }
+    }
+  });
+});
