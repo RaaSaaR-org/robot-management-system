@@ -24,6 +24,10 @@ due_date: ''
 created: 2026-08-16
 updated: 2026-08-16
 completed: 2026-08-16
+status_note: |
+  DONE 2026-08-16 — PR #229. Verified 2026-08-16: routes/runs/findings end-to-end (Prisma + repo/service/scheduler/photo store, /api/patrol/*, robot PatrolRunner/BaselineStore/inspector with capture/inspect blocks, WS fan-out, alerts + compliance events, VDA5050 export, patrol UI redesigned 50cf092); a live "Patrol now" on the house route ran 4/4 legs and raised findings during this pass. Demo clip `robot-agent/hardware/sim_g1_dds/clips/demo-task212-patrol.mp4` (local, gitignored).
+  FIXED IN REVIEW (08c5aff): "Promote to baseline" was not persisted server-side, so getBaseline kept serving the old run's photos — PatrolRun.promotedAt (+ migration) now wins per route+window; "This is normal" while the robot is offline now says the robot's baseline was not updated (robotNotified=false).
+  NOT DONE (honest gaps): (1) the offline comparator sanity (≈20 ChangeSim/3RScan pairs, gemma3:4b vs qwen2.5vl:3b, precision in the PR) was never run — no dataset on this machine; (2) the acceptance demo produced an out_of_place checkpoint finding + a missing_object en-route finding rather than ONE merged "unexpected object in Hallway" (the VLM labels the crate a "table"); e2e_patrol_check.py now asserts the shape (warns on count≠1, `--strict` fails) so the tuning is measurable.
 ---
 
 # Patrol — the robot walks a route on a schedule, takes control photos at checkpoints, and reports what is not normal along the whole way

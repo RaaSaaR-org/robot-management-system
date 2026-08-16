@@ -329,6 +329,13 @@ heading, into scene memory as `robot <name>` with `distanceSource: 'fleet'`, so
 the planner can talk about them. Peers are also on `/map` and, through the server
 proxy `GET /api/robots/:id/agent-mode/map`, on the `/agent` page's Map tab.
 
+**Known gap (follow-up, not TASK-207):** the fleet's `Zone` (server, axis-aligned
+rectangles on the fleet map) and the digital twin's `TwinZone` / place-graph
+keepouts (polygons, what `/map` and the planner use) share no key and are not
+reconciled — a keepout drawn on the fleet map is not a keepout on the robot's map
+and vice versa. Until a task maps one onto the other, the robot's map is the
+authority for what the robot will refuse to plan through.
+
 ### The navigator plans on the map (TASK-208)
 
 `src/agent-mode/path-planner.ts` is pure grid A* (8-connected, octile heuristic,
