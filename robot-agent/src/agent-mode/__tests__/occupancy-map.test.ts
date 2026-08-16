@@ -226,6 +226,23 @@ describe('OccupancyMap', () => {
     expect(header).toContain('20 20');
     expect(pgm.length).toBeGreaterThan(400);
   });
+
+  it('writes map_server greys north-up and a YAML whose origin is the bottom-left pixel (TASK-210)', () => {
+    const map = new OccupancyMap({ initialSizeM: 2 });
+    integrateN(map, frameOf(wallAhead(0.8, 0.3)), { x: 0, y: 0, yawDeg: 0 }, 4);
+    const pgm = map.toPgm();
+    const body = pgm.subarray(pgm.length - 400);
+    const greys = new Set(Array.from(body));
+    expect([...greys].every((g) => g === 0 || g === 254 || g === 205)).toBe(true);
+    expect(greys.has(0)).toBe(true); // the wall
+    expect(greys.has(254)).toBe(true); // the carved-free approach
+    // A wall at x=0.8 with the robot at the origin: the last image row is y=-1 (bottom, unseen → 205);
+    // the middle rows hold the wall — north-up means the row order is reversed against y.
+    const yaml = map.toMapServerYaml('map.pgm');
+    expect(yaml).toContain('image: map.pgm\n');
+    expect(yaml).toContain('resolution: 0.1\n');
+    expect(yaml).toContain('origin: [-1, -1, 0.0]\n');
+  });
 });
 
 describe('OccupancyMap dynamic overlay (TASK-207)', () => {

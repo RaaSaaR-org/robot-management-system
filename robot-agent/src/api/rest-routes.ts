@@ -1295,7 +1295,11 @@ export function createRestRoutes(
   // is stated on the payload because it is the whole caveat: the grid inherits
   // odometry drift and is only comparable with the place graph when that graph
   // is registered to odometry (`registered`), otherwise `keepouts` is `[]`.
-  // `?format=pgm` returns the grid as a binary PGM for eyeballing.
+  // `?format=pgm` returns the grid as a ROS map_server PGM, `?format=yaml` the
+  // matching YAML (`image: map.pgm`) — save both side by side and RViz / Nav2 /
+  // Foxglove load the map as is:
+  //   curl -o map.pgm  'http://<agent>/api/v1/robots/<id>/map?format=pgm'
+  //   curl -o map.yaml 'http://<agent>/api/v1/robots/<id>/map?format=yaml'
   router.get('/robots/:id/map', (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     const status = agentModeController.mapStatus();
@@ -1303,13 +1307,17 @@ export function createRestRoutes(
       res.status(404).json({ ok: false, error: 'occupancy map is disabled on this agent (AGENT_MAP_ENABLED)' });
       return;
     }
-    if (req.query.format === 'pgm') {
+    if (req.query.format === 'pgm' || req.query.format === 'yaml') {
       const map = agentModeController.occupancyMap();
       if (!map || !map.isAllocated()) {
         res.status(404).json({ ok: false, error: 'no map yet — nothing has been integrated' });
         return;
       }
-      res.type('image/x-portable-graymap').send(map.toPgm());
+      if (req.query.format === 'yaml') {
+        res.type('text/yaml').attachment('map.yaml').send(map.toMapServerYaml('map.pgm'));
+      } else {
+        res.type('image/x-portable-graymap').attachment('map.pgm').send(map.toPgm());
+      }
       return;
     }
     const grid = agentModeController.mapSnapshot();

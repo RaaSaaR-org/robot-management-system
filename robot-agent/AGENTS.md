@@ -248,7 +248,7 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
 | POST   | `/api/v1/robots/:id/reset` | Reset robot state |
 | GET    | `/api/v1/robots/:id/pointcloud` | Depth/LiDAR point-cloud frame (`?sensor=`, `?full=`) |
-| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `peers` + `peersDropped` (TASK-207), `nav` (the navigator's planned route, TASK-208), `frameId`, `status`; `?format=pgm` for a P5 image. 404 when `AGENT_MAP_ENABLED=false` |
+| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `peers` + `peersDropped` (TASK-207), `nav` (the navigator's planned route, TASK-208), `frameId`, `status`; `?format=pgm` / `?format=yaml` for a ROS `map_server` pair (save both as `map.pgm` + `map.yaml`; loads in RViz / Nav2 / Foxglove) — the `/agent` page's Map tab has the same as an **Export** menu (PGM+YAML, PNG, JSON), computed in the browser from the JSON grid (TASK-210). 404 when `AGENT_MAP_ENABLED=false` |
 | GET    | `/api/v1/register` | Registration info for server |
 | GET    | `/api/v1/health` | Health check |
 

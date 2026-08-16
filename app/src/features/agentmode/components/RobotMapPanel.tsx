@@ -15,6 +15,7 @@ import { TWIN_ZONE_COLORS } from '@/features/digitaltwin/store/twinZoneStore';
 import { useAgentModeStore } from '../store/agentmodeStore';
 import type { RobotMapGrid, RobotMapPayload } from '../types/agentmode.types';
 import { PlaceChip } from './PlaceChip';
+import { exportMap, type MapExportFormat } from '../utils/mapExport';
 
 export interface RobotMapPanelProps {
   robotId: string | null;
@@ -305,6 +306,19 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Export menu (TASK-210): three files an operator can take elsewhere. Open
+  // state only; the work is `exportMap`, computed from the payload in hand.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const runExport = useCallback(
+    async (format: MapExportFormat) => {
+      setExportOpen(false);
+      if (!robotId || !map?.grid) return;
+      const ok = await exportMap(robotId, map.grid, format);
+      setExportNote(ok ? null : 'Export failed: the grid could not be decoded.');
+    },
+    [robotId, map],
+  );
   const [size, setSize] = useState({ w: 0, h: 0 });
 
   // Poll while mounted and the tab is visible; stop when hidden.
@@ -408,8 +422,54 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
           >
             +
           </button>
+          <div className="relative ml-1">
+            <button
+              type="button"
+              data-testid="agent-map-export"
+              aria-label="Export map"
+              aria-haspopup="menu"
+              aria-expanded={exportOpen}
+              title={map?.grid ? 'Download the map as PGM+YAML (ROS map_server), PNG or JSON' : 'Nothing to export yet'}
+              className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+              disabled={!map?.grid}
+              onClick={() => setExportOpen((o) => !o)}
+            >
+              Export
+            </button>
+            {exportOpen && (
+              <div
+                role="menu"
+                aria-label="Export map as"
+                data-testid="agent-map-export-menu"
+                className="absolute right-0 top-full mt-1 z-20 min-w-[11rem] rounded-brand border border-glass-subtle glass-elevated shadow-lg py-1 text-xs"
+              >
+                {(
+                  [
+                    ['pgm', 'PGM + YAML (ROS map_server)'],
+                    ['png', 'PNG image'],
+                    ['json', 'JSON (raw grid)'],
+                  ] as Array<[MapExportFormat, string]>
+                ).map(([format, label]) => (
+                  <button
+                    key={format}
+                    type="button"
+                    role="menuitem"
+                    className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover"
+                    onClick={() => void runExport(format)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+      {exportNote && (
+        <p className="shrink-0 px-3 py-1 text-[11px] text-amber-600 dark:text-amber-400" role="status" data-testid="agent-map-export-note">
+          {exportNote}
+        </p>
+      )}
 
       <div ref={hostRef} className="relative flex-1 min-h-[220px] overflow-hidden">
         {map ? (

@@ -637,20 +637,40 @@ export class OccupancyMap {
   }
 
   /**
-   * Binary PGM (P5) for eyeballing: occupied = black, free = white,
-   * unknown = grey. Row 0 of the image is the TOP, i.e. the largest y — the
-   * usual map convention, so north is up.
+   * Binary PGM (P5) in ROS `map_server` greys — occupied = 0, free = 254,
+   * unknown = 205 — so the file loads in RViz / Nav2 / Foxglove together with
+   * {@link toMapServerYaml}. Row 0 of the image is the TOP, i.e. the largest
+   * y — the map convention, so north is up and the YAML's `origin` is the
+   * bottom-left pixel.
    */
   toPgm(): Buffer {
-    const header = Buffer.from(`P5\n# odom-frame occupancy, ${this.resolution} m/cell, origin (${this.originX}, ${this.originY})\n${this.width} ${this.height}\n255\n`, 'ascii');
-    const body = Buffer.alloc(this.width * this.height, 128);
+    const header = Buffer.from(
+      `P5\n# odom-frame occupancy, ${this.resolution} m/cell, origin (${this.originX}, ${this.originY}), ` +
+        `frame ${this.frameId ?? 'unknown'}, ${this.poseCount} poses\n${this.width} ${this.height}\n255\n`,
+      'ascii',
+    );
+    const body = Buffer.alloc(this.width * this.height, 205);
     for (let row = 0; row < this.height; row++) {
       const srcRow = this.height - 1 - row;
       for (let col = 0; col < this.width; col++) {
         const v = this.cells[srcRow * this.width + col];
-        body[row * this.width + col] = v > this.occupiedAbove ? 0 : v < this.freeBelow ? 255 : 128;
+        body[row * this.width + col] = v >= this.occupiedAbove ? 0 : v <= this.freeBelow ? 254 : 205;
       }
     }
     return Buffer.concat([header, body]);
+  }
+
+  /** The `map_server` YAML that goes with {@link toPgm}; `imageFile` is what the PGM was saved as. */
+  toMapServerYaml(imageFile: string): string {
+    return [
+      `image: ${imageFile}`,
+      `resolution: ${this.resolution}`,
+      `origin: [${this.originX}, ${this.originY}, 0.0]`,
+      'negate: 0',
+      'occupied_thresh: 0.65',
+      'free_thresh: 0.196',
+      `# frame: odom (${this.frameId ?? 'unknown'}), ${this.poseCount} poses`,
+      '',
+    ].join('\n');
   }
 }

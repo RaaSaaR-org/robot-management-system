@@ -225,3 +225,39 @@ describe('KnowledgePanel map tab', () => {
     expect(fetchRobotMap).not.toHaveBeenCalled();
   });
 });
+
+describe('RobotMapPanel export (TASK-210)', () => {
+  it('offers PGM+YAML, PNG and JSON once a grid is held, and is disabled without one', () => {
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload({ grid: null }), robotMapStatus: 'ok' });
+    const { unmount } = render(<RobotMapPanel robotId="r1" />);
+    expect(screen.getByTestId('agent-map-export')).toBeDisabled();
+    unmount();
+
+    useAgentModeStore.setState({ robotMap: payload() });
+    render(<RobotMapPanel robotId="r1" />);
+    const btn = screen.getByTestId('agent-map-export');
+    expect(btn).toBeEnabled();
+    act(() => btn.click());
+    const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
+    expect(items).toEqual(['PGM + YAML (ROS map_server)', 'PNG image', 'JSON (raw grid)']);
+  });
+
+  it('downloads the JSON grid from the menu', async () => {
+    const saved: string[] = [];
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push(this.download);
+    });
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    act(() => screen.getByTestId('agent-map-export').click());
+    await act(async () => {
+      screen.getByRole('menuitem', { name: 'JSON (raw grid)' }).click();
+    });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatch(/^map-r1-.*\.json$/);
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  });
+});
