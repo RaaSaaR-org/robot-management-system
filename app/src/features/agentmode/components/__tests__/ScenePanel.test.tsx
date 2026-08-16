@@ -60,3 +60,28 @@ describe('ScenePanel map summary', () => {
     expect(screen.getByTestId('agent-scene-map')).toHaveTextContent('nothing integrated yet');
   });
 });
+
+describe('ScenePanel fleet-reported entities (TASK-207)', () => {
+  it('renders a peer robot as a reported distance, not a vision guess', () => {
+    useAgentModeStore.setState({
+      scene: scene({
+        entities: [
+          {
+            label: 'robot Bravo',
+            bearingDeg: -34,
+            distanceEstM: 1.8,
+            distanceSource: 'fleet',
+            confidence: 1,
+            lastSeen: new Date().toISOString(),
+            observedSeq: 0,
+          },
+        ],
+      }),
+    });
+    render(<ScenePanel />);
+    const distance = screen.getByTestId('agent-scene-distance');
+    expect(distance).toHaveAttribute('data-distance-source', 'fleet');
+    expect(distance).toHaveTextContent('1.8 m');
+    expect(distance).not.toHaveTextContent('~');
+  });
+});

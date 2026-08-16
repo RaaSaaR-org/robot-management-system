@@ -21,6 +21,19 @@ export interface MapPose {
 
 export type CellState = 'occupied' | 'free' | 'unknown';
 
+/**
+ * A moving obstacle laid OVER the static grid (TASK-207): another robot, a
+ * person the fleet knows about. Never written into the log-odds cells — the
+ * static map must not remember a robot that has since driven away — but
+ * consulted by {@link OccupancyMap.isTraversable} after the grid.
+ */
+export interface DynamicObstacle {
+  x: number;
+  y: number;
+  radiusM: number;
+  label: string;
+}
+
 export interface OccupancyMapOptions {
   /** Cell edge in metres (default 0.1). */
   resolutionM?: number;
@@ -154,6 +167,9 @@ export class OccupancyMap {
   private lastDecayMs = 0;
   private poseCount = 0;
   private lastIntegratedMs: number | null = null;
+
+  /** Overlay of moving obstacles; see {@link setDynamicObstacles}. */
+  private dynamic: DynamicObstacle[] = [];
 
   constructor(opts: OccupancyMapOptions = {}) {
     this.resolution = opts.resolutionM ?? DEFAULTS.resolutionM;
@@ -483,6 +499,7 @@ export class OccupancyMap {
    */
   isTraversable(x: number, y: number, radiusM = 0.35): boolean {
     if (!this.isAllocated()) return false;
+    if (this.blockedByDynamic(x, y, radiusM)) return false;
     const rCells = Math.ceil(radiusM / this.resolution);
     const [cx, cy] = this.toCell(x, y);
     const r2 = (radiusM / this.resolution) * (radiusM / this.resolution);
@@ -496,6 +513,31 @@ export class OccupancyMap {
       }
     }
     return true;
+  }
+
+  // ── dynamic overlay ───────────────────────────────────────────────────────
+
+  /**
+   * Replace the set of moving obstacles. A full replace, not a merge: the
+   * caller (the peer tracker) owns the list and knows who has gone quiet.
+   */
+  setDynamicObstacles(obstacles: readonly DynamicObstacle[]): void {
+    this.dynamic = obstacles.map((o) => ({ ...o }));
+  }
+
+  getDynamicObstacles(): DynamicObstacle[] {
+    return this.dynamic.map((o) => ({ ...o }));
+  }
+
+  /** True when a disc of `radiusM` at `(x, y)` overlaps any dynamic obstacle. */
+  private blockedByDynamic(x: number, y: number, radiusM: number): boolean {
+    for (const o of this.dynamic) {
+      const dx = o.x - x;
+      const dy = o.y - y;
+      const reach = o.radiusM + radiusM;
+      if (dx * dx + dy * dy < reach * reach) return true;
+    }
+    return false;
   }
 
   summary(): OccupancyMapSummary {

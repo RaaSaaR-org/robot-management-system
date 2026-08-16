@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '@/shared/components/ui';
 import { cn } from '@/shared/utils';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
@@ -15,7 +16,7 @@ import { AgentVoiceBar } from '../components/AgentVoiceBar';
 import { BlockTimeline } from '../components/BlockTimeline';
 import { ConditionAnnouncer } from '../components/ConditionAnnouncer';
 import { EstopBanner } from '../components/EstopBanner';
-import { KnowledgePanel } from '../components/KnowledgePanel';
+import { KnowledgePanel, type KnowledgeTab } from '../components/KnowledgePanel';
 import { PlaceChip } from '../components/PlaceChip';
 import { SelfHeader } from '../components/SelfHeader';
 import { useAgentModeSocket } from '../hooks/useAgentModeSocket';
@@ -89,6 +90,14 @@ export function AgentModePage() {
   // around either of them may read as a confident "off / clear".
   const stateUnknown = useAgentModeStore(selectStateUnknown);
 
+  // `/agent?robot=<id>&tab=map` — the fleet page's "open robot's map" lands
+  // here (TASK-207). The param seeds the selection; the select still rules.
+  const [searchParams] = useSearchParams();
+  const requestedRobot = searchParams.get('robot');
+  const requestedTab = searchParams.get('tab');
+  const initialTab: KnowledgeTab =
+    requestedTab === 'map' || requestedTab === 'memory' ? requestedTab : 'scene';
+
   const [robotId, setRobotId] = useState<string | null>(null);
 
   useAgentModeSocket(robotId);
@@ -97,13 +106,15 @@ export function AgentModePage() {
     void robotsActions.fetchRobots();
   }, [robotsActions]);
 
-  // Auto-bind to a G1 as soon as the fleet is known.
+  // Auto-bind: the robot the URL asked for, else a G1, else the first one.
   useEffect(() => {
     if (robotId || robots.length === 0) return;
     const preferred =
-      robots.find((r) => isG1(r.model, r.metadata?.embodiment)) ?? robots[0];
+      (requestedRobot ? robots.find((r) => r.id === requestedRobot) : undefined) ??
+      robots.find((r) => isG1(r.model, r.metadata?.embodiment)) ??
+      robots[0];
     setRobotId(preferred.id);
-  }, [robots, robotId]);
+  }, [robots, robotId, requestedRobot]);
 
   useEffect(() => {
     if (!robotId) return;
@@ -240,7 +251,7 @@ export function AgentModePage() {
         />
         {/* What the robot knows: what it can see right now, and what it still
             knows after a restart — one card, two tabs. */}
-        <KnowledgePanel className={cn(PANEL_HEIGHT, 'min-w-0')} />
+        <KnowledgePanel robotId={robotId} initialTab={initialTab} className={cn(PANEL_HEIGHT, 'min-w-0')} />
       </div>
     </div>
   );

@@ -123,10 +123,11 @@ export interface SceneEntity {
    * labels, so it means "something solid is that far away in that direction" —
    * not "the object I named is that far away". `'vlm-estimate'` is the vision
    * model's own guess, which measured 0.94 m MAE against known geometry and is
-   * usually null anyway. `null` means there is no distance at all, which is
-   * never the same as 0.
+   * usually null anyway. `'fleet'` is another robot's position as the server
+   * reports it (TASK-207) — a real pose, but nobody's camera saw it. `null`
+   * means there is no distance at all, which is never the same as 0.
    */
-  distanceSource: 'lidar' | 'vlm-estimate' | null;
+  distanceSource: 'lidar' | 'vlm-estimate' | 'fleet' | null;
   confidence: number;
   lastSeen: string;
   /**

@@ -156,7 +156,9 @@ export function createRestRoutes(
       });
       return;
     }
-    res.json(robot);
+    // The frame travels WITH the pose (TASK-207): the server relays it to the
+    // other robots, which draw this one only if they share it.
+    res.json({ ...robot, location: { ...robot.location, frame: hardwareClient.getOdometryFrame() } });
   });
 
   // POST /robots/:id/command - Send command to robot
@@ -1323,15 +1325,31 @@ export function createRestRoutes(
           .filter((p) => p.keepout)
           .map((p) => ({ id: p.id, name: p.name, polygon: p.polygon.map(([x, y]) => [x, y]) }))
       : [];
+    // Other robots (TASK-207): only the ones in OUR frame; the rest are a count.
+    const peers = agentModeController.peers().map((p) => ({
+      robotId: p.robotId,
+      name: p.name,
+      x: p.x,
+      y: p.y,
+      headingDeg: p.headingDeg,
+      footprintRadiusM: p.footprintRadiusM,
+      place: p.place,
+      updatedAt: p.updatedAt,
+    }));
+    const peerStatus = agentModeController.peerStatus();
     res.json({
       ok: true,
       frame: 'odom',
+      frameId: hardwareClient.getOdometryFrame(),
       grid,
       pose: pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg, source: pose.source, atMs: pose.atMs } : null,
       place: belief?.place ?? null,
       registered,
       registrationReason: registration && !registration.registered ? registration.reason : null,
       keepouts,
+      peers,
+      peersDropped: peerStatus?.dropped ?? 0,
+      peersEnabled: peerStatus?.enabled ?? false,
       status,
     });
   });

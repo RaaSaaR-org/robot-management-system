@@ -21,6 +21,7 @@ import type {
   PointCloudPose,
   TelemetryFieldGroup,
 } from './types.js';
+import { FOOTPRINT_RADIUS_M } from './types.js';
 import { generateTelemetry } from './telemetry.js';
 import { generateSyntheticScan, LIVE_POINTS_PER_FRAME } from './pointcloud-sim.js';
 import { PointCloudReplaySource } from './pointcloud-replay.js';
@@ -987,10 +988,16 @@ export class RobotStateManager {
       name: this.state.name,
       model: this.state.model,
       // Honest identity: with real hardware attached we have no way to read
-      // the robot's serial/firmware/IP through the sidecar yet, so report an
-      // explicit 'unknown' rather than fake SIM- values. In sim mode the
-      // stable SIM-<robotId> serial and sim firmware are truthful.
-      serialNumber: hardwareConnected ? 'unknown' : this.state.serialNumber,
+      // the robot's serial/firmware/IP through the sidecar yet, so report
+      // 'unknown' rather than fake SIM- values. In sim mode the stable
+      // SIM-<robotId> serial and sim firmware are truthful.
+      //
+      // The serial is OMITTED, not 'unknown': it is `@unique` in the fleet
+      // database, so two sidecar-driven robots both claiming the string
+      // 'unknown' meant the second one could never register (TASK-207 found
+      // this with two sims). Absent is what we know, and the server keeps
+      // whatever it had.
+      serialNumber: hardwareConnected ? undefined : this.state.serialNumber,
       status: this.state.status,
       batteryLevel,
       location: { ...this.state.location },
@@ -1011,6 +1018,7 @@ export class RobotStateManager {
         maxPayloadKg: this.state.maxPayloadKg,
         description: this.state.description,
         powerSource: this.state.robotType === 'so101' ? 'ac_powered' : 'battery',
+        footprintRadiusM: FOOTPRINT_RADIUS_M[this.state.robotType] ?? FOOTPRINT_RADIUS_M.generic,
       },
       createdAt: this.state.createdAt,
       updatedAt: this.state.updatedAt,

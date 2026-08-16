@@ -1,12 +1,14 @@
 /**
  * @file KnowledgePanel.tsx
  * @description The right rail: one card holding everything the robot knows —
- *              what it can see right now (Scene) and what it still knows after
- *              a restart (Memory) — behind a two-option segmented control.
+ *              what it can see right now (Scene), the map it has built of the
+ *              room and who else is in it (Map, TASK-206/207), and what it
+ *              still knows after a restart (Memory) — behind one segmented
+ *              control.
  * @feature agentmode
  */
 
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { cn } from '@/shared/utils';
 import { SegmentedControl } from '@/shared/components/ui';
 import {
@@ -17,6 +19,7 @@ import {
 } from '../store/agentmodeStore';
 import { ScenePanel } from './ScenePanel';
 import { MemoryPanel, memoryEntryCount, memoryNeedsAttention } from './MemoryPanel';
+import { RobotMapPanel } from './RobotMapPanel';
 
 export interface KnowledgePanelProps {
   /**
@@ -25,9 +28,13 @@ export interface KnowledgePanelProps {
    * hardcodes a height, because the number that decides it is the page header's.
    */
   className?: string;
+  /** The robot whose map the Map tab reads; null = none bound. */
+  robotId?: string | null;
+  /** Which tab opens first (`?tab=map` from the fleet page's "open robot's map"). */
+  initialTab?: KnowledgeTab;
 }
 
-type KnowledgeTab = 'scene' | 'memory';
+export type KnowledgeTab = 'scene' | 'map' | 'memory';
 
 /**
  * Why the dot has to exist.
@@ -71,12 +78,20 @@ const ATTENTION_HINT =
  * notices on this page: a tab is a navigation choice the operator makes and can
  * undo, not a disclosure hiding the reason a robot will not move.
  */
-export const KnowledgePanel = memo(function KnowledgePanel({ className }: KnowledgePanelProps) {
-  const [tab, setTab] = useState<KnowledgeTab>('scene');
+export const KnowledgePanel = memo(function KnowledgePanel({
+  className,
+  robotId = null,
+  initialTab = 'scene',
+}: KnowledgePanelProps) {
+  const [tab, setTab] = useState<KnowledgeTab>(initialTab);
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   const entities = useAgentModeStore(selectSceneEntities);
   const digest = useAgentModeStore(selectMemory);
   const self = useAgentModeStore(selectSelf);
+  const robotMap = useAgentModeStore((s) => s.robotMap);
 
   const entries = memoryEntryCount(digest, self);
   const needsAttention = memoryNeedsAttention(digest);
@@ -84,9 +99,13 @@ export const KnowledgePanel = memo(function KnowledgePanel({ className }: Knowle
   const count =
     tab === 'scene'
       ? `${entities.length} ${entities.length === 1 ? 'entity' : 'entities'}`
-      : entries === null
-        ? '—'
-        : `${entries} ${entries === 1 ? 'entry' : 'entries'}`;
+      : tab === 'map'
+        ? robotMap
+          ? `${robotMap.peers.length} ${robotMap.peers.length === 1 ? 'peer' : 'peers'}`
+          : '—'
+        : entries === null
+          ? '—'
+          : `${entries} ${entries === 1 ? 'entry' : 'entries'}`;
 
   return (
     <div className={cn('glass-card flex flex-col overflow-hidden min-w-0', className)}>
@@ -97,6 +116,11 @@ export const KnowledgePanel = memo(function KnowledgePanel({ className }: Knowle
           onChange={setTab}
           options={[
             { value: 'scene', label: 'Scene', title: 'What the robot can see right now' },
+            {
+              value: 'map',
+              label: 'Map',
+              title: 'The map the robot has built itself, and the other robots it can see',
+            },
             {
               value: 'memory',
               label: (
@@ -126,10 +150,18 @@ export const KnowledgePanel = memo(function KnowledgePanel({ className }: Knowle
           belongs in SegmentedControl, which every feature shares. */}
       <div
         role="region"
-        aria-label={tab === 'scene' ? 'Scene' : 'Memory'}
+        aria-label={tab === 'scene' ? 'Scene' : tab === 'map' ? 'Map' : 'Memory'}
         className="flex-1 min-h-0 flex flex-col overflow-hidden"
       >
-        {tab === 'scene' ? <ScenePanel /> : <MemoryPanel headerless />}
+        {/* The map panel polls only while mounted, so an unselected tab costs
+            the robot nothing. */}
+        {tab === 'scene' ? (
+          <ScenePanel />
+        ) : tab === 'map' ? (
+          <RobotMapPanel robotId={robotId} />
+        ) : (
+          <MemoryPanel headerless />
+        )}
       </div>
     </div>
   );

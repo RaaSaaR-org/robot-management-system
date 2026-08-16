@@ -301,6 +301,39 @@ python e2e_loco_check.py 1 lo0 --idle-s 0       # skip the slow (60 s) sag check
 
   ![occupancy map of the room scene](docs/occupancy-map-room.png)
 
+### Two robots (TASK-207 — peers on the map)
+
+One `sim_node.py` is one robot in its own MuJoCo world; two of them on the same
+scene share the same world frame by construction (`/health.sim` + `scene` → the
+agent reports `location.frame = {kind:'sim', id:'<scene>'}`), which is exactly
+what lets two agents draw each other. Run a second node on another DDS domain and
+HTTP port, teleport it out of the first robot's way, and start a second agent
+against it:
+
+```bash
+python sim_node.py --domain 2 --http-port 8778 --quiet &
+curl -s -X POST localhost:8778/sim/reset-pose -H 'content-type: application/json' \
+     -d '{"x":-1.5,"y":1.0,"yaw":-1.57}'
+cd ../..   # robot-agent/
+sed -e 's/^PORT=41246/PORT=41247/' -e 's#^PUBLIC_URL=.*#PUBLIC_URL=http://localhost:41247#' \
+    -e 's/^ROBOT_ID=.*/ROBOT_ID=sim-robot-g1-edu-b/' -e 's/^ROBOT_NAME=.*/ROBOT_NAME=Bravo (G1 EDU)/' \
+    -e 's#^HARDWARE_SIDECAR_URL=.*#HARDWARE_SIDECAR_URL=http://localhost:8778#' \
+    -e 's#^AGENT_MAP_PATH=.*#AGENT_MAP_PATH=./data/occupancy-map-b.json#' \
+    -e 's#^PLACE_GRAPH_CACHE_PATH=.*#PLACE_GRAPH_CACHE_PATH=./data/place-graph-cache-b.json#' \
+    .env.g1-edu-agent > .env.g1-edu-agent-b
+AGENT_MODE_ENABLED=true DOTENV_CONFIG_PATH=.env.g1-edu-agent-b npx tsx src/index.ts &
+curl -s -X POST localhost:3001/api/robots/register -H 'content-type: application/json' \
+     -d '{"robotUrl":"http://localhost:41247"}'
+curl -s localhost:3001/api/robots/sim-robot-g1-edu/peers                       # B, at (-1.5, 1.0)
+curl -s localhost:41247/api/v1/robots/sim-robot-g1-edu-b/map | jq '.peers, .peersDropped'
+```
+
+Then `/agent?robot=sim-robot-g1-edu&tab=map` shows Bravo as a turquoise disc on
+G1-EDU-Bot's map, and Bravo's scene memory lists `robot G1-EDU-Bot (Agent Mode)`
+(`distanceSource: 'fleet'`) once it is within 3 m and ahead. A third agent without
+a sidecar (`npm run dev`, frame `null`) shows up as `peersDropped: 1` on both and
+is drawn by neither — the frame rule, exercised.
+
 The harness is re-runnable against a long-lived node: it starts by teleporting
 the robot to a known pose via `/sim/reset-pose` (a sim-only affordance), and
 every translation assertion is projected into the body frame at the pose where

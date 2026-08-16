@@ -259,6 +259,9 @@ agentModeRoutes.get('/:id/agent-mode/scene', (req: Request, res: Response) => {
  */
 const AGENT_ASSERTED_STATUSES: ReadonlySet<number> = new Set([400, 404]);
 
+/** The map is a few hundred KiB at most and served from memory; 5 s is generous. */
+const MAP_PROXY_TIMEOUT_MS = 5000;
+
 /**
  * True when a proxied body is something the robot actually said, rather than an
  * empty 200. Same guard as {@link isValidAgentModeSnapshot} serves for the state
@@ -301,6 +304,45 @@ function respondAgentProxyFailure(
   );
   res.status(502).json(AGENT_STATE_UNAVAILABLE);
 }
+
+/**
+ * GET /:id/agent-mode/map — the robot's own occupancy map, peers included
+ * (TASK-206/207). A pure proxy to the agent's `GET /api/v1/robots/:id/map`:
+ * the grid is the ROBOT's belief and the server keeps no copy of it. The
+ * agent's own 404s ("map disabled", "nothing integrated yet") pass through
+ * with their body; anything else is a 502 with the agent's error text — never
+ * an empty map, which would read as "the room is unknown".
+ */
+agentModeRoutes.get('/:id/agent-mode/map', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) {
+      return res.status(404).json({ code: 'ROBOT_NOT_FOUND', error: 'Robot not found' });
+    }
+    try {
+      const httpClient = new HttpClient(registered.baseUrl, MAP_PROXY_TIMEOUT_MS);
+      const map: unknown = await httpClient.get(`/api/v1/robots/${req.params.id}/map`);
+      if (!isObjectBody(map) || map.ok !== true) {
+        return res.status(502).json({ ...AGENT_STATE_UNAVAILABLE, error: 'agent returned no map' });
+      }
+      return res.json(map);
+    } catch (error) {
+      if (
+        error instanceof HttpClientError &&
+        error.statusCode === 404 &&
+        isObjectBody(error.responseBody)
+      ) {
+        return res.status(404).json(error.responseBody);
+      }
+      const why = error instanceof Error ? error.message : String(error);
+      console.warn(`[AgentMode] map fetch failed for ${req.params.id}: ${why}`);
+      return res.status(502).json({ ...AGENT_STATE_UNAVAILABLE, error: why });
+    }
+  } catch (error) {
+    console.error('[AgentMode] Get map error:', error);
+    res.status(500).json({ error: 'Failed to get agent map' });
+  }
+});
 
 /**
  * GET /:id/agent-mode/memory — the robot's durable-memory digest (TASK-197).

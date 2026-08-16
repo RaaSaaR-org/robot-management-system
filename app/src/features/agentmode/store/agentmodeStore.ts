@@ -25,6 +25,8 @@ import type {
   AgentSelfState,
   AgentMapSummary,
   AgentStateReachability,
+  RobotMapPayload,
+  RobotMapStatus,
   ControlOwner,
   MirroredAgentModeState,
   SceneEntity,
@@ -57,6 +59,10 @@ const initialState = {
    * one (older agent), `null` = map building disabled, else the counts.
    */
   map: undefined as AgentMapSummary | null | undefined,
+  robotMap: null as RobotMapPayload | null,
+  robotMapStatus: 'idle' as RobotMapStatus,
+  robotMapError: null as string | null,
+  robotMapFetchedAt: null as string | null,
   selfUpdatedAt: null as string | null,
   selfLive: false,
   selfAgeUnknown: false,
@@ -260,6 +266,37 @@ export const useAgentModeStore = createStore<AgentModeStore>(
         if (staleResponse(state, robotId)) return;
         state.memory = digest;
       });
+    },
+
+    // --------------------------------------------------------------------------
+    // Fetch the robot's own map (TASK-206/207)
+    // --------------------------------------------------------------------------
+    fetchRobotMap: async (robotId: string) => {
+      try {
+        const map = await agentmodeApi.getMap(robotId);
+        set((state) => {
+          if (staleResponse(state, robotId)) return;
+          state.robotMap = map;
+          state.robotMapStatus = 'ok';
+          state.robotMapError = null;
+          state.robotMapFetchedAt = new Date().toISOString();
+        });
+      } catch (err) {
+        // 404 is the ROBOT's answer ("map disabled", "older agent without the
+        // route", "nothing integrated yet"); anything else means we could not
+        // ask, which leaves the last map on screen and says so in the footer.
+        const why = getErrorMessage(err, 'map unavailable');
+        set((state) => {
+          if (staleResponse(state, robotId)) return;
+          if (isNotFoundError(err)) {
+            state.robotMap = null;
+            state.robotMapStatus = 'disabled';
+          } else {
+            state.robotMapStatus = 'unavailable';
+          }
+          state.robotMapError = why;
+        });
+      }
     },
 
     // --------------------------------------------------------------------------

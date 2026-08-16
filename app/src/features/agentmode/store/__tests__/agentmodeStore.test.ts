@@ -46,6 +46,7 @@ vi.mock('../../api/agentmodeApi', () => ({
     estop: vi.fn(),
     resetEstop: vi.fn(),
     getMemory: vi.fn(),
+    getMap: vi.fn(),
     writeIdentity: vi.fn(),
   },
 }));
@@ -2143,6 +2144,74 @@ describe('agentmodeStore', () => {
       await inFlight;
 
       expect(useAgentModeStore.getState().memory).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // ROBOT MAP (TASK-206/207) — the grid, peers and keep-outs the map tab draws
+  // ==========================================================================
+  describe('fetchRobotMap', () => {
+    const MAP = {
+      ok: true as const,
+      frame: 'odom' as const,
+      frameId: { kind: 'sim' as const, id: 'room' },
+      grid: null,
+      pose: null,
+      place: null,
+      registered: false,
+      registrationReason: null,
+      keepouts: [],
+      peers: [],
+      peersDropped: 0,
+      peersEnabled: true,
+    };
+
+    beforeEach(() => {
+      useAgentModeStore.getState().selectRobot(ROBOT_ID);
+    });
+
+    it('stores a map with its read time', async () => {
+      mockedApi.getMap.mockResolvedValueOnce(MAP);
+      await useAgentModeStore.getState().fetchRobotMap(ROBOT_ID);
+      const s = useAgentModeStore.getState();
+      expect(s.robotMap).toEqual(MAP);
+      expect(s.robotMapStatus).toBe('ok');
+      expect(s.robotMapError).toBeNull();
+      expect(s.robotMapFetchedAt).not.toBeNull();
+    });
+
+    it('records a 404 as "disabled" — the robot\u2019s answer — and clears the map', async () => {
+      mockedApi.getMap.mockResolvedValueOnce(MAP);
+      await useAgentModeStore.getState().fetchRobotMap(ROBOT_ID);
+      mockedApi.getMap.mockRejectedValueOnce(apiError(404, 'occupancy map is disabled on this agent (AGENT_MAP_ENABLED)'));
+      await useAgentModeStore.getState().fetchRobotMap(ROBOT_ID);
+      const s = useAgentModeStore.getState();
+      expect(s.robotMap).toBeNull();
+      expect(s.robotMapStatus).toBe('disabled');
+      expect(s.robotMapError).toContain('AGENT_MAP_ENABLED');
+      expect(s.error).toBeNull(); // no banner: nothing is wrong, the robot just has no map
+    });
+
+    it('records any other failure as "unavailable" and KEEPS the last map', async () => {
+      mockedApi.getMap.mockResolvedValueOnce(MAP);
+      await useAgentModeStore.getState().fetchRobotMap(ROBOT_ID);
+      mockedApi.getMap.mockRejectedValueOnce(apiError(502, 'ECONNREFUSED'));
+      await useAgentModeStore.getState().fetchRobotMap(ROBOT_ID);
+      const s = useAgentModeStore.getState();
+      expect(s.robotMap).toEqual(MAP);
+      expect(s.robotMapStatus).toBe('unavailable');
+      expect(s.robotMapError).toBe('ECONNREFUSED');
+    });
+
+    it('drops a map that arrives after a robot switch', async () => {
+      let resolve: (m: typeof MAP) => void = () => {};
+      mockedApi.getMap.mockReturnValueOnce(new Promise<typeof MAP>((r) => (resolve = r)));
+      const inFlight = useAgentModeStore.getState().fetchRobotMap(ROBOT_ID);
+      useAgentModeStore.getState().selectRobot('other-robot');
+      resolve(MAP);
+      await inFlight;
+      expect(useAgentModeStore.getState().robotMap).toBeNull();
+      expect(useAgentModeStore.getState().robotMapStatus).toBe('idle');
     });
   });
 

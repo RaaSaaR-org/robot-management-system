@@ -127,7 +127,7 @@ export interface SceneEntity {
    * Optional, like `fsmId`/`damped` below, because an older agent sends no
    * source field. Absent must be rendered as unverified, never as measured.
    */
-  distanceSource?: 'lidar' | 'vlm-estimate' | null;
+  distanceSource?: 'lidar' | 'vlm-estimate' | 'fleet' | null;
   /**
    * How many separate things the last look called by this label — present only
    * when it was more than one.
@@ -340,6 +340,81 @@ export interface AgentMapSummary {
   /** ISO time of the last integrated LiDAR cloud, null when none yet. */
   lastIntegratedAt: string | null;
 }
+
+// ============================================================================
+// ROBOT MAP (TASK-206/207) — `GET /robots/:id/agent-mode/map`
+// ============================================================================
+
+/** The occupancy grid on the wire: Int8 log-odds × 25, base64, row 0 = lowest y. */
+export interface RobotMapGrid {
+  version: 1;
+  frame: 'odom';
+  frameId: string | null;
+  /** Metres per cell. */
+  resolution: number;
+  /** World coordinates of the outer corner of cell (0, 0). */
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+  encoding: 'int8-logodds-b64';
+  cells: string;
+  /** Classification thresholds in log-odds (unscaled). */
+  occupiedAbove: number;
+  freeBelow: number;
+  poseCount: number;
+  lastIntegratedAt: string | null;
+  knownCells: number;
+  occupiedCells: number;
+}
+
+/** Another robot, already filtered to OUR frame by the agent. */
+export interface RobotMapPeer {
+  robotId: string;
+  name: string;
+  x: number;
+  y: number;
+  headingDeg: number | null;
+  footprintRadiusM: number;
+  place: string | null;
+  updatedAt: string | null;
+}
+
+/** A keep-out polygon from the place graph, in map coordinates (only when registered). */
+export interface RobotMapKeepout {
+  id: string;
+  name: string;
+  polygon: Array<[number, number]>;
+}
+
+/**
+ * The robot's own map, as the agent serves it. `frame` is the whole caveat:
+ * the grid inherits odometry drift; `keepouts` is `[]` unless the place graph
+ * is registered to that odometry (`registered`).
+ */
+export interface RobotMapPayload {
+  ok: true;
+  frame: 'odom';
+  frameId: { kind: 'sim' | 'odom'; id: string } | null;
+  /** Null until the first cloud has been integrated. */
+  grid: RobotMapGrid | null;
+  pose: { x: number; y: number; yawDeg: number; source: string; atMs: number } | null;
+  place: ScenePlace | null;
+  registered: boolean;
+  registrationReason: string | null;
+  keepouts: RobotMapKeepout[];
+  peers: RobotMapPeer[];
+  /** Peers the agent dropped for being in another odometry frame. */
+  peersDropped: number;
+  peersEnabled: boolean;
+}
+
+/**
+ * How the last map read went. `disabled` is the ROBOT's answer (map building
+ * off on that agent, or an older agent without the route); `unavailable` is
+ * ours (server/robot unreachable) — and the two must never look alike.
+ */
+export type RobotMapStatus = 'idle' | 'ok' | 'disabled' | 'unavailable';
 
 /**
  * What `GET /robots/:id/agent-mode` answers: the state plus WHEN the server's
@@ -636,6 +711,13 @@ export interface AgentModeStore {
    * not report one (older agent), `null` = map building disabled on it.
    */
   map: AgentMapSummary | null | undefined;
+  /** The full map (grid, peers, keepouts) as last fetched by the map panel; null before / when unavailable. */
+  robotMap: RobotMapPayload | null;
+  robotMapStatus: RobotMapStatus;
+  /** Why the last map read failed, in the agent's or server's words. */
+  robotMapError: string | null;
+  /** ISO time the map panel last got an answer, so a stale map can say so. */
+  robotMapFetchedAt: string | null;
   /**
    * When the self snapshot was TAKEN (ISO), or null when that is not known. It
    * answers "how old is what I am looking at", which the snapshot itself
@@ -712,6 +794,12 @@ export interface AgentModeStore {
    * is not "the robot remembers nothing".
    */
   fetchMemory: (robotId: string) => Promise<void>;
+  /**
+   * Load the robot's own map (TASK-206/207). Polled by the map panel while it
+   * is visible. A robot that says "no map" is recorded as `disabled`; a robot
+   * that cannot be reached keeps the last map and is recorded as `unavailable`.
+   */
+  fetchRobotMap: (robotId: string) => Promise<void>;
   /**
    * Write Name/Emoji/Operator/Site to the robot's `IDENTITY.md`.
    *

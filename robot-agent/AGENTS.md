@@ -248,7 +248,7 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 | DELETE | `/api/v1/robots/:id/tasks/:taskId` | Cancel task |
 | POST   | `/api/v1/robots/:id/reset` | Reset robot state |
 | GET    | `/api/v1/robots/:id/pointcloud` | Depth/LiDAR point-cloud frame (`?sensor=`, `?full=`) |
-| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `status`; `?format=pgm` for a P5 image. 404 when `AGENT_MAP_ENABLED=false` |
+| GET    | `/api/v1/robots/:id/map` | The robot's own 2-D occupancy grid (TASK-206) in the ODOMETRY frame: `grid` (int8 log-odds, base64), `pose`, `place`, keepout polygons when the place graph is registered, `peers` + `peersDropped` (TASK-207), `frameId`, `status`; `?format=pgm` for a P5 image. 404 when `AGENT_MAP_ENABLED=false` |
 | GET    | `/api/v1/register` | Registration info for server |
 | GET    | `/api/v1/health` | Health check |
 
@@ -291,6 +291,25 @@ sidecar/sim restart (which re-zeroes odometry) starts a fresh map instead of
 lying by metres. Config: `AGENT_MAP_*` (see `.env.example`); read it at
 `GET /api/v1/robots/:id/map`; a `{knownCells, occupiedCells, lastIntegratedAt}`
 summary rides in the mirrored `AgentModeState.map`.
+
+### Fleet peers on the map (TASK-207)
+
+`src/agent-mode/peers.ts` (`PeerTracker`) polls the server's
+`GET /api/robots/:id/peers` every `AGENT_PEERS_POLL_MS` (2 s; 0 = off) and keeps
+the other robots' last poses. Every peer carries the frame its pose is in
+(`location.frame` on `GET /api/v1/robots/:id`, from
+`hardwareClient.getOdometryFrame()`: `{kind:'sim', id:<scene>}` for `sim_node.py`,
+`{kind:'odom', id:<boot_id>}` for a real sidecar, `null` without one). A peer whose
+frame differs from ours — or has none — is DROPPED and counted (`peersDropped`),
+never drawn in the wrong place; two real robots therefore never see each other
+until someone builds cross-robot registration, which is the honest answer.
+Accepted peers go into the map's dynamic overlay
+(`OccupancyMap.setDynamicObstacles`, discs of `footprintRadiusM + 0.25`;
+`isTraversable()` consults it after the static grid, the log-odds cells never
+remember a robot) and, when within `AGENT_PEERS_NOTICE_M` and inside ±90° of
+heading, into scene memory as `robot <name>` with `distanceSource: 'fleet'`, so
+the planner can talk about them. Peers are also on `/map` and, through the server
+proxy `GET /api/robots/:id/agent-mode/map`, on the `/agent` page's Map tab.
 
 ## Key Dependencies
 

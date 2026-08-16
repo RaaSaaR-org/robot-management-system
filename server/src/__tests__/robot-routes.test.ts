@@ -15,6 +15,9 @@ const mockRobotManager = {
   unregisterRobot: vi.fn(),
   sendCommand: vi.fn(),
   getTelemetry: vi.fn(),
+  getRegisteredRobot: vi.fn(),
+  refreshPoses: vi.fn(),
+  getPeers: vi.fn(),
 };
 
 // Mock the robotManager import
@@ -37,6 +40,34 @@ describe('Robot Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('GET /api/robots/:id/peers (TASK-207)', () => {
+    it('refreshes poses first, then lists the other robots for the caller', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ robot: { id: 'r1' } });
+      mockRobotManager.refreshPoses.mockResolvedValue(undefined);
+      const peers = [{ robotId: 'r2', name: 'Bot-2', x: 1, y: 2, headingDeg: 0, frame: { kind: 'sim', id: 'room' }, footprintRadiusM: 0.35 }];
+      mockRobotManager.getPeers.mockReturnValue(peers);
+
+      const res = await request(app).get('/api/robots/r1/peers');
+
+      expect(res.status).toBe(200);
+      expect(res.body.robotId).toBe('r1');
+      expect(res.body.peers).toEqual(peers);
+      expect(typeof res.body.generatedAt).toBe('string');
+      expect(mockRobotManager.refreshPoses).toHaveBeenCalledTimes(1);
+      expect(mockRobotManager.getPeers).toHaveBeenCalledWith('r1');
+    });
+
+    it('404s an unknown caller instead of handing out the fleet', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(undefined);
+
+      const res = await request(app).get('/api/robots/ghost/peers');
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('ROBOT_NOT_FOUND');
+      expect(mockRobotManager.getPeers).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/robots', () => {

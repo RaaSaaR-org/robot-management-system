@@ -11,7 +11,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/config.js';
 import type { EmbodimentConfig } from '../embodiment/types.js';
-import { hardwareClient, type LocoResult } from '../hardware/HardwareClient.js';
+import { hardwareClient, type CachedBasePose, type LocoResult } from '../hardware/HardwareClient.js';
 import type { RobotStateManager } from '../robot/state.js';
 import type { PersistedAgentState } from '../robot/StatePersistence.js';
 import {
@@ -51,6 +51,7 @@ import { Planner, type PlannedBlock } from './planner.js';
 import { formatPlaceNotesSection } from './prompts.js';
 import { RangeSensor } from './range.js';
 import { MapKeeper } from './occupancy-map-keeper.js';
+import { PeerTracker, type TrackedPeer, type PeerTrackerStatus } from './peers.js';
 import type { OccupancyMapSnapshot } from './occupancy-map.js';
 import { SceneMemoryStore } from './scene-memory.js';
 import { ServerMirror, type BlockJournalContext } from './server-mirror.js';
@@ -139,6 +140,10 @@ export interface AgentModeControllerDeps {
    * hardware client's pose/boot id; `null` runs without a map at all.
    */
   mapKeeper?: MapKeeper | null;
+  /** Fleet peer feed (TASK-207); `undefined` = the real one, `null` = none. */
+  peerTracker?: PeerTracker | null;
+  /** Own planar pose for peer bearings (default: the hardware client's cache). */
+  getPose?: () => CachedBasePose | null;
   scene?: SceneMemoryStore;
   mirror?: ServerMirror;
   lock?: ControlOwnerLock;
@@ -244,6 +249,8 @@ export class AgentModeController {
   private readonly vision: VisionClient;
   private readonly range: RangeSensor;
   private readonly mapKeeper: MapKeeper | null;
+  private readonly peerTracker: PeerTracker | null;
+  private readonly getPose: () => CachedBasePose | null;
   private readonly scene: SceneMemoryStore;
   private readonly mirror: ServerMirror;
   private readonly executor: BlockExecutor;
@@ -393,6 +400,18 @@ export class AgentModeController {
             getBootId: () => hardwareClient.getSidecarBootId(),
           })
         : deps.mapKeeper;
+    this.peerTracker =
+      deps.peerTracker === undefined
+        ? new PeerTracker({
+            enabled: config.agentMode.peersPollMs > 0,
+            serverUrl: config.serverUrl,
+            robotId: this.robotId,
+            pollMs: config.agentMode.peersPollMs,
+            getFrame: () => hardwareClient.getOdometryFrame(),
+            onChange: () => this.syncPeers(),
+          })
+        : deps.peerTracker;
+    this.getPose = deps.getPose ?? (() => hardwareClient.getCachedPose());
     this.scene = deps.scene ?? new SceneMemoryStore(this.robotId);
     // `undefined` means "the real one"; an explicit `null` means "none".
     this.memory = deps.memory === undefined ? getWorkspace() : deps.memory;
@@ -552,6 +571,7 @@ export class AgentModeController {
    */
   attach(robotStateManager: RobotStateManager): void {
     this.robotStateManager = robotStateManager;
+    this.peerTracker?.start();
 
     // A protective stop has to stop the thing that is DRIVING, not just latch.
     // Without this the geofence (TASK-200) "fires" while the running `walk`
@@ -689,6 +709,7 @@ export class AgentModeController {
   }
 
   dispose(): void {
+    this.peerTracker?.dispose();
     this.mapKeeper?.dispose();
     this.idleWatcher.stop();
     this.unsubscribeLock?.();
@@ -748,6 +769,16 @@ export class AgentModeController {
   /** The keeper's live map, for callers that need geometry queries (TASK-208). */
   occupancyMap() {
     return this.mapKeeper?.getMap() ?? null;
+  }
+
+  /** Accepted (same-frame, unexpired) peers, for `/map` and the scene (TASK-207). */
+  peers(): TrackedPeer[] {
+    return this.peerTracker?.list() ?? [];
+  }
+
+  /** Peer feed diagnostics; null when this controller has no tracker. */
+  peerStatus(): PeerTrackerStatus | null {
+    return this.peerTracker?.status() ?? null;
   }
 
   /**
@@ -859,6 +890,57 @@ export class AgentModeController {
       this.scene.setPoseM(belief.poseM.x, belief.poseM.y, belief.poseSource);
     }
     this.scene.setPlace(belief?.place ?? null, belief?.driftSinceAnchorM ?? null);
+    this.syncPeers();
+  }
+
+  /**
+   * Push the fleet's view of the other robots into the two places that read
+   * it (TASK-207): the map's dynamic overlay (every accepted peer, as a disc)
+   * and scene memory (only peers within `AGENT_PEERS_NOTICE_M` and inside ±90°
+   * of heading — what the robot would plausibly "notice"). Called on every
+   * peer change and, like {@link syncPlace}, on every render pull, because the
+   * robot's own pose moves too and bearings are relative to it.
+   */
+  private syncPeers(): void {
+    if (!this.peerTracker) return;
+    const peers = this.peerTracker.list();
+    this.mapKeeper?.getMap()?.setDynamicObstacles(this.peerTracker.obstacles());
+
+    const pose = this.getPose();
+    if (!pose) {
+      // No own pose: bearings would be fiction. The overlay above still holds
+      // (it is in map coordinates, not relative), the scene says nothing.
+      this.scene.setFleetEntities([]);
+      return;
+    }
+    const noticeM = config.agentMode.peersNoticeM;
+    const now = nowIso();
+    const entities = peers.flatMap((p) => {
+      const dx = p.x - pose.x;
+      const dy = p.y - pose.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > noticeM) return [];
+      const bearing = (Math.atan2(dy, dx) * 180) / Math.PI;
+      let rel = bearing - pose.yawDeg;
+      while (rel > 180) rel -= 360;
+      while (rel <= -180) rel += 360;
+      if (Math.abs(rel) > 90) return [];
+      let world = bearing;
+      while (world > 180) world -= 360;
+      while (world <= -180) world += 360;
+      return [
+        {
+          label: `robot ${p.name}`,
+          bearingDeg: world,
+          distanceEstM: Math.round(dist * 10) / 10,
+          distanceSource: 'fleet' as const,
+          confidence: 1,
+          lastSeen: p.updatedAt ?? now,
+          observedSeq: 0,
+        },
+      ];
+    });
+    this.scene.setFleetEntities(entities);
   }
 
   setEnabled(enabled: boolean): AgentModeState {
