@@ -90,6 +90,32 @@ function MicIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * What the acknowledgement bubble says once the plan it announced has moved on.
+ *
+ * The robot answers a command with "Planning…" and the bubble used to keep
+ * saying that forever, next to a rail reading "Done": two truths of different
+ * ages on one screen. The bubble follows the plan while it has one, so the
+ * transcript reads like a conversation, not a log of first replies.
+ */
+export function ackTextFor(message: AgentChatMessage, plan: AgentPlan | null): string {
+  if (!message.showsPlan || !plan || plan.id !== message.planId) return message.text;
+  switch (plan.status) {
+    case 'planning':
+      return message.text;
+    case 'running':
+      return 'On it.';
+    case 'done':
+      return 'Done.';
+    case 'failed':
+      return 'That did not work.';
+    case 'aborted':
+      return 'Stopped.';
+    default:
+      return message.text;
+  }
+}
+
 function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentPlan | null }) {
   const isUser = message.role === 'user';
 
@@ -106,7 +132,7 @@ function MessageRow({ message, plan }: { message: AgentChatMessage; plan: AgentP
               : 'glass-card text-theme-primary rounded-bl-md'
         )}
       >
-        {message.text}
+        {ackTextFor(message, plan)}
       </div>
 
       {/* A heard command is not a typed one: the words went through a speech
@@ -189,6 +215,34 @@ export const AgentChat = memo(function AgentChat({
     return map;
   }, [plan, planHistory]);
 
+  /**
+   * The plan the robot is holding, when this console has no transcript for it.
+   *
+   * The conversation lives in this tab: a reload, a second operator, or a
+   * command that came in over A2A or the microphone leaves `messages` empty
+   * while the status rail (reading the same store) says "Done" or shows a
+   * running block. Two truths on one screen, and the older-looking one is the
+   * empty state. So a plan without a transcript is rendered as the exchange it
+   * was — marked as read from the robot, because this console did not see it
+   * happen.
+   */
+  const restoredRows = useMemo<AgentChatMessage[] | null>(() => {
+    if (messages.length > 0 || !plan) return null;
+    return [
+      { id: `${plan.id}-command`, role: 'user', text: plan.command, timestamp: plan.createdAt, planId: plan.id },
+      {
+        id: `${plan.id}-ack`,
+        role: 'agent',
+        text: 'Planning…',
+        timestamp: plan.createdAt,
+        planId: plan.id,
+        showsPlan: true,
+        ...(plan.language ? { spokenLanguage: plan.language } : {}),
+      },
+    ];
+  }, [messages.length, plan]);
+  const rows = restoredRows ?? messages;
+
   const canSend = Boolean(robotId) && enabled && !estopActive;
   const isPlanning = Boolean(pendingCommand) && plan?.id !== pendingCommand?.planId;
 
@@ -239,7 +293,7 @@ export const AgentChat = memo(function AgentChat({
       className={cn('glass-card flex flex-col overflow-hidden', className)}
     >
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-4">
-        {messages.length === 0 ? (
+        {rows.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center gap-3 py-8">
             <p className="text-theme-secondary text-sm">
               Say what the robot should do. The local planner turns it into blocks and
@@ -263,7 +317,12 @@ export const AgentChat = memo(function AgentChat({
           </div>
         ) : (
           <div className="space-y-3">
-            {messages.map((message) => (
+            {restoredRows && (
+              <p className="card-meta text-center" data-testid="agent-chat-restored">
+                read from the robot — this console was not open when it ran
+              </p>
+            )}
+            {rows.map((message) => (
               <MessageRow
                 key={message.id}
                 message={message}

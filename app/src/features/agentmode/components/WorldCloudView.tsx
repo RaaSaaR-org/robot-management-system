@@ -61,11 +61,40 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
   const error = useAgentModeStore((s) => s.robotCloudError);
   const fetchRobotCloud = useAgentModeStore((s) => s.fetchRobotCloud);
 
+  // One poll is ~1.3 MB of base64 read off the robot over WiFi, so it is only
+  // ever paid for a view someone is looking at:
+  //  - hidden tab: no fetch at all (the grid poll in RobotMapPanel already does
+  //    this; the cloud poll did not, so a backgrounded tab kept the robot
+  //    encoding full clouds for ten minutes for nobody), and one immediate
+  //    catch-up fetch when the tab comes back so the view is never stale-by-a-
+  //    poll on return;
+  //  - one request in flight at a time: on a slow link the fixed interval
+  //    stacked 1.3 MB requests, and out-of-order responses flipped the view
+  //    back to an older cloud (`staleResponse` only guards a robot change).
+  // The first load is still immediate — the 3-D view must fill on open.
+  const inFlight = useRef(false);
   useEffect(() => {
     if (!robotId) return;
-    void fetchRobotCloud(robotId, maxPoints);
-    const timer = setInterval(() => void fetchRobotCloud(robotId, maxPoints), pollMs);
-    return () => clearInterval(timer);
+    const tick = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await fetchRobotCloud(robotId, maxPoints);
+      } finally {
+        inFlight.current = false;
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), pollMs);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void tick();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [robotId, pollMs, maxPoints, fetchRobotCloud]);
 
   const built = useMemo(() => (robotId && cloud ? cloudToFrame(robotId, cloud) : null), [robotId, cloud]);

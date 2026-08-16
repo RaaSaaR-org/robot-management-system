@@ -95,6 +95,13 @@ export function formatBlockParams(block: AgentBlock): string {
       const entity = place ? `into ${place}` : (str(p.entity) ?? '');
       const nav = block.nav;
       if (!nav) return entity;
+      // The navigator re-plans at every stage, so the LAST route it published
+      // for an arrived goto is the degenerate one from the goal itself: zero
+      // length, no segments. "planned 0.0 m in 0 segments" is not a route an
+      // operator can act on — the card falls back to the target, and the block
+      // result underneath carries the distance actually walked.
+      const degenerate = nav.planned && nav.segments === 0;
+      if (degenerate) return entity;
       const how =
         nav.planned && nav.lengthM !== null
           ? `planned ${nav.lengthM.toFixed(1)} m in ${nav.segments} segment${nav.segments === 1 ? '' : 's'}`
