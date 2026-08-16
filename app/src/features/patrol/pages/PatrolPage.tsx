@@ -38,6 +38,7 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
   const routesError = usePatrolStore((s) => s.routesError);
   const runs = usePatrolStore(selectRuns);
   const runsStatus = usePatrolStore((s) => s.runsStatus);
+  const runsError = usePatrolStore((s) => s.runsError);
   const activeRuns = usePatrolStore(selectActiveRuns);
   const startingRouteId = usePatrolStore((s) => s.startingRouteId);
   const lastStartResult = usePatrolStore((s) => s.lastStartResult);
@@ -102,6 +103,9 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
     }
     return { enabled, scheduled, recent: recent.length, recentBaseline, findings, runsWithFindings };
   }, [routes, runs]);
+  // With no history in hand a failed run fetch would render "0 runs / 0 findings",
+  // which reads as "the night patrol never ran" instead of "we could not ask".
+  const runsUnknown = runsStatus === 'error' && runs.length === 0;
   const linkName = fallbackRobotId ? (robotNames[fallbackRobotId] ?? fallbackRobotId) : 'WS';
 
   const handleStart = useCallback(
@@ -188,15 +192,15 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
           />
           <KpiTile
             label="Runs · 24 h"
-            value={kpis.recent}
-            sub={`${kpis.recentBaseline} baseline`}
+            value={runsUnknown ? '—' : kpis.recent}
+            sub={runsUnknown ? 'history unavailable' : `${kpis.recentBaseline} baseline`}
             data-testid="patrol-kpi-runs"
           />
           <KpiTile
             label="Findings raised"
-            value={kpis.findings}
-            sub={`across ${kpis.runsWithFindings} run${kpis.runsWithFindings === 1 ? '' : 's'}`}
-            tone={kpis.findings > 0 ? 'attention' : 'neutral'}
+            value={runsUnknown ? '—' : kpis.findings}
+            sub={runsUnknown ? 'history unavailable' : `across ${kpis.runsWithFindings} run${kpis.runsWithFindings === 1 ? '' : 's'}`}
+            tone={!runsUnknown && kpis.findings > 0 ? 'attention' : 'neutral'}
             data-testid="patrol-kpi-findings"
           />
           <KpiTile
@@ -248,31 +252,57 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
 
         <section className="flex flex-col gap-2 min-w-0">
           <SectionHeader title="Routes" count={routes.length} />
-          {routesStatus === 'error' ? (
-            <div className={cn(PATROL_INSET, 'text-sm text-red-700 dark:text-red-400 border-l-[3px] border-l-red-500')}>{routesError ?? 'Failed to load routes'}</div>
+          {/* Data wins over status: the 30 s poll fails on any server restart, and
+              replacing the cards with a red line would take the steppers and the
+              Abort buttons away from an operator watching a live patrol. */}
+          {routesStatus === 'error' && routes.length === 0 ? (
+            <div className={cn(PATROL_INSET, 'text-sm text-red-700 dark:text-red-400 border-l-[3px] border-l-red-500')} role="alert" data-testid="patrol-routes-error">
+              {routesError ?? 'Failed to load routes'}
+            </div>
           ) : routesStatus === 'loading' && routes.length === 0 ? (
             <div className="grid gap-3 lg:grid-cols-2" aria-busy="true" aria-label="Loading routes">
               <div className="glass-card rounded-brand-lg animate-pulse h-28" />
               <div className="glass-card rounded-brand-lg animate-pulse h-28" />
             </div>
           ) : (
-            <RouteList
-              routes={routes}
-              lastRunByRoute={lastRunByRoute}
-              robotNames={robotNames}
-              startingRouteId={startingRouteId}
-              onStart={(route, mode) => void handleStart(route, mode)}
-              onAbort={(route) => void handleAbortRoute(route)}
-            />
+            <>
+              {routesStatus === 'error' && (
+                <div className={cn(PATROL_INSET, 'text-sm text-amber-700 dark:text-amber-400 border-l-[3px] border-l-amber-500')} role="status" data-testid="patrol-routes-stale">
+                  {routesError ?? 'Could not refresh the routes'} — showing the last known state.
+                </div>
+              )}
+              <RouteList
+                routes={routes}
+                lastRunByRoute={lastRunByRoute}
+                robotNames={robotNames}
+                startingRouteId={startingRouteId}
+                onStart={(route, mode) => void handleStart(route, mode)}
+                onAbort={(route) => void handleAbortRoute(route)}
+              />
+            </>
           )}
         </section>
 
         <section className="flex flex-col gap-2 min-w-0">
           <SectionHeader title="Run history" count={runs.length} />
-          {runsStatus === 'loading' && runs.length === 0 ? (
+          {/* Without this branch a failed fetch fell through to RunHistory's
+              "No runs yet" — the operator read a read failure as "the scheduled
+              patrol never ran". */}
+          {runsStatus === 'error' && runs.length === 0 ? (
+            <div className={cn(PATROL_INSET, 'text-sm text-red-700 dark:text-red-400 border-l-[3px] border-l-red-500')} role="alert" data-testid="patrol-runs-error">
+              {runsError ?? 'Failed to load patrol runs'}
+            </div>
+          ) : runsStatus === 'loading' && runs.length === 0 ? (
             <div className="glass-card rounded-brand-lg animate-pulse h-40" aria-busy="true" aria-label="Loading runs" />
           ) : (
-            <RunHistory runs={runs} robotNames={robotNames} />
+            <>
+              {runsStatus === 'error' && (
+                <div className={cn(PATROL_INSET, 'text-sm text-amber-700 dark:text-amber-400 border-l-[3px] border-l-amber-500')} role="status" data-testid="patrol-runs-stale">
+                  {runsError ?? 'Could not refresh the run history'} — showing the last known history.
+                </div>
+              )}
+              <RunHistory runs={runs} robotNames={robotNames} />
+            </>
           )}
         </section>
       </div>

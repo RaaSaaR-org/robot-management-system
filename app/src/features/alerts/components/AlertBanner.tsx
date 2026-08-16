@@ -8,12 +8,13 @@
  */
 
 import { useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
 import { useAlerts } from '../hooks/useAlerts';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
 import type { Alert, AlertSeverity } from '../types/alerts.types';
+import { findingLinkPath, parseFindingLink, stripFindingLink } from '@/features/patrol/utils/patrolFormat';
 
 // ============================================================================
 // TYPES
@@ -42,6 +43,14 @@ const SEVERITY_BUTTON_STYLES: Record<AlertSeverity, string> = {
   info: 'bg-blue-200 hover:bg-blue-300 text-blue-900 dark:bg-blue-800 dark:hover:bg-blue-700 dark:text-blue-100',
 };
 
+/** "Open finding" link tint — readable on each severity's banner background. */
+const SEVERITY_LINK_STYLES: Record<AlertSeverity, string> = {
+  critical: 'text-white/90 hover:text-white',
+  error: 'text-red-800 hover:text-red-900 dark:text-red-200 dark:hover:text-red-100',
+  warning: 'text-yellow-800 hover:text-yellow-900 dark:text-yellow-200 dark:hover:text-yellow-100',
+  info: 'text-blue-800 hover:text-blue-900 dark:text-blue-200 dark:hover:text-blue-100',
+};
+
 // ============================================================================
 // SUB-COMPONENTS
 // ============================================================================
@@ -55,6 +64,15 @@ interface AlertBannerContentProps {
 function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerContentProps) {
   const isCritical = alert.severity === 'critical';
   const buttonStyle = SEVERITY_BUTTON_STYLES[alert.severity];
+  // TASK-212: an alert raised for a patrol finding carries a machine tag
+  // `[finding:<id> run:<runId>]` in its message tail. Keep it out of the prose
+  // and offer it as a deep link into the run instead.
+  const findingLink = parseFindingLink(alert.message) ?? parseFindingLink(alert.title);
+  const findingPath = findingLink ? findingLinkPath(findingLink) : null;
+  const message = findingLink ? stripFindingLink(alert.message) : alert.message;
+  // A skipped-run alert carries a bare `[run:<id>]` — the target is the run
+  // itself. Saying "Open finding" there promises evidence that does not exist.
+  const linkLabel = findingLink?.findingId ? 'Open finding →' : 'Open run →';
 
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 sm:py-3">
@@ -65,11 +83,24 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
         <div className="min-w-0 truncate">
           <span className="font-medium">{alert.title}</span>
           <span className="mx-1 sm:mx-2">-</span>
-          <span className="opacity-90">{alert.message}</span>
+          <span className="opacity-90">{message}</span>
         </div>
       </div>
 
       <div className="flex items-center gap-2 flex-shrink-0">
+        {findingPath && (
+          <Link
+            to={findingPath}
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              'text-xs underline underline-offset-2 whitespace-nowrap',
+              SEVERITY_LINK_STYLES[alert.severity]
+            )}
+            data-testid="alert-banner-open-finding"
+          >
+            {linkLabel}
+          </Link>
+        )}
         {isCritical ? (
           <Button size="sm" variant="ghost" onClick={onAcknowledge} className={cn('border', buttonStyle)}>
             Acknowledge

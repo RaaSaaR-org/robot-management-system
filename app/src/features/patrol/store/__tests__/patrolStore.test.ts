@@ -137,6 +137,58 @@ describe('patrolStore.applyEvent', () => {
     expect(s.runsById['run-1'].findingCount).toBe(1);
   });
 
+  it('a late leg event never resurrects a run that already finished', () => {
+    // The robot pushes every event fire-and-forget over its own connection, and
+    // the server broadcasts them raw, so the leg that preceded `finished` can
+    // land after it. Applied blindly it put the parked robot back on the map
+    // overlay as "Running" forever — the overlay has no poll to heal it.
+    const finished = run({
+      status: 'done',
+      finishedAt: '2026-08-16T01:10:00.000Z',
+      legs: [
+        { ...run().legs[0], status: 'done' },
+        { ...run().legs[1], status: 'done' },
+      ],
+    });
+    usePatrolStore.getState().applyEvent(event('agent:patrol:started', run()));
+    usePatrolStore.getState().applyEvent(event('agent:patrol:finished', finished));
+
+    const lateLeg = run({ legs: [{ ...run().legs[0], status: 'done' }, run().legs[1]] });
+    usePatrolStore.getState().applyEvent(event('agent:patrol:leg', lateLeg));
+
+    const s = usePatrolStore.getState();
+    expect(s.runsById['run-1'].status).toBe('done');
+    expect(s.runsById['run-1'].finishedAt).toBe('2026-08-16T01:10:00.000Z');
+    expect(s.runsById['run-1'].legs[1].status).toBe('done');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+    expect(selectActiveRuns(s)).toHaveLength(0);
+    expect(selectOverlayRun('g1')(s)?.status).toBe('done');
+  });
+
+  it('a late finding is still recorded, but its stale run snapshot is not', () => {
+    usePatrolStore
+      .getState()
+      .applyEvent(event('agent:patrol:finished', run({ status: 'done', finishedAt: '2026-08-16T01:10:00.000Z', findingCount: 1 })));
+    usePatrolStore.getState().applyEvent(event('agent:finding:confirmed', run({ status: 'running', findingCount: 1 }), finding()));
+
+    const s = usePatrolStore.getState();
+    expect(s.findingsByRun['run-1']).toHaveLength(1);
+    expect(s.runsById['run-1'].status).toBe('done');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+  });
+
+  it('a late leg does not erase the skip the announcer is still reading', () => {
+    // The patrol branch deletes `lastSkippedByRobot` for any non-skipped run;
+    // an out-of-order leg used to silently swallow an announced skip.
+    const skipped = run({ runId: 'run-skip', status: 'skipped', reason: 'battery 12% below minimum', finishedAt: '2026-08-16T01:05:00.000Z' });
+    usePatrolStore.getState().applyEvent(event('agent:patrol:finished', skipped));
+    usePatrolStore.getState().applyEvent(event('agent:patrol:leg', run({ runId: 'run-skip' })));
+
+    const s = usePatrolStore.getState();
+    expect(selectLastSkipped('g1')(s)?.reason).toBe('battery 12% below minimum');
+    expect(s.runsById['run-skip'].status).toBe('skipped');
+  });
+
   it('ignores events that are not about patrol', () => {
     usePatrolStore.getState().applyEvent({ type: 'agent:scene:updated', robotId: 'g1', timestamp: 'now' });
     expect(usePatrolStore.getState().runs).toHaveLength(0);
@@ -226,6 +278,25 @@ describe('patrolStore actions', () => {
     expect(usePatrolStore.getState().lastStartResult?.reason).toBe('battery');
     expect(usePatrolStore.getState().error).toBeNull();
     expect(api.startRoute).toHaveBeenCalledWith('route-1', 'patrol', 'g1');
+  });
+
+  it('an abort the robot refuses lands in `error` — the operator must not think the run was stopped', async () => {
+    api.abortRoute.mockResolvedValue({ ok: false });
+    const ok = await usePatrolStore.getState().abortRun('route-1', 'g1');
+    expect(ok).toBe(false);
+    expect(api.abortRoute).toHaveBeenCalledWith('route-1', 'g1');
+    expect(usePatrolStore.getState().error).toMatch(/did not stop the run/i);
+  });
+
+  it('an abort that errors lands in `error` too, and an accepted one leaves it clean', async () => {
+    api.abortRoute.mockRejectedValue(new Error('robot unreachable'));
+    expect(await usePatrolStore.getState().abortRun('route-1', 'g1')).toBe(false);
+    expect(usePatrolStore.getState().error).toContain('robot unreachable');
+
+    usePatrolStore.getState().clearError();
+    api.abortRoute.mockResolvedValue({ ok: true, runId: 'run-1' });
+    expect(await usePatrolStore.getState().abortRun('route-1', 'g1')).toBe(true);
+    expect(usePatrolStore.getState().error).toBeNull();
   });
 
   it('a failed request lands in `error` and does not throw', async () => {

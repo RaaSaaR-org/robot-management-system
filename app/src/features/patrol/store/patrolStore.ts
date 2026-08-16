@@ -14,6 +14,7 @@ import type {
   AgentModeEvent,
   PatrolBaselineInfo,
   PatrolFinding,
+  PatrolLeg,
   PatrolLoadStatus,
   PatrolPlace,
   PatrolRoute,
@@ -130,7 +131,30 @@ const MAX_RUNS_IN_LIST = 100;
 // HELPERS
 // ============================================================================
 
-/** Insert-or-replace a run in the newest-first list. */
+const TERMINAL_RUN_STATUSES: ReadonlySet<PatrolRun['status']> = new Set(['done', 'aborted', 'failed', 'skipped']);
+const SETTLED_LEG_STATUSES: ReadonlySet<PatrolLeg['status']> = new Set(['done', 'failed', 'skipped']);
+
+function settledLegCount(legs: PatrolLeg[] | undefined): number {
+  return (legs ?? []).filter((l) => SETTLED_LEG_STATUSES.has(l.status)).length;
+}
+
+/**
+ * True when `incoming` is an OLDER snapshot of the run than the one we hold: it
+ * would move a terminal run back to 'running', drop `finishedAt`, or report fewer
+ * settled legs. Mirrors `isRunDowngrade` in server/src/services/PatrolService.ts —
+ * every `agent:patrol:*` event carries the whole run and the robot pushes them
+ * fire-and-forget over separate connections, so a `leg` (or a finding's embedded
+ * run) can land after the `finished` it preceded. The server guards its own rows
+ * but broadcasts the RAW event, so without this the map overlay — which has no
+ * polling to heal it — keeps claiming a parked robot is still patrolling.
+ */
+function isRunDowngrade(stored: PatrolRun | null | undefined, incoming: PatrolRun): boolean {
+  if (!stored) return false;
+  if (TERMINAL_RUN_STATUSES.has(stored.status) && !TERMINAL_RUN_STATUSES.has(incoming.status)) return true;
+  if (stored.finishedAt && !incoming.finishedAt) return true;
+  return settledLegCount(incoming.legs) < settledLegCount(stored.legs);
+}
+
 /** Keep `activeRunByRobot` honest against a server-fetched run: add while running, drop once it is not. */
 function reconcileActiveRun(state: { activeRunByRobot: Record<string, PatrolRun> }, run: PatrolRun): void {
   if (run.status === 'running') {
@@ -140,6 +164,7 @@ function reconcileActiveRun(state: { activeRunByRobot: Record<string, PatrolRun>
   }
 }
 
+/** Insert-or-replace a run in the newest-first list. */
 function upsertRunInList(list: PatrolRun[], run: PatrolRun): void {
   const idx = list.findIndex((r) => r.runId === run.runId);
   if (idx === -1) {
@@ -272,7 +297,18 @@ export const usePatrolStore = createStore<PatrolStore>(
     abortRun: async (routeId, robotId) => {
       try {
         const res = await patrolApi.abortRoute(routeId, robotId);
-        return Boolean(res?.ok);
+        const ok = Boolean(res?.ok);
+        // A refusal is a normal answer, not an exception: the robot replies
+        // `{ ok: false }` when it has no run to stop (already finished, or the
+        // request reached the wrong robot). Reported like every other failure
+        // here — silently returning false left the operator watching a robot
+        // that kept walking with nothing to tell them the abort did not land.
+        if (!ok) {
+          set((state) => {
+            state.error = 'The robot did not stop the run — it reported no active patrol to abort.';
+          });
+        }
+        return ok;
       } catch (err) {
         set((state) => {
           state.error = getErrorMessage(err, 'Failed to abort the run');
@@ -482,6 +518,10 @@ export const usePatrolStore = createStore<PatrolStore>(
         case 'agent:patrol:finished': {
           if (!run) return;
           set((state) => {
+            // A late `leg` must not resurrect a run we already saw finish — that
+            // also protects the `lastSkippedByRobot` delete below from erasing a
+            // legitimately announced skip.
+            if (isRunDowngrade(state.runsById[run.runId], run)) return;
             state.runsById[run.runId] = run;
             upsertRunInList(state.runs, run);
             state.lastRunByRobot[run.robotId] = run;
@@ -499,7 +539,10 @@ export const usePatrolStore = createStore<PatrolStore>(
             const list = state.findingsByRun[finding.runId] ?? [];
             upsertFinding(list, finding);
             state.findingsByRun[finding.runId] = list;
-            if (run) {
+            // The finding itself is always recorded (as on the server), but its
+            // embedded run snapshot may be older than what we hold — a late
+            // finding must not put a finished run back on the map as "running".
+            if (run && !isRunDowngrade(state.runsById[run.runId], run)) {
               state.runsById[run.runId] = run;
               upsertRunInList(state.runs, run);
               state.lastRunByRobot[run.robotId] = run;

@@ -106,6 +106,10 @@ function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProp
   const findingLink = alert.source === 'robot' ? parseFindingLink(alert.message) ?? parseFindingLink(alert.title) : null;
   const findingPath = findingLink ? findingLinkPath(findingLink) : null;
   const message = findingLink ? stripFindingLink(alert.message) : alert.message;
+  // A skipped-run alert carries a bare `[run:<id>]`: there is no finding to
+  // jump to, so promising one ("Open finding") sends the operator looking for
+  // something the run does not have.
+  const linkLabel = findingLink?.findingId ? 'Open finding →' : 'Open run →';
 
   return (
     <div
@@ -138,7 +142,7 @@ function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProp
               className="inline-flex items-center gap-1 mt-1 text-xs text-cobalt-500 hover:underline"
               data-testid="alert-open-finding"
             >
-              Open finding →
+              {linkLabel}
             </Link>
           )}
           {alert.acknowledged && alert.acknowledgedAt && (

@@ -2,14 +2,17 @@
  * @file RouteOverlay.test.tsx
  * @description The map overlay: numbered checkpoint markers for legs WITH a
  *              pose, red pins for findings with a pose, nothing at all when the
- *              robot has no run, and markers placed through the panel's own
- *              projection.
+ *              robot has no run, markers placed through the panel's own
+ *              projection, and the two things that made those markers
+ *              unreadable: an inert overlay that killed every tooltip and a
+ *              legend parked on the canvas's 1 m scale bar.
  * @feature patrol
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { RouteOverlay, overlayMarkers } from '../RouteOverlay';
+import { PATROL_STICKY_RAIL } from '../patrolUi';
 import { usePatrolStore } from '../../store/patrolStore';
 import { patrolApi } from '../../api/patrolApi';
 import type { PatrolFinding, PatrolRun } from '../../types/patrol.types';
@@ -85,9 +88,60 @@ describe('RouteOverlay', () => {
     expect(screen.getByTestId('patrol-overlay-legend')).toHaveTextContent('Patrol Round: running · 1/3 · 1 finding');
   });
 
+  it('names every marker and lets the pointer reach it (the <title>s used to be dead)', () => {
+    usePatrolStore.getState().applyEvent({ type: 'agent:patrol:started', robotId: 'g1', patrol: run, timestamp: 'x' });
+    usePatrolStore.getState().applyEvent({ type: 'agent:finding:detected', robotId: 'g1', patrol: run, finding, timestamp: 'x' });
+    const { container } = render(<RouteOverlay robotId="g1" project={project} widthPx={400} heightPx={300} />);
+
+    // The finding's summary is the map's only statement of WHAT was flagged.
+    const pin = screen.getByRole('img', { name: /crate in Hall/ });
+    expect(pin).toBe(screen.getByTestId('patrol-overlay-finding'));
+    expect(screen.getByRole('img', { name: /Checkpoint 1: Hall/ })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Checkpoint 2: Kitchen/ })).toBeInTheDocument();
+
+    // Hiding the whole <svg> from AT hid those names with it.
+    expect(container.querySelector('svg')).not.toHaveAttribute('aria-hidden');
+
+    // pointer-events inherits from the inert root: without an explicit opt-in
+    // the browser never hit-tests a marker, so its <title> can never show.
+    for (const marker of [...screen.getAllByTestId('patrol-overlay-checkpoint'), pin]) {
+      expect(marker).toHaveClass('pointer-events-auto');
+      expect(marker).toHaveAttribute('tabindex', '0');
+      expect(marker.querySelector('title')).not.toBeNull();
+    }
+    // …while the root itself stays inert so the map keeps its own interactions.
+    expect(screen.getByTestId('patrol-route-overlay')).toHaveClass('pointer-events-none');
+  });
+
+  it('keeps the legend clear of the canvas 1 m scale bar and hoverable', () => {
+    usePatrolStore.getState().applyEvent({ type: 'agent:patrol:started', robotId: 'g1', patrol: run, timestamp: 'x' });
+    render(<RouteOverlay robotId="g1" project={project} widthPx={400} heightPx={300} />);
+    const legend = screen.getByTestId('patrol-overlay-legend');
+    // RobotMapPanel draws the scale bar + "1 m" label at y = height-24 … height-10;
+    // an ~90 % opaque pill at bottom-2 erased the map's only distance reference.
+    expect(legend).toHaveClass('bottom-8');
+    expect(legend).not.toHaveClass('bottom-2');
+    // Its own title= reveals the text the pill truncates in a narrow panel.
+    expect(legend).toHaveClass('pointer-events-auto');
+    expect(legend).toHaveAttribute('title');
+  });
+
   it('follows the robot: another robot’s run is not drawn', () => {
     usePatrolStore.getState().applyEvent({ type: 'agent:patrol:started', robotId: 'g1', patrol: run, timestamp: 'x' });
     render(<RouteOverlay robotId="h1" project={project} widthPx={400} heightPx={300} />);
     expect(screen.queryByTestId('patrol-route-overlay')).toBeNull();
+  });
+});
+
+// Lives here because RouteOverlay is the overlay-side owner of the patrol
+// styling vocabulary in patrolUi.tsx.
+describe('PATROL_STICKY_RAIL', () => {
+  it('scopes self-start to lg so the rail is not shrink-to-fit on phones', () => {
+    const tokens = PATROL_STICKY_RAIL.split(/\s+/);
+    // Below lg both consumers stack the rail in a COLUMN flexbox, where
+    // align-self sizes the HORIZONTAL axis: bare `self-start` collapsed the
+    // rail to its content width beside full-width siblings.
+    expect(tokens).not.toContain('self-start');
+    expect(tokens).toContain('lg:self-start');
   });
 });

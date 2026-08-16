@@ -52,6 +52,26 @@ const INSPECTION_TEXT: Record<NonNullable<PatrolLeg['inspection']>, string> = {
   error: 'inspection error',
 };
 
+/**
+ * A checkpoint the robot REACHED but could not inspect: no control photo, or no
+ * checklist answer (camera/sidecar down, checklist model down or unparseable).
+ * Only a failed `goto` fails a leg, so such a leg ends 'done' — the same rule
+ * `blindLegs()` in robot-agent/src/agent-mode/patrol.ts applies when it writes
+ * the run's reason. Without saying so, a blind leg reads as a clean one and the
+ * operator takes "nothing found here" for "nothing is wrong here".
+ */
+function isBlindLeg(leg: PatrolLeg): boolean {
+  return leg.status === 'done' && (leg.photoDropped === 'error' || leg.inspection === 'error');
+}
+
+/** What the robot came back without at a blind checkpoint. */
+function blindReasonText(leg: PatrolLeg): string {
+  const missing: string[] = [];
+  if (leg.photoDropped === 'error') missing.push('no control photo');
+  if (leg.inspection === 'error') missing.push('no checklist answer');
+  return missing.join(' and ') || 'nothing was captured';
+}
+
 /** Colour of the inspection verdict: turquoise = same as baseline, amber = changed, else muted. */
 function inspectionClass(inspection: PatrolLeg['inspection']): string {
   if (inspection === 'same' || inspection === 'unchanged') return 'text-turquoise-700 dark:text-turquoise-400';
@@ -95,7 +115,13 @@ interface FindingRowProps {
 
 const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAck, onNormal, onEscalate }: FindingRowProps) {
   const ev = finding.evidence ?? {};
-  const closed = finding.status === 'dismissed_normal' || finding.status === 'escalated';
+  // A verdict is a judgement, not a one-way door. Only the verdict a finding
+  // already carries is disabled: an operator who clicked "This is normal" on a
+  // person in the hallway must still be able to escalate it, and the server
+  // accepts either transition from any status. Acknowledge stays open-only —
+  // it says "seen", which a decided finding already is.
+  const isNormal = finding.status === 'dismissed_normal';
+  const isEscalated = finding.status === 'escalated';
   const confidencePct = Math.round(finding.confidence * 100);
   return (
     <li
@@ -171,7 +197,7 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
           variant="outline"
           className="text-turquoise-700 dark:text-turquoise-400 border-turquoise-500/40"
           data-testid="patrol-finding-normal"
-          disabled={busy || closed}
+          disabled={busy || isNormal}
           title="Dismiss and teach the baseline that this is normal"
           onClick={() => onNormal(finding.id)}
         >
@@ -181,8 +207,8 @@ const FindingRow = memo(function FindingRow({ finding, busy, robotNotified, onAc
           size="sm"
           variant="destructive"
           data-testid="patrol-finding-escalate"
-          disabled={busy || closed}
-          title="Open an incident for this finding"
+          disabled={busy || isEscalated}
+          title={isEscalated ? 'Already escalated — an incident exists' : 'Open an incident for this finding'}
           onClick={() => onEscalate(finding.id)}
         >
           Escalate
@@ -298,6 +324,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
   });
 
   const photoIndexes = new Set(photoLegs.map((l) => l.index));
+  const blindLegCount = run.legs.filter(isBlindLeg).length;
   const evidenceFirst = sorted.length > 0;
   const routeName = run.routeName || route?.name || run.routeId;
 
@@ -346,12 +373,13 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {photoLegs.map((leg) => {
             const changed = leg.inspection === 'changed';
+            const blind = isBlindLeg(leg);
             const n = leg.findingIds.length;
             return (
               <div
                 key={`photo-${leg.index}`}
                 id={`patrol-photo-${leg.index}`}
-                className={cn(PATROL_INSET, PATROL_FADE_IN, 'scroll-mt-24 flex flex-col gap-2', changed && 'ring-1 ring-amber-500/40')}
+                className={cn(PATROL_INSET, PATROL_FADE_IN, 'scroll-mt-24 flex flex-col gap-2', (changed || blind) && 'ring-1 ring-amber-500/40')}
               >
                 <div className="flex flex-wrap items-center gap-2 min-w-0">
                   <span className="text-sm font-medium text-theme-primary truncate">
@@ -376,6 +404,14 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
                   baselineMissingText={baselineIsThisRun ? 'this run is the baseline' : undefined}
                   mode={photoMode}
                 />
+                {blind && (
+                  <p
+                    className={cn(PATROL_ATTENTION_TEXT, 'text-xs break-words min-w-0 border-l-2 border-l-amber-500/60 pl-2')}
+                    data-testid="patrol-photo-blind"
+                  >
+                    Not inspected — no control photo or checklist answer here, so this checkpoint was never compared with the baseline.
+                  </p>
+                )}
               </div>
             );
           })}
@@ -409,7 +445,10 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
           </div>
           {run.reason && (
             <p
-              className={cn('text-sm break-words', run.status === 'skipped' || run.status === 'failed' ? 'text-amber-600 dark:text-amber-400' : 'text-theme-secondary')}
+              // A `done` run carries a reason only when something went wrong
+              // anyway ("N checkpoint(s) not inspected") — muting it there hid
+              // the one line that says the patrol was partly blind.
+              className={cn('text-sm break-words', run.status !== 'done' || blindLegCount > 0 ? PATROL_ATTENTION_TEXT : 'text-theme-secondary')}
               data-testid="patrol-run-reason"
             >
               {run.reason}
@@ -473,6 +512,7 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
             <ol className="relative flex flex-col gap-2.5 before:absolute before:left-[11px] before:top-3 before:bottom-3 before:w-px before:bg-[var(--glass-border-highlight)]">
               {run.legs.map((leg) => {
                 const hasPhoto = photoIndexes.has(leg.index);
+                const blind = isBlindLeg(leg);
                 const n = leg.findingIds.length;
                 const time = leg.finishedAt ? formatWhen(leg.finishedAt) : leg.startedAt ? formatWhen(leg.startedAt) : '';
                 const body = (
@@ -503,6 +543,14 @@ export const RunDetail = memo(function RunDetail({ runId, robotNames = {}, class
                         )}
                       </span>
                       {leg.message && <span className="card-meta text-xs break-words">{leg.message}</span>}
+                      {blind && (
+                        <span
+                          className={cn(PATROL_ATTENTION_TEXT, 'text-xs break-words min-w-0 border-l-2 border-l-amber-500/60 pl-2')}
+                          data-testid="patrol-leg-blind"
+                        >
+                          Checkpoint not inspected — {blindReasonText(leg)}, so nothing here was compared with the baseline.
+                        </span>
+                      )}
                     </span>
                   </>
                 );

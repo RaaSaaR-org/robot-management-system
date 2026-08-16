@@ -117,9 +117,29 @@ describe('RunDetail', () => {
     fireEvent.click(screen.getByTestId('patrol-finding-normal'));
     await waitFor(() => expect(api.markFindingNormal).toHaveBeenCalledWith('f-1'));
     await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
-    expect(screen.getByTestId('patrol-finding-escalate')).toBeDisabled();
+    // Marked normal: that verdict is spent, but escalating stays possible — a
+    // mis-clicked "normal" on a person in the hallway must be correctable, and
+    // the server accepts the transition from any status.
+    expect(screen.getByTestId('patrol-finding-normal')).toBeDisabled();
+    expect(screen.getByTestId('patrol-finding-escalate')).not.toBeDisabled();
     // The robot took the lesson: no warning.
     expect(screen.queryByTestId('patrol-finding-robot-not-notified')).not.toBeInTheDocument();
+  });
+
+  it('lets an operator escalate a finding they had marked normal, and not escalate twice', async () => {
+    api.markFindingNormal.mockResolvedValue({ finding: { ...finding, status: 'dismissed_normal' }, robotNotified: true });
+    api.escalateFinding.mockResolvedValue({ ...finding, status: 'escalated' });
+    renderWithProviders(<RunDetail runId="run-1" />, { withAuth: false });
+    await screen.findAllByTestId('patrol-finding');
+
+    fireEvent.click(screen.getByTestId('patrol-finding-normal'));
+    await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'dismissed_normal'));
+
+    fireEvent.click(screen.getByTestId('patrol-finding-escalate'));
+    await waitFor(() => expect(api.escalateFinding).toHaveBeenCalledWith('f-1'));
+    await waitFor(() => expect(screen.getByTestId('patrol-finding')).toHaveAttribute('data-status', 'escalated'));
+    expect(screen.getByTestId('patrol-finding-escalate')).toBeDisabled();
+    expect(screen.getByTestId('patrol-finding-normal')).not.toBeDisabled();
   });
 
   it('This is normal tells the operator when the robot could not be taught (robotNotified: false)', async () => {
@@ -174,6 +194,41 @@ describe('RunDetail', () => {
     expect(reason).toHaveTextContent('battery 12% below the 30% minimum');
     expect(screen.queryAllByTestId('patrol-leg')).toHaveLength(0);
     expect(screen.getByTestId('patrol-run-promote')).toBeDisabled();
+  });
+
+  it('a blind checkpoint says it was not inspected, and a done run with blind legs shows its reason in amber', async () => {
+    // The robot reached the kitchen but the capture and the checklist both
+    // failed: patrol.ts leaves the leg 'done' and writes the run's reason.
+    // Rendered like any other done leg, that reads as "nothing wrong here".
+    api.getRun.mockResolvedValue({
+      ...run,
+      runId: 'run-blind',
+      status: 'done',
+      reason: '1 checkpoint(s) not inspected',
+      legs: [
+        run.legs[0],
+        { index: 1, checkpointId: 'cp-b', placeId: 'kitchen', name: 'Kitchen', status: 'done', photoKey: null, photoDropped: 'error', inspection: 'error', findingIds: [], message: 'capture failed: camera sidecar is down' },
+      ],
+      findings: [finding],
+    });
+    renderWithProviders(<RunDetail runId="run-blind" />, { withAuth: false });
+    await screen.findByTestId('patrol-run-detail');
+
+    const notes = await screen.findAllByTestId('patrol-leg-blind');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toHaveTextContent('Checkpoint not inspected');
+    expect(notes[0]).toHaveTextContent('no control photo and no checklist answer');
+    expect(notes[0]).toHaveTextContent(/nothing here was compared with the baseline/i);
+    // The inspected leg carries no such note.
+    expect(screen.getAllByTestId('patrol-leg')[0]).not.toHaveTextContent('Checkpoint not inspected');
+    // The photo pair of the blind checkpoint says it too.
+    expect(screen.getByTestId('patrol-photo-blind')).toHaveTextContent('Not inspected');
+
+    // The run-level reason is shown for a `done` run and reads as attention,
+    // not as ordinary metadata.
+    const reason = screen.getByTestId('patrol-run-reason');
+    expect(reason).toHaveTextContent('1 checkpoint(s) not inspected');
+    expect(reason.className).toMatch(/amber/);
   });
 
   it('a baseline run raises no findings and shows no baseline column fetch', async () => {

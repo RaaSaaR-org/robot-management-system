@@ -7,13 +7,21 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
 import { PatrolPage } from '../../pages/PatrolPage';
 import { usePatrolStore } from '../../store/patrolStore';
 import { useRobotsStore } from '@/features/robots/store/robotsStore';
 import { patrolApi } from '../../api/patrolApi';
 import type { PatrolRoute, PatrolRun } from '../../types/patrol.types';
+
+// The run history navigates on a row click; MemoryRouter has no window.location
+// to assert against, so the navigate call itself is the contract.
+const navigateSpy = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => navigateSpy };
+});
 
 vi.mock('../../api/patrolApi', () => ({
   patrolApi: {
@@ -72,6 +80,18 @@ describe('PatrolPage', () => {
     expect(screen.getByTestId('patrol-run-history')).toBeInTheDocument();
   });
 
+  it('opens the run from anywhere in its row — the row highlights, so it has to be clickable', async () => {
+    renderWithProviders(<PatrolPage />, { withAuth: false });
+    const row = (await screen.findAllByTestId('patrol-run-row'))[0]!;
+    expect(row).toHaveClass('cursor-pointer');
+    // A cell that is NOT the timestamp link: the row used to swallow this click.
+    const cell = within(row).getByText('Patrol · scheduled');
+    fireEvent.click(cell);
+    expect(navigateSpy).toHaveBeenCalledWith('/patrol/runs/run-1');
+    // The timestamp is still a real link — keyboard and "open in new tab".
+    expect(within(row).getByRole('link')).toHaveAttribute('href', '/patrol/runs/run-1');
+  });
+
   it('Patrol now / Baseline run start the route on its robot; a refusal is a notice', async () => {
     api.startRoute.mockResolvedValue({ accepted: false, reason: 'battery', message: 'Battery 12% is below the 30% minimum.' });
     renderWithProviders(<PatrolPage />, { withAuth: false });
@@ -105,6 +125,36 @@ describe('PatrolPage', () => {
     expect(screen.queryByTestId('patrol-run-now')).toBeNull();
     fireEvent.click(screen.getAllByTestId('patrol-abort')[0]);
     await waitFor(() => expect(api.abortRoute).toHaveBeenCalledWith('route-1', 'g1'));
+  });
+
+  it('says the run history could not be read instead of "No runs yet"', async () => {
+    // A 500 on GET /api/patrol/runs used to fall through to RunHistory's empty
+    // state, which an operator reads as "the scheduled patrol never ran".
+    api.listRuns.mockRejectedValue(new Error('Network Error'));
+    renderWithProviders(<PatrolPage />, { withAuth: false });
+    const err = await screen.findByTestId('patrol-runs-error');
+    expect(err).toHaveTextContent('Network Error');
+    expect(screen.queryByText(/No runs yet/i)).toBeNull();
+    // …and the tiles must not assert zeros they could not count.
+    expect(screen.getByTestId('patrol-kpi-runs')).toHaveTextContent('—');
+    expect(screen.getByTestId('patrol-kpi-findings')).toHaveTextContent('history unavailable');
+  });
+
+  it('a failed refresh keeps the loaded route cards (and their Abort buttons) on screen', async () => {
+    api.abortRoute.mockResolvedValue({ ok: true, runId: 'run-3' });
+    renderWithProviders(<PatrolPage />, { withAuth: false });
+    await screen.findByTestId('patrol-route-row');
+
+    // What the 30 s poll leaves behind when the server restarts mid-request:
+    // status 'error' while `routes` is still populated and still correct.
+    act(() => {
+      usePatrolStore.setState({ routesStatus: 'error', routesError: 'Network Error' });
+    });
+
+    expect(screen.getByTestId('patrol-route-row')).toHaveTextContent('Night round');
+    expect(screen.getByTestId('patrol-run-now')).toBeInTheDocument();
+    expect(screen.queryByTestId('patrol-routes-error')).toBeNull();
+    expect(screen.getByTestId('patrol-routes-stale')).toHaveTextContent('Network Error');
   });
 
   it('offers a New route link', async () => {
