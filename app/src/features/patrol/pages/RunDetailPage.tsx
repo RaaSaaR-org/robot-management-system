@@ -12,6 +12,7 @@ import { PageHeader } from '@/shared/components/ui/PageHeader';
 import { useRobotsStore, selectRobots } from '@/features/robots/store/robotsStore';
 import { usePatrolEvents } from '../hooks/usePatrolEvents';
 import { RunDetail } from '../components/RunDetail';
+import { PATROL_MOTION, PATROL_PANEL } from '../components/patrolUi';
 
 export interface RunDetailPageProps {
   className?: string;
@@ -35,16 +36,16 @@ export const RunDetailPage = memo(function RunDetailPage({ className }: RunDetai
 
   return (
     <div className={cn('min-h-screen', className)} data-testid="patrol-run-page">
-      <div className="mx-auto max-w-4xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
+      <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
         <PageHeader
           title="Patrol run"
           subtitle={
-            <Link to="/patrol" className="text-cobalt-500 hover:underline">
+            <Link to="/patrol" className={cn('text-cobalt-600 dark:text-cobalt-400 hover:underline', PATROL_MOTION)}>
               ← All routes and runs
             </Link>
           }
         />
-        {runId ? <RunDetail runId={runId} robotNames={robotNames} /> : <div className="glass-card p-4 card-meta">No run selected.</div>}
+        {runId ? <RunDetail runId={runId} robotNames={robotNames} /> : <div className={cn(PATROL_PANEL, 'card-meta')}>No run selected.</div>}
       </div>
     </div>
   );

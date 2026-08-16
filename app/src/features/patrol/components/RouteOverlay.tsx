@@ -1,9 +1,11 @@
 /**
  * @file RouteOverlay.tsx
  * @description Patrol overlay for the robot's map (RobotMapPanel): numbered
- *              checkpoint markers for the robot's active (else last) run and
- *              red pins for its findings, drawn as SVG over the map canvas in
- *              the panel's own world→screen projection. Renders nothing when
+ *              checkpoint markers for the robot's active (else last) run, the
+ *              route as a walked (solid) / remaining (dashed) path, a ping on
+ *              the running leg and severity-tinted pins for its findings, drawn
+ *              as SVG over the map canvas in the panel's own world→screen
+ *              projection; a glass legend in the corner. Renders nothing when
  *              the robot has no run — the map must not carry a permanent pill.
  * @feature patrol
  */
@@ -13,6 +15,7 @@ import { cn } from '@/shared/utils/cn';
 import type { PatrolFinding, PatrolRun } from '../types/patrol.types';
 import { usePatrolStore, selectFindingsForRun, selectOverlayRun } from '../store/patrolStore';
 import { runStatusStyle } from '../utils/patrolFormat';
+import { OVERLAY_COLOR, PATROL_GLOW_LIVE, PATROL_LIVE_BORDER, PATROL_MOTION, StatusDot, type PatrolTone } from './patrolUi';
 
 // ============================================================================
 // PURE
@@ -61,13 +64,40 @@ export function overlayMarkers(run: PatrolRun | null, findings: readonly PatrolF
   return { checkpoints, pins };
 }
 
-const COLOR_CHECKPOINT = '#2A5FFF';
-const COLOR_DONE = '#18E4C3';
-const COLOR_FINDING = '#ef4444';
-
 // ============================================================================
 // COMPONENT
 // ============================================================================
+
+const LEGEND_TONE: Record<PatrolRun['status'], PatrolTone> = {
+  running: 'primary',
+  done: 'accent',
+  aborted: 'attention',
+  failed: 'danger',
+  skipped: 'neutral',
+};
+
+/** Node fill per leg status — theme-aware CSS vars from the shared vocabulary. */
+function nodeFill(status: CheckpointMarker['status']): string {
+  if (status === 'done') return OVERLAY_COLOR.done;
+  if (status === 'failed' || status === 'skipped') return OVERLAY_COLOR.muted;
+  return OVERLAY_COLOR.running;
+}
+
+/** Pin fill per finding severity — high = finding red, medium = attention amber, low = neutral. */
+function pinFill(severity: FindingPin['severity']): string {
+  if (severity === 'high') return OVERLAY_COLOR.finding;
+  if (severity === 'medium') return OVERLAY_COLOR.attention;
+  return OVERLAY_COLOR.muted;
+}
+
+/** Legend leg dot (no text — the legend's text content is contractual). */
+const LEG_DOT: Record<CheckpointMarker['status'], string> = {
+  pending: 'bg-surface-light-300 dark:bg-surface-500',
+  running: 'bg-cobalt-500 animate-pulse',
+  done: 'bg-turquoise-600 dark:bg-turquoise-500',
+  failed: 'bg-red-500',
+  skipped: 'bg-surface-light-400 dark:bg-surface-400',
+};
 
 export interface RouteOverlayProps {
   robotId: string | null;
@@ -95,27 +125,48 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
   const inView = (sx: number, sy: number) => sx >= -20 && sy >= -20 && sx <= widthPx + 20 && sy <= heightPx + 20;
   const done = run.legs.filter((l) => l.status === 'done').length;
   const style = runStatusStyle(run.status);
+  const isRunning = run.status === 'running';
+  const findingTotal = run.findingCount || pins.length;
+
+  // Path segments: a leg the robot has reached is drawn solid (done), the rest dashed.
+  const projected = checkpoints.map((c) => ({ c, p: project(c.x, c.y) }));
+  const doneSegments: string[] = [];
+  const remainingSegments: string[] = [];
+  for (let i = 1; i < projected.length; i += 1) {
+    const a = projected[i - 1];
+    const b = projected[i];
+    const pts = `${a.p.join(',')} ${b.p.join(',')}`;
+    (b.c.status === 'done' ? doneSegments : remainingSegments).push(pts);
+  }
 
   return (
     <div className={cn('absolute inset-0 pointer-events-none', className)} data-testid="patrol-route-overlay" data-run-id={run.runId}>
       <svg width={widthPx} height={heightPx} className="absolute inset-0" aria-hidden="true">
-        {checkpoints.length >= 2 && (
-          <polyline
-            points={checkpoints.map((c) => project(c.x, c.y).join(',')).join(' ')}
-            fill="none"
-            stroke={COLOR_CHECKPOINT}
-            strokeOpacity={0.5}
-            strokeWidth={1.5}
-            strokeDasharray="4 3"
-          />
-        )}
-        {checkpoints.map((c) => {
-          const [sx, sy] = project(c.x, c.y);
+        {doneSegments.map((pts, i) => (
+          <polyline key={`done-${i}`} points={pts} fill="none" stroke={OVERLAY_COLOR.done} strokeOpacity={0.8} strokeWidth={2} strokeLinecap="round" />
+        ))}
+        {remainingSegments.map((pts, i) => (
+          <polyline key={`rest-${i}`} points={pts} fill="none" stroke={OVERLAY_COLOR.path} strokeOpacity={0.5} strokeWidth={1.5} strokeDasharray="4 3" strokeLinecap="round" />
+        ))}
+        {projected.map(({ c, p: [sx, sy] }) => {
           if (!inView(sx, sy)) return null;
-          const fill = c.status === 'done' ? COLOR_DONE : c.status === 'failed' || c.status === 'skipped' ? '#9ca3af' : COLOR_CHECKPOINT;
+          const fill = nodeFill(c.status);
+          const running = c.status === 'running';
           return (
-            <g key={`cp-${c.index}`} data-testid="patrol-overlay-checkpoint" data-index={c.index}>
-              <circle cx={sx} cy={sy} r={9} fill={fill} fillOpacity={0.9} stroke="white" strokeWidth={1.5} />
+            <g key={`cp-${c.index}`} data-testid="patrol-overlay-checkpoint" data-index={c.index} data-status={c.status}>
+              <circle cx={sx} cy={sy} r={9} fill={fill} fillOpacity={0.92} stroke="white" strokeWidth={1.5} />
+              {running && (
+                <circle
+                  cx={sx}
+                  cy={sy}
+                  r={9}
+                  fill="none"
+                  stroke={OVERLAY_COLOR.running}
+                  strokeWidth={1.5}
+                  opacity={0.6}
+                  className="animate-ping origin-center [transform-box:fill-box]"
+                />
+              )}
               <text x={sx} y={sy + 3.5} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" fontFamily="ui-sans-serif, system-ui, sans-serif">
                 {c.index + 1}
               </text>
@@ -127,8 +178,14 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
           const [sx, sy] = project(p.x, p.y);
           if (!inView(sx, sy)) return null;
           return (
-            <g key={`pin-${p.id}`} data-testid="patrol-overlay-finding" data-severity={p.severity} transform={`translate(${sx} ${sy})`}>
-              <path d="M0 0 C-6 -8 -7 -12 -7 -14 A7 7 0 1 1 7 -14 C7 -12 6 -8 0 0 Z" fill={COLOR_FINDING} stroke="white" strokeWidth={1.2} />
+            <g
+              key={`pin-${p.id}`}
+              data-testid="patrol-overlay-finding"
+              data-severity={p.severity}
+              transform={`translate(${sx} ${sy})`}
+              style={p.severity === 'high' ? { filter: 'drop-shadow(0 0 4px color-mix(in srgb, var(--color-signal-stopped) 50%, transparent))' } : undefined}
+            >
+              <path d="M0 0 C-6 -8 -7 -12 -7 -14 A7 7 0 1 1 7 -14 C7 -12 6 -8 0 0 Z" fill={pinFill(p.severity)} stroke="white" strokeWidth={1.2} />
               <circle cx={0} cy={-14} r={2.5} fill="white" />
               <title>{p.summary}</title>
             </g>
@@ -137,14 +194,26 @@ export const RouteOverlay = memo(function RouteOverlay({ robotId, project, width
       </svg>
       <div
         className={cn(
-          'absolute left-2 bottom-2 max-w-[calc(100%-1rem)] truncate rounded-brand px-2 py-0.5 text-[11px] font-medium tabular-nums glass-elevated',
+          'absolute left-2 bottom-2 max-w-[calc(100%-1rem)] flex items-center gap-2 glass-elevated rounded-brand px-2.5 py-1.5 text-[11px] font-mono tabular-nums',
+          PATROL_MOTION,
+          isRunning && cn(PATROL_LIVE_BORDER, PATROL_GLOW_LIVE),
           style.className
         )}
         data-testid="patrol-overlay-legend"
         title={`Patrol ${run.routeName || run.routeId}: ${style.label.toLowerCase()} · ${done}/${run.legs.length}`}
       >
-        Patrol {run.routeName || run.routeId}: {style.label.toLowerCase()} · {done}/{run.legs.length}
-        {pins.length > 0 || run.findingCount > 0 ? ` · ${run.findingCount || pins.length} finding${(run.findingCount || pins.length) === 1 ? '' : 's'}` : ''}
+        <StatusDot tone={LEGEND_TONE[run.status] ?? 'neutral'} pulse={isRunning} />
+        <span className="truncate min-w-0">
+          Patrol {run.routeName || run.routeId}: {style.label.toLowerCase()} · {done}/{run.legs.length}
+          {pins.length > 0 || run.findingCount > 0 ? ` · ${findingTotal} finding${findingTotal === 1 ? '' : 's'}` : ''}
+        </span>
+        {run.legs.length > 0 && run.legs.length <= 12 && (
+          <span className="hidden sm:flex items-center gap-1 shrink-0" aria-hidden="true">
+            {run.legs.map((l) => (
+              <span key={l.index} className={cn('inline-block w-1.5 h-1.5 rounded-full', LEG_DOT[l.status] ?? LEG_DOT.pending)} />
+            ))}
+          </span>
+        )}
       </div>
     </div>
   );

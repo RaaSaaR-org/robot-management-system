@@ -1,8 +1,8 @@
 /**
  * @file PatrolPage.tsx
- * @description /patrol — routes list with Baseline run / Patrol now / Abort,
- *              the active-run banner (live over the WebSocket) and the run
- *              history.
+ * @description /patrol — KPI strip, the live run rail (over the WebSocket),
+ *              route cards with Baseline run / Patrol now / Abort, and the
+ *              run history.
  * @feature patrol
  */
 
@@ -18,9 +18,12 @@ import { usePatrolEvents } from '../hooks/usePatrolEvents';
 import { RouteList } from '../components/RouteList';
 import { RunHistory } from '../components/RunHistory';
 import { ActiveRunBanner } from '../components/ActiveRunBanner';
+import { KpiTile, PATROL_FADE_IN, PATROL_INSET, PATROL_MOTION, SectionHeader, StatusDot } from '../components/patrolUi';
 
 /** Refresh cadence for the lists while the page is open (events cover the live part). */
 const REFRESH_MS = 30_000;
+/** Window of the "Runs · 24 h" tile. */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface PatrolPageProps {
   className?: string;
@@ -83,6 +86,24 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
     return m;
   }, [runs, activeRuns]);
 
+  const kpis = useMemo(() => {
+    const now = Date.now();
+    const enabled = routes.filter((r) => r.enabled).length;
+    const scheduled = routes.filter((r) => r.enabled && r.cronExpression).length;
+    const recent = runs.filter((r) => now - Date.parse(r.startedAt) <= DAY_MS);
+    const recentBaseline = recent.filter((r) => r.mode === 'baseline').length;
+    let findings = 0;
+    let runsWithFindings = 0;
+    for (const r of runs) {
+      if (r.findingCount > 0) {
+        findings += r.findingCount;
+        runsWithFindings += 1;
+      }
+    }
+    return { enabled, scheduled, recent: recent.length, recentBaseline, findings, runsWithFindings };
+  }, [routes, runs]);
+  const linkName = fallbackRobotId ? (robotNames[fallbackRobotId] ?? fallbackRobotId) : 'WS';
+
   const handleStart = useCallback(
     async (route: PatrolRoute, mode: 'baseline' | 'patrol') => {
       const robotId = route.robotId ?? fallbackRobotId ?? null;
@@ -111,12 +132,20 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
 
   return (
     <div className={cn('min-h-screen', className)} data-testid="patrol-page">
-      <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
         <PageHeader
           title="Patrol"
           subtitle="Routes the robot walks on a schedule, control photos at every checkpoint, and what was not normal along the way."
           meta={
-            <span className={cn('text-xs', isConnected ? 'text-turquoise-600 dark:text-turquoise-400' : 'text-theme-muted')} data-testid="patrol-live">
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 glass-subtle rounded-full px-2 py-0.5 text-[11px]',
+                PATROL_MOTION,
+                isConnected ? 'text-turquoise-700 dark:text-turquoise-400' : 'text-theme-muted'
+              )}
+              data-testid="patrol-live"
+            >
+              <StatusDot tone={isConnected ? 'accent' : 'neutral'} pulse={isConnected} />
               {isConnected ? 'live' : 'offline'}
             </span>
           }
@@ -149,13 +178,51 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
           }
         />
 
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 min-w-0" data-testid="patrol-kpis">
+          <KpiTile
+            label="Routes armed"
+            value={`${kpis.enabled}/${routes.length}`}
+            sub={`${kpis.scheduled} scheduled`}
+            tone={kpis.enabled > 0 ? 'primary' : 'neutral'}
+            data-testid="patrol-kpi-routes"
+          />
+          <KpiTile
+            label="Runs · 24 h"
+            value={kpis.recent}
+            sub={`${kpis.recentBaseline} baseline`}
+            data-testid="patrol-kpi-runs"
+          />
+          <KpiTile
+            label="Findings raised"
+            value={kpis.findings}
+            sub={`across ${kpis.runsWithFindings} run${kpis.runsWithFindings === 1 ? '' : 's'}`}
+            tone={kpis.findings > 0 ? 'attention' : 'neutral'}
+            data-testid="patrol-kpi-findings"
+          />
+          <KpiTile
+            label="Link"
+            value={
+              <span className="truncate min-w-0 text-lg leading-tight" title={isConnected ? linkName : undefined}>
+                {isConnected ? linkName : 'offline'}
+              </span>
+            }
+            sub={isConnected ? 'events over WebSocket' : 'no live events'}
+            tone={isConnected ? 'accent' : 'neutral'}
+            live={isConnected}
+            className={isConnected ? undefined : 'opacity-80'}
+            data-testid="patrol-kpi-link"
+          />
+        </div>
+
         <ActiveRunBanner runs={activeRuns} robotNames={robotNames} onAbort={(run) => void handleAbortRun(run)} />
 
         {lastStartResult && (
           <div
             className={cn(
-              'glass-card px-3 py-2 text-sm flex items-start gap-2',
-              lastStartResult.accepted ? 'text-theme-secondary' : 'text-amber-600 dark:text-amber-400 border border-amber-500/30'
+              PATROL_INSET,
+              PATROL_FADE_IN,
+              'text-sm flex items-start gap-2 border-l-[3px]',
+              lastStartResult.accepted ? 'text-theme-secondary border-l-turquoise-500' : 'text-amber-700 dark:text-amber-400 border-l-amber-500'
             )}
             role="status"
             data-testid="patrol-start-result"
@@ -165,26 +232,29 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
                 ? `Run started${lastStartResult.runId ? ` (${lastStartResult.runId})` : ''}.`
                 : `Refused${lastStartResult.reason ? ` (${lastStartResult.reason})` : ''}: ${lastStartResult.message}`}
             </span>
-            <button type="button" className="text-xs underline shrink-0" onClick={clearStartResult}>
+            <button type="button" className={cn('text-xs underline shrink-0 min-h-9 sm:min-h-0 hover:text-theme-primary', PATROL_MOTION)} onClick={clearStartResult}>
               dismiss
             </button>
           </div>
         )}
         {error && (
-          <div className="glass-card px-3 py-2 text-sm text-red-600 dark:text-red-400 flex items-start gap-2" role="alert">
+          <div className={cn(PATROL_INSET, PATROL_FADE_IN, 'text-sm text-red-700 dark:text-red-400 flex items-start gap-2 border-l-[3px] border-l-red-500')} role="alert">
             <span className="flex-1 min-w-0 break-words">{error}</span>
-            <button type="button" className="text-xs underline shrink-0" onClick={clearError}>
+            <button type="button" className={cn('text-xs underline shrink-0 min-h-9 sm:min-h-0 hover:text-theme-primary', PATROL_MOTION)} onClick={clearError}>
               dismiss
             </button>
           </div>
         )}
 
         <section className="flex flex-col gap-2 min-w-0">
-          <h2 className="card-title text-sm">Routes</h2>
+          <SectionHeader title="Routes" count={routes.length} />
           {routesStatus === 'error' ? (
-            <div className="glass-card p-4 text-sm text-red-600 dark:text-red-400">{routesError ?? 'Failed to load routes'}</div>
+            <div className={cn(PATROL_INSET, 'text-sm text-red-700 dark:text-red-400 border-l-[3px] border-l-red-500')}>{routesError ?? 'Failed to load routes'}</div>
           ) : routesStatus === 'loading' && routes.length === 0 ? (
-            <div className="glass-card p-4 card-meta text-sm">Loading routes…</div>
+            <div className="grid gap-3 lg:grid-cols-2" aria-busy="true" aria-label="Loading routes">
+              <div className="glass-card rounded-brand-lg animate-pulse h-28" />
+              <div className="glass-card rounded-brand-lg animate-pulse h-28" />
+            </div>
           ) : (
             <RouteList
               routes={routes}
@@ -198,9 +268,9 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
         </section>
 
         <section className="flex flex-col gap-2 min-w-0">
-          <h2 className="card-title text-sm">Run history</h2>
+          <SectionHeader title="Run history" count={runs.length} />
           {runsStatus === 'loading' && runs.length === 0 ? (
-            <div className="glass-card p-4 card-meta text-sm">Loading runs…</div>
+            <div className="glass-card rounded-brand-lg animate-pulse h-40" aria-busy="true" aria-label="Loading runs" />
           ) : (
             <RunHistory runs={runs} robotNames={robotNames} />
           )}

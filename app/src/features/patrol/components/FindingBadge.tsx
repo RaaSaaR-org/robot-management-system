@@ -20,8 +20,12 @@ import {
   PATROL_FINDING_TYPE_LABELS,
 } from '../types/patrol.types';
 import { legStatusStyle, runStatusStyle, severityStyle } from '../utils/patrolFormat';
+import { PATROL_MOTION } from './patrolUi';
 
-const PILL = 'inline-flex items-center gap-1 rounded-brand px-2 py-0.5 text-[11px] font-medium whitespace-nowrap';
+const PILL = cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', PATROL_MOTION);
+
+/** Low severity is neutral — cobalt is reserved for "running" / primary action. */
+const LOW_SEVERITY_OVERRIDE = 'bg-transparent text-theme-secondary dark:text-theme-secondary border border-glass-highlight';
 
 export interface FindingBadgeProps {
   severity: PatrolFindingSeverity;
@@ -34,7 +38,11 @@ export interface FindingBadgeProps {
 export const FindingBadge = memo(function FindingBadge({ severity, type, className }: FindingBadgeProps) {
   const style = severityStyle(severity);
   return (
-    <span className={cn(PILL, style.className, className)} data-severity={severity} data-testid="patrol-finding-badge">
+    <span
+      className={cn(PILL, style.className, severity === 'low' && LOW_SEVERITY_OVERRIDE, className)}
+      data-severity={severity}
+      data-testid="patrol-finding-badge"
+    >
       {style.label}
       {type && <span className="opacity-80">· {PATROL_FINDING_TYPE_LABELS[type] ?? type}</span>}
     </span>
@@ -77,7 +85,7 @@ const FINDING_STATUS_CLASS: Record<PatrolFindingStatus, string> = {
   candidate: 'glass-subtle text-theme-muted',
   open: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300',
   acknowledged: 'glass-subtle text-theme-secondary',
-  dismissed_normal: 'bg-turquoise-500/15 text-turquoise-600 dark:text-turquoise-400',
+  dismissed_normal: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400',
   escalated: 'bg-red-500/15 text-red-600 dark:text-red-400',
 };
 

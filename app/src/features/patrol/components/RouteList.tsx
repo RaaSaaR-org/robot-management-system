@@ -1,8 +1,9 @@
 /**
  * @file RouteList.tsx
- * @description The routes table on the patrol page: name, robot, checkpoints,
- *              schedule, enabled, next run, last run — with Baseline run /
- *              Patrol now / Abort per row. Scrolls inside itself on a phone.
+ * @description The route cards on the patrol page: name, enabled state, robot,
+ *              the route as a numbered node→node stepper coloured by the last
+ *              run, schedule / next / last facts — with Baseline run /
+ *              Patrol now / Abort per card. Single column on a phone.
  * @feature patrol
  */
 
@@ -15,6 +16,15 @@ import type { PatrolRoute, PatrolRun } from '../types/patrol.types';
 import { patrolApi } from '../api/patrolApi';
 import { RunStatusChip } from './FindingBadge';
 import { formatWhen, isRunActive } from '../utils/patrolFormat';
+import {
+  PATROL_MICRO,
+  PATROL_MONO,
+  PATROL_MOTION,
+  PATROL_PANEL,
+  RoutePath,
+  SEVERITY_RAIL,
+  type RoutePathLeg,
+} from './patrolUi';
 
 export interface RouteListProps {
   routes: PatrolRoute[];
@@ -78,7 +88,7 @@ export const RouteList = memo(function RouteList({
 
   if (routes.length === 0) {
     return (
-      <div className={cn('glass-card p-4', className)} data-testid="patrol-route-list">
+      <div className={cn('glass-card rounded-brand-lg p-4', className)} data-testid="patrol-route-list">
         <EmptyState
           size="sm"
           title="No patrol routes yet"
@@ -96,124 +106,142 @@ export const RouteList = memo(function RouteList({
   }
 
   return (
-    <div className={cn('glass-card overflow-hidden', className)} data-testid="patrol-route-list">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[720px]">
-          <thead>
-            <tr className="text-left card-meta text-[11px] uppercase tracking-wide border-b border-glass-subtle">
-              <th className="px-3 py-2 font-medium">Route</th>
-              <th className="px-3 py-2 font-medium">Robot</th>
-              <th className="px-3 py-2 font-medium">Checkpoints</th>
-              <th className="px-3 py-2 font-medium">Schedule</th>
-              <th className="px-3 py-2 font-medium">Next run</th>
-              <th className="px-3 py-2 font-medium">Last run</th>
-              <th className="px-3 py-2 font-medium text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {routes.map((route) => {
-              const last = lastRunByRoute[route.id];
-              const active = isRunActive(last);
-              const busy = startingRouteId === route.id;
-              const robotLabel = route.robotId ? (robotNames[route.robotId] ?? route.robotId) : 'any';
-              return (
-                <tr
-                  key={route.id}
-                  className="border-b border-glass-subtle last:border-b-0 hover:bg-theme-hover"
-                  data-testid="patrol-route-row"
-                  data-route-id={route.id}
-                >
-                  <td className="px-3 py-2 min-w-0">
+    <div className={cn('grid gap-3 lg:grid-cols-2 min-w-0', className)} data-testid="patrol-route-list">
+      {routes.map((route) => {
+        const last = lastRunByRoute[route.id];
+        const active = isRunActive(last);
+        const busy = startingRouteId === route.id;
+        const robotLabel = route.robotId ? (robotNames[route.robotId] ?? route.robotId) : 'any';
+        // Rail: cobalt while running, amber when the last run raised findings, else quiet.
+        const rail = active
+          ? 'border-l-[3px] border-l-cobalt-500'
+          : last && last.findingCount > 0
+            ? SEVERITY_RAIL.medium
+            : 'border-l-[3px] border-l-transparent';
+        const legs: RoutePathLeg[] = route.checkpoints.map((c, i) => ({
+          index: i,
+          label: c.name || c.placeId,
+          status: last?.legs[i]?.status ?? 'route',
+          findingCount: last?.legs[i]?.findingIds.length ?? 0,
+        }));
+        const next =
+          route.enabled && route.cronExpression
+            ? nextRuns[route.id] === undefined
+              ? '…'
+              : nextRuns[route.id]
+                ? formatWhen(nextRuns[route.id])
+                : 'invalid schedule'
+            : '—';
+        return (
+          <article
+            key={route.id}
+            className={cn(PATROL_PANEL, 'flex flex-col gap-3', PATROL_MOTION, rail)}
+            data-testid="patrol-route-row"
+            data-route-id={route.id}
+          >
+            {/* Row 1: name · enabled · robot */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+              <Link
+                to={`/patrol/routes/${encodeURIComponent(route.id)}`}
+                className={cn('font-display text-base font-semibold text-theme-primary hover:text-cobalt-500 truncate min-w-0', PATROL_MOTION)}
+                title={route.name}
+              >
+                {route.name}
+              </Link>
+              <span
+                className={cn(
+                  'text-[11px] shrink-0',
+                  route.enabled ? 'text-turquoise-700 dark:text-turquoise-400' : 'text-theme-muted'
+                )}
+              >
+                {route.enabled ? 'enabled' : 'disabled'}
+              </span>
+              <span className={cn(PATROL_MONO, 'basis-full sm:basis-auto sm:ml-auto truncate max-w-full sm:max-w-[12rem]')} title={robotLabel}>
+                {robotLabel}
+              </span>
+            </div>
+
+            {/* Row 2: the route as a stepper */}
+            {legs.length > 0 ? (
+              <RoutePath size="md" legs={legs} />
+            ) : (
+              <span className="text-xs text-theme-muted">No checkpoints yet</span>
+            )}
+
+            {/* Row 3: mono facts */}
+            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 min-w-0">
+              <div className="min-w-0">
+                <dt className={PATROL_MICRO}>Schedule</dt>
+                <dd className={cn(PATROL_MONO, 'truncate')} title={route.cronExpression ?? 'manual'}>
+                  {route.cronExpression ?? <span className="text-theme-muted">manual</span>}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className={PATROL_MICRO}>Next</dt>
+                <dd className={cn(PATROL_MONO, 'truncate')}>{next}</dd>
+              </div>
+              <div className="min-w-0 col-span-2 sm:col-span-1">
+                <dt className={PATROL_MICRO}>Last</dt>
+                <dd className="min-w-0">
+                  {last ? (
                     <Link
-                      to={`/patrol/routes/${encodeURIComponent(route.id)}`}
-                      className="font-medium text-theme-primary hover:text-cobalt-500 truncate block max-w-[16rem]"
-                      title={route.name}
+                      to={`/patrol/runs/${encodeURIComponent(last.runId)}`}
+                      className="inline-flex items-center gap-1.5 max-w-full hover:underline"
                     >
-                      {route.name}
+                      <RunStatusChip status={last.status} />
+                      <span className={cn(PATROL_MONO, 'text-theme-tertiary truncate')}>{formatWhen(last.startedAt)}</span>
                     </Link>
-                    <span
-                      className={cn(
-                        'text-[11px]',
-                        route.enabled ? 'text-turquoise-600 dark:text-turquoise-400' : 'text-theme-muted'
-                      )}
-                    >
-                      {route.enabled ? 'enabled' : 'disabled'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-theme-secondary truncate max-w-[10rem]" title={robotLabel}>
-                    {robotLabel}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-theme-secondary">{route.checkpoints.length}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-theme-secondary">
-                    {route.cronExpression ?? <span className="text-theme-muted">manual</span>}
-                  </td>
-                  <td className="px-3 py-2 text-theme-secondary tabular-nums text-xs">
-                    {route.enabled && route.cronExpression
-                      ? nextRuns[route.id] === undefined
-                        ? '…'
-                        : nextRuns[route.id]
-                          ? formatWhen(nextRuns[route.id])
-                          : 'invalid schedule'
-                      : '—'}
-                  </td>
-                  <td className="px-3 py-2">
-                    {last ? (
-                      <Link
-                        to={`/patrol/runs/${encodeURIComponent(last.runId)}`}
-                        className="inline-flex items-center gap-2 hover:underline"
-                      >
-                        <RunStatusChip status={last.status} />
-                        <span className="text-xs text-theme-tertiary tabular-nums">{formatWhen(last.startedAt)}</span>
-                      </Link>
-                    ) : (
-                      <span className="text-theme-muted text-xs">never</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                      {active ? (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          data-testid="patrol-abort"
-                          onClick={() => onAbort(route)}
-                        >
-                          Abort
-                        </Button>
-                      ) : (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            data-testid="patrol-run-baseline"
-                            disabled={busy || route.checkpoints.length === 0}
-                            isLoading={busy}
-                            title="Walk the route supervised and record what is normal"
-                            onClick={() => onStart(route, 'baseline')}
-                          >
-                            Baseline run
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            data-testid="patrol-run-now"
-                            disabled={busy || route.checkpoints.length === 0}
-                            isLoading={busy}
-                            title="Walk the route now and compare against the baseline"
-                            onClick={() => onStart(route, 'patrol')}
-                          >
-                            Patrol now
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  ) : (
+                    <span className={cn(PATROL_MONO, 'text-theme-muted')}>never</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
+
+            {/* Row 4: actions */}
+            <div className="flex items-center justify-end gap-1.5 flex-wrap">
+              {active ? (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="min-h-9"
+                  data-testid="patrol-abort"
+                  onClick={() => onAbort(route)}
+                >
+                  Abort
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="min-h-9"
+                    data-testid="patrol-run-baseline"
+                    disabled={busy || route.checkpoints.length === 0}
+                    isLoading={busy}
+                    title="Walk the route supervised and record what is normal"
+                    onClick={() => onStart(route, 'baseline')}
+                  >
+                    Baseline run
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="min-h-9 hover:shadow-[0_0_20px_-4px_color-mix(in_srgb,var(--color-primary)_45%,transparent)]"
+                    data-testid="patrol-run-now"
+                    disabled={busy || route.checkpoints.length === 0}
+                    isLoading={busy}
+                    title="Walk the route now and compare against the baseline"
+                    onClick={() => onStart(route, 'patrol')}
+                  >
+                    Patrol now
+                  </Button>
+                </>
+              )}
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 });

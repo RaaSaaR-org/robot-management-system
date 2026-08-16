@@ -14,6 +14,7 @@ import type { PatrolRoute } from '../types/patrol.types';
 import { usePatrolStore, selectRouteById, selectRuns } from '../store/patrolStore';
 import { RouteEditor } from '../components/RouteEditor';
 import { RunHistory } from '../components/RunHistory';
+import { PATROL_PANEL, SectionHeader } from '../components/patrolUi';
 
 export interface RouteEditorPageProps {
   className?: string;
@@ -70,7 +71,7 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
 
   return (
     <div className={cn('min-h-screen', className)} data-testid="patrol-route-page">
-      <div className="mx-auto max-w-4xl px-4 py-6 sm:py-8 flex flex-col gap-5 min-w-0">
+      <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8 pb-32 lg:pb-8 flex flex-col gap-5 min-w-0">
         <PageHeader
           title={isNew ? 'New patrol route' : (route?.name ?? 'Patrol route')}
           subtitle={
@@ -80,7 +81,7 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
           }
         />
         {!isNew && !route ? (
-          <div className="glass-card p-4 card-meta text-sm">{error ? `Route not found: ${error}` : 'Loading route…'}</div>
+          <div className={cn(PATROL_PANEL, 'card-meta text-sm', !error && 'animate-pulse')}>{error ? `Route not found: ${error}` : 'Loading route…'}</div>
         ) : (
           <RouteEditor
             key={route?.id ?? 'new'}
@@ -93,7 +94,7 @@ export const RouteEditorPage = memo(function RouteEditorPage({ className }: Rout
         )}
         {!isNew && route && (
           <section className="flex flex-col gap-2 min-w-0">
-            <h2 className="card-title text-sm">Runs of this route</h2>
+            <SectionHeader title="Runs of this route" count={routeRuns.length} />
             <RunHistory runs={routeRuns} robotNames={robotNames} hideRoute />
           </section>
         )}

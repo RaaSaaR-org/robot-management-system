@@ -26,7 +26,7 @@ export interface ChipStyle {
 
 const RUN_STATUS_STYLES: Record<PatrolRunStatus, ChipStyle> = {
   running: { label: 'Running', className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300', pulse: true },
-  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-600 dark:text-turquoise-400' },
+  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
   aborted: { label: 'Aborted', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
   failed: { label: 'Failed', className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
   skipped: { label: 'Skipped', className: 'glass-subtle text-theme-muted' },
@@ -40,7 +40,7 @@ export function runStatusStyle(status: PatrolRunStatus): ChipStyle {
 const LEG_STATUS_STYLES: Record<PatrolLegStatus, ChipStyle> = {
   pending: { label: 'Pending', className: 'glass-subtle text-theme-tertiary' },
   running: { label: 'Running', className: 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300', pulse: true },
-  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-600 dark:text-turquoise-400' },
+  done: { label: 'Done', className: 'bg-turquoise-500/15 text-turquoise-700 dark:text-turquoise-400' },
   failed: { label: 'Failed', className: 'bg-red-500/15 text-red-600 dark:text-red-400' },
   skipped: { label: 'Skipped', className: 'glass-subtle text-theme-muted' },
 };
