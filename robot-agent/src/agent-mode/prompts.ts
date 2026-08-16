@@ -32,7 +32,8 @@ const BLOCK_REFERENCE = `
 - walk       {"distanceM": 0.1..10, "direction": "forward"|"backward"|"left"|"right"}
 - turn       {"angleDeg": -180..180}          (+ = left / counter-clockwise)
 - goto       {"entity": "<bare English noun, e.g. table, chair, shelf, person>"}
-- look       {}                                (one camera frame → scene memory)
+- look       {"speak": true|false}             (one camera frame → scene memory;
+                                                speak:true also SAYS what it sees)
 - scan_room  {"steps": 4..12}                  (default 8; full 360° sweep)
 - wave       {"turn": true|false}              (right arm only — the G1 wave has
                                                 no hand selector; "turn" turns
@@ -118,6 +119,12 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '  target to its English noun before putting it in `goto.entity`.',
     '- Never invent a distance or a bearing you were not given; use `look` or',
     '  `scan_room` to find out instead.',
+    // Measured with gemma4:e2b: "go to the table and tell me what is on it"
+    // ended in speak:"What is on the table?" — the planner cannot know the
+    // answer when it plans, and had no block that answers from the camera.
+    '- "tell me what you see" / "what is on X" / "describe X" -> end with',
+    '  `look {"speak": true}`: it answers from the camera. Never answer such a',
+    '  question with `speak` — you have not seen the frame yet.',
     // ONE line, on purpose. Prompt length is a measured regression risk for
     // gemma3:4b in this repo (planner.test.ts is the gate), and there is no
     // matching `recall` rule to write: retrieval is injected below under

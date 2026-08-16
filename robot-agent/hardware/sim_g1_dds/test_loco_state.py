@@ -56,7 +56,7 @@ from loco_state import (  # noqa: E402
     WAVE_DURATION_S, LocoState, wrap_angle,
 )
 from joints import (  # noqa: E402
-    R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW, R_WRIST_ROLL,
+    ARM_REST, R_ELBOW, R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW, R_WRIST_ROLL,
     WAIST_YAW,
 )
 
@@ -438,13 +438,13 @@ def test_negative_stand_height_reads_as_the_low_sentinel():
 
 
 @pytest.mark.parametrize("task_id", [ARM_TASK_WAVE, ARM_TASK_WAVE_TURN])
-def test_wave_envelope_starts_and_ends_at_zero(task_id):
+def test_wave_envelope_starts_and_ends_at_rest(task_id):
     st = LocoState()
     st.set_arm_task(task_id, now=100.0)
 
     start = st.arm_targets(100.0)
     assert start is not None
-    assert all(abs(v) < 1e-6 for v in start.values())
+    assert all(abs(v - ARM_REST.get(j, 0.0)) < 1e-6 for j, v in start.items())
 
     peak = st.arm_targets(100.0 + WAVE_DURATION_S / 2)
     assert peak is not None
@@ -453,7 +453,7 @@ def test_wave_envelope_starts_and_ends_at_zero(task_id):
 
     end = st.arm_targets(100.0 + WAVE_DURATION_S - 1e-4)
     assert end is not None
-    assert all(abs(v) < 1e-3 for v in end.values())
+    assert all(abs(v - ARM_REST.get(j, 0.0)) < 1e-3 for j, v in end.items())
 
 
 def test_wave_drives_only_the_right_arm_unless_turning():
@@ -480,18 +480,18 @@ def test_wave_auto_clears_after_its_duration():
 
 
 @pytest.mark.parametrize("task_id", [ARM_TASK_SHAKE_REACH, ARM_TASK_SHAKE_RETURN])
-def test_shake_envelope_starts_and_ends_at_zero(task_id):
+def test_shake_envelope_starts_and_ends_at_rest(task_id):
     st = LocoState()
     st.set_arm_task(task_id, now=5.0)
 
     start = st.arm_targets(5.0)
     assert start is not None
     assert set(start) == {R_SHOULDER_PITCH, R_SHOULDER_ROLL, R_SHOULDER_YAW, R_ELBOW}
-    assert all(abs(v) < 1e-6 for v in start.values())
+    assert all(abs(v - ARM_REST.get(j, 0.0)) < 1e-6 for j, v in start.items())
 
     end = st.arm_targets(5.0 + SHAKE_DURATION_S - 1e-4)
     assert end is not None
-    assert all(abs(v) < 1e-3 for v in end.values())
+    assert all(abs(v - ARM_REST.get(j, 0.0)) < 1e-3 for j, v in end.items())
 
 
 def test_shake_return_stage_is_lower_than_the_reach_stage():
@@ -502,8 +502,9 @@ def test_shake_return_stage_is_lower_than_the_reach_stage():
     st.set_arm_task(ARM_TASK_SHAKE_RETURN, now=0.0)
     ret = st.arm_targets(SHAKE_DURATION_S / 2)[R_ELBOW]
 
+    rest = ARM_REST[R_ELBOW]
     assert reach == pytest.approx(0.85, abs=1e-6)
-    assert ret == pytest.approx(0.85 * 0.35, abs=1e-6)
+    assert ret == pytest.approx(rest + (0.85 - rest) * 0.35, abs=1e-6)
 
 
 def test_shake_auto_clears_after_its_duration():

@@ -62,12 +62,14 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (
 from unitree_sdk2py.utils.crc import CRC
 
 try:
-    from .joints import BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
+    from .cine_recorder import RecorderConfig, RecorderSlot, parse_size
+    from .joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from .loco_service import LocoSimService
     from .loco_state import UINT32_MAX, LocoState, wrap_angle
 except ImportError:  # plain-script invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from joints import BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
+    from cine_recorder import RecorderConfig, RecorderSlot, parse_size  # type: ignore[no-redef]
+    from joints import ARM_REST, BASE_JOINTS, BODY, LHAND, N_BODY, N_HAND, RHAND, WEIGHT_IDX
     from loco_service import LocoSimService
     from loco_state import UINT32_MAX, LocoState, wrap_angle
 
@@ -444,6 +446,8 @@ class SimNode:
         self._reset_queue: list[PoseResetRequest] = []
         self._range_queue: list[RangeRequest] = []
         self._renderer: mujoco.Renderer | None = None
+        self.recorder = RecorderSlot()
+        self.behind_s = 0.0  # how far sim time trails wall time (run_loop)
         self.crc = CRC()
 
         # MuJoCo's own instability handling (mj_checkAcc -> mj_resetData) zeroes
@@ -454,6 +458,12 @@ class SimNode:
         self.reset_count = 0
 
         self._resolve_indices()
+        # Start in the relaxed arm pose, not the MJCF zero pose (arms straight
+        # out). Done before the first _hold_pose() capture so the latched hold
+        # -- and therefore what the joints return to -- is the rest pose too.
+        for body_idx, q in ARM_REST.items():
+            self.data.qpos[self.qadr["body"][body_idx]] = q
+        mujoco.mj_forward(self.model, self.data)
         self._init_dds()
 
         # The loco service shares our lock and reads simulation time, so RPC
@@ -1149,9 +1159,12 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
         def do_GET(self) -> None:
             if self.path == "/health":
                 self._send(200, {"status": "ok", "connected": True, "sim": True,
-                                 "scene": node.scene.name})
+                                 "scene": node.scene.name,
+                                 "behind_s": round(node.behind_s, 3)})
             elif self.path == "/cameras":
                 self._send(200, {"cameras": node.camera_names()})
+            elif self.path == "/record":
+                self._send(200, {"ok": True, **node.recorder.status()})
             elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
                 name = self.path[len("/cameras/"):-len("/snapshot")]
                 req = node.request_render(name)
@@ -1168,11 +1181,17 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 })
             elif self.path == "/state" or self.path == "/state/fast":
                 with node.lock:
-                    joints = {n: float(node.data.qpos[a])
-                              for n, a in zip(BODY, node.qadr["body"])}
+                    joints = [{"name": n, "position": float(node.data.qpos[a])}
+                              for n, a in zip(BODY, node.qadr["body"])]
                     x, y, yaw = node.measured_pose()
-                self._send(200, {"ok": True, "sim": True, "joints": joints,
-                                 "odometry": {"x": x, "y": y, "yaw": yaw}})
+                # Same shape as g1_sidecar.py's /state (Contract §2): an explicit
+                # `connected` and `joints` as a list -- HardwareClient's poller
+                # falls back to `simulated === false` when `connected` is absent,
+                # which flipped this sim to "detached" one poll after attach.
+                self._send(200, {"ok": True, "sim": True, "simulated": True,
+                                 "connected": True, "joints": joints,
+                                 "odometry": {"x": x, "y": y, "yaw": yaw},
+                                 "timestamp": time.time()})
             elif self.path == "/loco/odom":
                 # No planar base (e.g. the fixed-base pickplace scene) means no
                 # odometry EXISTS. Answering (0,0,0) with ok:true would be a
@@ -1254,6 +1273,39 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
             # Handled before the DDS client is acquired: this is a simulator
             # affordance, not a robot command, and it must stay usable even
             # when the loco service is not up.
+            if self.path == "/record/start":
+                try:
+                    w, h = parse_size(str(body.get("size", "1080x1920")))
+                    cfg = RecorderConfig(
+                        path=str(body.get("path") or "sim-clip.mp4"),
+                        fps=int(body.get("fps", 30)), width=w, height=h,
+                        cam=str(body.get("cam", "follow")),
+                        distance=float(body.get("distance", 3.2)),
+                        elevation_deg=float(body.get("elevation", -18.0)),
+                        shadows=body.get("shadows", True) is not False,
+                    )
+                except (TypeError, ValueError) as exc:
+                    self._send(400, {"ok": False, "error": f"bad recorder params: {exc}"})
+                    return
+                rid = str(body.get("id") or "main")
+                ok, msg = node.recorder.request_start(cfg, rid)
+                self._send(200 if ok else 409, {"ok": ok, "message": msg,
+                                                 **node.recorder.status()})
+                return
+            if self.path == "/record/stop":
+                rid = body.get("id")  # None = stop every recorder
+                ok, msg = node.recorder.request_stop(str(rid) if rid else None)
+                # Wait (bounded) so the caller gets the finished files' status.
+                for _ in range(200):
+                    st = node.recorder.status()
+                    still = [r for r, c in st["recorders"].items()
+                             if c["recording"] and (rid is None or r == rid)]
+                    if not still:
+                        break
+                    time.sleep(0.05)
+                self._send(200 if ok else 409, {"ok": ok, "message": msg,
+                                                 **node.recorder.status()})
+                return
             if self.path == "/sim/reset-pose":
                 target = {}
                 for key in ("x", "y", "yaw"):
@@ -1327,6 +1379,7 @@ def run_loop(node: SimNode, viewer=None) -> None:
     odom_every = max(1, int((1.0 / ODOM_PUBLISH_HZ) / dt))
     wall0, n = time.time(), 0
     last_sync = 0.0
+    last_lag_warn = 0.0
     resets = node.reset_count
 
     while viewer is None or viewer.is_running():
@@ -1339,6 +1392,13 @@ def run_loop(node: SimNode, viewer=None) -> None:
         # stopped waiting and measured. Bounded so a host that simply cannot
         # keep up degrades instead of spiralling.
         behind = (time.time() - wall0) - node.data.time
+        node.behind_s = max(0.0, behind)
+        if behind > 0.5 and time.time() - last_lag_warn > 5.0:
+            # Callers wait in WALL seconds; a lagging sim under-executes every
+            # motion (a 90 deg turn comes back 60 deg). Say so, loudly.
+            print(f"[SimNode] WARNING sim is {behind:.2f} s behind real time "
+                  f"(rendering too much on the physics thread?)")
+            last_lag_warn = time.time()
         catchup = min(int(behind / dt), MAX_CATCHUP_STEPS) if behind > dt else 1
         for _ in range(max(1, catchup)):
             node.step(dt)
@@ -1354,6 +1414,7 @@ def run_loop(node: SimNode, viewer=None) -> None:
         # Between steps, never during one: mj_ray reads the same mjData mj_step
         # is writing (see RangeRequest).
         node.drain_ranges()
+        node.recorder.tick(node)
         if viewer is not None and node.data.time - last_sync > 1 / 60:
             viewer.sync()
             last_sync = node.data.time
@@ -1386,6 +1447,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--viewer", action="store_true",
                     help="open a live MuJoCo window (needs mjpython on macOS)")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--record", metavar="OUT.mp4",
+                    help="record a cinematic MP4 from start-up (see cine_recorder.py)")
+    ap.add_argument("--record-cam", default="follow",
+                    help="follow | orbit | wide | <MJCF camera name>  (default follow)")
+    ap.add_argument("--record-fps", type=int, default=30)
+    ap.add_argument("--record-size", default="1080x1920",
+                    help="WxH; default is vertical 1080x1920 for Reels/Shorts")
     args = ap.parse_args(argv)
 
     if not args.scene.exists():
@@ -1401,12 +1469,32 @@ def main(argv: list[str] | None = None) -> int:
 
     httpd = None
     if args.http_port:
+        bridge = _LocoBridge()
         httpd = ThreadingHTTPServer(("0.0.0.0", args.http_port),
-                                    make_handler(node, _LocoBridge()))
+                                    make_handler(node, bridge))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+        # Warm the facade's LocoClient now, off the request path. Built lazily
+        # it costs the FIRST /loco/* call ~0.8 s of DDS discovery -- and the
+        # robot-agent's executor waits in wall seconds from the moment it
+        # sends the command, so that first turn came back 35% short
+        # ("Turned -58° for a commanded -90°"). Failure here is not fatal:
+        # client() retries lazily and reports the reason on the next request.
+        def _warm():
+            try:
+                bridge.client()
+                print("[SimNode]   loco bridge warm (LocoClient ready)")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SimNode]   loco bridge not warm yet: {exc}")
+        threading.Thread(target=_warm, daemon=True).start()
         print(f"[SimNode]   http :{args.http_port} "
               f"(/health /cameras /state /loco/* /pointcloud/*) "
               f"-- point HARDWARE_SIDECAR_URL here")
+
+    if args.record:
+        w, h = parse_size(args.record_size)
+        node.recorder.request_start(RecorderConfig(
+            path=args.record, fps=args.record_fps, width=w, height=h, cam=args.record_cam))
 
     try:
         if args.viewer:
@@ -1420,6 +1508,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\n[SimNode] stopped")
     finally:
+        node.recorder.close()
         if httpd is not None:
             httpd.shutdown()
     return 0

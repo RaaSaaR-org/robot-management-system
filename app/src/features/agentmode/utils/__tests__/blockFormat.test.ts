@@ -24,6 +24,10 @@ describe('formatBlockParams', () => {
     expect(formatBlockParams(block('turn', { angleDeg: -34 }))).toBe('-34° right');
     expect(formatBlockParams(block('goto', { entity: 'table' }))).toBe('table');
     expect(formatBlockParams(block('wait', { seconds: 3 }))).toBe('3 s');
+    expect(formatBlockParams(block('look', {}))).toBe('camera → scene memory');
+    expect(formatBlockParams(block('look', { speak: true }))).toBe(
+      'camera → scene memory · says what it sees'
+    );
   });
 
   describe('wave', () => {

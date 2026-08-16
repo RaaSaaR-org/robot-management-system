@@ -15,6 +15,8 @@ in simulation and on hardware. Only the DDS peer changes.
 | `sim_node.py` | MuJoCo + DDS peer + optional sidecar-compatible HTTP facade |
 | `test_loco_state.py` | pytest for the state machine |
 | `e2e_loco_check.py` | Integration check: drives the sim with a real `LocoClient` and asserts the physics |
+| `cine_recorder.py` | Cinematic MP4 recording (follow / orbit / wide / any MJCF camera) → ffmpeg; `--record` flag and `/record/*` routes |
+| `demo_clip.py` | One Agent Mode command → captioned explainer clip (records, runs the plan, burns block captions) |
 
 ## Topics
 
@@ -57,6 +59,48 @@ and `/loco/*`. Its `/loco/*` routes deliberately go **out through a real
 `LocoClient` over DDS and back in through our own service** rather than poking
 the state machine directly — otherwise the demo would prove nothing about the
 wire.
+
+## Recording clips (demo / social videos)
+
+The sim can render a cinematic camera to MP4 on the physics thread while
+everything else (DDS, Agent Mode) runs as normal. No GPU needed — MuJoCo's
+offscreen renderer on the M-series CPU/GPU keeps up with 1080×1920 @ 30 fps.
+
+```bash
+# whole session, from start-up
+python sim_node.py --domain 1 --http-port 8777 --record session.mp4 --record-cam follow
+
+# per clip, over the facade (what demo_clip.py uses)
+curl -X POST localhost:8777/record/start -d '{"path":"clip.mp4","cam":"orbit","size":"1080x1920"}'
+curl -X POST localhost:8777/record/stop
+curl localhost:8777/record            # status
+```
+
+Camera modes: `follow` (chase cam behind the robot, smoothed), `orbit` (slow
+orbit, beauty shot), `wide` (fixed establishing shot of the room), or any MJCF
+camera name (`head_camera` = the robot's own POV).
+
+`demo_clip.py` scripts a whole explainer clip: it starts recording, submits one
+command to the robot-agent's Agent Mode, waits for the plan, stops recording and
+burns the command + each block (as it runs) + result as captions:
+
+```bash
+.venv/bin/python demo_clip.py "Go to the table and tell me what is on it" \
+    --out clips/table.mp4 --cam follow --title "NeoDEM · Agent Mode" \
+    --pip head_camera            # inset: what the robot's own camera sees
+    --start=-0.5,-0.5,90         # x, y, yaw° to teleport to first
+    --prime "look"               # a command run BEFORE recording (warms scene memory;
+                                 #   Agent Mode's scene memory is per process)
+```
+
+It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
+`clips/table.pip.mp4` (the inset stream) and `clips/table.json` (the plan with
+per-block timings, for editing elsewhere). Rendering runs on the physics
+thread, so `/health` now reports `behind_s` and the sim warns when it trails
+real time — the executor waits in wall seconds, and a lagging sim under-executes
+every motion.
+Needs the robot-agent running with `npm run dev:g1-edu-agent` (Ollama models
+pulled) and this sim on `--http-port 8777`.
 
 ## Scenes
 

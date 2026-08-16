@@ -12,6 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   BlockExecutor,
   G1_FSM_IDS,
+  WAVE_GESTURE_MS,
   turnToCommand,
   walkToCommand,
   type BlockExecutorDeps,
@@ -85,6 +86,7 @@ function makeExecutor(
     isAborted?: () => boolean;
     say?: (text: string) => Promise<boolean>;
     range?: RangeSensor;
+    sleep?: (ms: number) => Promise<void>;
   } = {}
 ) {
   const moves: MoveCall[] = [];
@@ -130,7 +132,7 @@ function makeExecutor(
     say: overrides.say ?? (async () => true),
     // Time is instantaneous so the duration wait does not slow the suite; the
     // `now` clock is advanced past every command so `driveFor` waits 0 ms.
-    sleep: async () => {},
+    sleep: overrides.sleep ?? (async () => {}),
     now: () => 1e12,
   };
 
@@ -429,6 +431,43 @@ describe('BlockExecutor — dispatch', () => {
 
       expect(actions).toEqual([{ name: 'wave', args: { turn: false } }]);
       expect(outcome.message).not.toMatch(/turning the torso/);
+    });
+
+    // SetTaskId returns as soon as the request is accepted; the ~4 s animation
+    // plays afterwards. The block used to finish in ~2 ms and the next block
+    // (a walk, say) started mid-wave.
+    it('holds the block open for the length of the gesture', async () => {
+      let slept = 0;
+      const { executor } = makeExecutor({ sleep: async (ms) => { slept += ms; } });
+
+      const outcome = await executor.execute(block('wave'));
+
+      expect(outcome.ok).toBe(true);
+      expect(slept).toBe(WAVE_GESTURE_MS);
+    });
+
+    it('greet holds for the gesture too', async () => {
+      let slept = 0;
+      const { executor } = makeExecutor({ sleep: async (ms) => { slept += ms; } });
+
+      await executor.execute(block('greet', { text: 'hi' }));
+
+      expect(slept).toBe(WAVE_GESTURE_MS);
+    });
+
+    it('lets an abort cut the hold short', async () => {
+      let slept = 0;
+      let aborted = false;
+      const { executor } = makeExecutor({
+        isAborted: () => aborted,
+        sleep: async (ms) => { slept += ms; if (slept >= 300) aborted = true; },
+      });
+
+      const outcome = await executor.execute(block('wave'));
+
+      expect(outcome.ok).toBe(false);
+      expect(outcome.message).toMatch(/aborted/);
+      expect(slept).toBeLessThan(WAVE_GESTURE_MS);
     });
 
     it('never claims a hand the G1 cannot wave with', async () => {
@@ -739,6 +778,41 @@ describe('BlockExecutor — range enrichment on every observation', () => {
     expect(outcome.ok).toBe(true);
     expect(scene.get('table')?.distanceEstM).toBeCloseTo(2.31, 2);
     expect(scene.get('table')?.distanceSource).toBe('lidar');
+  });
+
+  // "Go to the table and tell me what is on it" used to end in
+  // speak:"What is on the table?" — the planner cannot know the answer when it
+  // plans. `look {speak:true}` answers from the frame instead.
+  it('`look` with speak:true says what it saw', async () => {
+    const said: string[] = [];
+    const { executor } = makeExecutor({
+      observation: SEEN,
+      say: async (text) => {
+        said.push(text);
+        return true;
+      },
+    });
+
+    const outcome = await executor.execute(block('look', { speak: true }));
+
+    expect(outcome.ok).toBe(true);
+    expect(said).toEqual([SEEN.currentView]);
+    expect(outcome.message).toContain(`said: "${SEEN.currentView}"`);
+  });
+
+  it('`look` without speak stays silent', async () => {
+    const said: string[] = [];
+    const { executor } = makeExecutor({
+      observation: SEEN,
+      say: async (text) => {
+        said.push(text);
+        return true;
+      },
+    });
+
+    await executor.execute(block('look'));
+
+    expect(said).toEqual([]);
   });
 
   it('keeps the VLM number — marked as an estimate — when ranging is off', async () => {

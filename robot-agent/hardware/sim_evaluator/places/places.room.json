@@ -1,0 +1,376 @@
+{
+  "version": 1,
+  "frame": {
+    "id": "room-sim",
+    "kind": "sim",
+    "units": "m",
+    "yawConvention": "deg,+x=0,CCW+"
+  },
+  "places": [
+    {
+      "id": "CENTER",
+      "name": "Room centre",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -1.5,
+          -1.5
+        ],
+        [
+          1.5,
+          -1.5
+        ],
+        [
+          1.5,
+          1.5
+        ],
+        [
+          -1.5,
+          1.5
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "TABLE-SIDE",
+      "name": "Table side (east wall)",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          1.5,
+          -1.0
+        ],
+        [
+          3.0,
+          -1.0
+        ],
+        [
+          3.0,
+          3.0
+        ],
+        [
+          1.5,
+          3.0
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": [
+        {
+          "label": "table",
+          "x": 2.2,
+          "y": 0.7,
+          "source": "surveyed"
+        },
+        {
+          "label": "red hat on the table",
+          "x": 2.2,
+          "y": 0.7,
+          "source": "surveyed"
+        }
+      ]
+    },
+    {
+      "id": "SHELF-WALL",
+      "name": "Shelf wall (north)",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -3.0,
+          1.5
+        ],
+        [
+          1.5,
+          1.5
+        ],
+        [
+          1.5,
+          3.0
+        ],
+        [
+          -3.0,
+          3.0
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": [
+        {
+          "label": "shelf",
+          "x": -0.4,
+          "y": 2.75,
+          "source": "surveyed"
+        }
+      ]
+    },
+    {
+      "id": "WEST-SIDE",
+      "name": "West side",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -3.0,
+          -1.0
+        ],
+        [
+          -1.5,
+          -1.0
+        ],
+        [
+          -1.5,
+          1.5
+        ],
+        [
+          -3.0,
+          1.5
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "PERSON-CORNER",
+      "name": "Person corner (south-west)",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -3.0,
+          -3.0
+        ],
+        [
+          -1.5,
+          -3.0
+        ],
+        [
+          -1.5,
+          -1.0
+        ],
+        [
+          -3.0,
+          -1.0
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": [
+        {
+          "label": "person",
+          "x": -1.9,
+          "y": -1.45,
+          "source": "surveyed"
+        }
+      ]
+    },
+    {
+      "id": "SOUTH-STRIP",
+      "name": "South strip",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -1.5,
+          -3.0
+        ],
+        [
+          0.6,
+          -3.0
+        ],
+        [
+          0.6,
+          -1.5
+        ],
+        [
+          -1.5,
+          -1.5
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "DOORWAY",
+      "name": "Doorway (south wall)",
+      "placeType": "corridor",
+      "floor": 0,
+      "polygon": [
+        [
+          0.6,
+          -3.0
+        ],
+        [
+          1.5,
+          -3.0
+        ],
+        [
+          1.5,
+          -1.5
+        ],
+        [
+          0.6,
+          -1.5
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": [
+        {
+          "label": "door frame",
+          "x": 1.2,
+          "y": -3.0,
+          "source": "surveyed"
+        }
+      ]
+    },
+    {
+      "id": "CHAIR-CORNER",
+      "name": "Chair corner (south-east)",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          1.5,
+          -3.0
+        ],
+        [
+          3.0,
+          -3.0
+        ],
+        [
+          3.0,
+          -1.0
+        ],
+        [
+          1.5,
+          -1.0
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": [
+        {
+          "label": "chair",
+          "x": 1.6,
+          "y": -1.85,
+          "source": "surveyed"
+        }
+      ]
+    },
+    {
+      "id": "TABLE",
+      "name": "Table footprint",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          1.55,
+          0.25
+        ],
+        [
+          2.85,
+          0.25
+        ],
+        [
+          2.85,
+          1.15
+        ],
+        [
+          1.55,
+          1.15
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    },
+    {
+      "id": "SHELF",
+      "name": "Shelf footprint",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -1.0,
+          2.55
+        ],
+        [
+          0.2,
+          2.55
+        ],
+        [
+          0.2,
+          3.0
+        ],
+        [
+          -1.0,
+          3.0
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    },
+    {
+      "id": "CHAIR",
+      "name": "Chair footprint",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          1.35,
+          -2.1
+        ],
+        [
+          1.85,
+          -2.1
+        ],
+        [
+          1.85,
+          -1.6
+        ],
+        [
+          1.35,
+          -1.6
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    },
+    {
+      "id": "PERSON",
+      "name": "Person (do not walk into)",
+      "placeType": "cell",
+      "floor": 0,
+      "polygon": [
+        [
+          -2.2,
+          -1.75
+        ],
+        [
+          -1.6,
+          -1.75
+        ],
+        [
+          -1.6,
+          -1.15
+        ],
+        [
+          -2.2,
+          -1.15
+        ]
+      ],
+      "source": "surveyed",
+      "keepout": true,
+      "landmarks": []
+    }
+  ]
+}

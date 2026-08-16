@@ -27,6 +27,9 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscri
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from joints import ARM_REST, BODY  # noqa: E402
+
 # MuJoCo writes its instability warnings here, in the sim node's working
 # directory. Growth during a run means the solver blew up and auto-reset mjData.
 MUJOCO_LOG = pathlib.Path("MUJOCO_LOG.TXT")
@@ -160,12 +163,23 @@ def unwrap(samples):
     return out
 
 
+def joints_by_name(state):
+    """/state carries `joints` as a list of {name, position} (sidecar contract)."""
+    return {j["name"]: j["position"] for j in state["joints"]}
+
+
+# The stand pose is the MJCF zero pose except for the arms, which rest in
+# joints.ARM_REST (sim_node.py starts there and gestures return there).
+REST_BY_NAME = {BODY[i]: q for i, q in ARM_REST.items()}
+
+
 def stand_pose_deviation(joints):
-    """Worst |angle| among the joints that must stay in the stand pose."""
+    """Worst |angle - rest| among the joints that must stay in the stand pose."""
     worst, name = 0.0, ""
     for j in STAND_POSE_JOINTS:
-        if abs(joints.get(j, 0.0)) > worst:
-            worst, name = abs(joints[j]), j
+        dev = abs(joints.get(j, 0.0) - REST_BY_NAME.get(j, 0.0))
+        if dev > worst:
+            worst, name = dev, j
     return worst, name
 
 
@@ -197,7 +211,7 @@ def main():
     # The legs are decorative, but they must LOOK like a standing robot: they go
     # out verbatim on rt/lowstate. Feet buried in the floor kicked them out of
     # the stand pose on the first step and nothing pulled them back.
-    dev0, worst0 = stand_pose_deviation(get("/state")["joints"])
+    dev0, worst0 = stand_pose_deviation(joints_by_name(get("/state")))
     print(f"   stand pose: worst joint {worst0}={dev0:.4f} rad")
     if dev0 > STAND_POSE_TOL:
         fails.append(f"robot is not in the stand pose at start ({worst0}={dev0:.3f} rad)")
@@ -253,16 +267,17 @@ def main():
     print("7. WaveHand")
     c.WaveHand(False)
     time.sleep(1.2)
-    st = get("/state")
+    st = {"joints": joints_by_name(get("/state"))}
     r_sh_roll = st["joints"]["right_shoulder_roll_joint"]
     r_sh_pitch = st["joints"]["right_shoulder_pitch_joint"]
     print(f"   right_shoulder pitch={r_sh_pitch:.3f} roll={r_sh_roll:.3f}")
     if abs(r_sh_pitch) < 0.2:
         fails.append(f"WaveHand did not raise the arm (pitch={r_sh_pitch:.3f})")
     time.sleep(3.5)
-    st2 = get("/state")
-    if abs(st2["joints"]["right_shoulder_pitch_joint"]) > 0.15:
-        fails.append("arm did not return home after the wave")
+    st2 = {"joints": joints_by_name(get("/state"))}
+    if abs(st2["joints"]["right_shoulder_pitch_joint"]
+           - REST_BY_NAME["right_shoulder_pitch_joint"]) > 0.15:
+        fails.append("arm did not return to the rest pose after the wave")
     print(f"   after gesture pitch={st2['joints']['right_shoulder_pitch_joint']:.3f}")
 
     print("8. Damp() must refuse to translate")
@@ -329,7 +344,7 @@ def main():
     if idle_s > 0:
         c.StopMove()
         time.sleep(idle_s)
-        joints = get("/state")["joints"]
+        joints = joints_by_name(get("/state"))
         dev1, worst1 = stand_pose_deviation(joints)
         print(f"   worst joint {worst1}={dev1:.4f} rad "
               f"(waist_pitch={joints['waist_pitch_joint']:+.4f}, "

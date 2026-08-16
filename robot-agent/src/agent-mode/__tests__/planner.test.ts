@@ -12,6 +12,7 @@ import {
   Planner,
   coerceParams,
   enforceTurnDirection,
+  mergeAdjacentWaveIntoGreet,
   mergeSplitReasoningBlocks,
   plannerFallback,
 } from '../planner.js';
@@ -219,6 +220,50 @@ describe('Planner — prompt contents', () => {
   });
 });
 
+describe('mergeAdjacentWaveIntoGreet', () => {
+  const b = (kind: PlannedBlock['kind'], params: Record<string, unknown> = {}): PlannedBlock => ({
+    kind,
+    params,
+  });
+
+  it('drops a wave right before a greet — the greet waves anyway', () => {
+    const { blocks, merged } = mergeAdjacentWaveIntoGreet([
+      b('walk', { distanceM: 1, direction: 'forward' }),
+      b('wave', { turn: false }),
+      b('greet', { text: 'hello' }),
+    ]);
+    expect(merged).toBe(1);
+    expect(blocks.map((x) => x.kind)).toEqual(['walk', 'greet']);
+  });
+
+  it('drops a wave right after a greet too', () => {
+    const { blocks, merged } = mergeAdjacentWaveIntoGreet([
+      b('greet', { text: 'hello' }),
+      b('wave', { turn: false }),
+    ]);
+    expect(merged).toBe(1);
+    expect(blocks.map((x) => x.kind)).toEqual(['greet']);
+  });
+
+  it('carries the wave\'s torso turn onto the greet', () => {
+    const { blocks } = mergeAdjacentWaveIntoGreet([
+      b('wave', { turn: true }),
+      b('greet', { text: 'hi' }),
+    ]);
+    expect(blocks).toEqual([b('greet', { text: 'hi', turn: true })]);
+  });
+
+  it('leaves a wave alone when something runs between it and the greet', () => {
+    const { blocks, merged } = mergeAdjacentWaveIntoGreet([
+      b('wave', { turn: false }),
+      b('walk', { distanceM: 2, direction: 'forward' }),
+      b('greet', { text: 'hello' }),
+    ]);
+    expect(merged).toBe(0);
+    expect(blocks.map((x) => x.kind)).toEqual(['wave', 'walk', 'greet']);
+  });
+});
+
 describe('coerceParams / plannerFallback', () => {
   it('applies documented defaults', () => {
     // `wave` carries the sidecar's `turn` flag, not a hand: the G1 gesture is
@@ -231,6 +276,8 @@ describe('coerceParams / plannerFallback', () => {
       direction: 'forward',
     });
     expect(coerceParams({ kind: 'greet' })).toEqual({});
+    expect(coerceParams({ kind: 'look' })).toEqual({});
+    expect(coerceParams({ kind: 'look', speak: true })).toEqual({ speak: true });
   });
 
   it('rejects a posture without a pose', () => {
