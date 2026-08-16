@@ -456,6 +456,26 @@ export interface RobotMapPayload {
 export type RobotMapStatus = 'idle' | 'ok' | 'disabled' | 'unavailable';
 
 /**
+ * The robot's own 3-D world cloud (TASK-211): the lidar frames its map
+ * integrated, one point per voxel, in the ODOMETRY frame. `positions` is
+ * base64 of little-endian Float32 xyz triplets (z up, metres); `returned` may
+ * be an even-stride sample of `pointCount` when the request capped it.
+ */
+export interface RobotCloudPayload {
+  ok: true;
+  frame: 'odom';
+  frameId: string | null;
+  voxelM: number;
+  pointCount: number;
+  returned: number;
+  encoding: 'f32-xyz-b64';
+  positions: string;
+  frames: number;
+  lastIntegratedAt: string | null;
+  pose: { x: number; y: number; yawDeg: number; source: string; atMs: number } | null;
+}
+
+/**
  * What `GET /robots/:id/agent-mode` answers: the state plus WHEN the server's
  * in-memory mirror last heard it (TASK-200).
  *
@@ -757,6 +777,10 @@ export interface AgentModeStore {
   robotMapError: string | null;
   /** ISO time the map panel last got an answer, so a stale map can say so. */
   robotMapFetchedAt: string | null;
+  /** The world cloud (TASK-211) as last fetched by the map panel's 3-D view. */
+  robotCloud: RobotCloudPayload | null;
+  robotCloudStatus: RobotMapStatus;
+  robotCloudError: string | null;
   /**
    * When the self snapshot was TAKEN (ISO), or null when that is not known. It
    * answers "how old is what I am looking at", which the snapshot itself
@@ -839,6 +863,8 @@ export interface AgentModeStore {
    * that cannot be reached keeps the last map and is recorded as `unavailable`.
    */
   fetchRobotMap: (robotId: string) => Promise<void>;
+  /** Fetch the world cloud, `maxPoints` sampled (0 = all) — TASK-211. */
+  fetchRobotCloud: (robotId: string, maxPoints?: number) => Promise<void>;
   /**
    * Write Name/Emoji/Operator/Site to the robot's `IDENTITY.md`.
    *

@@ -179,6 +179,18 @@ export interface Config {
     /** Seconds after which an un-observed cell drifts back to unknown (`AGENT_MAP_DECAY_S`, 0 = off). */
     mapDecayS: number;
     /**
+     * World point cloud (TASK-211): the same lidar frames the grid integrates,
+     * kept in 3-D, one point per voxel, in the odometry frame
+     * (`AGENT_CLOUD_ENABLED`, default = map enabled).
+     */
+    cloudEnabled: boolean;
+    /** Voxel edge in metres (`AGENT_CLOUD_VOXEL_M`, default 0.05). */
+    cloudVoxelM: number;
+    /** Hard cap on stored points; oldest-seen go first (`AGENT_CLOUD_MAX_POINTS`, default 300000). */
+    cloudMaxPoints: number;
+    /** Where the cloud is persisted (`AGENT_CLOUD_PATH`, default = map path with `.cloud.json`). */
+    cloudPath: string;
+    /**
      * How often to ask the server where the OTHER robots are, in ms
      * (`AGENT_PEERS_POLL_MS`, default 2000 — the pose poll's cadence; 0 = off).
      * Peers in a different odometry frame are dropped, never drawn (TASK-207).
@@ -367,6 +379,12 @@ function envFloat(raw: string | undefined, fallback: number): number {
  * without a map has nothing to plan on and would fall back to `staged` on
  * every navigation anyway, so it is not worth pretending otherwise at boot.
  */
+function mapEnabledFromEnv(): boolean {
+  return process.env.AGENT_MAP_ENABLED === undefined
+    ? process.env.AGENT_RANGE_ENABLED !== 'false'
+    : process.env.AGENT_MAP_ENABLED === 'true';
+}
+
 function navPlannerFromEnv(): 'grid' | 'staged' {
   const raw = (process.env.AGENT_NAV_PLANNER || '').trim().toLowerCase();
   if (raw === 'grid' || raw === 'staged') return raw;
@@ -454,15 +472,21 @@ export const config: Config = {
     rangeMinM: parseFloat(process.env.AGENT_RANGE_MIN_M || '0.35'),
     // Occupancy map. Default follows range sensing: a map fed by nothing is
     // just an empty file, so there is no point keeping it on without a sensor.
-    mapEnabled:
-      process.env.AGENT_MAP_ENABLED === undefined
-        ? process.env.AGENT_RANGE_ENABLED !== 'false'
-        : process.env.AGENT_MAP_ENABLED === 'true',
+    mapEnabled: mapEnabledFromEnv(),
     mapResolutionM: parseFloat(process.env.AGENT_MAP_RESOLUTION_M || '0.1'),
     mapMaxM: parseFloat(process.env.AGENT_MAP_MAX_M || '60'),
     mapPath: process.env.AGENT_MAP_PATH || './data/occupancy-map.json',
     mapSweepHz: parseFloat(process.env.AGENT_MAP_SWEEP_HZ || '0'),
     mapDecayS: parseFloat(process.env.AGENT_MAP_DECAY_S || '0'),
+    cloudEnabled:
+      process.env.AGENT_CLOUD_ENABLED === undefined
+        ? mapEnabledFromEnv()
+        : process.env.AGENT_CLOUD_ENABLED === 'true',
+    cloudVoxelM: parseFloat(process.env.AGENT_CLOUD_VOXEL_M || '0.05'),
+    cloudMaxPoints: parseInt(process.env.AGENT_CLOUD_MAX_POINTS || '300000', 10),
+    cloudPath:
+      process.env.AGENT_CLOUD_PATH ||
+      (process.env.AGENT_MAP_PATH || './data/occupancy-map.json').replace(/\.json$/, '') + '.cloud.json',
     peersPollMs: parseInt(process.env.AGENT_PEERS_POLL_MS || '2000', 10),
     peersNoticeM: parseFloat(process.env.AGENT_PEERS_NOTICE_M || '3'),
     navPlanner: navPlannerFromEnv(),

@@ -1289,13 +1289,63 @@ export function createRestRoutes(
     res.type('text/markdown').send(agentModeController.sceneMarkdown());
   });
 
+  // GET /robots/:id/map/cloud — the robot's own 3-D world cloud (TASK-211):
+  // the lidar frames the grid integrated, kept one point per voxel in the
+  // ODOMETRY frame. `?format=json` (default) returns base64 Float32 xyz
+  // triplets, an even-stride sample of at most `?max=` points (default 80000,
+  // 0 = all); `?format=pcd` / `?format=ply` download the whole cloud as
+  // binary PCD / PLY (CloudCompare, Open3D, MeshLab, Foxglove, three.js).
+  // Not gated: geometry only. 404 when the cloud is off or empty.
+  router.get('/robots/:id/map/cloud', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    if (!agentModeController.worldCloudEnabled()) {
+      res.status(404).json({ ok: false, error: 'world cloud is disabled on this agent (AGENT_CLOUD_ENABLED)' });
+      return;
+    }
+    const cloud = agentModeController.worldCloud();
+    if (!cloud || cloud.pointCount === 0) {
+      res.status(404).json({ ok: false, error: 'no cloud yet — nothing has been integrated' });
+      return;
+    }
+    const format = typeof req.query.format === 'string' ? req.query.format : 'json';
+    if (format === 'pcd') {
+      res.type('application/octet-stream').attachment('cloud.pcd').send(cloud.toPcd());
+      return;
+    }
+    if (format === 'ply') {
+      res.type('application/octet-stream').attachment('cloud.ply').send(cloud.toPly());
+      return;
+    }
+    const maxRaw = typeof req.query.max === 'string' ? parseInt(req.query.max, 10) : NaN;
+    const max = Number.isFinite(maxRaw) && maxRaw >= 0 ? maxRaw : 80_000;
+    const { positions, total } = cloud.positions(max);
+    const pose = hardwareClient.getCachedPose();
+    res.json({
+      ok: true,
+      frame: 'odom',
+      frameId: cloud.frameId,
+      voxelM: cloud.voxelM,
+      pointCount: total,
+      returned: positions.length / 3,
+      encoding: 'f32-xyz-b64',
+      positions: Buffer.from(positions.buffer, positions.byteOffset, positions.byteLength).toString('base64'),
+      frames: cloud.getFrames(),
+      lastIntegratedAt: cloud.summary().lastIntegratedAt,
+      pose: pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg, source: pose.source, atMs: pose.atMs } : null,
+    });
+  });
+
   // GET /robots/:id/map — the robot's own occupancy grid (TASK-206)
   //
   // Not gated: geometry only — no captions, no operator words. `frame: 'odom'`
   // is stated on the payload because it is the whole caveat: the grid inherits
   // odometry drift and is only comparable with the place graph when that graph
   // is registered to odometry (`registered`), otherwise `keepouts` is `[]`.
-  // `?format=pgm` returns the grid as a binary PGM for eyeballing.
+  // `?format=pgm` returns the grid as a ROS map_server PGM, `?format=yaml` the
+  // matching YAML (`image: map.pgm`) — save both side by side and RViz / Nav2 /
+  // Foxglove load the map as is:
+  //   curl -o map.pgm  'http://<agent>/api/v1/robots/<id>/map?format=pgm'
+  //   curl -o map.yaml 'http://<agent>/api/v1/robots/<id>/map?format=yaml'
   router.get('/robots/:id/map', (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     const status = agentModeController.mapStatus();
@@ -1303,13 +1353,17 @@ export function createRestRoutes(
       res.status(404).json({ ok: false, error: 'occupancy map is disabled on this agent (AGENT_MAP_ENABLED)' });
       return;
     }
-    if (req.query.format === 'pgm') {
+    if (req.query.format === 'pgm' || req.query.format === 'yaml') {
       const map = agentModeController.occupancyMap();
       if (!map || !map.isAllocated()) {
         res.status(404).json({ ok: false, error: 'no map yet — nothing has been integrated' });
         return;
       }
-      res.type('image/x-portable-graymap').send(map.toPgm());
+      if (req.query.format === 'yaml') {
+        res.type('text/yaml').attachment('map.yaml').send(map.toMapServerYaml('map.pgm'));
+      } else {
+        res.type('image/x-portable-graymap').attachment('map.pgm').send(map.toPgm());
+      }
       return;
     }
     const grid = agentModeController.mapSnapshot();

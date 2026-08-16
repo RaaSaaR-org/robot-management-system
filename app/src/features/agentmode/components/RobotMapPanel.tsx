@@ -15,6 +15,9 @@ import { TWIN_ZONE_COLORS } from '@/features/digitaltwin/store/twinZoneStore';
 import { useAgentModeStore } from '../store/agentmodeStore';
 import type { RobotMapGrid, RobotMapPayload } from '../types/agentmode.types';
 import { PlaceChip } from './PlaceChip';
+import { exportCloud, exportMap, type CloudExportFormat, type MapExportFormat } from '../utils/mapExport';
+import { agentmodeApi } from '../api/agentmodeApi';
+import { WorldCloudView } from './WorldCloudView';
 
 export interface RobotMapPanelProps {
   robotId: string | null;
@@ -24,6 +27,8 @@ export interface RobotMapPanelProps {
 }
 
 type Orientation = 'north' | 'heading';
+/** 2-D: the occupancy grid canvas. 3-D: the world cloud (TASK-211). */
+type MapView = '2d' | '3d';
 
 /** Half-width of the view in metres — the zoom steps. */
 const RANGES_M = [2, 3, 6, 12, 24] as const;
@@ -305,6 +310,55 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Export menu (TASK-210): three files an operator can take elsewhere. Open
+  // state only; the work is `exportMap`, computed from the payload in hand.
+  const [view, setView] = useState<MapView>('2d');
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the export menu on Escape or a click anywhere outside it.
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportOpen(false);
+    };
+    const onPointer = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onPointer);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onPointer);
+    };
+  }, [exportOpen]);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const runExport = useCallback(
+    async (format: MapExportFormat) => {
+      setExportOpen(false);
+      if (!robotId || !map?.grid) return;
+      const ok = await exportMap(robotId, map.grid, format);
+      setExportNote(ok ? null : 'Export failed: the grid could not be decoded.');
+    },
+    [robotId, map],
+  );
+  // The 3-D export asks the robot for EVERY point (`max=0`), not the sampled
+  // view — a file is for keeps, and the sample is only for the screen.
+  const runCloudExport = useCallback(
+    async (format: CloudExportFormat) => {
+      setExportOpen(false);
+      if (!robotId) return;
+      try {
+        const full = await agentmodeApi.getCloud(robotId, 0);
+        const ok = exportCloud(robotId, full, format);
+        setExportNote(ok ? null : 'Export failed: the cloud could not be decoded.');
+      } catch (err) {
+        setExportNote(`Export failed: ${err instanceof Error ? err.message : 'the robot has no cloud'}.`);
+      }
+    },
+    [robotId],
+  );
+  const cloudAvailable = useAgentModeStore((s) => s.robotCloudStatus === 'ok' && s.robotCloud !== null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
   // Poll while mounted and the tab is visible; stop when hidden.
@@ -376,43 +430,127 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
 
   return (
     <div className={cn('flex flex-col min-h-0 flex-1', className)} data-testid="agent-map-panel">
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-glass-subtle">
-        <SegmentedControl<Orientation>
-          label="Map orientation"
-          value={orientation}
-          onChange={setOrientation}
+      <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-glass-subtle">
+        <SegmentedControl<MapView>
+          label="Map view"
+          value={view}
+          onChange={setView}
           options={[
-            { value: 'north', label: 'North up', title: 'Map north (the odometry +y axis) points up' },
-            { value: 'heading', label: 'Heading up', title: 'The robot always faces up' },
+            { value: '2d', label: '2D', title: 'The occupancy grid the robot plans on' },
+            { value: '3d', label: '3D', title: 'The point cloud the robot has kept of the world' },
           ]}
         />
+        {view === '2d' && (
+          <SegmentedControl<Orientation>
+            label="Map orientation"
+            value={orientation}
+            onChange={setOrientation}
+            options={[
+              { value: 'north', label: 'North up', title: 'Map north (the odometry +y axis) points up' },
+              { value: 'heading', label: 'Heading up', title: 'The robot always faces up' },
+            ]}
+          />
+        )}
         <div className="ml-auto inline-flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Zoom out"
-            className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
-            disabled={rangeIndex >= RANGES_M.length - 1}
-            onClick={() => setRangeIndex((i) => Math.min(RANGES_M.length - 1, i + 1))}
-          >
-            −
-          </button>
-          <span className="card-meta tabular-nums w-10 text-center" data-testid="agent-map-range">
-            ±{rangeM} m
-          </span>
-          <button
-            type="button"
-            aria-label="Zoom in"
-            className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
-            disabled={rangeIndex <= 0}
-            onClick={() => setRangeIndex((i) => Math.max(0, i - 1))}
-          >
-            +
-          </button>
+          {view === '2d' && (
+            <>
+              <button
+                type="button"
+                aria-label="Zoom out"
+                className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+                disabled={rangeIndex >= RANGES_M.length - 1}
+                onClick={() => setRangeIndex((i) => Math.min(RANGES_M.length - 1, i + 1))}
+              >
+                −
+              </button>
+              <span className="card-meta tabular-nums w-10 text-center" data-testid="agent-map-range">
+                ±{rangeM} m
+              </span>
+              <button
+                type="button"
+                aria-label="Zoom in"
+                className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+                disabled={rangeIndex <= 0}
+                onClick={() => setRangeIndex((i) => Math.max(0, i - 1))}
+              >
+                +
+              </button>
+            </>
+          )}
+          <div className="relative ml-1" ref={exportRef}>
+            <button
+              type="button"
+              data-testid="agent-map-export"
+              aria-label="Export map"
+              aria-haspopup="menu"
+              aria-expanded={exportOpen}
+              title="Download the map (PGM+YAML for ROS map_server, PNG, JSON) or the point cloud (PCD, PLY)"
+              className="glass-subtle px-2 py-0.5 text-xs rounded-brand disabled:opacity-40"
+              disabled={!map?.grid && !cloudAvailable}
+              onClick={() => setExportOpen((o) => !o)}
+            >
+              Export
+            </button>
+            {exportOpen && (
+              <div
+                role="menu"
+                aria-label="Export map as"
+                data-testid="agent-map-export-menu"
+                className="absolute right-0 top-full mt-1 z-20 min-w-[11rem] rounded-brand border border-glass-subtle glass-elevated shadow-lg py-1 text-xs"
+              >
+                <p className="px-3 pt-1 pb-0.5 card-meta text-[10px] uppercase tracking-wide">2D map</p>
+                {(
+                  [
+                    ['pgm', 'PGM + YAML (ROS map_server)'],
+                    ['png', 'PNG image'],
+                    ['json', 'JSON (raw grid)'],
+                  ] as Array<[MapExportFormat, string]>
+                ).map(([format, label]) => (
+                  <button
+                    key={format}
+                    type="button"
+                    role="menuitem"
+                    className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
+                    disabled={!map?.grid}
+                    onClick={() => void runExport(format)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <p className="px-3 pt-1.5 pb-0.5 card-meta text-[10px] uppercase tracking-wide border-t border-glass-subtle mt-1">3D point cloud</p>
+                {(
+                  [
+                    ['pcd', 'PCD (CloudCompare, Open3D, PCL)'],
+                    ['ply', 'PLY (MeshLab, Blender)'],
+                  ] as Array<[CloudExportFormat, string]>
+                ).map(([format, label]) => (
+                  <button
+                    key={format}
+                    type="button"
+                    role="menuitem"
+                    className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
+                    disabled={!cloudAvailable}
+                    title={cloudAvailable ? undefined : 'Open the 3D view first — the cloud is read on demand'}
+                    onClick={() => void runCloudExport(format)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+      {exportNote && (
+        <p className="shrink-0 px-3 py-1 text-[11px] text-amber-600 dark:text-amber-400" role="status" data-testid="agent-map-export-note">
+          {exportNote}
+        </p>
+      )}
 
       <div ref={hostRef} className="relative flex-1 min-h-[220px] overflow-hidden">
-        {map ? (
+        {view === '3d' ? (
+          <WorldCloudView robotId={robotId} />
+        ) : map ? (
           <>
             <canvas
               ref={canvasRef}

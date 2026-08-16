@@ -225,3 +225,90 @@ describe('KnowledgePanel map tab', () => {
     expect(fetchRobotMap).not.toHaveBeenCalled();
   });
 });
+
+describe('RobotMapPanel export (TASK-210)', () => {
+  it('offers PGM+YAML, PNG and JSON once a grid is held, and is disabled without one', () => {
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload({ grid: null }), robotMapStatus: 'ok' });
+    const { unmount } = render(<RobotMapPanel robotId="r1" />);
+    expect(screen.getByTestId('agent-map-export')).toBeDisabled();
+    unmount();
+
+    useAgentModeStore.setState({ robotMap: payload() });
+    render(<RobotMapPanel robotId="r1" />);
+    const btn = screen.getByTestId('agent-map-export');
+    expect(btn).toBeEnabled();
+    act(() => btn.click());
+    const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
+    expect(items).toEqual([
+      'PGM + YAML (ROS map_server)',
+      'PNG image',
+      'JSON (raw grid)',
+      'PCD (CloudCompare, Open3D, PCL)',
+      'PLY (MeshLab, Blender)',
+    ]);
+    // No cloud has been read yet: the 3-D entries wait for the 3-D view.
+    expect(screen.getByRole('menuitem', { name: 'PCD (CloudCompare, Open3D, PCL)' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'PGM + YAML (ROS map_server)' })).toBeEnabled();
+  });
+
+  it('switches to the 3-D view, which polls the cloud and reports the empty states (TASK-211)', async () => {
+    const fetchRobotCloud = vi.fn(async () => {});
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, fetchRobotCloud, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" pollMs={100000} />);
+    expect(screen.queryByTestId('agent-cloud-view')).toBeNull();
+    act(() => screen.getByRole('button', { name: '3D' }).click());
+    expect(fetchRobotCloud).toHaveBeenCalledWith('r1', 80000);
+    expect(screen.getByTestId('agent-cloud-empty')).toHaveTextContent('Reading the robot’s cloud…');
+    // Orientation and zoom belong to the 2-D canvas and leave with it.
+    expect(screen.queryByTestId('agent-map-range')).toBeNull();
+    act(() => {
+      useAgentModeStore.setState({ robotCloudStatus: 'disabled', robotCloudError: 'world cloud is disabled on this agent (AGENT_CLOUD_ENABLED)' });
+    });
+    expect(screen.getByTestId('agent-cloud-empty')).toHaveTextContent('does not keep a point cloud (AGENT_CLOUD_ENABLED)');
+    act(() => {
+      useAgentModeStore.setState({ robotCloudStatus: 'disabled', robotCloudError: 'no cloud yet — nothing has been integrated' });
+    });
+    expect(screen.getByTestId('agent-cloud-empty')).toHaveTextContent('No cloud yet');
+    act(() => {
+      useAgentModeStore.setState({ robotCloudStatus: 'unavailable', robotCloudError: 'ECONNREFUSED' });
+    });
+    expect(screen.getByTestId('agent-cloud-empty')).toHaveTextContent('Cloud unavailable: ECONNREFUSED');
+  });
+
+  it('downloads the JSON grid from the menu', async () => {
+    const saved: string[] = [];
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push(this.download);
+    });
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    act(() => screen.getByTestId('agent-map-export').click());
+    await act(async () => {
+      screen.getByRole('menuitem', { name: 'JSON (raw grid)' }).click();
+    });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatch(/^map-r1-.*\.json$/);
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it('closes the export menu on Escape and on a click outside it', () => {
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    act(() => screen.getByTestId('agent-map-export').click());
+    expect(screen.getByTestId('agent-map-export-menu')).toBeInTheDocument();
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+
+    act(() => screen.getByTestId('agent-map-export').click());
+    expect(screen.getByTestId('agent-map-export-menu')).toBeInTheDocument();
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    expect(screen.queryByTestId('agent-map-export-menu')).toBeNull();
+  });
+});

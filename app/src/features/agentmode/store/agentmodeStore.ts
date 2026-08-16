@@ -26,6 +26,7 @@ import type {
   AgentMapSummary,
   AgentStateReachability,
   RobotMapPayload,
+  RobotCloudPayload,
   RobotMapStatus,
   ControlOwner,
   MirroredAgentModeState,
@@ -63,6 +64,9 @@ const initialState = {
   robotMapStatus: 'idle' as RobotMapStatus,
   robotMapError: null as string | null,
   robotMapFetchedAt: null as string | null,
+  robotCloud: null as RobotCloudPayload | null,
+  robotCloudStatus: 'idle' as RobotMapStatus,
+  robotCloudError: null as string | null,
   selfUpdatedAt: null as string | null,
   selfLive: false,
   selfAgeUnknown: false,
@@ -295,6 +299,33 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             state.robotMapStatus = 'unavailable';
           }
           state.robotMapError = why;
+        });
+      }
+    },
+
+    // --------------------------------------------------------------------------
+    // Fetch the robot's own world cloud (TASK-211) — same contract as the map
+    // --------------------------------------------------------------------------
+    fetchRobotCloud: async (robotId: string, maxPoints?: number) => {
+      try {
+        const cloud = await agentmodeApi.getCloud(robotId, maxPoints);
+        set((state) => {
+          if (staleResponse(state, robotId)) return;
+          state.robotCloud = cloud;
+          state.robotCloudStatus = 'ok';
+          state.robotCloudError = null;
+        });
+      } catch (err) {
+        const why = getErrorMessage(err, 'cloud unavailable');
+        set((state) => {
+          if (staleResponse(state, robotId)) return;
+          if (isNotFoundError(err)) {
+            state.robotCloud = null;
+            state.robotCloudStatus = 'disabled';
+          } else {
+            state.robotCloudStatus = 'unavailable';
+          }
+          state.robotCloudError = why;
         });
       }
     },

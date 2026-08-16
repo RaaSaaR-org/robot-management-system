@@ -261,6 +261,8 @@ const AGENT_ASSERTED_STATUSES: ReadonlySet<number> = new Set([400, 404]);
 
 /** The map is a few hundred KiB at most and served from memory; 5 s is generous. */
 const MAP_PROXY_TIMEOUT_MS = 5000;
+/** The cloud is up to a few MB of base64 — give it longer than the grid. */
+const CLOUD_PROXY_TIMEOUT_MS = 15000;
 
 /**
  * True when a proxied body is something the robot actually said, rather than an
@@ -304,6 +306,43 @@ function respondAgentProxyFailure(
   );
   res.status(502).json(AGENT_STATE_UNAVAILABLE);
 }
+
+/**
+ * GET /:id/agent-mode/map/cloud — the robot's own 3-D world cloud (TASK-211).
+ * A pure proxy to the agent's `GET /api/v1/robots/:id/map/cloud`; `?max=`
+ * (points to return, 0 = all) passes through. Same error contract as `/map`:
+ * the agent's 404s ("cloud disabled", "nothing yet") pass through, anything
+ * else is a 502. The cloud can be a few MB — the budget is longer than the
+ * grid's.
+ */
+agentModeRoutes.get('/:id/agent-mode/map/cloud', async (req: Request, res: Response) => {
+  try {
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) {
+      return res.status(404).json({ code: 'ROBOT_NOT_FOUND', error: 'Robot not found' });
+    }
+    try {
+      const httpClient = new HttpClient(registered.baseUrl, CLOUD_PROXY_TIMEOUT_MS);
+      const params: Record<string, unknown> = {};
+      if (typeof req.query.max === 'string' && /^\d+$/.test(req.query.max)) params.max = req.query.max;
+      const cloud: unknown = await httpClient.get(`/api/v1/robots/${req.params.id}/map/cloud`, { params });
+      if (!isObjectBody(cloud) || cloud.ok !== true) {
+        return res.status(502).json({ ...AGENT_STATE_UNAVAILABLE, error: 'agent returned no cloud' });
+      }
+      return res.json(cloud);
+    } catch (error) {
+      if (error instanceof HttpClientError && error.statusCode === 404 && isObjectBody(error.responseBody)) {
+        return res.status(404).json(error.responseBody);
+      }
+      const why = error instanceof Error ? error.message : String(error);
+      console.warn(`[AgentMode] cloud fetch failed for ${req.params.id}: ${why}`);
+      return res.status(502).json({ ...AGENT_STATE_UNAVAILABLE, error: why });
+    }
+  } catch (error) {
+    console.error('[AgentMode] cloud proxy error:', error);
+    return res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to fetch cloud' });
+  }
+});
 
 /**
  * GET /:id/agent-mode/map — the robot's own occupancy map, peers included
