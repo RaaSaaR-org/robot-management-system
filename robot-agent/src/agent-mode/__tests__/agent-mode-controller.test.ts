@@ -123,7 +123,12 @@ function makeController(
       standHeight: async () => ({ ok: true }),
       odometry: async () => null,
     },
-    ...(opts.say ? { say: opts.say } : {}),
+    // Never the real voice client: it POSTs to `VOICE_SERVICE_URL`, and a
+    // developer who happens to be running a voice service on that port (see
+    // hardware/voice_sim/say_service.py) would have these tests speak out loud
+    // and time out on the delay. `false` is what an unreachable service
+    // returns, which is what this suite has always been asserting against.
+    say: opts.say ?? (async () => false),
     ...(opts.idleWatchIntervalMs === undefined
       ? {}
       : { idleWatchIntervalMs: opts.idleWatchIntervalMs }),

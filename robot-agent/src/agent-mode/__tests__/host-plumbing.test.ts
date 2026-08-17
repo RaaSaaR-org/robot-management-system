@@ -246,6 +246,22 @@ describe('host plumbing — greeting a visitor', () => {
     expect(no.planned).toEqual([]);
   });
 
+  it('answers a German offer in German even when the caller names no language', async () => {
+    // The visitor's "ja" arrives from a microphone, not from a UI that knows
+    // which language the site greets in. The route does, and the acceptance
+    // must follow it — this used to come out as "Wonderful — follow me,
+    // please." in the middle of a German tour, because the run whose language
+    // would have been read does not exist yet at that moment.
+    const h = rig();
+    rigs.push(h);
+    await greetOnce(h.controller);
+    await h.controller.submitCommand({ text: 'Ja, gerne!', spoken: true });
+    expect(h.said).toContain('Wunderbar — folgen Sie mir bitte.');
+    expect(h.said.some((line) => line.includes('follow me, please'))).toBe(false);
+    h.controller.abortTour('test');
+    await settle(h.controller);
+  });
+
   it('a stop word still outranks the conversation', async () => {
     const h = rig();
     rigs.push(h);

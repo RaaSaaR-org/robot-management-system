@@ -3099,14 +3099,19 @@ export class AgentModeController {
   private async handleVisitorUtterance(text: string, input: SubmitCommandInput): Promise<AgentCommandResult | null> {
     const runner = this.host;
     if (!runner) return null;
-    const language: SpokenLanguage = input.language ?? runner.activeRoute()?.language ?? 'en';
+    const pending = runner.pending();
+    // The language of the ROUTE the question belongs to, before the language of
+    // a run that has not started yet: a visitor who says yes to a German offer
+    // was answered "Wonderful — follow me, please" in English, because at that
+    // moment there is no active route to take the language from.
+    const language: SpokenLanguage =
+      input.language ?? pending?.route.language ?? runner.activeRoute()?.language ?? 'en';
     // Only a SPOKEN utterance answers a question the robot asked out loud. A
     // "ja" typed into the operator console is not the visitor's voice, and
     // letting it resolve their offer means whoever has the UI open can answer
     // for the person standing in front of the robot.
     const reply = input.spoken ? matchVisitorReply(text) : null;
 
-    const pending = runner.pending();
     if (pending) {
       if (!reply) {
         // Not an answer — a question ("what would you show me?"), or a command.

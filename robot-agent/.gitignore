@@ -1,1 +1,5 @@
 data/pointclouds-real/
+# Runtime caches the agent writes for itself (the route it last fetched from the
+# server, so host mode still works when the server is down). Local state, not
+# something a deployment should inherit from git.
+data/*-routes-cache*.json
