@@ -46,6 +46,16 @@ export const AgentBlockKinds = [
   'patrol',
   'capture',
   'inspect',
+  /**
+   * Host mode (TASK-213). `tour` is the top-level block `TourRunner` expands
+   * into legs (exactly as `patrol` is); `present` says ONE authored chunk of a
+   * stop's talk track; `demo` runs — or honestly narrates — the VLA skill that
+   * belongs to a stop. Never planned by the LLM: a stop's words are authored by
+   * an operator and a model may not rephrase them in front of a visitor.
+   */
+  'tour',
+  'present',
+  'demo',
 ] as const;
 export type AgentBlockKind = (typeof AgentBlockKinds)[number];
 
@@ -499,6 +509,12 @@ export const AgentModeEventTypes = [
   /** A confirmed finding (TASK-212) — carries {@link AgentModeEvent.finding} (+ `patrol`). */
   'agent:finding:detected',
   'agent:finding:confirmed',
+  /** Host-mode tour lifecycle (TASK-213) — carries {@link AgentModeEvent.tour}. */
+  'agent:tour:started',
+  'agent:tour:leg',
+  /** One visitor question and what the robot answered — carries `tour` + `turn`. */
+  'agent:tour:turn',
+  'agent:tour:finished',
 ] as const;
 export type AgentModeEventType = (typeof AgentModeEventTypes)[number];
 
@@ -550,6 +566,10 @@ export interface AgentModeEvent {
   patrol?: PatrolRun;
   /** Set on `agent:finding:*` only. */
   finding?: PatrolFinding;
+  /** Set on `agent:tour:*` (TASK-213): the tour run as of this event. */
+  tour?: TourRun;
+  /** Set on `agent:tour:turn` only: the question that was just answered. */
+  turn?: TourTurn;
   /** ISO timestamp */
   timestamp: string;
 }
@@ -773,3 +793,241 @@ export interface PatrolStartResult {
   /** Machine-readable refusal, e.g. `disabled`, `battery`, `place_unknown`, `busy`, `estop`, `window`, `damped`, `crash_unacknowledged`. */
   reason?: string;
 }
+
+// ============================================================================
+// HOST MODE (TASK-213) — tour routes, runs, turns. Wire contract shared verbatim
+// by robot-agent / server / app, same discipline as PATROL above. The server is
+// the source of record for routes and the persisted history of runs; the robot
+// executes, speaks and reports.
+//
+// Two rules are encoded in these types rather than left to prose:
+//   * everything the robot SAYS at a stop is authored text on the route
+//     (`greeting`/`offer`/`talkTrack`/`farewell`) — there is no field a model
+//     writes, because a demo is the worst place for an invented sentence;
+//   * a question the facts do not cover is a FIRST-CLASS outcome
+//     (`TourTurnAnswer = 'declined'`), not an error — it is the measurable
+//     alternative to hallucinating, and the UI surfaces it as "facts to add".
+// ============================================================================
+
+/** The VLA skill a stop demonstrates. Referenced, never redefined: `skillId` is a `SkillDefinition.id`. */
+export interface TourDemo {
+  skillId: string;
+  /** Display name, cached so the timeline reads right when the skill is gone. */
+  skillName: string;
+  /** Model version the operator expects to run, when pinned. */
+  modelVersionId?: string | null;
+  /** Roughly how long it takes — used for the route's duration estimate and the narration. */
+  expectSeconds: number;
+}
+
+/** Hard caps. Enforced on the server (route validation) AND on the robot (block building). */
+export const TOUR_HEADLINE_MAX = 60;
+export const TOUR_TALK_TRACK_MAX = 600;
+export const TOUR_FACT_MAX = 200;
+export const TOUR_FACTS_MAX = 8;
+export const TOUR_SITE_CARD_MAX = 10;
+export const TOUR_STOPS_MAX = 12;
+/**
+ * Longest a stop may dwell for questions, seconds.
+ *
+ * 30 and not a round 60, because 30 is what the `wait` block actually clamps
+ * to on the robot. Three different caps (server 120, route parser 60, wait
+ * block 30) meant the editor could promise the operator a pause the robot was
+ * never going to take, and the duration estimate was wrong by the difference.
+ */
+export const TOUR_DWELL_MAX_S = 30;
+
+export interface TourStop {
+  id: string;
+  /** Place id from the place graph the robot resolves (`goto.place` accepts it). */
+  placeId: string;
+  /** ≤ {@link TOUR_HEADLINE_MAX} chars — the stop's name on the card and in the timeline. */
+  headline: string;
+  /**
+   * ≤ {@link TOUR_TALK_TRACK_MAX} chars, authored. Said VERBATIM, chunked into
+   * ≤2-sentence `present` blocks so the (half-duplex) mic reopens between them
+   * — the closest thing to barge-in this stack has.
+   */
+  talkTrack: string;
+  /**
+   * ≤ {@link TOUR_FACTS_MAX} × ≤ {@link TOUR_FACT_MAX} chars — the ONLY ground
+   * for answering a question at this stop, besides what a `look` can see.
+   */
+  facts: string[];
+  demo?: TourDemo | null;
+  /** Seconds to wait for a question after the talk track. */
+  dwellS: number;
+  /** Ask "shall we go on?" and wait for a yes before walking to the next stop. */
+  askToContinue: boolean;
+}
+
+export interface TourRoute {
+  id: string;
+  name: string;
+  /** Robot this route is bound to; null = any robot the operator starts it on. */
+  robotId: string | null;
+  /** DigitalTwin whose place graph the stops reference; null for a robot with a local graph (sim). */
+  twinId: string | null;
+  /** The tour's default language. A visitor who speaks the other one wins, per turn. */
+  language: SpokenLanguage;
+  /** Where the robot waits for visitors and returns to when the tour ends. */
+  greetingPlaceId: string;
+  /** Authored welcome. The AI disclosure is appended by the robot and cannot be removed. */
+  greeting: string;
+  /** "Shall I show you around? It takes about six minutes." */
+  offer: string;
+  farewell: string;
+  /** ≤ {@link TOUR_SITE_CARD_MAX} facts true anywhere on this tour (what this site is, who runs it). */
+  siteCard: string[];
+  stops: TourStop[];
+  enabled: boolean;
+  /** May the robot offer this tour to a person it sees, unprompted? */
+  autoGreet: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Who the tour is for. `visitor` = the robot offered it and a person accepted. */
+export const TourRunOrigins = ['visitor', 'operator'] as const;
+export type TourRunOrigin = (typeof TourRunOrigins)[number];
+
+/**
+ * `declined` = the offer was made and answered "no" (not a failure — the most
+ * common outcome of a good greeting); `abandoned` = the reply window lapsed or
+ * the visitor walked away mid-tour; `skipped` = refused before the robot moved,
+ * `reason` says why.
+ */
+export const TourRunStatuses = [
+  'running',
+  'done',
+  'declined',
+  'abandoned',
+  'aborted',
+  'failed',
+  'skipped',
+] as const;
+export type TourRunStatus = (typeof TourRunStatuses)[number];
+
+export const TourLegStatuses = ['pending', 'running', 'done', 'failed', 'skipped'] as const;
+export type TourLegStatus = (typeof TourLegStatuses)[number];
+
+/**
+ * How a visitor question was answered.
+ * `grounded` — from the stop's facts or the site card;
+ * `from_camera` — from a `look` at the scene in front of the robot;
+ * `declined` — the facts did not cover it and the robot said so. THE GOOD
+ *   FAILURE: an un-grounded answer would be a defect, this is the alternative;
+ * `unanswered` — the robot never got an answer out (planner failure, abort).
+ */
+export const TourTurnAnswers = ['grounded', 'from_camera', 'declined', 'unanswered'] as const;
+export type TourTurnAnswer = (typeof TourTurnAnswers)[number];
+
+export interface TourTurn {
+  at: string;
+  /** Stop the visitor was standing at, null when asked outside a stop (e.g. during the offer). */
+  stopId: string | null;
+  question: string;
+  answer: string;
+  answered: TourTurnAnswer;
+  /** Language the turn was conducted in. */
+  language: SpokenLanguage;
+}
+
+/** What a `demo` block did. `narrated` is a full outcome, never dressed up as a grasp. */
+export const TourDemoModes = ['execute', 'narrate'] as const;
+export type TourDemoMode = (typeof TourDemoModes)[number];
+export const TourDemoStatuses = ['done', 'narrated', 'failed', 'skipped'] as const;
+export type TourDemoStatus = (typeof TourDemoStatuses)[number];
+
+export interface TourLegDemo {
+  mode: TourDemoMode;
+  status: TourDemoStatus;
+  skillId: string;
+  skillName: string;
+  steps?: number | null;
+  durationMs?: number | null;
+  /** Model version that ran (`execute`) or that last ran this skill (`narrate`). */
+  model?: string | null;
+  message?: string;
+}
+
+export interface TourLeg {
+  index: number;
+  stopId: string;
+  placeId: string;
+  name: string;
+  status: TourLegStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  /** One line for the timeline: "arrived and said 3 of 3", "goto failed: …". */
+  message?: string;
+  /** Chunks of the talk track actually spoken / total, so a cut-short stop is visible. */
+  spoken?: { said: number; of: number } | null;
+  demo?: TourLegDemo | null;
+  /** Robot pose (odom frame) when the leg finished — lets the map overlay place the stop marker. */
+  pose?: { x: number; y: number; yawDeg: number } | null;
+}
+
+export interface TourRun {
+  runId: string;
+  routeId: string;
+  routeName: string;
+  robotId: string;
+  origin: TourRunOrigin;
+  status: TourRunStatus;
+  /** Why the run was skipped/declined/abandoned/aborted/failed, in one sentence. */
+  reason?: string | null;
+  startedAt: string;
+  finishedAt?: string | null;
+  legs: TourLeg[];
+  /**
+   * The visitor's questions and what was said back — text only, trust level
+   * `untrusted`, swept by the same retention as patrol photos. Empty when
+   * `TOUR_TRANSCRIPT_ENABLED=false`.
+   */
+  turns: TourTurn[];
+  language: SpokenLanguage;
+  /**
+   * Whether the EU AI Act Art. 50 disclosure was actually spoken to this
+   * visitor. Recorded rather than assumed: it is the one sentence a compliance
+   * record has to be able to prove, and a greeting that failed to reach the
+   * speaker did not disclose anything.
+   */
+  disclosureSpoken: boolean;
+  /** Agent Mode plan the run executed as, when it did. */
+  planId?: string | null;
+}
+
+/** Response of `POST /robots/:id/agent-mode/tour`. */
+export interface TourStartResult {
+  accepted: boolean;
+  runId?: string;
+  message: string;
+  /**
+   * Machine-readable refusal: `disabled`, `no_route`, `busy`, `estop`, `battery`,
+   * `place_unknown`, `place_stale`, `damped`, `crash_unacknowledged`, `keepout`,
+   * `person_too_close`, `no_stops`.
+   */
+  reason?: string;
+}
+
+/** What `GET /robots/:id/agent-mode/tour` answers — mirrors `PatrolStatus`. */
+export interface TourStatus {
+  enabled: boolean;
+  /** The bound route, or null when host mode has none. */
+  route: TourRoute | null;
+  /** The run in flight, or null. */
+  run: TourRun | null;
+  /** A question the robot is waiting for an answer to, or null. */
+  pending: { kind: TourQuestionKind; expiresAt: string } | null;
+  /** Where the route came from: the server, the disk cache, or nothing. */
+  source: 'server' | 'cache' | 'none';
+}
+
+/**
+ * What the robot is waiting to be answered. Matched by keyword, never by a
+ * model: this runs in the gap right after a visitor stops speaking, which is
+ * the one place in the stack a 1.2 s planner round-trip is not affordable.
+ */
+export const TourQuestionKinds = ['offer', 'continue'] as const;
+export type TourQuestionKind = (typeof TourQuestionKinds)[number];

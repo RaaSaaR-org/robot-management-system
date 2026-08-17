@@ -33,6 +33,7 @@ import { robotRoutes } from './routes/robot.routes.js';
 import { voiceRoutes } from './routes/voice.routes.js';
 import { agentModeRoutes } from './routes/agent-mode.routes.js';
 import { patrolRoutes, patrolRobotRoutes } from './routes/patrol.routes.js';
+import { tourRoutes } from './routes/tour.routes.js';
 import { wellKnownRoutes } from './routes/wellknown.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { zoneRoutes } from './routes/zone.routes.js';
@@ -209,6 +210,10 @@ export function createApp(): Express {
   // upload + the spec-named /agent-mode/patrol aliases at /api/robots.
   app.use('/api/robots', authMiddleware, patrolRobotRoutes);
   app.use('/api/patrol', authMiddleware, patrolRoutes);
+
+  // Host mode (TASK-213): tour routes/runs at /api/tour. No /api/robots half —
+  // a tour stores no photos, so the robot has nothing to upload.
+  app.use('/api/tour', authMiddleware, tourRoutes);
 
   // Alert routes (protected)
   app.use('/api/alerts', authMiddleware, alertRoutes);

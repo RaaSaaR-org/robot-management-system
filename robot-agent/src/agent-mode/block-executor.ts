@@ -18,6 +18,7 @@ import type { SegmentCheck } from './path-planner.js';
 import { RangeSensor } from './range.js';
 import { gateByHash, type ChecklistAnswers } from './inspector.js';
 import type { PatrolCaptureHost } from './patrol.js';
+import { demoNarration } from './host.js';
 import { speakThroughVoiceService } from './voice-narrator.js';
 import {
   getWorkspace,
@@ -218,6 +219,19 @@ export interface BlockExecutorDeps {
    * because the executor is built once and patrols come and go.
    */
   patrol?: () => PatrolCaptureHost | null;
+  /**
+   * Run one VLA skill for a `demo` block (TASK-213), or absent when this agent
+   * cannot — the block then says so instead of pretending. Supplied by the
+   * controller (which owns the RobotStateManager the SkillExecutor needs);
+   * deliberately NOT an HTTP call back into our own REST API, which would make
+   * a demo depend on the agent being reachable from itself.
+   */
+  runSkill?: (input: {
+    skillId: string;
+    skillName: string;
+    taskPrompt?: string;
+    timeoutMs?: number;
+  }) => Promise<{ ok: boolean; steps?: number; durationMs?: number; message: string }>;
   /** Grab a base64 JPEG from a named camera. Default: the sidecar. */
   snapshot?: (cameraName: string) => Promise<string>;
   /** Camera used by `capture` (default `AGENT_CAMERA_NAME`). */
@@ -358,6 +372,15 @@ export class BlockExecutor {
           return {
             ok: false,
             message: 'internal error: "patrol" is the run itself and is driven by PatrolRunner',
+          };
+        case 'present':
+          return await this.present(block);
+        case 'demo':
+          return await this.demo(block);
+        case 'tour':
+          return {
+            ok: false,
+            message: 'internal error: "tour" is the visit itself and is driven by TourRunner',
           };
       }
     } catch (err) {
@@ -942,6 +965,12 @@ export class BlockExecutor {
       ? block.params.text.trim()
       : 'Hello! Good to see you.';
     const spoken = await this.say(text, this.language());
+    // Recorded on the block, not only in the prose: host mode's AI disclosure
+    // rides this block, and whether it was actually PLAYED is the one fact its
+    // compliance record has to be able to prove. A caller reading it back out
+    // of the message string would be parsing English to answer a legal
+    // question (TASK-213).
+    block.params.spoken = spoken;
     // Default `turn: false` — the torso turn is only correct when we know
     // where the person is, and `greet` carries no bearing of its own. The
     // planner sets `turn` here when it folded a `wave {turn:true}` into this
@@ -994,6 +1023,7 @@ export class BlockExecutor {
     const text = typeof block.params.text === 'string' ? block.params.text.trim() : '';
     if (!text) return { ok: false, message: 'speak: empty text' };
     const spoken = await this.say(text, this.language());
+    block.params.spoken = spoken;
     // A missing voice service is explicitly a degraded success, not a failure:
     // the utterance still reaches the operator as text in the block result.
     return {
@@ -1060,6 +1090,75 @@ export class BlockExecutor {
     // touched nothing, so it must neither raise nor clear it.
     if (result.ok) this.onDurableWrite(true, null);
     return { ok: result.ok, message: result.ok ? result.message : `remember: ${result.message}` };
+  }
+
+  /**
+   * One chunk of a stop's authored talk track (TASK-213). Not `speak` with a
+   * different name: the chunk counter is what makes a cut-short stop visible
+   * in the timeline ("said 2 of 3") instead of silently ending early, and the
+   * text is authored by an operator rather than by the planner — a distinction
+   * a reviewer of the timeline has to be able to see.
+   */
+  private async present(block: AgentBlock): Promise<BlockOutcome> {
+    const text = typeof block.params.text === 'string' ? block.params.text.trim() : '';
+    const chunk = Number(block.params.chunk);
+    const of = Number(block.params.of);
+    const where = Number.isFinite(chunk) && Number.isFinite(of) ? `part ${chunk} of ${of}` : 'part';
+    if (!text) return { ok: false, message: `present: empty text (${where})` };
+    const spoken = await this.say(text, this.language());
+    block.params.spoken = spoken;
+    return {
+      ok: true,
+      message: spoken
+        ? `Said ${where}: "${text}"`
+        : `Said ${where} (text-only, voice service unreachable): "${text}"`,
+    };
+  }
+
+  /**
+   * The stop's VLA skill (TASK-213), run or described.
+   *
+   * `narrate` is a FULL outcome, not a fallback that got away with it: the
+   * apple scene is a fixed-base G1, so in simulation the robot that can walk a
+   * tour physically cannot also pick the apple. The result string says
+   * "described, not executed" in that case, and the leg records `narrated` —
+   * a timeline that implies a grasp happened when the robot only talked is the
+   * one lie this feature must not tell.
+   */
+  private async demo(block: AgentBlock): Promise<BlockOutcome> {
+    const skillId = typeof block.params.skillId === 'string' ? block.params.skillId : '';
+    const skillName = typeof block.params.skillName === 'string' && block.params.skillName ? block.params.skillName : skillId;
+    const mode = block.params.mode === 'execute' ? 'execute' : 'narrate';
+    if (!skillId) return { ok: false, message: 'demo: no skillId' };
+
+    if (mode === 'narrate') {
+      const line = demoNarration(skillName, this.language() ?? 'en');
+      const spoken = await this.say(line, this.language());
+      return {
+        ok: true,
+        message: `Described "${skillName}" — not executed${spoken ? '' : ' (voice service unreachable)'}.`,
+      };
+    }
+
+    if (!this.deps.runSkill) {
+      // Say it out loud too: a visitor watching a robot that promised a
+      // demonstration is owed the reason it did not happen.
+      const line = demoNarration(skillName, this.language() ?? 'en');
+      await this.say(line, this.language());
+      return { ok: false, message: `demo: this agent cannot run skills, so "${skillName}" was only described.` };
+    }
+
+    const timeoutMs = Number.isFinite(Number(block.params.expectSeconds))
+      ? Math.max(5_000, Number(block.params.expectSeconds) * 2_000)
+      : undefined;
+    const result = await this.deps.runSkill({
+      skillId,
+      skillName,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    // Carried on the block so the runner can read the numbers back off it.
+    if (typeof result.steps === 'number') block.params.steps = result.steps;
+    return { ok: result.ok, message: result.message };
   }
 
   private async wait(block: AgentBlock): Promise<BlockOutcome> {

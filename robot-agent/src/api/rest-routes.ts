@@ -1293,6 +1293,75 @@ export function createRestRoutes(
   // PATROL (TASK-212)
   // ============================================================================
 
+  // ── host mode (TASK-213) ────────────────────────────────────────────────
+  //
+  // No photo route and no transcript-export route, on purpose: host mode
+  // stores no images and no audio at all, and the transcript is served as part
+  // of the run (text the visitor said, under the run's retention) rather than
+  // as a stream of its own that could be harvested.
+
+  // POST /robots/:id/agent-mode/tour — {routeId, origin?, route?}
+  // Refusals are NOT HTTP errors: {accepted:false, reason, message} — and are
+  // recorded as a skipped run (agent:tour:finished) so the server can alert.
+  router.post('/robots/:id/agent-mode/tour', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const routeId = req.body?.routeId;
+    if (typeof routeId !== 'string' || !routeId.trim()) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'body must be {routeId: string, origin?, route?}' });
+      return;
+    }
+    const origin = req.body?.origin === 'visitor' ? 'visitor' : 'operator';
+    const result = await agentModeController.startTour({
+      routeId: routeId.trim(),
+      origin,
+      ...(req.body?.route !== undefined ? { route: req.body.route } : {}),
+      // Only the robot itself may claim the disclosure was spoken — it is the
+      // one that spoke it. A caller asserting it over HTTP would be asserting
+      // something it cannot know, so the field is deliberately not read here.
+    });
+    res.json(result);
+  });
+
+  // POST /robots/:id/agent-mode/tour/abort — {reason?}
+  router.post('/robots/:id/agent-mode/tour/abort', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const reason =
+      typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'operator abort';
+    res.json(agentModeController.abortTour(reason));
+  });
+
+  // GET /robots/:id/agent-mode/tour — {enabled, route, run, pending, source}.
+  // GATED for the same reason as the run routes: `run` is the visit in flight,
+  // transcript included.
+  router.get('/robots/:id/agent-mode/tour', personalDataGate, (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    res.json(agentModeController.tourStatus());
+  });
+
+  // GET /robots/:id/agent-mode/tour/runs?limit=20 — newest first, from the workspace.
+  // GATED: a `TourRun` carries its transcript, so the LIST hands out every
+  // visitor's words in one request. Gating only the detail route while this one
+  // served the same text in bulk was the hole, not the mitigation.
+  router.get('/robots/:id/agent-mode/tour/runs', personalDataGate, (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const raw = Number(req.query.limit);
+    const limit = Number.isFinite(raw) && raw > 0 ? Math.min(200, Math.floor(raw)) : 20;
+    res.json({ runs: agentModeController.tourRuns(limit) });
+  });
+
+  // GET /robots/:id/agent-mode/tour/runs/:runId — TourRun, transcript included.
+  // GATED like a patrol photo: the turns are what a member of the public said
+  // to a robot, which is personal data even though no recording was kept.
+  router.get('/robots/:id/agent-mode/tour/runs/:runId', personalDataGate, (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const run = agentModeController.tourRun(String(req.params.runId));
+    if (!run) {
+      res.status(404).json({ code: 'NOT_FOUND', message: `no tour run ${req.params.runId} on this robot` });
+      return;
+    }
+    res.json(run);
+  });
+
   // POST /robots/:id/agent-mode/patrol — {routeId, mode?, origin?, route?}
   // Refusals are NOT HTTP errors: {accepted:false, reason, message} — and are
   // recorded as a skipped run (agent:patrol:finished) so the server can alert.

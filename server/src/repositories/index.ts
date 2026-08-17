@@ -130,3 +130,10 @@ export type {
   CreatePatrolRouteInput,
   UpdatePatrolRouteInput,
 } from './PatrolRepository.js';
+export { tourRepository, TourRepository } from './TourRepository.js';
+export type {
+  TourRouteRecord,
+  TourRunRecord,
+  CreateTourRouteInput,
+  UpdateTourRouteInput,
+} from './TourRepository.js';

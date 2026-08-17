@@ -32,6 +32,7 @@ import { digitalTwinService } from './services/DigitalTwinService.js';
 import { processSchedulerService } from './services/ProcessSchedulerService.js';
 import { patrolSchedulerService } from './services/PatrolSchedulerService.js';
 import { patrolPhotoCleanupJob } from './jobs/patrol-photo-cleanup.js';
+import { tourTranscriptCleanupJob } from './jobs/tour-transcript-cleanup.js';
 import { MULTI_TENANCY_ENABLED } from './config/features.js';
 
 const PORT = process.env.PORT || 3001;
@@ -88,6 +89,8 @@ async function main() {
   // retention sweep (control 72 h, baseline/finding 30 d).
   patrolSchedulerService.start();
   patrolPhotoCleanupJob.startSchedule(1);
+  // Host-mode visitor transcripts (TASK-213) — daily, 30 d by default.
+  tourTranscriptCleanupJob.startSchedule(24);
 
   // Initialize digital-twin build orchestrator (TASK-170) — reaps any scan
   // sessions left stuck in 'processing' from a prior run. No NATS dependency:
@@ -155,6 +158,7 @@ async function main() {
     processSchedulerService.stop();
     patrolSchedulerService.stop();
     patrolPhotoCleanupJob.stopSchedule();
+    tourTranscriptCleanupJob.stopSchedule();
     telemetryIngestionService.stopAll();
     retentionCleanupJob.stopSchedule();
     telemetryCleanupJob.stopSchedule();

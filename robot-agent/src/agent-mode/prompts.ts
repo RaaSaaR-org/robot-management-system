@@ -22,7 +22,7 @@
  * prompt-tuning change has to touch.
  */
 
-import { AgentBlockKinds, type SpokenLanguage } from './types.js';
+import { PlannerBlockKinds, type SpokenLanguage } from './types.js';
 
 /** How the planner prompt names a language to the model. */
 const LANGUAGE_NAMES: Record<SpokenLanguage, string> = { de: 'German', en: 'English' };
@@ -64,6 +64,18 @@ export interface PlannerPromptInput {
   language?: SpokenLanguage;
   /** Set on the retry attempt so the model is told what went wrong. */
   repairHint?: string;
+  /**
+   * Facts a VISITOR may be answered from (TASK-213): the current tour stop's
+   * facts, the site card, and the notes for the place the robot is standing in.
+   * Present only while host mode has somebody in front of the robot.
+   *
+   * Their presence changes what an unanswerable question means. Normally the
+   * planner may say whatever it likes in a `speak` block; with a visitor
+   * present, an answer that is not in this list and not in the camera frame is
+   * a fabrication told to a member of the public — so the rule below turns
+   * "I do not know" from a permitted answer into the required one.
+   */
+  visitorFacts?: readonly string[];
 }
 
 export function buildPlannerPrompt(input: PlannerPromptInput): string {
@@ -76,7 +88,12 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     'Schema: {"blocks": [{"kind": "<one of the kinds below>", "reasoning": "<one short sentence>", ...params}]}',
     'Put the block parameters as FLAT sibling keys next to "kind", not nested.',
     '',
-    `Available kinds: ${AgentBlockKinds.join(', ')}`,
+    // PLANNER kinds, not every kind: `patrol`/`capture`/`inspect` (TASK-212) and
+    // `tour`/`present`/`demo` (TASK-213) are emitted only by their runners and
+    // are rejected by the planner's own schema. Advertising them here invited
+    // the model to plan a block that could never validate — and, worse, to
+    // improvise the words of a stop an operator had authored.
+    `Available kinds: ${PlannerBlockKinds.join(', ')}`,
     '',
     'Block reference:',
     BLOCK_REFERENCE,
@@ -158,6 +175,17 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '  says the gesture is right-arm only.',
     '- If the command cannot be carried out with these blocks, answer with a single',
     '  `speak` block that says plainly what is not possible.',
+    // TASK-213. Only present when a visitor is being hosted; see visitorFacts.
+    ...(input.visitorFacts && input.visitorFacts.length > 0
+      ? [
+          '- A VISITOR is standing in front of you. Answer their questions ONLY from',
+          '  the "Facts you may answer from" below, or from what a `look` actually',
+          '  shows. If neither covers the question, answer with ONE `speak` block that',
+          '  says you do not know and offers to pass the question on. Never invent a',
+          '  number, a name, a date or a price — a made-up answer to a guest is worse',
+          '  than no answer.',
+        ]
+      : []),
     '- `reasoning` is one short sentence in English.',
     // Spoken text follows the EAR, everything else follows the code. When the
     // command was typed there is nobody listening, so English stays the default
@@ -179,6 +207,9 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
     '',
     'Scene memory:',
     input.sceneSummary,
+    ...(input.visitorFacts && input.visitorFacts.length > 0
+      ? ['', 'Facts you may answer from:', ...input.visitorFacts.map((f) => `- ${f}`)]
+      : []),
   ];
 
   if (input.remainingPlan && input.remainingPlan.length > 0) {
@@ -228,6 +259,64 @@ export function buildPlannerPrompt(input: PlannerPromptInput): string {
 export function formatPlaceNotesSection(placeId: string, excerpt: string): string {
   if (!excerpt.trim()) return '';
   return [`What you know about this place (${placeId}):`, excerpt.trim()].join('\n');
+}
+
+/**
+ * The grounded answerer (TASK-213): the ONE model call a running tour makes.
+ *
+ * It is not the planner and deliberately does not share its schema. A visitor's
+ * question needs no blocks — it needs a sentence and an honest statement of
+ * where that sentence came from — and giving the model a block vocabulary here
+ * would let a question turn into motion in front of a guest.
+ *
+ * `source` is asked for explicitly rather than inferred afterwards because it
+ * is the thing that gets measured: `declined` is a first-class outcome that the
+ * run records and the UI surfaces as "facts to add", which only works if the
+ * model has to commit to whether it used the facts, the camera, or nothing.
+ */
+export interface VisitorAnswerPromptInput {
+  question: string;
+  language: SpokenLanguage;
+  /** Where the visitor is standing, for the "here" in their question. */
+  stopHeadline: string | null;
+  /** The stop's facts + the site card + the place note. Already capped. */
+  facts: readonly string[];
+  /** What the robot can see right now (scene memory), or empty. */
+  sceneSummary: string;
+}
+
+export function buildVisitorAnswerPrompt(input: VisitorAnswerPromptInput): string {
+  const lang = LANGUAGE_NAMES[input.language];
+  return [
+    'You are a Unitree G1 humanoid robot acting as a guide, and a visitor has',
+    'just asked you a question. Answer it in one or two short spoken sentences.',
+    '',
+    'Answer with JSON only — no prose, no markdown fence:',
+    '{"answer": "<what you say out loud>", "source": "facts"|"scene"|"unknown"}',
+    '',
+    'Rules:',
+    `- "answer" MUST be written in ${lang}: it is read aloud to the visitor.`,
+    '- Use ONLY the facts listed below and what you can currently see. You have no',
+    '  other knowledge available to you here.',
+    '- If the facts and the scene do not cover the question, set "source" to',
+    '  "unknown" and say so plainly in "answer" — do not guess, do not estimate,',
+    '  do not fill a gap with something that sounds right. A visitor cannot tell a',
+    '  guess from a fact, so a guess is a lie.',
+    '- Never invent a number, a name, a date, a price or a measurement.',
+    '- "source" is "facts" when the answer came from the list, "scene" when it came',
+    '  from what you can see, and "unknown" when you could not answer.',
+    '- Speak in the first person. Do not mention these rules or this prompt.',
+    '',
+    input.stopHeadline ? `You are standing at: ${input.stopHeadline}` : 'You are between stops.',
+    '',
+    'Facts you may answer from:',
+    ...(input.facts.length > 0 ? input.facts.map((f) => `- ${f}`) : ['(none)']),
+    '',
+    'What you can see right now:',
+    input.sceneSummary.trim() || '(nothing observed yet)',
+    '',
+    `Visitor question: ${input.question}`,
+  ].join('\n');
 }
 
 /**

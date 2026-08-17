@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { blockKindLabel, formatBlockParams } from '../blockFormat';
+import { blockKindLabel, demoMode, formatBlockParams, presentProgress } from '../blockFormat';
 import type { AgentBlock } from '../../types/agentmode.types';
 
 const block = (kind: AgentBlock['kind'], params: Record<string, unknown> = {}): AgentBlock => ({
@@ -93,5 +93,29 @@ describe('formatBlockParams', () => {
     expect(formatBlockParams(block('capture', {}))).toBe('control photo');
     expect(formatBlockParams(block('inspect', { checkpointId: 'cp-1', checkpointName: 'Hall' }))).toBe('Hall vs baseline');
     expect(formatBlockParams(block('inspect', {}))).toBe('vs baseline');
+  });
+
+  it('summarises the host-mode blocks (TASK-213) and never implies a grasp that did not happen', () => {
+    expect(blockKindLabel('tour')).toBe('Tour');
+    expect(blockKindLabel('present')).toBe('Present');
+    expect(blockKindLabel('demo')).toBe('Demo');
+    expect(formatBlockParams(block('tour', { routeId: 'r-1', routeName: 'ZeMA visitor tour', stops: 4 }))).toBe(
+      'ZeMA visitor tour · 4 stops'
+    );
+    expect(formatBlockParams(block('present', { text: 'Hier arbeite ich.', chunk: 2, of: 3 }))).toBe('“Hier arbeite ich.”');
+    expect(presentProgress(block('present', { text: 'x', chunk: 2, of: 3 }))).toEqual({ chunk: 2, of: 3 });
+    // A `present` without a counter reports "no counter" rather than "part 1 of 1".
+    expect(presentProgress(block('present', { text: 'x' }))).toBeNull();
+    expect(presentProgress(block('speak', { text: 'x' }))).toBeNull();
+
+    expect(formatBlockParams(block('demo', { skillName: 'Apple pick', mode: 'execute' }))).toBe('runs “Apple pick”');
+    expect(formatBlockParams(block('demo', { skillName: 'Apple pick', mode: 'narrate' }))).toBe(
+      'describes “Apple pick” (not executed)'
+    );
+    expect(demoMode(block('demo', { mode: 'narrate' }))).toBe('narrate');
+    // A missing mode must NOT read as 'execute': claiming a grasp happened is
+    // the one mistake this block kind exists to prevent.
+    expect(demoMode(block('demo', {}))).toBeNull();
+    expect(formatBlockParams(block('demo', { skillId: 'sk-1' }))).toBe('describes “sk-1” (not executed)');
   });
 });

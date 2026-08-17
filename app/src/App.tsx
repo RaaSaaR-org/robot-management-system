@@ -30,6 +30,9 @@ import {
   LazyPatrolPage,
   LazyPatrolRouteEditorPage,
   LazyPatrolRunDetailPage,
+  LazyTourPage,
+  LazyTourEditorPage,
+  LazyTourRunDetailPage,
   LazyProcessesPage,
   LazyProcessDetailPage,
   LazyA2AChatPage,
@@ -245,6 +248,39 @@ function App() {
             element={
               <ProtectedAppRoute>
                 <LazyPatrolRunDetailPage />
+              </ProtectedAppRoute>
+            }
+          />
+          {/* Guide (TASK-213) - host mode: tours, editor, visit detail */}
+          <Route
+            path="/tour"
+            element={
+              <ProtectedAppRoute>
+                <LazyTourPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/tour/routes/new"
+            element={
+              <ProtectedAppRoute>
+                <LazyTourEditorPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/tour/routes/:id"
+            element={
+              <ProtectedAppRoute>
+                <LazyTourEditorPage />
+              </ProtectedAppRoute>
+            }
+          />
+          <Route
+            path="/tour/runs/:runId"
+            element={
+              <ProtectedAppRoute>
+                <LazyTourRunDetailPage />
               </ProtectedAppRoute>
             }
           />

@@ -398,6 +398,11 @@ export function setupWebSocket(server: Server): void {
       // the finding (+ run). Absent fields drop out of the JSON as before.
       patrol: event.patrol,
       finding: event.finding,
+      // Host mode (TASK-213): `agent:tour:*` carries the run; `agent:tour:turn`
+      // also carries the question that was just answered. Same channel as
+      // patrol — the app filters on the `agent:` prefix, not on a new socket.
+      tour: event.tour,
+      turn: event.turn,
       timestamp: event.timestamp,
     });
     broadcast(clients, message);

@@ -11,13 +11,13 @@ import type { PatrolFinding, PatrolRun } from '../../types/patrol.types';
 describe('finding link', () => {
   it('parses `[finding:<id> run:<runId>]` from an alert message', () => {
     const link = parseFindingLink('unexpected object in Hall — route Night round, run run-1, 01:02 [finding:f-1 run:run-1]');
-    expect(link).toEqual({ findingId: 'f-1', runId: 'run-1' });
+    expect(link).toEqual({ findingId: 'f-1', runId: 'run-1', kind: 'patrol' });
     expect(findingLinkPath(link!)).toBe('/patrol/runs/run-1#finding-f-1');
   });
 
   it('tolerates a link without a run (no path then)', () => {
     const link = parseFindingLink('… [finding:f-2]');
-    expect(link).toEqual({ findingId: 'f-2', runId: null });
+    expect(link).toEqual({ findingId: 'f-2', runId: null, kind: 'patrol' });
     expect(findingLinkPath(link!)).toBeNull();
   });
 
@@ -25,9 +25,19 @@ describe('finding link', () => {
     // PatrolService.raiseSkippedAlert appends only a run tag — no finding exists.
     // Before this the operator saw the raw tag in the prose and had no way in.
     const link = parseFindingLink('Patrol "Night round" (patrol, scheduled) was skipped: battery 12% · run: run-s · at: x [run:run-s]');
-    expect(link).toEqual({ findingId: null, runId: 'run-s' });
+    expect(link).toEqual({ findingId: null, runId: 'run-s', kind: 'patrol' });
     expect(findingLinkPath(link!)).toBe('/patrol/runs/run-s');
     expect(stripFindingLink('Patrol skipped: battery 12% [run:run-s]')).toBe('Patrol skipped: battery 12%');
+  });
+
+  it('sends a tour alert to the VISIT, not to a patrol run that does not exist', () => {
+    // TourService tags its alerts `[tour-run:<id>]` precisely so this parser
+    // can tell them apart; a bare `[run:…]` would have deep-linked an operator
+    // into /patrol/runs/<a tour run id> and shown them "not found".
+    const link = parseFindingLink('Tour "ZeMA Besucherrundgang" (visitor) ended failed: … [tour-run:t-1]');
+    expect(link).toEqual({ findingId: null, runId: 't-1', kind: 'tour' });
+    expect(findingLinkPath(link!)).toBe('/tour/runs/t-1');
+    expect(stripFindingLink('Tour ended failed [tour-run:t-1]')).toBe('Tour ended failed');
   });
 
   it('returns null for ordinary alerts', () => {

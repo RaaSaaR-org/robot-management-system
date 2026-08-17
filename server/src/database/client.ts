@@ -63,6 +63,9 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   'PatrolRoute',
   'PatrolRun',
   'PatrolFinding',
+  // TASK-213 host mode
+  'TourRoute',
+  'TourRun',
 ]);
 
 const globalForPrisma = globalThis as unknown as {

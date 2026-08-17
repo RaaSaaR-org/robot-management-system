@@ -11,8 +11,10 @@ import {
   blockKindGlyph,
   blockKindLabel,
   blockStatusStyle,
+  demoMode,
   formatBlockParams,
   formatDuration,
+  presentProgress,
 } from '../utils/blockFormat';
 import type { AgentBlock } from '../types/agentmode.types';
 
@@ -31,6 +33,14 @@ export const BlockCard = memo(function BlockCard({ block, index, className }: Bl
   const status = blockStatusStyle(block.status);
   const params = formatBlockParams(block);
   const duration = block.finishedAt ? blockDurationMs(block) : null;
+  // Host mode (TASK-213): a `present` block is one part of an authored talk
+  // track, and where the robot is in that track is what tells an operator it is
+  // mid-explanation rather than stuck. A `demo` block's mode is louder still —
+  // `narrate` means the robot DESCRIBED the skill, and the card has to say so in
+  // words, because a "Done" pill next to "Demo" otherwise reads as a grasp that
+  // happened.
+  const chunk = presentProgress(block);
+  const demo = demoMode(block);
 
   return (
     <div
@@ -60,6 +70,35 @@ export const BlockCard = memo(function BlockCard({ block, index, className }: Bl
             <span className="card-meta tabular-nums">{index + 1}.</span>
           )}
           <span className="card-value">{blockKindLabel(block.kind)}</span>
+          {chunk && (
+            <span
+              className="glass-subtle rounded-full px-2 py-0.5 text-[10px] font-mono tabular-nums text-theme-secondary whitespace-nowrap"
+              data-testid="agent-block-chunk"
+            >
+              part {chunk.chunk} of {chunk.of}
+            </span>
+          )}
+          {/* `demo` is the block's MODE, which is known before it runs — so the
+              label has to follow the block's status, not the mode alone. A
+              pending `execute` demo badged "Ran the skill" is the same class of
+              claim the narrate/execute split exists to prevent. */}
+          {demo && (
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap',
+                demo === 'execute' ? 'bg-cobalt-500/15 text-cobalt-600 dark:text-cobalt-300' : 'glass-subtle text-theme-secondary'
+              )}
+              data-testid="agent-block-demo-mode"
+            >
+              {demo === 'execute'
+                ? block.status === 'done'
+                  ? 'Ran the skill'
+                  : block.status === 'failed'
+                    ? 'Tried to run the skill'
+                    : 'Running the skill'
+                : 'Described only — not executed'}
+            </span>
+          )}
           {params && <span className="card-meta">{params}</span>}
 
           <span className="ml-auto flex items-center gap-2">

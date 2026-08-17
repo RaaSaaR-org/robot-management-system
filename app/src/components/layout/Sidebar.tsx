@@ -169,6 +169,21 @@ const NAV_CATEGORIES: NavCategory[] = [
         ),
       },
       {
+        // Host mode (TASK-213) — the robot with a person in front of it, next
+        // to Patrol, which is the robot alone. Icon is lucide's `speech`
+        // geometry drawn inline: every entry here is an inline stroke SVG, and
+        // importing one lucide component would make this the only odd one out.
+        label: "Guide",
+        path: "/tour",
+        icon: (
+          <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.8 20v-4.1l1.9.2a2.3 2.3 0 0 0 2.164-2.1V8.3A5.37 5.37 0 0 0 2 8.25c0 2.8.85 4.7 3 6.3v5.15" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.8 17.8a7.5 7.5 0 0 0 .003-10.603" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 15a3.5 3.5 0 0 0-.025-4.975" />
+          </svg>
+        ),
+      },
+      {
         label: "Automations",
         path: "/processes",
         icon: (

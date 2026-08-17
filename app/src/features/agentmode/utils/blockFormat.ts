@@ -25,6 +25,12 @@ const BLOCK_LABELS: Record<AgentBlockKind, string> = {
   patrol: 'Patrol',
   capture: 'Capture',
   inspect: 'Inspect',
+  // Host mode (TASK-213). "Present" and "Demo" are what the operator sees the
+  // robot doing in front of a visitor: saying one authored piece, and running
+  // (or describing) a skill.
+  tour: 'Tour',
+  present: 'Present',
+  demo: 'Demo',
 };
 
 /** Human label for a block kind. */
@@ -48,6 +54,9 @@ const BLOCK_GLYPHS: Record<AgentBlockKind, string> = {
   patrol: '⛨',
   capture: '📷',
   inspect: '🔍',
+  tour: '🚩',
+  present: '🗣',
+  demo: '🤲',
 };
 
 /** Glyph for a block kind — a tiny, dependency-free icon. */
@@ -157,6 +166,30 @@ export function formatBlockParams(block: AgentBlock): string {
       const name = str(p.checkpointName) ?? str(p.checkpointId) ?? '';
       return name ? `${name} vs baseline` : 'vs baseline';
     }
+    case 'tour': {
+      // TASK-213: the top-level block of a visit, expanded into legs by the
+      // TourRunner exactly as `patrol` is.
+      const name = str(p.routeName) ?? str(p.routeId) ?? '';
+      const stops = num(p.stops);
+      const count = stops !== null ? `${stops} stop${stops === 1 ? '' : 's'}` : 'tour';
+      return name ? `${name} · ${count}` : count;
+    }
+    case 'present': {
+      // One authored chunk of a stop's talk track. The words are what belongs
+      // on a one-line chip; the "part 2 of 3" counter is rendered as its own
+      // chip by BlockCard (see `presentProgress`), where there is room for it.
+      const text = str(p.text);
+      const progress = presentProgress(block);
+      if (text) return `“${text}”`;
+      return progress ? `part ${progress.chunk} of ${progress.of}` : 'part';
+    }
+    case 'demo': {
+      // `narrate` must never read as a grasp that happened: the robot said what
+      // it does at this station, it did not do it. The mode is spelled out in
+      // words rather than left to a status pill.
+      const skill = str(p.skillName) ?? str(p.skillId) ?? 'skill';
+      return demoMode(block) === 'execute' ? `runs “${skill}”` : `describes “${skill}” (not executed)`;
+    }
     case 'look':
       // `speak: true` is the answering look ("tell me what is on the table"):
       // the robot says what it sees, so the card should say so up front.
@@ -166,6 +199,30 @@ export function formatBlockParams(block: AgentBlock): string {
       return pairs.join(' · ');
     }
   }
+}
+
+/**
+ * Which chunk of a stop's talk track a `present` block says, when it says so.
+ * Null for any other kind — and for a `present` the robot sent without the
+ * counter, which is reported as "no counter" rather than as "part 1 of 1".
+ */
+export function presentProgress(block: AgentBlock): { chunk: number; of: number } | null {
+  if (block.kind !== 'present') return null;
+  const chunk = num(block.params?.chunk);
+  const of = num(block.params?.of);
+  return chunk !== null && of !== null ? { chunk, of } : null;
+}
+
+/**
+ * How a `demo` block ran: `execute` really drove the VLA skill, `narrate` only
+ * described it. Null for any other kind, and for a `demo` whose mode is missing
+ * — which must NOT default to 'execute': claiming a grasp happened is the one
+ * mistake this block kind exists to prevent.
+ */
+export function demoMode(block: AgentBlock): 'execute' | 'narrate' | null {
+  if (block.kind !== 'demo') return null;
+  const mode = str(block.params?.mode);
+  return mode === 'execute' || mode === 'narrate' ? mode : null;
 }
 
 // ============================================================================
