@@ -139,20 +139,22 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
  */
 export function AlertBanner({ className }: AlertBannerProps) {
   const location = useLocation();
-  const { mostCriticalAlert, acknowledgeAlert, removeAlert } = useAlerts();
+  const { mostCriticalAlert, acknowledgeAlertAsync, dismissAlert, error } = useAlerts();
 
-  // Hooks must be declared before any early returns (React Rules of Hooks)
+  // Hooks must be declared before any early returns (React Rules of Hooks).
+  // Both actions go to the server: acknowledging only in memory hides the
+  // banner until the next fetch of /alerts/active hands the same alert back.
   const handleAcknowledge = useCallback(() => {
     if (mostCriticalAlert) {
-      acknowledgeAlert(mostCriticalAlert.id);
+      void acknowledgeAlertAsync(mostCriticalAlert.id);
     }
-  }, [mostCriticalAlert, acknowledgeAlert]);
+  }, [mostCriticalAlert, acknowledgeAlertAsync]);
 
   const handleDismiss = useCallback(() => {
     if (mostCriticalAlert) {
-      removeAlert(mostCriticalAlert.id);
+      void dismissAlert(mostCriticalAlert.id);
     }
-  }, [mostCriticalAlert, removeAlert]);
+  }, [mostCriticalAlert, dismissAlert]);
 
   // Hide banner on landing page
   if (location.pathname === '/') {
@@ -185,6 +187,13 @@ export function AlertBanner({ className }: AlertBannerProps) {
         onAcknowledge={handleAcknowledge}
         onDismiss={handleDismiss}
       />
+      {/* A rejected acknowledge/dismiss puts the banner straight back; say why
+          instead of letting the click look like it did nothing. */}
+      {error && (
+        <p className="px-3 pb-2 text-xs opacity-90 sm:px-4" data-testid="alert-banner-error">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

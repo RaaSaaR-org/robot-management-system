@@ -8,7 +8,7 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { cn } from '@/shared/utils';
+import { cn, getErrorMessage } from '@/shared/utils';
 import { formatTimeAgo } from '@/shared/utils/format';
 import { SegmentedControl, Tooltip } from '@/shared/components/ui';
 import { TWIN_ZONE_COLORS } from '@/features/digitaltwin/store/twinZoneStore';
@@ -454,13 +454,21 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
         const ok = exportCloud(robotId, full, format);
         setExportNote(ok ? null : 'Export failed: the cloud could not be decoded.');
       } catch (err) {
-        setExportNote(`Export failed: ${err instanceof Error ? err.message : 'the robot has no cloud'}.`);
+        // The api client rejects with a plain `{ code, message, statusCode }`
+        // object, not an Error — an `instanceof Error` check here reported a
+        // dead agent, a timeout on a big cloud and a 401 all as "no cloud".
+        setExportNote(`Export failed: ${getErrorMessage(err, 'the robot has no cloud')}.`);
       }
     },
     [robotId, closeExport],
   );
   // Only for the menu's hint copy — the export itself never depends on it.
   const cloudAvailable = useAgentModeStore((s) => s.robotCloudStatus === 'ok' && s.robotCloud !== null);
+  // A grid with no dimensions is the robot saying "nothing has been integrated
+  // yet" — the image formats cannot represent that (a 0×0 PGM is a file no map
+  // tool will open), so they are only offered once there is a raster. The raw
+  // JSON stays available: an empty grid is still a valid diagnostic dump.
+  const gridHasRaster = Boolean(map?.grid && map.grid.width > 0 && map.grid.height > 0);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
   // Poll while mounted and the tab is visible; stop when hidden.
@@ -638,7 +646,8 @@ export const RobotMapPanel = memo(function RobotMapPanel({ robotId, className, p
                     // Roving tabindex: inside a menu, Tab exits — the arrows move.
                     tabIndex={-1}
                     className="block w-full text-left px-3 py-1.5 text-theme-primary hover:bg-theme-hover disabled:opacity-40"
-                    disabled={!map?.grid}
+                    disabled={!map?.grid || (format !== 'json' && !gridHasRaster)}
+                    title={!gridHasRaster && format !== 'json' ? 'The robot has not integrated anything into its map yet' : undefined}
                     onClick={() => void runExport(format)}
                   >
                     {label}

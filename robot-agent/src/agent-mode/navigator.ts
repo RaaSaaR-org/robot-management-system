@@ -350,6 +350,10 @@ export class Navigator {
    * tried again from where that ended. The map grows with every stage, so a
    * wall the robot walks up to is a wall the next plan goes around: that is how
    * a doorway is found without anyone naming it.
+   *
+   * Whether it ended well is decided by where the robot stands, not by which
+   * counter ran out: a navigation that spends its whole stage budget and ends
+   * INSIDE the polygon arrived — short of the centre, and it says so.
    */
   async navigateToPlace(place: Place): Promise<BlockOutcome> {
     try {
@@ -569,6 +573,28 @@ export class Navigator {
       if (look.status !== 'done') {
         return { ok: false, message: `goto place "${label}": look failed (${look.error ?? 'unknown'})` };
       }
+    }
+
+    // The stage budget is spent. Where that leaves the robot decides the
+    // verdict, not which counter expired: "go to dock 1" is carried out the
+    // moment the robot stands in Dock 1, and it is no less carried out because
+    // the budget ran out on the stage that put it there. The measured run this
+    // stands for is the warehouse goto that walked 18.01 m across the hall,
+    // ended INSIDE the Dock 1 polygon 1.41 m of planned route short of its
+    // centre, and reported "gave up after 12 stages" — while the very same end
+    // state one stage earlier, reached through the stall counter above, reports
+    // the honest "Arrived in Dock 1 … stopped 1.41 m from its centre". Same
+    // place, same pose, opposite verdicts. So: re-sample, and if the robot is
+    // inside, say it arrived and say plainly how it ended. Not inside — or no
+    // pose to check — is a real failure and keeps the wording below.
+    const finalPose = await this.planner.samplePose();
+    if (finalPose && inside(finalPose)) {
+      return arrived(
+        stages,
+        walkedTotalM,
+        Math.hypot(goal.x - finalPose.x, goal.y - finalPose.y),
+        `stopped %d m from its centre — the ${this.maxStages}-stage budget ran out before it got there.`,
+      );
     }
 
     const how = [

@@ -140,7 +140,7 @@ export const WorldCloudView = memo(function WorldCloudView({ robotId, className,
         className="rounded-none min-h-0"
       />
       <div
-        className="absolute top-2 right-2 text-[10px] font-mono bg-surface-900/80 text-theme-tertiary px-2 py-1 rounded"
+        className="absolute top-2 right-2 text-[10px] font-mono glass-elevated text-theme-primary px-2 py-1 rounded"
         data-testid="agent-cloud-stats"
         title="Points kept by the robot (one per voxel) · frames integrated · voxel size"
       >

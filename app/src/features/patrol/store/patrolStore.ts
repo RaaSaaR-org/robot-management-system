@@ -49,6 +49,16 @@ export interface PatrolStore {
   lastRunByRobot: Record<string, PatrolRun>;
   /** The most recent `skipped` run per robot — what the announcer reads. */
   lastSkippedByRobot: Record<string, PatrolRun>;
+  /**
+   * Per robot, WHEN we adopted the run now sitting in `activeRunByRobot`, on the
+   * store's own tick. Read by `fetchRuns` to date its own answer: a poll that was
+   * already in flight when the operator pressed "Patrol now" comes back with a
+   * list that predates the new run, and must not mistake it for a run that quietly
+   * ended. A tick rather than a clock, because `startedAt` is the robot's clock
+   * (which disagrees with ours) and `Date.now()` cannot order two things that
+   * happen in the same millisecond — which is exactly the case here.
+   */
+  activeRunSeenTick: Record<string, number>;
 
   // Places per robot (for the editor)
   placesByRobot: Record<string, PatrolPlace[]>;
@@ -115,6 +125,7 @@ const initialState = {
   activeRunByRobot: {} as Record<string, PatrolRun>,
   lastRunByRobot: {} as Record<string, PatrolRun>,
   lastSkippedByRobot: {} as Record<string, PatrolRun>,
+  activeRunSeenTick: {} as Record<string, number>,
   placesByRobot: {} as Record<string, PatrolPlace[]>,
   placesStatus: {} as Record<string, PatrolLoadStatus>,
   startingRouteId: null as string | null,
@@ -155,12 +166,35 @@ function isRunDowngrade(stored: PatrolRun | null | undefined, incoming: PatrolRu
   return settledLegCount(incoming.legs) < settledLegCount(stored.legs);
 }
 
+/**
+ * Strictly increasing counter used to order things the store did against each
+ * other — adopting an active run vs. issuing the fetch whose answer may contradict
+ * it. Never reset: only the relative order of two ticks ever means anything.
+ */
+let tick = 0;
+const nextTick = (): number => ++tick;
+
+/** The two maps that together answer "what is this robot running, and since when did we think so". */
+type ActiveSlots = Pick<PatrolStore, 'activeRunByRobot' | 'activeRunSeenTick'>;
+
+/** Put a running run in the robot's active slot, stamped with the tick we learned of it. */
+function markActiveRun(state: ActiveSlots, run: PatrolRun): void {
+  state.activeRunByRobot[run.robotId] = run;
+  state.activeRunSeenTick[run.robotId] = nextTick();
+}
+
+/** Empty the robot's active slot — stamp included, so a stale one cannot outlive the run. */
+function clearActiveRun(state: ActiveSlots, robotId: string): void {
+  delete state.activeRunByRobot[robotId];
+  delete state.activeRunSeenTick[robotId];
+}
+
 /** Keep `activeRunByRobot` honest against a server-fetched run: add while running, drop once it is not. */
-function reconcileActiveRun(state: { activeRunByRobot: Record<string, PatrolRun> }, run: PatrolRun): void {
+function reconcileActiveRun(state: ActiveSlots, run: PatrolRun): void {
   if (run.status === 'running') {
-    state.activeRunByRobot[run.robotId] = run;
+    markActiveRun(state, run);
   } else if (state.activeRunByRobot[run.robotId]?.runId === run.runId) {
-    delete state.activeRunByRobot[run.robotId];
+    clearActiveRun(state, run.robotId);
   }
 }
 
@@ -325,23 +359,39 @@ export const usePatrolStore = createStore<PatrolStore>(
         state.runsStatus = 'loading';
         state.runsError = null;
       });
+      // Taken before the request goes out so the answer can be dated against what
+      // we learn while it is in flight — see the delete loop below.
+      const requestedAt = nextTick();
       try {
         const runs = await patrolApi.listRuns({ limit: 50, ...query });
         set((state) => {
-          state.runs = [...runs].sort(newestFirst);
+          // The poll and the robot's events race on separate connections, so a row
+          // read here can be older than what `applyEvent` already folded in. Keep
+          // whichever snapshot is further along; a poll must never walk a run back.
+          const merged = runs.map((run) => {
+            const stored = state.runsById[run.runId];
+            return stored && isRunDowngrade(stored, run) ? stored : run;
+          });
+          state.runs = [...merged].sort(newestFirst);
           state.runsStatus = 'ok';
-          for (const run of runs) {
+          for (const run of merged) {
             state.runsById[run.runId] = run;
             reconcileActiveRun(state, run);
             const last = state.lastRunByRobot[run.robotId];
             if (!last || newestFirst(run, last) < 0) state.lastRunByRobot[run.robotId] = run;
           }
           // An unfiltered fetch is authoritative: any "running" entry the newest-first
-          // list no longer knows about was finished while we were not listening.
+          // list no longer knows about was finished while we were not listening — but
+          // only about runs that already existed when we asked. A run we adopted after
+          // that (the operator pressed "Patrol now" while this poll was in flight) is
+          // simply younger than the answer; dropping it took the live rail and the
+          // Abort button away from an operator whose robot was walking the route.
           if (!query.robotId && !query.routeId) {
-            const seen = new Set(runs.map((r) => r.runId));
+            const seen = new Set(merged.map((r) => r.runId));
             for (const [robotId, active] of Object.entries(state.activeRunByRobot)) {
-              if (!seen.has(active.runId)) delete state.activeRunByRobot[robotId];
+              if (seen.has(active.runId)) continue;
+              if ((state.activeRunSeenTick[robotId] ?? 0) > requestedAt) continue;
+              clearActiveRun(state, robotId);
             }
           }
         });
@@ -359,14 +409,18 @@ export const usePatrolStore = createStore<PatrolStore>(
       });
       try {
         const { findings, ...run } = await patrolApi.getRun(runId);
+        // The findings list is always the freshest word on findings, but the run row
+        // beside it can be an older snapshot than the events already gave us.
+        const stored = get().runsById[run.runId];
+        const fresh = stored && isRunDowngrade(stored, run) ? stored : run;
         set((state) => {
-          state.runsById[run.runId] = run;
-          state.findingsByRun[run.runId] = findings;
+          state.runsById[fresh.runId] = fresh;
+          state.findingsByRun[fresh.runId] = findings;
           state.runDetailStatus[runId] = 'ok';
-          upsertRunInList(state.runs, run);
-          reconcileActiveRun(state, run);
+          upsertRunInList(state.runs, fresh);
+          reconcileActiveRun(state, fresh);
         });
-        return run;
+        return fresh;
       } catch (err) {
         set((state) => {
           state.runDetailStatus[runId] = 'error';
@@ -381,14 +435,16 @@ export const usePatrolStore = createStore<PatrolStore>(
         const runs = await patrolApi.listRuns({ robotId, limit: 1 });
         const run = runs[0];
         if (!run) return;
+        const stored = get().runsById[run.runId];
+        const fresh = stored && isRunDowngrade(stored, run) ? stored : run;
         set((state) => {
-          state.runsById[run.runId] = run;
-          reconcileActiveRun(state, run);
+          state.runsById[fresh.runId] = fresh;
+          reconcileActiveRun(state, fresh);
           const last = state.lastRunByRobot[robotId];
-          if (!last || newestFirst(run, last) <= 0) state.lastRunByRobot[robotId] = run;
+          if (!last || newestFirst(fresh, last) <= 0) state.lastRunByRobot[robotId] = fresh;
         });
-        if (run.findingCount > 0 && !get().findingsByRun[run.runId]) {
-          await get().fetchRun(run.runId);
+        if (fresh.findingCount > 0 && !get().findingsByRun[fresh.runId]) {
+          await get().fetchRun(fresh.runId);
         }
       } catch {
         // Overlay only — a failed read leaves the map as it was.
@@ -546,7 +602,7 @@ export const usePatrolStore = createStore<PatrolStore>(
               state.runsById[run.runId] = run;
               upsertRunInList(state.runs, run);
               state.lastRunByRobot[run.robotId] = run;
-              if (run.status === 'running') state.activeRunByRobot[run.robotId] = run;
+              if (run.status === 'running') markActiveRun(state, run);
             }
           });
           return;
@@ -599,17 +655,18 @@ export const selectOverlayRun = (robotId: string | null | undefined) => (state: 
 export const selectActiveRun = (robotId: string | null | undefined) => (state: PatrolStore) =>
   robotId ? (state.activeRunByRobot[robotId] ?? null) : null;
 
-/** All running runs (any robot) — the page's active-run banner. */
-let cachedActiveSig = '';
-let cachedActive: PatrolRun[] = [];
-export const selectActiveRuns = (state: PatrolStore): PatrolRun[] => {
-  const runs = Object.values(state.activeRunByRobot);
-  const sig = runs.map((r) => `${r.runId}:${r.legs.filter((l) => l.status !== 'pending').length}:${r.findingCount}`).join('|');
-  if (sig === cachedActiveSig) return cachedActive;
-  cachedActiveSig = sig;
-  cachedActive = runs;
-  return runs;
-};
+/**
+ * All running runs (any robot) — the page's active-run rail.
+ *
+ * Builds a fresh array every call, so components must subscribe through
+ * `useShallow` (as PatrolPage does) instead of relying on reference equality.
+ * It used to memoise on a hand-written signature that counted "legs that are not
+ * pending" — which lumps the leg being walked in with the finished ones. The leg
+ * that settles checkpoint i produces the same count as the finding snapshot that
+ * showed checkpoint i as 'running', so the rail stayed frozen on the checkpoint
+ * where a finding was raised, and on the last checkpoint for the whole walk home.
+ */
+export const selectActiveRuns = (state: PatrolStore): PatrolRun[] => Object.values(state.activeRunByRobot);
 
 export const selectLastSkipped = (robotId: string | null | undefined) => (state: PatrolStore) =>
   robotId ? (state.lastSkippedByRobot[robotId] ?? null) : null;

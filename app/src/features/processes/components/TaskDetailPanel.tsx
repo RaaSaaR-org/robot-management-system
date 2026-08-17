@@ -5,7 +5,7 @@
  * @dependencies @/shared/components/ui, @/features/processes/hooks
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Card, Button, Spinner } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { TaskStatusBadge } from './TaskStatusBadge';
@@ -206,7 +206,14 @@ export function TaskDetailPanel({
     retryTask,
   } = useTask(taskId);
 
-  const { robots } = useRobots();
+  const { robots, fetchRobots } = useRobots();
+
+  // No process page loads the robot list on its own, and `useRobots` does not
+  // fetch by itself — without this the "Assigned Robot" card falls all the way
+  // through to the raw robot ID (the server never sends robotName here).
+  useEffect(() => {
+    if (robots.length === 0) fetchRobots();
+  }, [robots.length, fetchRobots]);
 
   // Subscribe to real-time WebSocket updates for this process
   useProcessWebSocket({ processId: taskId, enabled: !!taskId });

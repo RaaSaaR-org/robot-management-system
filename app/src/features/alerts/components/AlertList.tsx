@@ -5,7 +5,7 @@
  * @dependencies @/shared/utils/cn, @/features/alerts/hooks
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/shared/utils/cn';
 import { formatDateTime, formatTimeAgo } from '@/shared/utils/format';
@@ -239,31 +239,60 @@ export function AlertList({
   showAcknowledged = true,
   className,
 }: AlertListProps) {
-  const { alerts, unacknowledgedAlerts, acknowledgeAlert, removeAlert, clearAcknowledged } =
-    useAlerts();
+  const {
+    alerts,
+    unacknowledgedAlerts,
+    acknowledgeAlertAsync,
+    dismissAlert,
+    clearAcknowledged,
+    error,
+  } = useAlerts();
   // Resolve robot names for alert robot chips; alerts referencing deleted
   // robots degrade to plain text (see RobotRef).
   const robots = useRobotsStore(selectRobots);
+  const fetchRobots = useRobotsStore((state) => state.fetchRobots);
+
+  // Nothing else on /alerts loads the robot list (the robot WebSocket only
+  // patches entries that are already there), so without this every robot chip
+  // would fall back to the raw ID and lose its link. Only on an empty store —
+  // pages that already loaded robots keep their list.
+  useEffect(() => {
+    if (robots.length === 0) void fetchRobots();
+  }, [robots.length, fetchRobots]);
 
   const displayAlerts = showAcknowledged ? alerts : unacknowledgedAlerts;
 
+  // Both go through the server: a purely local acknowledge/dismiss looks like
+  // it worked and is undone by the very next fetch of /alerts/active.
   const handleAcknowledge = useCallback(
     (id: string) => {
-      acknowledgeAlert(id);
+      void acknowledgeAlertAsync(id);
     },
-    [acknowledgeAlert]
+    [acknowledgeAlertAsync]
   );
 
   const handleDismiss = useCallback(
     (id: string) => {
-      removeAlert(id);
+      void dismissAlert(id);
     },
-    [removeAlert]
+    [dismissAlert]
   );
+
+  // A failed acknowledge/dismiss rolls the row back; without this the row
+  // would just reappear with no reason given.
+  const errorStrip = error ? (
+    <div
+      role="alert"
+      className="mb-2 px-3 py-2 rounded-lg text-sm bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-900/40"
+    >
+      {error}
+    </div>
+  ) : null;
 
   if (displayAlerts.length === 0) {
     return (
       <div className={className}>
+        {errorStrip}
         <EmptyState />
       </div>
     );
@@ -271,6 +300,7 @@ export function AlertList({
 
   return (
     <div className={className}>
+      {errorStrip}
       {showAcknowledged && alerts.some((a) => a.acknowledged) && (
         <div className="flex justify-end mb-2">
           <Button size="sm" variant="ghost" onClick={clearAcknowledged}>

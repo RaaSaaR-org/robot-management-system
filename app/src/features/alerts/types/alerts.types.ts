@@ -161,12 +161,14 @@ export interface AlertsActions {
   addAlert: (request: CreateAlertRequest) => Alert;
   /** Add alert from server (e.g., WebSocket) */
   addAlertFromServer: (alert: Alert) => void;
-  /** Remove an alert by ID */
+  /** Remove an alert by ID (local only) */
   removeAlert: (id: string) => void;
-  /** Acknowledge an alert (for critical alerts) */
+  /** Acknowledge an alert (local only) */
   acknowledgeAlert: (id: string) => void;
-  /** Acknowledge alert via API */
+  /** Acknowledge an alert on the server, optimistically, rolling back on failure */
   acknowledgeAlertAsync: (id: string) => Promise<void>;
+  /** Delete an alert on the server, optimistically, rolling back on failure */
+  dismissAlertAsync: (id: string) => Promise<void>;
   /** Clear all alerts */
   clearAllAlerts: () => void;
   /** Clear only acknowledged alerts */

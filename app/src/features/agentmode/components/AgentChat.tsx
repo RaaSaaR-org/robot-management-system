@@ -6,6 +6,7 @@
  */
 
 import {
+  Fragment,
   memo,
   useEffect,
   useMemo,
@@ -218,16 +219,24 @@ export const AgentChat = memo(function AgentChat({
   /**
    * The plan the robot is holding, when this console has no transcript for it.
    *
-   * The conversation lives in this tab: a reload, a second operator, or a
-   * command that came in over A2A or the microphone leaves `messages` empty
-   * while the status rail (reading the same store) says "Done" or shows a
-   * running block. Two truths on one screen, and the older-looking one is the
-   * empty state. So a plan without a transcript is rendered as the exchange it
-   * was — marked as read from the robot, because this console did not see it
-   * happen.
+   * The conversation lives in this tab: a reload, or a plan adopted from a
+   * state snapshot this console was not open for, leaves the store with a plan
+   * nobody here wrote a line about while the status rail (reading the same
+   * store) says "Done" or shows a running block. Two truths on one screen, and
+   * the older-looking one is the empty state. So a plan without a transcript is
+   * rendered as the exchange it was — marked as read from the robot, because
+   * this console did not see it happen.
+   *
+   * The test is whether any line already RENDERS this plan, never whether the
+   * conversation is empty. Emptiness was the wrong question in both directions:
+   * the echo the store writes for a plan somebody else started was itself
+   * enough to switch the fallback off, and on a reload the closing "Plan
+   * completed" summary — one message, arriving after the fact — made the whole
+   * restored exchange disappear from under the operator.
    */
   const restoredRows = useMemo<AgentChatMessage[] | null>(() => {
-    if (messages.length > 0 || !plan) return null;
+    if (!plan) return null;
+    if (messages.some((m) => m.showsPlan && m.planId === plan.id)) return null;
     return [
       { id: `${plan.id}-command`, role: 'user', text: plan.command, timestamp: plan.createdAt, planId: plan.id },
       {
@@ -240,8 +249,25 @@ export const AgentChat = memo(function AgentChat({
         ...(plan.language ? { spokenLanguage: plan.language } : {}),
       },
     ];
-  }, [messages.length, plan]);
-  const rows = restoredRows ?? messages;
+  }, [messages, plan]);
+
+  /**
+   * The conversation with the restored exchange spliced into it.
+   *
+   * It goes where it happened: ahead of the first line that talks about this
+   * plan — the closing summary is the one line a live run pushes without an
+   * acknowledgement in front of it — and otherwise at the end, after whatever
+   * this console was saying before the robot took a command from elsewhere.
+   */
+  const rows = useMemo<AgentChatMessage[]>(() => {
+    if (!restoredRows) return messages;
+    const at = messages.findIndex((m) => m.planId === plan?.id);
+    if (at === -1) return [...messages, ...restoredRows];
+    return [...messages.slice(0, at), ...restoredRows, ...messages.slice(at)];
+  }, [messages, restoredRows, plan?.id]);
+
+  /** Where the "read from the robot" caption goes — right above what it labels. */
+  const restoredFirstId = restoredRows?.[0]?.id ?? null;
 
   const canSend = Boolean(robotId) && enabled && !estopActive;
   const isPlanning = Boolean(pendingCommand) && plan?.id !== pendingCommand?.planId;
@@ -317,21 +343,22 @@ export const AgentChat = memo(function AgentChat({
           </div>
         ) : (
           <div className="space-y-3">
-            {restoredRows && (
-              <p className="card-meta text-center" data-testid="agent-chat-restored">
-                read from the robot — this console was not open when it ran
-              </p>
-            )}
             {rows.map((message) => (
-              <MessageRow
-                key={message.id}
-                message={message}
-                plan={
-                  message.showsPlan && message.planId
-                    ? plansById.get(message.planId) ?? null
-                    : null
-                }
-              />
+              <Fragment key={message.id}>
+                {message.id === restoredFirstId && (
+                  <p className="card-meta text-center" data-testid="agent-chat-restored">
+                    read from the robot — this console was not open when it ran
+                  </p>
+                )}
+                <MessageRow
+                  message={message}
+                  plan={
+                    message.showsPlan && message.planId
+                      ? plansById.get(message.planId) ?? null
+                      : null
+                  }
+                />
+              </Fragment>
             ))}
 
             {isPlanning && (

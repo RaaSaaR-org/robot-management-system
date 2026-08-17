@@ -240,12 +240,19 @@ describe('agentmodeStore', () => {
       apply(event({ type: 'agent:plan:started', plan: makePlan({ language: 'de' }) }));
 
       const s = useAgentModeStore.getState();
-      expect(s.messages).toHaveLength(1);
+      expect(s.messages).toHaveLength(2);
       expect(s.messages[0]).toMatchObject({
         role: 'user',
         text: 'walk to the table with the hat',
         planId: 'plan-1',
         spokenLanguage: 'de',
+      });
+      // … and the acknowledgement the blocks hang off, which only
+      // `sendCommand` used to write.
+      expect(s.messages[1]).toMatchObject({
+        role: 'agent',
+        planId: 'plan-1',
+        showsPlan: true,
       });
     });
 
@@ -637,16 +644,109 @@ describe('agentmodeStore', () => {
       });
     });
 
-    it('ignores plan/block progress once the agent acknowledged an E-Stop', () => {
+    it('ignores progress about a plan this console’s own confirmed STOPP ended', async () => {
+      // The executor still had events in flight when the stop landed. Applying
+      // them would walk a plan the operator was told is aborted back to
+      // "running" — a timeline moving under a confirmed stop.
+      mockedApi.estop.mockResolvedValue({ ok: true, stopped: true, delivered: true });
       apply(event({ type: 'agent:plan:started', plan: makePlan() }));
-      useAgentModeStore.setState({ estopActive: true, estopStatus: 'acknowledged' });
+      apply(
+        event({ type: 'agent:block:started', block: makeBlock({ id: 'b1', status: 'running' }) })
+      );
 
-      apply(event({ type: 'agent:block:started', block: makeBlock({ id: 'b1' }) }));
+      await useAgentModeStore.getState().estop(ROBOT_ID, 'Operator pressed STOPP');
+      apply(
+        event({ type: 'agent:block:finished', block: makeBlock({ id: 'b1', status: 'done' }) })
+      );
       apply(event({ type: 'agent:plan:started', plan: makePlan({ id: 'plan-9' }) }));
 
       const s = useAgentModeStore.getState();
       expect(s.plan?.id).toBe('plan-1');
-      expect(statuses()).toEqual(['pending', 'pending', 'pending']);
+      expect(s.plan?.status).toBe('aborted');
+      expect(statuses()).toEqual(['aborted', 'skipped', 'skipped']);
+    });
+
+    describe('a latch this console did not set', () => {
+      /**
+       * The SafetyMonitor's geofence / protective stop and the fleet E-Stop.
+       * The robot-agent pushes `agent:state:changed` the moment the latch trips
+       * (`publishLatchChange`), while its executor only notices the abort
+       * flag a moment later and then emits the `aborted` block and plan
+       * (`agent-mode-controller.ts`). Suppressing on the latch alone threw away
+       * the only events that could end the plan — the rail kept its "Running"
+       * pill and its pulsing walk chip until the page was reloaded, because
+       * nothing repeats a finished plan: the 15 s heartbeat carries no `plan`.
+       */
+      const latchFromSafety = () =>
+        apply(
+          event({
+            type: 'agent:state:changed',
+            state: makeState({
+              estopActive: true,
+              estopSource: 'safety',
+              estopReason: 'Geofence breach',
+            }),
+          })
+        );
+
+      it('still lands the plan’s aborted status behind a safety latch', () => {
+        apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+        apply(
+          event({ type: 'agent:block:started', block: makeBlock({ id: 'b2', status: 'running' }) })
+        );
+
+        latchFromSafety();
+        expect(useAgentModeStore.getState().estopActive).toBe(true);
+
+        apply(
+          event({
+            type: 'agent:block:finished',
+            block: makeBlock({
+              id: 'b2',
+              status: 'aborted',
+              error: 'Safety stop (geofence): Geofence breach',
+            }),
+          })
+        );
+        apply(
+          event({
+            type: 'agent:plan:finished',
+            plan: makePlan({
+              status: 'aborted',
+              cursor: -1,
+              updatedAt: '2026-07-25T10:00:05.000Z',
+              blocks: [
+                makeBlock({ id: 'b1', kind: 'scan_room', status: 'done' }),
+                makeBlock({ id: 'b2', kind: 'turn', status: 'aborted' }),
+                makeBlock({ id: 'b3', kind: 'walk', status: 'skipped' }),
+              ],
+            }),
+          })
+        );
+
+        const s = useAgentModeStore.getState();
+        expect(s.plan?.status).toBe('aborted');
+        expect(s.controlOwner).toBe('idle');
+        expect(statuses()).toEqual(['done', 'aborted', 'skipped']);
+        expect(lastMessage(s)?.text).toBe('Plan aborted after 1 of 3 blocks.');
+      });
+
+      it('clears the pending command a safety-aborted plan was waiting on', () => {
+        apply(event({ type: 'agent:plan:started', plan: makePlan() }));
+        useAgentModeStore.setState({
+          pendingCommand: { planId: 'plan-1', text: 'walk to the table', robotId: ROBOT_ID },
+        });
+
+        latchFromSafety();
+        apply(
+          event({
+            type: 'agent:plan:finished',
+            plan: makePlan({ status: 'aborted', updatedAt: '2026-07-25T10:00:05.000Z' }),
+          })
+        );
+
+        expect(useAgentModeStore.getState().pendingCommand).toBeNull();
+      });
     });
   });
 
@@ -1701,13 +1801,14 @@ describe('agentmodeStore', () => {
 
       const s = useAgentModeStore.getState();
       // The new robot was never asked to stop — no latch, no aborted plan,
-      // no "E-Stop confirmed" in its conversation. Its own plan IS echoed as a
-      // user message (it was started elsewhere, see `startedHere`), so the
-      // assertion is about the stop, not about the conversation being empty.
+      // no "E-Stop confirmed" in its conversation. Its own plan IS written into
+      // the conversation as the command plus its acknowledgement (it was
+      // started elsewhere, see `startedHere`), so the assertion is about the
+      // stop, not about the conversation being empty.
       expect(s.estopActive).toBe(false);
       expect(s.plan?.status).toBe('running');
       expect(statuses()).toEqual(['pending', 'pending', 'pending']);
-      expect(s.messages.map((m) => m.role)).toEqual(['user']);
+      expect(s.messages.map((m) => m.role)).toEqual(['user', 'agent']);
       expect(s.messages.some((m) => m.text.includes('E-Stop'))).toBe(false);
     });
 

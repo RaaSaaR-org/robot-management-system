@@ -13,6 +13,7 @@ import { render, screen, act, fireEvent } from '@testing-library/react';
 import { RobotMapPanel, decodeGridToImage, drawMap, mapFooterText } from '../RobotMapPanel';
 import { KnowledgePanel } from '../KnowledgePanel';
 import { useAgentModeStore } from '../../store/agentmodeStore';
+import { agentmodeApi } from '../../api/agentmodeApi';
 import type { RobotMapPayload } from '../../types/agentmode.types';
 
 const GRID = {
@@ -375,6 +376,40 @@ describe('RobotMapPanel export (TASK-210)', () => {
     expect(screen.getByRole('menuitem', { name: 'PCD (CloudCompare, Open3D, PCL)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: 'PLY (MeshLab, Blender)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: 'PGM + YAML (ROS map_server)' })).toBeEnabled();
+  });
+
+  /**
+   * A robot that has integrated nothing reports a 0×0 grid. There is no PGM and
+   * no PNG to be had from it — the image writers refuse it now — so offering
+   * them handed the operator a corrupt download (PGM) or nothing at all (PNG,
+   * which threw out of the click handler). The raw JSON is still a valid dump.
+   */
+  it('offers neither PGM nor PNG for a map with nothing integrated yet, but keeps the raw JSON', () => {
+    const empty = { ...GRID, width: 0, height: 0, cells: '', poseCount: 0, knownCells: 0, occupiedCells: 0 };
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload({ grid: empty }), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    act(() => screen.getByTestId('agent-map-export').click());
+    expect(screen.getByRole('menuitem', { name: 'PGM + YAML (ROS map_server)' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'PNG image' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'JSON (raw grid)' })).toBeEnabled();
+  });
+
+  /**
+   * The api client rejects with a plain `{ code, message, statusCode }` object,
+   * never an Error, so the panel's `instanceof Error` check threw the real
+   * reason away: a dead agent, a timed-out full-cloud read and a 401 all told
+   * the operator the robot has no cloud.
+   */
+  it('reports why the cloud export failed instead of always blaming an empty robot', async () => {
+    vi.spyOn(agentmodeApi, 'getCloud').mockRejectedValue({ code: 'BAD_GATEWAY', message: 'robot agent unreachable', statusCode: 502 });
+    useAgentModeStore.setState({ fetchRobotMap: async () => {}, robotMap: payload(), robotMapStatus: 'ok' });
+    render(<RobotMapPanel robotId="r1" />);
+    act(() => screen.getByTestId('agent-map-export').click());
+    await act(async () => {
+      screen.getByRole('menuitem', { name: 'PCD (CloudCompare, Open3D, PCL)' }).click();
+    });
+    expect(screen.getByTestId('agent-map-export-note')).toHaveTextContent('Export failed: robot agent unreachable.');
+    vi.restoreAllMocks();
   });
 
   it('switches to the 3-D view, which polls the cloud and reports the empty states (TASK-211)', async () => {

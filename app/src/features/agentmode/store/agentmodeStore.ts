@@ -51,6 +51,7 @@ const initialState = {
   estopError: null as string | null,
   estopSource: null as AgentEstopSource,
   estopReason: null as string | null,
+  estopFinalizedPlanId: null as string | null,
   // A cold start knows nothing either, but "this server has no state for that
   // robot" is the documented empty case and renders as an empty page, not as a
   // claim. Only a robot the server HAS and could not ask is UNKNOWN.
@@ -504,6 +505,10 @@ export const useAgentModeStore = createStore<AgentModeStore>(
         state.estopActive = true;
         state.estopStatus = 'requesting';
         state.estopError = null;
+        // This stop has ended nothing yet. Carrying a previous stop's
+        // finalization into it would suppress the events of a plan that is
+        // running right now — see `progressSuppressed`.
+        state.estopFinalizedPlanId = null;
         // A STOPP pressed here is Agent Mode's own latch until the agent says
         // otherwise (a safety-monitor latch may already be underneath it).
         if (state.estopSource === null) state.estopSource = 'agent';
@@ -558,6 +563,12 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             plan.status = 'aborted';
             plan.cursor = -1;
             plan.updatedAt = new Date().toISOString();
+            // This rewrite is the only thing that needs protecting from the
+            // executor's in-flight events, and only while the stop is
+            // confirmed — see `progressSuppressed`. An unconfirmed stop keeps
+            // the feed open on purpose: it may be the evidence that the robot
+            // is still moving.
+            if (delivered) state.estopFinalizedPlanId = plan.id;
             state.messages.push(
               makeMessage(
                 'agent',
@@ -666,8 +677,8 @@ export const useAgentModeStore = createStore<AgentModeStore>(
         switch (event.type) {
           case 'agent:plan:started': {
             if (!event.plan) break;
-            // A stop the agent confirmed makes later progress events stale.
-            // An unconfirmed one does not — see `progressSuppressed`.
+            // Late events are stale only while this console's own confirmed
+            // STOPP has ended a plan — see `progressSuppressed`.
             if (progressSuppressed(state)) break;
             // A plan this tab did not send still has an author — someone spoke
             // to the robot, or drove it from another client. Without this the
@@ -679,6 +690,20 @@ export const useAgentModeStore = createStore<AgentModeStore>(
                 makeMessage('user', event.plan.command, {
                   planId: event.plan.id,
                   ...(event.plan.language ? { spokenLanguage: event.plan.language } : {}),
+                })
+              );
+              // The blocks hang off an acknowledgement, and only
+              // `sendCommand` ever wrote one. Without this the conversation
+              // showed the command that was spoken (or sent over A2A, or by
+              // patrol, or by a second operator) and then nothing at all until
+              // the closing summary — the per-block reasoning, results, errors
+              // and durations were on screen for a typed command and
+              // unreachable for a heard one. Same words the robot answers a
+              // typed command with; `ackTextFor` moves it on with the plan.
+              state.messages.push(
+                makeMessage('agent', 'Planning…', {
+                  planId: event.plan.id,
+                  showsPlan: true,
                 })
               );
             }
@@ -977,19 +1002,28 @@ function recordFoldedInterrupt(state: MutableState, incoming: AgentPlan): void {
 /**
  * Whether `agent:plan:*` / `agent:block:*` progress must be dropped.
  *
- * Only a stop the agent acknowledged as delivered makes later events stale.
- * While a stop is merely requested, failed, or latched without hardware
- * confirmation, the robot may still be executing, and its events are the
- * operator's only evidence of that. Hiding them would freeze the UI on a stop
- * that never happened.
+ * Suppression exists for exactly one thing: `estop` rewrites the live plan to
+ * "aborted" out of its confirmation, and the executor still has events in
+ * flight from before the stop landed. Those would walk that plan back to
+ * "running" — a timeline moving under a stop the operator has been told is
+ * confirmed. So what gates this is the rewrite, recorded as
+ * `estopFinalizedPlanId`, and it lasts exactly as long as the latch that
+ * caused it: a stop that rewrote nothing (unconfirmed, failed, or one that
+ * caught no live plan) suppresses nothing, because then the robot may still be
+ * executing and its events are the operator's only evidence of that.
+ *
+ * What must NOT gate this is the latch on its own. A latch we did not set — the
+ * SafetyMonitor's protective stop, a fleet E-Stop — is pushed as
+ * `agent:state:changed` the instant it trips, seconds BEFORE the executor
+ * notices the abort flag and emits the `aborted` block and plan. Dropping those
+ * because *some* latch is held froze the timeline on "Running" with a pulsing
+ * walk chip until the page was reloaded: the two events that could have ended
+ * the plan were the ones thrown away, and nothing repeats them — a finished
+ * plan gets no further event, and the 15 s heartbeat carries no `plan` by
+ * design.
  */
 function progressSuppressed(state: MutableState): boolean {
-  return (
-    state.estopActive &&
-    state.estopStatus !== 'requesting' &&
-    state.estopStatus !== 'unconfirmed' &&
-    state.estopStatus !== 'failed'
-  );
+  return state.estopActive && state.estopFinalizedPlanId !== null;
 }
 
 /**
