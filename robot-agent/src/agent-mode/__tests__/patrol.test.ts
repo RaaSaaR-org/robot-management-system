@@ -976,7 +976,16 @@ describe('PatrolRunStore.sweep', () => {
     ]);
     store.saveRun(mk('run-base', 'baseline'));
     store.savePhoto('r', 'run-base', 'cp-1', Buffer.from('c'));
-    // Age every file by 4 days via mtime; the sweep reads mtime against `now`.
+    // The sweep ages a photo by its mtime against `now`, so moving the injected
+    // clock is only half the job: the files were just written and carry the real
+    // wall-clock time, which would make the test measure the gap between a made-up
+    // clock and a real one — it only ever passed while the machine's date happened
+    // to sit near the literal above. Stamp each photo with the moment the fake
+    // clock says it was taken, then move that clock on by four days.
+    const taken = new Date(now);
+    for (const runId of ['run-control', 'run-finding', 'run-base']) {
+      fs.utimesSync(store.photoFile('r', runId, 'cp-1')!, taken, taken);
+    }
     now += 4 * 24 * 3600_000;
     const removed = store.sweep(72, 30);
     expect(removed.map((f) => path.basename(path.dirname(f)))).toEqual(['run-control']);
