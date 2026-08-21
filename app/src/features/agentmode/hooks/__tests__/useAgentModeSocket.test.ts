@@ -145,3 +145,89 @@ describe('useAgentModeSocket', () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });
+
+/** Stand-in for the store's `fetchState`, typed as the store declares it. */
+const makeFetchStateSpy = () => vi.fn(async (_robotId: string): Promise<void> => {});
+
+describe('useAgentModeSocket — catching up after a gap', () => {
+  /** The last socket the hook opened. */
+  const live = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+  let fetchState: ReturnType<typeof makeFetchStateSpy>;
+
+  beforeEach(() => {
+    fetchState = makeFetchStateSpy();
+    useAgentModeStore.setState({ fetchState });
+  });
+
+  it('does not re-read state on the first connection', () => {
+    // The page already fetched when it bound the robot; nothing was missed yet.
+    renderHook(() => useAgentModeSocket('robot-a'));
+    act(() => {
+      live().fireOpen();
+    });
+
+    expect(fetchState).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the robot’s state once the socket comes back from a drop', () => {
+    // The server's socket is pure fan-out: the `agent:block:finished` and
+    // `agent:plan:finished` emitted while this console was away are gone for
+    // good, and the heartbeat that resumes carries no plan to correct them —
+    // so the rail would read "Running · walk" for the rest of the session.
+    renderHook(() => useAgentModeSocket('robot-a'));
+    act(() => {
+      live().fireOpen();
+    });
+
+    act(() => {
+      live().fireClose();
+    });
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(fetchState).not.toHaveBeenCalled();
+
+    act(() => {
+      live().fireOpen();
+    });
+
+    expect(fetchState).toHaveBeenCalledTimes(1);
+    expect(fetchState).toHaveBeenCalledWith('robot-a');
+  });
+
+  it('gives the operator a way back once the backoff has given up', () => {
+    // Five failed attempts is roughly a minute and a half of downtime — a
+    // server restart, a laptop that slept. Without `retry` the only cure for
+    // the "Offline" that follows is a page reload.
+    const { result } = renderHook(() => useAgentModeSocket('robot-a'));
+    act(() => {
+      live().fireOpen();
+    });
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      act(() => {
+        live().fireClose();
+      });
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+    }
+
+    expect(result.current.error).toBe('Max reconnection attempts reached');
+    const givenUpAt = FakeWebSocket.instances.length;
+
+    act(() => {
+      result.current.retry();
+    });
+
+    expect(FakeWebSocket.instances.length).toBe(givenUpAt + 1);
+    expect(result.current.error).toBeNull();
+
+    // …and the socket it opens still catches up on everything it missed.
+    act(() => {
+      live().fireOpen();
+    });
+    expect(fetchState).toHaveBeenCalledWith('robot-a');
+  });
+});

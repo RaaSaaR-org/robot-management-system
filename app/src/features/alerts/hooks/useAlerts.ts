@@ -50,12 +50,14 @@ export interface UseAlertsReturn {
   error: string | null;
   /** Add a new alert */
   addAlert: (request: CreateAlertRequest) => Alert;
-  /** Remove an alert */
+  /** Remove an alert from local state only (auto-dismiss timers, mock data) */
   removeAlert: (id: string) => void;
-  /** Acknowledge an alert (local only) */
+  /** Acknowledge an alert in local state only */
   acknowledgeAlert: (id: string) => void;
-  /** Acknowledge an alert via API */
+  /** Acknowledge an alert on the server (optimistic, rolls back on failure) */
   acknowledgeAlertAsync: (id: string) => Promise<void>;
+  /** Dismiss an alert on the server (optimistic, rolls back on failure) */
+  dismissAlert: (id: string) => Promise<void>;
   /** Clear all alerts */
   clearAll: () => void;
   /** Clear only acknowledged alerts */
@@ -67,10 +69,10 @@ export interface UseAlertsReturn {
 export interface UseAlertReturn {
   /** The alert */
   alert: Alert | undefined;
-  /** Remove this alert */
-  remove: () => void;
-  /** Acknowledge this alert */
-  acknowledge: () => void;
+  /** Dismiss this alert (server + local) */
+  remove: () => Promise<void>;
+  /** Acknowledge this alert (server + local) */
+  acknowledge: () => Promise<void>;
 }
 
 // ============================================================================
@@ -135,6 +137,7 @@ export function useAlerts(autoFetch = true): UseAlertsReturn {
   const storeRemoveAlert = useAlertsStore((state) => state.removeAlert);
   const storeAcknowledgeAlert = useAlertsStore((state) => state.acknowledgeAlert);
   const storeAcknowledgeAlertAsync = useAlertsStore((state) => state.acknowledgeAlertAsync);
+  const storeDismissAlertAsync = useAlertsStore((state) => state.dismissAlertAsync);
   const storeClearAll = useAlertsStore((state) => state.clearAllAlerts);
   const storeClearAcknowledged = useAlertsStore((state) => state.clearAcknowledgedAlerts);
   const storeFetchAlerts = useAlertsStore((state) => state.fetchActiveAlerts);
@@ -174,6 +177,13 @@ export function useAlerts(autoFetch = true): UseAlertsReturn {
     [storeAcknowledgeAlertAsync]
   );
 
+  const dismissAlert = useCallback(
+    async (id: string): Promise<void> => {
+      await storeDismissAlertAsync(id);
+    },
+    [storeDismissAlertAsync]
+  );
+
   const clearAll = useCallback((): void => {
     storeClearAll();
   }, [storeClearAll]);
@@ -200,6 +210,7 @@ export function useAlerts(autoFetch = true): UseAlertsReturn {
       removeAlert,
       acknowledgeAlert,
       acknowledgeAlertAsync,
+      dismissAlert,
       clearAll,
       clearAcknowledged,
       fetchAlerts,
@@ -217,6 +228,7 @@ export function useAlerts(autoFetch = true): UseAlertsReturn {
       removeAlert,
       acknowledgeAlert,
       acknowledgeAlertAsync,
+      dismissAlert,
       clearAll,
       clearAcknowledged,
       fetchAlerts,
@@ -253,15 +265,15 @@ export function useAlerts(autoFetch = true): UseAlertsReturn {
 export function useAlert(id: string): UseAlertReturn {
   const alerts = useAlertsStore(selectAlerts);
   const alert = useMemo(() => alerts.find((a) => a.id === id), [alerts, id]);
-  const storeRemoveAlert = useAlertsStore((state) => state.removeAlert);
-  const storeAcknowledgeAlert = useAlertsStore((state) => state.acknowledgeAlert);
+  const storeDismissAlert = useAlertsStore((state) => state.dismissAlertAsync);
+  const storeAcknowledgeAlert = useAlertsStore((state) => state.acknowledgeAlertAsync);
 
-  const remove = useCallback((): void => {
-    storeRemoveAlert(id);
-  }, [id, storeRemoveAlert]);
+  const remove = useCallback((): Promise<void> => {
+    return storeDismissAlert(id);
+  }, [id, storeDismissAlert]);
 
-  const acknowledge = useCallback((): void => {
-    storeAcknowledgeAlert(id);
+  const acknowledge = useCallback((): Promise<void> => {
+    return storeAcknowledgeAlert(id);
   }, [id, storeAcknowledgeAlert]);
 
   return useMemo(

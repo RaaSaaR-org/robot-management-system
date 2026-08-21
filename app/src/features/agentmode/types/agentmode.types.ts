@@ -792,6 +792,16 @@ export interface AgentModeStore {
   /** The reason the latching side recorded, when known. */
   estopReason: string | null;
   /**
+   * The plan this console's own confirmed STOPP rewrote to "aborted", if any.
+   *
+   * The one thing that makes a later `agent:block:*` / `agent:plan:*` event
+   * stale: it was emitted before the stop landed and would walk that plan back
+   * to "running". A latch nobody here set — the SafetyMonitor's protective
+   * stop, a fleet E-Stop — finalizes nothing locally and suppresses nothing,
+   * because the agent's own `aborted` events are what end the timeline then.
+   */
+  estopFinalizedPlanId: string | null;
+  /**
    * Whether this console knows the robot's Agent Mode state at all. While this
    * is `'unreachable'`, `enabled`, `controlOwner`, `plan` and `estopActive` are
    * the last thing we heard — or the initial defaults — and MUST NOT be

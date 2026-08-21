@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { usePatrolStore, selectActiveRuns, selectOverlayRun, selectLastSkipped } from '../patrolStore';
 import { patrolApi } from '../../api/patrolApi';
-import type { AgentModeEvent, PatrolFinding, PatrolRun } from '../../types/patrol.types';
+import type { AgentModeEvent, PatrolFinding, PatrolLeg, PatrolRun } from '../../types/patrol.types';
 
 vi.mock('../../api/patrolApi', () => ({
   patrolApi: {
@@ -326,5 +326,101 @@ describe('patrolStore actions', () => {
     await usePatrolStore.getState().saveRoute({ name: 'Round 2', checkpoints: [] }, 'route-9');
     expect(usePatrolStore.getState().routes).toHaveLength(1);
     expect(usePatrolStore.getState().routes[0].name).toBe('Round 2');
+  });
+});
+
+describe('selectActiveRuns', () => {
+  // A three-checkpoint route, one status per checkpoint.
+  const legs = (...statuses: PatrolLeg['status'][]): PatrolLeg[] =>
+    statuses.map((status, index) => ({
+      index,
+      checkpointId: `cp-${index}`,
+      placeId: `place-${index}`,
+      name: `Place ${index}`,
+      status,
+      findingIds: [],
+    }));
+
+  // The rail re-reads this selector on every store change. The only snapshots that
+  // ever show a leg as 'running' are the ones embedded in finding events — there is
+  // no leg-start event — and the `leg` event that settles that same checkpoint has
+  // exactly as many non-pending legs. A selector keyed on that count therefore kept
+  // handing the rail the older snapshot, and the checkpoint pulsed forever.
+  it('sees the leg that settles the checkpoint where a finding was raised', () => {
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', run({ legs: legs('pending', 'pending', 'pending') })));
+    store.applyEvent(
+      event('agent:finding:detected', run({ legs: legs('done', 'running', 'pending'), findingCount: 1 }), finding({ legIndex: 1 }))
+    );
+    const atFinding = selectActiveRuns(usePatrolStore.getState());
+    expect(atFinding[0].legs[1].status).toBe('running');
+
+    store.applyEvent(event('agent:patrol:leg', run({ legs: legs('done', 'done', 'pending'), findingCount: 1 })));
+    const afterLeg = selectActiveRuns(usePatrolStore.getState());
+    expect(afterLeg).not.toBe(atFinding);
+    expect(afterLeg[0].legs[1].status).toBe('done');
+  });
+
+  it('sees the FINAL leg settle instead of pulsing it all the way home', () => {
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', run({ legs: legs('pending', 'pending', 'pending') })));
+    store.applyEvent(
+      event('agent:finding:detected', run({ legs: legs('done', 'done', 'running'), findingCount: 1 }), finding({ legIndex: 2 }))
+    );
+    const atFinding = selectActiveRuns(usePatrolStore.getState());
+    expect(atFinding[0].legs[2].status).toBe('running');
+
+    store.applyEvent(event('agent:patrol:leg', run({ legs: legs('done', 'done', 'done'), findingCount: 1 })));
+    const afterLeg = selectActiveRuns(usePatrolStore.getState());
+    expect(afterLeg).not.toBe(atFinding);
+    expect(afterLeg[0].legs[2].status).toBe('done');
+  });
+});
+
+describe('patrolStore fetch ordering', () => {
+  it('a fetchRuns already in flight does not delete the run the operator just started', async () => {
+    // The page polls every 30 s. Pressing "Patrol now" in the gap between a poll
+    // going out and its answer coming back used to make the live rail and the
+    // Abort button disappear while the robot was walking the route.
+    let deliver: (runs: PatrolRun[]) => void = () => {};
+    api.listRuns.mockReturnValue(new Promise<PatrolRun[]>((resolve) => { deliver = resolve; }));
+    const inFlight = usePatrolStore.getState().fetchRuns();
+
+    usePatrolStore.getState().applyEvent(event('agent:patrol:started', run({ runId: 'run-fresh' })));
+    deliver([run({ runId: 'run-old', status: 'done', startedAt: '2026-08-16T00:00:00.000Z', finishedAt: '2026-08-16T00:30:00.000Z' })]);
+    await inFlight;
+
+    expect(usePatrolStore.getState().activeRunByRobot.g1?.runId).toBe('run-fresh');
+    expect(selectActiveRuns(usePatrolStore.getState())).toHaveLength(1);
+
+    // …and the guard is about ordering only: the next poll, issued after the run
+    // was adopted, still clears a run the server no longer knows anything about.
+    api.listRuns.mockResolvedValue([]);
+    await usePatrolStore.getState().fetchRuns();
+    expect(usePatrolStore.getState().activeRunByRobot.g1).toBeUndefined();
+  });
+
+  it('a poll that lands with an older row than the live events does not walk the run backwards', async () => {
+    usePatrolStore.getState().applyEvent(
+      event('agent:patrol:finished', run({
+        status: 'done',
+        finishedAt: '2026-08-16T01:10:00.000Z',
+        legs: [{ ...run().legs[0], status: 'done' }, { ...run().legs[1], status: 'done' }],
+      }))
+    );
+    api.listRuns.mockResolvedValue([run()]);
+    await usePatrolStore.getState().fetchRuns();
+
+    const s = usePatrolStore.getState();
+    expect(s.runsById['run-1'].status).toBe('done');
+    expect(s.runs[0].status).toBe('done');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+
+    // fetchRun keeps the findings it reads even when it declines the stale row.
+    api.getRun.mockResolvedValue({ ...run(), findings: [finding()] });
+    const detail = await usePatrolStore.getState().fetchRun('run-1');
+    expect(detail?.status).toBe('done');
+    expect(usePatrolStore.getState().findingsByRun['run-1']).toHaveLength(1);
+    expect(usePatrolStore.getState().activeRunByRobot.g1).toBeUndefined();
   });
 });

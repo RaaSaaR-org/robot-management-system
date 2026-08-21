@@ -8,6 +8,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 import { cn } from '@/shared/utils/cn';
 import { Button } from '@/shared/components/ui/Button';
 import { PageHeader } from '@/shared/components/ui/PageHeader';
@@ -39,7 +40,10 @@ export const PatrolPage = memo(function PatrolPage({ className }: PatrolPageProp
   const runs = usePatrolStore(selectRuns);
   const runsStatus = usePatrolStore((s) => s.runsStatus);
   const runsError = usePatrolStore((s) => s.runsError);
-  const activeRuns = usePatrolStore(selectActiveRuns);
+  // `selectActiveRuns` derives a new array each call, so the comparison has to be
+  // on its contents: the run objects themselves are replaced whenever a patrol
+  // event moves the robot on, and that is exactly when the rail must redraw.
+  const activeRuns = usePatrolStore(useShallow(selectActiveRuns));
   const startingRouteId = usePatrolStore((s) => s.startingRouteId);
   const lastStartResult = usePatrolStore((s) => s.lastStartResult);
   const error = usePatrolStore((s) => s.error);

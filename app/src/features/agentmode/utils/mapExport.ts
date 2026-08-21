@@ -38,9 +38,15 @@ export function decodeCells(grid: RobotMapGrid): Int8Array | null {
  * refers to the bottom-left pixel exactly as map_server expects.
  */
 export function gridToPgmBody(grid: RobotMapGrid): Uint8Array | null {
+  const { width, height } = grid;
+  // A grid with no dimensions is the robot saying "nothing integrated yet" —
+  // the same thing its own `GET /map?format=pgm` answers 404 to. Writing it out
+  // anyway produces a `0 0` header with no raster, which RViz, Nav2 and GIMP all
+  // reject, and a canvas of that size throws. Refuse it here so every caller
+  // (PGM, PNG, exportMap) reports the failure instead of saving a corrupt file.
+  if (width <= 0 || height <= 0) return null;
   const cells = decodeCells(grid);
   if (!cells) return null;
-  const { width, height } = grid;
   const occ = Math.round(grid.occupiedAbove * LOGODDS_SCALE);
   const free = Math.round(grid.freeBelow * LOGODDS_SCALE);
   const out = new Uint8Array(width * height);
@@ -91,26 +97,35 @@ export function gridToMapServerYaml(grid: RobotMapGrid, imageFile: string): stri
 export function gridToPng(grid: RobotMapGrid, scale = 4): Promise<Blob | null> {
   const body = gridToPgmBody(grid);
   if (!body || typeof document === 'undefined') return Promise.resolve(null);
-  const canvas = document.createElement('canvas');
-  canvas.width = grid.width * scale;
-  canvas.height = grid.height * scale;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return Promise.resolve(null);
-  const img = ctx.createImageData(grid.width, grid.height);
-  for (let i = 0; i < body.length; i++) {
-    const g = body[i] === PGM_OCCUPIED ? 30 : body[i] === PGM_FREE ? 235 : 128;
-    img.data[i * 4] = g;
-    img.data[i * 4 + 1] = g;
-    img.data[i * 4 + 2] = g;
-    img.data[i * 4 + 3] = 255;
+  // Every canvas call below can throw on a grid the guards above accepted — a
+  // raster too big for createImageData, a browser that refuses the allocation.
+  // Callers fire this off with `void runExport(...)`, so a throw would surface
+  // as an unhandled rejection and the operator would see nothing at all; a null
+  // lands in the "Export failed" note instead.
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = grid.width * scale;
+    canvas.height = grid.height * scale;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return Promise.resolve(null);
+    const img = ctx.createImageData(grid.width, grid.height);
+    for (let i = 0; i < body.length; i++) {
+      const g = body[i] === PGM_OCCUPIED ? 30 : body[i] === PGM_FREE ? 235 : 128;
+      img.data[i * 4] = g;
+      img.data[i * 4 + 1] = g;
+      img.data[i * 4 + 2] = g;
+      img.data[i * 4 + 3] = 255;
+    }
+    const small = document.createElement('canvas');
+    small.width = grid.width;
+    small.height = grid.height;
+    small.getContext('2d')?.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
+    return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
+  } catch {
+    return Promise.resolve(null);
   }
-  const small = document.createElement('canvas');
-  small.width = grid.width;
-  small.height = grid.height;
-  small.getContext('2d')?.putImageData(img, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
 }
 
 /** File stem shared by every format, so a PGM and its YAML sit together. */
@@ -136,7 +151,7 @@ export type MapExportFormat = 'pgm' | 'png' | 'json';
 /**
  * Save the grid in one format. `pgm` downloads TWO files — the image and its
  * YAML — because one without the other is not a map to map_server.
- * Returns false when the grid could not be decoded.
+ * Returns false when the grid could not be decoded, or is still empty.
  */
 export async function exportMap(robotId: string, grid: RobotMapGrid, format: MapExportFormat): Promise<boolean> {
   const stem = mapExportStem(robotId, grid);

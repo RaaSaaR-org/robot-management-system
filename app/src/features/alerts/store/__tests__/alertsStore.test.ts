@@ -30,6 +30,7 @@ import type { Alert, CreateAlertRequest } from '../../types/alerts.types';
 vi.mock('../../api/alertsApi', () => ({
   alertsApi: {
     acknowledgeAlert: vi.fn(),
+    deleteAlert: vi.fn(),
     getActiveAlerts: vi.fn(),
     getAlertHistory: vi.fn(),
     getAlertCounts: vi.fn(),
@@ -205,18 +206,76 @@ describe('alertsStore', () => {
       expect(s.history[0]).toEqual(acked);
     });
 
-    it('falls back to local acknowledge on API error', async () => {
+    it('rolls the acknowledgement back and reports the failure on API error', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       (alertsApi.acknowledgeAlert as any).mockRejectedValue(new Error('down'));
       useAlertsStore.setState({ alerts: [makeAlert({ id: 'a', acknowledged: false })] });
 
       await useAlertsStore.getState().acknowledgeAlertAsync('a');
 
+      // Keeping it acknowledged would claim something the server never
+      // recorded — and /alerts/active would hand the alert back anyway.
       const alert = useAlertsStore.getState().alerts[0];
-      expect(alert.acknowledged).toBe(true);
-      expect(alert.acknowledgedAt).toBeTruthy();
+      expect(alert.acknowledged).toBe(false);
+      expect(alert.acknowledgedAt).toBeUndefined();
+      expect(useAlertsStore.getState().error).toBe('down');
       expect(errSpy).toHaveBeenCalled();
       errSpy.mockRestore();
+    });
+
+    it('skips the API for a locally raised alert but still flips it', async () => {
+      const created = useAlertsStore.getState().addAlert({
+        severity: 'critical',
+        title: 'E-stop',
+        message: 'engaged',
+        source: 'robot',
+      });
+
+      await useAlertsStore.getState().acknowledgeAlertAsync(created.id);
+
+      expect(alertsApi.acknowledgeAlert).not.toHaveBeenCalled();
+      expect(useAlertsStore.getState().alerts[0].acknowledged).toBe(true);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // dismissAlertAsync
+  // --------------------------------------------------------------------------
+  describe('dismissAlertAsync', () => {
+    it('deletes the alert on the server and drops it from state', async () => {
+      (alertsApi.deleteAlert as any).mockResolvedValue(undefined);
+      useAlertsStore.setState({ alerts: [makeAlert({ id: 'a' }), makeAlert({ id: 'b' })] });
+
+      await useAlertsStore.getState().dismissAlertAsync('a');
+
+      expect(alertsApi.deleteAlert).toHaveBeenCalledWith('a');
+      expect(useAlertsStore.getState().alerts.map((x) => x.id)).toEqual(['b']);
+    });
+
+    it('puts the alert back and reports the failure when the delete fails', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      (alertsApi.deleteAlert as any).mockRejectedValue(new Error('nope'));
+      useAlertsStore.setState({ alerts: [makeAlert({ id: 'a' })] });
+
+      await useAlertsStore.getState().dismissAlertAsync('a');
+
+      expect(useAlertsStore.getState().alerts.map((x) => x.id)).toEqual(['a']);
+      expect(useAlertsStore.getState().error).toBe('nope');
+      errSpy.mockRestore();
+    });
+
+    it('skips the API for a locally raised alert', async () => {
+      const created = useAlertsStore.getState().addAlert({
+        severity: 'info',
+        title: 'local',
+        message: 'm',
+        source: 'system',
+      });
+
+      await useAlertsStore.getState().dismissAlertAsync(created.id);
+
+      expect(alertsApi.deleteAlert).not.toHaveBeenCalled();
+      expect(useAlertsStore.getState().alerts).toEqual([]);
     });
   });
 

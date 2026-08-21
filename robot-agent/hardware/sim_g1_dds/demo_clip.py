@@ -286,7 +286,11 @@ class CaptionSheet:
         elif y.startswith("top+"):
             y0 = self.pad + int(y[4:])
         elif y == "bottom":
-            y0 = self.h - self.pad - th - bx * 2 - int(self.h * 0.06)
+            # One full plate-height above `bottom2`, not a fixed 6% of the frame:
+            # at 1600x900 that 54 px was less than this plate's own 79 px, so a
+            # closing report and the look result under it overlapped by 25 px
+            # whenever both were on screen.
+            y0 = self.h - self.pad - th - bx * 2 - (th + bx * 2 + 12)
         elif y == "bottom2":  # a smaller line under `bottom`
             y0 = self.h - self.pad - th - bx * 2
         else:
@@ -1222,42 +1226,81 @@ def burn_captions(raw: pathlib.Path, out: pathlib.Path, meta: dict, size: tuple[
             sheet.add(wrap(res, wrap_w + 8), fontsize=int(fs_blk * 0.72), color="#ffffffe6",
                       y="bottom2", t0=b["t1"], t1=max(t1, b["t1"] + 1.0))
 
-    # Closing caption: what the robot SAID last, if anything -- that is the
-    # answer the operator asked for -- else the plan outcome.
+    # Closing caption: the one line that says what happened. A `goto`'s own
+    # report outranks everything else -- "Arrived in Dock 1 after 12 stages and
+    # 18.17 m" IS the result of "go to dock 1", while the look it ran on arrival
+    # only describes the wall in front of it. Then what the robot SAID last, for
+    # a plan that was a question. `outcome` is the last resort and is skipped
+    # when it is the bare word "done": a caption that says "done" over a frame
+    # of a robot standing still tells the viewer nothing. `burn_stacked` has
+    # ranked these the same way since the stack layout existed; the inset layout
+    # closing on "done" after an 18 m walk is what showed the difference.
+    last_goto = next((b for b in reversed(meta["blocks"])
+                      if b["kind"] == "goto" and (b.get("result") or "").strip()), None)
     last_said = next((spoken_text(b.get("result")) for b in reversed(meta["blocks"])
                       if spoken_text(b.get("result"))), None)
-    if meta["status"] == "done" and last_said:
-        sheet.add(wrap(f'"{last_said}"', wrap_w), fontsize=fs_blk, color="#ffffff",
-                  y="bottom", t0=meta["end_t"])
-    elif meta.get("outcome"):
-        col = "#7CFFB2" if meta["status"] == "done" else "#ff6b6b"
-        sheet.add(wrap(meta["outcome"], wrap_w), fontsize=fs_blk, color=col, y="bottom",
+    closing, col = None, "#7CFFB2" if meta["status"] == "done" else "#ff6b6b"
+    if last_goto:
+        closing = last_goto["result"].split(" — ")[0].strip()
+    elif meta["status"] == "done" and last_said:
+        closing, col = f'"{last_said}"', "#ffffff"
+    elif (meta.get("outcome") or "").strip().lower() not in ("", "done"):
+        closing = meta["outcome"]
+    if closing:
+        sheet.add(wrap(closing, wrap_w), fontsize=fs_blk, color=col, y="bottom",
                   t0=meta["end_t"])
 
+    # ── The inset band ──────────────────────────────────────────────────────
+    # The eye view (4:3) and the map (square) hang from ONE label row, and that
+    # row has to clear the command box above it. Letting each inset place its
+    # own label just above its own top edge does not work: the square map
+    # starts higher than the 4:3 pip, so with a --title set "the robot's map"
+    # landed straight ON the command line. Measured at 1600x900 with a 35 px
+    # title: command plate 143-230, map label plate 172-239 -- a full overlap,
+    # and both are left aligned at the same pad, so neither was readable.
+    #
+    # So: one label row, placed under whatever the command block actually
+    # occupies (it wraps, so this is measured, not assumed), both insets hung
+    # below it, and the map shrunk if that would push it into the caption band
+    # at the bottom. The map is the one that gives way because it is square and
+    # scales down without losing its subject; the eye view is real footage.
+    bx, plate = 18, 6                       # CaptionSheet's own plate padding
+    base_inset = int(w * (0.42 if vertical else 0.24))
+    pip_h = int(base_inset * 3 / 4)
+    label_fs = int(fs_title * 0.9)
+    label_h = label_fs + 2 * bx + plate
+    cmd_lines = len(wrap(f"> {meta['command']}", wrap_w).split("\n"))
+    cmd_y0 = sheet.pad + (fs_title + 46 if title else 0)
+    cmd_bottom = cmd_y0 + (fs_cmd + int(fs_cmd * 0.35)) * cmd_lines - int(fs_cmd * 0.35) + bx
+    label_y = max(h - sheet.pad - pip_h - int(h * 0.21) - label_h, cmd_bottom + 14)
+    inset_y = label_y + label_h
+    # Lowest an inset may reach before it fouls the block caption at the bottom.
+    # The caption's plate starts one bx above its text, so that padding counts
+    # twice here -- once for the caption, once to leave a visible gap.
+    band_top = h - sheet.pad - fs_blk - 3 * bx - int(h * 0.06) - 10
+
+    pip_w = 0
     if pip is not None and pip.exists():
-        # "what the robot sees" inset, top-right under the command box, with a
-        # tiny label. Both streams started within a few ms of each other, but
-        # drop frames independently -- so the pip is re-cut onto the main
-        # timeline when the clock saw both recorders.
+        # "what the robot sees", on the right. Both streams started within a few
+        # ms of each other but drop frames independently -- so the pip is re-cut
+        # onto the main timeline when the clock saw both recorders.
         if clock is not None and clock.has("pip") and clock.has("main"):
             pip = retime_pip(pip, clock, 15, float(meta["recorder"].get("seconds") or 0) + 1.0, workdir)
-        pip_w = int(w * (0.42 if vertical else 0.24))
-        sheet.add("robot's eye view", fontsize=int(fs_title * 0.9), color="#ffffffcc",
-                  y="pip-label", x_right=True, pip_w=pip_w)
+        pip_w = min(base_inset, max(160, int((band_top - inset_y) * 4 / 3)))
+        sheet.pip_y = inset_y
+        sheet.add("robot's eye view", fontsize=label_fs, color="#ffffffcc",
+                  y=str(label_y), x_right=True)
     map_seq = None
     if map_samples:
-        # "the robot's map" inset: same band as the eye view, on the left --
-        # grid, keepouts (amber), peers (orange), the planned route (cobalt).
-        inset = int(w * (0.42 if vertical else 0.24))
-        pip_h = int(inset * 3 / 4)
-        map_y = h - sheet.pad - pip_h - int(h * 0.21) - (inset - pip_h)
-        sheet.add("the robot's map", fontsize=int(fs_title * 0.9), color="#ffffffcc",
-                  y=str(map_y - int(fs_title * 0.9) - 20 - 6))
+        # "the robot's map" inset, on the left -- grid, keepouts (amber), peers
+        # (orange), the planned route (cobalt).
+        inset = min(base_inset, max(160, band_top - inset_y))
+        sheet.add("the robot's map", fontsize=label_fs, color="#ffffffcc", y=str(label_y))
         rendered = render_map_frames(map_samples, video_t, float(meta["recorder"].get("seconds") or 0) + 1.0,
                                      5, inset, workdir)
         if rendered:
-            map_seq = (rendered[0], 5, sheet.pad, map_y)
-    subprocess.run(sheet.ffmpeg_args(raw, out, pip=pip, pip_w=pip_w if pip is not None and pip.exists() else 0,
+            map_seq = (rendered[0], 5, sheet.pad, inset_y)
+    subprocess.run(sheet.ffmpeg_args(raw, out, pip=pip, pip_w=pip_w,
                                      pip_y=sheet.pip_y, map_seq=map_seq), check=True)
     shutil.rmtree(workdir, ignore_errors=True)
 

@@ -6,9 +6,14 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { AgentChat, ackTextFor } from '../AgentChat';
-import type { AgentChatMessage, AgentPlan } from '../../types/agentmode.types';
+import type {
+  AgentBlock,
+  AgentChatMessage,
+  AgentModeEvent,
+  AgentPlan,
+} from '../../types/agentmode.types';
 import { useAgentModeStore } from '../../store/agentmodeStore';
 
 beforeEach(() => {
@@ -49,6 +54,72 @@ describe('AgentChat — a plan this console did not see', () => {
     render(<AgentChat robotId="demo-g1-001" />);
     expect(screen.queryByTestId('agent-chat-restored')).toBeNull();
     expect(screen.getByRole('button', { name: 'turn left and look around' })).toBeInTheDocument();
+  });
+
+  it('keeps the restored exchange when the closing summary arrives', () => {
+    // The reload case, one event later: `agent:plan:finished` pushes the first
+    // real message into a conversation that had none. Keyed on emptiness, the
+    // whole restored exchange — and with it every block card — disappeared
+    // from under the operator at the moment the plan ended.
+    useAgentModeStore.setState({ plan });
+    const { rerender } = render(<AgentChat robotId="demo-g1-001" />);
+
+    act(() => {
+      useAgentModeStore.getState().applyEvent({
+        type: 'agent:plan:finished',
+        robotId: 'demo-g1-001',
+        plan: { ...plan, status: 'done' },
+        timestamp: '2026-08-16T10:02:00.000Z',
+      } as AgentModeEvent);
+    });
+    rerender(<AgentChat robotId="demo-g1-001" />);
+
+    expect(screen.getByTestId('agent-user-message')).toHaveTextContent('walk into the kitchen');
+    expect(screen.getByTestId('agent-chat-restored')).toBeInTheDocument();
+    // … and the summary lands after it, not instead of it.
+    const agentLines = screen.getAllByTestId('agent-agent-message');
+    expect(agentLines[agentLines.length - 1]).toHaveTextContent('Plan completed');
+  });
+});
+
+describe('AgentChat — a plan nobody typed here', () => {
+  const block = (id: string, kind: string): AgentBlock =>
+    ({ id, kind, params: {}, status: 'pending' }) as unknown as AgentBlock;
+
+  const spokenPlan = {
+    id: 'plan-7',
+    robotId: 'demo-g1-001',
+    command: 'lauf in die Küche',
+    language: 'de',
+    blocks: [block('b1', 'turn'), block('b2', 'walk')],
+    cursor: -1,
+    status: 'running',
+    createdAt: '2026-08-16T10:00:00.000Z',
+    updatedAt: '2026-08-16T10:00:00.000Z',
+  } as unknown as AgentPlan;
+
+  it('renders the blocks of a plan that arrived as an event, not as a send', () => {
+    // Voice, A2A, patrol, a second operator: nothing goes through
+    // `sendCommand`, so nothing used to write the acknowledgement the block
+    // cards hang off. The transcript line appeared and then the operator saw
+    // nothing at all — no reasoning, no results, no errors, no durations —
+    // until a bare "Plan completed" at the very end.
+    useAgentModeStore.getState().applyEvent({
+      type: 'agent:plan:started',
+      robotId: 'demo-g1-001',
+      plan: spokenPlan,
+      timestamp: '2026-08-16T10:00:00.000Z',
+    } as AgentModeEvent);
+
+    render(<AgentChat robotId="demo-g1-001" />);
+
+    expect(screen.getByTestId('agent-user-message')).toHaveTextContent('lauf in die Küche');
+    expect(screen.getByTestId('agent-spoken-marker')).toHaveTextContent('DE');
+    expect(screen.getByTestId('agent-plan-blocks')).toHaveAttribute('data-plan-id', 'plan-7');
+    expect(screen.getAllByTestId('agent-block-card')).toHaveLength(2);
+    // It is this console's live view of a running plan, not a reconstruction.
+    expect(screen.queryByTestId('agent-chat-restored')).toBeNull();
+    expect(screen.getByTestId('agent-agent-message')).toHaveTextContent('On it.');
   });
 });
 

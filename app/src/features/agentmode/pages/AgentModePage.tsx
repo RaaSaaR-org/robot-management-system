@@ -100,7 +100,7 @@ export function AgentModePage() {
 
   const [robotId, setRobotId] = useState<string | null>(null);
 
-  useAgentModeSocket(robotId);
+  const { error: socketError, retry: retrySocket } = useAgentModeSocket(robotId);
 
   useEffect(() => {
     void robotsActions.fetchRobots();
@@ -164,13 +164,29 @@ export function AgentModePage() {
           ) : (
             // Not receiving events is true right now, and everything below is
             // therefore the last thing this console heard. It gets the word.
-            <span
-              data-testid="agent-connection-status"
-              data-connection={connectionStatus}
-              title="No event stream. Everything on this page is the last thing this console heard."
-              className="text-xs font-medium text-amber-600 dark:text-amber-400"
-            >
-              Offline
+            <span className="inline-flex items-center gap-2">
+              <span
+                data-testid="agent-connection-status"
+                data-connection={connectionStatus}
+                title="No event stream. Everything on this page is the last thing this console heard."
+                className="text-xs font-medium text-amber-600 dark:text-amber-400"
+              >
+                Offline
+              </span>
+              {/* The backoff gives up after ~90 seconds of downtime and then
+                  never tries again on its own. Only shown once it has: while
+                  it is still retrying, a button that says "Reconnect" next to
+                  a socket already reconnecting is noise. */}
+              {socketError && (
+                <button
+                  type="button"
+                  data-testid="agent-connection-retry"
+                  onClick={retrySocket}
+                  className="text-xs font-medium text-cobalt-500 hover:text-cobalt-600 underline underline-offset-2"
+                >
+                  Reconnect
+                </button>
+              )}
             </span>
           )
         }

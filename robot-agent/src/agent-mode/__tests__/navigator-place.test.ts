@@ -4,8 +4,9 @@
  *              room it was given as a polygon — through the doorway, never
  *              through the wall — arrives once the pose is inside and near the
  *              centre, walks by sight while the map has no path yet and re-plans
- *              as the map grows, refuses a keepout, and stops honestly when the
- *              way in is blocked. Plus `resolvePlaceByName` and `placeGoal`.
+ *              as the map grows, refuses a keepout, counts a spent stage budget
+ *              that ended inside the polygon as arrival, and stops honestly when
+ *              the way in is blocked. Plus `resolvePlaceByName` and `placeGoal`.
  * @feature agentmode
  * @status test
  */
@@ -98,6 +99,8 @@ interface WorldOpts {
   wallX?: number;
   /** Whether that wall has the doorway (default true). */
   door?: boolean;
+  /** Stage budget for the navigation (default 12). */
+  maxStages?: number;
 }
 
 function makeWorld(scene: SceneMemoryStore, opts: WorldOpts) {
@@ -173,7 +176,7 @@ function makeWorld(scene: SceneMemoryStore, opts: WorldOpts) {
     scene,
     runGeneratedBlock,
     isAborted: () => false,
-    maxStages: 12,
+    maxStages: opts.maxStages ?? 12,
     planner:
       opts.planner === false
         ? null
@@ -340,6 +343,42 @@ describe('Navigator.navigateToPlace — discovering the map as it goes', () => {
     expect(w.ran[0]!.reasoning).toMatch(/the map has nothing yet/);
     // Every walk after that was planned — no "by sight" stage was needed.
     for (const b of walks(w.ran)) expect(b.params.planned).toBe(true);
+  });
+
+  it('counts a spent stage budget that ended INSIDE the place as arrival, not as giving up', async () => {
+    const scene = new SceneMemoryStore('r');
+    // Three stages is not enough to reach the centre of the kitchen from the
+    // far corner of the hallway — but it IS enough to get through the door and
+    // stand in the kitchen. The order was "go to the kitchen", and the robot is
+    // in the kitchen: the budget expiring on the way to the centre does not
+    // undo that. This is the warehouse run that motivated the rule — 18.01 m
+    // walked, standing inside Dock 1, 1.41 m of route short of the centroid,
+    // reported as "gave up after 12 stages".
+    const w = makeWorld(scene, { map: twoRooms(), maxStages: 3 });
+    w.pose.x = -0.9;
+    w.pose.y = -1;
+    const outcome = await w.navigator.navigateToPlace(KITCHEN);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/^Arrived in Kitchen after 3 stages and [\d.]+ m/);
+    expect(outcome.message).not.toMatch(/gave up/);
+    // And honest about how it ended: short of the centre, out of stages.
+    expect(outcome.message).toMatch(/stopped [\d.]+ m from its centre — the 3-stage budget ran out/);
+    expect(pointInPolygon(w.pose.x, w.pose.y, KITCHEN.polygon)).toBe(true);
+    expect(Math.hypot(w.pose.x - 5, w.pose.y)).toBeGreaterThan(PLACE_ARRIVAL_M);
+  });
+
+  it('still gives up when the spent stage budget left it OUTSIDE the place', async () => {
+    const scene = new SceneMemoryStore('r');
+    // The same three stages from one metre further back: the robot is still in
+    // the hallway when they run out. Not in the kitchen, so not arrived.
+    const w = makeWorld(scene, { map: twoRooms(), maxStages: 3 });
+    w.pose.x = -0.9;
+    w.pose.y = -1.7;
+    const outcome = await w.navigator.navigateToPlace(KITCHEN);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/gave up after 3 stages \(3 on a planned path\) and [\d.]+ m/);
+    expect(outcome.message).toMatch(/shortest remaining route [\d.]+ m\.$/);
+    expect(pointInPolygon(w.pose.x, w.pose.y, KITCHEN.polygon)).toBe(false);
   });
 
   it('stops honestly when the way in stays blocked', async () => {

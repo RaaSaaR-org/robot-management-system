@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { RobotMapGrid } from '../../types/agentmode.types';
-import { gridToPgm, gridToPgmBody, gridToMapServerYaml, exportMap, PGM_OCCUPIED, PGM_FREE, PGM_UNKNOWN, decodeCloudPositions, cloudToPcd, cloudToPly, exportCloud } from '../mapExport';
+import { gridToPgm, gridToPgmBody, gridToPng, gridToMapServerYaml, exportMap, PGM_OCCUPIED, PGM_FREE, PGM_UNKNOWN, decodeCloudPositions, cloudToPcd, cloudToPly, exportCloud } from '../mapExport';
 
 // 3 wide × 2 high. Cell (0,0) = bottom-left. Row y=0: occupied, free, unknown; row y=1: unknown ×3.
 const cells = new Int8Array([127, -127, 0, 0, 0, 0]);
@@ -72,6 +72,49 @@ describe('exportMap', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     expect(await exportMap('g1', { ...grid, cells: 'AAA=' }, 'pgm')).toBe(false);
     expect(click).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A robot that has integrated nothing reports a 0×0 grid — its own
+ * `GET /map?format=pgm` answers 404 for exactly that case. The browser export
+ * used to write a PGM whose header said `0 0` with no raster after it, a file
+ * RViz, Nav2 and GIMP all refuse, and told the operator it had saved a map.
+ */
+describe('a grid with nothing integrated yet', () => {
+  const empty: RobotMapGrid = { ...grid, width: 0, height: 0, cells: '', poseCount: 0, knownCells: 0, occupiedCells: 0, lastIntegratedAt: null };
+
+  it('has no PGM body and no PGM file', () => {
+    expect(gridToPgmBody(empty)).toBeNull();
+    expect(gridToPgm(empty)).toBeNull();
+  });
+
+  it('saves nothing for PGM or PNG and says so, while the raw JSON still saves', async () => {
+    const saved: string[] = [];
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push(this.download);
+    });
+    expect(await exportMap('g1', empty, 'pgm')).toBe(false);
+    expect(await exportMap('g1', empty, 'png')).toBe(false);
+    expect(saved).toEqual([]);
+    expect(await exportMap('g1', empty, 'json')).toBe(true);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatch(/^map-g1-.*\.json$/);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('gridToPng', () => {
+  it('resolves null instead of rejecting when the canvas refuses the raster', async () => {
+    // Real browsers throw IndexSizeError out of createImageData; jsdom has no
+    // canvas backend at all, so stand in one that fails the way a browser does.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      createImageData: () => {
+        throw new DOMException('The source width is zero or not a number.', 'IndexSizeError');
+      },
+    } as unknown as CanvasRenderingContext2D);
+    await expect(gridToPng(grid)).resolves.toBeNull();
   });
 });
 

@@ -26,10 +26,32 @@ import { alertsApi } from '../api/alertsApi';
 // ============================================================================
 
 /**
+ * Prefix of every client-generated alert ID. The server issues cuids, so this
+ * prefix is what tells a purely local alert (raised by e.g. an emergency-stop
+ * button through `addAlert`) apart from one that actually lives in the
+ * database — the former has no row to PATCH or DELETE.
+ */
+const LOCAL_ID_PREFIX = 'alert_';
+
+/**
  * Generate a unique ID for alerts.
  */
 function generateAlertId(): string {
-  return `alert_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  return `${LOCAL_ID_PREFIX}${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
+/**
+ * Whether this alert only ever existed in the browser.
+ */
+function isLocalAlert(id: string): boolean {
+  return id.startsWith(LOCAL_ID_PREFIX);
+}
+
+/**
+ * Message for an alert action that the server refused or never received.
+ */
+function actionErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 /**
@@ -154,6 +176,17 @@ export const useAlertsStore = create<AlertsStore>()(
       },
 
       acknowledgeAlertAsync: async (id: string): Promise<void> => {
+        const previous = get().alerts.find((a) => a.id === id);
+        if (!previous) return;
+        const snapshot = { ...previous };
+
+        // Optimistic: the row dims on the click, not a round-trip later.
+        get().acknowledgeAlert(id);
+
+        // A locally raised alert has no server row, so the in-memory flip is
+        // the whole story — PATCHing its made-up ID would only 404.
+        if (isLocalAlert(id)) return;
+
         try {
           const updatedAlert = await alertsApi.acknowledgeAlert(id);
           set((state) => {
@@ -166,11 +199,50 @@ export const useAlertsStore = create<AlertsStore>()(
             if (historyIndex !== -1) {
               state.history[historyIndex] = updatedAlert;
             }
+            state.error = null;
           });
         } catch (error) {
           console.error('Failed to acknowledge alert:', error);
-          // Still update locally as fallback
-          get().acknowledgeAlert(id);
+          // Roll back. Keeping the row dimmed would claim an acknowledgement
+          // the server never recorded — and the next fetch of /alerts/active
+          // (which is defined as acknowledged:false) would hand the alert
+          // straight back, banner and all, with no explanation.
+          set((state) => {
+            const index = state.alerts.findIndex((a) => a.id === id);
+            if (index !== -1) {
+              state.alerts[index] = snapshot;
+            }
+            state.error = actionErrorMessage(error, 'Failed to acknowledge alert');
+          });
+        }
+      },
+
+      dismissAlertAsync: async (id: string): Promise<void> => {
+        const previous = get().alerts.find((a) => a.id === id);
+        if (!previous) return;
+        const snapshot = { ...previous };
+
+        // Optimistic: the row/banner disappears on the click.
+        get().removeAlert(id);
+
+        // Nothing to delete for an alert that never left the browser.
+        if (isLocalAlert(id)) return;
+
+        try {
+          await alertsApi.deleteAlert(id);
+          set((state) => {
+            state.error = null;
+          });
+        } catch (error) {
+          console.error('Failed to dismiss alert:', error);
+          // Put it back rather than let it vanish until the next fetch
+          // silently resurrects it.
+          set((state) => {
+            if (!state.alerts.some((a) => a.id === id)) {
+              state.alerts = sortAlerts([...state.alerts, snapshot]);
+            }
+            state.error = actionErrorMessage(error, 'Failed to dismiss alert');
+          });
         }
       },
 

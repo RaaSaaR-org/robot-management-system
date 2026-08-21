@@ -51,15 +51,19 @@ function StatsCard({ label, count, severity }: StatsCardProps) {
           ? 'border-yellow-500/50 bg-yellow-500/10'
           : 'border-blue-500/50 bg-blue-500/10';
 
+  // Light/dark pair per severity, as the patrol feature does it (patrolUi.tsx
+  // KPI_VALUE_TONE): the dark-only 400/300 tints these used to carry washed the
+  // count out to near-invisible on the light background. Warning follows
+  // patrol's amber — the yellow ramp has no light sibling that passes AA.
   const textClass = isZero
     ? 'text-theme-secondary'
     : severity === 'critical'
-      ? 'text-red-400'
+      ? 'text-red-700 dark:text-red-400'
       : severity === 'error'
-        ? 'text-red-300'
+        ? 'text-red-600 dark:text-red-300'
         : severity === 'warning'
-          ? 'text-yellow-400'
-          : 'text-blue-400';
+          ? 'text-amber-700 dark:text-amber-400'
+          : 'text-blue-700 dark:text-blue-400';
 
   return (
     <div className={cn('p-4 rounded-lg border', colorClass)}>

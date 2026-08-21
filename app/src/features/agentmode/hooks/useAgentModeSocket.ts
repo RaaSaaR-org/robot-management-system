@@ -6,7 +6,7 @@
  * @feature agentmode
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getWebSocketUrl } from '@/shared/utils/websocket';
 import { useAgentModeStore } from '../store/agentmodeStore';
 import { usePatrolStore } from '@/features/patrol/store/patrolStore';
@@ -28,6 +28,16 @@ export interface UseAgentModeSocketReturn {
   isConnected: boolean;
   /** Connection error, if any. */
   error: string | null;
+  /**
+   * Start over after the backoff gave up.
+   *
+   * `MAX_RECONNECT_ATTEMPTS` is reached after roughly a minute and a half of
+   * downtime — a server restart or a laptop that slept through lunch — and the
+   * hook then stops on its own. Without a way back, the only cure for a console
+   * that says "Offline" for the rest of the shift is a page reload, which is
+   * not something an operator should have to know.
+   */
+  retry: () => void;
 }
 
 /** Dev-only debug logging for WebSocket lifecycle events. */
@@ -50,6 +60,7 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
     return {
       applyEvent: store.applyEvent,
       setConnectionStatus: store.setConnectionStatus,
+      fetchState: store.fetchState,
     };
   }, []);
 
@@ -58,11 +69,26 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
 
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Bumped by `retry` — the effect below reads it as "connect again, now". */
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  /**
+   * The robot whose event stream this console lost, until it has caught up.
+   *
+   * Held per robot rather than as a bare flag so a robot switch cannot inherit
+   * it: switching already re-reads the state through the page's own effect.
+   */
+  const droppedForRobotRef = useRef<string | null>(null);
+
+  const retry = useCallback(() => {
+    reconnectAttemptsRef.current = 0;
+    setError(null);
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   // --------------------------------------------------------------------------
   // Live socket (never opened in demo mode)
@@ -94,6 +120,18 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
           setIsConnected(true);
           setError(null);
           actions.setConnectionStatus('connected');
+          // The server's socket is pure fan-out — nothing is replayed. Every
+          // event emitted while this console was away is simply gone, and the
+          // ones that matter are the terminal ones: a `agent:block:finished`
+          // and an `agent:plan:finished` lost to a server restart leave the
+          // rail reading "Running · walk" for the rest of the session, with
+          // the 15 s heartbeat keeping the freshness line at "just now" while
+          // it carries no `plan` that could correct it. So a socket that comes
+          // back after a drop asks what actually happened.
+          if (droppedForRobotRef.current === robotId) {
+            droppedForRobotRef.current = null;
+            void actions.fetchState(robotId);
+          }
         };
 
         ws.onmessage = (event) => {
@@ -121,6 +159,10 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
           if (!mountedRef.current || closedByUs) return;
           setIsConnected(false);
           actions.setConnectionStatus('disconnected');
+          // A gap starts here, whether the reconnect below succeeds on the
+          // first try or an hour later. What was missed is only knowable by
+          // asking again once the stream is back.
+          droppedForRobotRef.current = robotId;
 
           if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current += 1;
@@ -163,7 +205,7 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
       }
       actions.setConnectionStatus('disconnected');
     };
-  }, [robotId, actions]);
+  }, [robotId, actions, retryNonce]);
 
   // --------------------------------------------------------------------------
   // Demo plan driver — replays a realistic plan for an accepted command.
@@ -270,5 +312,5 @@ export function useAgentModeSocket(robotId: string | null): UseAgentModeSocketRe
     };
   }, [robotId, pendingCommand, estopActive, actions]);
 
-  return { isConnected, error };
+  return { isConnected, error, retry };
 }
