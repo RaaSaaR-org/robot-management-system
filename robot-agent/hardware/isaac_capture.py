@@ -141,10 +141,14 @@ START_YAW = math.pi / 2
 # background strobes at any time-lapse rate. Positive CHASE_FWD puts the camera AHEAD of the robot,
 # positive CHASE_SIDE to its left — a front-quarter view, so a turn shows the chest and head coming
 # round rather than the back of a jacket.
-# The distance is set by the legs, not by taste: at 24 mm on a 20.955 mm aperture the vertical
-# field covers only 1.23 m at 2.5 m, which crops the feet — unacceptable on footage whose whole
-# caveat is that the legs are not stepping. 3.4 m forward covers 1.85 m and keeps them in frame.
+# The distance is set by the legs, not by taste, and it is set by the OUTPUT ASPECT. Isaac fixes the
+# HORIZONTAL aperture at 20.955 mm, so the vertical one is 20.955 * height/width: landscape 16:9 sees
+# 1.23 m of height at 2.5 m, portrait 9:16 sees 3.9 m at the same distance. Hence two defaults rather
+# than one number — 3.4 m keeps a 1.3 m robot's feet in a 1280x720 frame (1.85 m of coverage), and
+# 1.5 m fills a 1080x1920 one to about 55% of frame height. Both are `--chase` overridable: framing
+# is a flag here, like --room-eye, so a look tweak is never a diff.
 CHASE_FWD, CHASE_SIDE, CHASE_UP = 3.4, 1.6, 1.5
+CHASE_PORTRAIT = (1.5, 0.7, 1.15)
 # Aimed below the pelvis, which tilts the camera down and lifts the robot off the bottom edge —
 # aiming at 1.0 m puts the feet on the frame border, where a single step of drift would clip them.
 CHASE_TARGET_Z = 0.75
@@ -181,7 +185,12 @@ HEAD_OFFSET_X, HEAD_OFFSET_Y, HEAD_OFFSET_Z = 0.076, 0.0, 1.271
 # a bearing with it, and a camera whose real HFOV disagrees makes every bearing wrong by a factor,
 # which then steers the navigator into a wall while every log line still looks reasonable.
 HEAD_CAM_HFOV_DEG = 105.3
-HEAD_CAM_W, HEAD_CAM_H = 640, 480
+# Resolution is free of the bearing maths and may be raised at will: `head_focal` below is derived
+# from HEAD_CAM_HFOV_DEG and the aperture alone, and vision.ts converts a pixel column to a bearing
+# as a FRACTION of the width. Keep the 4:3 so the vertical field does not move either. 1280x960
+# because this is also the most visually interesting camera in the rig -- it is the one that sees
+# the shelving and the containers, and 640 px is too few to show it at any size in a 1080-wide film.
+HEAD_CAM_W, HEAD_CAM_H = 1280, 960
 # Isaac's PinholeCameraCfg is specified by aperture and focal length, not by FOV.
 USD_HORIZONTAL_APERTURE = 20.955
 
@@ -237,6 +246,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--dome", type=float, default=1500.0, help="dome light intensity")
     ap.add_argument("--start", default=f"{START_X},{START_Y},{math.degrees(START_YAW)}",
                     help="robot start pose x,y,yaw_deg")
+    ap.add_argument("--chase", default="",
+                    help="chase camera offset fwd,side,up in metres; default follows the aspect — "
+                         f"{CHASE_FWD},{CHASE_SIDE},{CHASE_UP} landscape, "
+                         f"{CHASE_PORTRAIT[0]},{CHASE_PORTRAIT[1]},{CHASE_PORTRAIT[2]} portrait")
+    ap.add_argument("--chase-target-z", type=float, default=CHASE_TARGET_Z,
+                    help="height the chase camera aims at, metres above the floor")
     ap.add_argument("--serve", type=int, default=0,
                     help="serve the sidecar sensor contract on this port (0 = off)")
     ap.add_argument("--sidecar-url", default="http://localhost:8767",
@@ -887,6 +902,14 @@ def main() -> int:
               f"(/loco/* -> {args.sidecar_url})", flush=True)
 
     meta: list[dict] = []
+    # Aspect picks the default standoff, because the vertical field is aspect-dependent while the
+    # horizontal one is fixed — see CHASE_FWD. An explicit --chase always wins.
+    chase_fwd, chase_side, chase_up = (
+        xyz(args.chase) if args.chase else
+        CHASE_PORTRAIT if args.height > args.width else
+        (CHASE_FWD, CHASE_SIDE, CHASE_UP))
+    print(f"[capture] chase fwd={chase_fwd} side={chase_side} up={chase_up} "
+          f"target_z={args.chase_target_z} for {args.width}x{args.height}", flush=True)
     smooth_eye = smooth_tgt = None
     cam_yaw = syaw               # the camera's own azimuth, seeded from the robot's start heading
     t0 = t_prev = time.monotonic()
@@ -925,12 +948,12 @@ def main() -> int:
             err = math.atan2(math.sin(wyaw - cam_yaw), math.cos(wyaw - cam_yaw))
             cam_yaw += err * min(1.0, dt / CHASE_YAW_TAU)
         cc, cs = math.cos(cam_yaw), math.sin(cam_yaw)
-        ex = wx + CHASE_FWD * cc - CHASE_SIDE * cs
-        ey = wy + CHASE_FWD * cs + CHASE_SIDE * cc
+        ex = wx + chase_fwd * cc - chase_side * cs
+        ey = wy + chase_fwd * cs + chase_side * cc
         ex = min(max(ex, ROOM_X[0] + CAM_MARGIN), ROOM_X[1] - CAM_MARGIN)
         ey = min(max(ey, ROOM_Y[0] + CAM_MARGIN), ROOM_Y[1] - CAM_MARGIN)
-        eye = torch.tensor([[ex, ey, CHASE_UP]], device=sim.device)
-        tgt = torch.tensor([[wx, wy, CHASE_TARGET_Z]], device=sim.device)
+        eye = torch.tensor([[ex, ey, chase_up]], device=sim.device)
+        tgt = torch.tensor([[wx, wy, args.chase_target_z]], device=sim.device)
         if smooth_eye is None:
             smooth_eye, smooth_tgt = eye.clone(), tgt.clone()
         else:
