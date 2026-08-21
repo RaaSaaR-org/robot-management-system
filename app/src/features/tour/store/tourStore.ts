@@ -42,6 +42,8 @@ export interface TourStore {
 
   // Live: per robot, the running run and the last run seen (from events or fetch)
   activeRunByRobot: Record<string, TourRun>;
+  /** Per robot, the tick at which the active slot above was last filled — see `nextTick`. */
+  activeRunSeenTick: Record<string, number>;
   lastRunByRobot: Record<string, TourRun>;
 
   // Places per robot and the skill library (for the editor)
@@ -93,6 +95,7 @@ const initialState = {
   runsById: {} as Record<string, TourRun>,
   runDetailStatus: {} as Record<string, TourLoadStatus>,
   activeRunByRobot: {} as Record<string, TourRun>,
+  activeRunSeenTick: {} as Record<string, number>,
   lastRunByRobot: {} as Record<string, TourRun>,
   placesByRobot: {} as Record<string, TourPlace[]>,
   placesStatus: {} as Record<string, TourLoadStatus>,
@@ -142,18 +145,56 @@ function settledLegCount(legs: TourLeg[] | undefined): number {
  */
 function isRunDowngrade(stored: TourRun | null | undefined, incoming: TourRun): boolean {
   if (!stored) return false;
+  if (incoming.turns.length < stored.turns.length) return true;
+  return isProgressDowngrade(stored, incoming);
+}
+
+/**
+ * `isRunDowngrade` without the transcript clause: would `incoming` walk the run's
+ * PROGRESS backwards — status, finish, settled legs?
+ *
+ * Split out for the detail fetch, which is the one caller that must answer the
+ * two halves differently. A fetched run legitimately carries fewer turns than
+ * the events did (the retention sweep removed them), so its transcript always
+ * wins; but the same response may still be a snapshot read before the finish
+ * committed, and taking that pinned the page at "running" with a `—` duration
+ * for good and put the run back into `activeRunByRobot`.
+ */
+function isProgressDowngrade(stored: TourRun, incoming: TourRun): boolean {
   if (TERMINAL_RUN_STATUSES.has(stored.status) && !TERMINAL_RUN_STATUSES.has(incoming.status)) return true;
   if (stored.finishedAt && !incoming.finishedAt) return true;
-  if (incoming.turns.length < stored.turns.length) return true;
   return settledLegCount(incoming.legs) < settledLegCount(stored.legs);
 }
 
+/**
+ * Strictly increasing counter used to order things the store did against each
+ * other — adopting an active run vs. issuing the fetch whose answer may
+ * contradict it. Never reset: only the relative order of two ticks means anything.
+ */
+let tick = 0;
+const nextTick = (): number => ++tick;
+
+/** The two maps that together answer "what is this robot running, and since when did we think so". */
+type ActiveSlots = Pick<TourStore, 'activeRunByRobot' | 'activeRunSeenTick'>;
+
+/** Put a running run in the robot's active slot, stamped with the tick we learned of it. */
+function markActiveRun(state: ActiveSlots, run: TourRun): void {
+  state.activeRunByRobot[run.robotId] = run;
+  state.activeRunSeenTick[run.robotId] = nextTick();
+}
+
+/** Empty the robot's active slot — stamp included, so a stale one cannot outlive the run. */
+function clearActiveRun(state: ActiveSlots, robotId: string): void {
+  delete state.activeRunByRobot[robotId];
+  delete state.activeRunSeenTick[robotId];
+}
+
 /** Keep `activeRunByRobot` honest against a server-fetched run: add while running, drop once it is not. */
-function reconcileActiveRun(state: { activeRunByRobot: Record<string, TourRun> }, run: TourRun): void {
+function reconcileActiveRun(state: ActiveSlots, run: TourRun): void {
   if (run.status === 'running') {
-    state.activeRunByRobot[run.robotId] = run;
+    markActiveRun(state, run);
   } else if (state.activeRunByRobot[run.robotId]?.runId === run.runId) {
-    delete state.activeRunByRobot[run.robotId];
+    clearActiveRun(state, run.robotId);
   }
 }
 
@@ -191,7 +232,7 @@ function withTurn(turns: TourTurn[], turn: TourTurn | undefined): TourTurn[] {
  * the three views drift apart.
  */
 function storeRun(
-  state: Pick<TourStore, 'runsById' | 'runs' | 'lastRunByRobot' | 'activeRunByRobot'>,
+  state: Pick<TourStore, 'runsById' | 'runs' | 'lastRunByRobot' | 'activeRunByRobot' | 'activeRunSeenTick'>,
   run: TourRun
 ): void {
   state.runsById[run.runId] = run;
@@ -205,7 +246,7 @@ function storeRun(
 // ============================================================================
 
 export const useTourStore = createStore<TourStore>(
-  (set) => ({
+  (set, get) => ({
     ...initialState,
 
     // ------------------------------------------------------------------------
@@ -331,12 +372,24 @@ export const useTourStore = createStore<TourStore>(
         state.runsStatus = 'loading';
         state.runsError = null;
       });
+      // Taken before the request goes out so the answer can be dated against what
+      // we learn while it is in flight — see the prune loop below.
+      const requestedAt = nextTick();
       try {
         const runs = await tourApi.listRuns({ limit: 50, ...query });
         set((state) => {
-          state.runs = [...runs].sort(newestFirst);
+          // The poll and the robot's events race on separate connections, so a row
+          // read here can be older than what `applyEvent` already folded in. Keep
+          // whichever snapshot is further along; a poll must never walk a run back
+          // (press "End tour" and the list answer, computed before the finish
+          // committed, would otherwise re-raise the banner over a dead Stop button).
+          const merged = runs.map((run) => {
+            const stored = state.runsById[run.runId];
+            return stored && isRunDowngrade(stored, run) ? stored : run;
+          });
+          state.runs = [...merged].sort(newestFirst);
           state.runsStatus = 'ok';
-          for (const run of runs) {
+          for (const run of merged) {
             state.runsById[run.runId] = run;
             reconcileActiveRun(state, run);
             const last = state.lastRunByRobot[run.robotId];
@@ -344,11 +397,17 @@ export const useTourStore = createStore<TourStore>(
           }
           // An unfiltered fetch is authoritative: any "running" entry the
           // newest-first list no longer knows about ended while we were not
-          // listening.
+          // listening — but only about runs that already existed when we asked. A
+          // run adopted after that (the visitor said yes, or the operator pressed
+          // "Start tour", while this poll was in flight) is simply younger than the
+          // answer; dropping it took the live banner and the End-tour button away
+          // from a tour the robot was actually walking.
           if (!query.robotId && !query.routeId) {
-            const seen = new Set(runs.map((r) => r.runId));
+            const seen = new Set(merged.map((r) => r.runId));
             for (const [robotId, active] of Object.entries(state.activeRunByRobot)) {
-              if (!seen.has(active.runId)) delete state.activeRunByRobot[robotId];
+              if (seen.has(active.runId)) continue;
+              if ((state.activeRunSeenTick[robotId] ?? 0) > requestedAt) continue;
+              clearActiveRun(state, robotId);
             }
           }
         });
@@ -366,14 +425,14 @@ export const useTourStore = createStore<TourStore>(
       });
       try {
         const run = await tourApi.getRun(runId);
+        // The server's transcript, our progress — see `isProgressDowngrade`.
+        const stored = get().runsById[run.runId];
+        const fresh = stored && isProgressDowngrade(stored, run) ? { ...stored, turns: run.turns } : run;
         set((state) => {
-          // Deliberately NOT guarded by `isRunDowngrade`: the server is the
-          // source of record, and a run whose transcript was swept legitimately
-          // comes back with fewer turns than the live events once carried.
-          storeRun(state, run);
+          storeRun(state, fresh);
           state.runDetailStatus[runId] = 'ok';
         });
-        return run;
+        return fresh;
       } catch (err) {
         set((state) => {
           state.runDetailStatus[runId] = 'error';

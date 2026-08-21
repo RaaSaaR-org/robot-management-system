@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import queue
 import re
 import subprocess
 import threading
@@ -36,21 +37,55 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATE = {"out_dir": pathlib.Path("."), "voice": {"de": "Anna", "en": "Samantha"},
          "rate": 175, "spoken": 0, "log": None, "mute": False, "max_block": 8.5}
-LOCK = threading.Lock()  # one mouth: utterances queue instead of overlapping
+LOCK = threading.Lock()  # synthesis is serialised, so the log order is the spoken order
+PLAY_Q: "queue.Queue[tuple]" = queue.Queue()  # one mouth: playback is strictly serial
 
 
 def _slug(text: str, n: int = 40) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower())[:n].strip("-") or "utterance"
 
 
+def _player() -> None:
+    """The one mouth: utterances play strictly one after another, here and only
+    here.
+
+    Playback used to happen inside the request, which forced every line to
+    choose between talking over the previous one and blocking past the agent's
+    10 s client timeout -- and blocking is the worse half, because the agent
+    then records the utterance as NOT spoken. That flag is what
+    `TourRun.disclosureSpoken` is derived from, so two long lines back to back
+    had the Art. 50 disclosure audibly spoken and the compliance record saying
+    it was not. Queueing keeps both promises: nothing overlaps, and no request
+    waits on a line that is not its own.
+
+    The wall clock is stamped when playback actually STARTS -- that is the
+    number `mix_voice` lays the audio by."""
+    while True:
+        path, rec, done = PLAY_Q.get()
+        rec["wall"] = time.time()
+        rec["at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            if STATE["mute"]:
+                # Muted still takes the time it takes to speak. `--mute` spares
+                # the room, not the clock: returning at synthesis speed raced the
+                # talk track ahead of the picture, and `mix_voice` then laid
+                # full-length audio over a robot that had stopped talking.
+                time.sleep(rec["seconds"])
+            else:
+                subprocess.run(["afplay", str(path)])
+        except Exception as err:  # noqa: BLE001 -- a lost line must not end the take
+            print(f"[say]   !! playback failed: {err}")
+        with STATE["log"].open("a") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        print(f"[say] {rec['seconds']:5.1f}s {rec['language']} {rec['text'][:70]}")
+        done.set()
+        PLAY_Q.task_done()
+
+
 def speak(text: str, language: str) -> dict:
-    """Synthesise, then play. Returns the record that was appended to the log."""
+    """Synthesise, queue for playback, wait for it up to `max_block`."""
+    deadline = time.time() + STATE["max_block"]
     with LOCK:
-        # One mouth: an utterance that outran `max_block` is still playing, and
-        # the next line waits for it rather than talking over it.
-        prev = STATE.get("playing")
-        if prev is not None and prev.poll() is None:
-            prev.wait()
         idx = STATE["spoken"] + 1
         voice = STATE["voice"].get(language, STATE["voice"]["en"])
         path = STATE["out_dir"] / f"{idx:03d}-{_slug(text)}.aiff"
@@ -63,26 +98,18 @@ def speak(text: str, language: str) -> dict:
             seconds = float(out.stdout.strip())
         except Exception:  # noqa: BLE001 -- a missing duration only costs the mixer a hint
             pass
-        wall = time.time()
-        if not STATE["mute"]:
-            play = subprocess.Popen(["afplay", str(path)])
-            STATE["playing"] = play
-            # The agent's voice client gives up after 10 s
-            # (`speakThroughVoiceService`) and then records the utterance as NOT
-            # spoken -- so a long line is answered before its tail has played
-            # rather than being reported as silence. The audio is real either
-            # way; only the robot's wait for it is cut short.
-            try:
-                play.wait(timeout=STATE["max_block"])
-            except subprocess.TimeoutExpired:
-                print(f"[say]   (still playing at {STATE['max_block']}s -- answering now)")
-        rec = {"at": datetime.now(timezone.utc).isoformat(), "wall": wall, "seconds": seconds,
-               "language": language, "voice": voice, "text": text, "file": path.name}
+        rec = {"at": None, "wall": None, "seconds": seconds, "language": language,
+               "voice": voice, "text": text, "file": path.name}
+        done = threading.Event()
         STATE["spoken"] = idx
-        with STATE["log"].open("a") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        print(f"[say] {seconds:5.1f}s {language} {text[:70]}")
-        return rec
+        PLAY_Q.put((path, rec, done))
+    # Outside the lock, so the next line can be synthesised while this one plays.
+    # The agent's voice client gives up after 10 s (`speakThroughVoiceService`),
+    # so a line still playing at `max_block` is answered now and keeps playing --
+    # the audio is real either way; only the robot's wait for it is cut short.
+    if not done.wait(timeout=max(0.0, deadline - time.time())):
+        print(f"[say]   (still playing at {STATE['max_block']}s -- answering now)")
+    return rec
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -145,6 +172,7 @@ def main() -> int:
     STATE.update({"out_dir": out, "voice": {"de": args.voice_de, "en": args.voice_en},
                   "rate": args.rate, "log": out / "voicelog.jsonl", "mute": args.mute,
                   "max_block": args.max_block})
+    threading.Thread(target=_player, daemon=True).start()
     print(f"[say] voice service stand-in on :{args.port} -> {out}  "
           f"(de={args.voice_de}, en={args.voice_en}, {args.rate} wpm)")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

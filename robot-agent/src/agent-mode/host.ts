@@ -39,6 +39,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/config.js';
 import { safeSegment } from './baseline.js';
 import { mayInitiate, SELF_INITIATIVE_MIN_BATTERY, type InitiativeContext } from './initiative.js';
+import { SERVICE_TOKEN_ENV } from './journal.js';
 import { PLACE_STALE_MS } from '../robot/StatePersistence.js';
 import type {
   AgentBlock,
@@ -162,6 +163,12 @@ export interface TourRouteSourceOptions {
   cachePath: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * Platform API token for `GET /api/tour/routes/:id`, which sits behind
+   * `authMiddleware`. Defaults to `process.env[SERVICE_TOKEN_ENV]`; `''` sends
+   * no header, which is what a dev server with `AUTH_DISABLED=true` wants.
+   */
+  authToken?: string;
 }
 
 export type TourRouteOrigin = 'server' | 'cache' | 'none';
@@ -177,12 +184,14 @@ export class TourRouteSource {
   private readonly cachePath: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly authToken: string;
 
   constructor(opts: TourRouteSourceOptions) {
     this.serverUrl = opts.serverUrl.replace(/\/+$/, '');
     this.cachePath = opts.cachePath;
     this.timeoutMs = opts.timeoutMs ?? TOUR_ROUTE_FETCH_TIMEOUT_MS;
     this.fetchImpl = opts.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
+    this.authToken = opts.authToken ?? process.env[SERVICE_TOKEN_ENV] ?? '';
   }
 
   url(routeId: string): string {
@@ -225,8 +234,22 @@ export class TourRouteSource {
 
   async fetch(routeId: string): Promise<{ route: TourRoute | null; origin: TourRouteOrigin; error?: string }> {
     try {
-      const res = await this.fetchImpl(this.url(routeId), { signal: AbortSignal.timeout(this.timeoutMs) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await this.fetchImpl(this.url(routeId), {
+        signal: AbortSignal.timeout(this.timeoutMs),
+        ...(this.authToken ? { headers: { Authorization: `Bearer ${this.authToken}` } } : {}),
+      });
+      if (!res.ok) {
+        // Auto-greet is the one host-mode path where the robot fetches for
+        // itself, so an unauthenticated 401 here does not fail loudly — it falls
+        // back to the disk cache, which on a fresh robot is empty, and the robot
+        // greets nobody, forever. Say which of the two it is.
+        throw new Error(
+          res.status === 401 || res.status === 403
+            ? `HTTP ${res.status} — the robot is not authenticated to the platform. ` +
+              `Set ${SERVICE_TOKEN_ENV} to a service-account API token.`
+            : `HTTP ${res.status}`,
+        );
+      }
       const route = parseTourRoute(await res.json(), this.url(routeId));
       this.remember(route);
       return { route, origin: 'server' };
@@ -276,6 +299,7 @@ export type TourPhraseKind =
   | 'dontKnow'
   | 'noteTaken'
   | 'giveRoom'
+  | 'cannotStart'
   | 'questionsWelcome'
   | 'demoStart'
   | 'demoNarrated'
@@ -293,6 +317,7 @@ const TOUR_PHRASES: Record<SpokenLanguage, Record<TourPhraseKind, string>> = {
     dontKnow: 'I do not know that, and I would rather not guess.',
     noteTaken: 'I will pass the question on to my team.',
     giveRoom: 'Please give me a little room and I will lead the way.',
+    cannotStart: 'I am sorry — I cannot start the tour just now.',
     questionsWelcome: 'Ask me anything about this.',
     demoStart: 'Watch — I will do it now.',
     demoNarrated: 'I am not set up to run it right here, so let me describe it instead.',
@@ -309,6 +334,7 @@ const TOUR_PHRASES: Record<SpokenLanguage, Record<TourPhraseKind, string>> = {
     dontKnow: 'Das weiß ich nicht, und ich möchte lieber nicht raten.',
     noteTaken: 'Ich gebe die Frage an mein Team weiter.',
     giveRoom: 'Bitte lassen Sie mir etwas Platz, dann gehe ich voran.',
+    cannotStart: 'Es tut mir leid — ich kann den Rundgang gerade nicht starten.',
     questionsWelcome: 'Fragen Sie mich gern etwas dazu.',
     demoStart: 'Schauen Sie — ich mache es jetzt.',
     demoNarrated: 'Ich kann es hier nicht ausführen, deshalb beschreibe ich es Ihnen.',

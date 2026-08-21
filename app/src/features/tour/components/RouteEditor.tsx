@@ -396,13 +396,21 @@ export const RouteEditor = memo(function RouteEditor({
         setPreviewNote('Pick a robot to hear this on.');
         return;
       }
-      const spoken = chunkTalkTrack(stop.talkTrack).join(' ');
-      if (!spoken) return;
+      // Chunk by chunk, in order, the way the runner says it at the stop — not
+      // joined back into one string. `/voice/say` rejects anything over 500
+      // characters while a talk track may be TOUR_TALK_TRACK_MAX (600), so the
+      // joined form made the preview unreachable for content this very editor
+      // reports as within cap.
+      const chunks = chunkTalkTrack(stop.talkTrack);
+      if (chunks.length === 0) return;
       setPreviewingStopId(stop.id);
       setPreviewNote(null);
       try {
-        await voiceApi.say(draft.robotId, spoken, draft.language);
-        setPreviewNote(`Sent to the robot's speaker (${spoken.length} characters).`);
+        for (const chunk of chunks) {
+          await voiceApi.say(draft.robotId, chunk, draft.language);
+        }
+        const spokenChars = chunks.reduce((n, c) => n + c.length, 0);
+        setPreviewNote(`Sent to the robot's speaker (${spokenChars} characters).`);
       } catch (err) {
         // The voice service is a sidecar and is often simply not running; say
         // so instead of leaving the author waiting for a sound that never comes.

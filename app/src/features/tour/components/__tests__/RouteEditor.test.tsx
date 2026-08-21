@@ -190,12 +190,20 @@ describe('RouteEditor', () => {
     await settle();
     fireEvent.click(screen.getByTestId('tour-stop-preview'));
     await waitFor(() => expect(voice.say).toHaveBeenCalled());
-    const [robotId, spoken, language] = voice.say.mock.calls[0]!;
+    const calls = voice.say.mock.calls;
+    const [robotId, , language] = calls[0]!;
     expect(robotId).toBe('g1');
     expect(language).toBe('de');
+    const spoken = calls.map((c) => c[1] as string).join(' ');
     // The tail past the 40 s cap is not said on the tour, so it is not said here.
     expect(spoken).toContain('Satz 14');
     expect(spoken).not.toContain('Satz 15');
+    // Chunk by chunk, the way the runner says it — and no chunk over the 500
+    // characters `/voice/say` accepts. Joined into one string, a talk track
+    // written up to TOUR_TALK_TRACK_MAX (600) was rejected outright, so the
+    // preview was unreachable for content this editor reports as within cap.
+    expect(calls.length).toBeGreaterThan(1);
+    for (const [, chunk] of calls) expect((chunk as string).length).toBeLessThanOrEqual(500);
     expect(await screen.findByTestId('tour-preview-note')).toHaveTextContent(/Sent to the robot/);
   });
 

@@ -194,6 +194,44 @@ describe('tourStore actions', () => {
     expect(s.activeRunByRobot.g1).toBeUndefined();
   });
 
+  it('a poll answer computed before the finish cannot re-raise the banner', async () => {
+    // The list request and the socket race on separate connections. The answer
+    // here was computed before "End tour" committed, so it still says running:
+    // taking it put the live banner back over a dead Stop button.
+    useTourStore.getState().applyEvent(event('agent:tour:started', run()));
+    useTourStore.getState().applyEvent(event('agent:tour:finished', run({ status: 'done', finishedAt: '2026-08-17T10:08:00.000Z' })));
+    api.listRuns.mockResolvedValue([run({ status: 'running' })]);
+    await useTourStore.getState().fetchRuns();
+    const s = useTourStore.getState();
+    expect(selectRunById('run-1')(s)?.status).toBe('done');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+  });
+
+  it('a run adopted while the poll was in flight survives the prune', async () => {
+    // `fetchRuns` treats an unfiltered answer as authoritative about what ended.
+    // A run that STARTED after the request went out is simply younger than the
+    // answer; dropping it took the banner and the End-tour button away from a
+    // tour the robot was actually walking.
+    api.listRuns.mockImplementation(async () => {
+      useTourStore.getState().applyEvent(event('agent:tour:started', run({ runId: 'run-2' })));
+      return [];
+    });
+    await useTourStore.getState().fetchRuns();
+    expect(useTourStore.getState().activeRunByRobot.g1?.runId).toBe('run-2');
+  });
+
+  it('a stale detail response cannot pin a finished run at “running”', async () => {
+    useTourStore.getState().applyEvent(event('agent:tour:finished', run({ status: 'done', finishedAt: '2026-08-17T10:08:00.000Z', turns: [turn()] })));
+    // Read before the finish committed — older on progress, and it also predates
+    // nothing on the transcript, so only the progress half must be held back.
+    api.getRun.mockResolvedValue(run({ status: 'running', turns: [turn()] }));
+    await useTourStore.getState().fetchRun('run-1');
+    const s = useTourStore.getState();
+    expect(selectRunById('run-1')(s)?.status).toBe('done');
+    expect(selectRunById('run-1')(s)?.finishedAt).toBe('2026-08-17T10:08:00.000Z');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+  });
+
   it('a refused start is a result, not an error', async () => {
     api.startRoute.mockResolvedValue({ accepted: false, reason: 'person_too_close', message: 'Please give me a little room and I will lead the way.' });
     const res = await useTourStore.getState().startRun('route-1', 'g1');

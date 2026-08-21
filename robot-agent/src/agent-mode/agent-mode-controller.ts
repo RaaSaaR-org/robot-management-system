@@ -3125,7 +3125,6 @@ export class AgentModeController {
         // question is answered from what the operator authored rather than
         // from whatever the model believes about the building.
       } else if (pending.kind === 'offer') {
-        runner.clearPending();
         if (reply === 'yes') {
           const started = await this.startTour({
             routeId: pending.route.id,
@@ -3133,10 +3132,28 @@ export class AgentModeController {
             route: pending.route,
             disclosureSpoken: pending.disclosureSpoken,
           });
-          await this.executorSay(
-            started.accepted ? tourPhrase('accepted', language) : started.message,
-            language,
-          );
+          // The offer is spent only once the tour is actually walking, or once
+          // saying yes again could not possibly help. `startTour` refuses a
+          // visitor standing too close — which is exactly what somebody who just
+          // walked up and said "ja" triggers — and clearing the slot before the
+          // attempt meant their second "ja", a step back later, found no pending
+          // offer, fell through to the planner, and the tour could never start
+          // at all: `IdleWatcher` is edge-triggered on the person LEAVING, so no
+          // fresh greeting comes while they stand there waiting. The offer still
+          // lapses on its own timer if they give up.
+          const retryable =
+            started.reason === 'person_too_close' || started.reason === 'busy' || started.reason === 'running';
+          if (started.accepted || !retryable) runner.clearPending();
+          if (started.accepted) {
+            await this.executorSay(tourPhrase('accepted', language), language);
+          } else if (started.reason !== 'person_too_close') {
+            // `person_too_close` is already spoken by `startTour`, in the route's
+            // language. Everything else is announced from the phrasebook — never
+            // `started.message`, which is operator-facing precondition text in
+            // hardcoded English and was being read out by the German TTS voice
+            // immediately after the German phrase it followed.
+            await this.executorSay(tourPhrase('cannotStart', language), language);
+          }
           return {
             accepted: started.accepted,
             outcome: started.accepted ? 'planned' : 'refused',
@@ -3144,6 +3161,7 @@ export class AgentModeController {
             message: started.message,
           };
         }
+        runner.clearPending();
         runner.decline(
           pending.route,
           reply === 'bye' ? 'the visitor said goodbye' : 'the visitor declined the tour',

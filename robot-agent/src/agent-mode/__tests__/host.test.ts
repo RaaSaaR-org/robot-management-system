@@ -373,6 +373,35 @@ describe('TourRouteSource', () => {
     expect(cached.route?.name).toBe('ZeMA visitor tour');
     expect((await down.fetch('nothing-here')).origin).toBe('none');
   });
+
+  it('authenticates with the service token, and says so when it is missing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neodem-tourauth-'));
+    const seen: Array<Record<string, string> | undefined> = [];
+    const src = new TourRouteSource({
+      serverUrl: 'http://server',
+      cachePath: path.join(dir, 'cache.json'),
+      authToken: 'svc-token',
+      fetchImpl: (async (_url: string, init: { headers?: Record<string, string> }) => {
+        seen.push(init?.headers);
+        return new Response(JSON.stringify(ROUTE), { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+    expect((await src.fetch('zema-visit')).origin).toBe('server');
+    expect(seen[0]?.Authorization).toBe('Bearer svc-token');
+
+    // Auto-greet is the one path where the robot fetches for itself, and a 401
+    // there falls back to a disk cache that is empty on a fresh robot — so the
+    // robot greets nobody, forever. The error must name the cause.
+    const unauth = new TourRouteSource({
+      serverUrl: 'http://server',
+      cachePath: path.join(dir, 'empty.json'),
+      authToken: '',
+      fetchImpl: (async () => new Response('no', { status: 401 })) as unknown as typeof fetch,
+    });
+    const denied = await unauth.fetch('zema-visit');
+    expect(denied.origin).toBe('none');
+    expect(denied.error).toContain('NEODEM_SERVICE_TOKEN');
+  });
 });
 
 // ── driving a tour ──────────────────────────────────────────────────────────

@@ -165,7 +165,7 @@ function rig(opts: RigOpts = {}) {
     triggerEmergencyStop: () => {},
     resetEmergencyStop: () => true,
   } as unknown as RobotStateManager);
-  return { controller, events, said, planned, root, ws };
+  return { controller, events, said, planned, root, ws, scene };
 }
 
 /** A model that answers the grounded-answerer prompt with fixed JSON. */
@@ -355,6 +355,39 @@ describe('host plumbing — answering a visitor', () => {
     expect(h.controller.tourStatus().run).toBeNull();
     // The offer is still open for the visitor to answer.
     expect(h.controller.tourStatus().pending).toMatchObject({ kind: 'offer' });
+  });
+
+  it('a "ja" the robot cannot act on yet leaves the offer armed for the next one', async () => {
+    const h = rig();
+    rigs.push(h);
+    await greetOnce(h.controller);
+    expect(h.controller.tourStatus().pending).toMatchObject({ kind: 'offer' });
+
+    // The visitor said yes from where they were standing — inside the 1.2 m the
+    // robot needs before it walks, which is exactly where somebody who just
+    // walked up to it is.
+    h.scene.merge(VIEW, 0, { forwardClearanceM: 0.85 });
+    const refused = await h.controller.submitCommand({ text: 'ja', spoken: true, language: 'de' });
+    expect(refused).toMatchObject({ accepted: false, outcome: 'refused' });
+    // Spoken in the route's language, and ONLY that: `started.message` is
+    // operator-facing precondition text in hardcoded English, and reading it out
+    // through the German voice is the untranslated sentence the phrasebook exists
+    // to prevent.
+    expect(h.said.join(' ')).toContain('Bitte lassen Sie mir etwas Platz');
+    expect(h.said.join(' ')).not.toContain('in front of me');
+
+    // The offer must SURVIVE it. Clearing it here meant the second "ja" — after
+    // the visitor took the step back the robot just asked for — found no pending
+    // offer and fell through to the planner, and the tour could never start:
+    // IdleWatcher is edge-triggered on the person leaving, so no fresh greeting
+    // comes while they stand there waiting.
+    expect(h.controller.tourStatus().pending).toMatchObject({ kind: 'offer' });
+
+    h.scene.merge(VIEW, 0, { forwardClearanceM: 2.5 });
+    const accepted = await h.controller.submitCommand({ text: 'ja', spoken: true, language: 'de' });
+    expect(accepted).toMatchObject({ accepted: true });
+    expect(h.controller.tourStatus().run).not.toBeNull();
+    await settle(h.controller);
   });
 
   it('a stray "ja" during a tour is acknowledged, not answered as a question', async () => {

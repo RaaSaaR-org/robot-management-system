@@ -865,6 +865,7 @@ class TourLog:
         self.samples: list[tuple[float, dict]] = []
         self._t0 = time.time()
         self._last_key: str | None = None
+        self._saw_run = False
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -883,11 +884,20 @@ class TourLog:
         st = http_soft("GET", f"{self.url}/tour", timeout=3)
         if st is None:
             raise RuntimeError("the robot did not answer GET .../agent-mode/tour")
-        if not st.get("run"):
+        if st.get("run"):
+            self._saw_run = True
+        elif self._saw_run:
             # `GET /tour` carries the run IN FLIGHT only. A visit that just
             # ended is exactly what the pane should keep showing -- with its
             # reason -- instead of going blank, so the last run is pulled in
             # when it belongs to this take.
+            #
+            # Only AFTER a run has been seen in flight: before the first one
+            # there is nothing of this take's to back-fill, and asking anyway
+            # doubled the request rate through the whole pre-visit period --
+            # every call re-reading run files through `personalDataGate`,
+            # exactly while the local LLM is producing the greeting the take is
+            # about.
             try:
                 runs = (http_soft("GET", f"{self.url}/tour/runs?limit=1", timeout=3) or {}).get("runs") or []
                 if runs and iso_to_s(runs[0].get("startedAt") or "1970-01-01T00:00:00Z") >= self._t0 - 5:
@@ -980,8 +990,17 @@ class VisitorScript:
         when, _, text = cue.partition(":")
         if not text:
             raise SystemExit(f"bad cue {cue!r} -- expected WHEN:TEXT")
-        if when in ("offer", "continue", "stop", "said"):  # `stop:2+15:text` -- the ref went to text
+        if when in ("stop", "said"):  # `stop:2+15:text` -- the ref went to text
+            # Only these two kinds TAKE a ref, and only here can the first
+            # partition have eaten it. `offer`/`continue` answer a question that
+            # is pending or is not, so everything after their colon is what the
+            # visitor says -- re-partitioning it left `offer:Ja, gerne` with an
+            # empty text, which armed on the offer, claimed the pending window so
+            # nothing else could answer it, POSTed "" and had the visit recorded
+            # as abandoned about a visitor who had just said yes.
             ref, _, text = text.partition(":")
+            if not text:
+                raise SystemExit(f"bad cue {cue!r} -- expected {when}:<ref>[+DELAY]:TEXT")
             when = f"{when}:{ref}"
         base, _, delay = when.partition("+")
         d = float(delay) if delay else 0.0
@@ -1009,11 +1028,15 @@ class VisitorScript:
         return sum(1 for c in self.cues if not c["fired"])
 
     def _read_loop(self) -> None:
-        """The only thread that talks to the robot about state.
+        """This script's one reader of the visit state -- every cue of it
+        watches this cached snapshot instead of polling for itself, so a cue
+        busy saying something cannot stop the others from seeing the next
+        question.
 
-        Every cue watches this cached snapshot instead of polling itself: one
-        reader keeps the request rate sane, and a cue that is busy saying
-        something cannot stop the others from seeing the next question."""
+        Not the process's only reader: `--say` and `--person` each build their
+        own VisitorScript, and `TourLog` and `PersonFollower` sample on their
+        own threads. Keep that in mind before adding another poll here -- the
+        README's own invocation already runs several against one agent."""
         last = None
         while not self._stop.wait(self.period):
             try:
@@ -1082,7 +1105,15 @@ class VisitorScript:
     def _fire(self, cue: dict) -> None:
         cue["fired"] = True
         if self.on_fire is not None:
-            self.on_fire(cue)
+            # Same catch as the speaking path below, and for the same reason: this
+            # runs on the cue's own thread, `http` reports failure by raising
+            # SystemExit, and `threading.excepthook` DISCARDS SystemExit. A scene
+            # with no `person` body or a 400 from /sim/reset-pose killed the cue
+            # thread in silence, and the take recorded a visit with no visitor.
+            try:
+                self.on_fire(cue)
+            except (Exception, SystemExit) as err:  # noqa: BLE001
+                print(f"[clip]   !! cue {cue['kind']}/{cue['ref']} failed: {err}")
             return
         t0 = time.time()
         try:
@@ -1729,10 +1760,19 @@ def burn_tour_layout(raw: pathlib.Path, out: pathlib.Path, meta: dict, cam_size:
         spoken_until = b["t0"] + max(2.5, len(text) / 14.0)
         t1 = max(b.get("t1") or 0.0, spoken_until)
         nxt = said[i + 1]["t0"] if i + 1 < len(said) else None
-        if nxt is not None:
-            t1 = min(t1, max(nxt - 0.1, b["t0"] + 1.2))
-        colour = "#8ec9ff" if (b.get("params") or {}).get("disclosure") else "#ffffff"
+        # A caption holds for at least 1.2 s, but NEVER into the next one's slot:
+        # both plates draw at y="bottom", so an overlap is two stacked plates on
+        # top of each other, not a longer read. The floor used to be applied
+        # AFTER the clamp and beat it, and without a voice service every chunk
+        # completes in milliseconds -- so the whole subtitle track stacked. When
+        # the two rules cannot both hold, the caption is dropped: the same answer
+        # the memory and patrol layouts give.
         t1 = max(t1, b["t0"] + 1.2)
+        if nxt is not None:
+            t1 = min(t1, nxt - 0.1)
+        if t1 <= b["t0"]:
+            continue
+        colour = "#8ec9ff" if (b.get("params") or {}).get("disclosure") else "#ffffff"
         # A greeting is three sentences long, and dropping the tail would drop
         # the OFFER -- so a long line is paged four lines at a time, each page
         # holding for its share of the utterance.
@@ -2337,7 +2377,9 @@ def main() -> int:
                 parts = [float(v) for v in where.split(",")]
                 body = {"body": "person", "x": parts[0], "y": parts[1],
                         "yaw": (parts[2] * 3.141592653589793 / 180) if len(parts) > 2 else 0.0}
-                http("POST", f"{SIM_URL}/sim/reset-pose", body)
+                # Soft, like PersonFollower.place: a take whose visitor could not be
+                # moved is still a take worth keeping, and this runs on a cue thread.
+                http_soft("POST", f"{SIM_URL}/sim/reset-pose", body)
                 print(f"[clip]   visitor moves to {parts[0]}, {parts[1]}")
 
             scripts.append(VisitorScript(args.person, tourlog, agent, on_fire=move_visitor))
