@@ -3,6 +3,27 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.08.21] - 2026-08-21
+
+### Added
+
+- render the G1 in an Isaac warehouse and serve Agent Mode's sensors from it (#233)
+- the robot walks a route on a schedule, takes control photos and reports what is not normal (TASK-212) (#229)
+- export the 2D map + keep a 3-D world cloud from every Agent Mode run — TASK-210/211 (#228)
+- goto a place by name — walk into a room the robot has never seen, planning on its map (TASK-209) (#227)
+- the navigator plans on the occupancy map and refuses keepouts (TASK-208) (#226)
+- robots see each other — fleet peers on every agent's map, and the map on /agent (TASK-207) (#225)
+- the robot builds its own 2-D occupancy map from the LiDAR (TASK-206) (#224)
+- clip recorder pipeline, Agent Mode fixes, and occupancy-map task series (#223)
+- drive Unitree's Isaac sim from Agent Mode via the G1 sport RPC (#219)
+
+### Fixed
+
+- twelve defects found by auditing and filming the shipped Agent Mode work (#232)
+- the sticky alert banner is see-through in dark mode (#231)
+- post-merge review of TASK-206..212 — 26 confirmed defects, live-verified (#230)
+
+
 ## [v2026.08.09] - 2026-08-09
 
 ### Added
