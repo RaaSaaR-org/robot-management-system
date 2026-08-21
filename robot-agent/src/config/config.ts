@@ -290,6 +290,47 @@ export interface Config {
       /** Language of the two spoken patrol lines (`AGENT_PATROL_LANGUAGE`, `en` | `de`, default `en`). */
       language: 'en' | 'de';
     };
+    /**
+     * Host mode (TASK-213): the robot greets a visitor, offers a tour, walks
+     * them to authored stops and answers their questions from authored facts.
+     * Opt-in per deployment, like patrol — a robot that talks to the public
+     * unprompted is a decision an operator makes, not a default.
+     */
+    tour: {
+      /** `AGENT_HOST_ENABLED`, default **false**. Every start is refused (`disabled`) while off. */
+      enabled: boolean;
+      /** The route this robot hosts (`AGENT_TOUR_ROUTE_ID`); empty = no auto-greet, operator starts name a route. */
+      routeId: string;
+      /** Disk cache of tour routes fetched from the server (`AGENT_TOUR_ROUTE_CACHE_PATH`). */
+      routeCachePath: string;
+      /** How long the robot waits for a yes/no after asking (`AGENT_TOUR_REPLY_WINDOW_MS`, 30 000). */
+      replyWindowMs: number;
+      /** Default seconds a stop waits for questions when the route does not say (`AGENT_TOUR_DWELL_S`, 12). */
+      dwellS: number;
+      /**
+       * Personal distance, m (`TOUR_MIN_PERSON_M`, 1.2 — the upper bound of
+       * Hall's personal zone). The robot asks for room rather than walking
+       * into somebody standing closer than this; `AGENT_RANGE_MIN_M` remains
+       * the safety floor that actually stops it.
+       */
+      minPersonM: number;
+      /**
+       * What a `demo` block does (`TOUR_DEMO_MODE`, `narrate` | `execute`).
+       * Defaults to `narrate` because the apple scene is a FIXED-BASE G1: a
+       * robot that can walk a tour cannot, in that scene, also pick the apple.
+       */
+      demoMode: 'execute' | 'narrate';
+      /** Keep the questions and answers of a tour (`TOUR_TRANSCRIPT_ENABLED`, true). */
+      transcriptEnabled: boolean;
+      /** Days a transcript is kept before it is cleared (`TOUR_TRANSCRIPT_RETENTION_DAYS`, 30). */
+      transcriptRetentionDays: number;
+      /**
+       * Appended to the AI-disclosure sentence (`TOUR_DISCLOSURE_EXTRA`), e.g.
+       * the name of the controller. It can only ADD — the disclosure itself
+       * lives in `host.ts` and is not configurable away.
+       */
+      disclosureExtra: string;
+    };
   };
   /**
    * Place awareness (TASK-195): the robot's continuously maintained answer to
@@ -546,6 +587,18 @@ export const config: Config = {
       hashGate: envFloat(process.env.AGENT_PATROL_HASH_GATE, 0.97),
       homePlace: process.env.AGENT_PATROL_HOME_PLACE || '',
       language: process.env.AGENT_PATROL_LANGUAGE === 'de' ? 'de' : 'en',
+    },
+    tour: {
+      enabled: process.env.AGENT_HOST_ENABLED === 'true',
+      routeId: process.env.AGENT_TOUR_ROUTE_ID || '',
+      routeCachePath: process.env.AGENT_TOUR_ROUTE_CACHE_PATH || './data/tour-routes-cache.json',
+      replyWindowMs: envFloat(process.env.AGENT_TOUR_REPLY_WINDOW_MS, 30_000),
+      dwellS: envFloat(process.env.AGENT_TOUR_DWELL_S, 12),
+      minPersonM: envFloat(process.env.TOUR_MIN_PERSON_M, 1.2),
+      demoMode: process.env.TOUR_DEMO_MODE === 'execute' ? 'execute' : 'narrate',
+      transcriptEnabled: process.env.TOUR_TRANSCRIPT_ENABLED !== 'false',
+      transcriptRetentionDays: envFloat(process.env.TOUR_TRANSCRIPT_RETENTION_DAYS, 30),
+      disclosureExtra: process.env.TOUR_DISCLOSURE_EXTRA || '',
     },
   },
   place: {

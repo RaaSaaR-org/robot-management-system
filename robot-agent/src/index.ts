@@ -457,6 +457,10 @@ async function main() {
       // same "we ARE the robot" step — a loser on the port must not delete
       // the winner's photos.
       agentModeController.startPatrolRetentionSweep();
+      // Host mode (TASK-213): close tours a restart left open, then sweep
+      // visitor transcripts past retention. Same "we ARE the robot" gate — a
+      // loser on the port must not close the winner's running tour.
+      agentModeController.startTourRetentionSweep();
     },
     abandonIncarnation: (reason) => incarnations.abandon(reason),
   });

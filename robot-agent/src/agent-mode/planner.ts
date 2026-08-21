@@ -76,6 +76,14 @@ export interface PlannerInput {
    * whatever happens, because that is the key the scene memory is stored under.
    */
   language?: SpokenLanguage;
+  /**
+   * Facts a VISITOR may be answered from (TASK-213), when host mode has one in
+   * front of the robot. Present only while a tour offer is outstanding: a
+   * question asked DURING a tour never reaches the planner at all, it goes to
+   * the grounded answerer. Their presence adds one rule to the prompt — answer
+   * only from these, or say you do not know.
+   */
+  visitorFacts?: readonly string[];
 }
 
 export interface PlannerResult {
@@ -442,6 +450,7 @@ export class Planner {
         sceneSummary: input.sceneSummary,
         ...(remainingPlan && remainingPlan.length > 0 ? { remainingPlan } : {}),
         ...(input.language ? { language: input.language } : {}),
+        ...(input.visitorFacts && input.visitorFacts.length > 0 ? { visitorFacts: input.visitorFacts } : {}),
         ...(attempt > 0 ? { repairHint: lastError } : {}),
       });
 

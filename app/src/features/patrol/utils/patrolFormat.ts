@@ -77,21 +77,37 @@ export interface FindingLink {
   /** Null for a run-only tag: a skipped run has no finding to jump to. */
   findingId: string | null;
   runId: string | null;
+  /**
+   * Which run detail page the id belongs to. Host mode (TASK-213) raises the
+   * same kind of alert for a tour that ended badly, and its runs live under
+   * `/tour/runs/…` — sending an operator to `/patrol/runs/<a tour run id>`
+   * would show them a "run not found" page for an alert that is perfectly
+   * real. This parser is now the alert deep-link parser for both use cases;
+   * if a third one appears it should move somewhere neutral.
+   */
+  kind: 'patrol' | 'tour';
 }
 
 /**
- * Both shapes of the machine tag. The bare `[run:…]` alternative is second so a
- * full `[finding:… run:…]` tag still parses as one link. Without it the skipped-run
- * alert reached the operator with a raw `[run:…]` in the prose and no way into the run.
+ * All three shapes of the machine tag. The bare `[run:…]` alternative is last so
+ * a full `[finding:… run:…]` tag still parses as one link — and `tour-run` is
+ * matched before `run` so the shorter alternative cannot swallow its prefix.
+ * Without the bare form the skipped-run alert reached the operator with a raw
+ * `[run:…]` in the prose and no way into the run.
  */
-const FINDING_LINK_RE = /\[(?:finding:([^\s\]]+)(?:\s+run:([^\s\]]+))?|run:([^\s\]]+))\]/;
+const FINDING_LINK_RE = /\[(?:finding:([^\s\]]+)(?:\s+run:([^\s\]]+))?|tour-run:([^\s\]]+)|run:([^\s\]]+))\]/;
 
 /** Parse the finding/run link out of an alert message/title; null when absent. */
 export function parseFindingLink(text: string | null | undefined): FindingLink | null {
   if (!text) return null;
   const m = FINDING_LINK_RE.exec(text);
   if (!m) return null;
-  return { findingId: m[1] ?? null, runId: m[2] ?? m[3] ?? null };
+  const tourRunId = m[3] ?? null;
+  return {
+    findingId: m[1] ?? null,
+    runId: m[2] ?? tourRunId ?? m[4] ?? null,
+    kind: tourRunId ? 'tour' : 'patrol',
+  };
 }
 
 /** The message with the machine tag removed (for display). */
@@ -105,7 +121,7 @@ export function stripFindingLink(text: string): string {
  */
 export function findingLinkPath(link: FindingLink): string | null {
   if (!link.runId) return null;
-  const runPath = `/patrol/runs/${encodeURIComponent(link.runId)}`;
+  const runPath = `/${link.kind}/runs/${encodeURIComponent(link.runId)}`;
   return link.findingId ? `${runPath}#finding-${link.findingId}` : runPath;
 }
 

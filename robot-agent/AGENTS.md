@@ -488,6 +488,82 @@ mocap `person` can now be moved the same way (`{"body":"person",…}`); baseline
 --patrol-route ROUTE.json [--patrol-mode baseline]` records it (camera / map with
 numbered checkpoints + red finding pins / baseline-vs-now photo pair).
 
+### Host mode (TASK-213)
+
+The second complete use case, and patrol's mirror image: patrol is the robot alone
+at night, **host mode is the robot with a human in front of it**. A person walks up,
+the robot greets them with the site's welcome, states that it is an AI, offers a
+tour, and — if they accept — walks them to an ordered list of **stops**, says a
+short authored piece at each one, optionally demonstrates a VLA skill, and answers
+questions from facts an operator wrote. Opt-in: `AGENT_HOST_ENABLED=true` plus
+`AGENT_TOUR_ROUTE_ID`. Code: `src/agent-mode/host.ts` (`TourRunner`,
+`TourRouteSource`, `TourRunStore`, the phrasebook, the disclosure, the reply
+matcher, preconditions, stop plan), `block-executor.ts` (`present` / `demo`),
+`prompts.ts` (`buildVisitorAnswerPrompt`), the controller's `startTour()` /
+`abortTour()` / `handleVisitorUtterance()` / `answerVisitorQuestion()`.
+
+**One tour = one Agent Mode plan** (`command: "tour: <route name>"`): a leading
+`tour` block that stays running while the stops run and gets the summary, then per
+stop `goto{place}` → `present`×n (the talk track, chunked) → `demo` (when the stop
+has one) → `wait` (the dwell, where questions are taken), and finally
+`goto{greetingPlace}` + the farewell `speak`. Every leg runs through the same
+executor as an operator `goto`. **Stop semantics:** a stop the robot cannot reach
+is skipped and the tour goes on (a visitor is following it — walking them back to
+the door because one aisle was blocked is worse); "shall we go on?" waits 30 s and
+ends the tour `done` on a no or `abandoned` on silence; an E-Stop aborts the walk
+home but the farewell is still spoken, because it moves nothing.
+
+**Two things the LLM is used for, and only two**: answering an unscripted question,
+and planning an unscripted sentence that is not part of a tour. Greeting, offer,
+talk tracks, handovers, goodbye, yes/no and goodbye detection are **templates and
+keyword matches** (`tourPhrase`, `matchVisitorReply`) — a 1.2 s planner round-trip
+in the gap after a visitor stops talking is the one place a spoken interface cannot
+afford it, and a model may not rephrase words an operator authored in front of a
+guest.
+
+**Grounded Q&A.** While a tour runs, an utterance never reaches the planner:
+`handleVisitorUtterance` consults the pending question first (yes/no/goodbye by
+keyword, both languages, no model), then queues anything else as a question. Each
+question gets ONE model call against `buildVisitorAnswerPrompt` — the stop's facts,
+the route's site card, the place note and the scene summary, and nothing else. The
+model must name its source, and the run records `answered: grounded | from_camera |
+declined | unanswered` per turn. **`declined` is the good failure**: an un-grounded
+answer is a defect, and the UI surfaces declined turns as "facts to add".
+
+**Fail closed.** `POST /robots/:id/agent-mode/tour {routeId, origin?, route?}`
+answers `TourStartResult`; a refusal is `{accepted:false, reason, message}` with
+`reason ∈ disabled|estop|busy|battery|place_unknown|damped|crash_unacknowledged|
+route_unknown|no_places|no_stops|person_too_close|running`, and is ALSO recorded as
+a `skipped` run and announced with `agent:tour:finished`. A `visitor`-origin tour
+passes `mayInitiate('goto','self',…)` — the robot offered it, and an offer is an
+initiative even though a human accepted.
+
+**What host mode does NOT do**, and must keep not doing: it stores **no images and
+no audio at all** (patrol's "drop the photo when a person is in frame" becomes
+"never capture"), infers no age, gender or emotion (prohibited in a workplace under
+the EU AI Act since Feb 2025), and identifies nobody. What persists is the text of
+the visit under `workspace-<id>/tour/<routeId>/runs/<runId>/run.json`, swept after
+`TOUR_TRANSCRIPT_RETENTION_DAYS`, erased with the workspace by an Art. 17 wipe.
+The AI disclosure (`AI_DISCLOSURE` in `host.ts`) is appended to every greeting and
+is reviewed like code — `TOUR_DISCLOSURE_EXTRA` can only add to it.
+
+**Barge-in is not solved, and is not pretended.** The voice service is half-duplex:
+the mic is muted from utterance-end until playback-end, so a visitor cannot
+interrupt a sentence in flight. The mitigation is structural — `chunkTalkTrack`
+splits a talk track into ≤2-sentence `present` blocks so the mic reopens between
+them, a stop is capped at ~40 s of speech, and `stopp` (the stop word) remains the
+always-available interrupt.
+
+**Demos are honest.** `TOUR_DEMO_MODE=narrate` is the default because
+`g1_apple_pnp_scene.xml` is a **fixed-base** G1 — the robot that walks a tour
+physically cannot pick the apple in that scene. A narrated demo says out loud that
+it is only describing the skill and reports `narrated`, never `done`.
+
+Endpoints: `POST /robots/:id/agent-mode/tour`, `POST …/tour/abort`,
+`GET …/tour` → `TourStatus`, `GET …/tour/runs`, `GET …/tour/runs/:runId` (gated by
+`personalDataGate` — the transcript is what a member of the public said). Events:
+`agent:tour:started|leg|turn|finished`, mirrored like every other Agent Mode event.
+
 ## Key Dependencies
 
 | Package                 | Purpose                     |

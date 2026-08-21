@@ -83,6 +83,19 @@ export const LazyPatrolRunDetailPage = lazy(() =>
 );
 
 /**
+ * Tour pages (TASK-213) - host mode: tours, editor, visit detail
+ */
+export const LazyTourPage = lazy(() =>
+  import('@/features/tour').then((m) => ({ default: m.TourPage }))
+);
+export const LazyTourEditorPage = lazy(() =>
+  import('@/features/tour').then((m) => ({ default: m.TourEditorPage }))
+);
+export const LazyTourRunDetailPage = lazy(() =>
+  import('@/features/tour').then((m) => ({ default: m.RunDetailPage }))
+);
+
+/**
  * Alerts page - Alert history and management
  */
 export const LazyAlertsPage = lazy(() =>

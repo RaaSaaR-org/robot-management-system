@@ -2701,6 +2701,71 @@ model PatrolFinding {
 }
 
 // ============================================================================
+// HOST MODE (TASK-213) — tour routes are the source of record, runs are the
+// persisted history of what the robot said and what it was asked
+// (`agent:tour:*`). JSON columns are TEXT (SQLite locally); (de)serialised in
+// TourRepository. tenantId-scoped like PatrolRoute.
+//
+// No cron, no time windows, no findings: a tour is triggered by a person the
+// robot greets or by an operator, never by a clock, so there is nothing for a
+// scheduler to own.
+// ============================================================================
+
+model TourRoute {
+  id              String   @id @default(uuid())
+  name            String
+  robotId         String? // robot the route is bound to; null = any robot the operator starts it on
+  twinId          String? // DigitalTwin whose place graph the stops reference
+  language        String   @default("en") // SpokenLanguage: the tour's default; a visitor who speaks the other one wins per turn
+  greetingPlaceId String // where the robot waits for visitors and returns to
+  greeting        String // authored welcome; the robot appends the AI disclosure, which no column can remove
+  offer           String
+  farewell        String
+  siteCard        String   @default("[]") // JSON string[] — facts true anywhere on this tour
+  stops           String   @default("[]") // JSON TourStop[] (headline, talkTrack, facts, demo, dwellS, askToContinue)
+  enabled         Boolean  @default(true)
+  autoGreet       Boolean  @default(false) // may the robot offer this tour to a person it sees, unprompted?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([robotId])
+  @@index([enabled])
+  @@index([createdAt])
+}
+
+model TourRun {
+  id               String    @id // = TourRun.runId minted by the robot (or by the server when the start never reached it)
+  routeId          String // plain column, NO FK: history must survive route deletion and runs the robot reports for routes the server does not know (disk cache)
+  routeName        String
+  robotId          String
+  origin           String // TourRunOrigin: 'visitor' | 'operator'
+  status           String // TourRunStatus: running|done|declined|abandoned|aborted|failed|skipped
+  reason           String?
+  startedAt        DateTime
+  finishedAt       DateTime?
+  legs             String    @default("[]") // JSON TourLeg[]
+  turns            String    @default("[]") // JSON TourTurn[] — question/answer text only; no audio, no identity
+  language         String    @default("en") // SpokenLanguage the run was conducted in
+  disclosureSpoken Boolean   @default(false) // EU AI Act Art. 50 evidence: recorded per run, never assumed
+  planId           String?
+  alertId          String? // alert raised for a skipped/failed run (idempotency)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([routeId])
+  @@index([robotId])
+  @@index([status])
+  @@index([startedAt])
+  @@index([createdAt])
+}
+
+// ============================================================================
 // MULTI-TENANCY (TASK-155)
 // ============================================================================
 //
@@ -2756,6 +2821,10 @@ model Tenant {
   patrolRoutes   PatrolRoute[]
   patrolRuns     PatrolRun[]
   patrolFindings PatrolFinding[]
+
+  // Relations (TASK-213 host mode)
+  tourRoutes TourRoute[]
+  tourRuns   TourRun[]
 
   @@index([slug])
 }

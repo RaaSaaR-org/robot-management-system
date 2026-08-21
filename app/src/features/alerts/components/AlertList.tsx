@@ -108,8 +108,12 @@ function AlertItem({ alert, robotName, onAcknowledge, onDismiss }: AlertItemProp
   const message = findingLink ? stripFindingLink(alert.message) : alert.message;
   // A skipped-run alert carries a bare `[run:<id>]`: there is no finding to
   // jump to, so promising one ("Open finding") sends the operator looking for
-  // something the run does not have.
-  const linkLabel = findingLink?.findingId ? 'Open finding →' : 'Open run →';
+  // something the run does not have. A tour run (TASK-213) is a visit.
+  const linkLabel = findingLink?.findingId
+    ? 'Open finding →'
+    : findingLink?.kind === 'tour'
+      ? 'Open visit →'
+      : 'Open run →';
 
   return (
     <div

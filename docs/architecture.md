@@ -151,7 +151,9 @@ chat / voice ──► A2A message ──► planner (Ollama) ──► block li
 ```
 
 **Blocks** (v1): `walk`, `turn`, `goto`, `look`, `scan_room`, `wave`, `greet`, `posture`,
-`speak`, `wait`. `walk`/`turn`/`goto` become `SetVelocity` (api 7105) with a duration;
+`speak`, `wait`, plus the runner-owned kinds the planner may never emit — `patrol`,
+`capture`, `inspect` (patrol, TASK-212) and `tour`, `present`, `demo` (host mode,
+TASK-213). `walk`/`turn`/`goto` become `SetVelocity` (api 7105) with a duration;
 `wave`/`greet` become arm tasks (7106); `posture` becomes `SetFsmId` (7101). `look` and
 `scan_room` take no robot action — they capture a head-camera frame and send it to the
 vision model. A `vla_skill` block is deliberately **not** in v1.
@@ -175,6 +177,19 @@ frame and roughly where. No faces, no identities, no image retention.
 
 **Arbitration.** A `controlOwner` (`idle | teleop | vla | agent`) is exclusive. Human
 teleop preempts the agent and discards the running plan.
+
+**Two use cases sit on top of it.** *Patrol* (TASK-212) is the robot alone: an
+operator-defined route walked on a schedule, a control photo at every checkpoint,
+compared against a baseline of normal. *Host mode* (TASK-213) is its mirror image —
+the robot with a member of the public in front of it: it greets them, states that it
+is an AI (EU AI Act Art. 50, in force since 2 August 2026), offers a guided tour,
+walks them to authored stops, and answers questions ONLY from facts an operator
+wrote — recording "I do not know" as a first-class outcome rather than inventing an
+answer. Both are one Agent Mode plan driven by a runner rather than by the planner,
+so E-Stop, geofence, arbitration and the audit log apply to a tour stop exactly as
+to an operator's `goto`. Host mode stores no images and no audio at all, and infers
+no age, gender or emotion — emotion recognition in a workplace is prohibited, not
+merely discouraged. See `robot-agent/AGENTS.md` for both.
 
 > **Safety deviation — read before pointing this at hardware.** Agent Mode ships with a
 > **manual E-Stop only** — three triggers, all manual: the UI button on `/agent`, a spoken

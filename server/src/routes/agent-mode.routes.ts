@@ -19,6 +19,7 @@ import { agentModeService, isValidAgentModeSnapshot } from '../services/AgentMod
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClient.js';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
 import { patrolService } from '../services/PatrolService.js';
+import { tourService } from '../services/TourService.js';
 import {
   AgentModeEventTypes,
   type AgentModeEvent,
@@ -48,7 +49,7 @@ function respondProxyError(res: Response, error: unknown, action: string): void 
 
 /**
  * POST /:id/agent-mode/events — Ingest an Agent Mode event from the robot-agent.
- * Body: { type: AgentModeEventType, robotId, plan?, block?, scene?, state?, memory?, patrol?, finding?, timestamp? }
+ * Body: { type: AgentModeEventType, robotId, plan?, block?, scene?, state?, memory?, patrol?, finding?, tour?, turn?, timestamp? }
  *
  * Unauthenticated in practice: the robot-agent pushes without an Authorization
  * header, which works because the route sits behind `authMiddleware` and dev
@@ -58,7 +59,7 @@ function respondProxyError(res: Response, error: unknown, action: string): void 
  */
 agentModeRoutes.post('/:id/agent-mode/events', (req: Request, res: Response) => {
   try {
-    const { type, robotId, plan, block, scene, state, memory, patrol, finding, timestamp } = req.body ?? {};
+    const { type, robotId, plan, block, scene, state, memory, patrol, finding, tour, turn, timestamp } = req.body ?? {};
 
     if (!AgentModeEventTypes.includes(type as AgentModeEventType)) {
       return res.status(400).json({
@@ -89,6 +90,10 @@ agentModeRoutes.post('/:id/agent-mode/events', (req: Request, res: Response) => 
       // exactly like `memory` — and are ALSO persisted, below.
       patrol,
       finding,
+      // Host mode (TASK-213): the tour run / the answered question ride the
+      // event out to the WebSocket like `patrol` — and are ALSO persisted below.
+      tour,
+      turn,
       timestamp: typeof timestamp === 'string' ? timestamp : new Date().toISOString(),
     };
 
@@ -98,6 +103,11 @@ agentModeRoutes.post('/:id/agent-mode/events', (req: Request, res: Response) => 
     // throws (it logs). Only the patrol/finding families are handed over.
     if (event.type.startsWith('agent:patrol:') || event.type.startsWith('agent:finding:')) {
       void patrolService.ingest(event);
+    }
+    // Tour runs + their transcript, same contract: fire-and-forget, and
+    // TourService.ingest never throws (it logs).
+    if (event.type.startsWith('agent:tour:')) {
+      void tourService.ingest(event);
     }
     res.json({ ok: true, state: merged });
   } catch (error) {

@@ -17,6 +17,7 @@
     "seed:evaluation": "tsx src/scripts/seed-evaluation.ts",
     "seed:synthetic": "tsx src/scripts/seed-synthetic-demo.ts",
     "seed:marketplace": "tsx src/scripts/seed-marketplace-demo.ts",
+    "seed:tour": "tsx src/database/seeds/tour-zema.seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

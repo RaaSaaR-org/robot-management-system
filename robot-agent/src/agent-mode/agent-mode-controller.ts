@@ -50,7 +50,8 @@ import { ARRIVAL_M, Navigator, type NavPlannerDeps } from './navigator.js';
 import { checkStraightSegment, planPath, type PlannerWorld, type SegmentCheck } from './path-planner.js';
 import { FOOTPRINT_RADIUS_M } from '../robot/types.js';
 import { Planner, type PlannedBlock } from './planner.js';
-import { formatPlaceNotesSection } from './prompts.js';
+import { buildVisitorAnswerPrompt, formatPlaceNotesSection } from './prompts.js';
+import { agentModelRef, extractJsonObject, genkitGenerate, type GenerateFn } from './llm.js';
 import { resolvePlaceByName, type Place } from './place-resolver.js';
 import { RangeSensor } from './range.js';
 import { MapKeeper } from './occupancy-map-keeper.js';
@@ -63,6 +64,18 @@ import {
   parsePatrolRoute,
   type PatrolExecution,
 } from './patrol.js';
+import {
+  TourRouteSource,
+  TourRunner,
+  checkTourPreconditions,
+  disclosureLine,
+  matchVisitorReply,
+  parseTourRoute,
+  tourPhrase,
+  type TourAnswer,
+  type TourAnswerRequest,
+  type TourExecution,
+} from './host.js';
 import { SceneMemoryStore } from './scene-memory.js';
 import { ServerMirror, type BlockJournalContext } from './server-mirror.js';
 import { VisionClient, type VisionObservation } from './vision.js';
@@ -95,11 +108,31 @@ import type {
   PatrolRunMode,
   PatrolRunOrigin,
   PatrolStartResult,
+  TourRoute,
+  TourRun,
+  TourRunOrigin,
+  TourStartResult,
+  TourStatus,
+  TourTurn,
   SceneMemory,
   SpokenLanguage,
 } from './types.js';
 
 /** `POST /robots/:id/agent-mode/patrol` body, after validation by the route. */
+/** `POST /robots/:id/agent-mode/tour` body, after validation by the route. */
+export interface StartTourInput {
+  routeId: string;
+  origin?: TourRunOrigin;
+  /** The route, sent inline by the server so the robot need not fetch it. */
+  route?: unknown;
+  /**
+   * Whether the AI disclosure has already been spoken to this visitor (the
+   * greeting that made the offer did it). Never assumed from the origin: a
+   * greeting the voice service never played disclosed nothing.
+   */
+  disclosureSpoken?: boolean;
+}
+
 export interface StartPatrolInput {
   routeId: string;
   mode?: PatrolRunMode;
@@ -182,6 +215,11 @@ export interface AgentModeControllerDeps {
   /** Loco facade override — tests pass a stub instead of the sidecar. */
   loco?: BlockExecutorDeps['loco'];
   say?: BlockExecutorDeps['say'];
+  /**
+   * The model call the visitor answerer makes (TASK-213). Injected in tests;
+   * the default is the same Ollama the planner uses.
+   */
+  generate?: GenerateFn;
   sleep?: BlockExecutorDeps['sleep'];
   now?: () => number;
   maxNavStages?: number;
@@ -240,6 +278,19 @@ export interface AgentModeControllerDeps {
   snapshot?: BlockExecutorDeps['snapshot'];
   /** ONE checklist VLM call for `capture` (tests inject answers). */
   checklist?: ConstructorParameters<typeof PatrolRunner>[0]['checklist'];
+  /**
+   * Host mode (TASK-213). `undefined` = the real runner over the workspace;
+   * `null` = no host mode on this controller (every start is refused).
+   */
+  host?: TourRunner | null;
+  /** Tour route fetch + cache when a start carries no route inline. */
+  tourRoutes?: TourRouteSource;
+  /** `AGENT_HOST_ENABLED` override (tests). */
+  hostEnabled?: boolean;
+  /** `AGENT_TOUR_ROUTE_ID` override (tests) — the route this robot hosts. */
+  tourRouteId?: string;
+  /** Run one VLA skill for a `demo` block; absent = this agent cannot. */
+  runSkill?: BlockExecutorDeps['runSkill'];
 }
 
 /**
@@ -310,6 +361,14 @@ export class AgentModeController {
   private readonly patrol: PatrolRunner | null;
   private readonly patrolRoutes: PatrolRouteSource;
   private readonly patrolEnabled: boolean;
+  /** Host mode (TASK-213); null when this controller runs without one. */
+  private readonly host: TourRunner | null;
+  /** Speaks the lines host mode says outside a block (the offer's reply, a refusal). */
+  private readonly sayFn: NonNullable<BlockExecutorDeps['say']>;
+  private readonly generate: GenerateFn;
+  private readonly tourRoutes: TourRouteSource;
+  private readonly hostEnabled: boolean;
+  private readonly tourRouteId: string;
   /** The route the navigator is following right now (TASK-208), null between navigations. */
   private navState: AgentNavPlan | null = null;
   /** The `goto` block whose route `navState` describes, while it runs. */
@@ -552,6 +611,38 @@ export class AgentModeController {
           })
         : deps.patrol;
 
+    this.sayFn = deps.say ?? speakThroughVoiceService;
+    this.generate = deps.generate ?? genkitGenerate;
+    this.hostEnabled = deps.hostEnabled ?? config.agentMode.tour.enabled;
+    this.tourRouteId = deps.tourRouteId ?? config.agentMode.tour.routeId;
+    this.tourRoutes =
+      deps.tourRoutes ??
+      new TourRouteSource({ serverUrl: config.serverUrl, cachePath: config.agentMode.tour.routeCachePath });
+    this.host =
+      deps.host === undefined
+        ? new TourRunner({
+            robotId: this.robotId,
+            workspace: this.memory,
+            emit: (type, run, turn) => this.emit(type, { tour: run, ...(turn ? { turn } : {}) }),
+            // The same default as the patrol runner: without an injected `say`
+            // the tour still talks through the voice service on a real robot.
+            say: deps.say ?? speakThroughVoiceService,
+            answer: (req) => this.answerVisitorQuestion(req),
+            getPose: () => {
+              const pose = this.getPose();
+              return pose ? { x: pose.x, y: pose.y, yawDeg: pose.yawDeg } : null;
+            },
+            // The last MEASURED clearance down the forward corridor, from the
+            // same scene store the walk clamp reads. Never a fresh probe: this
+            // is asked on a conversational path, and a robot that pauses to
+            // ping a LiDAR before saying "please give me some room" has
+            // already failed at the thing it was being polite about.
+            rangeAheadM: () => this.scene.getForwardClearanceM(),
+            personVisible: () => this.scene.isPersonVisible(),
+            ...(deps.now ? { now: deps.now } : {}),
+          })
+        : deps.host;
+
     const executorDeps: BlockExecutorDeps = {
       scene: this.scene,
       vision: this.vision,
@@ -562,6 +653,10 @@ export class AgentModeController {
       // patrol is active (TASK-212); the executor never knows.
       onLook: (observation) => this.onPatrolLook(observation),
       patrol: () => (this.patrol?.active() ? this.patrol.captureHost() : null),
+      // The `demo` block's skill (TASK-213). Always wired, because the
+      // controller is a module singleton in production and cannot be handed a
+      // dep at boot; it refuses honestly until a RobotStateManager is attached.
+      runSkill: deps.runSkill ?? ((input) => this.runVlaSkill(input)),
       ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
       loco: trackedLoco,
       // The blocks of the RUNNING plan speak the language its operator used;
@@ -675,7 +770,14 @@ export class AgentModeController {
       // purpose is to answer "what is this robot doing", and the two states it
       // is most often asked about — a plan running, an E-Stop latched — are
       // exactly the ones `checks[]` above is skipped in.
-      alwaysChecks: [{ name: 'mirror-state', run: () => this.remirrorState() }],
+      alwaysChecks: [
+        { name: 'mirror-state', run: () => this.remirrorState() },
+        // An offer nobody answered has to be noticed by something (TASK-213):
+        // the pending slot is only ever read on the next utterance, and a
+        // visitor who walks away never sends one. It rides the ALWAYS list
+        // because a lapsed offer is exactly as real while a plan runs.
+        { name: 'tour-offer-expiry', run: () => void this.host?.expireOffer() },
+      ],
       ...(deps.idleWatchIntervalMs === undefined
         ? {}
         : { intervalMs: deps.idleWatchIntervalMs }),
@@ -1402,13 +1504,22 @@ export class AgentModeController {
       };
     }
 
-    // A command during a PATROL (TASK-212) aborts the run — the robot was
+    // A visitor is not an operator (TASK-213). While host mode has a question
+    // outstanding or a tour running, a short utterance is an ANSWER and a long
+    // one is a QUESTION — neither becomes a plan. Placed here, after the
+    // stop-word and latch checks and before anything that could plan or fold:
+    // safety still outranks conversation, and a reply must never cost a model
+    // round-trip.
+    const hosted = await this.handleVisitorUtterance(text, input);
+    if (hosted) return hosted;
+
+    // A typed command during a PATROL (TASK-212) or a TOUR (TASK-213) aborts the run — the robot was
     // walking unattended and a human just asked for something else — and the
     // command is then run as a fresh plan the moment the patrol has wound down
     // (see `runPatrolPlan`'s hand-off). It is not folded into the patrol plan:
     // those blocks are the route, and re-planning "the rest of the route" with
     // an LLM is exactly the thing a patrol must never do.
-    if (this.isRunning() && this.plan && this.patrol?.active()) {
+    if (this.isRunning() && this.plan && (this.patrol?.active() || this.host?.active())) {
       const replaced = this.pendingCommand;
       this.pendingCommand = {
         text,
@@ -1416,13 +1527,17 @@ export class AgentModeController {
         ...(input.language ? { language: input.language } : {}),
         ...(input.spoken ? { spoken: true } : {}),
       };
-      this.abortPatrol('operator command');
+      const wasTour = this.host?.active() !== null && this.host?.active() !== undefined;
+      if (wasTour) this.abortTour('operator command');
+      else this.abortPatrol('operator command');
       return {
         accepted: true,
         outcome: 'folded',
         planId: this.plan.id,
         ...(replaced ? { replacedCommand: replaced.text } : {}),
-        message: 'Understood — I am stopping the patrol and will do that next.',
+        message: wasTour
+          ? 'Understood — I am ending the tour and will do that next.'
+          : 'Understood — I am stopping the patrol and will do that next.',
       };
     }
 
@@ -1647,6 +1762,7 @@ export class AgentModeController {
           command: plan.command,
           sceneSummary: this.plannerSceneSummary(),
           ...(plan.language ? { language: plan.language } : {}),
+          ...this.plannerVisitorFacts(),
         });
         // An E-Stop that landed during the LLM round-trip already finalized
         // this plan and emitted its `finished`. Writing fresh pending blocks
@@ -1901,6 +2017,7 @@ export class AgentModeController {
       sceneSummary: this.plannerSceneSummary(),
       remainingPlan: remaining,
       ...(plan.language ? { language: plan.language } : {}),
+      ...this.plannerVisitorFacts(),
     });
 
     // Completed blocks are frozen; only the pending tail is replaced.
@@ -2306,7 +2423,20 @@ export class AgentModeController {
    * hallucinate motion for what must never be more than a wave.
    */
   private onPersonAppeared(observation: VisionObservation): void {
-    this.startProactivePlan(
+    // Host mode (TASK-213) changes who the robot thinks this person is. An
+    // operator gets "ready whenever you have a job for me"; a VISITOR gets the
+    // site's welcome, the AI disclosure, and the offer of a tour — and the
+    // robot then waits to be answered.
+    if (this.hostEnabled && this.host && this.tourRouteId) {
+      void this.greetVisitor(observation);
+      return;
+    }
+    this.greetOperator(observation);
+  }
+
+  /** Today's greeting, and the fallback whenever host mode has no usable route. */
+  private greetOperator(observation: VisionObservation): boolean {
+    return this.startProactivePlan(
       '(idle) a person appeared',
       [
         {
@@ -2317,6 +2447,64 @@ export class AgentModeController {
       ],
       'greet',
     );
+  }
+
+  /**
+   * Welcome a visitor and offer them the tour.
+   *
+   * The sentence is assembled from the route (operator-authored), the
+   * disclosure (source, not configurable away) and the offer — never planned.
+   * A model has no business writing the first thing a member of the public
+   * hears from a robot, and the 1.2 s it would cost lands exactly in the pause
+   * after somebody walks up.
+   *
+   * The offer is armed only AFTER the greeting has been spoken: the voice
+   * service is half-duplex, so the visitor's microphone is muted for the whole
+   * greeting, and starting a 30 s reply window before it would spend most of
+   * the window on the robot's own voice.
+   */
+  private async greetVisitor(observation: VisionObservation): Promise<void> {
+    const runner = this.host;
+    if (!runner) return;
+    const fetched = await this.tourRoutes.fetch(this.tourRouteId);
+    const route = fetched.route;
+    if (!route || !route.enabled || !route.autoGreet || route.stops.length === 0) {
+      // A route that is missing, off, or not allowed to greet is not a reason
+      // to stand there mute — the robot falls back to what it did before.
+      this.greetOperator(observation);
+      return;
+    }
+    const text = [route.greeting.trim(), disclosureLine(route.language), route.offer.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const started = this.startProactivePlan(
+      '(idle) a visitor appeared',
+      [
+        {
+          kind: 'greet',
+          params: { text },
+          reasoning: `A visitor became visible: ${observation.currentView}`,
+        },
+      ],
+      'greet',
+      { language: route.language },
+    );
+    if (!started) return;
+    const greetPlan = this.plan;
+    await this.runPromise;
+    // Did the greeting actually reach a speaker? The block result says so, and
+    // it is the difference between "this visitor was told they are talking to
+    // an AI" and "we meant to tell them" — which is the whole evidentiary
+    // value of the Art. 50 record.
+    // `params.spoken` is set by the executor the moment the utterance is
+    // handed to the voice service, BEFORE the wave. A greeting whose arm
+    // gesture failed still reached the visitor's ears, and the disclosure
+    // record follows the ears, not the arm — hence no `status === 'done'`
+    // condition here.
+    const greetBlock = greetPlan?.blocks[0];
+    const disclosureSpoken = greetBlock?.params.spoken === true;
+    if (this.latchedEstop() || this.host?.active()) return;
+    runner.armOffer(route, { disclosureSpoken });
   }
 
   /**
@@ -2365,6 +2553,7 @@ export class AgentModeController {
     command: string,
     blocks: PlannedBlock[],
     origin: 'greet' | 'heartbeat',
+    opts: { language?: SpokenLanguage } = {},
   ): boolean {
     if (!this.isIdleWatchEligible()) return false;
 
@@ -2394,6 +2583,10 @@ export class AgentModeController {
       id: uuidv4(),
       robotId: this.robotId,
       command,
+      // The blocks of a plan speak the plan's language (see the executor's
+      // `language` dep). A visitor greeting is the one self-initiated plan
+      // that has one, because the route says which language this site greets in.
+      ...(opts.language ? { language: opts.language } : {}),
       blocks: blocks.map((b) => this.toBlock(b)),
       cursor: -1,
       status: 'running',
@@ -2551,6 +2744,508 @@ export class AgentModeController {
     if (this.heartbeatPlanId === plan.id) return;
     if (plan.status === 'failed') this.lastPlanFailedAtMs = Date.now();
     else if (plan.status === 'done' || plan.status === 'aborted') this.lastPlanFailedAtMs = null;
+  }
+
+  // ── host mode (TASK-213) ──────────────────────────────────────────────────
+
+  /**
+   * Start a tour. Refusals are answers, not errors: every unmet precondition
+   * comes back as `{accepted:false, reason}` AND is recorded as a `skipped`
+   * run, so the server persists it — the same fail-closed rule as patrol.
+   */
+  async startTour(input: StartTourInput): Promise<TourStartResult> {
+    const origin: TourRunOrigin = input.origin === 'visitor' ? 'visitor' : 'operator';
+    if (origin === 'operator') this.noteOperatorTurn();
+    const runner = this.host;
+    if (!runner) return { accepted: false, reason: 'disabled', message: 'This robot has no tour runner (no workspace).' };
+
+    let route: TourRoute | null = null;
+    if (input.route !== undefined && input.route !== null) {
+      try {
+        route = parseTourRoute(input.route, 'route');
+        this.tourRoutes.remember(route);
+      } catch (err) {
+        return runner.refuse(stubTourRoute(input.routeId), origin, 'route_unknown', `The route sent inline is invalid: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      const fetched = await this.tourRoutes.fetch(input.routeId);
+      route = fetched.route;
+      if (!route) {
+        return runner.refuse(stubTourRoute(input.routeId), origin, 'route_unknown', `Tour route ${input.routeId} is unknown here and could not be fetched (${fetched.error ?? 'no server'}).`);
+      }
+    }
+
+    const rsm = this.robotStateManager;
+    const verdict = checkTourPreconditions({
+      hostEnabled: this.hostEnabled,
+      agentModeEnabled: this.enabled,
+      estopLatched: this.latchedEstop() !== null,
+      tourActive: runner.active() !== null,
+      planRunning: this.isRunning(),
+      controlOwner: this.lock.get(),
+      teleopOrVlaActive: !!rsm && ((rsm.isTeleopActive?.() ?? false) || (rsm.isVLAActive?.() ?? false)),
+      initiative: this.initiativeContext(),
+      origin,
+      route,
+      knownPlaceIds: this.knownPlaces().map((p) => p.id),
+      rangeAheadM: this.scene.getForwardClearanceM(),
+      personVisible: this.scene.isPersonVisible(),
+      now: new Date(this.now()),
+    });
+    if (!verdict.ok) {
+      // Somebody is standing in front of the robot and asked for something it
+      // will not do. Saying nothing would read as a broken robot, so the
+      // refusal is spoken as well as returned — and only this one is, because
+      // it is the only refusal the visitor can fix by moving.
+      if (verdict.reason === 'person_too_close') {
+        void this.executorSay(tourPhrase('giveRoom', route.language), route.language);
+      }
+      return runner.refuse(route, origin, verdict.reason, verdict.message);
+    }
+
+    const claim = this.lock.claim('agent');
+    if (!claim.ok) return runner.refuse(route, origin, 'busy', claim.reason ?? 'control is busy.');
+
+    // Whether the visitor was told they are talking to an AI is carried in by
+    // the caller (the greeting that made the offer knows whether it was
+    // actually spoken); a tour an operator starts from the UI has disclosed
+    // nothing yet, and the run must not claim otherwise.
+    const { run, blocks } = runner.begin(route, origin, { disclosureSpoken: input.disclosureSpoken === true });
+    const plan: AgentPlan = {
+      id: uuidv4(),
+      robotId: this.robotId,
+      command: `tour: ${route.name}`,
+      language: route.language,
+      blocks: blocks.map((b) => b.block),
+      cursor: -1,
+      status: 'running',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.plan = plan;
+    this.abortRequested = false;
+    this.abortReason = null;
+    this.planFinalized = false;
+    // Nobody vouches for what a member of the public says: a `remember` that
+    // somehow arrived during a tour is `untrusted`, like a self-initiated plan.
+    if (origin === 'visitor') this.selfInitiatedPlanId = plan.id;
+    this.emit('agent:plan:started', { plan: clonePlan(plan) });
+    this.writeJournal(
+      heartbeatJournalRecord({
+        at: nowIso(),
+        place: this.scene.getPlace()?.id ?? null,
+        trust: origin === 'visitor' ? 'self' : 'operator',
+        msg: `tour of "${route.name}" started (${origin}, run ${run.runId})`,
+      }),
+    );
+
+    this.runPromise = this.runTourPlan(plan).finally(() => {
+      this.runPromise = null;
+      if (this.selfInitiatedPlanId === plan.id) this.selfInitiatedPlanId = null;
+      const pending = this.pendingCommand;
+      if (pending) {
+        this.pendingCommand = null;
+        void this.submitCommand(pending);
+      }
+    });
+    return {
+      accepted: true,
+      runId: run.runId,
+      message: `Tour of "${route.name}" started (${route.stops.length} stop(s)).`,
+    };
+  }
+
+  /**
+   * Run one VLA skill for a `demo` block, through the same closed loop
+   * `POST /robots/:id/skills/execute` uses — in process, not over our own HTTP
+   * API: a demo that depends on the agent being able to reach itself has one
+   * more way to fail in front of an audience, for no gain.
+   */
+  private async runVlaSkill(input: {
+    skillId: string;
+    skillName: string;
+    taskPrompt?: string;
+    timeoutMs?: number;
+  }): Promise<{ ok: boolean; steps?: number; durationMs?: number; message: string }> {
+    const rsm = this.robotStateManager;
+    if (!rsm) return { ok: false, message: 'this agent has no robot to run a skill on' };
+    const { SkillExecutor } = await import('../vla/skill-executor.js');
+    const executor = new SkillExecutor(rsm);
+    const result = await executor.run({
+      skillId: input.skillId,
+      taskPrompt: input.taskPrompt ?? `Execute skill ${input.skillName}`,
+      maxSteps: 200,
+      timeoutMs: input.timeoutMs ?? 60_000,
+      robotId: this.robotId,
+    });
+    const ok = result.status === 'completed';
+    return {
+      ok,
+      steps: result.steps,
+      durationMs: result.durationMs,
+      message: ok
+        ? `Ran "${input.skillName}": ${result.steps} step(s) in ${(result.durationMs / 1000).toFixed(1)} s.`
+        : `"${input.skillName}" did not finish: ${result.error ?? result.message ?? result.status}`,
+    };
+  }
+
+  /** Abort the running tour (the plan aborts with it). */
+  abortTour(reason: string): { ok: boolean; runId?: string } {
+    const runId = this.host?.requestAbort(reason) ?? null;
+    if (!runId) return { ok: false };
+    this.abortPlan(`Tour aborted: ${reason}`);
+    return { ok: true, runId };
+  }
+
+  /** `GET /robots/:id/agent-mode/tour`. */
+  tourStatus(): TourStatus {
+    const pending = this.host?.pending() ?? null;
+    return {
+      enabled: this.hostEnabled && this.host !== null,
+      route: this.host?.activeRoute() ?? pending?.route ?? null,
+      run: this.host?.active() ?? null,
+      pending: pending ? { kind: pending.kind, expiresAt: pending.expiresAt } : null,
+      source: this.host ? (this.host.activeRoute() ? 'server' : 'none') : 'none',
+    };
+  }
+
+  tourRuns(limit = 20): TourRun[] {
+    return this.host?.runs?.listRuns(limit) ?? [];
+  }
+
+  tourRun(runId: string): TourRun | null {
+    const runner = this.host;
+    if (!runner) return null;
+    const active = runner.active();
+    if (active && active.runId === runId) return active;
+    return runner.runs?.findRun(runId) ?? null;
+  }
+
+  /** Close tours a restart left running, then sweep transcripts past retention. */
+  startTourRetentionSweep(): void {
+    this.host?.closeInterrupted();
+    this.host?.startRetentionSweep();
+  }
+
+  /**
+   * Drive the tour plan. Same shape as {@link runPatrolPlan}: the ORDER and the
+   * stop/abort semantics belong to the runner, this side only runs one block at
+   * a time through the same start/execute/finish path every other plan uses.
+   */
+  private async runTourPlan(plan: AgentPlan): Promise<void> {
+    const runner = this.host!;
+    const exec: TourExecution = {
+      begin: (block) => {
+        plan.cursor = plan.blocks.indexOf(block);
+        this.startBlock(plan, block);
+      },
+      execute: async (block) => {
+        if (block.kind !== 'goto') return this.executor.execute(block);
+        this.generatedInsertIndex = plan.blocks.indexOf(block) + 1;
+        this.activeGoto = block;
+        try {
+          return await this.runGoto(block);
+        } finally {
+          this.activeGoto = null;
+        }
+      },
+      finish: (block, outcome) => this.finishBlock(plan, block, outcome),
+      skip: (block, reason) => {
+        if (block.status !== 'pending') return;
+        block.status = 'skipped';
+        block.error = reason;
+        plan.updatedAt = nowIso();
+        this.emit('agent:plan:updated', { plan: clonePlan(plan) });
+      },
+      isAborted: () => this.abortSignalled(),
+      abortReason: () => this.abortReason,
+    };
+    let run: TourRun | null = null;
+    try {
+      run = await runner.drive(plan.id, exec);
+      if (!this.planFinalized) {
+        for (const block of plan.blocks) {
+          if (block.status === 'pending') {
+            block.status = 'skipped';
+            block.error = run.reason ?? 'not run';
+          }
+        }
+        plan.status = run.status === 'aborted' ? 'aborted' : run.status === 'failed' ? 'failed' : 'done';
+      }
+    } catch (err) {
+      plan.status = 'failed';
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[AgentMode] tour plan ${plan.id} crashed: ${message}`);
+      for (const block of plan.blocks) {
+        if (block.status === 'pending') block.status = 'skipped';
+        else if (block.status === 'running') {
+          block.status = 'failed';
+          block.error = message;
+          block.finishedAt = nowIso();
+        }
+      }
+    } finally {
+      plan.cursor = -1;
+      plan.updatedAt = nowIso();
+      this.notePlanOutcome(plan);
+      if (run) {
+        const declined = run.turns.filter((t) => t.answered === 'declined').length;
+        this.writeJournal(
+          heartbeatJournalRecord({
+            at: nowIso(),
+            place: this.scene.getPlace()?.id ?? null,
+            trust: 'self',
+            msg:
+              `tour run ${run.runId} ${run.status}: ${run.legs.filter((l) => l.status === 'done').length}/${run.legs.length} stop(s), ` +
+              `${run.turns.length} question(s), ${declined} declined${run.reason ? ` — ${run.reason}` : ''}`,
+          }),
+        );
+      }
+      if (!this.planFinalized) {
+        this.lock.release('agent');
+        this.emit('agent:plan:finished', { plan: clonePlan(plan) });
+      }
+    }
+  }
+
+  /**
+   * Answer ONE visitor question, from the facts the operator authored and from
+   * what the robot can currently see. The only model call a running tour makes.
+   *
+   * It does NOT go through the planner: a question needs a sentence, not
+   * blocks, and handing a visitor's words to something that can plan motion is
+   * how "what does that arm do?" becomes an arm moving. The classification
+   * (`grounded` / `from_camera` / `declined`) is what the model was asked for,
+   * not something guessed from the text afterwards — `declined` has to be
+   * countable for the "facts to add" list to mean anything.
+   */
+  private async answerVisitorQuestion(req: TourAnswerRequest): Promise<TourAnswer> {
+    const facts = this.visitorFacts(req);
+    const decline = (): TourAnswer => ({
+      answer: `${tourPhrase('dontKnow', req.language)} ${tourPhrase('noteTaken', req.language)}`,
+      answered: 'declined',
+    });
+    let raw: string;
+    try {
+      const model = await agentModelRef(config.agentMode.plannerModel);
+      const res = await this.generate({
+        model,
+        prompt: [
+          {
+            text: buildVisitorAnswerPrompt({
+              question: req.question,
+              language: req.language,
+              stopHeadline: req.stop?.headline ?? null,
+              facts,
+              sceneSummary: this.scene.summary(),
+            }),
+          },
+        ],
+        temperature: 0,
+        thinking: config.agentMode.plannerThinking,
+      });
+      raw = res.text ?? '';
+    } catch (err) {
+      console.warn(`[Host] the answerer failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { answer: tourPhrase('answerFailed', req.language), answered: 'unanswered' };
+    }
+    const parsed = extractJsonObject(raw) as { answer?: unknown; source?: unknown } | null;
+    const answer = typeof parsed?.answer === 'string' ? parsed.answer.trim() : '';
+    const source = parsed?.source;
+    // A model that answers with no JSON, or with an empty sentence, has not
+    // answered. Reading its raw text out loud would be exactly the
+    // ungrounded-answer failure this path exists to prevent.
+    if (!answer) return decline();
+    if (source === 'scene') return { answer, answered: 'from_camera' };
+    // "from the facts" is only possible when there WERE facts. An empty list
+    // and a confident `source:'facts'` is a model describing its own weights.
+    if (source === 'facts' && facts.length > 0) return { answer, answered: 'grounded' };
+    if (source === 'unknown') return { answer, answered: 'declined' };
+    // Anything else — a source we did not ask for, or `facts` with no facts —
+    // is an answer with no stated ground. It is NOT spoken: filing it as
+    // `declined` while still reading it aloud would record the honest outcome
+    // and perform the dishonest one, which is the worse half of both.
+    return decline();
+  }
+
+  /**
+   * What a visitor may be answered from: the current stop's facts, the site
+   * card, and the durable note for the place the robot is standing in. Nothing
+   * else — in particular not `MEMORY.md`, which holds operator instructions
+   * and is none of a guest's business.
+   */
+  private visitorFacts(req: TourAnswerRequest): string[] {
+    const facts = [...(req.stop?.facts ?? []), ...req.route.siteCard];
+    const place = this.scene.getPlace()?.id ?? null;
+    const note = place ? (this.memory?.placeExcerpt(place) ?? '') : '';
+    if (note.trim()) {
+      for (const line of note.split('\n')) {
+        const clean = line.replace(/^[-*]\s*/, '').trim();
+        if (clean) facts.push(clean);
+      }
+    }
+    return facts;
+  }
+
+  /**
+   * A visitor said something while a tour is running, or while an offer is
+   * waiting for an answer. Returns null when host mode has no opinion and the
+   * utterance should be planned as usual.
+   *
+   * Called from {@link submitCommand} after the stop-word check and before the
+   * planner — the same place, and for the same reason, stop words are handled:
+   * a reply must never cost a model round-trip, and must never become motion.
+   */
+  private async handleVisitorUtterance(text: string, input: SubmitCommandInput): Promise<AgentCommandResult | null> {
+    const runner = this.host;
+    if (!runner) return null;
+    const pending = runner.pending();
+    // The language of the ROUTE the question belongs to, before the language of
+    // a run that has not started yet: a visitor who says yes to a German offer
+    // was answered "Wonderful — follow me, please" in English, because at that
+    // moment there is no active route to take the language from.
+    const language: SpokenLanguage =
+      input.language ?? pending?.route.language ?? runner.activeRoute()?.language ?? 'en';
+    // Only a SPOKEN utterance answers a question the robot asked out loud. A
+    // "ja" typed into the operator console is not the visitor's voice, and
+    // letting it resolve their offer means whoever has the UI open can answer
+    // for the person standing in front of the robot.
+    const reply = input.spoken ? matchVisitorReply(text) : null;
+
+    if (pending) {
+      if (!reply) {
+        // Not an answer — a question ("what would you show me?"), or a command.
+        // The offer STAYS ARMED either way: somebody who asks something before
+        // saying yes has not declined, and clearing the slot here meant their
+        // "ja" a moment later was planned as a command instead of starting the
+        // tour. It lapses on its own timer if they never answer.
+        //
+        // The utterance itself falls through to the planner, which is given
+        // the route's facts (see `plannerVisitorFacts`) precisely so this
+        // question is answered from what the operator authored rather than
+        // from whatever the model believes about the building.
+      } else if (pending.kind === 'offer') {
+        if (reply === 'yes') {
+          const started = await this.startTour({
+            routeId: pending.route.id,
+            origin: 'visitor',
+            route: pending.route,
+            disclosureSpoken: pending.disclosureSpoken,
+          });
+          // The offer is spent only once the tour is actually walking, or once
+          // saying yes again could not possibly help. `startTour` refuses a
+          // visitor standing too close — which is exactly what somebody who just
+          // walked up and said "ja" triggers — and clearing the slot before the
+          // attempt meant their second "ja", a step back later, found no pending
+          // offer, fell through to the planner, and the tour could never start
+          // at all: `IdleWatcher` is edge-triggered on the person LEAVING, so no
+          // fresh greeting comes while they stand there waiting. The offer still
+          // lapses on its own timer if they give up.
+          const retryable =
+            started.reason === 'person_too_close' || started.reason === 'busy' || started.reason === 'running';
+          if (started.accepted || !retryable) runner.clearPending();
+          if (started.accepted) {
+            await this.executorSay(tourPhrase('accepted', language), language);
+          } else if (started.reason !== 'person_too_close') {
+            // `person_too_close` is already spoken by `startTour`, in the route's
+            // language. Everything else is announced from the phrasebook — never
+            // `started.message`, which is operator-facing precondition text in
+            // hardcoded English and was being read out by the German TTS voice
+            // immediately after the German phrase it followed.
+            await this.executorSay(tourPhrase('cannotStart', language), language);
+          }
+          return {
+            accepted: started.accepted,
+            outcome: started.accepted ? 'planned' : 'refused',
+            ...(started.runId ? { planId: this.plan?.id ?? undefined } : {}),
+            message: started.message,
+          };
+        }
+        runner.clearPending();
+        runner.decline(
+          pending.route,
+          reply === 'bye' ? 'the visitor said goodbye' : 'the visitor declined the tour',
+          pending.disclosureSpoken,
+        );
+        await this.executorSay(tourPhrase('declined', language), language);
+        return { accepted: true, outcome: 'answered', message: 'The visitor declined the tour.' };
+      } else {
+        // 'continue': the runner is waiting on this inside drive().
+        runner.pushReply(reply);
+        return { accepted: true, outcome: 'answered', message: `Understood ("${reply}").` };
+      }
+    }
+
+    if (!runner.active()) return null;
+
+    // A TYPED command during a tour is an operator's, not a visitor's: nobody
+    // standing in front of a robot types at it. It falls through to the
+    // interrupt path below, which aborts the tour and then runs the command —
+    // the same rule patrol has, and the way an operator takes a robot back
+    // without shouting "stopp" at it in front of guests.
+    if (!input.spoken) return null;
+
+    // A tour is running. "Goodbye" ends it; anything else is a question, and a
+    // question is answered at the next gap rather than folded into the plan —
+    // re-planning the rest of a tour with an LLM would throw away the words an
+    // operator authored, which is the one thing this feature promises not to do.
+    if (reply === 'bye' || reply === 'no') {
+      // NOT abortTour: that is the E-Stop shape (skip the walk home, record
+      // the run `aborted`). A guest saying goodbye is the ordinary end of a
+      // visit — the robot stops showing stops, says its farewell and walks
+      // back to where the next visitor will find it.
+      runner.endByVisitor('the visitor said goodbye');
+      return { accepted: true, outcome: 'answered', message: 'Ending the tour and walking back.' };
+    }
+    // A bare "yes" with nothing outstanding answers a question nobody asked —
+    // somebody agreeing with the robot, or a reply that arrived after the
+    // window closed. Queuing it as a QUESTION is what a live run actually did:
+    // "ja" went to the answerer, which dutifully replied "Ich sage ja." and
+    // filed a declined turn. Acknowledge it and let it go.
+    if (reply === 'yes') {
+      return { accepted: true, outcome: 'answered', message: 'Understood.' };
+    }
+    const queued = runner.enqueueQuestion(text, language);
+    return {
+      accepted: true,
+      outcome: 'answered',
+      message: queued
+        ? 'Understood — I will answer that as soon as I have finished this sentence.'
+        : 'I already have three questions waiting; ask me again in a moment.',
+    };
+  }
+
+  /**
+   * The facts to hand the PLANNER while a visitor is in front of the robot.
+   *
+   * Narrow on purpose. A question asked during a running tour never reaches
+   * the planner — it goes to the grounded answerer. The one case that does is
+   * a visitor who says something other than yes/no while the offer is
+   * outstanding ("what would you show me?"): that is planned, and without the
+   * facts it is planned by a model with no idea what this building is. With
+   * them, the prompt carries the same "answer only from these, or say you do
+   * not know" rule the answerer works under.
+   */
+  private plannerVisitorFacts(): { visitorFacts?: readonly string[] } {
+    const pending = this.host?.pending();
+    if (!pending) return {};
+    const facts = this.visitorFacts({
+      question: '',
+      language: pending.route.language,
+      route: pending.route,
+      stop: null,
+    });
+    return facts.length > 0 ? { visitorFacts: facts } : {};
+  }
+
+  /** Speak one templated line outside a block. Never throws; silence is the failure. */
+  private async executorSay(text: string, language: SpokenLanguage): Promise<void> {
+    try {
+      await this.sayFn(text, language);
+    } catch {
+      // A robot with no voice still has a working timeline; the caller's
+      // return value carries the same words.
+    }
   }
 
   // ── patrol (TASK-212) ─────────────────────────────────────────────────────
@@ -2897,7 +3592,7 @@ export class AgentModeController {
 
   private emit(
     type: AgentModeEventType,
-    extra: Partial<Pick<AgentModeEvent, 'plan' | 'block' | 'scene' | 'memory' | 'patrol' | 'finding'>> = {}
+    extra: Partial<Pick<AgentModeEvent, 'plan' | 'block' | 'scene' | 'memory' | 'patrol' | 'finding' | 'tour' | 'turn'>> = {}
   ): void {
     const event: AgentModeEvent = {
       type,
@@ -2925,6 +3620,28 @@ export class AgentModeController {
 }
 
 /** A route we know only by id — what a refused start is recorded against. */
+/** The least a refused tour can be recorded against when the route is unknown. */
+function stubTourRoute(routeId: string): TourRoute {
+  const at = nowIso();
+  return {
+    id: routeId,
+    name: routeId,
+    robotId: null,
+    twinId: null,
+    language: 'en',
+    greetingPlaceId: '',
+    greeting: '',
+    offer: '',
+    farewell: '',
+    siteCard: [],
+    stops: [],
+    enabled: false,
+    autoGreet: false,
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
 function stubRoute(routeId: string): PatrolRoute {
   const at = nowIso();
   return {

@@ -8,6 +8,8 @@ export {
   blockKindLabel,
   blockKindGlyph,
   formatBlockParams,
+  presentProgress,
+  demoMode,
   blockStatusStyle,
   planStatusStyle,
   blockDurationMs,

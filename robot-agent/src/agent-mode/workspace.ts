@@ -397,6 +397,17 @@ export class Workspace {
     return path.join(this.rootDir, 'patrol');
   }
 
+  /**
+   * Host mode data (TASK-213): `tour/<routeId>/runs/<runId>/run.json` — the
+   * legs walked and the visitor's questions with what was answered. No photos
+   * and no audio are ever written here (host mode captures neither), but the
+   * transcript IS personal data: it is what a member of the public said to a
+   * robot. Erasure takes the whole subtree, like patrol's.
+   */
+  get tourDir(): string {
+    return path.join(this.rootDir, 'tour');
+  }
+
   /** The ID card (TASK-198). See {@link IDENTITY_FILE_NAME} for the duplication. */
   get identityFile(): string {
     return path.join(this.rootDir, IDENTITY_FILE_NAME);
@@ -797,20 +808,22 @@ export class Workspace {
     // and a log of when the robot was where. Every file under the subtree is
     // listed individually so the erasure report says what went, and the
     // directory itself goes with them.
-    try {
-      if (fs.existsSync(this.patrolDir)) {
-        const walkPatrol = (dir: string): void => {
+    // Tour runs (TASK-213) go with them: a visitor's questions, verbatim.
+    for (const subtree of [this.patrolDir, this.tourDir]) {
+      try {
+        if (!fs.existsSync(subtree)) continue;
+        const walkSubtree = (dir: string): void => {
           for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const file = path.join(dir, entry.name);
-            if (entry.isDirectory()) walkPatrol(file);
+            if (entry.isDirectory()) walkSubtree(file);
             else if (entry.isFile()) remove(file);
           }
         };
-        walkPatrol(this.patrolDir);
-        fs.rmSync(this.patrolDir, { recursive: true, force: true });
+        walkSubtree(subtree);
+        fs.rmSync(subtree, { recursive: true, force: true });
+      } catch (err) {
+        errors.push(`${subtree}: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      errors.push(`${this.patrolDir}: ${err instanceof Error ? err.message : String(err)}`);
     }
     // Age 0: a leftover scratch file goes now, not in a minute.
     // `includeRescued`: a `*.rescued-*` copy is spared by the BOOT sweep (it is

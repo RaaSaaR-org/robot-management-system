@@ -72,7 +72,12 @@ function AlertBannerContent({ alert, onAcknowledge, onDismiss }: AlertBannerCont
   const message = findingLink ? stripFindingLink(alert.message) : alert.message;
   // A skipped-run alert carries a bare `[run:<id>]` — the target is the run
   // itself. Saying "Open finding" there promises evidence that does not exist.
-  const linkLabel = findingLink?.findingId ? 'Open finding →' : 'Open run →';
+  // A tour run (TASK-213) is a visit, and the page it opens says "Visit".
+  const linkLabel = findingLink?.findingId
+    ? 'Open finding →'
+    : findingLink?.kind === 'tour'
+      ? 'Open visit →'
+      : 'Open run →';
 
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 sm:py-3">

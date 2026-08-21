@@ -216,6 +216,67 @@ in a room" with it). Patrol clips: `demo_clip.py --layout patrol --patrol-route
 ../sim_evaluator/patrol/route.house.json [--patrol-mode baseline]` — see
 `../sim_evaluator/patrol/README.md`.
 
+### Host-mode visits (TASK-213)
+
+`--layout tour` films a VISIT instead of a command: the scene camera as the
+canvas, the visit pane down the right-hand side (the route's stops with the live
+state of each leg, whether the EU AI Act disclosure was actually spoken, and
+every question the visitor asked with where the answer came from), the robot's
+map top-right, and what the robot says as subtitles.
+
+```bash
+# the robot starts this one by itself: a visitor walks up, it greets, discloses
+# and offers -- and the visitor answers
+.venv/bin/python demo_clip.py --tour-listen \
+    --out clips/host-mode/assets/02-visit.mp4 \
+    --cam follow --size 1600x900 --fps 12 --no-reset \
+    --places ../sim_evaluator/places/places.warehouse.json \
+    --map-window=-10.5,-6.5,10.5,6.5 \
+    --person "8:ahead" --person-follow \
+    --say "offer+3:Ja, gerne!" \
+    --say "stop:1+22:Wie findest du deinen Weg?" \
+    --say "continue+3:Ja, weiter" \
+    --voice-log clips/host-mode/assets/voice/voicelog.jsonl
+```
+
+```text
+    --tour ROUTE_ID|ROUTE.json   # start a tour as an operator would (a route id the
+                                 #   robot can fetch, or a TourRoute JSON sent inline)
+    --tour-listen                # start nothing: record what the robot does by itself
+    --person "WHEN:X,Y[,YAW]"    # move the sim's mocap `person`; "WHEN:ahead" puts them
+                                 #   1.8 m in front of the robot, where it can see them
+    --person-follow              # once the visit is running, the visitor walks along
+    --say "WHEN:TEXT"            # the visitor speaks. WHEN is seconds, `offer+N`,
+                                 #   `continue+N` (the next "shall we go on?"),
+                                 #   `stop:<n|id>+N` or `said:<n>+N`. Repeatable
+    --min-seconds 60 --grace 10  # a take never ends before / ends this long after
+                                 #   the last thing happened (default 25 / 8)
+    --voice-log voicelog.jsonl   # mix in what the voice service actually said
+```
+
+Cue triggers are events, not stopwatch times, because a walk that replans twice
+drifts ten seconds against a clock. Each `continue+N` answers a DIFFERENT "shall
+we go on?". The sidecar is `<out>.tourlog.json` (the visit sampled while
+recording), so `--recaption` rebuilds the pane without walking the robot again.
+
+**The robot needs a voice for this to be worth filming.** Without a voice
+service, host mode still runs but every utterance is "text-only" and the run
+honestly records `disclosureSpoken: false`. `hardware/voice_sim/say_service.py`
+is a stand-in built for the camera — macOS `say` behind the same `/say`
+endpoint, one utterance at a time, every line logged with its wall clock and
+duration:
+
+```bash
+python3 ../voice_sim/say_service.py --out-dir clips/host-mode/assets/voice --rate 185
+```
+
+`demo_clip.py --voice-log …/voicelog.jsonl` then lays those utterances onto the
+clip's audio track — each placed in VIDEO seconds and stretched by the same
+factor the picture was, so the voice stays with the robot that said it. Note
+that the agent's voice client gives up after 10 s and records anything slower as
+*not spoken*, which is why the service answers a long line before its tail has
+finished playing (`--max-block-s`).
+
 It writes `clips/table.mp4`, `clips/table.raw.mp4` (no captions),
 `clips/table.pip.mp4` (the inset stream) and `clips/table.json` (the plan with
 per-block timings, for editing elsewhere). Rendering runs on the physics
