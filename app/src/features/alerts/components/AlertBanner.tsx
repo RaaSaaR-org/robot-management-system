@@ -172,28 +172,36 @@ export function AlertBanner({ className }: AlertBannerProps) {
 
   // In normal layout flow (rendered by AppLayout above the page content) so it
   // never overlaps page titles; sticks below the 56px TopBar while scrolling.
+  // The severity tints are translucent in dark mode (`dark:bg-*-900/20`), so the
+  // sticky bar needs an opaque plate under it — without one the page scrolls
+  // *through* the alert and neither the alert nor the content stays readable.
   return (
     <div
       role="alert"
       aria-live="assertive"
-      className={cn(
-        'sticky top-14 z-30 border rounded-brand transition-all duration-300 animate-fade-in',
-        SEVERITY_STYLES[mostCriticalAlert.severity],
-        className
-      )}
+      className={cn('sticky top-14 z-30 rounded-brand bg-theme-primary', className)}
     >
-      <AlertBannerContent
-        alert={mostCriticalAlert}
-        onAcknowledge={handleAcknowledge}
-        onDismiss={handleDismiss}
-      />
-      {/* A rejected acknowledge/dismiss puts the banner straight back; say why
-          instead of letting the click look like it did nothing. */}
-      {error && (
-        <p className="px-3 pb-2 text-xs opacity-90 sm:px-4" data-testid="alert-banner-error">
-          {error}
-        </p>
-      )}
+      <div
+        className={cn(
+          'border rounded-brand transition-all duration-300 animate-fade-in',
+          SEVERITY_STYLES[mostCriticalAlert.severity]
+        )}
+      >
+        <AlertBannerContent
+          alert={mostCriticalAlert}
+          onAcknowledge={handleAcknowledge}
+          onDismiss={handleDismiss}
+        />
+        {/* A rejected acknowledge/dismiss puts the banner straight back; say why
+            instead of letting the click look like it did nothing. Inside the
+            tinted layer, so the reason sits on the severity colour and within
+            the border rather than on the bare plate under it. */}
+        {error && (
+          <p className="px-3 pb-2 text-xs opacity-90 sm:px-4" data-testid="alert-banner-error">
+            {error}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
