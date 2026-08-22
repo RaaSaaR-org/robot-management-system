@@ -46,6 +46,7 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -109,6 +110,39 @@ ACTION_KD = 1.5
 # filming. A full G1 scene renders in ~70 ms here, so this cap rarely binds --
 # it is the guard for the day someone films a small scene.
 STREAM_MAX_FPS = 15.0
+
+
+def qs_one(query: dict[str, list[str]], key: str) -> str | None:
+    """First value of `key`, or None. Repeated params take the first, not the last."""
+    vals = query.get(key)
+    return vals[0] if vals else None
+
+
+def qs_bool(query: dict[str, list[str]], key: str, default: bool) -> bool:
+    """`?key=0|false|no|off` is False, `?key` alone is True, anything unparseable
+    keeps the default -- a typo must not silently flip a render option."""
+    raw = qs_one(query, key)
+    if raw is None:
+        return default
+    low = raw.strip().lower()
+    if low in ("", "1", "true", "yes", "on"):
+        return True
+    if low in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def qs_int(query: dict[str, list[str]], key: str, default: int, lo: int, hi: int) -> int:
+    """Bounded int; out-of-range and unparseable both keep the default."""
+    raw = qs_one(query, key)
+    if raw is None:
+        return default
+    try:
+        val = int(raw)
+    except ValueError:
+        return default
+    return val if lo <= val <= hi else default
+
 
 TOPIC_ARM_SDK = "rt/arm_sdk"
 TOPIC_LOWSTATE = "rt/lowstate"
@@ -240,8 +274,12 @@ class RenderRequest:
     the physics loop renders between steps and hands the JPEG back.
     """
 
-    def __init__(self, camera: str) -> None:
+    def __init__(self, camera: str, *, shadows: bool = True,
+                 reflection: bool = True, quality: int = 85) -> None:
         self.camera = camera
+        self.shadows = shadows
+        self.reflection = reflection
+        self.quality = quality
         self.done = threading.Event()
         self.jpeg: bytes | None = None
         self.error: str | None = None
@@ -1120,8 +1158,11 @@ class SimNode:
 
     # -------------------------------------------------------------- rendering
 
-    def request_render(self, camera: str, timeout: float = 5.0) -> RenderRequest:
-        req = RenderRequest(camera)
+    def request_render(self, camera: str, timeout: float = 5.0, *,
+                       shadows: bool = True, reflection: bool = True,
+                       quality: int = 85) -> RenderRequest:
+        req = RenderRequest(camera, shadows=shadows, reflection=reflection,
+                            quality=quality)
         with self.lock:
             self._render_queue.append(req)
         if not req.done.wait(timeout):
@@ -1133,13 +1174,16 @@ class SimNode:
             pending, self._render_queue = self._render_queue, []
         for req in pending:
             try:
-                req.jpeg = self._render_jpeg(req.camera)
+                req.jpeg = self._render_jpeg(
+                    req.camera, shadows=req.shadows,
+                    reflection=req.reflection, quality=req.quality)
             except Exception as exc:  # noqa: BLE001
                 req.error = str(exc)
             finally:
                 req.done.set()
 
-    def _render_jpeg(self, camera: str) -> bytes:
+    def _render_jpeg(self, camera: str, *, shadows: bool = True,
+                     reflection: bool = True, quality: int = 85) -> bytes:
         from PIL import Image  # lazy: only the HTTP facade needs it
 
         if self._renderer is None:
@@ -1148,8 +1192,22 @@ class SimNode:
         if cam_id < 0:
             raise KeyError(f"no camera '{camera}' in {self.scene.name}")
         self._renderer.update_scene(self.data, camera=camera)
+        # Set on EVERY render, not once: these flags live on the shared mjvScene
+        # and survive update_scene, so one fast frame would otherwise leak its
+        # lighting into the next MJPEG frame.
+        #
+        # Measured here on g1_dex3_house_scene at 640x480: 37.7 ms with shadows
+        # against 4.9 ms with neither pass on an idle machine, 66.7 against 8.2 on
+        # a busy one. Take the RATIO, ~8x; the absolute cost moves with load.
+        # Six lights over 187 geoms is the whole of it, and it is flat in
+        # resolution -- rendering 160x120 measured the same on every run -- so
+        # this is the only lever the facade has.
+        # An episode recorder pulling 30 frames a second needs it; a human
+        # looking at the MJPEG stream does not, which is why the default is on.
+        self._renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 1 if shadows else 0
+        self._renderer.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 1 if reflection else 0
         buf = io.BytesIO()
-        Image.fromarray(self._renderer.render()).save(buf, format="JPEG", quality=85)
+        Image.fromarray(self._renderer.render()).save(buf, format="JPEG", quality=quality)
         return buf.getvalue()
 
     def camera_names(self) -> list[str]:
@@ -1504,6 +1562,19 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_bytes(self, code: int, content_type: str, body: bytes) -> None:
+            """The third reply path, for `?format=raw`. Same Content-Length
+            discipline as `_send` -- a keep-alive connection needs it -- but no
+            JSON and no base64. A JPEG base64'd into a JSON body costs 1.33x on
+            the wire and is emitted TWICE by the snapshot route for backward
+            compatibility, which a recorder pulling 30 frames a second pays for
+            in `json.dumps` on the HTTP thread and in a decode on the far side."""
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _stream_mjpeg(self, name: str) -> None:
             """Serve `name` as multipart MJPEG until the client goes away.
 
@@ -1558,22 +1629,40 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
 
         # ---- GET ----
         def do_GET(self) -> None:
-            if self.path == "/health":
+            # Route on the path alone. Nothing here used to take a query
+            # string, so `/cameras/x/snapshot?shadows=0` fell through to the
+            # 404 below rather than being served with the option ignored.
+            path, _, raw_query = self.path.partition("?")
+            query = urllib.parse.parse_qs(raw_query)
+            if path == "/health":
                 self._send(200, {"status": "ok", "connected": True, "sim": True,
                                  "scene": node.scene.name,
                                  "behind_s": round(node.behind_s, 3),
                                  "boot_id": BOOT_ID})
-            elif self.path == "/cameras":
+            elif path == "/cameras":
                 self._send(200, {"cameras": node.camera_names()})
-            elif self.path == "/record":
+            elif path == "/record":
                 self._send(200, {"ok": True, **node.recorder.status()})
-            elif self.path.startswith("/cameras/") and self.path.endswith("/stream"):
-                self._stream_mjpeg(self.path[len("/cameras/"):-len("/stream")])
-            elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
-                name = self.path[len("/cameras/"):-len("/snapshot")]
-                req = node.request_render(name)
+            elif path.startswith("/cameras/") and path.endswith("/stream"):
+                self._stream_mjpeg(path[len("/cameras/"):-len("/stream")])
+            elif path.startswith("/cameras/") and path.endswith("/snapshot"):
+                name = path[len("/cameras/"):-len("/snapshot")]
+                # Optional, all defaulting to what this route has always done:
+                #   ?shadows=0     drop the shadow pass    (37.7 ms -> 7.5 ms)
+                #   ?reflection=0  drop the floor mirror   (          -> 4.9 ms)
+                #   ?quality=NN    JPEG quality, 1..100    (default 85)
+                #   ?format=raw    image/jpeg bytes instead of base64-in-JSON
+                req = node.request_render(
+                    name,
+                    shadows=qs_bool(query, "shadows", True),
+                    reflection=qs_bool(query, "reflection", True),
+                    quality=qs_int(query, "quality", 85, 1, 100),
+                )
                 if req.error or req.jpeg is None:
                     self._send(503, {"ok": False, "error": req.error or "no frame"})
+                    return
+                if qs_one(query, "format") == "raw":
+                    self._send_bytes(200, "image/jpeg", req.jpeg)
                     return
                 self._send(200, {
                     "ok": True, "camera": name, "source": "mujoco",
@@ -1583,11 +1672,24 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                     "jpeg_base64": base64.b64encode(req.jpeg).decode(),
                     "image_b64": base64.b64encode(req.jpeg).decode(),
                 })
-            elif self.path == "/state" or self.path == "/state/fast":
+            elif path == "/state" or path == "/state/fast":
                 with node.lock:
                     joints = [{"name": n, "position": float(node.data.qpos[a])}
                               for n, a in zip(BODY, node.qadr["body"])]
+                    # The 14 Dex3 finger joints, which /action has always
+                    # accepted and this route never reported. HardwareClient's
+                    # `getStateNow()` maps the reply by NAME into the
+                    # embodiment's joint order and fills anything missing with
+                    # 0.0 -- so on a g1_edu every finger read back as "fully
+                    # open" no matter where it was. A recorded demonstration
+                    # with a constant zero column for both hands is worse than
+                    # one with no hand column at all.
+                    joints += [{"name": n, "position": float(node.data.qpos[a])}
+                               for n, a in zip(LHAND, node.qadr["lh"])]
+                    joints += [{"name": n, "position": float(node.data.qpos[a])}
+                               for n, a in zip(RHAND, node.qadr["rh"])]
                     x, y, yaw = node.measured_pose()
+                    sim_time = float(node.data.time)
                 # Same shape as g1_sidecar.py's /state (Contract §2): an explicit
                 # `connected` and `joints` as a list -- HardwareClient's poller
                 # falls back to `simulated === false` when `connected` is absent,
@@ -1595,8 +1697,15 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 self._send(200, {"ok": True, "sim": True, "simulated": True,
                                  "connected": True, "joints": joints,
                                  "odometry": {"x": x, "y": y, "yaw": yaw},
+                                 # `timestamp` stays WALL time (the sidecar
+                                 # contract); `sim_time` is data.time, which
+                                 # diverges from it whenever the loop catches up
+                                 # after rendering. A recorder that needs to
+                                 # know the frames really are 1/fps apart in the
+                                 # world it filmed wants the second one.
+                                 "sim_time": sim_time,
                                  "timestamp": time.time()})
-            elif self.path == "/loco/odom":
+            elif path == "/loco/odom":
                 # No planar base (e.g. the fixed-base pickplace scene) means no
                 # odometry EXISTS. Answering (0,0,0) with ok:true would be a
                 # fabricated pose -- and the navigator would happily integrate
@@ -1612,12 +1721,12 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 with node.lock:
                     x, y, yaw = node.measured_pose()
                 self._send(200, {"ok": True, "x": x, "y": y, "yaw": yaw, "source": "sim"})
-            elif self.path == "/pointcloud/sensors":
+            elif path == "/pointcloud/sensors":
                 # Same shape as g1_sidecar.py: {"sensors": [...]}.
                 self._send(200, {"sensors": SIM_DEPTH_SENSORS})
-            elif (self.path.startswith("/pointcloud/")
-                  and self.path.endswith("/snapshot")):
-                name = self.path[len("/pointcloud/"):-len("/snapshot")]
+            elif (path.startswith("/pointcloud/")
+                  and path.endswith("/snapshot")):
+                name = path[len("/pointcloud/"):-len("/snapshot")]
                 if name not in SIM_DEPTH_SENSORS:
                     # 200 + ok:false, verbatim the sidecar's wording for an
                     # unknown sensor, so a client's error handling is identical.

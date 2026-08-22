@@ -60,6 +60,12 @@ export interface HapticPreset {
  *    moment the operator will not trust a colour change.
  *  - `linkLost` — long and mid-strength, distinct from `estop` by being softer
  *    and from `saturation` by lasting ~7x as long.
+ *  - `episodeMark` — the confirmation that the left stick click landed and one
+ *    episode just became two. Mid-strength and ~4x the length of the clutch
+ *    taps, so it cannot be mistaken for a grip; well short of `linkLost` and
+ *    much softer than `estop`, because nothing is wrong. The operator gets no
+ *    other feedback that the boundary was taken: the desktop episode list is
+ *    behind the headset, and the HUD's frame counter only restarts a beat later.
  */
 export const HAPTICS = {
   clutchEngage: { intensity: 0.6, ms: 40 },
@@ -67,6 +73,7 @@ export const HAPTICS = {
   saturation: { intensity: 0.35, ms: 35 },
   estop: { intensity: 1, ms: 300 },
   linkLost: { intensity: 0.7, ms: 250 },
+  episodeMark: { intensity: 0.5, ms: 150 },
 } as const satisfies Record<string, HapticPreset>;
 
 /**

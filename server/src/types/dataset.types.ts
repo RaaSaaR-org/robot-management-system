@@ -106,6 +106,24 @@ export interface CreateDatasetDto {
   description?: string;
   robotTypeId?: string;
   skillId?: string;
+  /**
+   * Register a dataset that ALREADY EXISTS at this path instead of minting an
+   * empty one to upload into (TASK-215).
+   *
+   * An absolute local directory, or a RustFS prefix. When it is given the row is
+   * created `ready` rather than `uploading`, and the metadata below is taken
+   * from the caller rather than zeroed — because there is nothing to wait for.
+   * `server/src/scripts/register-local-dataset.ts` documents this gap in a
+   * comment; this is it being closed.
+   */
+  storagePath?: string;
+  /** Only meaningful with `storagePath`. */
+  lerobotVersion?: string;
+  fps?: number;
+  totalFrames?: number;
+  totalDuration?: number;
+  demonstrationCount?: number;
+  infoJson?: Record<string, unknown>;
 }
 
 /**

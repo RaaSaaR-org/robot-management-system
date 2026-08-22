@@ -83,6 +83,22 @@ export interface EpisodeSummary {
   startTime: number;
   endTime: number;
   durationS: number;
+  /** Ticks the recorder wanted and did not get. Absent for sessions recorded before TASK-215. */
+  droppedFrames?: number;
+  /** Frames per second the episode actually achieved. */
+  fpsActual?: number;
+}
+
+/**
+ * One of the optional per-episode statistics, or an em-dash.
+ *
+ * `droppedFrames` and `fpsActual` arrived with TASK-215; every episode recorded
+ * before it has neither, and those sessions still have to render. An em-dash
+ * says "not recorded" — a 0 would claim the recorder kept up, which is a much
+ * worse thing to be wrong about than a blank cell.
+ */
+export function formatEpisodeStat(value: number | undefined, digits = 0): string {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
 }
 
 /**

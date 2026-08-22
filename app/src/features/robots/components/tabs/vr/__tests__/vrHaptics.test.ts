@@ -131,6 +131,7 @@ describe('HAPTICS presets', () => {
     expect(Object.keys(HAPTICS).sort()).toEqual([
       'clutchEngage',
       'clutchRelease',
+      'episodeMark',
       'estop',
       'linkLost',
       'saturation',
@@ -161,6 +162,18 @@ describe('HAPTICS presets', () => {
   it('makes releasing the clutch weaker than engaging it', () => {
     expect(HAPTICS.clutchRelease.intensity).toBeLessThan(HAPTICS.clutchEngage.intensity);
     expect(HAPTICS.clutchRelease.ms).toBeLessThan(HAPTICS.clutchEngage.ms);
+  });
+
+  it('keeps the episode mark clear of the clutch taps and of the alarms', () => {
+    // The hand can only tell two buzzes apart if they differ in more than one
+    // dimension, and this one has to survive being felt mid-task: it is the ONLY
+    // confirmation that a left stick click actually took an episode boundary.
+    // Several times the length of a clutch tap, so it is not a grip; well short
+    // of `linkLost` and much softer than `estop`, because nothing is wrong.
+    expect(HAPTICS.episodeMark.ms).toBeGreaterThan(HAPTICS.clutchEngage.ms * 2);
+    expect(HAPTICS.episodeMark.ms).toBeLessThan(HAPTICS.linkLost.ms);
+    expect(HAPTICS.episodeMark.intensity).toBeLessThan(HAPTICS.linkLost.intensity);
+    expect(HAPTICS.episodeMark.intensity).toBeGreaterThan(HAPTICS.saturation.intensity);
   });
 
   it('pulsePreset fires the named preset', () => {

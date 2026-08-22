@@ -32,6 +32,11 @@ import { datasetRepository, robotTypeRepository } from '../repositories/index.js
 import type { CreateDatasetInput } from '../types/vla.types.js';
 import type { FrameRow } from './LeRobotExportService.js';
 import {
+  agentRecordingService,
+  AgentRecordingRefused,
+  type AgentEpisodeReport,
+} from './AgentRecordingService.js';
+import {
   SimFrameRecorder,
   type RecordedFrame,
   type RecorderProgress,
@@ -43,6 +48,13 @@ import {
 // ============================================================================
 
 const DEFAULT_FPS = 30;
+
+/**
+ * How often the session page is told what the robot's recorder is doing.
+ * Matched to the sim recorder's own 1 Hz progress emit — faster would only
+ * make the number flicker.
+ */
+const AGENT_PROGRESS_POLL_MS = 1000;
 const MAX_BATCH_SIZE = 100;
 
 // ============================================================================
@@ -223,6 +235,19 @@ export class TeleoperationService extends EventEmitter {
         this.simRecorders.delete(sessionId);
       }
       this.stopSidecarProgressPoller(sessionId);
+      this.stopAgentProgressPoller(sessionId);
+
+      // A robot recording a session that is being deleted has to be told. It
+      // has no other way to find out: nothing else stops its tick, and it would
+      // keep filming — and refuse the next session as "busy" — until the agent
+      // is restarted.
+      const doomed = await this.prisma.teleoperationSession.findUnique({
+        where: { id: sessionId },
+      });
+      if (doomed?.recorderKind === 'agent') {
+        await agentRecordingService.stop(doomed.robotId).catch(() => null);
+      }
+
       this.lastQualityFeedback.delete(sessionId);
       this.clientEpisodeIndex.delete(sessionId);
       this.progressTicks.delete(sessionId);
@@ -298,11 +323,56 @@ export class TeleoperationService extends EventEmitter {
       }
     }
 
-    // No hardware sidecar recording (sim robots, or sidecar unreachable):
-    // start the server-side SimFrameRecorder which samples the robot agent's
-    // telemetry at the session FPS and persists TeleoperationFrame rows.
+    // No hardware sidecar. Ask the robot agent to record the episode itself
+    // (TASK-215): it holds the commanded pose and is one hop from the cameras,
+    // so it can write a LeRobot v3.0 tree WITH VIDEO and with `action` and
+    // `observation.state` genuinely distinct. The server-side SimFrameRecorder
+    // can do neither — it polls telemetry, which carries only the measured pose
+    // and no pictures at all.
+    //
+    // A robot whose agent predates these routes, or does not answer, falls back
+    // to SimFrameRecorder. Which path was taken is written to the session,
+    // because endSession has to ask the same recorder to stop and a server
+    // restart in between must not lose that.
+    let recorderKind: 'agent' | 'sim' | 'sidecar' | null = sidecarStarted ? 'sidecar' : null;
+
     if (!sidecarStarted && !session.sidecarDatasetPath) {
-      await this.startSimRecorder(session as TeleoperationSession);
+      let agentStatus;
+      try {
+        agentStatus = await agentRecordingService.start(session.robotId, {
+          sessionId,
+          fps: session.fps,
+          ...(session.languageInstr ? { task: session.languageInstr } : {}),
+          inputMode: session.type,
+        });
+      } catch (err) {
+        // The robot understood and said no. That is a state on the robot the
+        // operator has to clear — most often a recording left running by a
+        // session that ended badly — and quietly falling back to the joints-only
+        // recorder would hide it behind a dataset with no video.
+        if (err instanceof AgentRecordingRefused) {
+          throw new Error(
+            `The robot refused to record this session: ${err.message}. ` +
+              `Stop the recording on ${session.robotId} and start the session again.`
+          );
+        }
+        throw err;
+      }
+      if (agentStatus) {
+        recorderKind = 'agent';
+        console.log(
+          `[TeleoperationService] agent-side recording started on ${session.robotId}: ` +
+            `${agentStatus.cameras.map((c) => c.key).join(', ') || 'no cameras'} @ ${agentStatus.fpsTarget} fps`
+        );
+        this.startAgentProgressPoller(sessionId, session.robotId);
+      } else {
+        recorderKind = 'sim';
+        console.log(
+          `[TeleoperationService] ${session.robotId} cannot record on the agent — ` +
+            'falling back to the server-side SimFrameRecorder (joints only, no video)'
+        );
+        await this.startSimRecorder(session as TeleoperationSession);
+      }
     }
 
     const updated = await this.prisma.teleoperationSession.update({
@@ -311,6 +381,7 @@ export class TeleoperationService extends EventEmitter {
         status: 'recording',
         startedAt: session.startedAt ?? new Date(),
         ...(sidecarDatasetPath ? { sidecarDatasetPath } : {}),
+        ...(recorderKind ? { recorderKind } : {}),
       },
     });
 
@@ -344,6 +415,15 @@ export class TeleoperationService extends EventEmitter {
 
     // Sim frame recorder: stop sampling while paused (no frames while paused)
     this.simRecorders.get(sessionId)?.pause();
+
+    // …and the agent's recorder, which holds the frames for an agent-recorded
+    // session. Without this the dataset kept growing while the console said the
+    // session was parked, and the pause landed in the data as a stretch of
+    // whatever the robot happened to be doing while nobody was driving it.
+    if (session.recorderKind === 'agent') {
+      await agentRecordingService.pause(session.robotId);
+      this.stopAgentProgressPoller(sessionId);
+    }
 
     const updated = await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
@@ -381,11 +461,21 @@ export class TeleoperationService extends EventEmitter {
     // Sim frame recorder: resume sampling. If the recorder is gone (e.g. the
     // server restarted mid-session) and this is a frame-based session,
     // restart one initialized from the persisted frames.
-    const existingRecorder = this.simRecorders.get(sessionId);
-    if (existingRecorder) {
-      existingRecorder.resume();
-    } else if (!session.sidecarDatasetPath) {
-      await this.startSimRecorder(session as TeleoperationSession);
+    if (session.recorderKind === 'agent') {
+      // The agent owns this session's frames. Starting a SimFrameRecorder here
+      // — which is what the `else` below used to do, because there is never a
+      // `simRecorders` entry for an agent session — would run a second,
+      // joints-only recorder alongside it, writing TeleoperationFrame rows that
+      // then look like a frame-based session to `endSession`.
+      await agentRecordingService.resume(session.robotId);
+      this.startAgentProgressPoller(sessionId, session.robotId);
+    } else {
+      const existingRecorder = this.simRecorders.get(sessionId);
+      if (existingRecorder) {
+        existingRecorder.resume();
+      } else if (!session.sidecarDatasetPath) {
+        await this.startSimRecorder(session as TeleoperationSession);
+      }
     }
 
     const updated = await this.prisma.teleoperationSession.update({
@@ -425,12 +515,33 @@ export class TeleoperationService extends EventEmitter {
 
     // Stop progress poller
     this.stopSidecarProgressPoller(sessionId);
+    this.stopAgentProgressPoller(sessionId);
 
     // Stop the sim frame recorder (if any) and flush remaining frames
     const recorder = this.simRecorders.get(sessionId);
     if (recorder) {
       await recorder.stop();
       this.simRecorders.delete(sessionId);
+    }
+
+    // Stop the agent-side recorder. This is where the encode happens, so it can
+    // take a while; the result carries the dataset it wrote or the reason there
+    // is none.
+    let agentResult: Awaited<ReturnType<typeof agentRecordingService.stop>> = null;
+    if (session.recorderKind === 'agent') {
+      agentResult = await agentRecordingService.stop(session.robotId);
+      if (agentResult?.ok) {
+        console.log(
+          `[TeleoperationService] agent recording stopped: ${agentResult.totalFrames} frames, ` +
+            `${agentResult.totalDropped} dropped, ${agentResult.fpsActual} fps → ${agentResult.datasetPath}`
+        );
+      } else {
+        console.warn(
+          `[TeleoperationService] agent recording produced no dataset: ` +
+            `${agentResult?.error ?? 'the robot did not answer'}`
+        );
+      }
+      await this.persistEpisodeSummaries(sessionId, agentResult?.episodes ?? []);
     }
     this.lastQualityFeedback.delete(sessionId);
     this.clientEpisodeIndex.delete(sessionId);
@@ -484,8 +595,11 @@ export class TeleoperationService extends EventEmitter {
       } catch { /* use defaults */ }
     }
 
-    // Frame-based sessions: the DB is the source of truth for the frame count
-    const isFrameBased = !session.sidecarDatasetPath && !s3Path;
+    // Frame-based sessions: the DB is the source of truth for the frame count.
+    // An agent-recorded session is NOT frame-based — its frames are a parquet
+    // file on the robot, and auto-exporting the (empty) TeleoperationFrame
+    // table for it would produce a second, hollow dataset next to the real one.
+    const isFrameBased = !session.sidecarDatasetPath && !s3Path && session.recorderKind !== 'agent';
     const dbFrameCount = isFrameBased
       ? await this.prisma.teleoperationFrame.count({ where: { sessionId } })
       : 0;
@@ -546,10 +660,35 @@ export class TeleoperationService extends EventEmitter {
       }
     }
 
+    // Register the dataset the robot wrote. `storagePath` is a directory on
+    // the robot's disk, which for a simulated robot on this box is a directory
+    // this server can read — `isLocalDataset()` in datasets.routes.ts already
+    // serves episodes, frames and video straight out of one.
+    if (agentResult?.ok && agentResult.datasetPath) {
+      try {
+        exportedDatasetId = await this.registerAgentDataset(
+          session as TeleoperationSession,
+          agentResult,
+          duration
+        );
+      } catch (err) {
+        console.error('[TeleoperationService] registering the agent dataset failed:', err);
+      }
+    }
+
     // Zero-frame frame-based sessions: complete with a clear warning, no dataset
     const zeroFrameWarning =
       isFrameBased && dbFrameCount === 0
         ? 'No frames were recorded — the robot agent produced no telemetry during the session. No dataset was created.'
+        : null;
+
+    // An agent session that recorded nothing says WHY, in the robot's own
+    // words: "teleop is not engaged" and "an emergency stop is latched" are
+    // different problems with different fixes, and the operator needs the
+    // difference.
+    const agentWarning =
+      session.recorderKind === 'agent' && !agentResult?.ok
+        ? `No dataset was recorded on the robot: ${agentResult?.error ?? 'the robot did not answer the stop'}`
         : null;
 
     let updated = await this.prisma.teleoperationSession.update({
@@ -559,9 +698,15 @@ export class TeleoperationService extends EventEmitter {
         endedAt,
         duration,
         qualityScore,
-        frameCount: isFrameBased ? dbFrameCount : (totalFrames || episodesRecorded),
+        frameCount: agentResult?.ok
+          ? agentResult.totalFrames
+          : isFrameBased
+            ? dbFrameCount
+            : (totalFrames || episodesRecorded),
         ...(exportedDatasetId ? { exportedDatasetId } : {}),
         ...(s3Path ? { sidecarDatasetPath: s3Path } : {}),
+        ...(agentResult?.datasetPath ? { agentDatasetPath: agentResult.datasetPath } : {}),
+        ...(agentWarning ? { errorMessage: agentWarning } : {}),
         ...(zeroFrameWarning ? { errorMessage: zeroFrameWarning } : {}),
       },
     });
@@ -621,6 +766,25 @@ export class TeleoperationService extends EventEmitter {
       throw new Error('Episodes are managed by the hardware sidecar for this session');
     }
 
+    // Agent-recorded sessions: the episode boundary lives in the recorder that
+    // holds the frames, so it has to be drawn there. Doing it here as well
+    // would put the boundary in the database and nowhere in the dataset.
+    if (session.recorderKind === 'agent') {
+      const agentIndex = await agentRecordingService.nextEpisode(session.robotId);
+      if (agentIndex === null) {
+        throw new Error(
+          'The robot is recording this session but did not accept the episode boundary'
+        );
+      }
+      this.emitEvent({
+        type: 'session:progress',
+        sessionId,
+        recordingProgress: { currentEpisode: agentIndex, running: true },
+        timestamp: new Date(),
+      });
+      return { episodeIndex: agentIndex };
+    }
+
     const recorder = this.simRecorders.get(sessionId);
     let episodeIndex: number;
     if (recorder) {
@@ -654,6 +818,61 @@ export class TeleoperationService extends EventEmitter {
     });
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Persisted summaries win when they exist. They carry two numbers that
+    // cannot be derived from frames at all: the ticks the recorder LOST (a
+    // missing frame leaves no row to count) and the rate it really achieved.
+    const persisted = await this.prisma.teleoperationEpisode.findMany({
+      where: { sessionId },
+      orderBy: { episodeIndex: 'asc' },
+    });
+    if (persisted.length > 0) {
+      // `startTime` is where the episode begins in the SESSION's timeline, and
+      // for an agent-recorded session that is the sum of what came before it —
+      // the recorder reports each episode's own duration, not an offset. Every
+      // row read 0.0s before this, which the review table renders as a column
+      // of zeroes that looks like a bug in the recorder rather than in the sum.
+      let cursor = 0;
+      return persisted.map((e) => {
+        const startTime = Math.round(cursor * 100) / 100;
+        cursor += e.durationS;
+        return {
+          episodeIndex: e.episodeIndex,
+          frameCount: e.frameCount,
+          startTime,
+          endTime: Math.round(cursor * 100) / 100,
+          durationS: Math.round(e.durationS * 100) / 100,
+          droppedFrames: e.droppedFrames,
+          fpsActual: Math.round(e.fpsActual * 100) / 100,
+        };
+      });
+    }
+
+    // A live agent-recorded session has no rows yet — they are written when it
+    // stops — so ask the robot what it has so far.
+    //
+    // NOT gated on `status === 'recording'`: a PAUSED session still has
+    // episodes, and gating on the status made the panel go empty the moment an
+    // operator paused, which reads as "your takes are gone".
+    if (session.recorderKind === 'agent') {
+      const live = await agentRecordingService.status(session.robotId);
+      if (live) {
+        let cursor = 0;
+        return live.episodes.map((e) => {
+          const startTime = Math.round(cursor * 100) / 100;
+          cursor += e.durationS;
+          return {
+            episodeIndex: e.episodeIndex,
+            frameCount: e.frames,
+            startTime,
+            endTime: Math.round(cursor * 100) / 100,
+            durationS: e.durationS,
+            droppedFrames: e.dropped,
+            fpsActual: e.fpsActual,
+          };
+        });
+      }
     }
 
     const groups = await this.prisma.teleoperationFrame.groupBy({
@@ -705,6 +924,16 @@ export class TeleoperationService extends EventEmitter {
     const liveRecorder = this.simRecorders.get(sessionId);
     if (liveRecorder) {
       await liveRecorder.discardEpisode(episodeIndex);
+    }
+    if (session.recorderKind === 'agent') {
+      // The frames are on the robot, not in this database, so the delete has to
+      // happen there. The deleteMany below is still correct and still runs — it
+      // is a no-op for an agent-recorded session, and it is what cleans up a
+      // session that fell back to the sim recorder partway through.
+      await agentRecordingService.discardEpisode(session.robotId, episodeIndex);
+      await this.prisma.teleoperationEpisode.deleteMany({
+        where: { sessionId, episodeIndex },
+      });
     }
 
     const deleted = await this.prisma.teleoperationFrame.deleteMany({
@@ -1194,6 +1423,9 @@ export class TeleoperationService extends EventEmitter {
   /** Live sim frame recorders, keyed by sessionId. */
   private simRecorders = new Map<string, SimFrameRecorder>();
 
+  /** Progress pollers for agent-side recordings, one per live session. */
+  private agentPollers = new Map<string, ReturnType<typeof setInterval>>();
+
   /** Latest computed quality feedback per session (attached to progress events). */
   private lastQualityFeedback = new Map<string, QualityFeedback>();
 
@@ -1405,6 +1637,198 @@ export class TeleoperationService extends EventEmitter {
   /**
    * Poll sidecar /record/status every 2s and broadcast progress via events.
    */
+  /**
+   * Poll the robot's recorder so the session page shows live frame counts,
+   * drops and the rate actually being achieved.
+   *
+   * Every other progress source in this service is push (the sim recorder calls
+   * back, the sidecar poller reads a status file). The agent has to be asked,
+   * and asking is cheap: the route reads counters the recorder keeps anyway,
+   * and it is the only place `behind_s` is refreshed — the tick must not spend
+   * its budget asking the sim how it is feeling.
+   */
+  private startAgentProgressPoller(sessionId: string, robotId: string): void {
+    this.stopAgentProgressPoller(sessionId);
+    const timer = setInterval(() => {
+      void (async () => {
+        const status = await agentRecordingService.status(robotId).catch(() => null);
+        if (!status) return;
+        this.emitEvent({
+          type: 'session:progress',
+          sessionId,
+          recordingProgress: {
+            frameCount: status.totalFrames,
+            currentEpisode: status.episodeIndex,
+            episodesDone: Math.max(0, status.episodes.length - 1),
+            fpsActual: status.fpsActual,
+            running: status.recording,
+            degraded: status.degraded,
+          },
+          timestamp: new Date(),
+        });
+        if (status.degraded && status.lastDropReason) {
+          this.emitEvent({
+            type: 'quality:warning',
+            sessionId,
+            message: `Recording is dropping frames: ${status.lastDropReason}`,
+            timestamp: new Date(),
+          });
+        }
+      })();
+    }, AGENT_PROGRESS_POLL_MS);
+    timer.unref?.();
+    this.agentPollers.set(sessionId, timer);
+  }
+
+  private stopAgentProgressPoller(sessionId: string): void {
+    const timer = this.agentPollers.get(sessionId);
+    if (timer) {
+      clearInterval(timer);
+      this.agentPollers.delete(sessionId);
+    }
+  }
+
+  /**
+   * Write what the recorder reported about each episode.
+   *
+   * Upserted rather than created: a session that is ended twice, or one whose
+   * summaries were already written by a previous stop attempt, must not blow up
+   * on the unique index — and the second report is the more complete one.
+   */
+  private async persistEpisodeSummaries(
+    sessionId: string,
+    episodes: AgentEpisodeReport[]
+  ): Promise<void> {
+    for (const ep of episodes) {
+      try {
+        await this.prisma.teleoperationEpisode.upsert({
+          where: { sessionId_episodeIndex: { sessionId, episodeIndex: ep.episodeIndex } },
+          create: {
+            sessionId,
+            episodeIndex: ep.episodeIndex,
+            frameCount: ep.frames,
+            droppedFrames: ep.dropped,
+            durationS: ep.durationS,
+            fpsActual: ep.fpsActual,
+          },
+          update: {
+            frameCount: ep.frames,
+            droppedFrames: ep.dropped,
+            durationS: ep.durationS,
+            fpsActual: ep.fpsActual,
+          },
+        });
+      } catch (err) {
+        console.error(
+          `[TeleoperationService] could not persist episode ${ep.episodeIndex} of ${sessionId}:`,
+          err
+        );
+      }
+    }
+  }
+
+  /**
+   * Register a dataset the robot wrote, by path, with provenance.
+   *
+   * `DatasetService.create()` is deliberately not used: it mints its own
+   * storagePath and zeroes fps/frames/duration, which is right for an empty
+   * dataset somebody is about to upload into and wrong for one that already
+   * exists on disk. `datasetRepository.create()` takes what it is given, and is
+   * the same door `exportToLeRobot` and the sidecar path already use.
+   */
+  private async registerAgentDataset(
+    session: TeleoperationSession,
+    result: NonNullable<Awaited<ReturnType<typeof agentRecordingService.stop>>>,
+    durationS: number
+  ): Promise<string | null> {
+    if (!result.datasetPath) return null;
+    const robotTypeId = await this.resolveRobotTypeIdFromSession(session.robotId);
+
+    // Read the info.json the robot just wrote, so the Datasets page shows the
+    // real feature list — including whether there is video at all, which is the
+    // one thing that decides whether this dataset can train a VLA.
+    let infoJson: Record<string, unknown> = {};
+    try {
+      const { readFile } = await import('fs/promises');
+      const { join } = await import('path');
+      infoJson = JSON.parse(await readFile(join(result.datasetPath, 'meta', 'info.json'), 'utf-8'));
+    } catch {
+      // A robot on another host: the path is real there and unreadable here.
+      // The row is still worth having — it names where the data is.
+      console.log(
+        `[TeleoperationService] ${result.datasetPath} is not readable from the server; ` +
+          'registering the dataset without its info.json'
+      );
+    }
+
+    const name =
+      session.datasetRepoId ??
+      session.languageInstr?.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 50) ??
+      `teleop-${session.id.slice(0, 8)}`;
+
+    const dataset = await datasetRepository.create({
+      name,
+      description:
+        `Teleoperation in simulation: ${session.languageInstr ?? session.id}` +
+        (result.scene ? ` (${result.scene})` : ''),
+      robotTypeId,
+      storagePath: result.datasetPath,
+      lerobotVersion: 'v3.0',
+      fps: Math.round(result.fpsActual) || session.fps,
+      totalFrames: result.totalFrames,
+      totalDuration: durationS,
+      demonstrationCount: result.totalEpisodes,
+      status: 'ready',
+      infoJson: infoJson as import('../types/vla.types.js').LeRobotInfo,
+    });
+
+    // The DatasetProvenance model has existed since the EU AI Act work and
+    // nothing had ever written one. A simulation-derived dataset is exactly the
+    // case the column list was designed for: an auditor asking "where did this
+    // training data come from" gets the scene file, the sim boot it was
+    // recorded under, and the operator who drove it.
+    try {
+      const { trainingDataDocService } = await import('./TrainingDataDocService.js');
+      await trainingDataDocService.recordProvenance(
+        dataset.id,
+        {
+          sourceType: 'collected',
+          sourceName: result.scene ? `MuJoCo sim — ${result.scene}` : 'MuJoCo sim',
+          collectionMethod:
+            `Teleoperation (${session.type}) recorded on the robot agent at ` +
+            `${result.fpsActual} fps, ${result.totalDropped} dropped frames, ` +
+            `cameras: ${result.videoFeatures.join(', ') || 'none'}` +
+            // The sim boot belongs here, with the rest of how the data was
+            // collected. It was in `copyrightCompliance`, which an EU AI Act
+            // report renders under a heading about rights clearance — a
+            // reviewer reading "Simulation boot 585f1c…" there learns nothing
+            // and mistrusts the field.
+            (result.bootId ? `, simulation boot ${result.bootId}` : ''),
+          collectionPeriod: {
+            start: (session.startedAt ?? new Date()).toISOString(),
+            end: new Date().toISOString(),
+          },
+          labelingProcedure: session.languageInstr
+            ? `Single task instruction: "${session.languageInstr}"`
+            : 'No task instruction was given',
+          annotatorInfo: `Operator ${session.operatorId}`,
+          cleaningSteps: [
+            'Frames the recorder could not complete were dropped, not interpolated',
+            'Episodes discarded by the operator were removed before the dataset was written',
+          ],
+          copyrightCompliance:
+            'Simulation-derived: no third-party material, no recorded persons.',
+        },
+        session.operatorId
+      );
+    } catch (err) {
+      console.error('[TeleoperationService] recording provenance failed:', err);
+    }
+
+    console.log(`[TeleoperationService] registered dataset ${dataset.id} at ${result.datasetPath}`);
+    return dataset.id;
+  }
+
   private startSidecarProgressPoller(sessionId: string, sidecarUrl: string): void {
     if (this.sidecarPollers.has(sessionId)) return;
 

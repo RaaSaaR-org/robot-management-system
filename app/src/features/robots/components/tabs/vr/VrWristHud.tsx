@@ -113,11 +113,14 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
       vx: t.vx,
       vy: t.vy,
       omega: t.omega,
+      recording: t.recording,
     });
     // Appended, never inserted, and never while latched: `composeHud` guarantees
     // a latched E-Stop returns exactly its two red lines and nothing competing
     // with them, and an extra readout under that banner is exactly the
     // competition it exists to avoid.
+    // The plate holds `HUD_MAX_LINES`; `composeHud` returns at most four and
+    // gives up its TURN line while recording precisely so this one still fits.
     if (!t.estopLatched && t.rttMs !== null) {
       const rtt = Math.round(t.rttMs);
       lines.push({

@@ -49,6 +49,7 @@ import {
   canStartSession,
   canPauseSession,
   canEndSession,
+  formatEpisodeStat,
 } from '../types/datacollection.types';
 
 const Robot3DViewer = lazy(() =>
@@ -147,12 +148,22 @@ export function SessionDetailPage() {
     return () => clearInterval(timer);
   }, [id, isWsConnected, sessionStatus, fetchSession]);
 
-  const handleNextEpisode = useCallback(async () => {
-    if (!session || session.status !== 'recording') return;
+  /**
+   * Returns whether the boundary was actually drawn.
+   *
+   * The VR rig buzzes the controller on the way back, and a buzz is a promise:
+   * an operator who feels it stops watching and starts the next take. Buzzing
+   * for a refused boundary — the session is paused, the robot said no — would
+   * be worse than not buzzing at all.
+   */
+  const handleNextEpisode = useCallback(async (): Promise<boolean> => {
+    if (!session || session.status !== 'recording') return false;
     try {
       await storeNextEpisode(session.id);
+      return true;
     } catch {
       /* surfaced via store error */
+      return false;
     }
   }, [session, storeNextEpisode]);
 
@@ -570,7 +581,28 @@ export function SessionDetailPage() {
           {/* Row 3: Input control surface */}
           {isVrSession ? (
             /* VR sessions: WebXR rig + synthetic-input toggle + collapsed keyboard fallback */
-            <VRSessionPanel robot={robot} />
+            <VRSessionPanel
+              robot={robot}
+              onNextEpisode={handleNextEpisode}
+              // 1-based, matching the "Recording episode N of M" readout above —
+              // the last number the operator saw before the headset went on. The
+              // review table's `Ep 0` is a 0-based storage index and is a
+              // different thing.
+              recording={
+                isRecording
+                  ? {
+                      episode: currentEpisode + 1,
+                      // The CURRENT episode's frames, not the session's. The
+                      // HUD reads `ep 2 · 412 fr`, and 412 has to be this
+                      // take's count or the two halves of that line contradict
+                      // each other.
+                      frames:
+                        episodes.find((e) => e.episodeIndex === currentEpisode)?.frameCount ??
+                        liveFrameCount,
+                    }
+                  : null
+              }
+            />
           ) : (
             /*
               Keyboard / gamepad fallback for sessions where the operator
@@ -705,6 +737,8 @@ export function SessionDetailPage() {
                     <tr className="text-left text-xs text-theme-muted border-b border-glass-subtle">
                       <th className="pb-2 pr-4 font-medium">Episode</th>
                       <th className="pb-2 pr-4 font-medium">Frames</th>
+                      <th className="pb-2 pr-4 font-medium">Dropped</th>
+                      <th className="pb-2 pr-4 font-medium">fps</th>
                       <th className="pb-2 pr-4 font-medium">Duration</th>
                       <th className="pb-2 font-medium">Start</th>
                     </tr>
@@ -717,6 +751,19 @@ export function SessionDetailPage() {
                         </td>
                         <td className="py-2 pr-4 text-theme-secondary">
                           {ep.frameCount.toLocaleString(UI_DATE_LOCALE)}
+                        </td>
+                        {/* Yellow only when frames were actually lost. An
+                            em-dash means the episode predates TASK-215 and never
+                            counted, which is not the same claim as "none". */}
+                        <td
+                          className={`py-2 pr-4 ${
+                            (ep.droppedFrames ?? 0) > 0 ? 'text-yellow-400' : 'text-theme-secondary'
+                          }`}
+                        >
+                          {formatEpisodeStat(ep.droppedFrames)}
+                        </td>
+                        <td className="py-2 pr-4 text-theme-secondary">
+                          {formatEpisodeStat(ep.fpsActual, 1)}
                         </td>
                         <td className="py-2 pr-4 text-theme-secondary">{ep.durationS.toFixed(1)}s</td>
                         <td className="py-2 text-theme-muted">{ep.startTime.toFixed(1)}s</td>

@@ -36,6 +36,21 @@ export const HUD_COLORS = {
   dim: '#9CA3AF',
 } as const;
 
+/**
+ * How many lines the wrist plate can actually hold. A BUDGET, not a style rule.
+ *
+ * `VrWristHud` draws on a 512 x 256 px texture at `linePx: 52`, and
+ * `VrTextPlate` centres the block vertically. 5 lines is 5 * 52 = 260 px against
+ * 256 px of canvas: the outer two lines' 37 px glyphs (`linePx * 0.72`) still
+ * land inside the edges, so five is legible. 6 lines is 312 px, which puts the
+ * first line's baseline 2 px ABOVE the top of the canvas and the last one 2 px
+ * below the bottom — both clipped, and the operator has no way to scroll.
+ *
+ * `composeHud` therefore returns at most FOUR lines: `VrWristHud` spends the
+ * fifth on RTT, which it owns because only it knows the thresholds.
+ */
+export const HUD_MAX_LINES = 5;
+
 /** What the operator's hands are currently doing. */
 export type HudMode = 'ARM-L' | 'ARM-R' | 'ARM-LR' | 'DRIVE' | 'IDLE';
 
@@ -62,6 +77,20 @@ export interface HudState {
   vy: number;
   /** Commanded yaw rate, rad/s (CCW positive). */
   omega: number;
+  /**
+   * The episode being captured right now, or null/absent when nothing is being
+   * recorded.
+   *
+   * `episode` is the number the operator saw on the desktop before they put the
+   * headset on — `SessionDetailPage`'s "Recording episode N of M", which is
+   * 1-based — NOT the 0-based `episodeIndex` the review table lists. The wearer
+   * cannot see either readout while in VR, so the HUD matches the one they were
+   * last shown live.
+   *
+   * Optional so that the robot-detail page's teleop modal, which has no session
+   * behind it, does not have to invent a value.
+   */
+  recording?: { episode: number; frames: number } | null;
 }
 
 export function hudMode(state: Pick<HudState, 'armLeft' | 'armRight' | 'driving'>): HudMode {
@@ -82,6 +111,11 @@ function fixed(v: number, digits: number): string {
   return Number.isFinite(v) ? v.toFixed(digits) : '--';
 }
 
+/** A whole count for the HUD — never NaN, never negative, never a float. */
+function count(v: number): string {
+  return Number.isFinite(v) ? String(Math.max(0, Math.round(v))) : '--';
+}
+
 /**
  * The HUD, as an ordered list of lines.
  *
@@ -90,6 +124,20 @@ function fixed(v: number, digits: number): string {
  * one fact that matters at that moment is that the robot is stopped and will
  * stay stopped until somebody clears the latch deliberately — a red banner
  * competing with a speed readout is a banner that gets skimmed.
+ *
+ * RECORDING COSTS A LINE, AND `turn` PAYS FOR IT. The plate holds five lines
+ * (`HUD_MAX_LINES`) and four of them were already spoken for, with the fifth
+ * committed to RTT. So while an episode is being captured the TURN readout is
+ * dropped rather than a sixth line added, because turning in this rig is
+ * PHYSICAL — never a stick, see `vrHeading` — so the operator's own inner ear
+ * already reports the yaw they asked for. It is the only line on the plate whose
+ * information the wearer has a second source for. LINK, MODE, SPEED and RTT have
+ * none, and neither does REC: nothing else in the headset says whether the last
+ * two minutes of work is being kept.
+ *
+ * REC goes FIRST for the same reason. It is the line the operator scans for, and
+ * anything appended at the bottom is the first thing off the plate if the budget
+ * ever moves.
  */
 export function composeHud(state: HudState): HudLine[] {
   if (state.estopLatched) {
@@ -104,7 +152,22 @@ export function composeHud(state: HudState): HudLine[] {
       ? '--'
       : `${Math.max(0, Math.round(state.msSinceState))}ms`;
 
+  const rec = state.recording;
+
   return [
+    // Red, not green: every camera ever built lights red for "armed and
+    // capturing", and the operator does not have to be taught it. It is also the
+    // only red line that can appear while the robot is running, so it cannot be
+    // confused with the E-Stop banner, which replaces the plate entirely.
+    ...(rec
+      ? [
+          {
+            id: 'rec',
+            text: `REC ● ep ${count(rec.episode)} · ${count(rec.frames)} fr`,
+            color: HUD_COLORS.bad,
+          },
+        ]
+      : []),
     {
       id: 'link',
       text: `LINK ${state.link.toUpperCase()} ${age}`,
@@ -127,11 +190,16 @@ export function composeHud(state: HudState): HudLine[] {
       text: `SPEED ${fixed(state.vx, 2)} fwd ${fixed(state.vy, 2)} left`,
       color: HUD_COLORS.text,
     },
-    {
-      id: 'turn',
-      text: `TURN ${fixed(state.omega, 2)} rad/s`,
-      color: HUD_COLORS.text,
-    },
+    // Dropped while recording — see the docstring. `rec` buys this slot.
+    ...(rec
+      ? []
+      : [
+          {
+            id: 'turn',
+            text: `TURN ${fixed(state.omega, 2)} rad/s`,
+            color: HUD_COLORS.text,
+          },
+        ]),
   ];
 }
 

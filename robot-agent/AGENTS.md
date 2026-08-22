@@ -564,6 +564,70 @@ Endpoints: `POST /robots/:id/agent-mode/tour`, `POST …/tour/abort`,
 `personalDataGate` — the transcript is what a member of the public said). Events:
 `agent:tour:started|leg|turn|finished`, mirrored like every other Agent Mode event.
 
+### Episode recording (TASK-215)
+
+`src/recording/` turns a teleoperation session into a **LeRobot v3.0 dataset**:
+`EpisodeRecorder.ts` (the tick loop), `lerobot-writer.ts` (the aggregated parquet,
+`meta/`, and one ffmpeg-encoded MP4 per camera), `dex3-layout.ts` (the joint
+vector — 43 for a G1 EDU, both hands included), `camera-map.ts` (scene camera →
+`observation.images.<key>`) and `recording-controller.ts` (the one recorder this
+agent owns, attached to the state manager at boot the way `agentModeController`
+is).
+
+| Method | Path | Answer |
+|--------|------|--------|
+| POST | `/api/v1/robots/:id/recording/start` | body `{sessionId, fps?, cameras?, task?, shadows?, inputMode?}` → `{ok:true, …RecordingStatus}` |
+| POST | `…/recording/next-episode` | close this take, open the next → `{ok:true, episodeIndex}` |
+| POST | `…/recording/episodes/:index/discard` | throw a take away → `{ok:true, episodeIndex}` |
+| POST | `…/recording/pause` · `…/recording/resume` | park capture without ending the session; parked ticks are not counted as drops |
+| POST | `…/recording/stop` | encode and write → `StopRecordingResult` |
+| GET | `…/recording/status` | `{ok:true, …RecordingStatus}`; refreshes `behind_s` first, since the tick must not spend its budget asking the sim how it is feeling |
+
+Deliberately `/recording/*` and **not** `/record/*`: the sim's HTTP facade already
+serves `/record/start|stop` for `cine_recorder.py`, which makes a demo MP4 and not
+a dataset. A refusal the operator has to act on — already recording, teleop not
+driving, the sidecar not reporting every joint — is a **409 `RECORDING_REFUSED`**
+carrying the recorder's own words; anything else is a 500 `RECORDING_FAILED`.
+
+Datasets land in **`data/workspace-<robotId>/datasets/<sessionId>/`**
+(`RECORDING_DATASET_DIR` moves the root), next to the patrol photos and the
+journal — everything this robot produced about a place is then in one tree a
+retention sweep can find. JPEGs are spilled to `datasets/.scratch/` while
+recording and removed on stop — but **only once the dataset is safely written**.
+Until it is, they are the only copy, and a missing ffmpeg used to delete them
+anyway; a failed stop now answers with the reason and the scratch path.
+
+**Check that what it wrote actually opens.** `server/curation/check_lerobot_v3.py
+<dataset-dir>` replays the steps `lerobot` takes when it loads a dataset and
+stops at the first thing it would have raised — the path templates, the tasks
+index, the episode lookup columns, and the cast of the data parquet to the schema
+`info.json` declares. It needs `pandas`, `pyarrow` and `datasets` and exits 2
+when they are missing, so "not checked" is distinguishable from "broken". Reading
+the tree back with the same library that wrote it proves nothing; this is the
+check that would have caught a whole release of unloadable datasets.
+
+**`action` is the COMMANDED pose, `observation.state` the MEASURED one.**
+Commanded comes from `getTeleopPositions()`, measured from a fresh
+`hardwareClient.getJointMapNow()` — not from the 2 s poll cache, which at 30 Hz
+would store the same measured pose sixty times over and make the whole
+commanded/measured distinction an artefact of the cache. Both are read through
+the same layout, and `start` refuses **before the first frame** if either side
+cannot fill it, because a constant column only shows up hours into a training run.
+
+**A tick that cannot get everything is dropped and counted, never interpolated
+and never half-written**: the previous frame still in flight, a latched E-Stop,
+teleop disengaged, a joint missing on either side. `RecordingStatus.dropped` and
+`lastDropReason` say which; 15 consecutive drops set `degraded`. The row and its
+JPEGs are written only once every part of the frame is in hand, so the image
+sequences stay contiguous and each video has exactly one frame per row.
+
+**The `fps` in `meta/info.json` is the MEASURED rate**, not the requested one:
+accepted frames over the span they actually covered. The `timestamp` column is
+generated from it, so declaring 30 for a run that achieved 21 would put every
+timestamp in the dataset wrong. `fpsTarget` is reported alongside it, and shadows
+are off by default because the sim's shadow pass is what costs the tick its budget
+(`?shadows=0&reflection=0&format=raw`, see `hardware/sim_g1_dds/README.md`).
+
 ## Key Dependencies
 
 | Package                 | Purpose                     |

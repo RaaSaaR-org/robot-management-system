@@ -1714,11 +1714,19 @@ model TeleoperationSession {
   episodeTimeS       Float? // Per-episode max duration (seconds)
   datasetRepoId      String? // HF-style repo_id (e.g. "robot0/pick-block-xyz")
   sidecarDatasetPath String? // Path on the pi where lerobot-record wrote the dataset
+  // Which recorder produced this session's data (TASK-215):
+  //   'agent'   — the robot agent's EpisodeRecorder wrote a LeRobot v3.0 tree
+  //   'sim'     — the server-side SimFrameRecorder wrote TeleoperationFrame rows
+  //   'sidecar' — lerobot-record on the hardware sidecar
+  // Null for sessions recorded before the distinction existed.
+  recorderKind       String?
+  agentDatasetPath   String? // Path ON THE ROBOT where the agent wrote the dataset
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   // Relations
-  frames TeleoperationFrame[]
+  frames   TeleoperationFrame[]
+  episodes TeleoperationEpisode[]
 
   @@index([operatorId])
   @@index([robotId])
@@ -1732,6 +1740,33 @@ model TeleoperationSession {
 // ============================================================================
 
 // DatasetProvenance - Source documentation for training datasets
+/// One episode of a teleoperation session, as the recorder saw it (TASK-215).
+///
+/// Episode summaries used to be derived on the fly by grouping
+/// TeleoperationFrame rows, which works only while the frames live in this
+/// database. An agent-side recorder writes its frames straight to a LeRobot
+/// tree on the robot, so there are no rows to group — and the two numbers that
+/// matter most about an episode, how many frames it LOST and the rate it really
+/// achieved, were never derivable from the frames in the first place.
+model TeleoperationEpisode {
+  id            String   @id @default(uuid())
+  sessionId     String
+  episodeIndex  Int
+  frameCount    Int      @default(0)
+  /// Ticks the recorder wanted and did not get. Counted, never interpolated.
+  droppedFrames Int      @default(0)
+  /// Seconds from the episode's first accepted frame to its last.
+  durationS     Float    @default(0)
+  /// Frames per second actually achieved, measured across those frames.
+  fpsActual     Float    @default(0)
+  createdAt     DateTime @default(now())
+
+  session TeleoperationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, episodeIndex])
+  @@index([sessionId])
+}
+
 model DatasetProvenance {
   id                  String   @id @default(uuid())
   datasetId           String   @unique
@@ -2519,29 +2554,29 @@ model MarketplaceListing {
 }
 
 model ListingVersion {
-  id             String   @id @default(cuid())
+  id             String             @id @default(cuid())
   listingId      String
   listing        MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
-  version        String   @default("1.0.0")
+  version        String             @default("1.0.0")
   artifactUri    String // "local://<relative path>" or "rustfs://<bucket>/<key>"
   fileName       String
-  fileSizeBytes  BigInt   @default(0)
+  fileSizeBytes  BigInt             @default(0)
   checksumSha256 String?
   changelog      String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime           @default(now())
 
   @@index([listingId])
 }
 
 model ListingLicense {
-  id           String @id @default(cuid())
+  id           String             @id @default(cuid())
   listingId    String
   listing      MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   tier         String // research | per_robot | per_fleet | enterprise
   label        String
   description  String
   priceCredits Int
-  features     String @default("[]") // JSON: string[]
+  features     String             @default("[]") // JSON: string[]
 
   purchases ListingPurchase[]
 
@@ -2549,16 +2584,16 @@ model ListingLicense {
 }
 
 model ListingPurchase {
-  id            String   @id @default(cuid())
+  id            String             @id @default(cuid())
   buyerId       String
   listingId     String
   listing       MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   licenseId     String
-  license       ListingLicense @relation(fields: [licenseId], references: [id])
+  license       ListingLicense     @relation(fields: [licenseId], references: [id])
   versionId     String?
   creditsPaid   Int
-  downloadCount Int      @default(0)
-  purchasedAt   DateTime @default(now())
+  downloadCount Int                @default(0)
+  purchasedAt   DateTime           @default(now())
 
   @@unique([buyerId, listingId])
   @@index([buyerId])
@@ -2566,16 +2601,16 @@ model ListingPurchase {
 }
 
 model ListingReview {
-  id         String   @id @default(cuid())
+  id         String             @id @default(cuid())
   listingId  String
   listing    MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   authorId   String
   authorName String
-  authorTier String   @default("bronze")
+  authorTier String             @default("bronze")
   rating     Int
   body       String
-  robotType  String   @default("Generic")
-  createdAt  DateTime @default(now())
+  robotType  String             @default("Generic")
+  createdAt  DateTime           @default(now())
 
   @@unique([listingId, authorId])
   @@index([listingId])
