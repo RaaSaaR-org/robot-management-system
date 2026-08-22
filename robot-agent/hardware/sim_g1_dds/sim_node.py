@@ -11,8 +11,12 @@ Two jobs:
 
 2. **Sidecar-compatible HTTP facade** (`--http-port`). Serves the subset of
    `g1_sidecar.py` that Agent Mode needs -- `/health`, `/cameras`,
-   `/cameras/<n>/snapshot`, `/state`, `/loco/*`, `/pointcloud/*` -- so the whole
-   Collect→Act loop can be exercised with no hardware attached. The
+   `/cameras/<n>/snapshot`, `/cameras/<n>/stream` (MJPEG), `/state`, `/action`,
+   `/estop`, `/loco/*`,
+   `/pointcloud/*` -- so the whole Collect→Act loop can be exercised with no
+   hardware attached. `/action` is how VR teleop reaches these joints: clamped
+   and slew-limited exactly as the sidecar's is, and published as a real
+   `rt/arm_sdk` message rather than writing `tgt` behind the subscriber's back. The
    `/pointcloud/*` routes are backed by a real `mj_ray` cast against the scene
    (see `SimNode.cast_lidar`), NOT by a fabricated room: an obstacle that is not
    in the MJCF produces no return here, exactly as an obstacle that is not in
@@ -46,6 +50,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import queue
+
 import mujoco
 import numpy as np
 
@@ -54,6 +60,7 @@ from unitree_sdk2py.core.channel import (
 )
 from unitree_sdk2py.idl.default import (
     unitree_go_msg_dds__SportModeState_, unitree_hg_msg_dds__HandState_,
+    unitree_hg_msg_dds__HandCmd_, unitree_hg_msg_dds__LowCmd_,
     unitree_hg_msg_dds__LowState_,
 )
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
@@ -78,6 +85,31 @@ DEFAULT_SCENE = (
     Path(__file__).resolve().parents[1]
     / "sim_evaluator" / "mjcf" / "g1_dex3_room_scene.xml"
 )
+# /action slew limiting. These MIRROR g1_sidecar.py (CONTROL_HZ / MAX_JOINT_VEL)
+# and read the same environment variables, deliberately: the facade exists so a
+# plan can be built against the sim and then run on the robot, and a sim that
+# accepts a jump the robot ramps would teach exactly the wrong reflex. See
+# `SimNode.send_action`.
+ACTION_CONTROL_HZ = float(os.environ.get("G1_CONTROL_HZ") or 50.0)
+ACTION_MAX_JOINT_VEL = float(os.environ.get("G1_MAX_JOINT_VEL") or 1.0)  # rad/s
+ACTION_MAX_STEP = ACTION_MAX_JOINT_VEL / ACTION_CONTROL_HZ
+# Hand the joints back if the operator's stream stops. A teleop client that
+# crashes mid-motion must not leave the sim pinned to a half-finished pose
+# forever with the robot's own controller locked out.
+ACTION_IDLE_RELEASE_S = 1.5
+# Gains written into the arm_sdk message. THIS SIM IGNORES THEM -- `_on_arm_sdk`
+# reads only `.q` and the weight, because the MJCF drives position actuators with
+# gains of its own. They are set anyway so the bytes on the wire are the bytes a
+# real G1 needs; a capture of this traffic has to be replayable at the robot.
+ACTION_KP = 60.0
+ACTION_KD = 1.5
+
+# Ceiling for one MJPEG stream. Every frame is rendered by the PHYSICS thread
+# (RenderRequest), so an unpaced stream steals from the simulation it is
+# filming. A full G1 scene renders in ~70 ms here, so this cap rarely binds --
+# it is the guard for the day someone films a small scene.
+STREAM_MAX_FPS = 15.0
+
 TOPIC_ARM_SDK = "rt/arm_sdk"
 TOPIC_LOWSTATE = "rt/lowstate"
 TOPIC_ODOM = "rt/odommodestate"
@@ -485,7 +517,8 @@ class SimNode:
         )
         print(f"[SimNode] scene {scene.name}, DDS domain {domain}")
         print(f"[SimNode]   sub  {TOPIC_ARM_SDK}, rt/dex3/{{left,right}}/cmd")
-        print(f"[SimNode]   pub  {TOPIC_LOWSTATE}, {TOPIC_ODOM}, rt/dex3/*/state")
+        print(f"[SimNode]   pub  {TOPIC_LOWSTATE}, {TOPIC_ODOM}, rt/dex3/*/state, "
+              f"{TOPIC_ARM_SDK} (/action)")
         print("[SimNode]   rpc  rt/api/sport/{request,response}")
         if not self.has_base:
             print("[SimNode]   NOTE scene has no planar base -- loco velocity is a no-op")
@@ -506,6 +539,20 @@ class SimNode:
             if jid < 0:
                 raise KeyError(f"joint '{name}' not in {self.scene.name}")
             return int(m.jnt_qposadr[jid])
+
+        # Position limits per BODY index, for /action clamping. `jnt_limited`
+        # is honoured: an unlimited hinge clamps to nothing rather than to a
+        # meaningless (0, 0) range.
+        def limits(name: str) -> tuple[float, float]:
+            jid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if jid < 0 or not bool(m.jnt_limited[jid]):
+                return (-math.inf, math.inf)
+            lo, hi = m.jnt_range[jid]
+            return (float(lo), float(hi))
+
+        self.body_limits = [limits(n) for n in BODY]
+        self.hand_limits = {"lh": [limits(n) for n in LHAND],
+                            "rh": [limits(n) for n in RHAND]}
 
         self.act = {
             "body": [act(n) for n in BODY],
@@ -567,6 +614,40 @@ class SimNode:
         ChannelSubscriber(TOPIC_HAND_CMD.format("right"), HandCmd_).Init(
             lambda m: self._on_hand("rh", m), 10)
 
+        # We PUBLISH arm_sdk as well as subscribing to it: `POST /action` goes out
+        # over the real DDS wire and comes back in through our own subscriber
+        # above, the same way `/loco/*` goes out through a real LocoClient. It
+        # would be a line shorter to poke `self.tgt` directly, and that shortcut
+        # is exactly what the facade is written to avoid -- the sim would then
+        # accept commands over a path the robot does not have.
+        self.pub_arm = ChannelPublisher(TOPIC_ARM_SDK, LowCmd_); self.pub_arm.Init()
+        self.msg_arm = unitree_hg_msg_dds__LowCmd_()
+        # ONE writer. `msg_arm` is a single mutable object handed to CycloneDDS
+        # for serialisation, and three threads want to send on it -- the HTTP
+        # thread on /action, the physics thread on the idle release, and /estop.
+        # Filling it from one thread while another is mid-serialise is a data
+        # race on memory the C layer is reading. Everything is queued to this
+        # thread instead, which also keeps the DDS write off the physics loop.
+        # Depth 2 and drop-OLDEST: at 50 Hz a queued setpoint is worthless the
+        # moment a newer one exists, and a backlog would make the arm chase
+        # stale targets seconds after the operator moved on.
+        self._arm_q: "queue.Queue[tuple]" = queue.Queue(maxsize=2)
+        # /action ramp state: the last COMMANDED body pose (radians, BODY order)
+        # and when it was last written. None until the first /action seeds it
+        # from the live pose.
+        self._action_cmd: np.ndarray | None = None
+        self._action_hand: dict[str, np.ndarray] = {}
+        self._action_at = 0.0
+        self.pub_hand_cmd = {}
+        for side, key in (("left", "lh"), ("right", "rh")):
+            c = ChannelPublisher(TOPIC_HAND_CMD.format(side), HandCmd_); c.Init()
+            self.pub_hand_cmd[key] = c
+        self.msg_hand_cmd = {"lh": unitree_hg_msg_dds__HandCmd_(),
+                             "rh": unitree_hg_msg_dds__HandCmd_()}
+        self._arm_dropped = 0
+        # Last blend weight the writer actually put on the wire.
+        self._arm_weight = 0.0
+
         self.pub_low = ChannelPublisher(TOPIC_LOWSTATE, LowState_); self.pub_low.Init()
         self.pub_odom = ChannelPublisher(TOPIC_ODOM, SportModeState_); self.pub_odom.Init()
         self.pub_hand = {}
@@ -579,6 +660,9 @@ class SimNode:
         self.msg_hand = {"lh": unitree_hg_msg_dds__HandState_(),
                          "rh": unitree_hg_msg_dds__HandState_()}
 
+        # Last, so the writer never sees a half-built node.
+        threading.Thread(target=self._arm_writer, name="arm-writer", daemon=True).start()
+
     # --------------------------------------------------------------- callbacks
 
     def _on_arm_sdk(self, msg: LowCmd_) -> None:
@@ -586,6 +670,199 @@ class SimNode:
             self.weight = float(msg.motor_cmd[WEIGHT_IDX].q)
             self.tgt["body"] = np.array([msg.motor_cmd[i].q for i in range(N_BODY)])
             self.arm_cmd_count += 1
+
+    # ----------------------------------------------------------- /action
+
+    def send_action(self, action: dict) -> tuple[int, dict]:
+        """POST /action -- {"<joint>": radians, ...}, CLAMPED + RAMPED.
+
+        The same contract `g1_sidecar.py:send_action` serves on the robot, and
+        deliberately so: every target is clamped to the joint's real limits, then
+        advanced toward it by at most ACTION_MAX_STEP per call. A caller driving
+        this at ACTION_CONTROL_HZ gets the nominal rad/s; a slower caller simply
+        moves slower, and a single un-repeated setpoint stops part-way -- the
+        safe failure mode, identical to the robot's.
+
+        Body joints go out on `rt/arm_sdk`, Dex3 finger joints on
+        `rt/dex3/{left,right}/cmd`; one request may mix them, which is what a
+        43-DOF teleop pose actually looks like. Joints the caller does not name
+        keep their commanded value rather than falling to zero: arm_sdk carries
+        all 29 body joints in one message, so a request that moves only an arm
+        would otherwise command the legs and waist straight to 0 -- a full-body
+        pose change nobody asked for.
+
+        Returns (http_status, body). Unknown joint names are REJECTED rather than
+        skipped: silently dropping a typo'd joint is how a teleop rig ends up
+        looking like it works while half the arm never moves. (The robot's
+        sidecar skips them instead. The divergence is deliberate and one-way --
+        anything this accepts, the robot accepts.)
+        """
+        if not isinstance(action, dict) or not action:
+            return 400, {"ok": False, "error": 'body must be {"<joint>": radians, ...}'}
+
+        where = {}
+        for i, name in enumerate(BODY):
+            where[name] = ("body", i)
+        for key, table in (("lh", LHAND), ("rh", RHAND)):
+            for i, name in enumerate(table):
+                where[name] = (key, i)
+
+        want: dict[str, dict[int, float]] = {}
+        for name, value in action.items():
+            slot = where.get(name)
+            if slot is None:
+                return 400, {"ok": False,
+                             "error": f"unknown joint '{name}' -- not a G1 body or Dex3 joint"}
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return 400, {"ok": False,
+                             "error": f"'{name}' must be a number (radians), got {value!r}"}
+            if not math.isfinite(float(value)):
+                return 400, {"ok": False, "error": f"'{name}' must be finite, got {value!r}"}
+            key, idx = slot
+            want.setdefault(key, {})[idx] = float(value)
+
+        converged = True
+        with self.lock:
+            if self._action_cmd is None:
+                # Seed from where the robot actually IS, so the first call ramps
+                # from the live pose instead of leaping away from it toward a
+                # fabricated zero. Same reasoning as the sidecar's seeding.
+                self._action_cmd = np.array(
+                    [float(self.data.qpos[a]) for a in self.qadr["body"]])
+            for key in ("lh", "rh"):
+                if key in want and key not in self._action_hand:
+                    self._action_hand[key] = np.array(
+                        [float(self.data.qpos[a]) for a in self.qadr[key]])
+
+            for key, targets in want.items():
+                cmd = self._action_cmd if key == "body" else self._action_hand[key]
+                lims = self.body_limits if key == "body" else self.hand_limits[key]
+                for i, target in targets.items():
+                    lo, hi = lims[i]
+                    delta = min(hi, max(lo, target)) - cmd[i]
+                    if delta > ACTION_MAX_STEP:
+                        delta, converged = ACTION_MAX_STEP, False
+                    elif delta < -ACTION_MAX_STEP:
+                        delta, converged = -ACTION_MAX_STEP, False
+                    cmd[i] += delta
+            self._action_at = time.time()
+            body_out = self._action_cmd.copy()
+            hand_out = {k: v.copy() for k, v in self._action_hand.items() if k in want}
+
+        self._enqueue_arm(body_out, 1.0, hand_out)
+        return 200, {"ok": True, "sim": True, "applied": len(action),
+                     "converged": converged, "max_step_rad": ACTION_MAX_STEP}
+
+    def release_action(self) -> tuple[int, dict]:
+        """POST /estop -- drop the ramp state and hand the joints back.
+
+        Mirrors the sidecar's soft e-stop. Weight 0 does NOT spring the arms back
+        to rest: `_hold_pose` latches wherever they were when authority moved, so
+        the robot keeps the pose it was left in and its own controller holds it
+        there. That is the honest behaviour -- an operator letting go of a teleop
+        rig should not make the arms drop. The fingers have no blend weight, so
+        they simply stay where they were last commanded.
+        """
+        with self.lock:
+            had = self._action_cmd is not None
+            self._action_cmd = None
+            self._action_hand = {}
+            self._action_at = 0.0
+        if had:
+            self._enqueue_arm(None, 0.0, {})
+        return 200, {"ok": True, "sim": True, "released": had}
+
+    def expire_action(self) -> None:
+        """Release arm authority when the operator's stream stops (run_loop).
+
+        A teleop client that crashes mid-motion must not leave the sim pinned to
+        a half-finished pose forever with the robot's own controller locked out.
+        """
+        with self.lock:
+            idle = self._action_cmd is None
+            if not idle and time.time() - self._action_at < ACTION_IDLE_RELEASE_S:
+                return
+            announce = not idle
+            self._action_cmd = None
+            self._action_hand = {}
+            self._action_at = 0.0
+        # Re-ask on every tick until the writer confirms weight 0 reached the
+        # wire. A release dropped by a full queue would otherwise leave the sim
+        # pinned under a publisher that has gone away -- the one failure this
+        # watchdog exists to prevent.
+        if self._arm_weight == 0.0:
+            return
+        if announce:
+            print(f"[SimNode] /action idle >{ACTION_IDLE_RELEASE_S}s -- arm authority released")
+        self._enqueue_arm(None, 0.0, {})
+
+    def _enqueue_arm(self, body: "np.ndarray | None", weight: float,
+                     hands: "dict[str, np.ndarray]") -> None:
+        """Hand one command to the writer thread, newest-wins.
+
+        NEVER blocks. This is called from the HTTP threads and from the physics
+        loop, and a blocking put would stall the simulation behind a DDS write --
+        the whole reason the writer is a separate thread. A full queue therefore
+        drops its OLDEST entry: at 50 Hz a queued setpoint is worthless the
+        moment a newer one exists, and a backlog would make the arm chase
+        targets the operator had already moved on from.
+
+        A dropped release is covered by `expire_action`, which keeps asking
+        until the writer confirms the weight actually went out.
+        """
+        item = (body, weight, hands)
+        for _ in range(self._arm_q.maxsize + 2):
+            try:
+                self._arm_q.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    self._arm_q.get_nowait()
+                    self._arm_dropped += 1
+                except queue.Empty:
+                    pass
+        self._arm_dropped += 1
+
+    def _arm_writer(self) -> None:
+        """The one hand on the wire: arm_sdk and Dex3 commands go out here only.
+
+        `msg_arm` is a single mutable object that CycloneDDS serialises in C.
+        Filling it from the HTTP thread while the physics thread is mid-write is
+        a data race on memory the C layer is reading, so every sender queues here
+        instead of publishing for itself.
+        """
+        while True:
+            body, weight, hands = self._arm_q.get()
+            try:
+                self._publish_arm(body, weight)
+                for key, vec in hands.items():
+                    self._publish_hand_cmd(key, vec)
+            except Exception as err:  # noqa: BLE001 -- a lost frame must not end the sim
+                print(f"[SimNode]   !! arm_sdk publish failed: {err}")
+
+    def _publish_arm(self, body: "np.ndarray | None", weight: float) -> None:
+        """Write one arm_sdk LowCmd. `body` None keeps the last targets."""
+        msg = self.msg_arm
+        if body is not None:
+            for i in range(N_BODY):
+                msg.motor_cmd[i].q = float(body[i])
+                msg.motor_cmd[i].kp = ACTION_KP
+                msg.motor_cmd[i].kd = ACTION_KD
+        msg.motor_cmd[WEIGHT_IDX].q = float(weight)
+        msg.crc = self.crc.Crc(msg)
+        self.pub_arm.Write(msg)
+        # What the wire actually carried, so `expire_action` can tell a release
+        # that went out from one that was dropped under load.
+        self._arm_weight = float(weight)
+
+    def _publish_hand_cmd(self, key: str, vec: "np.ndarray") -> None:
+        """Write one Dex3 HandCmd for the given side ('lh' | 'rh')."""
+        msg = self.msg_hand_cmd[key]
+        for i in range(N_HAND):
+            msg.motor_cmd[i].q = float(vec[i])
+            msg.motor_cmd[i].kp = ACTION_KP
+            msg.motor_cmd[i].kd = ACTION_KD
+        self.pub_hand_cmd[key].Write(msg)
 
     def _on_hand(self, side: str, msg: HandCmd_) -> None:
         with self.lock:
@@ -1197,6 +1474,28 @@ def _loco_stand_height(client, rpc_lock, body: dict) -> tuple[int, dict]:
 
 def make_handler(node: SimNode, bridge: _LocoBridge):
     class Handler(BaseHTTPRequestHandler):
+        # HTTP/1.1, so a client that keeps its connection open gets ONE server
+        # thread for the whole stream. Under HTTP/1.0 every request cost a fresh
+        # TCP connection and a fresh thread -- fine for Agent Mode's 2 Hz polling,
+        # which is all this facade used to see, but `/action` teleop runs at 50 Hz
+        # and turned that into 50 connections and 50 threads a second. Safe here
+        # because `_send` is the only reply path and always sets Content-Length.
+        protocol_version = "HTTP/1.1"
+        # ...and a keep-alive connection MUST be able to die on its own.
+        # `BaseHTTPRequestHandler.timeout` is None by default, so between two
+        # requests the handler blocks in `rfile.readline()` forever. Under the
+        # old HTTP/1.0 default every connection closed after one response, so
+        # this could not arise; with keep-alive on, a robot-agent that vanishes
+        # WITHOUT closing its sockets -- Wi-Fi off, lid closed, box powered down,
+        # none of which send a FIN -- strands one thread and one file descriptor
+        # per pooled connection for the life of the sim, and they accumulate over
+        # every such event.
+        #
+        # 30 s is far longer than any real gap: Agent Mode polls at 2 Hz and
+        # teleop at 50 Hz. `handle_one_request` turns the resulting socket
+        # timeout into `close_connection`, which ends the thread.
+        timeout = 30
+
         def _send(self, code: int, payload: dict) -> None:
             body = json.dumps(payload).encode()
             self.send_response(code)
@@ -1204,6 +1503,55 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _stream_mjpeg(self, name: str) -> None:
+            """Serve `name` as multipart MJPEG until the client goes away.
+
+            This is the SECOND reply path in a handler whose `protocol_version`
+            comment promises that `_send` is the only one. A stream has no
+            Content-Length -- it is not supposed to end -- so the keep-alive that
+            HTTP/1.1 buys every other route has to be switched off by hand here.
+            Leave it on and the next request on this socket is read as more image
+            data, which does not fail, it desynchronises.
+
+            Frames come from the physics thread (see `RenderRequest`), the same
+            queue `/cameras/<n>/snapshot` uses. Each open stream therefore costs
+            the simulation one render per frame: two viewers are two renders, not
+            a shared one. `STREAM_MAX_FPS` bounds a single stream, not their sum.
+            """
+            # Render one frame BEFORE the 200. Once the multipart header is on the
+            # wire there is no longer any way to say "no such camera" that a
+            # browser will show -- it would just wait forever on an empty stream.
+            first = node.request_render(name)
+            if first.error or first.jpeg is None:
+                self._send(503, {"ok": False, "error": first.error or "no frame"})
+                return
+
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            jpeg = first.jpeg
+            min_dt = 1.0 / STREAM_MAX_FPS
+            try:
+                while True:
+                    started = time.time()
+                    self.wfile.write(b"--FRAME\r\nContent-Type: image/jpeg\r\n"
+                                     b"Content-Length: " + str(len(jpeg)).encode()
+                                     + b"\r\n\r\n" + jpeg + b"\r\n")
+                    self.wfile.flush()
+                    req = node.request_render(name)
+                    if req.error or req.jpeg is None:
+                        break  # scene reloaded, or the physics loop stopped
+                    jpeg = req.jpeg
+                    slack = min_dt - (time.time() - started)
+                    if slack > 0:
+                        time.sleep(slack)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the viewer closed the tab -- how every one of these ends
 
         def log_message(self, *args) -> None:  # keep the sim output readable
             pass
@@ -1219,6 +1567,8 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 self._send(200, {"cameras": node.camera_names()})
             elif self.path == "/record":
                 self._send(200, {"ok": True, **node.recorder.status()})
+            elif self.path.startswith("/cameras/") and self.path.endswith("/stream"):
+                self._stream_mjpeg(self.path[len("/cameras/"):-len("/stream")])
             elif self.path.startswith("/cameras/") and self.path.endswith("/snapshot"):
                 name = self.path[len("/cameras/"):-len("/snapshot")]
                 req = node.request_render(name)
@@ -1360,6 +1710,14 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
                 self._send(200 if ok else 409, {"ok": ok, "message": msg,
                                                  **node.recorder.status()})
                 return
+            if self.path == "/action":
+                self._send(*node.send_action(body))
+                return
+
+            if self.path == "/estop":
+                self._send(*node.release_action())
+                return
+
             if self.path == "/sim/reset-pose":
                 target = {}
                 for key in ("x", "y", "yaw"):
@@ -1470,6 +1828,9 @@ def run_loop(node: SimNode, viewer=None) -> None:
                 node.publish_state()
             if n % odom_every == 0:
                 node.publish_odom()
+                # Same cadence as odom -- cheap, and far finer than the 1.5 s
+                # it is watching for.
+                node.expire_action()
             if node.reset_count != resets:
                 break  # re-base the clock below before stepping any further
         node.drain_pose_resets()
@@ -1551,7 +1912,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[SimNode]   loco bridge not warm yet: {exc}")
         threading.Thread(target=_warm, daemon=True).start()
         print(f"[SimNode]   http :{args.http_port} "
-              f"(/health /cameras /state /loco/* /pointcloud/*) "
+              f"(/health /cameras /cameras/<n>/{{snapshot,stream}} /state "
+              f"/action /estop /loco/* /pointcloud/*) "
               f"-- point HARDWARE_SIDECAR_URL here")
 
     if args.record:

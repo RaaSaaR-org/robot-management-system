@@ -9,6 +9,8 @@ import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from '../services/HttpClie
 import { sensorScanService } from '../services/SensorScanService.js';
 import { robotRepository } from '../repositories/index.js';
 import { prisma } from '../database/index.js';
+import http from 'node:http';
+import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
 
 export const robotRoutes = Router();
 
@@ -250,7 +252,14 @@ robotRoutes.get('/:id/telemetry/history', async (req: Request, res: Response) =>
 // ============================================================================
 
 /**
- * GET /:id/camera/:name — Proxy MJPEG camera stream from robot sidecar (port 8765)
+ * GET /:id/camera/:name — Proxy the robot's live MJPEG camera to the browser.
+ *
+ * This used to guess a camera sidecar at `<agent host>:8765/camera/<name>`, an
+ * endpoint neither `so101_sidecar.py` nor `g1_sidecar.py` has ever served — both
+ * expose `/cameras/<name>/...`. So every camera view in the app answered 502.
+ * It now goes through the agent, which is the only party that knows where its
+ * own sidecar lives (HARDWARE_SIDECAR_URL) and which gates the frames as the
+ * personal data they are.
  */
 robotRoutes.get('/:id/camera/:name', async (req: Request, res: Response) => {
   try {
@@ -259,19 +268,37 @@ robotRoutes.get('/:id/camera/:name', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Robot not found' });
     }
 
-    // Derive sidecar URL (port 8765) from agent URL
-    const agentUrl = new URL(registered.baseUrl);
-    const sidecarUrl = `http://${agentUrl.hostname}:8765`;
     const camName = req.params.name;
+    const target = `${registered.baseUrl.replace(/\/$/, '')}` +
+      `/api/v1/robots/${encodeURIComponent(req.params.id)}` +
+      `/camera/${encodeURIComponent(camName)}/stream`;
 
-    // Pipe the MJPEG stream through to the browser
-    const http = await import('http');
-    const upstream = http.get(`${sidecarUrl}/camera/${camName}`, (stream) => {
+    // The agent's camera route sits behind its personal-data gate. Present the
+    // shared secret when one is configured; without it the gate falls back to
+    // loopback-only, which is exactly the single-box dev setup.
+    const upstream = http.get(target, { headers: agentServiceAuthHeaders() }, (stream) => {
+      if (stream.statusCode !== 200) {
+        stream.resume();
+        res.status(stream.statusCode ?? 502).json({
+          error: 'Cannot reach robot camera',
+          detail: `agent answered ${stream.statusCode} for camera '${camName}'`,
+        });
+        return;
+      }
       res.writeHead(200, {
-        'Content-Type': 'multipart/x-mixed-replace; boundary=FRAME',
+        'Content-Type': stream.headers['content-type'] ?? 'multipart/x-mixed-replace; boundary=FRAME',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Connection': 'close',
       });
+      // `pipe` ends `res` on the source's 'end' but NOT on 'error'/'aborted'.
+      // Without this, a sidecar or agent restart mid-stream — routine in
+      // development — left this response open forever: no end, no error, just a
+      // browser `<img>` on a `multipart/x-mixed-replace` that never fires
+      // `onerror`. The viewer saw a frozen frame and a dangling socket at every
+      // hop, and only closing the modal recovered it.
+      const drop = () => { stream.unpipe(res); res.destroy(); };
+      stream.on('error', drop);
+      stream.on('aborted', drop);
       stream.pipe(res);
     });
     upstream.on('error', () => {
@@ -279,7 +306,9 @@ robotRoutes.get('/:id/camera/:name', async (req: Request, res: Response) => {
         res.status(502).json({ error: 'Cannot reach robot camera' });
       }
     });
-    req.on('close', () => upstream.destroy());
+    // `res`, not `req`: a browser that navigates away closes the response, and
+    // every frame rendered after that costs the simulation a render for nobody.
+    res.on('close', () => upstream.destroy());
   } catch (error) {
     if (!res.headersSent) {
       res.status(500).json({ error: 'Camera proxy error' });

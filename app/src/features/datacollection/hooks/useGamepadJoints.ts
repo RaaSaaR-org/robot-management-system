@@ -85,7 +85,9 @@ function readGamepad(gp: Gamepad): JointDirections {
 }
 
 function getWsBaseUrl(robot: Robot): string {
-  const agent = robot.a2aAgentUrl?.replace(/\/$/, '') ?? 'http://localhost:41245';
+  // 41243 is the robot agent's default port; this fallback read 41245, a port
+  // nothing listens on.
+  const agent = robot.a2aAgentUrl?.replace(/\/$/, '') ?? 'http://localhost:41243';
   try {
     const url = new URL(agent);
     return `ws://${url.hostname}:8766`;

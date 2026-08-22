@@ -233,6 +233,34 @@ export interface LocoResult {
   rpcCode?: number;
 }
 
+/**
+ * A `POST /action` the sidecar refused, as an exception rather than a silence.
+ *
+ * `sendAction` used to be a bare `await fetch(...)` with no `res.ok` check, and
+ * fetch only rejects on a network failure — so the two answers that matter most
+ * were both invisible:
+ *
+ * - **403 `G1_READ_ONLY`** from `g1_sidecar.py`. Read-only is the DEFAULT
+ *   (`G1_READ_ONLY` is on unless explicitly set to `0`), so the ordinary
+ *   first-run experience on a real G1 was a VR operator moving an on-screen
+ *   robot while the physical one never received a single command.
+ * - **400 `unknown joint '<name>'`** from `sim_g1_dds/sim_node.py`, which
+ *   rejects the WHOLE pose — one typo'd or renamed joint froze all 43.
+ *
+ * `status` is the HTTP status so callers can tell "the robot said no" (a status
+ * is present) from "nothing answered" (no status, a transport failure).
+ */
+export class HardwareActionError extends Error {
+  constructor(
+    message: string,
+    /** HTTP status the sidecar answered with. */
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'HardwareActionError';
+  }
+}
+
 /** Planar base pose from `GET /loco/odom` (`rt/odommodestate`). */
 export interface LocoOdometry {
   /** Base x in metres, world frame. */
@@ -691,12 +719,53 @@ export class HardwareClient {
     return any ? out : null;
   }
 
-  async sendAction(joints: Record<string, number>): Promise<void> {
-    if (!this.sidecarAvailable) return;
-    await fetch(`${getSidecarUrl()}/action`, {
+  /**
+   * `POST /action` — a name-keyed joint-target dict, ramped and clamped by the
+   * sidecar.
+   *
+   * @returns the parsed sidecar body, or `null` when there is no sidecar to
+   *          send to (a pure in-process sim) — `null` means "not sent", never
+   *          "sent and accepted".
+   * @throws {HardwareActionError} when the sidecar refuses the pose. Refusal is
+   *         `!res.ok` OR a 200 carrying `ok:false`: `send_action` in
+   *         `g1_sidecar.py` returns the read-only refusal as a body field, and
+   *         only the HTTP layer above it turns that into a 403, so trusting the
+   *         status alone would let one of the two shapes through.
+   */
+  async sendAction(joints: Record<string, number>): Promise<Record<string, unknown> | null> {
+    if (!this.sidecarAvailable) return null;
+    const res = await fetch(`${getSidecarUrl()}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(joints),
+      signal: AbortSignal.timeout(1000),
+    });
+    // The body is read before the status is judged: the sidecar's `error` text
+    // ("unknown joint 'elbow'", "G1_READ_ONLY — command path disabled") is the
+    // only thing that tells an operator WHICH of the refusals they hit.
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok || body.ok === false) {
+      const detail = typeof body.error === 'string' ? body.error : `sidecar /action returned HTTP ${res.status}`;
+      throw new HardwareActionError(detail, res.status);
+    }
+    return body;
+  }
+
+  /**
+   * Soft e-stop: drop the sidecar's action-ramp state and hand the joints back
+   * to the robot's own controller.
+   *
+   * Sent when teleop ends. Without it the sidecar keeps ramping from the last
+   * commanded pose, so the NEXT operator's first `/action` would continue a
+   * stranger's motion instead of starting from where the robot actually stands.
+   * It does not make the arms drop — the robot holds the pose it was left in.
+   */
+  async releaseAction(): Promise<void> {
+    if (!this.sidecarAvailable) return;
+    await fetch(`${getSidecarUrl()}/estop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
       signal: AbortSignal.timeout(1000),
     });
   }
@@ -866,6 +935,11 @@ export class HardwareClient {
    *
    * Length mismatches are logged and the overlap is mapped — never silently
    * truncated (the old SO-101 hardcoding dropped a G1's joints 7..N silently).
+   *
+   * Inherits {@link sendAction}'s throw on a refused pose. The one caller —
+   * `SkillExecutor`'s hardware branch — already wraps this in try/catch and
+   * ends the rollout with `Send action failed: …`, which is the correct
+   * outcome: a closed loop whose actions are being rejected is not running.
    */
   async sendActionVector(action: number[]): Promise<void> {
     const order = this.getJointOrder();
