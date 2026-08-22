@@ -210,6 +210,15 @@ export function VRTeleopModalBody({
   const [copied, setCopied] = useState<string | null>(null);
   /** Bumped to put the viewpoint back in the robot's head. */
   const [recenterKey, setRecenterKey] = useState(0);
+  /**
+   * Whether tracked hands drive the wrists and fingers. Off by default, and
+   * that is TASK-216's decision rather than an oversight: `xr_teleoperate`'s
+   * own hand-tracking path is where its Quest 3 WebSocket-drop bug lives
+   * (issue #296) while controller mode keeps working, so controllers stay the
+   * reliable default and hands are opt-in.
+   */
+  const [handTracking, setHandTracking] = useState(false);
+  const [preferIk, setPreferIk] = useState(true);
   const recenter = useCallback(() => setRecenterKey((n) => n + 1), []);
   /** Wraps the posed model so its bounding box can be measured for the viewpoint. */
   const modelRef = useRef<THREE.Group>(null);
@@ -250,6 +259,22 @@ export function VRTeleopModalBody({
     const left = endEffectorMode('left', jointMap);
     return left === 'none' ? endEffectorMode('right', jointMap) : left;
   }, [jointMap]);
+
+  /**
+   * Whether the agent has an arm chain for this robot.
+   *
+   * Asked of the joints the robot ADVERTISED, exactly as the agent asks it of
+   * the joint config — so a G1 answers yes, an SO-101 answers no and keeps the
+   * orientation mapping, and neither has to be named here.
+   */
+  const ikCapable = useMemo(() => {
+    const names = new Set(joints.map((j) => j.name));
+    return (['left', 'right'] as const).every((side) =>
+      ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw']
+        .every((j) => names.has(`${side}_${j}_joint`)),
+    );
+  }, [joints]);
+  const retargetMode: 'orientation' | 'ik' = ikCapable && preferIk ? 'ik' : 'orientation';
 
   const canEnterVr = status === 'open' && (sessionSupported === true || EMULATOR_ACTIVE);
 
@@ -624,6 +649,27 @@ export function VRTeleopModalBody({
           >
             Home
           </Button>
+          <Button
+            variant={retargetMode === 'ik' ? 'primary' : 'ghost'}
+            size="sm"
+            disabled={!ikCapable}
+            data-testid="vr-retarget-mode"
+            title={ikCapable
+              ? 'IK: stream where your hand IS and let the robot solve the arm. Orientation: the older mapping, controller angles onto joint angles.'
+              : 'This robot has no arm chain the agent can solve — the orientation mapping is the only option'}
+            onClick={() => setPreferIk((on) => !on)}
+          >
+            {retargetMode === 'ik' ? 'IK' : 'Orientation'}
+          </Button>
+          <Button
+            variant={handTracking ? 'primary' : 'ghost'}
+            size="sm"
+            data-testid="vr-hand-tracking"
+            title="Use tracked hands where they are available. A tracked hand drives its own wrist and fingers and has no grip clutch; a side without one falls back to its controller."
+            onClick={() => setHandTracking((on) => !on)}
+          >
+            Hands
+          </Button>
           {inVr && (
             <Button variant="ghost" size="sm" onClick={recenter}>Recenter</Button>
           )}
@@ -702,6 +748,8 @@ export function VRTeleopModalBody({
           inVr={inVr}
           jointMap={jointMap}
           send={send}
+          retargetMode={retargetMode}
+          handTracking={handTracking}
           onRecenter={recenter}
           onEstop={onStopButton}
           onNextEpisode={onNextEpisode}

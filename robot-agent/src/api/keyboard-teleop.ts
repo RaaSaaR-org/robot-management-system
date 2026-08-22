@@ -13,6 +13,10 @@ import type { RobotStateManager } from '../robot/state.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
 import { config } from '../config/config.js';
+import { WristTeleop, parseWristPose } from '../teleop/wrist-teleop.js';
+import { FingerRetargeter, gripPose, type HandKeypoints } from '../teleop/dexpilot.js';
+import { G1_ARM_CHAINS, G1_FINGER_CHAINS, type Side } from '../teleop/g1-chains.generated.js';
+import { markTeleopMode } from '../teleop/teleop-mode.js';
 
 /** How fast a held joint moves, in radians per second. */
 const SLEW_RATE_RAD_PER_S = 0.8;
@@ -131,6 +135,10 @@ export function clampPlanar(vx: number, vy: number, limit: number): { vx: number
  * - `sidecar_down` — nothing answered the pose stream at all.
  * - `estop_latched` — the input was DISCARDED because an E-Stop is latched.
  * - `unknown_joints` — the pose named joints this embodiment does not have.
+ * - `ik_unsupported` — a wrist pose arrived for an embodiment with no arm chain
+ *   to solve. Sent ONCE, because a client that keeps streaming would otherwise
+ *   be told 20 times a second, and because the honest answer is "this robot is
+ *   not a G1", which does not change while the socket is open.
  */
 export type TeleopErrorCode =
   | 'loco_unavailable'
@@ -138,7 +146,8 @@ export type TeleopErrorCode =
   | 'action_rejected'
   | 'sidecar_down'
   | 'estop_latched'
-  | 'unknown_joints';
+  | 'unknown_joints'
+  | 'ik_unsupported';
 
 interface DirectionMessage {
   joint: string;
@@ -170,6 +179,38 @@ interface EStopMessage {
   /** Latch the robot's emergency stop. The one message that is never gated. */
   estop: { reason?: string };
 }
+interface WristsMessage {
+  /**
+   * Where the operator's hands are RELATIVE TO THE ROBOT'S EYE POINT, in the
+   * robot's axes: `p` in metres (+x forward, +y left, +z up), `q` as
+   * (x, y, z, w).
+   *
+   * Head-relative because that is what a headset measures. The wearer's height,
+   * where they are standing in their room and how the XR origin was placed all
+   * cancel in the subtraction, which is why this rig needs no calibration step.
+   *
+   * A side that is absent, null, or unusable is left alone — that is how one
+   * hand drives while the other rests, and how a hand whose tracking is lost
+   * holds its pose instead of snapping somewhere.
+   */
+  wrists: {
+    left?: { p?: unknown; q?: unknown; grip?: unknown } | null;
+    right?: { p?: unknown; q?: unknown; grip?: unknown } | null;
+  };
+}
+interface HandsMessage {
+  /**
+   * Tracked fingertips, in the robot's own HAND frame (+x along the fingers,
+   * +z toward the index side, metres, origin at the wrist).
+   *
+   * Independent of `wrists`: an operator can have finger tracking without arm
+   * IK and the reverse, and a message may carry either or both.
+   */
+  hands: {
+    left?: { wrist?: unknown; thumb?: unknown; index?: unknown; middle?: unknown } | null;
+    right?: { wrist?: unknown; thumb?: unknown; index?: unknown; middle?: unknown } | null;
+  };
+}
 type TeleopMessage =
   | DirectionMessage
   | DeltaMessage
@@ -177,7 +218,36 @@ type TeleopMessage =
   | PoseMessage
   | PresetMessage
   | MoveMessage
-  | EStopMessage;
+  | EStopMessage
+  | WristsMessage
+  | HandsMessage;
+
+/**
+ * One hand's four DexPilot keypoints off the wire, in the robot's hand frame.
+ *
+ * All four or none: a partial hand would have the retargeter matching three
+ * vectors against a fourth point that is a stale frame old, which shows up as a
+ * finger that lags the others rather than as an error anybody would notice.
+ */
+function parseHandKeypoints(value: unknown): HandKeypoints | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const raw = value as Record<string, unknown>;
+  const point = (key: string): [number, number, number] | null => {
+    const v = raw[key];
+    if (!Array.isArray(v) || v.length !== 3) return null;
+    if (!v.every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+    const p = v as [number, number, number];
+    // A fingertip half a metre from the wrist is not a fingertip.
+    if (Math.hypot(p[0], p[1], p[2]) > 0.5) return null;
+    return p;
+  };
+  const wrist = point('wrist');
+  const thumb = point('thumb');
+  const index = point('index');
+  const middle = point('middle');
+  if (!wrist || !thumb || !index || !middle) return null;
+  return { wrist, thumb, index, middle };
+}
 
 export function createKeyboardTeleopWebSocket(
   robotStateManager: RobotStateManager
@@ -326,6 +396,72 @@ export function createKeyboardTeleopWebSocket(
     /** Once per socket, not once per tick — see `errorsSent`. */
     let errorsWarned = false;
 
+    // ---- inverse kinematics (TASK-216) ------------------------------------
+    // Per socket, not module-level: the warm start and the rate limiter are one
+    // operator's arm state, and a second console connecting must not inherit a
+    // stranger's. `controlOwnerLock` already decides who is allowed to drive.
+    const wristTeleop = new WristTeleop(robotStateManager);
+    const fingers = new Map<Side, FingerRetargeter>();
+    const fingerSeed = new Map<Side, number[]>();
+    /**
+     * When tracked fingers last drove each hand.
+     *
+     * A TIMESTAMP and not "is there a retargeter for this side", which is what
+     * this was first written as. The retargeter is created on the first
+     * `{hands}` message and never destroyed, so an operator who tried hand
+     * tracking once — found it dropped out, as Quest hand tracking does, and
+     * went back to the controllers — had the trigger silently ignored on that
+     * hand for the rest of the session, with the fingers frozen wherever the
+     * last tracked frame left them. The condition is meant to be live.
+     */
+    const handsSeenAt = new Map<Side, number>();
+    /**
+     * How long a hand goes on counting as tracked, in ms.
+     *
+     * Comfortably more than the 50 ms stream interval, so ordinary jitter never
+     * hands the fingers back and forth, and short enough that letting go of
+     * hand tracking gives the trigger back within a couple of frames.
+     */
+    const HANDS_STALE_MS = 500;
+    const handsDriving = (side: Side): boolean => {
+      const at = handsSeenAt.get(side);
+      return at !== undefined && Date.now() - at < HANDS_STALE_MS;
+    };
+    /** Cached per socket: the embodiment does not change mid-session. */
+    let armCapable: boolean | null = null;
+    let handCapable: boolean | null = null;
+
+    const hasJoints = (names: readonly string[]): boolean => {
+      const config = new Set(robotStateManager.getActiveJointConfig().map((j) => j.name));
+      return names.every((n) => config.has(n));
+    };
+    /**
+     * Whether this robot has arms the chain table describes.
+     *
+     * Asked of the JOINT CONFIG rather than of the robot type, so an embodiment
+     * that grows G1 arms under another name works and one that calls itself a
+     * G1 without them is refused instead of being sent commands for joints it
+     * does not have.
+     */
+    const canSolveArms = (): boolean => {
+      if (armCapable === null) {
+        armCapable = (['left', 'right'] as const).every(
+          (side) => hasJoints(G1_ARM_CHAINS[side].links.map((l) => l.joint)),
+        );
+      }
+      return armCapable;
+    };
+    const canSolveFingers = (): boolean => {
+      if (handCapable === null) {
+        handCapable = (['left', 'right'] as const).every((side) =>
+          (['thumb', 'index', 'middle'] as const).every(
+            (f) => hasJoints(G1_FINGER_CHAINS[side][f].links.map((l) => l.joint)),
+          ),
+        );
+      }
+      return handCapable;
+    };
+
     const drive = async (vx: number, vy: number, omega: number, ttlS: number): Promise<void> => {
       if (moveInFlight) {
         pendingMove = { velocity: { vx, vy, omega }, ttlS };
@@ -403,6 +539,14 @@ export function createKeyboardTeleopWebSocket(
       // blocked RPC is a past intent, and the drain would otherwise deliver it
       // after the stop.
       pendingMove = null;
+      // The solver's warm start and rate limiter describe an arm that is about
+      // to be stopped where it stands. Keeping them would let the first pose
+      // after the reset resume a trajectory the operator abandoned during the
+      // latch, at the full rate allowance, from a stale seed.
+      wristTeleop.reset();
+      for (const retargeter of fingers.values()) retargeter.reset();
+      fingerSeed.clear();
+      handsSeenAt.clear();
       sendError('estop_latched', 'an emergency stop is latched — reset it before driving');
       return true;
     };
@@ -579,6 +723,85 @@ export function createKeyboardTeleopWebSocket(
         return;
       }
 
+      // ---- wrist poses: solve arm IK here (TASK-216) ----------------------
+      if ('wrists' in msg && msg.wrists && typeof msg.wrists === 'object') {
+        if (refusedByEStop()) return;
+        if (!canSolveArms()) {
+          sendError(
+            'ik_unsupported',
+            'this robot has no G1 arm chain — stream {positions} instead of {wrists}',
+          );
+          return;
+        }
+        let solved = false;
+        for (const side of ['left', 'right'] as const) {
+          const target = parseWristPose(msg.wrists[side]);
+          // A missing side is a hand that is not driving, and an UNUSABLE side
+          // is a hand whose tracking just dropped. Both hold: the arm stays
+          // where it is rather than snapping to a default or to the other
+          // hand's pose. Decision 4 of TASK-216 — a failed solve holds the
+          // previous pose, and never quietly reverts to orientation mapping
+          // in the middle of a recorded demonstration.
+          if (!target) continue;
+          const report = wristTeleop.solve(side, target);
+          if (!report.held) solved = true;
+
+          // The trigger, as one grasp axis. Only when finger tracking is not
+          // driving this hand — otherwise the two would fight over the same
+          // seven joints at the stream rate, and the loser would be whichever
+          // message happened to arrive second.
+          const grip = (msg.wrists[side] as { grip?: unknown } | null)?.grip;
+          if (typeof grip === 'number' && Number.isFinite(grip) && !handsDriving(side)
+            && canSolveFingers()) {
+            for (const [joint, angle] of Object.entries(gripPose(side, grip))) {
+              robotStateManager.setTeleopJoint(joint, angle);
+            }
+          }
+        }
+        if (solved) {
+          markTeleopMode('ik');
+          sendState();
+        }
+        return;
+      }
+
+      // ---- tracked fingertips: DexPilot retargeting here -------------------
+      if ('hands' in msg && msg.hands && typeof msg.hands === 'object') {
+        if (refusedByEStop()) return;
+        if (!canSolveFingers()) {
+          sendError(
+            'ik_unsupported',
+            'this robot has no Dex3 hands — finger retargeting has nothing to drive',
+          );
+          return;
+        }
+        let moved = false;
+        for (const side of ['left', 'right'] as const) {
+          const keypoints = parseHandKeypoints(msg.hands[side]);
+          if (!keypoints) continue;
+          let retargeter = fingers.get(side);
+          if (!retargeter) {
+            retargeter = new FingerRetargeter(side);
+            fingers.set(side, retargeter);
+          }
+          const result = retargeter.solve(keypoints, fingerSeed.get(side) ?? null);
+          if (!result.q.every((v) => Number.isFinite(v))) continue;
+          fingerSeed.set(side, result.q);
+          handsSeenAt.set(side, Date.now());
+          const names = retargeter.jointNames();
+          for (let i = 0; i < names.length; i++) {
+            // Same clamp as every other path: `setTeleopJoint` owns the limits.
+            robotStateManager.setTeleopJoint(names[i]!, result.q[i]!);
+          }
+          moved = true;
+        }
+        if (moved) {
+          markTeleopMode('hand-tracking');
+          sendState();
+        }
+        return;
+      }
+
       if ('positions' in msg && msg.positions && typeof msg.positions === 'object') {
         if (refusedByEStop()) return;
         // Pose stream (e.g. WebXR / Meta Quest): absolute targets for many joints.
@@ -596,6 +819,10 @@ export function createKeyboardTeleopWebSocket(
             `this robot has no joint(s): ${unknown.join(', ')}`,
           );
         }
+        // Joint angles the CLIENT computed. For the VR rig that is the
+        // orientation mapping in `vrRetarget.ts`; the recorder needs to be able
+        // to tell those demonstrations apart from IK-solved ones.
+        markTeleopMode('orientation');
         sendState();
         return;
       }
@@ -604,6 +831,7 @@ export function createKeyboardTeleopWebSocket(
         if (refusedByEStop()) return;
         // Absolute target for a single joint (radians).
         robotStateManager.setTeleopJoint(msg.joint, msg.position);
+        markTeleopMode('manual');
         sendState();
         return;
       }
@@ -611,6 +839,7 @@ export function createKeyboardTeleopWebSocket(
       if ('direction' in msg && typeof msg.direction === 'number') {
         if (refusedByEStop()) return;
         // Held-key motion: set (or clear) the joint's velocity.
+        markTeleopMode('manual');
         velocity.set(msg.joint, msg.direction * SLEW_RATE_RAD_PER_S);
         return;
       }
@@ -619,6 +848,7 @@ export function createKeyboardTeleopWebSocket(
         if (refusedByEStop()) return;
         // One-shot nudge (radians).
         robotStateManager.applyTeleopDelta(msg.joint, msg.delta);
+        markTeleopMode('manual');
         sendState();
       }
     });

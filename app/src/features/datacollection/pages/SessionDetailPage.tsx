@@ -50,6 +50,7 @@ import {
   canPauseSession,
   canEndSession,
   formatEpisodeStat,
+  formatRetargetModes,
 } from '../types/datacollection.types';
 
 const Robot3DViewer = lazy(() =>
@@ -740,7 +741,12 @@ export function SessionDetailPage() {
                       <th className="pb-2 pr-4 font-medium">Dropped</th>
                       <th className="pb-2 pr-4 font-medium">fps</th>
                       <th className="pb-2 pr-4 font-medium">Duration</th>
-                      <th className="pb-2 font-medium">Start</th>
+                      <th className="pb-2 pr-4 font-medium">Start</th>
+                      {/* How the demonstration was DRIVEN. It belongs next to
+                          the frame counts because it is the same kind of fact:
+                          something about this take that cannot be recovered
+                          from the frames afterwards. */}
+                      <th className="pb-2 font-medium">Input</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -766,7 +772,13 @@ export function SessionDetailPage() {
                           {formatEpisodeStat(ep.fpsActual, 1)}
                         </td>
                         <td className="py-2 pr-4 text-theme-secondary">{ep.durationS.toFixed(1)}s</td>
-                        <td className="py-2 text-theme-muted">{ep.startTime.toFixed(1)}s</td>
+                        <td className="py-2 pr-4 text-theme-muted">{ep.startTime.toFixed(1)}s</td>
+                        <td
+                          className="py-2 font-mono text-xs text-theme-muted"
+                          data-testid={`episode-input-${ep.episodeIndex}`}
+                        >
+                          {formatRetargetModes(ep.retargetModes)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

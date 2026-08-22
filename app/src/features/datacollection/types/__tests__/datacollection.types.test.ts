@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatEpisodeStat } from '../datacollection.types';
+import { formatEpisodeStat, formatRetargetModes } from '../datacollection.types';
 
 // The review table itself lives inside `SessionDetailPage`, which has no render
 // harness in this repo — it wants a router, two Zustand stores, a telemetry
@@ -41,5 +41,25 @@ describe('formatEpisodeStat', () => {
 
   it('distinguishes a real zero from an absent value', () => {
     expect(formatEpisodeStat(0)).not.toBe(formatEpisodeStat(undefined));
+  });
+});
+
+describe('formatRetargetModes', () => {
+  it('shows an em-dash when the robot did not say', () => {
+    // Every episode recorded before TASK-216, and any recorded by an agent that
+    // has not been updated. "orientation" would be a claim nobody made, and it
+    // is the exact claim that makes a mixed dataset a trap.
+    expect(formatRetargetModes(undefined)).toBe('—');
+  });
+
+  it('says "none" when nothing drove the take', () => {
+    // A different fact from "unknown": the agent watched and saw no input. An
+    // episode the operator opened and never touched.
+    expect(formatRetargetModes([])).toBe('none');
+  });
+
+  it('names the mode, and names both when a take used two', () => {
+    expect(formatRetargetModes(['ik'])).toBe('ik');
+    expect(formatRetargetModes(['hand-tracking', 'ik'])).toBe('hand-tracking + ik');
   });
 });

@@ -287,6 +287,19 @@ describe.skipIf(!HAVE_FFMPEG)('writeLeRobotV3 produces a v3.0 tree', () => {
     }
   });
 
+  it('carries the retargeting label on the EPISODES parquet, never on the data one', async () => {
+    // Two different constraints, twenty lines apart in the writer. The data
+    // parquet is CAST against `info.json.features` and a column features does
+    // not declare is a hard CastError; the episodes parquet is not cast, which
+    // is why `dropped_frames`, `wall_duration_s` and now `retarget_modes` can
+    // live there at all. Putting this one in the wrong file makes every dataset
+    // unopenable, and the two files are written by the same loop.
+    const episodes = await readRows(join(root, 'meta/episodes/chunk-000/file-000.parquet'));
+    expect(episodes[0]!).toHaveProperty('retarget_modes');
+    const data = await readRows(join(root, 'data/chunk-000/file-000.parquet'));
+    expect(data[0]!).not.toHaveProperty('retarget_modes');
+  });
+
   it('gives every episode the coordinates lerobot finds its parquet by', async () => {
     // `get_data_file_path` reads these two and formats `data_path` with them.
     const rows = await readRows(join(root, 'meta/episodes/chunk-000/file-000.parquet'));

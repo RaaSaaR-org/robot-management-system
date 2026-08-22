@@ -88,6 +88,13 @@ robot-agent/src/
 │   ├── agent-card.ts     # A2A AgentCard definition (3 skills)
 │   ├── agent-executor.ts # A2A message processing (Genkit, LRU context cache)
 │   └── genkit.ts         # Genkit/Gemini AI setup (gemini-2.5-flash)
+├── teleop/               # Arm IK + finger retargeting (TASK-216)
+│   ├── g1-chains.generated.ts # GENERATED from the MJCF — do not edit
+│   ├── kinematics.ts     # FK, Jacobians, small dense solves. Quats are (w,x,y,z)
+│   ├── ik.ts             # Damped least squares; position primary, orientation in its null space
+│   ├── dexpilot.ts       # DexPilot fingertip retargeting + the trigger grasp axis
+│   ├── wrist-teleop.ts   # Wire pose -> solve -> rate limit -> setTeleopJoint
+│   └── teleop-mode.ts    # Which retargeting drove the robot, for the recorder
 ├── robot/
 │   ├── types.ts          # All type definitions (RobotStatus, CommandType, etc.)
 │   ├── state.ts          # RobotStateManager facade (coordinates subsystems)
@@ -257,6 +264,46 @@ The robot accepts tasks pushed from the server's `TaskDistributor`:
 
 - `ws://localhost:41243/ws/telemetry/:robotId` - Real-time telemetry (every 2s) + alerts on state change
 - `ws://localhost:41243/ws/pointcloud/:robotId` - Binary point-cloud stream (~3 Hz)
+- `ws://localhost:41243/ws/keyboard-teleop` - Operator input (keyboard rig, gamepad, WebXR)
+
+### Teleop socket messages (`/ws/keyboard-teleop`)
+
+Duck-typed on a key, not on a `type` discriminator. `{estop}` is handled first
+and is never gated; everything else is discarded while an E-Stop is latched, and
+everything that moves a joint goes through `setTeleopJoint`, which clamps to the
+advertised limits.
+
+| Message | Drives | Retargeting happens |
+|---|---|---|
+| `{positions: {joint: rad}}` | any joints at once | in the CLIENT |
+| `{position}` / `{delta}` / `{direction}` | one joint | in the client |
+| `{move: {vx, vy, omega}}` | the base, with a 0.35 s dead man | — |
+| `{wrists: {left?, right?}}` | both arms, 7 joints each | **in the agent** (TASK-216) |
+| `{hands: {left?, right?}}` | both Dex3 hands, 7 joints each | **in the agent** (TASK-216) |
+| `{preset: 'home' \| 'stop'}` | every joint / the base | — |
+| `{estop: {reason?}}` | latches, durably | — |
+
+`{wrists}` carries, per side, `p` — the palm point **relative to the robot's eye
+point** in robot axes (+x forward, +y left, +z up), metres — and `q`, its
+orientation as `(x, y, z, w)`. Head-relative because that is what a headset can
+measure: the wearer's height, where they are standing and how the XR origin was
+placed all cancel in the subtraction, which is why the VR rig has no calibration
+step. An optional `grip` (0..1) drives that hand as a single grasp axis, and is
+ignored while tracked fingers are arriving for the same hand.
+
+`{hands}` carries `wrist`, `thumb`, `index`, `middle` per side, in the robot's
+own hand frame (+x along the fingers, +z toward the index side, origin at the
+wrist). The frame is built by the browser from the palm's geometry rather than
+from WebXR's hand-joint axis convention — see `app/.../vr/vrWrist.ts`.
+
+A side that is absent, null or unusable HOLDS: that arm stays where it is. It
+never falls back to a default pose and never falls back to the client-side
+orientation mapping, because silently changing retargeting strategy inside a
+recorded demonstration poisons the data.
+
+Which retargeting actually drove the robot is OBSERVED here, not declared by the
+client (`src/teleop/teleop-mode.ts`), and the episode recorder writes it per
+episode into `meta/episodes`.
 
 ### Point-cloud sources (G1 / G1-EDU)
 

@@ -13,6 +13,7 @@ import { spawnSync } from 'child_process';
 import { ParquetReader } from '@dsnp/parquetjs';
 import { EpisodeRecorder, jpegSize, type RecorderHooks } from '../EpisodeRecorder.js';
 import { G1_DEX3_JOINTS } from '../dex3-layout.js';
+import { markTeleopMode, resetTeleopModes } from '../../teleop/teleop-mode.js';
 
 const HAVE_FFMPEG = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 
@@ -570,4 +571,90 @@ describe.skipIf(!HAVE_FFMPEG)('EpisodeRecorder with cameras', () => {
     expect(files.every((f) => /^f_\d{6}\.jpg$/.test(f))).toBe(true);
     await rec.stop();
   }, 60_000);
+});
+
+describe('per-episode retargeting labels (TASK-216)', () => {
+  let dir: string;
+  let h: Harness;
+  let rec: EpisodeRecorder;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'episode-modes-'));
+    h = harness();
+    rec = new EpisodeRecorder({
+      hooks: h.hooks,
+      robotType: 'g1_edu',
+      scratchRoot: join(dir, 'scratch'),
+      datasetRoot: join(dir, 'datasets'),
+    });
+    // Module-level state shared by every recorder in the process: without this
+    // a mode marked by an earlier test is still "seen" here and these
+    // assertions pass no matter what the recorder does.
+    resetTeleopModes();
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    if (rec.isRecording()) await rec.stop().catch(() => {});
+    await rm(dir, { recursive: true, force: true });
+    resetTeleopModes();
+  });
+
+  it('ignores what drove the robot before Start was pressed', async () => {
+    // THE BUG THIS PINS, found in a live run. The tracker is emptied only by a
+    // recorder tick, so a mode marked while the operator was lining the robot
+    // up landed on episode 0 — a take driven purely by IK came out labelled
+    // `ik+orientation` because the arm had been nudged by hand beforehand.
+    markTeleopMode('manual');
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    markTeleopMode('ik');
+    await run(h, 300);
+    vi.useRealTimers();
+    const stopped = await rec.stop();
+    expect(stopped.ok).toBe(true);
+    expect(stopped.episodes[0]!.retargetModes).toEqual(['ik']);
+  });
+
+  it('labels each take with what drove THAT take', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    markTeleopMode('ik');
+    await run(h, 300);
+    await rec.nextEpisode();
+    markTeleopMode('orientation');
+    await run(h, 300);
+    vi.useRealTimers();
+    const stopped = await rec.stop();
+    expect(stopped.ok).toBe(true);
+    // Not a session-wide union. An operator who changes how they are driving
+    // between takes gets two differently labelled episodes, which is the whole
+    // point: a dataset that mixes them silently is a trap for whoever trains
+    // on it.
+    expect(stopped.episodes[0]!.retargetModes).toEqual(['ik']);
+    expect(stopped.episodes[1]!.retargetModes).toEqual(['orientation']);
+  });
+
+  it('says both when one take used both', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    markTeleopMode('ik');
+    markTeleopMode('hand-tracking');
+    await run(h, 300);
+    vi.useRealTimers();
+    const stopped = await rec.stop();
+    expect(stopped.ok).toBe(true);
+    expect(stopped.episodes[0]!.retargetModes).toEqual(['hand-tracking', 'ik']);
+  });
+
+  it('carries the label into meta/episodes, where a trainer would read it', async () => {
+    markTeleopMode('ik');
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    markTeleopMode('hand-tracking');
+    await run(h, 300);
+    vi.useRealTimers();
+    const stopped = await rec.stop();
+    expect(stopped.ok).toBe(true);
+    const lines = await readFile(join(stopped.datasetPath!, 'meta', 'episodes.jsonl'), 'utf-8');
+    const rows = lines.trim().split('\n').map((l) => JSON.parse(l) as { retarget_modes: string[] });
+    expect(rows[0]!.retarget_modes).toEqual(['hand-tracking']);
+  });
 });

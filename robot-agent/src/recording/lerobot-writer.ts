@@ -33,6 +33,17 @@ export interface WriterEpisode {
   dropped: number;
   /** Wall seconds the episode really took, for the summary and provenance. */
   wallDurationS: number;
+  /**
+   * How this episode's joint targets were produced — `orientation`, `ik`,
+   * `hand-tracking`, `manual`, or several of those (TASK-216).
+   *
+   * Optional so that a caller which does not know still writes a valid dataset;
+   * an episode with nothing to say gets an empty string rather than a missing
+   * column, because `@dsnp/parquetjs` defaults fields to REQUIRED and a missing
+   * value throws at `appendRow` — which would lose the whole session at encode
+   * time, after the scratch frames are gone.
+   */
+  retargetModes?: readonly string[];
 }
 
 export interface WriterCamera {
@@ -470,6 +481,18 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
     // it happened in rather than in a log nobody reads.
     dropped_frames: { type: 'INT64' },
     wall_duration_s: { type: 'FLOAT' },
+    // Also not LeRobot's. A '+'-joined string rather than a repeated field:
+    // parquetjs's repeated fields have no representation for "none", and an
+    // episode driven by nothing at all is a real case (a take the operator
+    // opened and never touched).
+    //
+    // Note this column, like the two above it, means a `meta/episodes` parquet
+    // that lerobot's own writer would not produce. That is already true of this
+    // dataset and is safe for READING — lerobot loads the episodes table
+    // without a schema cast, unlike the data table — but a NeoDEM dataset that
+    // is later APPENDED to by lerobot itself would end up with two episode
+    // files of different schemas, and `load_nested_dataset` concatenates them.
+    retarget_modes: { type: 'UTF8', optional: true },
   };
   for (const cam of options.cameras) {
     const p = `videos/observation.images.${cam.key}`;
@@ -505,6 +528,7 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
       'meta/episodes/file_index': 0,
       dropped_frames: ep.dropped,
       wall_duration_s: Math.round(ep.wallDurationS * 1000) / 1000,
+      retarget_modes: (ep.retargetModes ?? []).join('+'),
     };
     for (const cam of options.cameras) {
       const p = `videos/observation.images.${cam.key}`;
@@ -521,6 +545,10 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
       length: ep.frames.length,
       dropped_frames: ep.dropped,
       wall_duration_s: Math.round(ep.wallDurationS * 1000) / 1000,
+      // The parquet gets a joined string (see the schema); the JSON twin gets
+      // the list, because JSON can express one and nothing here has to agree
+      // with parquetjs's idea of a repeated field.
+      retarget_modes: [...(ep.retargetModes ?? [])],
     });
   }
   await epWriter.close();

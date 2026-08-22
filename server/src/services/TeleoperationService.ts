@@ -64,6 +64,36 @@ const MAX_BATCH_SIZE = 100;
 /**
  * Service for teleoperation session management and data collection
  */
+/**
+ * How an episode's retargeting modes are stored: '+'-joined, or null when the
+ * robot did not say.
+ *
+ * Null and the empty string are different answers and both are real. Null is an
+ * older agent that has no idea; the empty string is a take nobody drove. Neither
+ * may be turned into 'orientation', which is what a plain `?? ''` would do to
+ * the first of them — labelling every pre-TASK-216 episode with a mode nothing
+ * observed is exactly the trap the field exists to close.
+ */
+function joinModes(modes: readonly string[] | undefined): string | null {
+  return modes === undefined ? null : modes.join('+');
+}
+
+/**
+ * The inverse. `undefined` for a row that predates the column.
+ *
+ * Accepts `undefined` as well as `null`, and that is not defensive padding: a
+ * row read back before the column existed — from an older Prisma client, or
+ * from any of the many places a `TeleoperationEpisode` is constructed without
+ * it — has the property MISSING rather than null, and `null` alone let a
+ * `.split` of undefined escape into `listEpisodes` and 500 the episode list of
+ * every pre-TASK-216 session. Both spellings mean the same thing: nobody
+ * recorded a mode.
+ */
+function splitModes(stored: string | null | undefined): string[] | undefined {
+  if (stored === null || stored === undefined) return undefined;
+  return stored === '' ? [] : stored.split('+');
+}
+
 export class TeleoperationService extends EventEmitter {
   private static instance: TeleoperationService;
 
@@ -845,6 +875,7 @@ export class TeleoperationService extends EventEmitter {
           durationS: Math.round(e.durationS * 100) / 100,
           droppedFrames: e.droppedFrames,
           fpsActual: Math.round(e.fpsActual * 100) / 100,
+          retargetModes: splitModes(e.retargetModes),
         };
       });
     }
@@ -870,6 +901,7 @@ export class TeleoperationService extends EventEmitter {
             durationS: e.durationS,
             droppedFrames: e.dropped,
             fpsActual: e.fpsActual,
+            retargetModes: e.retargetModes,
           };
         });
       }
@@ -1710,12 +1742,14 @@ export class TeleoperationService extends EventEmitter {
             droppedFrames: ep.dropped,
             durationS: ep.durationS,
             fpsActual: ep.fpsActual,
+            retargetModes: joinModes(ep.retargetModes),
           },
           update: {
             frameCount: ep.frames,
             droppedFrames: ep.dropped,
             durationS: ep.durationS,
             fpsActual: ep.fpsActual,
+            retargetModes: joinModes(ep.retargetModes),
           },
         });
       } catch (err) {

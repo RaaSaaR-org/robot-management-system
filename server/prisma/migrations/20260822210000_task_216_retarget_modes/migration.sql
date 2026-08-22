@@ -1,0 +1,26 @@
+-- TASK-216: how each episode's joint targets were produced.
+--
+-- Nullable with NO default, and that is the whole point of the column. Three
+-- states have to stay distinguishable:
+--
+--   NULL  the robot agent did not say. Every episode recorded before TASK-216,
+--         and any session recorded by an agent that has not been updated.
+--   ''    the agent said "nothing drove this take" — an episode the operator
+--         opened and never touched.
+--   'ik'  / 'orientation' / 'hand-tracking' / 'manual', '+'-joined when a take
+--         used more than one.
+--
+-- A DEFAULT of '' would quietly turn the first into the second, and a default of
+-- 'orientation' would label every pre-TASK-216 demonstration with a retargeting
+-- nothing observed — which is exactly the trap this column exists to close. A
+-- dataset that mixes orientation-mapped and IK-solved demonstrations without
+-- saying which is which is unusable for training, and one that says the wrong
+-- thing is worse than one that says nothing.
+--
+-- The value is OBSERVED by the robot agent from its teleop socket
+-- (robot-agent/src/teleop/teleop-mode.ts), not declared by the browser, so an
+-- operator who switches mode mid-session gets both modes on the take that used
+-- both rather than whichever mode they happened to open the session with.
+
+-- AlterTable
+ALTER TABLE "TeleoperationEpisode" ADD COLUMN "retargetModes" TEXT;

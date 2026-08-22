@@ -87,6 +87,16 @@ export interface EpisodeSummary {
   droppedFrames?: number;
   /** Frames per second the episode actually achieved. */
   fpsActual?: number;
+  /**
+   * How this episode's joint targets were produced (TASK-216): `orientation`
+   * (the browser's controller mapping), `ik` (the agent's arm solver),
+   * `hand-tracking` (DexPilot fingers), `manual` (a joint moved by hand).
+   *
+   * Observed by the agent from the teleop socket rather than declared by the
+   * client, so a session that changed mode says so on the take that changed.
+   * Absent — NOT empty — for an episode recorded before the agent could tell.
+   */
+  retargetModes?: string[];
 }
 
 /**
@@ -545,4 +555,23 @@ export function canPauseSession(session: TeleoperationSession): boolean {
  */
 export function canEndSession(session: TeleoperationSession): boolean {
   return session.status === 'recording' || session.status === 'paused';
+}
+
+/**
+ * The retargeting an episode was driven with, for a table cell.
+ *
+ * Three states, all real and all different (TASK-216):
+ *
+ * - `undefined` — the robot agent did not say. Every episode recorded before
+ *   TASK-216, and any recorded by an agent that has not been updated. An
+ *   em-dash, exactly like the other unrecorded statistics.
+ * - `[]` — the agent said nothing drove this take. "none", not a blank.
+ * - anything else — the modes, joined. A take that used two says so, because
+ *   an operator can change how they are driving between one take and the next
+ *   and a dataset that mixes them silently is a trap for whoever trains on it.
+ */
+export function formatRetargetModes(modes: string[] | undefined): string {
+  if (modes === undefined) return '—';
+  if (modes.length === 0) return 'none';
+  return modes.join(' + ');
 }

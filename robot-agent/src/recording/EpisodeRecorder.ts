@@ -19,6 +19,7 @@ import {
   type WriterEpisode,
   type WriterFrame,
 } from './lerobot-writer.js';
+import { takeTeleopModes, type TeleopMode } from '../teleop/teleop-mode.js';
 
 /**
  * A refusal the caller can act on, carried as a type rather than as a sentence.
@@ -86,6 +87,16 @@ export interface EpisodeReport {
   dropped: number;
   durationS: number;
   fpsActual: number;
+  /**
+   * How the joint targets in THIS episode were produced, observed from the
+   * teleop socket — see `teleop/teleop-mode.ts`.
+   *
+   * Per episode and not per session because an operator can change how they are
+   * driving between takes, and a dataset that mixes orientation-mapped and
+   * IK-solved demonstrations without saying which is which is a trap for
+   * whoever trains on it.
+   */
+  retargetModes: TeleopMode[];
 }
 
 export interface RecordingStatus {
@@ -130,6 +141,8 @@ export interface StopRecordingResult {
 interface LiveEpisode {
   index: number;
   frames: WriterFrame[];
+  /** Retargeting seen while this episode was open. Discarded with the take. */
+  modes: Set<TeleopMode>;
   /** Per-camera JPEG paths, index-aligned with `frames`. */
   images: Map<string, string[]>;
   dropped: number;
@@ -357,6 +370,14 @@ export class EpisodeRecorder {
     await discardScratch(this.scratchDir());
     await mkdir(this.scratchDir(), { recursive: true });
     this.current = this.openEpisode(0);
+    // Discard whatever the socket saw BEFORE the operator pressed Start. The
+    // tracker is module-level and is only emptied by a recorder tick, so
+    // without this the first episode inherits every mode used while the
+    // operator was lining the robot up — a take driven purely by IK came out
+    // labelled `ik+orientation` because somebody had nudged a joint by hand
+    // minutes earlier. An episode is labelled with what drove it, not with what
+    // the session has ever done.
+    takeTeleopModes();
     await this.prepareEpisodeDirs(this.current);
 
     this.timer = setInterval(() => {
@@ -524,6 +545,11 @@ export class EpisodeRecorder {
         ep.firstFrameAtMs !== null && ep.lastFrameAtMs !== null
           ? Math.max(0, ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000
           : 0,
+      // Carried on the episode OBJECT, never as a parallel array indexed by the
+      // recorder's episode number: the writer re-indexes densely after a
+      // discard, and one discarded take would shift every subsequent label by
+      // one — a dataset that is wrong in a way nothing would ever flag.
+      retargetModes: [...ep.modes].sort(),
     }));
 
     // fps has to be positive for the timestamps to mean anything; a session
@@ -545,6 +571,9 @@ export class EpisodeRecorder {
           simBootId: this.bootId,
           simulated: true,
           inputMode: this.inputMode,
+          // Session-level union, for a glance. The authority is per episode,
+          // in `meta/episodes`.
+          retargetModes: [...new Set(kept.flatMap((ep) => [...ep.modes]))].sort(),
           fpsTarget: this.fpsTarget,
           fpsActual: fpsForFile,
           droppedFrames: this.totalDropped,
@@ -607,6 +636,10 @@ export class EpisodeRecorder {
 
   private async tick(): Promise<void> {
     if (this.stopping || !this.current) return;
+    // Before the pause and drop checks: the marks describe what has ALREADY
+    // driven the robot, and they belong to the episode that was open when it
+    // happened whether or not this particular tick produces a frame.
+    for (const mode of takeTeleopModes()) this.current.modes.add(mode);
     if (this.paused) return; // deliberate; not a drop
     if (this.tickInFlight) {
       // The previous tick has not come back. Skipping is the whole design:
@@ -796,6 +829,7 @@ export class EpisodeRecorder {
         dropped: ep.dropped,
         durationS: Math.round(spanS * 100) / 100,
         fpsActual: Math.round(fps * 100) / 100,
+        retargetModes: [...ep.modes].sort(),
       };
     });
   }
@@ -812,6 +846,7 @@ export class EpisodeRecorder {
       lastFrameAtMs: null,
       pausedMs: 0,
       epoch: 0,
+      modes: new Set(),
     };
     return ep;
   }

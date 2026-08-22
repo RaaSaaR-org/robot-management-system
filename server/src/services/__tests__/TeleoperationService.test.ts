@@ -915,6 +915,45 @@ describe('TeleoperationService', () => {
       expect(mockPrisma.teleoperationFrame.groupBy).not.toHaveBeenCalled();
     });
 
+    it('reports an episode recorded before the column existed as "not recorded"', async () => {
+      // THE BUG THIS PINS. A row without the column has `retargetModes`
+      // UNDEFINED, not null — which is what a row looks like anywhere but a
+      // fresh Prisma read against the new schema — and a guard that checked
+      // only `null` let a `.split` of undefined escape into `listEpisodes`,
+      // 500ing the episode list of every session recorded before TASK-216.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED, status: 'completed', recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([
+        { episodeIndex: 0, frameCount: 10, droppedFrames: 0, durationS: 1, fpsActual: 10 },
+      ]);
+      const episodes = await service.listEpisodes('session-1');
+      // Undefined, NOT [] and NOT ['orientation']: "we do not know" is a
+      // different fact from "nothing drove it", and labelling an old
+      // demonstration with a mode nobody observed is the trap the field exists
+      // to close.
+      expect(episodes[0]!.retargetModes).toBeUndefined();
+    });
+
+    it('round-trips a label, and keeps "none" apart from "not recorded"', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED, status: 'completed', recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([
+        { episodeIndex: 0, frameCount: 10, droppedFrames: 0, durationS: 1, fpsActual: 10, retargetModes: 'ik' },
+        { episodeIndex: 1, frameCount: 10, droppedFrames: 0, durationS: 1, fpsActual: 10, retargetModes: 'hand-tracking+ik' },
+        { episodeIndex: 2, frameCount: 10, droppedFrames: 0, durationS: 1, fpsActual: 10, retargetModes: '' },
+        { episodeIndex: 3, frameCount: 10, droppedFrames: 0, durationS: 1, fpsActual: 10, retargetModes: null },
+      ]);
+      const episodes = await service.listEpisodes('session-1');
+      expect(episodes[0]!.retargetModes).toEqual(['ik']);
+      expect(episodes[1]!.retargetModes).toEqual(['hand-tracking', 'ik']);
+      // An episode the operator opened and never touched.
+      expect(episodes[2]!.retargetModes).toEqual([]);
+      // An episode the robot could not say anything about.
+      expect(episodes[3]!.retargetModes).toBeUndefined();
+    });
+
     it('still lists the episodes of a PAUSED session', async () => {
       // The rows are only written when the session ends, so gating the live
       // query on `status === 'recording'` made the panel go empty the moment an

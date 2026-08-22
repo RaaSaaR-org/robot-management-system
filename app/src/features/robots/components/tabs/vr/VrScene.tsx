@@ -40,6 +40,10 @@ export interface VrSceneProps {
   canStreamRef: { current: boolean };
   telemetryRef: { current: VrRigTelemetry };
   recenterKey: number;
+  /** How the arm is driven — see `VrTeleopRig`. Threaded through, not decided here. */
+  retargetMode: 'orientation' | 'ik';
+  /** Whether tracked hands drive the wrists and fingers where they are available. */
+  handTracking: boolean;
   inVr: boolean;
   jointMap: VrJointMap;
   send: (payload: unknown) => void;
@@ -78,6 +82,8 @@ export function VrScene({
   canStreamRef,
   telemetryRef,
   recenterKey,
+  retargetMode,
+  handTracking,
   inVr,
   jointMap,
   send,
@@ -165,6 +171,8 @@ export function VrScene({
           canStreamRef={canStreamRef}
           telemetryRef={telemetryRef}
           recenterKey={recenterKey}
+          retargetMode={retargetMode}
+          handTracking={handTracking}
           inVr={inVr}
         />
       </XR>

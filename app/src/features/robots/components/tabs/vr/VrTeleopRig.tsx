@@ -15,6 +15,14 @@ import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { retargetArm, type RetargetResult, type VrJointMap } from './vrRetarget';
+import {
+  handKeypointsToRobotFrame,
+  wristToRobotFrame,
+  HAND_JOINT_NAMES,
+  type RobotHandKeypoints,
+  type RobotWristPose,
+  type XrRigidTransform,
+} from './vrWrist';
 import { isStickClick, pickDriveStick, stickAxis } from './vrDrive';
 import {
   headingController,
@@ -42,6 +50,11 @@ export interface VrHandTelemetry {
   squeeze: number;
   /** True while any joint on that arm was clipped by its working range. */
   saturated: boolean;
+  /**
+   * What is driving this side this frame: a tracked hand, a controller, or
+   * nothing. Null under the orientation mapping, which has no pose source.
+   */
+  tracked: 'hand' | 'controller' | null;
 }
 
 /**
@@ -108,8 +121,8 @@ export function createRigTelemetry(): VrRigTelemetry {
     vx: 0,
     vy: 0,
     omega: 0,
-    left: { squeeze: 0, saturated: false },
-    right: { squeeze: 0, saturated: false },
+    left: { squeeze: 0, saturated: false, tracked: null },
+    right: { squeeze: 0, saturated: false, tracked: null },
     estopLatched: false,
     // 'lost' until a state frame proves otherwise — the fail-safe direction for
     // a control link, and the same rule `linkState()` applies.
@@ -178,12 +191,37 @@ export interface VrTeleopRigProps {
   recenterKey: number;
   /** Whether an immersive session is running — also resets the heading history. */
   inVr: boolean;
+  /**
+   * How the arm is driven.
+   *
+   * `orientation` is the original mapping in `vrRetarget.ts`: controller angles
+   * onto joint angles, computed here and sent as `{positions}`. It reads no
+   * controller POSITION at all, so reaching forward does nothing.
+   *
+   * `ik` streams where the hand IS — `{wrists}` — and the agent solves the arm.
+   * That is the mode a recorded demonstration wants, because the operator's
+   * hand and the robot's go to the same place.
+   *
+   * Both stay: `orientation` is the fallback for an embodiment the agent has no
+   * chain for, and it is 645 lines of tested behaviour.
+   */
+  retargetMode: 'orientation' | 'ik';
+  /**
+   * Use tracked hands where they are available.
+   *
+   * A tracked hand supplies BOTH the wrist pose and the fingers for its side,
+   * and has no clutch — there is no grip button on a hand, so it drives
+   * whenever it is tracked. A side with no tracked hand falls back to that
+   * side's controller, so one of each works.
+   */
+  handTracking: boolean;
 }
 
 /** How long a buzz stays queued waiting for the haptic rate limit, in seconds. */
 const BUZZ_RETRY_WINDOW_S = 1;
 
 type ControllerState = ReturnType<typeof useXRInputSourceState<'controller'>>;
+type HandState = ReturnType<typeof useXRInputSourceState<'hand'>>;
 
 export function VrTeleopRig({
   jointMap,
@@ -198,9 +236,13 @@ export function VrTeleopRig({
   telemetryRef,
   recenterKey,
   inVr,
+  retargetMode,
+  handTracking,
 }: VrTeleopRigProps) {
   const left = useXRInputSourceState('controller', 'left');
   const right = useXRInputSourceState('controller', 'right');
+  const leftHand = useXRInputSourceState('hand', 'left');
+  const rightHand = useXRInputSourceState('hand', 'right');
   // A/X recenters, B/Y stops. In immersive VR the modal's DOM is not on screen,
   // so neither header button can be reached — the wearer needs both without
   // taking the headset off.
@@ -496,8 +538,80 @@ export function VrTeleopRig({
       );
     };
 
-    const leftResult = compute(left, 'left');
-    const rightResult = compute(right, 'right');
+    // ---- where the hands ARE (TASK-216) ----------------------------------
+    // Everything below is measured FROM THE HEAD and un-yawed by the ROBOT's
+    // bearing, so the wearer's height, where they are standing and which way
+    // they are facing all cancel — see `vrWrist.ts`. That is what keeps this
+    // rig free of the startup pose-match `xr_teleoperate` needs.
+    const head = frame.getViewerPose(referenceSpace ?? undefined as never) ?? null;
+    const headTransform = head?.transform as XrRigidTransform | undefined;
+
+    /** One tracked hand's wrist pose and fingertips, or null if it is not tracked. */
+    const readHand = (
+      hand: HandState,
+      side: 'left' | 'right',
+    ): { wrist: RobotWristPose; keypoints: RobotHandKeypoints } | null => {
+      if (!handTracking || !referenceSpace || !headTransform) return null;
+      const joints = hand?.inputSource?.hand;
+      if (!joints) return null;
+      const poseOf = (name: string): XRJointPose | null => {
+        const space = joints.get(name as never);
+        if (!space) return null;
+        return frame.getJointPose?.(space, referenceSpace) ?? null;
+      };
+      const wristPose = poseOf(HAND_JOINT_NAMES.wrist);
+      if (!wristPose) return null;
+      const wrist = wristToRobotFrame(
+        wristPose.transform as XrRigidTransform,
+        headTransform,
+        robotHeadingRef.current,
+      );
+      if (!wrist) return null;
+      const keypoints = handKeypointsToRobotFrame({
+        wrist: wristPose.transform.position,
+        thumbTip: poseOf(HAND_JOINT_NAMES.thumbTip)?.transform.position,
+        indexProximal: poseOf(HAND_JOINT_NAMES.indexProximal)?.transform.position,
+        indexTip: poseOf(HAND_JOINT_NAMES.indexTip)?.transform.position,
+        middleProximal: poseOf(HAND_JOINT_NAMES.middleProximal)?.transform.position,
+        middleTip: poseOf(HAND_JOINT_NAMES.middleTip)?.transform.position,
+      });
+      if (!keypoints) return null;
+      telemetry[side].tracked = 'hand';
+      return { wrist, keypoints };
+    };
+
+    /** One controller's wrist pose, behind the same grip clutch as the arms. */
+    const readController = (ctrl: ControllerState, side: 'left' | 'right'): RobotWristPose | null => {
+      if (!ctrl || !referenceSpace || !headTransform) return null;
+      const squeeze = ctrl.gamepad['xr-standard-squeeze'];
+      if (!squeeze || (squeeze.button ?? 0) < GRIP_THRESHOLD) return null; // clutch
+      const gripSpace = ctrl.inputSource?.gripSpace;
+      if (!gripSpace) return null;
+      const pose = frame.getPose(gripSpace, referenceSpace);
+      if (!pose) return null;
+      const wrist = wristToRobotFrame(
+        pose.transform as XrRigidTransform,
+        headTransform,
+        robotHeadingRef.current,
+      );
+      if (!wrist) return null;
+      telemetry[side].tracked = 'controller';
+      // The trigger stays the one-axis grasp it has always been — TASK-216
+      // keeps it as the fallback for an operator without hand tracking.
+      wrist.grip = ctrl.gamepad['xr-standard-trigger']?.button ?? 0;
+      return wrist;
+    };
+
+    telemetry.left.tracked = null;
+    telemetry.right.tracked = null;
+    const trackedLeft = readHand(leftHand, 'left');
+    const trackedRight = readHand(rightHand, 'right');
+    const ikOn = retargetMode === 'ik' || trackedLeft !== null || trackedRight !== null;
+    const wristLeft = ikOn ? (trackedLeft?.wrist ?? readController(left, 'left')) : null;
+    const wristRight = ikOn ? (trackedRight?.wrist ?? readController(right, 'right')) : null;
+
+    const leftResult = ikOn ? null : compute(left, 'left');
+    const rightResult = ikOn ? null : compute(right, 'right');
     const want: JointTargets = { ...leftResult?.angles, ...rightResult?.angles };
 
     // Prune → seed → filter, in that order, as one reducer. Passing an empty
@@ -517,13 +631,23 @@ export function VrTeleopRig({
       source: HapticSource | undefined,
       side: 'left' | 'right',
       result: RetargetResult | null,
+      /**
+       * Engagement under IK, which is a different question from `result`: an
+       * arm can be driving with no `RetargetResult` at all, because the joint
+       * angles are computed on the robot.
+       */
+      ikEngaged: boolean,
     ): boolean => {
       const squeeze = ctrl?.gamepad['xr-standard-squeeze']?.button ?? 0;
-      const engaged = result !== null;
+      const engaged = result !== null || ikEngaged;
       if (engaged !== gripHeld.current[side]) {
         pulsePreset(source, engaged ? HAPTICS.clutchEngage : HAPTICS.clutchRelease);
         gripHeld.current[side] = engaged;
       }
+      // Only the orientation mapping knows about saturation: under IK the
+      // clamping happens on the robot, and the browser is not told. A tap that
+      // means "you are asking for something unreachable" is worth having back
+      // and is deliberately not faked here from a guess.
       const saturated = (result?.saturated.length ?? 0) > 0;
       // Rate limited inside `pulse()`, so calling this every frame produces a
       // tap roughly every 120 ms for as long as the pose is unreachable —
@@ -538,19 +662,38 @@ export function VrTeleopRig({
       hand.saturated = saturated;
       return engaged;
     };
-    telemetry.armLeft = record(left, leftSource, 'left', leftResult);
-    telemetry.armRight = record(right, rightSource, 'right', rightResult);
+    telemetry.armLeft = record(left, leftSource, 'left', leftResult, wristLeft !== null);
+    telemetry.armRight = record(right, rightSource, 'right', rightResult, wristRight !== null);
     telemetry.driving = stickDriving;
     telemetry.vx = vx;
     telemetry.vy = vy;
     telemetry.omega = omega;
 
-    if (Object.keys(want).length === 0) return; // neither arm engaged — hold pose
     if (!streaming) return;
-    if (now - lastSentRef.current >= SEND_INTERVAL_S) {
+    if (now - lastSentRef.current < SEND_INTERVAL_S) return;
+
+    if (ikOn) {
+      // A side that is absent is a hand that is not driving, and the agent's
+      // contract for it is HOLD — it does not fall back to a default pose and
+      // it does not fall back to the orientation mapping, which would change
+      // retargeting strategy in the middle of a recorded demonstration.
+      if (!wristLeft && !wristRight && !trackedLeft && !trackedRight) return;
       lastSentRef.current = now;
-      send({ positions: targetsRef.current });
+      send({ wrists: { left: wristLeft, right: wristRight } });
+      if (trackedLeft || trackedRight) {
+        send({
+          hands: {
+            left: trackedLeft?.keypoints ?? null,
+            right: trackedRight?.keypoints ?? null,
+          },
+        });
+      }
+      return;
     }
+
+    if (Object.keys(want).length === 0) return; // neither arm engaged — hold pose
+    lastSentRef.current = now;
+    send({ positions: targetsRef.current });
   });
 
   return null;
