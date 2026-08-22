@@ -30,7 +30,7 @@ import { getJointConfig } from './joint-configs/index.js';
 import type { JointConfig } from './types.js';
 import { StatePublisher, type StateListener } from './StatePublisher.js';
 import { CommandExecutor } from './CommandExecutor.js';
-import { hardwareClient, type CachedBasePose } from '../hardware/HardwareClient.js';
+import { hardwareClient, HardwareActionError, type CachedBasePose } from '../hardware/HardwareClient.js';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import {
   PlaceTracker,
@@ -197,6 +197,32 @@ export interface PlaceBelief {
  * Synchronous on purpose — see {@link RobotStateManager.onSafetyStop}.
  */
 export type SafetyStopListener = (stop: StopActuation) => void;
+
+/**
+ * Why the teleop pose is not reaching the robot, as a code an operator UI can
+ * render without parsing prose.
+ *
+ * `action_rejected` = the sidecar answered and said no (read-only mode, an
+ * unknown joint name); `sidecar_down` = nothing answered at all. The
+ * distinction is the whole point: the first is a setting somebody can change,
+ * the second is a cable or a process.
+ */
+export type TeleopErrorCode = 'action_rejected' | 'sidecar_down';
+
+export interface TeleopError {
+  code: TeleopErrorCode;
+  message: string;
+}
+
+/**
+ * Notified when a teleop frame fails to reach the hardware.
+ *
+ * A seam rather than a console line, because the operator who needs to know is
+ * wearing a headset and will never see a server log. Fired on EVERY failed
+ * frame, not once per session: a socket that connects after the sidecar already
+ * broke still has to be told, and the socket layer dedupes per code.
+ */
+export type TeleopErrorListener = (err: TeleopError) => void;
 
 // ============================================================================
 // ROBOT STATE MANAGER
@@ -1290,15 +1316,30 @@ export class RobotStateManager {
   }
 
   /**
-   * Enter teleop mode. Seeds the override map from the embodiment's default
-   * pose. Idempotent — returns the current teleop pose (radians).
+   * Enter teleop mode. Idempotent — returns the current teleop pose (radians).
+   *
+   * Seeded from where the robot ACTUALLY IS whenever a sidecar is reporting
+   * joints, and only from the embodiment's default pose otherwise. With
+   * forwarding live (see `startTeleopForwarding`) the difference is a real
+   * movement: the G1's defaults are all zero, which is the MJCF pose with both
+   * arms straight out in front, so seeding from defaults would haul a standing
+   * robot into a T-pose the moment somebody opened the VR view — before they
+   * touched a controller.
    */
   enableTeleop(): Record<string, number> {
     if (!this.teleopJoints) {
+      const live = new Map(hardwareClient.getJointStates().map((j) => [j.name, j.position]));
       this.teleopJoints = new Map();
       for (const joint of this.getActiveJointConfig()) {
-        this.teleopJoints.set(joint.name, joint.defaultPosition);
+        const at = live.get(joint.name);
+        this.teleopJoints.set(
+          joint.name,
+          at === undefined
+            ? joint.defaultPosition
+            : Math.max(joint.limitLower, Math.min(joint.limitUpper, at)),
+        );
       }
+      this.startTeleopForwarding();
     }
     return this.getTeleopPositions();
   }
@@ -1306,7 +1347,106 @@ export class RobotStateManager {
   /** Leave teleop mode; the simulation resumes its idle/walk animation. */
   disableTeleop(): void {
     this.teleopJoints = null;
+    this.stopTeleopForwarding();
     this.notifyListeners();
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Teleop → hardware forwarding
+  //
+  // Without this the teleop pose lives only in `teleopJoints` and never leaves
+  // the process: the 3D view showed the operator's commanded arm while the
+  // robot — the MuJoCo sim or a real G1 — stood untouched, and `getTelemetry`
+  // then overwrote the commanded pose with the real one, so the same robot
+  // appeared in two different postures depending on which panel you looked at.
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * How often the teleop pose is pushed to the sidecar, in ms.
+   *
+   * 50 Hz, matching the sidecar's `G1_CONTROL_HZ`: `/action` advances the
+   * commanded pose by a fixed step PER CALL, so the physical slew rate is set by
+   * how often we call it. Forwarding on the teleop socket's own 30 Hz tick would
+   * quietly move the robot at 60% of its configured rad/s.
+   */
+  private static readonly TELEOP_FORWARD_MS = 20;
+  private teleopForwardTimer: ReturnType<typeof setInterval> | null = null;
+  private teleopForwardInFlight = false;
+  /** Logged once per teleop session, not once per failed frame. */
+  private teleopForwardWarned = false;
+  private teleopErrorListeners = new Set<TeleopErrorListener>();
+
+  /**
+   * Subscribe to teleop-forwarding failures (see {@link TeleopErrorListener}).
+   * Returns an unsubscribe function.
+   */
+  onTeleopError(listener: TeleopErrorListener): () => void {
+    this.teleopErrorListeners.add(listener);
+    return () => this.teleopErrorListeners.delete(listener);
+  }
+
+  private emitTeleopError(err: TeleopError): void {
+    for (const listener of this.teleopErrorListeners) {
+      try {
+        listener(err);
+      } catch (e) {
+        console.error('[RobotStateManager/Teleop] error listener failed:', e);
+      }
+    }
+  }
+
+  private startTeleopForwarding(): void {
+    if (this.teleopForwardTimer) return;
+    this.teleopForwardWarned = false;
+    this.teleopForwardTimer = setInterval(() => {
+      void this.forwardTeleopToHardware();
+    }, RobotStateManager.TELEOP_FORWARD_MS);
+    // Never hold the process open for a teleop session nobody is driving.
+    this.teleopForwardTimer.unref?.();
+  }
+
+  private stopTeleopForwarding(): void {
+    if (!this.teleopForwardTimer) return;
+    clearInterval(this.teleopForwardTimer);
+    this.teleopForwardTimer = null;
+    // Hand the joints back so the next operator's first /action ramps from
+    // where the robot stands, not from the last one's half-finished motion.
+    void hardwareClient.releaseAction().catch(() => { /* sidecar already gone */ });
+  }
+
+  private async forwardTeleopToHardware(): Promise<void> {
+    if (!this.teleopJoints || !hardwareClient.isConnected()) return;
+    // THE E-STOP HAS TO REACH THE WRITERS, not just the record. This gate was
+    // missing: the forwarder checked only "teleop is on" and "a sidecar is
+    // attached", so a latched E-Stop kept POSTing /action at 50 Hz — the stop
+    // zeroed the base and then the operator's arm pose walked straight back
+    // out to the robot, one frame later. The latch is the single source of
+    // truth (`isEStopTriggered`); releasing it needs a deliberate operator
+    // reset, and forwarding resumes on its own when that happens.
+    if (this.isEStopTriggered()) return;
+    // One request in flight at a time. At 50 Hz a sidecar answering slowly would
+    // otherwise queue a request per tick, and each would carry a target that was
+    // already stale when it was sent.
+    if (this.teleopForwardInFlight) return;
+    this.teleopForwardInFlight = true;
+    try {
+      await hardwareClient.sendAction(this.getTeleopPositions());
+    } catch (err) {
+      // A refusal the sidecar ANSWERED (403 read-only, 400 unknown joint) is a
+      // different problem from a sidecar that is not there, and an operator can
+      // only act on the first — so they are not flattened into one code.
+      this.emitTeleopError({
+        code: err instanceof HardwareActionError ? 'action_rejected' : 'sidecar_down',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      if (!this.teleopForwardWarned) {
+        this.teleopForwardWarned = true;
+        console.warn('[RobotStateManager/Teleop] forwarding to the sidecar failed —'
+          + ' the operator drives the view only:', err);
+      }
+    } finally {
+      this.teleopForwardInFlight = false;
+    }
   }
 
   /** Reset all teleop joints to their default (home) pose. */
@@ -1716,6 +1856,15 @@ export class RobotStateManager {
    *  2. **Command the base.** `StopMove` zeroes the commanded velocity — the
    *     robot may be several seconds into a multi-second move that no plan abort
    *     can recall, because the duration lives on the robot.
+   *  3. **Drop the action ramp, for a category-0 stop only.** `StopMove` says
+   *     nothing about the ARMS: the sidecar keeps ramping toward the last
+   *     `/action` target it was given, so an E-Stop taken mid-teleop left the
+   *     robot completing the operator's reach with its base stopped. Releasing
+   *     the hold hands the joints back to the robot's own controller.
+   *
+   * What this deliberately does NOT do is damp. `/action` release + `StopMove`
+   * is the right severity for a G1 that is STANDING; commanding damping from a
+   * safety stop collapses it, which turns a stop into a fall.
    *
    * Best-effort by construction: nothing here may throw back into the monitor,
    * and a sidecar that is not there is reported, not hidden. `locoStop()` is
@@ -1738,6 +1887,18 @@ export class RobotStateManager {
         `[RobotStateManager] ${stop.type} stop: base StopMove NOT delivered (${result.error ?? 'unknown error'}) — ` +
           'the robot may still be executing commanded velocity',
       );
+    }
+
+    // Category 0 only: a protective stop (category 2) is a pause that keeps the
+    // controllers powered and the pose held, and dropping the ramp there would
+    // make every recoverable stop hand the arms back and re-seed from wherever
+    // they drifted to.
+    if (stop.category === 0) {
+      await hardwareClient.releaseAction().catch((err) => {
+        console.warn(
+          `[RobotStateManager] ${stop.type} stop: action-ramp release NOT delivered (${err instanceof Error ? err.message : String(err)})`,
+        );
+      });
     }
   }
 
