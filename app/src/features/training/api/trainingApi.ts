@@ -152,7 +152,11 @@ export const trainingApi = {
    * Mark dataset upload as complete, trigger validation
    */
   async completeUpload(datasetId: string): Promise<void> {
-    await apiClient.post(ENDPOINTS.datasetUploadComplete(datasetId));
+    // No client timeout. This one request downloads the archive out of the
+    // object store, unpacks it and — when NATS is absent, the documented dev
+    // default — validates every file inside the request. The shared client
+    // aborts at 30 s, which is shorter than any real dataset takes.
+    await apiClient.post(ENDPOINTS.datasetUploadComplete(datasetId), undefined, { timeout: 0 });
   },
 
   // ============================================================================

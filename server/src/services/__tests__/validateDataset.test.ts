@@ -44,6 +44,28 @@ interface FixtureOptions {
   omitData?: boolean;
   /** Write the camera mp4 as zero bytes. */
   emptyVideo?: boolean;
+  /** v3.0: spread the episodes across this many data + video files in chunk-000. */
+  splitFiles?: number;
+  /** v3.0: skip writing `file-<n>` even though the metadata points at it. */
+  omitSplitFile?: number;
+  /** Claim more chunks in info.json than the tree actually has. */
+  declaredChunks?: number;
+  /** Declare the cameras as `dtype: 'image'` with `video_path: null`. */
+  stillImages?: boolean;
+  /** With `stillImages`, write no frames at all. */
+  emptyImages?: boolean;
+  /** Add this many frames to episode 0's `length` in the episode metadata only. */
+  metaLengthBump?: number;
+  /** Claim this many frames in info.json regardless of what is written. */
+  declaredFrames?: number;
+  /** Episode lengths, when the default three are not enough. */
+  episodes?: number[];
+  /**
+   * One video camera AND one `dtype: 'image'` feature — an RGB stream recorded
+   * as video next to a depth map stored as frames. `video_path` is non-null, so
+   * this is the shape that isolates the dtype filter from it.
+   */
+  mixedMedia?: boolean;
 }
 
 async function writeDataParquet(
@@ -87,7 +109,13 @@ async function writeDataParquet(
   await writer.close();
 }
 
-async function writeEpisodesParquet(path: string, perEpisode: number[], cameras: string[]): Promise<void> {
+async function writeEpisodesParquet(
+  path: string,
+  perEpisode: number[],
+  cameras: string[],
+  fileOf: (ep: number) => number = () => 0,
+  lengthBump = 0,
+): Promise<void> {
   const fields: Record<string, unknown> = {
     episode_index: { type: 'INT64' },
     length: { type: 'INT64' },
@@ -110,19 +138,20 @@ async function writeEpisodesParquet(path: string, perEpisode: number[], cameras:
   let cursor = 0;
   for (let ep = 0; ep < perEpisode.length; ep++) {
     const length = perEpisode[ep]!;
+    const file = fileOf(ep);
     const row: Record<string, unknown> = {
       episode_index: ep,
-      length,
+      length: ep === 0 ? length + lengthBump : length,
       dataset_from_index: from,
       dataset_to_index: from + length,
       'data/chunk_index': 0,
-      'data/file_index': 0,
+      'data/file_index': file,
     };
     for (const cam of cameras) {
       row[`videos/${cam}/from_timestamp`] = cursor;
       row[`videos/${cam}/to_timestamp`] = cursor + length / FPS;
       row[`videos/${cam}/chunk_index`] = 0;
-      row[`videos/${cam}/file_index`] = 0;
+      row[`videos/${cam}/file_index`] = file;
     }
     cursor += length / FPS;
     from += length;
@@ -136,14 +165,22 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
   const version = options.version ?? 'v3.0';
   const cameras = (options.cameras ?? ['cam_high']).map((c) => `observation.images.${c}`);
   const dir = join(root, name);
-  const perEpisode = EPISODES;
+  const perEpisode = options.episodes ?? EPISODES;
   const totalFrames = perEpisode.reduce((a, b) => a + b, 0);
   await mkdir(join(dir, 'meta'), { recursive: true });
   await mkdir(join(dir, 'data', 'chunk-000'), { recursive: true });
 
   const features: Record<string, unknown> = {};
+  const stillKey = 'observation.images.depth';
+  if (options.mixedMedia) {
+    features[stillKey] = { dtype: 'image', shape: [64, 64, 1], names: ['height', 'width', 'channel'] };
+  }
   for (const cam of cameras) {
-    features[cam] = { dtype: 'video', shape: [64, 64, 3], names: ['height', 'width', 'channel'] };
+    features[cam] = {
+      dtype: options.stillImages ? 'image' : 'video',
+      shape: [64, 64, 3],
+      names: ['height', 'width', 'channel'],
+    };
   }
   features['observation.state'] = { dtype: 'float32', shape: [STATE_DIM], names: null };
   features.action = { dtype: 'float32', shape: [STATE_DIM], names: null };
@@ -157,13 +194,13 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
     robot_type: 'unitree_g1_edu_dex3',
     fps: FPS,
     total_episodes: options.declaredEpisodes ?? perEpisode.length,
-    total_frames: totalFrames,
-    total_chunks: 1,
+    total_frames: options.declaredFrames ?? totalFrames,
+    total_chunks: options.declaredChunks ?? 1,
     chunks_size: 1000,
     data_path: version === 'v3.0'
       ? 'data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet'
       : 'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet',
-    video_path: cameras.length
+    video_path: cameras.length && !options.stillImages
       ? (version === 'v3.0'
         ? 'videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4'
         : 'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4')
@@ -173,17 +210,41 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
   await writeFile(join(dir, 'meta', 'info.json'), JSON.stringify(info, null, 2));
 
   if (version === 'v3.0') {
-    if (!options.omitData) {
-      await writeDataParquet(join(dir, 'data', 'chunk-000', 'file-000.parquet'), perEpisode, options);
+    // One data file per `split` group, so `data/file_index` in the episode
+    // metadata is the only thing that says where episode N's rows live — which
+    // is the whole point of the v3.0 layout.
+    const splits = Math.max(1, options.splitFiles ?? 1);
+    const fileOf = (ep: number) => ep % splits;
+    for (let file = 0; file < splits; file++) {
+      if (options.omitData) continue;
+      if (options.omitSplitFile === file) continue;
+      const eps = perEpisode.map((n, ep) => (fileOf(ep) === file ? n : 0));
+      await writeDataParquet(
+        join(dir, 'data', 'chunk-000', `file-${String(file).padStart(3, '0')}.parquet`),
+        eps, options,
+      );
     }
     await mkdir(join(dir, 'meta', 'episodes', 'chunk-000'), { recursive: true });
     await writeEpisodesParquet(
       join(dir, 'meta', 'episodes', 'chunk-000', 'file-000.parquet'), perEpisode, cameras,
+      fileOf, options.metaLengthBump ?? 0,
     );
     for (const cam of cameras) {
+      if (options.stillImages) {
+        if (options.emptyImages) continue;
+        const dst = join(dir, 'images', cam, 'episode_000000');
+        await mkdir(dst, { recursive: true });
+        await writeFile(join(dst, 'frame_000000.png'), 'not really a png, but non-empty');
+        continue;
+      }
       const dst = join(dir, 'videos', cam, 'chunk-000');
       await mkdir(dst, { recursive: true });
-      await writeFile(join(dst, 'file-000.mp4'), options.emptyVideo ? '' : 'not really an mp4, but non-empty');
+      for (let file = 0; file < splits; file++) {
+        await writeFile(
+          join(dst, `file-${String(file).padStart(3, '0')}.mp4`),
+          options.emptyVideo ? '' : 'not really an mp4, but non-empty',
+        );
+      }
     }
   } else {
     for (let ep = 0; ep < perEpisode.length; ep++) {
@@ -198,6 +259,11 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
       .map((length, ep) => JSON.stringify({ episode_index: ep, tasks: ['pick'], length }))
       .join('\n');
     await writeFile(join(dir, 'meta', 'episodes.jsonl'), `${lines}\n`);
+    if (options.mixedMedia) {
+      const dst = join(dir, 'images', stillKey, 'episode_000000');
+      await mkdir(dst, { recursive: true });
+      await writeFile(join(dst, 'frame_000000.png'), 'not really a png, but non-empty');
+    }
     for (const cam of cameras) {
       const dst = join(dir, 'videos', 'chunk-000', cam);
       await mkdir(dst, { recursive: true });
@@ -358,5 +424,114 @@ describe('what it refuses to guess at', () => {
     await writeFile(join(dir, 'meta', 'info.json'), JSON.stringify({ codebase_version: 'v3.0' }));
     const report = await validate(dir);
     expect(codes(report.errors)).toEqual(['MISSING_ROBOT_TYPE', 'MISSING_FPS', 'MISSING_FEATURES']);
+  });
+});
+
+describe('v3.0 file enumeration', () => {
+  // The first cut of this validator guessed the v3 file list from
+  // `total_chunks`: one file per chunk, always named `file-000`. v3.0 does not
+  // work that way — it names a template and then addresses each episode by
+  // (chunk_index, file_index) in the episode metadata. These four are what
+  // that guess got wrong.
+
+  it('opens every data file the episode metadata points at, not just file-000', async () => {
+    const report = await validate(await fixture('v3-split', { splitFiles: 3 }));
+    expect(report.errors).toEqual([]);
+    const data = report.files.filter((f) => f.kind === 'data').map((f) => f.path);
+    expect(data).toEqual([
+      'data/chunk-000/file-000.parquet',
+      'data/chunk-000/file-001.parquet',
+      'data/chunk-000/file-002.parquet',
+    ]);
+  });
+
+  it('reports a missing file-001 — which the guess could never see', async () => {
+    // The headline regression. Under the old enumeration this dataset passed:
+    // `file-000` was present, nothing ever asked about `file-001`, and a third
+    // of the frames were simply not there.
+    const report = await validate(await fixture('v3-missing-1', {
+      splitFiles: 3, omitSplitFile: 1,
+    }));
+    expect(codes(report.errors)).toContain('MISSING_DATA_FILE');
+    expect(report.errors.some((e) => e.message.includes('file-001.parquet'))).toBe(true);
+  });
+
+  it('does not invent chunks info.json declares but the metadata never uses', async () => {
+    // The other direction: `total_chunks: 4` on a dataset that keeps everything
+    // in chunk-000 produced MISSING_DATA_FILE for three files it never claimed
+    // to have, and marked a sound dataset `failed`.
+    const report = await validate(await fixture('v3-overdeclared', { declaredChunks: 4 }));
+    expect(report.errors).toEqual([]);
+    expect(report.valid).toBe(true);
+  });
+
+  it('checks each video file the metadata names, per camera', async () => {
+    const report = await validate(await fixture('v3-split-video', { splitFiles: 2 }));
+    const video = report.files.filter((f) => f.kind === 'video').map((f) => f.path);
+    expect(video).toEqual([
+      'videos/observation.images.cam_high/chunk-000/file-000.mp4',
+      'videos/observation.images.cam_high/chunk-000/file-001.mp4',
+    ]);
+  });
+});
+
+describe('image features that are not video', () => {
+  it('accepts a dtype:image dataset, which has no mp4 by design', async () => {
+    // `imageKeys` lumped `dtype: 'image'` in with `dtype: 'video'` and then
+    // demanded an mp4 for each — so every image-mode dataset, which is most of
+    // what comes off the Hub, failed with MISSING_VIDEO_FILE for a file the
+    // format never says exists.
+    const report = await validate(await fixture('v3-stills', { stillImages: true }));
+    expect(codes(report.errors)).not.toContain('MISSING_VIDEO_FILE');
+    expect(report.errors).toEqual([]);
+    // Still counted as a camera, so NO_IMAGE_FEATURES does not fire.
+    expect(report.imageKeys).toEqual(['observation.images.cam_high']);
+    expect(codes(report.warnings)).not.toContain('NO_IMAGE_FEATURES');
+  });
+
+  it('does not demand an mp4 for an image feature sitting next to a video one', async () => {
+    // The case the `video_path === null` short-circuit does not cover: a v2.1
+    // dataset with an RGB camera recorded as video AND a depth map stored as
+    // frames. `video_path` is non-null, so only the dtype filter keeps the
+    // depth key out of the mp4 list — without it the depth feature is asked
+    // for `videos/chunk-000/observation.images.depth/episode_000000.mp4`,
+    // which the format never says exists.
+    const report = await validate(await fixture('v21-mixed', {
+      version: 'v2.1', mixedMedia: true,
+    }));
+    expect(codes(report.errors)).not.toContain('MISSING_VIDEO_FILE');
+    expect(report.errors).toEqual([]);
+    expect(report.imageKeys).toContain('observation.images.depth');
+  });
+
+  it('but fails one whose images/ prefix is empty', async () => {
+    const report = await validate(await fixture('v3-stills-empty', {
+      stillImages: true, emptyImages: true,
+    }));
+    expect(codes(report.errors)).toContain('MISSING_IMAGE_FILES');
+  });
+});
+
+describe('the frame count, cross-checked against the metadata', () => {
+  it('catches a v3 manifest that disagrees with the episode lengths', async () => {
+    // v3.0 had no metadata-side frame check at all: `metaFrames` stayed null,
+    // and the only cross-check was against the data parquets — which is the
+    // half that gets skipped on any dataset with more than 8 data files.
+    const report = await validate(await fixture('v3-frames', { metaLengthBump: 5 }));
+    expect(codes(report.errors)).toContain('FRAME_COUNT_MISMATCH');
+    expect(report.errors.some((e) => e.message.includes('38'))).toBe(true);
+  });
+
+  it('does not record a partial row count as the dataset\'s frame total', async () => {
+    // With more data files than it reads, the validator warned that the count
+    // was partial and then wrote that partial count into `totalFrames` anyway,
+    // which is the number the training split and the UI both then believe.
+    const episodes = Array.from({ length: 12 }, (_, i) => 10 + i);
+    const report = await validate(await fixture('v3-partial', {
+      episodes, splitFiles: 12, declaredFrames: 0,
+    }));
+    expect(codes(report.warnings)).toContain('PARTIAL_ROW_COUNT');
+    // The full 186 from the episode metadata, not the 8 files the read got to.
+    expect(report.totalFrames).toBe(episodes.reduce((a, b) => a + b, 0));
   });
 });

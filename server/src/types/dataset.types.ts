@@ -278,6 +278,14 @@ export interface DatasetValidationResult {
    * missing parquet, and prose cannot be branched on.
    */
   report?: DatasetStructureReport;
+  /**
+   * The store could not be reached, so nothing was checked (TASK-217 review).
+   *
+   * Distinct from `valid: false`, which means the files were opened and are
+   * wrong. A caller must not write `status: 'failed'` on this one: the dataset
+   * may be perfectly good and the object store merely down.
+   */
+  storeUnavailable?: boolean;
 }
 
 /**

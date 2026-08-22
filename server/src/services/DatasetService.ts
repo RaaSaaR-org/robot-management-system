@@ -4,8 +4,9 @@
  * @feature datasets
  */
 
-import { existsSync } from 'fs';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { createWriteStream, existsSync } from 'fs';
+import { mkdtemp, rm, stat } from 'fs/promises';
+import { pipeline } from 'stream/promises';
 import { tmpdir } from 'os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'path';
 import { fileURLToPath } from 'url';
@@ -18,7 +19,15 @@ import {
 } from '../repositories/index.js';
 import { modelStorage, BUCKETS } from '../storage/model-storage.js';
 import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
-import { openDatasetTree } from './lerobot/DatasetTree.js';
+import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
+
+/**
+ * What a validation run concluded (TASK-217 review).
+ *
+ * `unavailable` is the one the caller must not turn into `status: 'failed'` —
+ * the store could not be reached, so the dataset was never looked at.
+ */
+export type ValidationOutcome = 'ready' | 'failed' | 'unavailable';
 import { ExtractError, extractDatasetArchive } from './lerobot/extractArchive.js';
 import { validateDatasetStructure } from './lerobot/validateDataset.js';
 import type { DatasetStructureReport, ExpectedDimensions } from './lerobot/validateDataset.js';
@@ -343,13 +352,28 @@ export class DatasetService extends EventEmitter {
       return false;
     }
 
-    // Delete from storage if RustFS is available
+    // Delete from storage if RustFS is available.
+    //
+    // Both versions, because an uploaded dataset's archive lives under
+    // `<id>/upload/data.bin` since TASK-217 and the delete still asked for
+    // `<id>/latest/data.bin` — so every uploaded dataset ever deleted left its
+    // full archive in the bucket, paid for forever.
     if (isRustFSInitialized() && dataset.storagePath) {
-      try {
-        await modelStorage.deleteDataset(id, 'latest');
-      } catch (error) {
-        console.warn(`[DatasetService] Failed to delete storage for ${id}:`, error);
+      for (const version of ['latest', UPLOAD_VERSION]) {
+        try {
+          await modelStorage.deleteDataset(id, version);
+        } catch (error) {
+          console.warn(`[DatasetService] Failed to delete ${version} storage for ${id}:`, error);
+        }
       }
+    }
+
+    // And the unpacked tree, which `unpackUploadedArchive` wrote to local disk
+    // and nothing else ever removes.
+    try {
+      await rm(join(uploadRoot(), id), { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`[DatasetService] Failed to remove the unpacked upload for ${id}:`, error);
     }
 
     // Delete from database
@@ -489,17 +513,23 @@ export class DatasetService extends EventEmitter {
       throw new ExtractError('STORAGE_UNAVAILABLE', 'Storage service not available');
     }
     const key = uploadObjectKey(id);
-    const buffer = await getRustFSClient().download(BUCKETS.TRAINING_DATASETS, key);
-    if (buffer.length === 0) {
-      throw new ExtractError('EMPTY_UPLOAD', `${key} is zero bytes — nothing was uploaded`);
-    }
 
     const scratch = await mkdtemp(join(tmpdir(), `dataset-upload-${id}-`));
     // The name carries the extension `tar` dispatches on, so a `.zip` upload
     // reaches bsdtar as a zip rather than as an unknown blob.
     const archive = join(scratch, `upload${uploadExtension(id)}`);
     try {
-      await writeFile(archive, buffer);
+      // Streamed, not buffered. `download()` accumulates the whole object in
+      // chunks and then `Buffer.concat`s it, so a 10 GB dataset tarball — an
+      // ordinary size for the multi-camera recordings this feature exists to
+      // accept — was materialised twice in the API process before a byte
+      // reached disk, taking every other request down with it.
+      const source = await modelStorage.getDatasetStream(id, UPLOAD_VERSION);
+      await pipeline(source, createWriteStream(archive));
+      const written = await stat(archive);
+      if (written.size === 0) {
+        throw new ExtractError('EMPTY_UPLOAD', `${key} is zero bytes — nothing was uploaded`);
+      }
       const target = join(uploadRoot(), id);
       await rm(target, { recursive: true, force: true });
       const { datasetRoot, symlinksRemoved } = await extractDatasetArchive(archive, target);
@@ -589,6 +619,7 @@ export class DatasetService extends EventEmitter {
       // validation failure would mark a perfectly good dataset failed because
       // an object store was down.
       result.errors.push('Storage service not available');
+      result.storeUnavailable = true;
       return result;
     }
 
@@ -611,6 +642,14 @@ export class DatasetService extends EventEmitter {
     try {
       report = await validateDatasetStructure(tree, expected);
     } catch (error) {
+      // A store that could not answer is not a dataset that is wrong. Marking
+      // it `failed` here is what the guard above exists to prevent, and it was
+      // reachable through this catch until the TASK-217 review found it.
+      if (error instanceof DatasetStoreError) {
+        result.errors.push(error.message);
+        result.storeUnavailable = true;
+        return result;
+      }
       result.errors.push(`Validation error: ${error instanceof Error ? error.message : String(error)}`);
       return result;
     }
@@ -632,7 +671,7 @@ export class DatasetService extends EventEmitter {
   /**
    * Validate and update dataset (called by worker or synchronously)
    */
-  async validateAndUpdateDataset(datasetId: string, storagePath: string): Promise<void> {
+  async validateAndUpdateDataset(datasetId: string, storagePath: string): Promise<ValidationOutcome> {
     try {
       // Update progress
       await this.updateValidationProgress(datasetId, {
@@ -655,6 +694,21 @@ export class DatasetService extends EventEmitter {
         progress: 50,
         message: 'Computing quality score...',
       });
+
+      if (validation.storeUnavailable) {
+        // Nothing was opened, so nothing is known. Leaving `status` alone is
+        // the whole point: a dataset that was `ready` stays `ready` while the
+        // store is down, and the caller is told to try again rather than shown
+        // a red badge it cannot act on.
+        await this.updateValidationProgress(datasetId, {
+          datasetId,
+          status: 'failed',
+          progress: 100,
+          message: 'Storage unavailable — nothing was validated',
+          errors: validation.errors,
+        });
+        return 'unavailable';
+      }
 
       if (!validation.valid) {
         // The report goes with the failure. A dataset marked `failed` with no
@@ -682,7 +736,7 @@ export class DatasetService extends EventEmitter {
           timestamp: new Date().toISOString(),
         });
 
-        return;
+        return 'failed';
       }
 
       // Compute quality score
@@ -730,6 +784,7 @@ export class DatasetService extends EventEmitter {
       });
 
       console.log(`[DatasetService] Dataset validated: ${datasetId} (score: ${qualityScore.total})`);
+      return 'ready';
 
     } catch (error) {
       console.error(`[DatasetService] Validation error for ${datasetId}:`, error);
@@ -750,6 +805,7 @@ export class DatasetService extends EventEmitter {
         error: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString(),
       });
+      return 'failed';
     }
   }
 

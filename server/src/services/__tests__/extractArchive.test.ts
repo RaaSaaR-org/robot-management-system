@@ -181,20 +181,23 @@ describe('the shapes an attacker uploads', () => {
     expect(existsSync(canary)).toBe(false);
   });
 
-  it('removes symlinks rather than unpacking them', async () => {
+  it('refuses an archive with a symlink in it, before extracting anything', async () => {
     // A symlink to `/` inside the archive turns any later write into the
-    // extracted tree into a write anywhere on the host.
+    // extracted tree into a write anywhere on the host. The first version of
+    // this file unpacked the archive and then deleted the links, which relies
+    // on tar not having followed one during extraction. Refusing the archive
+    // on its member list closes that window.
     const src = join(root, 'linky');
     await dataset(src);
     await symlink('/etc', join(src, 'escape'));
     const archive = await tarGz(src, ['meta', 'data', 'escape'], join(root, 'linky.tar.gz'));
 
     const target = join(root, 'out-linky');
-    const { datasetRoot, symlinksRemoved } = await extractDatasetArchive(archive, target);
-    expect(symlinksRemoved).toBe(1);
-    expect(existsSync(join(datasetRoot, 'escape'))).toBe(false);
-    // And the real files survived the strip.
-    expect(await listFiles(datasetRoot)).toContain('meta/info.json');
+    await expect(extractDatasetArchive(archive, target)).rejects.toMatchObject({
+      code: 'LINK_MEMBER',
+    });
+    // And nothing was written: the refusal comes before `mkdir`.
+    expect(existsSync(target)).toBe(false);
   });
 
   it('will not merge into a directory that already holds something', async () => {

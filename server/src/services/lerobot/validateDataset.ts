@@ -100,6 +100,33 @@ async function readFirstRow(buffer: Buffer): Promise<Record<string, unknown> | n
   }
 }
 
+/**
+ * Every row of a parquet, for `meta/episodes/**` only.
+ *
+ * Safe here because that file holds one row per episode with a handful of
+ * scalar columns — it is the manifest, not the data. `cap` is a backstop so a
+ * malformed file cannot pull an unbounded number of rows into memory.
+ */
+async function readAllRows(
+  buffer: Buffer,
+  cap = 200_000,
+): Promise<Record<string, unknown>[] | null> {
+  try {
+    const { ParquetReader } = await import('@dsnp/parquetjs');
+    const reader = await ParquetReader.openBuffer(buffer);
+    const cursor = reader.getCursor();
+    const rows: Record<string, unknown>[] = [];
+    let row: Record<string, unknown> | null;
+    while (rows.length < cap && (row = (await cursor.next()) as Record<string, unknown> | null)) {
+      rows.push(row);
+    }
+    await reader.close();
+    return rows;
+  } catch {
+    return null;
+  }
+}
+
 /** pyarrow `list<float32>` surfaces either as an array or as parquetjs's `{list}`. */
 function vectorWidth(value: unknown): number | null {
   if (Array.isArray(value)) return value.length;
@@ -115,23 +142,51 @@ function vectorWidth(value: unknown): number | null {
  * the question this answers is "is everything the manifest promised actually
  * there", and a listing can only ever say what happens to be present.
  */
+interface V3FileRefs {
+  /** Distinct `data/chunk-CCC/file-FFF.parquet` the episode rows point at. */
+  data: string[];
+  /** Per video key, the distinct `videos/KEY/chunk-CCC/file-FFF.mp4`. */
+  video: Record<string, string[]>;
+}
+
 function expectedFiles(
   info: Record<string, unknown>,
   layout: LeRobotLayout,
   episodeCount: number,
-  imageKeys: string[],
+  videoKeys: string[],
+  refs: V3FileRefs | null,
 ): { data: string[]; video: string[] } {
   const chunkSize = Number(info.chunks_size ?? 1000) || 1000;
   const data: string[] = [];
   const video: string[] = [];
 
   if (layout === 'v3') {
-    // Many episodes per file, so the file count comes from the chunk count, not
-    // the episode count. `total_chunks` is the manifest's own answer.
+    // v3.0 does not name its files in `info.json` — it names a template and
+    // then addresses each episode by (chunk_index, file_index) in the episode
+    // metadata. `refs` is that set, read out of the metadata this validator has
+    // already opened.
+    //
+    // The first cut guessed `file-000` in every chunk from `total_chunks`,
+    // which is wrong in both directions: a chunk split across `file-000` and
+    // `file-001` (what `data_files_size_in_mb` produces on any real recording
+    // session) had its second file never checked, and a dataset that keeps
+    // everything in chunk-000 while declaring more chunks was reported
+    // MISSING_DATA_FILE for files it never claimed to have.
+    // The manifest's own guess, used only where the metadata could not answer:
+    // a v3.0 tree with no readable `meta/episodes/**` still has to be told its
+    // data files are missing, and a recording written before the video columns
+    // existed still has to have its mp4s checked.
     const chunks = Math.max(1, Number(info.total_chunks ?? 1) || 1);
-    for (let c = 0; c < chunks; c++) {
-      data.push(`data/chunk-${pad3(c)}/file-000.parquet`);
-      for (const key of imageKeys) video.push(`videos/${key}/chunk-${pad3(c)}/file-000.mp4`);
+    const guess = (key?: string): string[] => Array.from({ length: chunks }, (_, c) => (
+      key === undefined
+        ? `data/chunk-${pad3(c)}/file-000.parquet`
+        : `videos/${key}/chunk-${pad3(c)}/file-000.mp4`
+    ));
+
+    for (const ref of refs?.data?.length ? refs.data : guess()) data.push(ref);
+    for (const key of videoKeys) {
+      const named = refs?.video[key];
+      for (const path of named?.length ? named : guess(key)) video.push(path);
     }
     return { data, video };
   }
@@ -139,7 +194,7 @@ function expectedFiles(
   for (let ep = 0; ep < episodeCount; ep++) {
     const chunk = Math.floor(ep / chunkSize);
     data.push(`data/chunk-${pad3(chunk)}/episode_${pad6(ep)}.parquet`);
-    for (const key of imageKeys) {
+    for (const key of videoKeys) {
       // Both orderings are in this repo's own trees: `make_synthetic_dataset.py`
       // writes chunk-first and the Cosmos converter writes key-first, and
       // `streamLocalVideo` has always accepted either. Validation has to accept
@@ -225,6 +280,17 @@ export async function validateDatasetStructure(
     .filter(([, f]) => f?.dtype === 'video' || f?.dtype === 'image')
     .map(([key]) => key);
 
+  // Only a `video` feature is backed by an mp4. A `dtype: 'image'` feature is
+  // PNG frames under `images/<key>/`, and demanding a video for it failed
+  // every image-mode dataset — which is most of what comes off the Hub —
+  // with MISSING_VIDEO_FILE for a file the format never says exists.
+  const videoKeys = info.video_path === null
+    ? []
+    : Object.entries(features).filter(([, f]) => f?.dtype === 'video').map(([key]) => key);
+  const stillKeys = Object.entries(features)
+    .filter(([, f]) => f?.dtype === 'image')
+    .map(([key]) => key);
+
   // THE warning. A state-only dataset validates perfectly and then dies inside
   // a training job hours later with "All image features are missing from the
   // batch" — the one failure this whole file exists to move earlier.
@@ -243,6 +309,7 @@ export async function validateDatasetStructure(
   const declaredEpisodes = report.episodeCount;
   let metaEpisodes: number | null = null;
   let metaFrames: number | null = null;
+  let v3Refs: V3FileRefs | null = null;
 
   if (report.layout === 'v3') {
     const shards = (await tree.list('meta/episodes')).filter((f) => f.path.endsWith('.parquet'));
@@ -250,13 +317,19 @@ export async function validateDatasetStructure(
       error('MISSING_EPISODE_META', 'v3.0 stores episode rows in meta/episodes/chunk-000/file-000.parquet and there is none');
     } else {
       let rows = 0;
+      let frames = 0;
+      let sawLength = true;
+      const dataRefs = new Set<string>();
+      const videoRefs: Record<string, Set<string>> = {};
+
       for (const shard of shards) {
         report.files.push({ path: shard.path, size: shard.size, kind: 'meta' });
         if (shard.size === 0) {
           error('EMPTY_FILE', `${shard.path} is zero bytes`);
           continue;
         }
-        const shape = await readParquetShape(await tree.read(shard.path));
+        const buffer = await tree.read(shard.path);
+        const shape = await readParquetShape(buffer);
         if (!shape) {
           error('UNREADABLE_PARQUET', `${shard.path} could not be opened as a parquet file`);
           continue;
@@ -265,10 +338,48 @@ export async function validateDatasetStructure(
         for (const required of ['episode_index', 'length']) {
           if (!shape.columns.includes(required)) {
             error('EPISODE_META_INCOMPLETE', `${shard.path} has no ${required} column`);
+            if (required === 'length') sawLength = false;
+          }
+        }
+
+        // The rows themselves, because v3.0's file list lives in them: which
+        // parquet an episode's frames are in, and which mp4 its video window
+        // cuts out of. Without this the validator was guessing.
+        const metaRows = await readAllRows(buffer);
+        if (metaRows === null) {
+          error('BAD_EPISODE_META', `${shard.path} opened but its rows could not be read`);
+          continue;
+        }
+        for (const row of metaRows) {
+          frames += Number(row['length'] ?? 0) || 0;
+          const chunk = Number(row['data/chunk_index'] ?? 0) || 0;
+          const file = Number(row['data/file_index'] ?? 0) || 0;
+          dataRefs.add(`data/chunk-${pad3(chunk)}/file-${pad3(file)}.parquet`);
+          for (const column of Object.keys(row)) {
+            const m = /^videos\/(.+)\/chunk_index$/.exec(column);
+            if (!m) continue;
+            const key = m[1]!;
+            const vChunk = Number(row[column] ?? 0) || 0;
+            const vFile = Number(row[`videos/${key}/file_index`] ?? 0) || 0;
+            (videoRefs[key] ??= new Set()).add(
+              `videos/${key}/chunk-${pad3(vChunk)}/file-${pad3(vFile)}.mp4`,
+            );
           }
         }
       }
       metaEpisodes = rows;
+      // v3.0 had no metadata-side frame check at all: `metaFrames` stayed null
+      // and the only cross-check was against the data parquets, which is the
+      // half that gets skipped on a large dataset.
+      if (sawLength && frames > 0) metaFrames = frames;
+      if (dataRefs.size > 0) {
+        v3Refs = {
+          data: [...dataRefs].sort(),
+          video: Object.fromEntries(
+            Object.entries(videoRefs).map(([key, set]) => [key, [...set].sort()]),
+          ),
+        };
+      }
     }
   } else {
     const jsonl = await tree.stat('meta/episodes.jsonl');
@@ -306,7 +417,7 @@ export async function validateDatasetStructure(
   }
 
   // ---- the files the manifest promised ------------------------------------
-  const expectedPaths = expectedFiles(info, report.layout, report.episodeCount, report.imageKeys);
+  const expectedPaths = expectedFiles(info, report.layout, report.episodeCount, videoKeys, v3Refs);
   const presentData: string[] = [];
 
   for (const path of expectedPaths.data) {
@@ -342,6 +453,23 @@ export async function validateDatasetStructure(
       continue;
     }
     report.files.push({ path: found, size: entry.size, kind: 'video' });
+  }
+
+  // A `dtype: 'image'` feature stores PNG frames, so the check is that the
+  // prefix has something in it — the format does not fix a filename we could
+  // stat, and an empty prefix is the failure that matters.
+  for (const key of stillKeys) {
+    const entries = await tree.list(`images/${key}`);
+    if (entries.length === 0) {
+      error(
+        'MISSING_IMAGE_FILES',
+        `info.json declares ${key} as a dtype:'image' feature and images/${key}/ is empty`,
+      );
+      continue;
+    }
+    for (const entry of entries.slice(0, 4)) {
+      report.files.push({ path: entry.path, size: entry.size, kind: 'video' });
+    }
   }
 
   // ---- open the data ------------------------------------------------------
@@ -400,7 +528,11 @@ export async function validateDatasetStructure(
       `info.json declares ${report.totalFrames} frames and the data parquet holds ${rowsRead}`,
     );
   }
-  if (report.totalFrames === 0 && rowsRead > 0) report.totalFrames = rowsRead;
+  // Only when every data file was opened. Backfilling a partial count made the
+  // first 8 files' row total the dataset's recorded `totalFrames`, which is
+  // then what the training split and the UI both believe.
+  if (readAll && report.totalFrames === 0 && rowsRead > 0) report.totalFrames = rowsRead;
+  if (!readAll && report.totalFrames === 0 && metaFrames !== null) report.totalFrames = metaFrames;
 
   // ---- widths against the robot type --------------------------------------
   // An error, not a warning. A dataset whose state vector is the wrong width

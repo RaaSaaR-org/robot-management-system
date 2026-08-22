@@ -890,15 +890,18 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
       : dataset.infoJson;
     const fps = info?.fps ?? dataset.fps ?? 30;
 
+    // `flagged` was hardcoded false in front of a flag control that wrote
+    // nowhere. Read once, up here: the review found the fix had only been
+    // applied to the local branch, so a flagged episode on a RustFS or
+    // HuggingFace dataset still came back `flagged: false`.
+    const flags = await datasetEpisodeFlagRepository.flaggedIndices(dataset.id);
+
     // Local datasets (TASK-178, v3.0 via a converted view since TASK-217).
     if (isLocalDataset(dataset.storagePath)) {
       const root = await localReadRoot(dataset.storagePath, res);
       if (root === null) return;
       const local = await readLocalEpisodes(root, fps);
       if (local && local.length > 0) {
-        // `flagged` was hardcoded false here, in front of a flag control that
-        // wrote nowhere. Both ends are real now.
-        const flags = await datasetEpisodeFlagRepository.flaggedIndices(dataset.id);
         return res.json({
           episodes: local.map((e) => ({ ...e, flagged: flags.has(e.index) })),
         });
@@ -939,7 +942,7 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
             index: epIndex,
             frameCount,
             durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
-            flagged: false,
+            flagged: flags.has(epIndex),
             ...(Object.keys(videoWindows).length > 0 ? { videoWindows } : {}),
           });
         }
@@ -959,7 +962,7 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
           index: i,
           frameCount: avgFrames,
           durationSeconds: fps > 0 ? parseFloat((avgFrames / fps).toFixed(2)) : 0,
-          flagged: false,
+          flagged: flags.has(i),
         });
       }
     }
@@ -1220,6 +1223,17 @@ datasetRoutes.patch('/:id/episodes/:index/flag', async (req: Request, res: Respo
       return res.status(400).json({ error: 'flagged must be a boolean' });
     }
 
+    // An index past the end of the dataset is a typo, not a flag. Storing it
+    // made `/quality` count more flagged episodes than the dataset has and
+    // report a negative clean percentage.
+    const episodeCount = dataset.demonstrationCount ?? 0;
+    if (episodeCount > 0 && episodeIndex >= episodeCount) {
+      return res.status(400).json({
+        error: `Episode ${episodeIndex} is out of range — this dataset has ${episodeCount}`,
+        code: 'EPISODE_OUT_OF_RANGE',
+      });
+    }
+
     // Stored, as of TASK-217. This used to answer `{success:true}` and write
     // nothing, while `GET /:id/flagged` always answered `[]` and the viewer
     // showed a flag control in front of both.
@@ -1275,8 +1289,10 @@ datasetRoutes.get('/:id/quality', async (req: Request, res: Response) => {
             // not exist. `DataQualityService` has the metrics; nothing runs
             // them over a dataset.
             anomalousTrajectoryCount: 0,
+            // Clamped: a flag left behind by an episode count that later
+            // shrank must not read as "-25% clean".
             cleanTrajectoryPercentage: dataset.demonstrationCount > 0
-              ? Math.round(((dataset.demonstrationCount - flaggedCount) / dataset.demonstrationCount) * 100)
+              ? Math.max(0, Math.round(((dataset.demonstrationCount - flaggedCount) / dataset.demonstrationCount) * 100))
               : 100,
             statistics: null,
             flaggedSummary: flaggedRows.map((row) => ({
@@ -1352,7 +1368,17 @@ datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    await datasetService.validateAndUpdateDataset(id, dataset.storagePath);
+    const outcome = await datasetService.validateAndUpdateDataset(id, dataset.storagePath);
+    if (outcome === 'unavailable') {
+      // 503, not 200-with-`validation: null`. Nothing was opened, the row was
+      // deliberately left alone, and the caller's next move is to retry — not
+      // to go looking at a dataset that is probably fine.
+      return res.status(503).json({
+        error: 'Dataset storage is not reachable — nothing was validated',
+        code: 'STORE_UNAVAILABLE',
+        datasetId: id,
+      });
+    }
     const updated = await datasetService.get(id);
     res.json({
       datasetId: id,

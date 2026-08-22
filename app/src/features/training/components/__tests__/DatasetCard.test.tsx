@@ -105,6 +105,19 @@ describe('what the card says about validation', () => {
         errors: [{ code: 'MISSING_INFO', message: 'Missing required file: meta/info.json' }],
       }),
     })} />);
-    expect(screen.getByTestId('dataset-validation-errors')).toHaveTextContent('1 structural problem');
+    const panel = screen.getByTestId('dataset-validation-errors');
+    expect(panel).toHaveTextContent('1 structural problem');
+    // `toHaveTextContent` is a substring match, so the assertion above is
+    // satisfied by the very string this test is named after. This is the half
+    // that bites: rendering "1 structural problems" fails here.
+    expect(panel).not.toHaveTextContent('structural problems');
+  });
+
+  it('keeps "Not validated" off a card that is still uploading', () => {
+    // The line is about a dataset nobody has checked, not about one where
+    // there is nothing to check yet. Without the status guard, every card
+    // mid-upload claims it was never validated.
+    render(<DatasetCard dataset={makeDataset({ status: 'uploading', validation: undefined })} />);
+    expect(screen.queryByTestId('dataset-not-validated')).not.toBeInTheDocument();
   });
 });

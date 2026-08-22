@@ -31,6 +31,29 @@ export interface TreeEntry {
 }
 
 /**
+ * The store could not answer — not "the file is not there".
+ *
+ * The two were the same answer before TASK-217's review: `stat` caught every
+ * exception and returned null, so a RustFS timeout read as a missing parquet
+ * and `validateAndUpdateDataset` wrote `status: 'failed'` on a dataset whose
+ * files were all present. A validator is allowed to say a dataset is broken;
+ * it is not allowed to say so because it could not look.
+ */
+export class DatasetStoreError extends Error {
+  constructor(readonly path: string, readonly cause: unknown) {
+    super(`could not reach the object store for ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'DatasetStoreError';
+  }
+}
+
+/** A 404 from the object store, as opposed to any other reason it said no. */
+function isNotFound(err: unknown): boolean {
+  const e = err as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } };
+  return e?.name === 'NotFound' || e?.name === 'NoSuchKey' || e?.Code === 'NoSuchKey'
+    || e?.$metadata?.httpStatusCode === 404;
+}
+
+/**
  * A LeRobot dataset tree, addressed by paths relative to its root.
  *
  * Every path is POSIX-style and relative — `meta/info.json`, never an absolute
@@ -139,20 +162,31 @@ export class RustFsDatasetTree implements DatasetTree {
     try {
       const meta = await getRustFSClient().getMetadata(this.bucket, this.key(path));
       return { path, size: meta.contentLength ?? 0 };
-    } catch {
-      return null;
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw new DatasetStoreError(path, err);
     }
   }
 
   async read(path: string): Promise<Buffer> {
-    return getRustFSClient().download(this.bucket, this.key(path));
+    try {
+      return await getRustFSClient().download(this.bucket, this.key(path));
+    } catch (err) {
+      if (isNotFound(err)) throw err;
+      throw new DatasetStoreError(path, err);
+    }
   }
 
   async list(prefix: string): Promise<TreeEntry[]> {
     const out: TreeEntry[] = [];
-    for await (const obj of getRustFSClient().listAll(this.bucket, this.key(prefix))) {
-      if (obj.key.endsWith('/')) continue;
-      out.push({ path: obj.key.slice(this.root.length), size: obj.size });
+    try {
+      for await (const obj of getRustFSClient().listAll(this.bucket, this.key(prefix))) {
+        if (obj.key.endsWith('/')) continue;
+        out.push({ path: obj.key.slice(this.root.length), size: obj.size });
+      }
+    } catch (err) {
+      if (isNotFound(err)) return [];
+      throw new DatasetStoreError(prefix, err);
     }
     out.sort((a, b) => a.path.localeCompare(b.path));
     return out;

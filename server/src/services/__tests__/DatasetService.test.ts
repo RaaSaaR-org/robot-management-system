@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Readable } from 'stream';
 import type { DatasetValidationResult } from '../../types/dataset.types.js';
 import type { DatasetStructureReport } from '../lerobot/validateDataset.js';
 
@@ -55,6 +56,13 @@ vi.mock('../../storage/model-storage.js', () => ({
   modelStorage: {
     getDatasetUploadUrl,
     deleteDataset: deleteDatasetFromStorage,
+    // The upload is streamed to the scratch file rather than buffered whole:
+    // a multi-GB dataset tarball was materialised twice in the API process
+    // before a byte reached disk.
+    getDatasetStream: async (id: string, version: string) => {
+      const buffer = await rustfsDownload('training-datasets', `${id}/${version}/data.bin`);
+      return Readable.from([buffer]);
+    },
   },
 }));
 
@@ -66,7 +74,14 @@ vi.mock('../../storage/rustfs-client.js', () => ({
     // `RustFsDatasetTree` asks for a size, not a boolean: validation now cares
     // that a file is non-empty, not only that it is listed.
     getMetadata: async (_bucket: string, key: string) => {
-      if (!(await rustfsExists(_bucket, key))) throw new Error('NotFound');
+      if (!(await rustfsExists(_bucket, key))) {
+        // Shaped like the AWS SDK's HeadObject 404, because that is what the
+        // tree branches on: anything that is NOT a 404 is now a store outage,
+        // and an outage must not be recorded as a broken dataset.
+        const err = new Error('NotFound');
+        err.name = 'NotFound';
+        throw err;
+      }
       return { contentLength: 1024 };
     },
     listAll: async function* (_bucket: string, prefix: string) {
@@ -670,6 +685,25 @@ async function mockCompleteDataset(options: {
 }
 
 describe('validateStructure', () => {
+  it('separates "the file is not there" from "the store did not answer"', async () => {
+    // `RustFsDatasetTree.stat` caught every exception and returned null, so a
+    // timeout, a 500 or an expired credential all read as a missing parquet —
+    // and the dataset was written `failed` for files that were all present.
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    await mockCompleteDataset();
+    rustfsExists.mockImplementation(async () => {
+      const err = new Error('connection reset by peer');
+      err.name = 'TimeoutError';
+      throw err;
+    });
+
+    const result = await datasetService.validateStructure('ds1/');
+
+    expect(result.storeUnavailable).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(' ')).toContain('could not reach the object store');
+  });
+
   it('returns invalid with an error when storage is unavailable', async () => {
     vi.mocked(isRustFSInitialized).mockReturnValue(false);
     const result = await datasetService.validateStructure('ds1/');
@@ -984,17 +1018,39 @@ describe('computeStats', () => {
 
 describe('validateAndUpdateDataset', () => {
   it('marks the dataset failed and emits validation:failed when structure is invalid', async () => {
-    vi.mocked(isRustFSInitialized).mockReturnValue(false); // structure invalid
+    // A REACHABLE store holding a manifest with nothing behind it. This used to
+    // be written as "turn RustFS off", which is a different thing entirely —
+    // see the test below.
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    await mockCompleteDataset({ omit: ['data/chunk-000/file-000.parquet'] });
     vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
 
     const events: { type: string }[] = [];
     const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
 
-    await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+    const outcome = await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
 
-    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    expect(outcome).toBe('failed');
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', expect.objectContaining({
+      status: 'failed',
+    }));
     expect(events.some((e) => e.type === 'dataset:validation:failed')).toBe(true);
     unsub();
+  });
+
+  it('leaves the row ALONE when the store cannot be reached', async () => {
+    // The comment in `validateStructure` says an unreachable store must not be
+    // recorded as a validation failure — and then the caller wrote
+    // `status: 'failed'` on exactly that, so one RustFS outage turned every
+    // dataset anyone revalidated red. Nothing was opened, so nothing is known.
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+
+    const outcome = await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(outcome).toBe('unavailable');
+    expect(datasetRepository.update).not.toHaveBeenCalled();
   });
 
   it('marks the dataset ready with a quality score on a valid structure', async () => {
