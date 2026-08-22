@@ -1,4 +1,4 @@
-"""faster-whisper STT engine (CTranslate2, CUDA float16 on the RTX 5090).
+"""faster-whisper STT engine (CTranslate2, CUDA float16 on the GPU box's GPU).
 
 Windows pitfall handled here: ctranslate2 needs the cuBLAS/cuDNN DLLs from
 the pip-installed nvidia-* packages on the DLL search path, otherwise it

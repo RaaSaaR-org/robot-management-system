@@ -3,8 +3,8 @@
  * @description Validates that ProcessManager routes 'execute_skill' steps to
  * SkillExecutionService instead of the generic TaskDistributor pipeline (TASK-143).
  *
- * The full execution path is integration-tested manually against the real Pi
- * (see /Users/heussers/.claude/plans/merry-beaming-pelican.md). This test pins
+ * The full execution path is integration-tested manually against the real Pi.
+ * This test pins
  * the ergonomic guarantees: a missing skillId fails fast, a missing robot fails
  * fast, and the action type is registered in the type system.
  * @feature processes

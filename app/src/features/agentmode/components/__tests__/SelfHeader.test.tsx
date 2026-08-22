@@ -121,7 +121,7 @@ describe('SelfHeader', () => {
    */
   it('leaves the incarnation, operator and site to the details drawer', () => {
     useAgentModeStore.setState({
-      self: self({ incarnation: 197, incarnationExact: false, operator: 'Sebastian', site: 'dz-226 Lab' }),
+      self: self({ incarnation: 197, incarnationExact: false, operator: 'Sebastian', site: 'Robot Lab' }),
     });
     render(<SelfHeader />);
 
@@ -129,7 +129,7 @@ describe('SelfHeader', () => {
     expect(header).not.toHaveTextContent(/starts/);
     expect(header).not.toHaveTextContent(/incarnation/);
     expect(header).not.toHaveTextContent('Sebastian');
-    expect(header).not.toHaveTextContent('dz-226 Lab');
+    expect(header).not.toHaveTextContent('Robot Lab');
   });
 
   // The chip is the door into everything it stopped saying out loud — above

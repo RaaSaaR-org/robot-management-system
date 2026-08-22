@@ -63,20 +63,20 @@ removes "undertrained" as an objection; it is **not** the fix.
   result; it removes "undertrained" as an objection.
 
 **Recipe (reuse TASK-185's, change only the step count):**
-- Driver: `C:\Unitree\_data\task185_run_ablation_n17.sh` — set `STEPS=14000`, keep `BS=8`,
+- Driver: `$UNITREE_ROOT/_data/task185_run_ablation_n17.sh` — set `STEPS=14000`, keep `BS=8`,
   `TASK185_OPTIM=paged_adamw_8bit` (stock `adamw_torch` OOMs at 31.9/32 GB even at batch 1),
   `TASK185_GRAD_CHECKPOINTING=0`, and `unset HF_HUB_OFFLINE` (the Cosmos-Reason2-2B backbone
   needs an online token-authed `model_info()` call).
 - Cost: ~1.55 it/s → **~2.5 h per arm, ~5 h total**. Raise `--save-total-limit` above 2 if
   intermediate checkpoints are wanted (TASK-185 lost checkpoint-1000 to pruning).
-- Runner: `~/unitree/task185/task185_finetune.py` in WSL distro `g1-eval` (a copy of
+- Runner: `$UNITREE_ROOT/task185/task185_finetune.py` in WSL the eval distro (a copy of
   `launch_finetune.py`'s `__main__` whose only deviation is env-var levers for optim /
   gradient-checkpointing — needed because `launch_finetune.py` pins `optim` *after*
   `get_default_config()`).
 - Configs (unchanged, single-camera for parity with the dreams' single view):
   `vla-training/groot/g1_dex3_1cam_modality_config.py` + `modality_g1_dex3_1cam.json`.
 
-**Then re-run the closed loop** with `C:\Unitree\_data\task185\eval_g1_sim_groot_success.py`
+**Then re-run the closed loop** with `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py`
 (serve via `task185_serve_n17.sh <arm> <port>`; sim on native Windows, policy server in WSL —
 WSL2 localhost-forwarding makes the ZMQ port reachable). **Depends on [[TASK-186]]:** without a
 push/slide reward the unseen-behavior cell — the decisive one — still cannot be scored.

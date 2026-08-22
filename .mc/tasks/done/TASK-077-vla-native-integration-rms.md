@@ -80,7 +80,7 @@ robot-agent/hardware/
 
 ## What stays in vla-tests
 
-- `client_pi.py` — research tool, Peter's GPU server integration, model comparisons
+- `client_pi.py` — research tool, the GPU_BOX GPU server integration, model comparisons
 - Server-side setup docs
 - Experimental backends (GR00T, SmolVLA)
 

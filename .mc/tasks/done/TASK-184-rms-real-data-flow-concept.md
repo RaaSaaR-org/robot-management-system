@@ -118,7 +118,7 @@ Design principles:
 | Area | Today | How to connect real data |
 |---|---|---|
 | **Telemetry history** | ❌ `RobotTelemetry` model never written; live proxy only; no `robot_telemetry` WS broadcast | Phase 2: ingestion service (below) |
-| Simulation jobs | ❌ mock progression + `Math.random` metrics by default (`SimulationService.ts:1130,1184`); real MuJoCo only if `SIMULATION_BACKEND=real` (`:604`) | run real backend on dz-226; show "backend: mock" badge otherwise |
+| Simulation jobs | ❌ mock progression + `Math.random` metrics by default (`SimulationService.ts:1130,1184`); real MuJoCo only if `SIMULATION_BACKEND=real` (`:604`) | run real backend on GPU_BOX; show "backend: mock" badge otherwise |
 | Isaac Lab / synthetic | ❌ `IsaacLabClient.ts:177` silent mockMode without `ISAAC_LAB_URL`; `SyntheticDataService.ts:451-472` hardcoded GPU status | surface mock state in API response; wire real URL when service exists |
 | Federated learning | ❌ mock robot list + fake deltas (`FederatedLearningService.ts:180,292,638-651`); rounds persisted but math fake | real robot gradient uploads (big; Phase 4 follow-up) |
 | Data augmentation / OOD quality / contribution scoring | ❌ `Math.random` placeholders (`DataAugmentationService.ts:67+`, `DataQualityService.ts:575-581`, `DataContributionService.ts:46-51,218` — in-memory Maps!) | Phase 4 follow-ups; DataContributionService → Prisma first |
@@ -210,7 +210,7 @@ real `tau_est` when hardware is connected (`SafetyMonitor.ts:496-525`).
 
 #### Phase 4 — ML-layer realness (separate follow-up tasks, listed for the concept)
 
-Real simulation backend on dz-226 (`SIMULATION_BACKEND=real`), Isaac Lab URL,
+Real simulation backend on GPU_BOX (`SIMULATION_BACKEND=real`), Isaac Lab URL,
 federated learning with real robot deltas, real augmentation/OOD/contribution
 scoring (+ DataContributionService → Prisma), explainability outcome labels,
 persisted deployment metrics. Each becomes its own task; this issue only

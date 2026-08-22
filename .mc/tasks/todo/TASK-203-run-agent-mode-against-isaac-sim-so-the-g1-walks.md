@@ -46,7 +46,7 @@ and the training route is a dead end for this goal.
 
 ### What Unitree's Isaac sim already gives us
 
-Checkout: `~/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/unitree_sim_isaaclab`
+Checkout: `$UNITREE_ROOT/unitree_sim_isaaclab`
 
 * **The right robot.** `assets/robots/g1-29dof_wholebody_dex3/g1_29dof_with_dex3_rev_1_0.usd` has
   exactly 43 joints matching `sim_g1_dds/joints.py` — 29 `BODY` + 7 `LHAND` + 7 `RHAND`, identical
@@ -92,7 +92,7 @@ An earlier revision of this task claimed headless rendering was broken on this b
 5.0.0 was needed. **That was wrong.** Disproven 2026-08-08 by running the stock, unmodified
 `scripts/tutorials/04_sensors/run_usd_camera.py --headless --enable_cameras --save`, which produced
 2708 RGB frames with full geometry, materials, shadows and floor reflections (std ≈ 50 over ~7000
-distinct colours — not a sky gradient). Isaac Sim 6.0.1 on the RTX 5090 renders correctly.
+distinct colours — not a sky gradient). Isaac Sim 6.0.1 on GPU_BOX renders correctly.
 
 What actually went wrong with the earlier empty captures is still open, but the leading explanation is
 **GPU contention**: every failed capture was run while the 1500-iteration PPO job held ~26 GB at 90%
@@ -114,7 +114,7 @@ Two things Isaac needs to start at all here:
 * `OMNI_KIT_ACCEPT_EULA=YES` — otherwise Kit prompts and dies with "Unable to bootstrap inner kit
   kernel: EOF when reading a line".
 * `git-lfs` on `PATH` — rsl_rl's logger shells out to `git status`; the IsaacLab checkout has an lfs
-  filter configured but no binary. Use `~/anaconda3/envs/unitree_sim_env/bin`.
+  filter configured but no binary. Use `$CONDA_ENV/bin`.
 
 ### Already running on this box
 

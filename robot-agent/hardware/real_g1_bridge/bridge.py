@@ -78,7 +78,7 @@ import time
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Contract constants (C:\Unitree\_data\apple_pnp\CONTRACT.md)
+# Contract constants ($UNITREE_ROOT/_data/apple_pnp/CONTRACT.md)
 # ---------------------------------------------------------------------------
 TASK_INSTRUCTION = "move the apple to the plate"
 STATE_DIM = 43

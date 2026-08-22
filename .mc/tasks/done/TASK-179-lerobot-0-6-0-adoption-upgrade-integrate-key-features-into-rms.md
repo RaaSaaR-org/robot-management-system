@@ -141,7 +141,7 @@ intervention tagging).
 
 ## Acceptance Criteria
 
-- [x] Phase 0: 0.6.0 committed in vla-server (PR #5) + training-worker (PR #5). **GPU box verified 2026-07-11 (dz-226, RTX 5090):** `neodem-train` conda env upgraded to lerobot 0.6.0 with groot + robometer + topreward + annotations + vla-jepa + lingbot-va + fastwam + dataset/training/evaluation extras; all imports pass with CUDA (torch 2.11.0+cu128). The Linux `setup-lerobot-gpu.sh` was adapted in place (Windows box: conda env instead of uv venv; flash-attn skipped, sdpa attention).
+- [x] Phase 0: 0.6.0 committed in vla-server (PR #5) + training-worker (PR #5). **GPU box verified 2026-07-11 (GPU_BOX, the GPU box):** `neodem-train` conda env upgraded to lerobot 0.6.0 with groot + robometer + topreward + annotations + vla-jepa + lingbot-va + fastwam + dataset/training/evaluation extras; all imports pass with CUDA (torch 2.11.0+cu128). The Linux `setup-lerobot-gpu.sh` was adapted in place (Windows box: conda env instead of uv venv; flash-attn skipped, sdpa attention).
 - [x] Phase 1: **validated LIVE 2026-07-11**: `POST /api/evaluation/reward-model` (Robometer, 5 episodes of the v3.0 PickBottle set) → RewardModelRunner in-process on cuda → 16-pt progress curves in EpisodeReward → curves + score table render in the evaluation UI. Caveat: Robometer scores ≈0.02–0.04 on our G1+Dex3 lab scenes (out-of-distribution for the Qwen3-VL judge) — pipeline validated, score quality on this domain is a research question.
 - [x] Phase 2: **validated end-to-end 2026-07-11**: `GR00T_BACKEND=lerobot` job 8676d309 trained 300 steps on the v3.0 202-ep PickBottle set **directly, no v3→v2 conversion**, live per-step loss in the UI (1.24 → 1.15), bf16 checkpoint → RustFS → ModelVersion v1783728372822. Open-loop A/B (12 held-out trajectories, Isaac open_loop_eval protocol): native-300 avg MSE 0.687 vs isaac-2000 avg MSE 0.426 in the same harness — sane curve, needs equal step count to compete; `isaac` stays the default backend.
 - [x] Phase 3: `highlight` incident clips and `dagger` intervention episodes land in the server from a rollout (sim-tested; hardware dagger pre-emption out of scope, documented)
@@ -164,7 +164,7 @@ intervention tagging).
 
 ## Notes
 
-- **GPU-box validation (2026-07-11, dz-226)**: everything deferred to the CUDA
+- **GPU-box validation (2026-07-11, GPU_BOX)**: everything deferred to the CUDA
   machine is done — env upgrade + imports (Phase 0), live Robometer scoring
   through API + UI (Phase 1), native `GR00T_BACKEND=lerobot` fine-tune with
   live loss + artifact + ModelVersion + open-loop A/B vs the 2000-step
@@ -175,7 +175,7 @@ intervention tagging).
   saved bf16 + gzip level 1 (fp32 + level 9 measured 1.2 MB/s ≈ 2.8 h for
   12 GB). Server fix (RMS PR #184): job retry now clears
   errorMessage/timestamps/metrics. A/B numbers in
-  `C:\Unitree\_ft_out\ab_eval\results.json`.
+  `$UNITREE_ROOT/_ft_out/ab_eval/results.json`.
 - **Implementation status (2026-07-07)**: Phases 0–4 implemented on
   `feat/lerobot-060-adoption` (RMS) + `feat/lerobot-060` (training-worker,
   PR #5). Deferred to follow-up sessions: GPU-box venv setup + live

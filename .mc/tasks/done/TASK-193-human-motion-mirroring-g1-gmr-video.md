@@ -61,14 +61,14 @@ object interaction, no task-success signal. Do not scope VLA training into this 
 ### Current state (as originally written — superseded by the Spike findings below)
 
 - **Nothing GMR-related is installed on this box yet.** GMR is not cloned; there is no `gmr` conda env.
-- **The playback renderer already exists.** `C:\Unitree\tools\g1_mujoco_webview.py` loads
+- **The playback renderer already exists.** `$UNITREE_ROOT/tools/g1_mujoco_webview.py` loads
   `g1_body29_hand14.xml` (G1 29-body + 14 hand DOF = the 43-DOF model), and if the env var
   `G1_TRAJ` points at an `(N, nq)` `.npy` it replays that trajectory at `G1_TRAJ_FPS` (default 30)
-  and serves rendered frames over HTTP on port 8088. `C:\Unitree\tools\g1_traj.npy` is an existing
+  and serves rendered frames over HTTP on port 8088. `$UNITREE_ROOT/tools/g1_traj.npy` is an existing
   sample trajectory.
   ⚠ **Known bug for this box:** `XML` on line 9 is hardcoded to a pz-264 Linux path
-  (`/home/humanoid/Dokumente/unitree/xr_teleoperate/assets/g1/g1_body29_hand14.xml`). The local
-  model is at `C:\Unitree\xr_teleoperate\assets\g1\g1_body29_hand14.xml`. Make the path an env
+  (`$UNITREE_ROOT/xr_teleoperate/assets/g1/g1_body29_hand14.xml`). The local
+  model is at `$UNITREE_ROOT/xr_teleoperate/assets/g1/g1_body29_hand14.xml`. Make the path an env
   var / arg rather than swapping one hardcoded path for another.
 - MuJoCo is available in the `neodem-svc` env (see the presentation-pack notes); `mujoco` is also
   used by `quest-mujoco-teleop`.
@@ -88,7 +88,7 @@ video.mp4
 ```
 
 Steps:
-1. Clone GMR to `C:\Unitree\gmr\` (not under `nvidia/` — it is not an NVIDIA project) and add it
+1. Clone GMR to `$UNITREE_ROOT/gmr/` (not under `nvidia/` — it is not an NVIDIA project) and add it
    to `.gitignore` alongside the other upstream repos.
    Install per its README: `conda create -n gmr python=3.10 -y && conda activate gmr && pip install -e .`
    Deps are mink (IK) + MuJoCo + poselib — all CPU, no Blackwell/CUDA pin risk.
@@ -102,7 +102,7 @@ Steps:
 5. Convert GMR's output to the `(N, nq)` layout `g1_mujoco_webview.py` expects and replay.
    The joint ordering between GMR's `robot_joint_positions` and the MJCF's `nq` is **not assumed
    to match** — verify explicitly, this is the most likely source of a subtly-wrong demo.
-6. Record the result as a demo clip into `C:\Unitree\_data\presentation\`.
+6. Record the result as a demo clip into `$UNITREE_ROOT/_data/presentation/`.
 
 ### Phase 2 — Surface it in NeoDEM (DONE 2026-07-18)
 
@@ -164,24 +164,24 @@ alongside the [[TASK-172]] sim-RL work.
 
 ### Key files
 
-- `C:\Unitree\tools\g1_mujoco_webview.py` — playback renderer (fix the hardcoded `XML` path)
-- `C:\Unitree\xr_teleoperate\assets\g1\g1_body29_hand14.xml` — G1 29-DoF + Dex3 MJCF
-- `C:\Unitree\tools\g1_traj.npy` — existing `(N, nq)` sample, use to verify the replay path works
+- `$UNITREE_ROOT/tools/g1_mujoco_webview.py` — playback renderer (fix the hardcoded `XML` path)
+- `$UNITREE_ROOT/xr_teleoperate/assets/g1/g1_body29_hand14.xml` — G1 29-DoF + Dex3 MJCF
+- `$UNITREE_ROOT/tools/g1_traj.npy` — existing `(N, nq)` sample, use to verify the replay path works
   *before* wiring GMR in
-- `C:\Unitree\_data\presentation\` — where the demo artefacts belong
-- `C:\Unitree\.gitignore` — add `gmr/` with the other upstream repos
+- `$UNITREE_ROOT/_data/presentation/` — where the demo artefacts belong
+- `$UNITREE_ROOT/.gitignore` — add `gmr/` with the other upstream repos
 
 ## Spike findings (2026-07-18) — read before continuing
 
 **Proven working on this box.** GMR retargets the bundled Xsens boxing BVH onto the G1 at
 ~107 it/s, output verified structurally *and* visually (a recognisable boxing stance: guard up,
-jab extended, weight on the back foot). Artifacts in `C:\Unitree\_data\gmr_spike\`.
+jab extended, weight on the back foot). Artifacts in `$UNITREE_ROOT/_data/gmr_spike/`.
 
 Install notes — the README's instructions do **not** work as-written on native Windows:
 
 1. **Do not use conda.** `conda create` hits a `CondaToSNonInteractiveError` demanding acceptance
    of the Anaconda default-channel Terms of Service. That ToS has commercial-use implications and
-   is a human decision, not an install step. Sidestepped with a uv venv at `C:\Unitree\gmr\.venv`
+   is a human decision, not an install step. Sidestepped with a uv venv at `$UNITREE_ROOT/gmr/.venv`
    built on the system `Python310`. The README's `conda install libstdcxx-ng` step is Linux-only
    and unnecessary here.
 2. **`PYTHONUTF8=1` is required.** `setup.py` does `open("README.md").read()` with no encoding, so
@@ -226,8 +226,8 @@ worked around.
 
 **Question asked:** GVHMR is Linux-only and pins `torch==2.3.0+cu121`. Does Docker solve it?
 **Answer:** Docker solves the *Linux* problem; it does nothing for the *Blackwell* problem — a
-container passes the GPU through as-is, and cu121's kernels stop at sm_90 while the RTX 5090 is
-sm_120. The fix was breaking the pins, not changing OS. `C:\Unitree\gvhmr\Dockerfile.blackwell`
+container passes the GPU through as-is, and cu121's kernels stop at sm_90 while GPU_BOX's GPU is
+sm_120. The fix was breaking the pins, not changing OS. `$UNITREE_ROOT/gvhmr/Dockerfile.blackwell`
 does both and is the durable artifact of this spike.
 
 Verified inside the image: torch 2.11.0+cu128, arch list includes `sm_120`, GPU matmul executes,
@@ -252,7 +252,7 @@ Five fixes, all in the Dockerfile with rationale comments:
    ⚠ **This re-enables arbitrary code execution on unpickle and is scoped to this image on
    purpose.** Do not reuse the image against untrusted checkpoints.
 
-**Preprocessing is proven on real input.** YOLO → ViTPose → HMR2 all run on the 5090. On the
+**Preprocessing is proven on real input.** YOLO → ViTPose → HMR2 all run on the GPU box. On the
 bundled tennis clip: 312 frames, keypoint confidence 0.903 mean. On a user-supplied 7 s 720×720
 green-screen dance clip: 222/222 frames, box 215×549 px, confidence 0.847 mean with 98% of
 keypoints above 0.5, weakest joint the left elbow at 7% low-confidence (it silhouettes mid-clip).
@@ -260,7 +260,7 @@ Green screen did **not** hurt 2D detection.
 
 **The one remaining blocker — `SMPLX_NEUTRAL.npz` (HUMAN ACTION):** register at
 smpl-x.is.tue.mpg.de and place it at
-`C:\Unitree\gvhmr\inputs\checkpoints\body_models\smplx\SMPLX_NEUTRAL.npz`.
+`$UNITREE_ROOT/gvhmr/inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz`.
 
 ⚠ **Correction to an earlier assumption in this file:** SMPL-X is *not* only needed for
 rendering. `EnDecoder.__init__` calls `make_smplx("supermotion_v437coco17")`, which hits a bare
@@ -284,7 +284,7 @@ different targets:
 
 So for a *demo video*, a glide clip is a legitimate input. For hardware it is not.
 
-### Ready-to-run tooling (2026-07-18) — `C:\Unitree\_data\mirror_spike\pipeline\`
+### Ready-to-run tooling (2026-07-18) — `$UNITREE_ROOT/_data/mirror_spike/pipeline/`
 
 A 23-agent parallel source audit of the GVHMR→GMR handoff produced `RUNBOOK.md` plus three
 scripts. **Read `RUNBOOK.md` first** — it carries every verified defect with file:line.
@@ -302,7 +302,7 @@ scripts. **Read `RUNBOOK.md` first** — it carries every verified defect with f
 
 - **B1** The model is NOT in the docker image — the `.dockerignore` added earlier this session
   excludes `inputs/`, so `COPY . /app` never carries it. Requires
-  `-v C:\Unitree\gvhmr\inputs:/app/inputs`. Failure mode is the message-less AssertionError.
+  `-v $UNITREE_ROOT/gvhmr/inputs:/app/inputs`. Failure mode is the message-less AssertionError.
 - **B2** `gvhmr_to_robot.py:91` is posix-only: `split('/')` on a Windows backslash path embeds the
   whole path in the video filename → `os.makedirs` on `unitree_g1_C:` → `OSError [WinError 123]`.
   Reproduced in the real venv. Fires *after* the multi-minute SMPL-X forward pass, and after a
@@ -401,7 +401,7 @@ Known pre-existing, unrelated: `server/src/__tests__/simulation-routes.test.ts` 
 ## Acceptance Criteria
 
 - [x] GMR installed on this box and verified standalone on a LAFAN1 clip — a **uv venv** at
-      `C:\Unitree\gmr\.venv`, not a conda env: `conda create` demands acceptance of the Anaconda
+      `$UNITREE_ROOT/gmr/.venv`, not a conda env: `conda create` demands acceptance of the Anaconda
       default-channel ToS, which has commercial-use implications and is a human decision
 - [x] `g1_mujoco_webview.py` replays `g1_traj.npy` on this box. The hardcoded pz-264 path is now
       `G1_XML` + a per-host candidate list (swapping one hardcoded path for another would just

@@ -28,7 +28,7 @@ status_note: 'DONE 2026-07-17 — all 6 steps ran. Result is NEGATIVE and that i
   dreams arm is the more inert one. Step 5(b) (push/slide) is UNANSWERABLE in this
   sim: the only reward scores pick-and-place, and a derived push proxy is invalid
   (place-instructed rollouts satisfy it MORE often than push-instructed ones).
-  Report: C:\Unitree\_data\task185\RESULTS.md; RES-001 §4.11; LEARNING_REPORT §8.4
+  Report: $UNITREE_ROOT/_data/task185/RESULTS.md; RES-001 §4.11; LEARNING_REPORT §8.4
   (+ lessons 16/17). The old blocker was wrong: CUDA works with driver still at
   580.88 — no 610.43 activation was ever needed. Follow-ups spun out: push/slide
   reward in unitree_sim_isaaclab, and a 14k-step retrain (both arms were ~0.15
@@ -49,26 +49,26 @@ the half-staged NVIDIA driver wedges WSL CUDA until the next Windows reboot.
 - Offline ablation (GR00T-N1-2B, 3000 steps, bs 8, single cam): real holdout
   6.4 % vs 6.5 % normalized MAE (no tax); held-out unseen-behavior dreams
   16.8 % (real-only) vs **7.7 % (real+dreams) = 2.2× better**, leakage-free.
-  Reports: `C:\Unitree\_data\task182_spike\ablation\eval_*.json`.
-- Distro **`g1-eval`** (user-owned copy of the Ubuntu-22.04 vhdx at
-  `C:\WSL\Ubuntu22.04-sh\ext4.vhdx`; original untouched): full zema runtime —
-  `~/unitree/Isaac-GR00T` (.venv, N1.7), `IsaacLab`, `unitree_sim_isaaclab`
+  Reports: `$UNITREE_ROOT/_data/task182_spike/ablation/eval_*.json`.
+- Distro **the eval distro** (user-owned copy of the Ubuntu-22.04 vhdx at
+  `<wsl-vhdx>`; original untouched): full GPU-box runtime —
+  `$UNITREE_ROOT/Isaac-GR00T` (.venv, N1.7), `IsaacLab`, `unitree_sim_isaaclab`
   (via `quest-sim-teleop`), `unitree_lerobot`, conda envs. Stale apt 535 driver
   libs already quarantined to `/root/stale-nvidia-libs/`;
   `/etc/sysctl.d/99-cuda-aslr.conf` present (harmless).
-- Datasets (in distro `g1-dreams`, `/root/unitree/datasets/gt_v2/`):
+- Datasets (in the dreams distro, `$UNITREE_ROOT/datasets/gt_v2/`):
   `unitree_g1_train` (182 real), `unitree_g1_train_plus_dreams45` (227 =
   182 real + 45 dreams, dream videos already 640×480 h264),
   `unitree_g1_dreams_unseen_holdout` (5 held-out unseen-behavior dreams),
-  `unitree_g1_holdout` (20 real). Copy into g1-eval (e.g. via
-  `tar -C ... | wsl -d g1-eval tar -x`) or a shared /mnt/c staging dir.
-- Ablation/eval scripts: `/root/unitree/spike/run_ablation*.sh`,
-  `eval_ablation.py` (g1-dreams) — for N1.7 use
+  `unitree_g1_holdout` (20 real). Copy into the eval distro (e.g. via
+  `tar -C ... | wsl -d <eval-distro> tar -x`) or a shared host-mounted staging dir.
+- Ablation/eval scripts: `$UNITREE_ROOT/spike/run_ablation*.sh`,
+  `eval_ablation.py` (dreams distro) — for N1.7 use
   `vla-training/scripts/41_groot_finetune.sh` instead (see below).
 
 **Steps:**
 1. After the Windows reboot: verify `torch.cuda.is_available()` in BOTH
-   distros (g1-dreams cosmos venv, g1-eval Isaac-GR00T venv). If driver
+   distros (dreams distro cosmos venv, eval-distro Isaac-GR00T venv). If driver
    610.43 is active (`nvidia-smi` on Windows shows 610.43), no lib
    workarounds should be needed anymore.
 2. Single-cam N1.7 configs: derive a 1-camera variant of
@@ -100,7 +100,7 @@ unseen-behavior instruction.
 
 ## Outcome (2026-07-17) — all 6 steps ran; result is negative
 
-Full report: `C:\Unitree\_data\task185\RESULTS.md` · RES-001 §4.11 · LEARNING_REPORT §8.4.
+Full report: `$UNITREE_ROOT/_data/task185/RESULTS.md` · RES-001 §4.11 · LEARNING_REPORT §8.4.
 
 | | offline real holdout | offline held-out dreams | **closed-loop place** |
 |---|---|---|---|
@@ -121,7 +121,7 @@ Full report: `C:\Unitree\_data\task185\RESULTS.md` · RES-001 §4.11 · LEARNING
 5. **Caveat:** both arms are undertrained (3000 × bs8 = 24k samples ≈ 0.15 epochs of 157k frames).
    TASK-180's 14k recipe suggests this buys ~5 %, so it likely would not flip the conclusion.
 6. **The premise of this task was wrong:** no reboot/driver 610.43 was needed — CUDA works in
-   `g1-eval` with the driver still at 580.88.
+   the eval distro with the driver still at 580.88.
 
 **Follow-ups to spin out:**
 - Add a **push/slide reward** to `unitree_sim_isaaclab/tasks/common_rewards/` — hard prerequisite
@@ -131,5 +131,5 @@ Full report: `C:\Unitree\_data\task185\RESULTS.md` · RES-001 §4.11 · LEARNING
 
 **Artifacts:** `_data/task185/` — `cl_{real_only,dreams}_{place,push}.json` + `.mp4`,
 `RESULTS.md`, first-round `contaminated/` (see lesson 17); checkpoints
-`~/unitree/task185/out/<arm>/checkpoint-3000` and evals `~/unitree/task185/eval/*.json` in WSL
-`g1-eval`; configs `vla-training/groot/g1_dex3_1cam_modality_config.py` + `modality_g1_dex3_1cam.json`.
+`$UNITREE_ROOT/task185/out/<arm>/checkpoint-3000` and evals `$UNITREE_ROOT/task185/eval/*.json` in WSL
+the eval distro; configs `vla-training/groot/g1_dex3_1cam_modality_config.py` + `modality_g1_dex3_1cam.json`.

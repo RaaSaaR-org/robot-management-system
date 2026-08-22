@@ -88,7 +88,7 @@ This is the first task in the sequence that needs the **real robot** and the fir
 - Authoring: `ZoneAuthoringOverlay` already paints polygons in the twin UI — extend it rather than
   building a second editor. **Open question to settle first:** hand-authored, or derived from the
   DBSCAN clusters the twin-builder currently computes and discards
-  (`C:/Unitree/twin-builder/pipelines/open3d_pipeline.py:~100-107`)?
+  (`$UNITREE_ROOT/twin-builder/pipelines/open3d_pipeline.py:~100-107`)?
 
 **Robot Agent**
 

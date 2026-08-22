@@ -47,7 +47,7 @@ the stages in order; each gate must pass before the next.
   (ISO/TS 15066 force limits, mm/s speeds), not validated for a humanoid.
 - No trained G1 VLA policy — `vla-server` only ran in `--stub` (sine waves).
 
-## Progress update (2026-07-03, lab box dz-226, Windows nativ)
+## Progress update (2026-07-03, lab box GPU_BOX, Windows nativ)
 
 Real G1 EDU 4 is wired (PC2 `192.168.123.164`, ping 0 ms, SSH open).
 **Owner directive: Stage 1 is READ-ONLY — no writes to the robot, enforced in code.**
@@ -62,14 +62,14 @@ Real G1 EDU 4 is wired (PC2 `192.168.123.164`, ping 0 ms, SSH open).
   PC2 recon (SSH) showed the factory image has NO unitree_sdk2py, NO pyzmq and
   no internet (and cyclonedds 0.10.2 has no aarch64 wheels → offline install
   impractical). Instead the workstation NIC (192.168.123.10, adapter
-  "Ethernet") joins DDS domain 0 directly: venv `C:\Unitree\.venv-g1-dds`
+  "Ethernet") joins DDS domain 0 directly: venv `$UNITREE_ROOT/.venv-g1-dds`
   (py3.10 via uv; cyclonedds 0.10.2 win-wheel + pyzmq + numpy) with
-  `PYTHONPATH=C:\Unitree\unitree_sdk2_python` (pinned repo @4f12b01,
+  `PYTHONPATH=$UNITREE_ROOT/unitree_sdk2_python` (pinned repo @4f12b01,
   not pip-installed). Zero footprint on the robot. Real lowstate at ~50 Hz.
 - **New:** `g1_sidecar.py` has a `G1_READ_ONLY` mode, **default ON** —
   `POST /action` + `POST /record/start` → 403 (verified), lerobot driver never
   loaded, state via ZMQ SUB from the read-only bridge. Runs on this box via
-  `C:\Unitree\.venv-g1-sidecar` (port 8767).
+  `$UNITREE_ROOT/.venv-g1-sidecar` (port 8767).
 - **Joint-name gate (static):** sidecar `BODY_JOINTS` ≡ `g1.config.ts` (29,
   order-exact), hands ≡ `dex3HandJoints()` (14), `g1_edu.yaml` ≡ sidecar (43);
   DDS motor index 0–28 verified against lerobot `G1_29_JointIndex`.
@@ -98,7 +98,7 @@ Real G1 EDU 4 is wired (PC2 `192.168.123.164`, ping 0 ms, SSH open).
 ### Stage 0 — Install & network
 - [x] Install NeoDEM (server + app + robot-agent) on the lab box. Sim-only smoke
       test first: `cd robot-agent && npm run dev:g1-edu`, confirm telemetry/3D viz.
-      *(2026-07-03: installed on dz-226; g1-edu-4 registered, telemetry serves
+      *(2026-07-03: installed on GPU_BOX; g1-edu-4 registered, telemetry serves
       43 joints. 3D viz Playwright-verified — G1 humanoid renders after the
       `g1_edu` type-mapping fix, see progress notes.)*
 - [ ] Install Unitree SDK2 + lerobot with the `unitree_g1` robot/teleop classes.
@@ -144,7 +144,7 @@ Real G1 EDU 4 is wired (PC2 `192.168.123.164`, ping 0 ms, SSH open).
       *(Shipped via TASK-171/172 on PR #164: real Unitree G1 meshes vendored
       (`mjcf/g1/g1_29dof.xml`, 36 STLs), `envs/g1_env.py`, twin-derived
       SimScenes selectable in the Simulation page (MuJoCo backend). Re-verified
-      2026-07-11: sim_evaluator pytest 50 passed / 1 skipped on dz-226.)*
+      2026-07-11: sim_evaluator pytest 50 passed / 1 skipped on GPU_BOX.)*
 - [ ] Train a policy on the Stage-2 data; evaluate in sim. Define a success bar.
       *(Blocked by Stage 2 — no real teleop dataset yet. Note: GR00T-N1.7
       finetuning on G1+Dex3 data through the platform is already proven on this
@@ -186,7 +186,7 @@ TASK-170, TASK-172 and TASK-181 too):
 1. **Safety first (this task, Stage 1 gate):** verify physical e-stop + Unitree
    remote e-stop before any motion.
 2. **Voice validation (TASK-181):** adapter venv is ready
-   (`C:\Unitree\.venv-g1-audio`, mock-smoke-tested 2026-07-11); one admin step
+   (`$UNITREE_ROOT/.venv-g1-audio`, mock-smoke-tested 2026-07-11); one admin step
    remains — the UDP-5555 firewall rule (exact command in TASK-181).
 3. ~~**Live scan session (TASK-170 Phase 5 hardware)**~~ ✅ DONE 2026-07-17
    against the powered G1: LiDAR enabled (authorized switch write), 42 real
@@ -205,9 +205,9 @@ TASK-170, TASK-172 and TASK-181 too):
    → `convert_unitree_json_to_lerobot --robot-type Unitree_G1_Dex3` (v3.0) →
    `convert_v3_to_v2.py` (v2.1) → registered + rendering in the app (dataset
    "VR Teleop Pipeline Test (synthetic)"). Follow
-   `C:\Unitree\_data\vr_teleop_pipeline_test\ROBOT_DAY_RUNBOOK.md` and
+   `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/ROBOT_DAY_RUNBOOK.md` and
    `docs/vr-teleop-data-collection.md`. Environment caveat: WSL is GONE from
-   dz-226 — use the NATIVE conda envs `tv` (teleop) and `unitree_lerobot`
+   GPU_BOX — use the NATIVE conda envs `tv` (teleop) and `unitree_lerobot`
    (conversion), created 2026-07-12. Must-fix before the session: (a) generate
    WebXR TLS certs (cert.pem/key.pem) — Quest cannot connect without them;
    (b) local-dir dataset registration is script-only (`POST /api/datasets` has

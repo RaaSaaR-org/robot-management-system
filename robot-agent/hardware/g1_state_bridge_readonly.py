@@ -37,9 +37,9 @@ safe to run while the robot is standing under its built-in controller.
 Run on the workstation (verified against a physical G1 EDU 4, 2026-07-03):
   # venv with Python <=3.10 (cyclonedds 0.10.2 has no cp311+ wheels), pyzmq,
   # numpy, and the pinned unitree_sdk2_python repo on PYTHONPATH
-  PYTHONPATH=C:/Unitree/unitree_sdk2_python python g1_state_bridge_readonly.py --iface Ethernet
+  PYTHONPATH=$UNITREE_ROOT/unitree_sdk2_python python g1_state_bridge_readonly.py --iface Ethernet
 
-Robot-less loopback test (mock publisher from C:\\Unitree\\g1-sensor-toolkit):
+Robot-less loopback test (mock publisher from $UNITREE_ROOT/g1-sensor-toolkit):
   python mock_robot_publisher.py --domain 9            # terminal 1 (no --interface)
   python g1_state_bridge_readonly.py --domain 9        # terminal 2 (no --iface)
 

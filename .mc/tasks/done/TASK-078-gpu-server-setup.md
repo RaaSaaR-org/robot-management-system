@@ -1,6 +1,6 @@
 ---
 id: TASK-078
-title: Peter GPU Server Setup & First End-to-End VLA Test
+title: GPU Server Setup & First End-to-End VLA Test
 status: done
 priority: 1
 tags:
@@ -13,18 +13,18 @@ updated: 2026-03-18
 ---
 
 
-# TASK-078 — Peter GPU Server Setup & First E2E VLA Test
+# TASK-078 — GPU Server Setup & First E2E VLA Test
 
 ---
 ## 🚨 REIHENFOLGE — TASK-082 zuerst
 
 **Depends-on: TASK-082 (VLA Server Consolidation)**
 
-Erst wenn `vla-server/` existiert und sauber ist, setup Peter's GPU damit.
-Peter soll das **konsolidierte** `vla-server/` deployen — nicht das alte
+Erst wenn `vla-server/` existiert und sauber ist, GPU_BOX damit einrichten.
+GPU_BOX soll das **konsolidierte** `vla-server/` deployen — nicht das alte
 `smolvla-server/` oder `vla-inference/`.
 
-**Setup auf Peter's GPU nach TASK-082:**
+**Setup auf GPU_BOX nach TASK-082:**
 ```bash
 git pull origin main   # holt neues vla-server/
 cd vla-server
@@ -36,21 +36,21 @@ VLA_DEVICE=cuda uv run python server.py
 
 ## Goal
 
-Peter's GTX 5090 (peter-ubuntu, 100.125.78.40) runs the LeRobot policy server.
+GPU_BOX runs the LeRobot policy server.
 Pi runs client_pi.py. Arm moves. First real VLA test confirmed.
 
 ## Pi-Side Status (Ready ✅)
 
-- Tailscale: aktiv, Peter erreichbar (18–55ms ping)
-- LeRobot venv: `~/repos/vla-tests/.venv-lerobot/bin/python` ✅
-- OpenPI venv: `~/repos/vla-tests/pi05/client/.venv/` ✅
+- Tailscale: aktiv, GPU_BOX erreichbar (18–55 ms ping)
+- LeRobot venv: `$VLA_TESTS/.venv-lerobot/bin/python` ✅
+- OpenPI venv: `$VLA_TESTS/pi05/client/.venv/` ✅
 - Calibration: `~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_so101.json` ✅
 - Arm port: `/dev/ttyACM0` ✅
-- Server-Readme: `~/repos/vla-tests/pi05/server/README.md`
+- Server-Readme: `$VLA_TESTS/pi05/server/README.md`
 
-## Peter's Setup (GPU server — peter-ubuntu)
+## GPU_BOX-Setup (GPU server)
 
-Peter muss auf seinem Rechner (Linux, GTX 5090, CUDA):
+Auf GPU_BOX (Linux, NVIDIA-GPU, CUDA) einzurichten:
 
 ### Option A: LeRobot backend (empfohlen)
 
@@ -79,19 +79,19 @@ python -m lerobot.scripts.server.policy_server \
 ### Option B: OpenPI backend (legacy, Franka-trained)
 
 ```bash
-# See ~/repos/vla-tests/pi05/server/README.md for full setup
+# See $VLA_TESTS/pi05/server/README.md for full setup
 # Needs JAX + CUDA + OpenPI checkpoint
 ```
 
-## Pi Run Command (nach Peter-Setup)
+## Pi Run Command (nach GPU_BOX-Setup)
 
 ```bash
 # LeRobot backend (recommended):
-cd ~/repos/vla-tests/pi05/client
-source ~/repos/vla-tests/.venv-lerobot/bin/activate
+cd $VLA_TESTS/pi05/client
+source $VLA_TESTS/.venv-lerobot/bin/activate
 python client_pi.py \
     --backend lerobot \
-    --host 100.125.78.40 \
+    --host <gpu-box-ip> \
     --port /dev/ttyACM0 \
     --model Elvinky/pi05_so101_pick_place_bottle \
     --policy-type pi05 \
@@ -99,10 +99,10 @@ python client_pi.py \
     --hz 5
 
 # OpenPI DROID (if needed):
-source ~/repos/vla-tests/pi05/client/.venv/bin/activate
+source $VLA_TESTS/pi05/client/.venv/bin/activate
 python client_pi.py \
     --backend openpi \
-    --host 100.125.78.40 \
+    --host <gpu-box-ip> \
     --port /dev/ttyACM0 \
     --config droid \
     --prompt "pick up the cup"
@@ -110,8 +110,8 @@ python client_pi.py \
 
 ## Test Checklist
 
-- [ ] Peter: LeRobot server startet ohne Fehler
-- [ ] Pi: `curl http://100.125.78.40:8080` gibt Antwort (port check)
+- [ ] GPU_BOX: LeRobot server startet ohne Fehler
+- [ ] Pi: `curl http://<gpu-box-ip>:8080` gibt Antwort (port check)
 - [ ] Pi: client_pi.py connected (keine Verbindungsfehler in den ersten 10s)
 - [ ] Arm: bewegt sich auf Chunk-Empfang hin (auch langsam/falsch ist OK für ersten Test)
 - [ ] Latenz: loggt `inference latency=XXXms` — Target: <500ms bei 5Hz
@@ -119,7 +119,7 @@ python client_pi.py \
 
 ## Troubleshooting
 
-- Port 8080 blockiert: Peter muss Firewall-Regel hinzufügen oder Tailscale sorgt für Routing
+- Port 8080 blockiert: GPU_BOX muss Firewall-Regel hinzufügen oder Tailscale sorgt für Routing
 - "Missing motor IDs": `--skip-motors wrist_roll` als Fallback
 - Kalibrierung falsch: LeRobot versucht zu rekalibrieren → mit `--calibration-file ~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_so101.json` erzwingen
 

@@ -30,7 +30,7 @@ this task is hardware bring-up, tuning, and sign-off.
 
 ## Details
 
-### Current state (all on dz-226, the Windows GPU box)
+### Current state (all on GPU_BOX, the Windows GPU box)
 
 - Voice service at `robot-agent/voice/` (Python 3.12 uv venv) is **fully working
   with PC mic/speaker**: Silero VAD → faster-whisper `large-v3-turbo` (CUDA) →
@@ -45,13 +45,13 @@ this task is hardware bring-up, tuning, and sign-off.
     (wraps `unitree_sdk2py AudioClient.PlayStream`, 96 000-byte chunks, 1 s
     pacing, PlayStop after buffered audio drains; `/play /stop /volume /led`
     on `:8766`); tested with `G1_AUDIO_MOCK=1`.
-- Robot facts: G1 EDU on robot LAN `192.168.123.0/24`; dz-226 NIC
+- Robot facts: G1 EDU on robot LAN `192.168.123.0/24`; GPU_BOX NIC
   "Ethernet 3" = `192.168.123.10`. DDS domain **0** = real robot.
-- ✅ **Adapter venv READY (2026-07-11):** `C:\Unitree\.venv-g1-audio` created
+- ✅ **Adapter venv READY (2026-07-11):** `$UNITREE_ROOT/.venv-g1-audio` created
   (uv-managed CPython 3.10.20, `cyclonedds==0.10.2`, `numpy`) — replaces the
   broken `.venv-g1-dds`. Adapter smoke-tested from it in mock mode:
-  `G1_AUDIO_MOCK=1 PYTHONPATH=C:\Unitree\unitree_sdk2_python
-  C:\Unitree\.venv-g1-audio\Scripts\python.exe adapters\g1_audio_adapter.py`
+  `G1_AUDIO_MOCK=1 PYTHONPATH=$UNITREE_ROOT/unitree_sdk2_python
+  $UNITREE_ROOT/.venv-g1-audio/Scripts/python.exe adapters\g1_audio_adapter.py`
   → `GET :8766/health` = `{"status":"ok","mock":true,"interface":"Ethernet 3"}`.
 - ✅ Voice service test suite re-verified on main 2026-07-11: **79 passed**
   (again 2026-07-17).
@@ -83,7 +83,7 @@ this task is hardware bring-up, tuning, and sign-off.
    venv's python.exe on the robot LAN profile:
    `New-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"
    -Direction Inbound -Protocol UDP -LocalPort 5555 -Action Allow
-   -Program "C:\Unitree\robot-management-system\robot-agent\voice\.venv\Scripts\python.exe"`
+   -Program "$UNITREE_ROOT/robot-management-system/robot-agent/voice/.venv/Scripts/python.exe"`
 2. **Adapter bring-up**: start `g1_audio_adapter.py` in the 3.10 venv
    (`G1_NET_INTERFACE=Ethernet 3`, no mock). `GET :8766/health`, then
    `POST /play` with a known WAV (16 k mono s16le body) → audible from the

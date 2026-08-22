@@ -67,17 +67,17 @@ No synthetic data is involved here. This is purely "can we get a competent polic
 **Key files:**
 - `vla-training/groot/g1_dex3_1cam_modality_config.py` + `modality_g1_dex3_1cam.json` — the working
   pattern to copy for 2-cam (short keys, `arms` 0–14 / `hands` 14–28).
-- `~/unitree/task185/task185_finetune.py` (WSL `g1-eval`) — finetune runner; env levers
+- `$UNITREE_ROOT/task185/task185_finetune.py` (the WSL eval distro) — finetune runner; env levers
   `TASK185_OPTIM=paged_adamw_8bit` (stock `adamw_torch` OOMs at 31.9/32 GB even at batch 1) and
   `TASK185_GRAD_CHECKPOINTING`. Keep `unset HF_HUB_OFFLINE` (the gated Cosmos-Reason2-2B backbone
   needs an online token-authed `model_info()` call).
-- `C:\Unitree\_data\task185_run_ablation_n17.sh` — training driver (change `STEPS`, modality path).
-- `C:\Unitree\_data\task185_serve_n17.sh` — serve a checkpoint from WSL; sim on native Windows
+- `$UNITREE_ROOT/_data/task185_run_ablation_n17.sh` — training driver (change `STEPS`, modality path).
+- `$UNITREE_ROOT/_data/task185_serve_n17.sh` — serve a checkpoint from WSL; sim on native Windows
   reaches it over `127.0.0.1:<port>` via WSL2 localhost-forwarding (no need to copy 15 GB).
-- `C:\Unitree\_data\task185\eval_g1_sim_groot_success.py` — closed-loop harness. It already sends
+- `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py` — closed-loop harness. It already sends
   **both** `cam_right_high` and `cam_left_high` (currently the same head frame — for a real 2-cam
   policy, wire the sim's second view properly rather than duplicating).
-- Sim: `C:\Unitree\unitree_sim_isaaclab\start_sim_pickplace_dex3.bat` (DDS **domain 1**).
+- Sim: `$UNITREE_ROOT/unitree_sim_isaaclab/start_sim_pickplace_dex3.bat` (DDS **domain 1**).
 
 **Trap (cost TASK-185 a full round):** `G1_29_ArmController` runs a `while True` thread writing
 `rt/lowcmd` and `Dex3_1_Controller` spawns non-daemon children, so a "finished" eval keeps

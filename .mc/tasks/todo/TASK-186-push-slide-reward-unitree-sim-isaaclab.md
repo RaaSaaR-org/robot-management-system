@@ -42,7 +42,7 @@ DreamGen ablation ([[TASK-185]] step 5b) impossible to measure.
   object travel ≥ 0.08 m with lift ≤ 0.06 m, read from `rt/sim_state`).
 - **That proxy is provably invalid:** applied to TASK-185's rollouts, *place*-instructed runs
   satisfied it **more** often (7–8/10) than *push*-instructed runs (6/10). It measures flailing.
-  Evidence: `C:\Unitree\_data\task185\RESULTS.md` §2.1.
+  Evidence: `$UNITREE_ROOT/_data/task185/RESULTS.md` §2.1.
 
 **What's needed — a reward that separates "pushed as instructed" from "knocked around":**
 1. **Direction:** displacement projected onto the *commanded* axis (left/right/forward/toward
@@ -61,7 +61,7 @@ DreamGen ablation ([[TASK-185]] step 5b) impossible to measure.
 - `unitree_sim_isaaclab/tasks/common_rewards/` — new `base_reward_push_cylindercfg.py`.
 - `unitree_sim_isaaclab/dds/rewards_dds.py` — publisher (`rt/rewards_state`); no change expected.
 - `unitree_sim_isaaclab/dds/dds_create.py` — registration if a new task variant is added.
-- Consumer/reference harness: `C:\Unitree\_data\task185\eval_g1_sim_groot_success.py`
+- Consumer/reference harness: `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py`
   (`--mode push` currently implements the invalid proxy — replace it with the DDS signal).
 
 ## Test Strategy

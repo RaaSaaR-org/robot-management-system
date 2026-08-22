@@ -133,7 +133,7 @@ def test_convert_without_manifest_fails_cleanly(tmp_path: Path):
 
 
 # ---------------------------------------------------------------- wsl backend
-# Real pipeline (g1-dreams distro); tests never spawn wsl.exe — subprocess is
+# Real pipeline (NEURAL_TRAJ_WSL_DISTRO); tests never spawn wsl.exe — subprocess is
 # faked so they stay GPU-free and green on any machine.
 
 def test_wsl_backend_command_shape(tmp_path: Path):
@@ -142,7 +142,7 @@ def test_wsl_backend_command_shape(tmp_path: Path):
     be = WslBackend()
     prompt = "Pick up the red cube"
     cmd = be.build_command({"prompt": prompt, "seed": 3}, tmp_path)
-    assert cmd[:7] == ["wsl", "-d", "g1-dreams", "-u", "root", "--", "bash"]
+    assert cmd[:7] == ["wsl", "-d", be.DISTRO, "-u", "root", "--", "bash"]
     assert cmd[7] == "-lc"
     inner = cmd[8]
     assert "76_dreams_one_episode.sh" in inner

@@ -113,4 +113,4 @@ here.
 - LeRobot RTC docs: https://huggingface.co/docs/lerobot/rtc
 - LeRobot v0.5.0 release notes (RTC intro): https://huggingface.co/blog/lerobot-release-v050
 - Retired origin: [[TASK-088]] (LeRobot 0.5.0 migration half superseded by
-  [[TASK-179]]; hardware context pre-dated the G1 pivot and the dz-226 GPU box)
+  [[TASK-179]]; hardware context pre-dated the G1 pivot and GPU_BOX)

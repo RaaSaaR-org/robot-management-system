@@ -40,7 +40,7 @@ silence.
 
 ## Details
 
-### What was observed (dz-226, 2026-08-02, warehouse scene)
+### What was observed (GPU_BOX, 2026-08-02, warehouse scene)
 
 Driving Agent Mode through `g1_warehouse_scene.xml` with the surveyed graph
 `places.warehouse.json` loaded, the robot was commanded `walk forward 2 metres` from
@@ -213,6 +213,6 @@ Integration, and this is the one that would have caught it: drive more than `PLA
 metres without a re-anchor, then walk at a keepout place, and assert that **either** a stop fires
 **or** the state says enforcement is off. Asserting only "a stop fires" is what let this through.
 
-Live re-check on dz-226 (the reproduction above is a runbook): load the warehouse scene, drive
+Live re-check on GPU_BOX (the reproduction above is a runbook): load the warehouse scene, drive
 > 15 m, approach RACK-A, confirm the console says the fence is not enforcing, then re-anchor with
 `"you are in Aisle 1"` and confirm the stop fires with the robot stationary.

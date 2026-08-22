@@ -39,7 +39,7 @@ The Agent Mode planner call has no timeout. When the local model stops answering
 `planning`, so `AgentModeState.plan.status` stays there and the console's block timeline shows the
 "Planning…" state with nothing behind it.
 
-### How it bit (dz-226, 2026-08-02)
+### How it bit (GPU_BOX, 2026-08-02)
 
 Ollama kept advertising `gemma4:e2b` as loaded — `GET /api/ps` listed it with
 `size_vram=1.77GB` — after its `llama-server.exe` worker had died. Every request to the model then

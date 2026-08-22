@@ -1,9 +1,11 @@
 # VR Teleoperation Data Collection (Unitree G1 EDU + Dex3-1)
 
+> **Placeholders used here:** `GPU_BOX` = the lab's GPU workstation · `$UNITREE_ROOT` = root of the Unitree checkouts and spike data · `$CONDA_ENVS` = the conda env directory · `$VLA_TESTS` = the VLA test checkouts. Real host names, users and absolute paths are deliberately kept out of this repo. Inside PowerShell blocks they are written `$env:UNITREE_ROOT` etc. — set them as environment variables before copy-pasting.
+
 How to collect manipulation datasets for the G1 EDU via VR teleoperation
 (Meta Quest 3 hand-tracking → `xr_teleoperate`), convert them to LeRobot, and
 import them into NeoDEM — plus how to test the entire path **without a headset
-or robot**. Verified end-to-end (headset-free) on the lab box `dz-226` on
+or robot**. Verified end-to-end (headset-free) on the lab box `GPU_BOX` on
 2026-07-12; synthetic proof dataset: "VR Teleop Pipeline Test (synthetic)".
 
 Related: [`docs/architecture.md`](architecture.md) · in-app sim recording for
@@ -31,10 +33,10 @@ raw episodes  <task>/episode_XXXX/{data.json, colors/, depths/, audios/}
 
 **DDS domains: 0 = real robot, 1 = simulation. Never mix.**
 
-## Environment (dz-226 — native Windows, no WSL)
+## Environment (GPU_BOX — native Windows, no WSL)
 
-> ⚠ Older Unitree-bundle docs describe a WSL2 runtime (`~/unitree`, env
-> `unitree_sim_env`, `bash run/*.sh`). **WSL is gone from dz-226** (verified
+> ⚠ Older Unitree-bundle docs describe a WSL2 runtime (`$UNITREE_ROOT`, env
+> `unitree_sim_env`, `bash run/*.sh`). **WSL is gone from GPU_BOX** (verified
 > 2026-07-12). Use the native conda envs below; the bash run scripts in
 > `quest-sim-teleop/run/` do not apply — start components natively.
 
@@ -45,9 +47,9 @@ raw episodes  <task>/episode_XXXX/{data.json, colors/, depths/, audios/}
 | `env_isaaclab_51_unitree` | Isaac Sim 5.1 + unitree_sim_isaaclab | sim side, DDS domain 1 |
 
 Pinned checkouts: `xr_teleoperate@7dc9aa1`, `unitree_lerobot@41c2805`,
-`unitree_sim_isaaclab@e30c25b` (all under `C:\Unitree\`). adb:
-`C:\Unitree\tools\platform-tools\adb.exe`. ffmpeg (needed by the v3→v2
-converter): `C:\Unitree\_data\vr_teleop_pipeline_test\bin\ffmpeg.exe` → PATH.
+`unitree_sim_isaaclab@e30c25b` (all under `$UNITREE_ROOT/`). adb:
+`$UNITREE_ROOT/tools/platform-tools/adb.exe`. ffmpeg (needed by the v3→v2
+converter): `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/bin/ffmpeg.exe` → PATH.
 
 ## Testing without headset or robot (proven 2026-07-12)
 
@@ -56,9 +58,9 @@ converter): `C:\Unitree\_data\vr_teleop_pipeline_test\bin\ffmpeg.exe` → PATH.
    page — synthetic joint targets stream through the same WebSocket path the
    real WebXR rig uses; frames are recorded server-side and exported to a
    LeRobot dataset when the session ends.
-2. **Unitree stack, MuJoCo dry-run:** env `tv`, cwd `C:\Unitree\xr_teleoperate\teleop`,
+2. **Unitree stack, MuJoCo dry-run:** env `tv`, cwd `$UNITREE_ROOT/xr_teleoperate/teleop`,
    run the patched `teleop_mujoco_win.py --no-quest --render-port 8090`
-   (from `C:\Unitree\_data\vr_teleop_pipeline_test\`) — loads the G1+Dex3 MJCF,
+   (from `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/`) — loads the G1+Dex3 MJCF,
    builds the real `G1_29_ArmIK`, serves an MJPEG viewer on :8090.
 3. **Data path:** generate synthetic raw episodes
    (`gen_synthetic_episode.py`, same dir) and run stages C+D below. This is the
@@ -69,13 +71,13 @@ converter): `C:\Unitree\_data\vr_teleop_pipeline_test\bin\ffmpeg.exe` → PATH.
 ```powershell
 # Terminal 1 — simulation
 conda activate env_isaaclab_51_unitree
-cd C:\Unitree\unitree_sim_isaaclab
+cd $env:UNITREE_ROOT/unitree_sim_isaaclab
 python sim_main.py --device cpu --enable_cameras --task Isaac-PickPlace-Cylinder-G129-Dex3-Joint `
     --enable_dex3_dds --robot_type g129
 
 # Terminal 2 — teleop + recorder (after the sim viewport is up)
 conda activate tv
-cd C:\Unitree\xr_teleoperate\teleop
+cd $env:UNITREE_ROOT/xr_teleoperate/teleop
 python teleop_hand_and_arm.py --sim --arm=G1_29 --ee=dex3 --input-mode=hand `
     --img-server-ip=127.0.0.1 --record --task-name "pick cylinder" --task-goal "Pick up the cylinder."
 ```
@@ -101,8 +103,8 @@ Stage-1 gate) **before** pressing `r`; `q` returns the arms home.
 ```powershell
 conda activate unitree_lerobot
 $env:PYTHONUTF8='1'
-python C:\Unitree\unitree_lerobot\unitree_lerobot\utils\sort_and_rename_folders.py --data_dir <raw>\<task_name>
-python C:\Unitree\unitree_lerobot\unitree_lerobot\utils\convert_unitree_json_to_lerobot.py `
+python $env:UNITREE_ROOT/unitree_lerobot/unitree_lerobot/utils/sort_and_rename_folders.py --data_dir <raw>\<task_name>
+python $env:UNITREE_ROOT/unitree_lerobot/unitree_lerobot/utils/convert_unitree_json_to_lerobot.py `
     --raw-dir <raw> --repo-id local/<name> --robot-type Unitree_G1_Dex3 --no-push-to-hub
 ```
 
@@ -121,17 +123,17 @@ for the RustFS upload flow).
 
 ```powershell
 conda activate unitree_lerobot
-$env:PATH = "C:\Unitree\_data\vr_teleop_pipeline_test\bin;$env:PATH"   # ffmpeg
-python C:\Unitree\Isaac-GR00T\scripts\lerobot_conversion\convert_v3_to_v2.py --repo-id local/<name>
-Copy-Item -Recurse $HOME\.cache\huggingface\lerobot\local\<name> C:\Unitree\_data\<target>
+$env:PATH = "$env:UNITREE_ROOT/_data/vr_teleop_pipeline_test/bin;$env:PATH"   # ffmpeg
+python $env:UNITREE_ROOT/Isaac-GR00T/scripts/lerobot_conversion/convert_v3_to_v2.py --repo-id local/<name>
+Copy-Item -Recurse $HOME\.cache\huggingface\lerobot\local\<name> $env:UNITREE_ROOT/_data/<target>
 ```
 
 Registration: `POST /api/datasets` does not accept a `storagePath`, so local
 directories are registered by script — follow the pattern of
 `server/src/scripts/seed-synthetic-demo.ts` (a ready adaptation,
-`register_dataset.ts`, sits in `C:\Unitree\_data\vr_teleop_pipeline_test\`).
+`register_dataset.ts`, sits in `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/`).
 Run it from `server/` with an **absolute** database URL
-(`DATABASE_URL=file:C:/Unitree/robot-management-system/server/prisma/dev.db` —
+(`DATABASE_URL=file:$UNITREE_ROOT/robot-management-system/server/prisma/dev.db` —
 a relative `file:./dev.db` resolves against the generated client and opens the
 wrong SQLite file, surfacing as Prisma `P2021`).
 
@@ -148,4 +150,4 @@ Verify: `GET /api/datasets/<id>/episodes`, `.../episodes/0/frames`,
   cyclonedds + `unitree_sdk2py` (+ teleimager client) in `tv`; the headset-free
   MuJoCo path never touches DDS, so this remains unproven until sim/robot day.
 - Full evidence + runbook of the 2026-07-12 dry-run:
-  `C:\Unitree\_data\vr_teleop_pipeline_test\ROBOT_DAY_RUNBOOK.md`.
+  `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/ROBOT_DAY_RUNBOOK.md`.

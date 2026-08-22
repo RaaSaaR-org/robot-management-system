@@ -8,7 +8,7 @@
 
 The current VLA pipeline (pi0.5 via sidecar → client_pi.py) works in principle but is not production-ready:
 
-1. **Never end-to-end tested** — blocked on Peter's GPU server (OpenPI + pi0.5 checkpoint)
+1. **Never end-to-end tested** — blocked on the GPU_BOX GPU server (OpenPI + pi0.5 checkpoint)
 2. **Wrist camera missing** — client_pi.py only sends `front` camera (index 0, IMX477). The SO-101 also has a wrist camera (index 1, OV5647). Most fine-tuned checkpoints expect 2 camera views.
 3. **No crash recovery** — if client_pi.py exits unexpectedly, the sidecar doesn't notify the robot-agent; `vla_active` flag stays `true` even though nothing is running
 4. **No status webhook** — dashboard shows VLA "running" even after subprocess exits
@@ -16,7 +16,7 @@ The current VLA pipeline (pi0.5 via sidecar → client_pi.py) works in principle
 
 ## Acceptance Criteria
 
-- [ ] End-to-end test: sidecar spawns client_pi.py → connects to Peter's server → arm moves
+- [ ] End-to-end test: sidecar spawns client_pi.py → connects to the GPU_BOX server → arm moves
 - [ ] Wrist camera: `/vla/start` body accepts `wristCameraIndex` (default: 1); `client_pi.py` gets `--wrist-camera-index` arg; `LeRobotClient` sends `observation.images.wrist` in addition to `front`
 - [ ] Crash recovery: sidecar watchdog polls subprocess every 2s; if it exits, sets `vla_active=false` and logs returncode (already partially done via existing watchdog, verify it resets state correctly)
 - [ ] Status endpoint accuracy: `GET /vla/status` returns `active: false` immediately after subprocess exits (not just at next state poll)
@@ -32,7 +32,7 @@ The current VLA pipeline (pi0.5 via sidecar → client_pi.py) works in principle
 
 ## Related
 
-- Blocked by: Peter's GPU server setup
+- Blocked by: the GPU_BOX GPU server setup
 - Depends on: TASK-074 (done)
-- See: `~/repos/vla-tests/pi05/client/client_pi.py`
+- See: `$VLA_TESTS/pi05/client/client_pi.py`
 - See: `robot-agent/hardware/so101_sidecar.py`

@@ -21,7 +21,7 @@ never hears anything:
 ```powershell
 New-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)" `
   -Direction Inbound -Protocol UDP -LocalPort 5555 -Action Allow `
-  -Program "C:\Unitree\robot-management-system\robot-agent\voice\.venv\Scripts\python.exe"
+  -Program "$UNITREE_ROOT/robot-management-system/robot-agent/voice/.venv/Scripts/python.exe"
 ```
 
 Verify: `Get-NetFirewallRule -DisplayName "NeoDEM voice G1 mic (UDP 5555)"`.
@@ -138,5 +138,5 @@ long as agent, voice service and adapter run on this box.
 | Packets arrive, stream silent | Robot mics muted, or `vui` holds the array — check step 7 |
 | `/play` 409 busy | A previous playback still holds the lock; `POST /stop` |
 | `/play` audible on PC, not robot | Adapter started with `G1_AUDIO_MOCK=1` — preflight flags this |
-| Adapter import errors | Wrong venv. It must be `C:\Unitree\.venv-g1-audio` (3.10). The 3.12 voice venv has no cyclonedds wheels — that is why the adapter is a separate process |
+| Adapter import errors | Wrong venv. It must be `$UNITREE_ROOT/.venv-g1-audio` (3.10). The 3.12 voice venv has no cyclonedds wheels — that is why the adapter is a separate process |
 | Robot answers passing chatter | Wake phrase disabled — `.env.voice.g1` ships `hey g1,hallo g1` on |

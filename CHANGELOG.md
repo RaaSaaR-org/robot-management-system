@@ -80,7 +80,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses 
 ### Maintenance
 
 - VR teleop data-collection guide + TASK-169 robot-day update (#194)
-- task triage + runtime-validation notes, 2026-07-11 dz-226 session (#190)
+- task triage + runtime-validation notes, 2026-07-11 GPU_BOX session (#190)
 
 
 ## [v2026.07.04] - 2026-07-04
