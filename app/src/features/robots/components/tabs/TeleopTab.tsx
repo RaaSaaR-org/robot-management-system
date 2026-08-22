@@ -41,7 +41,9 @@ function getAgentBaseUrl(robot: TeleopTabProps['robot']): string {
   if (robot.a2aAgentUrl) {
     return robot.a2aAgentUrl.replace(/\/$/, '');
   }
-  return 'http://localhost:41245';
+  // 41243 is the robot agent's default port (robot-agent/src/config/config.ts);
+  // this fallback read 41245, a port nothing listens on.
+  return 'http://localhost:41243';
 }
 
 function getWsBaseUrl(robot: TeleopTabProps['robot']): string {
