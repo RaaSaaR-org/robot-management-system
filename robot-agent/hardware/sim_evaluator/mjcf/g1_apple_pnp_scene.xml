@@ -1,7 +1,7 @@
 <mujoco model="g1_apple_pnp_scene">
   <!--
     G1 EDU + Dex3-1 apple-to-plate scene (NVIDIA GR00T E2E apple workflow,
-    C:\Unitree\_data\apple_pnp\CONTRACT.md): robot base fixed at
+    $UNITREE_ROOT/_data/apple_pnp/CONTRACT.md): robot base fixed at
     (-0.15, 0, 0.76) with +90 deg yaw (baked into g1_dex3/g1_43dof_fixedbase.xml,
     robot faces world +y), a ~0.75 m table covered in a BLACK tablecloth, a RED
     apple (freejoint) on the robot's LEFT-front (world -x; every dataset episode
