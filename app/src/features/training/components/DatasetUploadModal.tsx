@@ -9,6 +9,7 @@ import { AlertTriangle, CameraOff, CheckCircle2, XCircle } from 'lucide-react';
 import { Modal, Button, Input, ProgressBar, Spinner } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils/error';
 import { trainingApi } from '../api';
 import type { Dataset, RobotType } from '../types';
 
@@ -68,6 +69,7 @@ export function DatasetUploadModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fetchedTypes, setFetchedTypes] = useState<RobotType[]>([]);
   const [typesError, setTypesError] = useState<string | null>(null);
+  const [typesFailed, setTypesFailed] = useState(false);
   const [typesLoading, setTypesLoading] = useState(false);
   const [typesAttempt, setTypesAttempt] = useState(0);
   /** Bumped on close/unmount/reset, so a poll in flight stops writing state. */
@@ -85,6 +87,7 @@ export function DatasetUploadModal({
     let cancelled = false;
     setTypesLoading(true);
     setTypesError(null);
+    setTypesFailed(false);
     trainingApi.listRobotTypes()
       .then((types) => { if (!cancelled) setFetchedTypes(types); })
       .catch((err: unknown) => {
@@ -94,7 +97,15 @@ export function DatasetUploadModal({
         // endpoint was added to remove.
         if (cancelled) return;
         setFetchedTypes([]);
-        setTypesError(err instanceof Error ? err.message : 'Could not load robot types');
+        // The detail, not another copy of the headline: the api client's own
+        // message for a failed GET is already a sentence, and prefixing it with
+        // the same words rendered "Could not load robot types: Could not load
+        // robot types".
+        // `getErrorMessage`, not `String(err)`: the api client rejects with a
+        // plain `ApiError` object, so `String` on it renders "[object Object]".
+        const detail = getErrorMessage(err, '');
+        setTypesError(!detail || /robot types/i.test(detail) ? null : detail);
+        setTypesFailed(true);
       })
       .finally(() => { if (!cancelled) setTypesLoading(false); });
     return () => { cancelled = true; };
@@ -195,7 +206,12 @@ export function DatasetUploadModal({
    * then — a still-`validating` dataset is a real answer ("it is taking a
    * while"), and better than a green tick that means nothing.
    */
-  const pollValidation = useCallback(async (id: string, token: number): Promise<PollResult | null> => {
+  const pollValidation = useCallback(async (
+    id: string,
+    token: number,
+    /** True once the completion call has failed — nothing will move the row. */
+    abandoned: () => boolean,
+  ): Promise<PollResult | null> => {
     const deadline = Date.now() + VALIDATION_TIMEOUT_MS;
     let lastError = 'the server did not answer';
     let everAnswered = false;
@@ -209,9 +225,15 @@ export function DatasetUploadModal({
         if (dataset.status !== 'validating' && dataset.status !== 'uploading') {
           return { kind: 'dataset', dataset };
         }
+        // The row has not been picked up AND the request that would have picked
+        // it up has already failed. Waiting out the deadline would spin for a
+        // minute on something that is never going to happen.
+        if (dataset.status === 'uploading' && abandoned()) {
+          return { kind: 'dataset', dataset };
+        }
         if (Date.now() > deadline) return { kind: 'timeout', dataset };
       } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        lastError = getErrorMessage(err, 'the server did not answer');
         if (Date.now() > deadline) {
           // Never once read the status vs read it and it is still going: the
           // first must not be painted as a green tick.
@@ -269,17 +291,23 @@ export function DatasetUploadModal({
     } catch (err) {
       uploading.current = false;
       setBusy(false);
-      setError(err instanceof Error ? err.message : 'Upload failed');
+      setError(getErrorMessage(err, 'Upload failed'));
       return;
     }
 
-    try {
-      await trainingApi.completeUpload(datasetId);
-    } catch {
-      // A timeout here is not a failed upload: the server is still unpacking.
-      // The row exists and carries the outcome, so the poll below is the
-      // authority on what happened, not this request.
-    }
+    // The completion call and the poll run TOGETHER, not one after the other.
+    // Completion downloads the archive, unpacks it and — without NATS —
+    // validates it inside the request, which is minutes on a real dataset; the
+    // row reaches `validating` and then `ready` while it is still open. Waiting
+    // for it first meant the poll that exists to show that progress could not
+    // run until there was nothing left to show.
+    let completionError: string | null = null;
+    const completion = trainingApi.completeUpload(datasetId).catch((err: unknown) => {
+      // Not a failed upload on its own: a dropped connection or a proxy's idle
+      // timeout leaves the server working and the row still carries the answer.
+      // Only used below if the poll ALSO never saw the row move.
+      completionError = getErrorMessage(err, 'the completion request failed');
+    });
 
     // POLL the real thing. This used to be `setTimeout(2000)` with a comment
     // saying "in reality, would poll", followed unconditionally by a green
@@ -287,10 +315,28 @@ export function DatasetUploadModal({
     // a dataset that had just failed. Validation now opens every file the
     // manifest names, so it has something to say and the operator should see
     // it here rather than find out during a training run.
-    const outcome = await pollValidation(datasetId, token);
+    const outcome = await pollValidation(datasetId, token, () => completionError !== null);
     if (outcome === null) return; // the modal was closed or reset under us
+
+    // Only wait on the completion call when the poll did NOT get a terminal
+    // answer. A row that reached `ready` or `failed` is the server's verdict,
+    // and blocking on a request that may never return would hide it.
+    const settled = outcome.kind === 'dataset' && outcome.dataset.status !== 'uploading';
+    if (!settled) await completion;
+    if (pollToken.current !== token) return;
     uploading.current = false;
     setBusy(false);
+
+    // The one case that IS a failed upload: the completion request errored and
+    // the row never moved off `uploading`, so nothing on the server ever took
+    // the archive. Anything else — a row that reached ready or failed — is the
+    // server's answer and outranks a broken HTTP call.
+    if (completionError && !settled) {
+      setError(completionError);
+      setStep('upload');
+      return;
+    }
+
     setPollOutcome(outcome);
     setValidated(outcome.kind === 'unreachable' ? null : outcome.dataset);
     setStep('complete');
@@ -373,13 +419,13 @@ export function DatasetUploadModal({
               {typesLoading && noTypes && (
                 <p className="mt-1 text-sm text-theme-secondary">Loading robot types…</p>
               )}
-              {!typesLoading && typesError && (
+              {!typesLoading && typesFailed && (
                 <p
                   data-testid="robot-types-error"
                   className="mt-1 flex items-center gap-2 text-sm text-red-600 dark:text-red-400"
                 >
                   <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>Could not load robot types: {typesError}</span>
+                  <span>Could not load robot types{typesError ? `: ${typesError}` : '.'}</span>
                   <button
                     type="button"
                     className="underline"
@@ -389,7 +435,7 @@ export function DatasetUploadModal({
                   </button>
                 </p>
               )}
-              {!typesLoading && !typesError && noTypes && (
+              {!typesLoading && !typesFailed && noTypes && (
                 <p data-testid="robot-types-empty" className="mt-1 text-sm text-theme-secondary">
                   No robot types are registered yet — one has to exist before a dataset can name it.
                 </p>

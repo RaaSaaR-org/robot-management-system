@@ -109,7 +109,10 @@ describe('PATCH /:id/episodes/:index/flag', () => {
 describe('GET /:id/flagged', () => {
   it('returns what is flagged, not an empty list with an explanation', async () => {
     mockFlagRepo.listFlagged.mockResolvedValue({
-      rows: [{ datasetId: 'ds1', episodeIndex: 3, flagged: true, reason: 'blurry' }],
+      rows: [{
+        datasetId: 'ds1', episodeIndex: 3, flagged: true, reason: 'blurry',
+        reviewDecision: null, reviewedAt: null, reviewedBy: null,
+      }],
       total: 1,
     });
 
@@ -117,7 +120,14 @@ describe('GET /:id/flagged', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.flagged[0]).toMatchObject({ episodeIndex: 3, reason: 'blurry' });
+    // In the shape `FlaggedTrajectoriesResponse` declares, not the raw row.
+    // Both this endpoint and `/quality` emitted untyped literals that disagreed
+    // with the declared type AND with each other — `episodeIndex` here,
+    // `trajectoryIndex` there, for the same number.
+    expect(res.body.flagged[0]).toMatchObject({
+      trajectoryIndex: 3, flagReason: 'blurry', reviewed: false, anomalyTypes: [],
+    });
+    expect(res.body.flagged[0].episodeIndex).toBeUndefined();
     // The old body carried `message: 'Run advanced validation to generate
     // flagged trajectories'`, which described a pipeline that does not exist.
     expect(res.body.message).toBeUndefined();
@@ -221,7 +231,9 @@ describe('GET /:id/quality', () => {
     expect(res.body.report.flaggedTrajectoryCount).toBe(1);
     // 4 episodes, 1 flagged.
     expect(res.body.report.cleanTrajectoryPercentage).toBe(75);
-    expect(res.body.report.flaggedSummary[0]).toMatchObject({ trajectoryIndex: 2, reason: 'blurry' });
+    expect(res.body.report.flaggedSummary[0]).toMatchObject({
+      trajectoryIndex: 2, flagReason: 'blurry',
+    });
   });
 });
 

@@ -39,9 +39,9 @@ def make(root: Path, *extra: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def convert(source: Path, out: Path) -> tuple[int, dict]:
+def convert(source: Path, out: Path, *extra: str) -> tuple[int, dict]:
     result = subprocess.run(
-        [sys.executable, str(CONVERT), str(source), str(out)],
+        [sys.executable, str(CONVERT), str(source), str(out), *extra],
         capture_output=True, text=True,
     )
     lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
@@ -121,6 +121,76 @@ class TestRoundTrip:
         assert episodes[1]["tasks"] == ["place the cube"]
 
 
+class TestMultiFile:
+    """The (chunk_index, file_index) handling — the reason the converter exists.
+
+    A real recording session splits at `data_files_size_in_mb`, so episode 0's
+    rows are in `file-000.parquet` and episode 2's are in `file-002.parquet`
+    with its OWN row numbering and its own video timeline. Every test above
+    runs against a single-file fixture, where every one of those lookups
+    happens to be `[0]` and a converter that ignored them entirely would pass.
+    """
+
+    def test_reads_each_episode_out_of_the_file_its_metadata_names(self, tmp_path: Path) -> None:
+        make(tmp_path / "v3", "--version", "v3.0", "--files", "3")
+        make(tmp_path / "v21")
+        code, out = convert(tmp_path / "v3", tmp_path / "conv")
+        assert code == 0, out
+        assert out["episodes"] == 3
+
+        # The same diff as the single-file round trip: three separate source
+        # files have to produce the identical v2.1 tree.
+        for episode in range(3):
+            name = f"episode_{episode:06d}.parquet"
+            ref = pq.read_table(tmp_path / "v21" / "data" / "chunk-000" / name).to_pydict()
+            got = pq.read_table(tmp_path / "conv" / "data" / "chunk-000" / name).to_pydict()
+            assert set(got) == set(ref), f"episode {episode} column set"
+            for column in ref:
+                assert got[column] == ref[column], f"episode {episode} column {column}"
+
+    def test_a_missing_second_file_is_named_rather_than_skipped(self, tmp_path: Path) -> None:
+        make(tmp_path / "v3", "--version", "v3.0", "--files", "3")
+        (tmp_path / "v3" / "data" / "chunk-000" / "file-001.parquet").unlink()
+        code, out = convert(tmp_path / "v3", tmp_path / "conv")
+        assert code != 0
+        assert out["error"] in {"DATA_MISSING", "DATA_INCOMPLETE"}, out
+        assert not (tmp_path / "conv").exists()
+
+    def test_the_chunk_it_writes_to_matches_the_chunks_size_it_declares(self, tmp_path: Path) -> None:
+        # Every episode used to be written to chunk-000 while info.json declared
+        # `chunks_size: 1000`, so a view of a >1000-episode dataset failed this
+        # repo's own validator: it looks for episode 1000 under chunk-001, which
+        # was never written. `--chunk-size 2` reproduces that at three episodes
+        # instead of a thousand.
+        make(tmp_path / "v3", "--version", "v3.0")
+        code, out = convert(tmp_path / "v3", tmp_path / "conv", "--chunk-size", "2")
+        assert code == 0, out
+
+        info = json.loads((tmp_path / "conv" / "meta" / "info.json").read_text())
+        assert info["chunks_size"] == 2
+        assert info["total_chunks"] == 2
+        assert (tmp_path / "conv" / "data" / "chunk-000" / "episode_000000.parquet").exists()
+        assert (tmp_path / "conv" / "data" / "chunk-000" / "episode_000001.parquet").exists()
+        # The one that used to land in chunk-000 and be unfindable.
+        assert (tmp_path / "conv" / "data" / "chunk-001" / "episode_000002.parquet").exists()
+
+    @requires_ffmpeg
+    def test_cuts_each_episode_out_of_its_own_video_timeline(self, tmp_path: Path) -> None:
+        # The trap: with one video the windows run 0.0-1.0, 1.0-2.1, 2.1-3.3.
+        # Split across three, every episode's window starts at 0.0 in ITS file.
+        # A converter that used a dataset-global cursor would seek past the end
+        # of files 1 and 2 and cut nothing.
+        make(tmp_path / "v3", "--version", "v3.0", "--files", "3", "--cameras", "cam_high")
+        code, out = convert(tmp_path / "v3", tmp_path / "conv")
+        assert code == 0, out
+        assert out["videos"] == 3
+        for episode, expected in enumerate([10, 11, 12]):
+            path = (tmp_path / "conv" / "videos" / "chunk-000"
+                    / "observation.images.cam_high" / f"episode_{episode:06d}.mp4")
+            _, frames = probe(path)
+            assert abs(frames - expected) <= 1, f"episode {episode}: {frames} frames, wanted {expected}"
+
+
 @requires_ffmpeg
 class TestVideo:
     def test_cuts_one_mp4_per_episode_at_the_declared_windows(self, tmp_path: Path) -> None:
@@ -168,6 +238,38 @@ class TestVideo:
         b = first_frame(tmp_path / "conv" / "videos" / "chunk-000" / key / "episode_000001.mp4",
                         tmp_path / "b.png")
         assert a != b, "episode 1 starts on the same picture as episode 0 — the cut snapped to a keyframe"
+
+
+@requires_ffmpeg
+class TestVideoCutIsChecked:
+    def test_refuses_a_source_video_shorter_than_the_metadata_claims(self, tmp_path: Path) -> None:
+        # ffmpeg exits 0 for a window that starts past the end of the source —
+        # it writes a video with no frames in it. The cut was never checked, so
+        # this produced empty episode videos and reported ok:true, and the
+        # dataset failed later in the player with nothing to play.
+        make(tmp_path / "v3", "--version", "v3.0", "--cameras", "cam_high")
+        src = (tmp_path / "v3" / "videos" / "observation.images.cam_high"
+               / "chunk-000" / "file-000.mp4")
+        assert src.exists()
+        # Re-encode to a fifth of a second: episode 0's window still overlaps,
+        # episodes 1 and 2 start past the end.
+        assert FFMPEG is not None
+        short = src.with_name("short.mp4")
+        subprocess.run(
+            [FFMPEG, "-y", "-loglevel", "error", "-i", str(src), "-t", "0.2",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(short)],
+            check=True, capture_output=True,
+        )
+        short.replace(src)
+
+        code, out = convert(tmp_path / "v3", tmp_path / "conv")
+        assert code != 0, out
+        assert out["error"] in {"VIDEO_EMPTY", "VIDEO_SHORT"}, out
+        # And the failed run left nothing behind — neither a half-tree nor the
+        # staging directory it was building in.
+        assert not (tmp_path / "conv").exists()
+        partials = list(tmp_path.glob(".conv.*.partial"))
+        assert partials == [], partials
 
 
 class TestRefusals:

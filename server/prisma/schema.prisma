@@ -2244,7 +2244,11 @@ model Dataset {
   skillId            String?
   storagePath        String // RustFS storage location
   lerobotVersion     String // LeRobot v3 format version
-  fps                Int
+  // Float, not Int (TASK-217 review). A recording's real rate is 10.12 or
+  // 29.97 as often as it is 30, and rounding it to an Int while deriving
+  // `totalDuration` from the unrounded value left three columns that cannot
+  // all be true: 253 frames at "10 fps" is 25.3 s, and the recording is 25.0.
+  fps                Float
   totalFrames        Int
   totalDuration      Float // Duration in seconds
   demonstrationCount Int

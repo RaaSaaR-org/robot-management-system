@@ -42,3 +42,12 @@ CREATE TABLE "DatasetEpisodeFlag" (
 CREATE UNIQUE INDEX "DatasetEpisodeFlag_datasetId_episodeIndex_key" ON "DatasetEpisodeFlag"("datasetId", "episodeIndex");
 CREATE INDEX "DatasetEpisodeFlag_datasetId_idx" ON "DatasetEpisodeFlag"("datasetId");
 CREATE INDEX "DatasetEpisodeFlag_datasetId_flagged_idx" ON "DatasetEpisodeFlag"("datasetId", "flagged");
+
+-- And `fps` becomes a Float (TASK-217 review).
+--
+-- A recording's real rate is 10.12 or 29.97 as often as it is 30. Rounding it
+-- into an Int while deriving `totalDuration` from the unrounded value left
+-- three columns on the same row that cannot all be true: 253 frames at the
+-- stored "10 fps" is 25.3 s, and the recording is 25.0. Widening is lossless —
+-- every existing row keeps the integer it already holds.
+ALTER TABLE "Dataset" ALTER COLUMN "fps" TYPE DOUBLE PRECISION;

@@ -45,7 +45,7 @@ import { datasetRepository } from '../repositories/index.js';
 import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import { datasetService } from './DatasetService.js';
-import { resolveLocalView } from './lerobot/LocalDatasetView.js';
+import { DatasetViewError, resolveLocalView } from './lerobot/LocalDatasetView.js';
 import {
   episodeCurationService,
   type CurationBackend,
@@ -267,9 +267,10 @@ export class DatasetCurationService {
     }
   }
 
-  private backendFor(dataset: Dataset | null): CurationBackend {
-    return dataset?.lerobotVersion?.startsWith('v3') ? 'lerobot' : 'native';
-  }
+  // `backendFor` lived here and chose the `lerobot` backend for a v3.0 dataset.
+  // Nothing called it any more once `viewOf` started converting v3.0 to a v2.1
+  // view — every path sets `backend: 'native'` — so it was a switch that read
+  // as though it decided something. Deleted rather than left to be trusted.
 
   /** Local on-disk dataset convention (see datasets.routes.ts): absolute path that exists. */
   private isLocalDir(storagePath: string): boolean {
@@ -296,9 +297,10 @@ export class DatasetCurationService {
     const viewOf = async (
       dir: string,
       rest: Omit<ResolvedSource, 'dir' | 'backend' | 'sourceVersion' | 'converted' | 'originalDir'>,
+      into?: string,
     ): Promise<ResolvedSource> => {
       try {
-        const view = await resolveLocalView(dir);
+        const view = await resolveLocalView(dir, into ? { into } : {});
         return {
           ...rest,
           dir: view.root,
@@ -307,14 +309,28 @@ export class DatasetCurationService {
           sourceVersion: view.sourceVersion,
           converted: view.converted,
         };
-      } catch {
+      } catch (error) {
         // A directory with no readable `meta/info.json` is not something to
         // fail resolution over: `curate.py` will report what is wrong with it
         // far more usefully than a view resolver can.
-        return {
-          ...rest, dir, originalDir: dir, backend: 'native',
-          sourceVersion: 'unknown', converted: false,
-        };
+        if (error instanceof DatasetViewError && error.code === 'NOT_A_DATASET') {
+          return {
+            ...rest, dir, originalDir: dir, backend: 'native',
+            sourceVersion: 'unknown', converted: false,
+          };
+        }
+        // Everything else is a v3.0 dataset that could NOT be converted —
+        // ffmpeg missing, a video the metadata names that is not there, the
+        // converter timing out. A bare catch here handed the raw v3.0 tree to
+        // `curate.py`, which reads v2.1 paths: the operator saw a confusing
+        // failure about missing episode files instead of the real reason.
+        if (error instanceof DatasetViewError) {
+          throw new CurationError(
+            `could not build a readable view of ${dir}: ${error.message}`,
+            error.code,
+          );
+        }
+        throw error;
       }
     };
 
@@ -335,11 +351,15 @@ export class DatasetCurationService {
       const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'neodem-curation-'));
       const dir = path.join(tmpRoot, 'src');
       await this.downloadPrefix(storagePath, dir, opts?.skipVideos ?? false);
+      // Into `tmpRoot`, so `cleanup()` reaches it. The persistent cache is
+      // keyed by source path, and this source path is a temp directory that
+      // will never recur — so a cached view of it could never be hit again and
+      // nothing would ever sweep it.
       return viewOf(dir, {
         mode: 'rustfs',
         tmpRoot,
         cleanup: () => rm(tmpRoot, { recursive: true, force: true }),
-      });
+      }, path.join(tmpRoot, 'view'));
     }
 
     // Legacy/dev fallback: datasets living under CURATION_DATASETS_ROOT/:id.

@@ -755,7 +755,10 @@ export class DatasetService extends EventEmitter {
         qualityScore: qualityScore.total,
         infoJson: validation.info as LeRobotInfo,
         statsJson: validation.stats as LeRobotStats,
-        fps: Math.round(validation.fps) || undefined,
+        // Not rounded. `totalDuration` is derived from this number, so an Int
+        // here made the row contradict itself for every recording whose rate
+        // is not a whole number — which is most of them.
+        fps: validation.fps || undefined,
         totalFrames: validation.totalFrames,
         totalDuration: parseFloat(validation.totalDuration.toFixed(3)),
         demonstrationCount: validation.episodeCount,

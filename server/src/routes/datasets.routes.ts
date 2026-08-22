@@ -22,9 +22,12 @@ import type {
 import type { DatasetStatus } from '../types/vla.types.js';
 import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
+import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
 import { robotTypeRepository } from '../repositories/index.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import type {
+  FlaggedTrajectoriesResponse,
+  FlaggedTrajectorySummary,
   TriggerValidationRequest,
   UnflagTrajectoryRequest,
 } from '../types/data-quality.types.js';
@@ -1295,11 +1298,7 @@ datasetRoutes.get('/:id/quality', async (req: Request, res: Response) => {
               ? Math.max(0, Math.round(((dataset.demonstrationCount - flaggedCount) / dataset.demonstrationCount) * 100))
               : 100,
             statistics: null,
-            flaggedSummary: flaggedRows.map((row) => ({
-              trajectoryIndex: row.episodeIndex,
-              reason: row.reason ?? 'flagged by an operator',
-              flaggedAt: row.createdAt,
-            })),
+            flaggedSummary: flaggedRows.map(toFlaggedSummary),
             validationStatus: 'completed',
           }
         : null,
@@ -1438,6 +1437,33 @@ datasetRoutes.post('/:id/validate-advanced', async (req: Request, res: Response)
   }
 });
 
+/**
+ * One operator flag, in the shape the repo's own types declare for it.
+ *
+ * Both endpoints built untyped object literals, so tsc never compared them to
+ * `FlaggedTrajectorySummary` — and they disagreed with each other as well as
+ * with the type: `episodeIndex` in one response, `trajectoryIndex` in its
+ * sibling, `reason` where the type says `flagReason`. A client written against
+ * the declared types read `undefined` from both.
+ *
+ * `anomalyTypes` and `qualityScore` are empty and 0 because nothing computes
+ * them: `validate-advanced` is the pipeline that would, and it answers 501.
+ */
+function toFlaggedSummary(row: EpisodeFlag): FlaggedTrajectorySummary {
+  return {
+    trajectoryIndex: row.episodeIndex,
+    flagReason: row.reason ?? 'flagged by an operator',
+    anomalyTypes: [],
+    qualityScore: 0,
+    reviewed: row.reviewedAt !== null,
+    ...(row.reviewedAt ? { reviewedAt: row.reviewedAt } : {}),
+    ...(row.reviewedBy ? { reviewedBy: row.reviewedBy } : {}),
+    ...(row.reviewDecision
+      ? { reviewDecision: row.reviewDecision as 'keep' | 'remove' | 'pending' }
+      : {}),
+  };
+}
+
 // ============================================================================
 // GET /api/datasets/:id/flagged - List flagged trajectories for review
 // ============================================================================
@@ -1456,13 +1482,14 @@ datasetRoutes.get('/:id/flagged', async (req: Request, res: Response) => {
     }
 
     const { rows, total } = await datasetEpisodeFlagRepository.listFlagged(id, page, limit);
-    res.json({
+    const payload: FlaggedTrajectoriesResponse & { page: number; limit: number } = {
       datasetId: id,
       total,
       page,
       limit,
-      flagged: rows,
-    });
+      flagged: rows.map(toFlaggedSummary),
+    };
+    res.json(payload);
   } catch (error) {
     console.error('[DatasetRoutes] Error getting flagged trajectories:', error);
     res.status(500).json({ error: 'Failed to get flagged trajectories' });

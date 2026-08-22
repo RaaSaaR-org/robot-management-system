@@ -47,13 +47,34 @@ AssertionError: expected 404 to be 200
 `npx vitest run src/__tests__/teleoperation-routes.test.ts` → 44 passed.
 `npx vitest run` immediately after → 205 files, 5344 passed.
 
-### Why 404 and not 500 is the clue
+Second occurrence (2026-08-23, TASK-217 review):
+
+```
+FAIL src/__tests__/aggregation-routes.test.ts
+  > POST /api/federated/rounds/:roundId/submit > returns 409 when the robot
+    already submitted (conflict)
+Error: ETIMEDOUT: Operation timed out          (7796 ms)
+```
+
+This one **also failed when the file was run on its own**, and then passed on
+the next full run. So "passes in isolation" — written into the first note above
+— is not reliably true, and mock-state leaking between FILES is not the whole
+story. A `supertest` request that never completes points at the request itself
+(an unawaited handler, a listener that is never closed) rather than at a
+handler returning the wrong body. Reproduce by running one file in a loop, not
+only the whole suite.
+
+### Why the status code is the clue
 
 A 404 from these handlers means the mocked service returned null/undefined for
 a record the test had just arranged. That points at mock state leaking across
 files rather than at anything in the handler: every one of these suites builds
 its own express app and `vi.mock`s the service module, and vitest shares a
 worker between files unless told otherwise.
+
+The 404 shape and the ETIMEDOUT shape may be two different faults; treat the
+timeout as the more informative one, since a request that never returns is a
+narrower thing to look for.
 
 Two candidates, both cheap to test:
 

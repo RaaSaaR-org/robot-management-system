@@ -556,6 +556,18 @@ export async function validateDatasetStructure(
   }
   const seenState = report.observedStateWidth ?? declaredState;
   const seenAction = report.observedActionWidth ?? declaredAction;
+  // `expected.proprioceptionDim && …` treats 0 and null identically, and every
+  // RobotType in this database carries 0 — so the check that exists to catch a
+  // 28-wide state vector on a 43-DOF G1 EDU silently does nothing, and the
+  // report reads as though it passed. Say that it was skipped.
+  if (!expected.proprioceptionDim && !expected.actionDim) {
+    warn(
+      'ROBOT_DIMS_UNKNOWN',
+      'The robot type declares no proprioceptionDim or actionDim, so the vector widths were '
+      + 'not checked against the robot. A dataset of the wrong width for its robot will not be '
+      + 'caught until training.',
+    );
+  }
   if (expected.proprioceptionDim && seenState !== undefined && seenState !== expected.proprioceptionDim) {
     error(
       'ROBOT_STATE_DIM_MISMATCH',

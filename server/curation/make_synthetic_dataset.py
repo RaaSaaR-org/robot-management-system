@@ -203,12 +203,18 @@ def build_v3(
     robot_type: str,
     cameras: list[str] | None = None,
     break_kind: str | None = None,
+    files: int = 1,
 ) -> None:
-    """The v3.0 layout: one file per chunk, episodes addressed inside it.
+    """The v3.0 layout: many episodes per file, addressed by row range.
 
     Deliberately built from the SAME series as :func:`build`, so a v3.0 fixture
     and the v2.1 fixture made from the same arguments hold identical numbers and
     the converter can be diffed against one from the other.
+
+    `files` splits the episodes across that many data files and, per camera,
+    that many videos — the shape `data_files_size_in_mb` produces on any real
+    recording session, and the one the converter's (chunk_index, file_index)
+    handling exists for. With `files=1` the tree is byte-for-byte what it was.
     """
     data_dir = root / "data" / "chunk-000"
     meta_dir = root / "meta"
@@ -222,18 +228,27 @@ def build_v3(
     tasks = ["pick up the cube", "place the cube"]
     ffmpeg = _find_ffmpeg() if cameras else None
 
-    cols: dict[str, list] = {
-        "observation.state": [], "action": [], "timestamp": [], "frame_index": [],
-        "episode_index": [], "index": [], "task_index": [],
-    }
+    files = max(1, files)
+    def blank() -> dict[str, list]:
+        return {
+            "observation.state": [], "action": [], "timestamp": [], "frame_index": [],
+            "episode_index": [], "index": [], "task_index": [],
+        }
+    per_file: list[dict[str, list]] = [blank() for _ in range(files)]
+    # Video timestamps are relative to the file the episode's window lives in,
+    # not to the dataset: a per-file cursor is what the real writer produces and
+    # what the converter's `-ss` has to be given.
+    video_cursors = [0.0] * files
     episode_rows: list[dict] = []
     global_index = 0
-    video_cursor = 0.0
 
     for ep in range(num_episodes):
         ep_len = frames + ep  # the same varying length `build` uses
         task_index = ep % len(tasks)
         start = global_index
+        file_index = ep % files
+        cols = per_file[file_index]
+        video_cursor = video_cursors[file_index]
         for f in range(ep_len):
             phase = (f / max(ep_len - 1, 1)) * 2 * math.pi
             vec = [round(math.sin(phase + j * 0.1), 4) for j in range(action_dim)]
@@ -256,7 +271,7 @@ def build_v3(
             "dataset_from_index": start,
             "dataset_to_index": global_index,
             "data/chunk_index": 0,
-            "data/file_index": 0,
+            "data/file_index": file_index,
             "meta/episodes/chunk_index": 0,
             "meta/episodes/file_index": 0,
         }
@@ -266,25 +281,28 @@ def build_v3(
             row[f"videos/{key}/from_timestamp"] = round(video_cursor, 6)
             row[f"videos/{key}/to_timestamp"] = round(video_cursor + duration, 6)
             row[f"videos/{key}/chunk_index"] = 0
-            row[f"videos/{key}/file_index"] = 0
-        video_cursor += duration
+            row[f"videos/{key}/file_index"] = file_index
+        video_cursors[file_index] = video_cursor + duration
         episode_rows.append(row)
 
-    table_cols = {
-        "observation.state": pa.array(cols["observation.state"], type=pa.list_(pa.float32())),
-        "action": pa.array(cols["action"], type=pa.list_(pa.float32())),
-        "timestamp": pa.array(cols["timestamp"], type=pa.float32()),
-        "frame_index": pa.array(cols["frame_index"], type=pa.int64()),
-        "episode_index": pa.array(cols["episode_index"], type=pa.int64()),
-        "index": pa.array(cols["index"], type=pa.int64()),
-        "task_index": pa.array(cols["task_index"], type=pa.int64()),
-    }
-    if break_kind == "undeclared-column":
-        # The exact shape of the bug that made every dataset TASK-215 produced
-        # unloadable: lerobot casts the data parquet against `info.json`
-        # features and a column features does not declare is a hard CastError.
-        table_cols["next_done"] = pa.array([False] * global_index, type=pa.bool_())
-    pq.write_table(pa.table(table_cols), data_dir / "file-000.parquet")
+    for file_index, cols in enumerate(per_file):
+        table_cols = {
+            "observation.state": pa.array(cols["observation.state"], type=pa.list_(pa.float32())),
+            "action": pa.array(cols["action"], type=pa.list_(pa.float32())),
+            "timestamp": pa.array(cols["timestamp"], type=pa.float32()),
+            "frame_index": pa.array(cols["frame_index"], type=pa.int64()),
+            "episode_index": pa.array(cols["episode_index"], type=pa.int64()),
+            "index": pa.array(cols["index"], type=pa.int64()),
+            "task_index": pa.array(cols["task_index"], type=pa.int64()),
+        }
+        if break_kind == "undeclared-column":
+            # The exact shape of the bug that made every dataset TASK-215
+            # produced unloadable: lerobot casts the data parquet against
+            # `info.json` features and a column features does not declare is a
+            # hard CastError.
+            n = len(cols["index"])
+            table_cols["next_done"] = pa.array([False] * n, type=pa.bool_())
+        pq.write_table(pa.table(table_cols), data_dir / f"file-{file_index:03d}.parquet")
 
     ep_table = {k: pa.array([r[k] for r in episode_rows]) for k in episode_rows[0]}
     pq.write_table(pa.table(ep_table), ep_meta_dir / "file-000.parquet")
@@ -293,12 +311,15 @@ def build_v3(
     for cam in cameras:
         assert ffmpeg is not None
         key = f"observation.images.{cam}"
-        rel = VIDEO_PATH_TEMPLATE_V3.format(video_key=key, chunk_index=0, file_index=0)
-        dst = root / rel
-        _write_video(ffmpeg, dst, global_index, fps)
-        total_videos += 1
-        if break_kind == "truncated-video":
-            dst.write_bytes(b"")
+        for file_index, cols in enumerate(per_file):
+            rel = VIDEO_PATH_TEMPLATE_V3.format(
+                video_key=key, chunk_index=0, file_index=file_index,
+            )
+            dst = root / rel
+            _write_video(ffmpeg, dst, len(cols["index"]), fps)
+            total_videos += 1
+            if break_kind == "truncated-video":
+                dst.write_bytes(b"")
 
     video_features = {
         f"observation.images.{cam}": {
@@ -389,14 +410,21 @@ def main() -> None:
         default="",
         help="comma-separated camera names; emits a tiny real mp4 per episode/camera via ffmpeg",
     )
+    ap.add_argument(
+        "--files", type=int, default=1,
+        help="v3.0 only: spread the episodes across this many data files and videos, "
+             "the shape data_files_size_in_mb produces on a real recording session",
+    )
     args = ap.parse_args()
     cameras = [c.strip() for c in args.cameras.split(",") if c.strip()]
     if args.version == "v3.0":
         build_v3(args.root, args.episodes, args.frames, args.action_dim, args.fps,
-                 args.robot_type, cameras, args.break_kind)
+                 args.robot_type, cameras, args.break_kind, args.files)
     else:
         if args.break_kind:
             raise SystemExit("--break is only implemented for --version v3.0")
+        if args.files != 1:
+            raise SystemExit("--files is only meaningful for --version v3.0")
         build(args.root, args.episodes, args.frames, args.action_dim, args.fps,
               args.robot_type, cameras)
 

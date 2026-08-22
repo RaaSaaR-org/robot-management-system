@@ -5,8 +5,11 @@
  * @feature datasets
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { Readable } from 'stream';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { DatasetValidationResult } from '../../types/dataset.types.js';
 import type { DatasetStructureReport } from '../lerobot/validateDataset.js';
 
@@ -202,6 +205,25 @@ function makeValidation(overrides: Partial<DatasetValidationResult> = {}): Datas
     ...overrides,
   };
 }
+
+/**
+ * Where the upload test unpacks.
+ *
+ * It used to unpack into `server/data/uploaded-datasets` — inside the
+ * developer's checkout — and leave the tree there. Gitignored, so it never
+ * showed up in a commit, which is exactly why it went unnoticed.
+ */
+let uploadDir: string;
+
+beforeAll(async () => {
+  uploadDir = await mkdtemp(join(tmpdir(), 'dataset-upload-test-'));
+  process.env.DATASET_UPLOAD_DIR = uploadDir;
+});
+
+afterAll(async () => {
+  delete process.env.DATASET_UPLOAD_DIR;
+  await rm(uploadDir, { recursive: true, force: true });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -523,7 +545,7 @@ describe('completeUpload', () => {
     const moved = vi.mocked(datasetRepository.update).mock.calls
       .map((c) => c[1] as { storagePath?: string })
       .find((input) => typeof input.storagePath === 'string');
-    expect(moved?.storagePath).toMatch(/uploaded-datasets|dataset-upload/);
+    expect(moved?.storagePath?.startsWith(uploadDir)).toBe(true);
     expect(jsPublish).toHaveBeenCalledWith(
       'jobs.dataset.validate',
       expect.any(Uint8Array),

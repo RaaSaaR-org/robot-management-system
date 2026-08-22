@@ -217,12 +217,35 @@ def _slice_episode(table: pa.Table, episode: Episode) -> pa.Table:
     return table.filter(mask)
 
 
+def _count_frames(ffmpeg: str, path: Path) -> int | None:
+    """Frames in an mp4, or None when the probe is unavailable.
+
+    `ffprobe` sits next to `ffmpeg`; when it does not, the check is skipped
+    rather than the conversion refused.
+    """
+    probe = Path(ffmpeg).with_name("ffprobe")
+    if not probe.exists():
+        return None
+    result = subprocess.run(
+        [str(probe), "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip().split(",")[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def _write_video_segment(
     ffmpeg: str,
     src: Path,
     dst: Path,
     start_s: float,
     end_s: float,
+    expect_frames: int | None = None,
 ) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     duration = max(0.0, end_s - start_s)
@@ -243,14 +266,43 @@ def _write_video_segment(
     if result.returncode != 0:
         raise ConvertError("FFMPEG_FAILED", f"cutting {dst.name}: {result.stderr.strip()[:400]}")
 
+    # The cut was never checked. ffmpeg exits 0 for a window that starts past
+    # the end of the source — it just writes a video with no frames in it — so a
+    # source mp4 shorter than the episode metadata claims produced empty episode
+    # videos and the converter still reported ok:true.
+    if not dst.exists() or dst.stat().st_size == 0:
+        raise ConvertError("VIDEO_EMPTY", f"cutting {dst.name} produced an empty file")
+    frames = _count_frames(ffmpeg, dst)
+    if frames is not None:
+        if frames == 0:
+            raise ConvertError(
+                "VIDEO_EMPTY",
+                f"{dst.name}: the {start_s:.3f}-{end_s:.3f}s window cut zero frames out of "
+                f"{src.name} — the source is shorter than the episode metadata says",
+            )
+        # One frame of slack: a cut on a non-keyframe boundary can land either
+        # side, and that is not a broken conversion.
+        if expect_frames is not None and abs(frames - expect_frames) > 1:
+            raise ConvertError(
+                "VIDEO_SHORT",
+                f"{dst.name}: cut {frames} frames for an episode of {expect_frames}",
+            )
 
-def convert(source: Path, out: Path, force: bool = False) -> dict[str, Any]:
+
+def convert(
+    source: Path,
+    out: Path,
+    force: bool = False,
+    chunk_size: int = CHUNK_SIZE,
+) -> dict[str, Any]:
     source = source.expanduser().resolve()
     out = out.expanduser().resolve()
-    if out.exists():
-        if not force:
-            raise ConvertError("OUTPUT_EXISTS", f"{out} already exists; pass --force to replace it")
-        shutil.rmtree(out)
+    if out.exists() and not force:
+        raise ConvertError("OUTPUT_EXISTS", f"{out} already exists; pass --force to replace it")
+    # NOT `shutil.rmtree(out)` here. The server always passes --force, so
+    # deleting the destination up front meant a conversion that then failed —
+    # a missing video, ffmpeg gone — had already destroyed the working view an
+    # operator was reading. The old tree stays until the new one is complete.
 
     info = _load_info(source)
     features = dict(info.get("features") or {})
@@ -265,100 +317,136 @@ def convert(source: Path, out: Path, force: bool = False) -> dict[str, Any]:
 
     # Written to a sibling and moved into place, so a converter that dies
     # halfway does not leave a half-tree that the reader treats as a cache hit.
-    staging = out.parent / f".{out.name}.partial"
+    #
+    # The name carries this process's pid: two servers converting the same
+    # dataset shared one staging path, and each deleted the other's work
+    # mid-write — which surfaced as a bogus FFMPEG_FAILED on a sound archive.
+    staging = out.parent / f".{out.name}.{os.getpid()}.partial"
     if staging.exists():
         shutil.rmtree(staging)
-    (staging / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
-    (staging / "meta").mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
 
-    loaded: dict[tuple[int, int], pa.Table] = {}
-    episodes_meta: list[dict[str, Any]] = []
-    total_frames = 0
-    total_videos = 0
+    # Any failure from here removes the staging tree; the success path renames
+    # it into place, so there is nothing left either way. A failed conversion
+    # used to leave `.<name>.partial` behind, and every retry made another one.
+    try:
+        (staging / "meta").mkdir(parents=True, exist_ok=True)
 
-    for episode in episodes:
-        key = (episode.data_chunk, episode.data_file)
-        if key not in loaded:
-            path = data_files.get(key)
-            if path is None:
+        loaded: dict[tuple[int, int], pa.Table] = {}
+        chunks_written: set[int] = set()
+        episodes_meta: list[dict[str, Any]] = []
+        total_frames = 0
+        total_videos = 0
+
+        for episode in episodes:
+            key = (episode.data_chunk, episode.data_file)
+            if key not in loaded:
+                path = data_files.get(key)
+                if path is None:
+                    raise ConvertError(
+                        "DATA_MISSING",
+                        f"episode {episode.index} names data chunk {key} and no such file exists",
+                    )
+                loaded[key] = pq.read_table(path)
+            rows = _slice_episode(loaded[key], episode)
+            if rows.num_rows != episode.length:
                 raise ConvertError(
-                    "DATA_MISSING",
-                    f"episode {episode.index} names data chunk {key} and no such file exists",
+                    "LENGTH_MISMATCH",
+                    f"episode {episode.index}: meta says {episode.length} frames, the data parquet holds "
+                    f"{rows.num_rows}",
                 )
-            loaded[key] = pq.read_table(path)
-        rows = _slice_episode(loaded[key], episode)
-        if rows.num_rows != episode.length:
-            raise ConvertError(
-                "LENGTH_MISMATCH",
-                f"episode {episode.index}: meta says {episode.length} frames, the data parquet holds "
-                f"{rows.num_rows}",
+            # The chunk is computed, not hardcoded. Every episode used to be written
+            # to chunk-000 while `info.json` declared `chunks_size: 1000`, so a view
+            # of a >1000-episode dataset failed this repo's own validator: it looks
+            # for episode 1000 under chunk-001, which never existed.
+            episode_chunk = episode.index // chunk_size
+            chunks_written.add(episode_chunk)
+            data_rel = DATA_PATH_OUT.format(
+                episode_chunk=episode_chunk, episode_index=episode.index,
             )
-        pq.write_table(rows, staging / "data" / "chunk-000" / f"episode_{episode.index:06d}.parquet")
-        total_frames += rows.num_rows
+            (staging / data_rel).parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(rows, staging / data_rel)
+            total_frames += rows.num_rows
 
-        task_names = episode.tasks
-        if not task_names and "task_index" in rows.column_names and rows.num_rows:
-            first = int(rows["task_index"][0].as_py())
-            task_names = [tasks[first]] if 0 <= first < len(tasks) else []
-        episodes_meta.append({
-            "episode_index": episode.index,
-            "tasks": task_names,
-            "length": rows.num_rows,
-        })
+            task_names = episode.tasks
+            if not task_names and "task_index" in rows.column_names and rows.num_rows:
+                first = int(rows["task_index"][0].as_py())
+                task_names = [tasks[first]] if 0 <= first < len(tasks) else []
+            episodes_meta.append({
+                "episode_index": episode.index,
+                "tasks": task_names,
+                "length": rows.num_rows,
+            })
 
-        for video_key, (start, end, chunk, file_index) in episode.videos.items():
-            assert ffmpeg is not None
-            src = source / "videos" / video_key / f"chunk-{chunk:03d}" / f"file-{file_index:03d}.mp4"
-            if not src.exists():
-                raise ConvertError(
-                    "VIDEO_MISSING",
-                    f"episode {episode.index} names {src.relative_to(source)} and it is not there",
+            for video_key, (start, end, chunk, file_index) in episode.videos.items():
+                assert ffmpeg is not None
+                src = source / "videos" / video_key / f"chunk-{chunk:03d}" / f"file-{file_index:03d}.mp4"
+                if not src.exists():
+                    raise ConvertError(
+                        "VIDEO_MISSING",
+                        f"episode {episode.index} names {src.relative_to(source)} and it is not there",
+                    )
+                rel = VIDEO_PATH_OUT.format(
+                    episode_chunk=episode_chunk, video_key=video_key, episode_index=episode.index,
                 )
-            rel = VIDEO_PATH_OUT.format(
-                episode_chunk=0, video_key=video_key, episode_index=episode.index,
-            )
-            _write_video_segment(ffmpeg, src, staging / rel, start, end)
-            total_videos += 1
+                _write_video_segment(
+                    ffmpeg, src, staging / rel, start, end, expect_frames=episode.length,
+                )
+                total_videos += 1
 
-    out_info = dict(info)
-    out_info["codebase_version"] = CODEBASE_VERSION_OUT
-    out_info["data_path"] = DATA_PATH_OUT
-    out_info["video_path"] = VIDEO_PATH_OUT if video_keys else None
-    out_info["total_episodes"] = len(episodes_meta)
-    out_info["total_frames"] = total_frames
-    out_info["total_videos"] = total_videos
-    out_info["total_tasks"] = len(tasks)
-    out_info["total_chunks"] = 1
-    out_info["chunks_size"] = CHUNK_SIZE
-    out_info["splits"] = {"train": f"0:{len(episodes_meta)}"}
-    # Where this view came from, so a stray directory is identifiable as cache
-    # rather than as somebody's dataset.
-    out_info["_neodem_converted_from"] = {"version": info.get("codebase_version"), "path": str(source)}
-    (staging / "meta" / "info.json").write_text(json.dumps(out_info, indent=2))
+        out_info = dict(info)
+        out_info["codebase_version"] = CODEBASE_VERSION_OUT
+        out_info["data_path"] = DATA_PATH_OUT
+        out_info["video_path"] = VIDEO_PATH_OUT if video_keys else None
+        out_info["total_episodes"] = len(episodes_meta)
+        out_info["total_frames"] = total_frames
+        out_info["total_videos"] = total_videos
+        out_info["total_tasks"] = len(tasks)
+        out_info["total_chunks"] = max(chunks_written) + 1 if chunks_written else 1
+        out_info["chunks_size"] = chunk_size
+        out_info["splits"] = {"train": f"0:{len(episodes_meta)}"}
+        # Where this view came from, so a stray directory is identifiable as cache
+        # rather than as somebody's dataset.
+        out_info["_neodem_converted_from"] = {"version": info.get("codebase_version"), "path": str(source)}
+        (staging / "meta" / "info.json").write_text(json.dumps(out_info, indent=2))
 
-    with (staging / "meta" / "episodes.jsonl").open("w") as fh:
-        for row in episodes_meta:
-            fh.write(json.dumps(row) + "\n")
-    with (staging / "meta" / "tasks.jsonl").open("w") as fh:
-        for i, task in enumerate(tasks):
-            fh.write(json.dumps({"task_index": i, "task": task}) + "\n")
+        with (staging / "meta" / "episodes.jsonl").open("w") as fh:
+            for row in episodes_meta:
+                fh.write(json.dumps(row) + "\n")
+        with (staging / "meta" / "tasks.jsonl").open("w") as fh:
+            for i, task in enumerate(tasks):
+                fh.write(json.dumps({"task_index": i, "task": task}) + "\n")
 
-    stats = source / "meta" / "stats.json"
-    if stats.exists():
-        shutil.copyfile(stats, staging / "meta" / "stats.json")
+        stats = source / "meta" / "stats.json"
+        if stats.exists():
+            shutil.copyfile(stats, staging / "meta" / "stats.json")
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    staging.rename(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # The destination is replaced only now, with a complete tree in hand.
+        if out.exists():
+            shutil.rmtree(out)
+        try:
+            staging.rename(out)
+        except OSError:
+            # Another process finished the same conversion between the rmtree and
+            # this rename. The view is content-addressed and deterministic, so its
+            # tree is ours; take it and drop the duplicate.
+            if not (out / "meta" / "info.json").exists():
+                raise
+            shutil.rmtree(staging, ignore_errors=True)
 
-    return {
-        "ok": True,
-        "source": str(source),
-        "out": str(out),
-        "episodes": len(episodes_meta),
-        "frames": total_frames,
-        "videos": total_videos,
-        "video_keys": video_keys,
-    }
+        return {
+            "ok": True,
+            "source": str(source),
+            "out": str(out),
+            "episodes": len(episodes_meta),
+            "frames": total_frames,
+            "videos": total_videos,
+            "video_keys": video_keys,
+        }
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def main() -> None:
@@ -366,9 +454,14 @@ def main() -> None:
     ap.add_argument("source", type=Path, help="the v3.0 dataset directory")
     ap.add_argument("out", type=Path, help="where to write the v2.1 view")
     ap.add_argument("--force", action="store_true", help="replace an existing output directory")
+    ap.add_argument(
+        "--chunk-size", type=int, default=CHUNK_SIZE,
+        help=f"episodes per output chunk directory (default {CHUNK_SIZE}); "
+             "this is what info.json declares as chunks_size, so the two cannot disagree",
+    )
     args = ap.parse_args()
     try:
-        result = convert(args.source, args.out, force=args.force)
+        result = convert(args.source, args.out, force=args.force, chunk_size=args.chunk_size)
     except ConvertError as exc:
         print(json.dumps({"ok": False, "error": exc.code, "detail": exc.detail}))
         raise SystemExit(1) from exc
