@@ -38,6 +38,9 @@ Identity is `(0, 0, 0, 1)`, not `(1, 0, 0, 0)`, and `convert_quat` has been remo
 checkout is 2.x-era code and writes WXYZ throughout -- copying a `rot=` value from it yields a room
 rotated 180 degrees about X. Every quaternion in this file is XYZW.
 
+Set `UNITREE_SIM_CHECKOUT` to your `unitree_sim_isaaclab` checkout before running -- the scene and
+robot USDs are read from it and there is no default (this repo carries no machine-local paths).
+
 Run it on the SAME DDS domain as `isaac_loco_bridge.py`, and NOT while `sim_g1_dds/sim_node.py` or
 Unitree's `sim_main.py` is up: two `sport` services on one domain race, and the loser's commands are
 accepted and dropped.
@@ -92,10 +95,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # `robots/unitree.py` reads PROJECT_ROOT at module scope, so it must be set before any import of it
 # -- though we deliberately do not import their task cfgs at all: `tasks/__init__.py` gym-registers
 # everything and drags in pinocchio via `pink.tasks`.
-CHECKOUT = os.environ.get(
-    "UNITREE_SIM_CHECKOUT",
-    "/home/humanoid/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/unitree_sim_isaaclab",
-)
+CHECKOUT = os.environ.get("UNITREE_SIM_CHECKOUT")
+if not CHECKOUT:
+    raise SystemExit(
+        "UNITREE_SIM_CHECKOUT is not set. Point it at your unitree_sim_isaaclab checkout, e.g.\n"
+        "    export UNITREE_SIM_CHECKOUT=/path/to/unitree_sim_isaaclab"
+    )
 os.environ.setdefault("PROJECT_ROOT", CHECKOUT)
 os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 

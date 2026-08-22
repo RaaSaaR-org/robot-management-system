@@ -1,16 +1,17 @@
 """WSL backend: real GR00T-dreams pipeline (TASK-182 stages 1-3, proven 2026-07-14).
 
-One episode = one invocation of ``76_dreams_one_episode.sh`` inside the
-``g1-dreams`` WSL distro (user root, repo ``~/unitree``): Cosmos-Predict2-2B
+One episode = one invocation of ``76_dreams_one_episode.sh`` inside a WSL distro
+(``NEURAL_TRAJ_WSL_DISTRO``, user root): Cosmos-Predict2-2B
 (LoRA post-trained on real G1 teleop) generates the video from a real seed
 frame + the language prompt, then the GR00T-dreams IDM (checkpoint-20000,
 holdout MAE 0.079 rad / 5.5 % normalized) pseudo-labels 28-dim actions.
 The script writes ``video.mp4`` + ``trajectory.json`` + ``meta.json`` straight
 into the (Windows) jobdir via its ``/mnt/c/...`` view.
 
-Requirements: the distro must exist with the post-trained checkpoints in
-place, and the GPU must be free (~24 GB; ~4-6 min per episode including model
-load). The prompt is passed base64-encoded — wsl.exe mangles quoted spaces.
+Requirements: ``NEURAL_TRAJ_WSL_DISTRO`` must name an existing distro with the
+post-trained checkpoints in place, and the GPU must be free (~24 GB; ~4-6 min
+per episode including model load). The prompt is passed base64-encoded —
+wsl.exe mangles quoted spaces.
 """
 from __future__ import annotations
 
@@ -24,7 +25,11 @@ from pathlib import Path
 from ..constants import MODEL_NAME
 from ..errors import NeuralTrajError
 
-_SCRIPT = "/root/unitree/vla-training/scripts/76_dreams_one_episode.sh"
+# Both are deployment-specific: this repo carries no machine-local names or paths.
+_SCRIPT = os.environ.get(
+    "NEURAL_TRAJ_WSL_SCRIPT", "/root/unitree/vla-training/scripts/76_dreams_one_episode.sh"
+)
+_DISTRO = os.environ.get("NEURAL_TRAJ_WSL_DISTRO", "Ubuntu")
 
 
 def _to_wsl_path(p: Path) -> str:
@@ -41,7 +46,7 @@ class WslBackend:
     name = "wsl"
     model = MODEL_NAME
 
-    DISTRO = "g1-dreams"
+    DISTRO = _DISTRO
     USER = "root"
 
     def build_command(self, spec: dict, jobdir: Path) -> list[str]:

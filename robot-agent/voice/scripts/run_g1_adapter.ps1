@@ -2,7 +2,10 @@
 #
 # The adapter needs Python 3.10 + cyclonedds + unitree_sdk2py. The voice
 # service's own 3.12 venv cannot run it (no cp312 cyclonedds wheels), so it
-# runs out-of-process in C:\Unitree\.venv-g1-audio and is reached over HTTP.
+# runs out-of-process in a separate venv under UNITREE_ROOT and is reached over HTTP.
+#
+# Set UNITREE_ROOT (or pass -UnitreeRoot) to the directory holding .venv-g1-audio
+# and unitree_sdk2_python. No default: this repo carries no machine-local paths.
 #
 #   .\scripts\run_g1_adapter.ps1           # real robot (DDS domain 0)
 #   .\scripts\run_g1_adapter.ps1 -Mock     # robot-less smoke test
@@ -15,18 +18,23 @@
 param(
     [switch]$Mock,
     [string]$Interface = "Ethernet 3",
-    [int]$Port = 8766
+    [int]$Port = 8766,
+    [string]$UnitreeRoot = $env:UNITREE_ROOT
 )
 
 $ErrorActionPreference = "Stop"
 
-$venvPython = "C:\Unitree\.venv-g1-audio\Scripts\python.exe"
-$sdkPath = "C:\Unitree\unitree_sdk2_python"
+if (-not $UnitreeRoot) {
+    Write-Error "UNITREE_ROOT is not set. Set it (or pass -UnitreeRoot) to the directory holding .venv-g1-audio and unitree_sdk2_python."
+    exit 1
+}
+$venvPython = Join-Path $UnitreeRoot ".venv-g1-audio\Scripts\python.exe"
+$sdkPath = Join-Path $UnitreeRoot "unitree_sdk2_python"
 $adapter = Join-Path $PSScriptRoot "..\adapters\g1_audio_adapter.py"
 
 if (-not (Test-Path $venvPython)) {
     Write-Error "DDS venv missing: $venvPython"
-    Write-Error "Recreate: uv venv --python 3.10 C:\Unitree\.venv-g1-audio; uv pip install --python $venvPython cyclonedds==0.10.2 numpy"
+    Write-Error "Recreate: uv venv --python 3.10 $UnitreeRoot\.venv-g1-audio; uv pip install --python $venvPython cyclonedds==0.10.2 numpy"
     exit 1
 }
 if (-not (Test-Path $sdkPath)) {

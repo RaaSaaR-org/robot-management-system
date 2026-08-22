@@ -31,7 +31,8 @@ from envs.g1_apple_env import (  # noqa: E402
 )
 
 # Optional debug render target (used by the apple_pnp workstream).
-_SCENE_CHECK_DIR = r"C:\Unitree\_data\apple_pnp"
+# Set APPLE_PNP_SCENE_CHECK_DIR to an existing directory to get scene_check.jpg written there.
+_SCENE_CHECK_DIR = os.environ.get("APPLE_PNP_SCENE_CHECK_DIR", "")
 
 
 def _hold_action(obs: dict) -> np.ndarray:
@@ -186,7 +187,7 @@ def test_ego_camera_shows_apple_and_plate(env):
     assert int(red.sum()) > 200, f"apple not visible: {int(red.sum())} red px"
     assert int(white.sum()) > 1000, f"plate not visible: {int(white.sum())} white px"
 
-    if os.path.isdir(_SCENE_CHECK_DIR):
+    if _SCENE_CHECK_DIR and os.path.isdir(_SCENE_CHECK_DIR):
         from PIL import Image
 
         Image.fromarray(img).save(
