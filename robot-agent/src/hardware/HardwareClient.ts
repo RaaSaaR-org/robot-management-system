@@ -827,6 +827,119 @@ export class HardwareClient {
   }
 
   /**
+   * One-shot camera snapshot as raw JPEG bytes.
+   *
+   * Prefers the sim facade's `?format=raw`, which answers `image/jpeg` and
+   * skips a base64 round trip the recorder would only undo. A sidecar that does
+   * not know the parameter answers its usual JSON — `g1_sidecar.py` ignores
+   * query strings — so the JSON body is decoded instead and nothing has to know
+   * in advance which one it is talking to.
+   *
+   * `shadows: false` drops MuJoCo's shadow and reflection passes: on
+   * `g1_dex3_house_scene.xml` a frame costs ~50 ms with them and ~8 ms without,
+   * and it is the ratio that holds rather than the milliseconds — the shadowed
+   * form is the half that moves with machine load. That is the difference
+   * between 20 fps and 30 fps with two cameras. It changes the lighting of the
+   * picture, so the choice is recorded in the dataset rather than made silently.
+   */
+  async snapshotRaw(
+    name: string,
+    opts: { shadows?: boolean; quality?: number; timeoutMs?: number } = {}
+  ): Promise<Buffer> {
+    const params = new URLSearchParams({ format: 'raw' });
+    if (opts.shadows === false) {
+      params.set('shadows', '0');
+      params.set('reflection', '0');
+    }
+    if (opts.quality !== undefined) params.set('quality', String(opts.quality));
+
+    const url = `${getSidecarUrl()}/cameras/${encodeURIComponent(name)}/snapshot?${params.toString()}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 2000) });
+    const contentType = res.headers.get('content-type') ?? '';
+
+    if (res.ok && contentType.startsWith('image/')) {
+      return Buffer.from(await res.arrayBuffer());
+    }
+
+    const data = (await res.json().catch(() => ({}))) as {
+      image_b64?: string;
+      jpeg_base64?: string;
+      error?: string;
+    };
+    if (!res.ok) {
+      throw new Error(
+        `Sidecar snapshot ${name} failed: HTTP ${res.status}${data.error ? ` — ${data.error}` : ''}`
+      );
+    }
+    const b64 = data.image_b64 ?? data.jpeg_base64;
+    if (!b64) {
+      throw new Error(
+        `Sidecar snapshot ${name}: ${data.error ?? 'response carried neither image_b64 nor jpeg_base64'}`
+      );
+    }
+    return Buffer.from(b64, 'base64');
+  }
+
+  /**
+   * A FRESH measured pose, keyed by joint name.
+   *
+   * {@link getJointStates} answers from the 2 s poll cache, which a recorder
+   * ticking at 30 Hz would resample sixty times; {@link getStateNow} is fresh
+   * but returns a vector in the embodiment's order with **missing joints filled
+   * in as 0**, which is indistinguishable from a joint that is genuinely at
+   * zero. This returns only what the sidecar actually reported, so a caller can
+   * tell the difference and refuse.
+   */
+  async getJointMapNow(timeoutMs = 1500): Promise<Record<string, number>> {
+    const res = await fetch(`${getSidecarUrl()}/state/fast`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar /state/fast returned ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      joints?: Array<{ name?: unknown; position?: unknown }>;
+    };
+    const out: Record<string, number> = {};
+    for (const joint of data.joints ?? []) {
+      if (typeof joint?.name === 'string' && typeof joint.position === 'number'
+          && Number.isFinite(joint.position)) {
+        out[joint.name] = joint.position;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * What the sidecar says about itself: the scene it loaded, the boot it is on,
+   * and how far its physics has fallen behind the wall clock.
+   *
+   * `behind_s` is the starvation signal a recorder pulling frames has to watch —
+   * every render happens on the physics thread, so filming the simulation is
+   * taken out of the simulation.
+   */
+  async describeSidecar(timeoutMs = 2000): Promise<{
+    scene: string | null;
+    bootId: string | null;
+    behindS: number | null;
+  }> {
+    const res = await fetch(`${getSidecarUrl()}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`Sidecar /health returned ${res.status}`);
+    const data = (await res.json()) as {
+      scene?: unknown;
+      boot_id?: unknown;
+      behind_s?: unknown;
+    };
+    return {
+      scene: typeof data.scene === 'string' ? data.scene : null,
+      bootId: typeof data.boot_id === 'string' ? data.boot_id : null,
+      behindS: typeof data.behind_s === 'number' ? data.behind_s : null,
+    };
+  }
+
+  /**
    * List of depth / LiDAR sensor names the sidecar exposes.
    *
    * @status hardware-pending — on real G1 hardware these come from the Livox

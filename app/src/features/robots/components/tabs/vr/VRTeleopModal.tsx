@@ -112,7 +112,7 @@ interface ControlGroup {
  * card; listing both rows flat left the operator to infer the mode from a
  * parenthetical.
  */
-function controlGroups(trigger: EndEffectorMode): ControlGroup[] {
+function controlGroups(trigger: EndEffectorMode, hasNextEpisode: boolean): ControlGroup[] {
   return [
     {
       id: 'arm',
@@ -136,10 +136,21 @@ function controlGroups(trigger: EndEffectorMode): ControlGroup[] {
     },
     {
       id: 'safety',
-      title: 'Safety and view',
+      // The title moves with the rows. A card headed "Safety and view" that
+      // lists an episode control is as wrong as one that lists a control the
+      // session does not have.
+      title: hasNextEpisode ? 'Safety, view and recording' : 'Safety and view',
       rows: [
         { id: 'estop', keys: 'B / Y', label: 'E-STOP — either hand, either button' },
         { id: 'recenter', keys: 'A / X', label: 'Recenter the view inside the robot’s head' },
+        // Listed ONLY when the host actually wired one up. This modal is opened
+        // from the robot detail page too, where there is no session and no
+        // episode to advance, and a mapping card that names a control the
+        // session does not have is a lie the operator finds out about by
+        // pressing it.
+        ...(hasNextEpisode
+          ? [{ id: 'next-episode', keys: 'L-Stick', label: 'Click to end this episode and start the next' }]
+          : []),
       ],
     },
   ];
@@ -152,13 +163,31 @@ export interface VRTeleopModalProps {
   /** `isSessionSupported('immersive-vr')`; null while it is still pending. */
   sessionSupported: boolean | null;
   onClose: () => void;
+  /**
+   * End the current episode and start the next one, for the LEFT stick click
+   * inside the headset. Only the data-collection session page supplies it; when
+   * it is absent the binding and its row on the mapping card both disappear.
+   */
+  onNextEpisode?: () => void;
+  /**
+   * The episode being captured right now, for the wrist HUD's REC line. Null
+   * (or absent) when nothing is recording.
+   */
+  recording?: { episode: number; frames: number } | null;
 }
 
 /**
  * The modal body is mounted only while the modal is open, so the link and the
  * (heavy) XR canvas connect on open and tear down on close.
  */
-export function VRTeleopModalBody({ robot, availability, sessionSupported, onClose }: VRTeleopModalProps) {
+export function VRTeleopModalBody({
+  robot,
+  availability,
+  sessionSupported,
+  onClose,
+  onNextEpisode,
+  recording,
+}: VRTeleopModalProps) {
   const [status, setStatus] = useState<LinkStatus>('closed');
   const [robotType, setRobotType] = useState('');
   const [joints, setJoints] = useState<VrJoint[]>([]);
@@ -402,7 +431,10 @@ export function VRTeleopModalBody({ robot, availability, sessionSupported, onClo
     t.link = meters.link;
     t.msSinceState = meters.msSinceState;
     t.rttMs = meters.rttMs;
-  }, [estopLatched, meters]);
+    // `?? null` because the prop is optional: `undefined` would leave the HUD's
+    // REC line switched on by an absent value.
+    t.recording = recording ?? null;
+  }, [estopLatched, meters, recording]);
 
   /**
    * Raise the E-Stop. One implementation for both entry points — the B/Y buttons
@@ -668,12 +700,13 @@ export function VRTeleopModalBody({ robot, availability, sessionSupported, onClo
           send={send}
           onRecenter={recenter}
           onEstop={onStopButton}
+          onNextEpisode={onNextEpisode}
         />
       </div>
 
       {/* Controller mapping */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {controlGroups(trigger).map((group) => (
+        {controlGroups(trigger, !!onNextEpisode).map((group) => (
           <div key={group.id} className="rounded-lg border border-theme-subtle bg-theme-secondary p-3">
             <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-theme-tertiary">
               {group.title}

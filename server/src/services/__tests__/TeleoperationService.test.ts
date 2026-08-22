@@ -24,6 +24,11 @@ const { mockPrisma, mockDatasetRepository, mockRobotTypeRepository } = vi.hoiste
     robot: {
       findUnique: vi.fn(),
     },
+    teleoperationEpisode: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(),
+      deleteMany: vi.fn(),
+    },
   },
   mockDatasetRepository: {
     create: vi.fn().mockResolvedValue({ id: 'ds-created-id' }),
@@ -43,6 +48,7 @@ vi.mock('@prisma/client', () => ({
     teleoperationSession = mockPrisma.teleoperationSession;
     teleoperationFrame = mockPrisma.teleoperationFrame;
     robot = mockPrisma.robot;
+    teleoperationEpisode = mockPrisma.teleoperationEpisode;
   },
 }));
 
@@ -67,13 +73,38 @@ vi.mock('../LeRobotExportService.js', () => ({
   },
 }));
 
-// The sim recorder path lazily imports RobotManager for telemetry — stub it out
+// The sim recorder path lazily imports RobotManager for telemetry — stub it out.
+// AgentRecordingService reaches for `getRegisteredRobot` through the same lazy
+// import; returning null there is what makes these tests take the SIM path.
 vi.mock('../RobotManager.js', () => ({
   robotManager: {
     getTelemetry: vi.fn().mockResolvedValue({
       jointStates: [{ name: 'shoulder_pan', position: 0.1, velocity: 0 }],
     }),
+    getRegisteredRobot: vi.fn().mockResolvedValue(null),
   },
+}));
+
+const { mockAgentRecording, mockProvenance } = vi.hoisted(() => ({
+  mockAgentRecording: {
+    start: vi.fn().mockResolvedValue(null),
+    nextEpisode: vi.fn().mockResolvedValue(null),
+    discardEpisode: vi.fn().mockResolvedValue(false),
+    stop: vi.fn().mockResolvedValue(null),
+    status: vi.fn().mockResolvedValue(null),
+  },
+  mockProvenance: { recordProvenance: vi.fn().mockResolvedValue({ id: 'prov-1' }) },
+}));
+
+vi.mock('../AgentRecordingService.js', async (importOriginal) => {
+  // The real AgentRecordingRefused is kept: startSession branches on
+  // `instanceof`, and a stubbed class would make that branch untestable.
+  const actual = await importOriginal<typeof import('../AgentRecordingService.js')>();
+  return { ...actual, agentRecordingService: mockAgentRecording };
+});
+
+vi.mock('../TrainingDataDocService.js', () => ({
+  trainingDataDocService: mockProvenance,
 }));
 
 vi.mock('../../storage/rustfs-client.js', () => ({
@@ -90,6 +121,7 @@ vi.mock('../DataQualityService.js', () => ({
 }));
 
 import { TeleoperationService } from '../TeleoperationService.js';
+import { AgentRecordingRefused } from '../AgentRecordingService.js';
 
 // ============================================================================
 // TEST DATA
@@ -135,6 +167,12 @@ describe('TeleoperationService', () => {
       { id: 'rt-aloha', name: 'ALOHA', manufacturer: 'Google', model: 'ALOHA', actionDim: 14, proprioceptionDim: 14 },
     ]);
     mockRobotTypeRepository.create.mockResolvedValue({ id: 'rt-new-id' });
+    mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([]);
+    mockAgentRecording.start.mockResolvedValue(null);
+    mockAgentRecording.stop.mockResolvedValue(null);
+    mockAgentRecording.status.mockResolvedValue(null);
+    mockAgentRecording.nextEpisode.mockResolvedValue(null);
+    mockProvenance.recordProvenance.mockResolvedValue({ id: 'prov-1' });
     service = TeleoperationService.getInstance();
   });
 
@@ -509,6 +547,313 @@ describe('TeleoperationService', () => {
         });
         await service.deleteSession('session-1');
       }
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Agent-side recording (TASK-215)
+  // --------------------------------------------------------------------------
+
+  describe('recording on the robot agent', () => {
+    const AGENT_STATUS = {
+      ok: true,
+      recording: true,
+      sessionId: 'session-1',
+      episodeIndex: 0,
+      frames: 0,
+      totalFrames: 0,
+      dropped: 0,
+      totalDropped: 0,
+      fpsTarget: 30,
+      fpsActual: 0,
+      degraded: false,
+      lastDropReason: null,
+      cameras: [{ camera: 'head_camera', key: 'cam_right_high' }],
+      scene: 'g1_dex3_house_scene.xml',
+      behindS: 0,
+      episodes: [],
+    };
+
+    const AGENT_RESULT = {
+      ok: true,
+      datasetPath: '/robot/data/datasets/session-1',
+      robotType: 'Unitree_G1_Dex3',
+      totalEpisodes: 2,
+      totalFrames: 240,
+      totalDropped: 3,
+      fpsActual: 29.85,
+      episodes: [
+        { episodeIndex: 0, frames: 120, dropped: 1, durationS: 4.01, fpsActual: 29.9 },
+        { episodeIndex: 1, frames: 120, dropped: 2, durationS: 4.03, fpsActual: 29.8 },
+      ],
+      videoFeatures: ['observation.images.cam_right_high'],
+      scene: 'g1_dex3_house_scene.xml',
+      bootId: 'boot-1',
+    };
+
+    const CREATED = {
+      ...COMPLETED_SESSION,
+      status: 'created',
+      startedAt: null,
+      sidecarDatasetPath: null,
+      recorderKind: null,
+      type: 'vr_quest',
+      fps: 30,
+    };
+
+    function updatePassesThrough(base: Record<string, unknown>) {
+      mockPrisma.teleoperationSession.update.mockImplementation(
+        async (args: { data: Record<string, unknown> }) => ({ ...base, ...args.data }),
+      );
+    }
+
+    beforeEach(() => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue(CREATED);
+      mockPrisma.robot.findUnique.mockResolvedValue({
+        id: 'robot-1',
+        model: 'G1 EDU',
+        a2aAgentUrl: null,
+      });
+      mockPrisma.teleoperationFrame.aggregate.mockResolvedValue({
+        _max: { frameIndex: null, episodeIndex: null },
+      });
+      mockPrisma.teleoperationFrame.count.mockResolvedValue(0);
+      updatePassesThrough(CREATED);
+    });
+
+    afterEach(async () => {
+      // The agent poller is an interval; ending the session clears it.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+      });
+      await service.endSession('session-1').catch(() => {});
+    });
+
+    it('records on the agent when the agent can, and does not also start the sim recorder', async () => {
+      mockAgentRecording.start.mockResolvedValue(AGENT_STATUS);
+      const result = await service.startSession('session-1');
+      expect(result.status).toBe('recording');
+      expect(mockAgentRecording.start).toHaveBeenCalledWith('robot-1', {
+        sessionId: 'session-1',
+        fps: 30,
+        task: 'Pick up the cube',
+        inputMode: 'vr_quest',
+      });
+      // The sim recorder seeds itself from persisted frames; it must not have run.
+      expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('writes down WHICH recorder ran, because endSession has to ask the same one to stop', async () => {
+      mockAgentRecording.start.mockResolvedValue(AGENT_STATUS);
+      await service.startSession('session-1');
+      const data = mockPrisma.teleoperationSession.update.mock.calls[0]![0].data;
+      expect(data.recorderKind).toBe('agent');
+    });
+
+    it('falls back to the sim recorder when the agent cannot record', async () => {
+      mockAgentRecording.start.mockResolvedValue(null);
+      await service.startSession('session-1');
+      expect(mockPrisma.teleoperationFrame.aggregate).toHaveBeenCalled();
+      const data = mockPrisma.teleoperationSession.update.mock.calls[0]![0].data;
+      expect(data.recorderKind).toBe('sim');
+    });
+
+    it('refuses to start at all when the robot understood and said no', async () => {
+      // Silently falling back would hide a recording left running by a session
+      // that ended badly, behind a dataset with no video.
+      mockAgentRecording.start.mockRejectedValue(
+        new AgentRecordingRefused('busy recording session other-1', 409, 'RECORDING_REFUSED'),
+      );
+      await expect(service.startSession('session-1')).rejects.toThrow(
+        /busy recording session other-1.*Stop the recording on robot-1/s,
+      );
+      expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('draws the episode boundary on the robot, where the frames are', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+      });
+      mockAgentRecording.nextEpisode.mockResolvedValue(4);
+      expect(await service.nextEpisode('session-1')).toEqual({ episodeIndex: 4 });
+      expect(mockAgentRecording.nextEpisode).toHaveBeenCalledWith('robot-1');
+      // No local index was invented alongside it.
+      expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('says so rather than inventing an index when the robot will not advance', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+      });
+      mockAgentRecording.nextEpisode.mockResolvedValue(null);
+      await expect(service.nextEpisode('session-1')).rejects.toThrow(
+        /did not accept the episode boundary/,
+      );
+    });
+
+    it('persists what the recorder reported about each episode', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+        startedAt: new Date('2026-08-22T10:00:00Z'),
+      });
+      mockAgentRecording.stop.mockResolvedValue(AGENT_RESULT);
+      updatePassesThrough({ ...CREATED, status: 'completed' });
+
+      await service.endSession('session-1');
+
+      expect(mockPrisma.teleoperationEpisode.upsert).toHaveBeenCalledTimes(2);
+      const first = mockPrisma.teleoperationEpisode.upsert.mock.calls[0]![0];
+      expect(first.where).toEqual({
+        sessionId_episodeIndex: { sessionId: 'session-1', episodeIndex: 0 },
+      });
+      expect(first.create).toMatchObject({ frameCount: 120, droppedFrames: 1, fpsActual: 29.9 });
+    });
+
+    it('registers the dataset the robot wrote, by path, with its measured numbers', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+        startedAt: new Date('2026-08-22T10:00:00Z'),
+      });
+      mockAgentRecording.stop.mockResolvedValue(AGENT_RESULT);
+      updatePassesThrough({ ...CREATED, status: 'completed' });
+
+      await service.endSession('session-1');
+
+      expect(mockDatasetRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          storagePath: '/robot/data/datasets/session-1',
+          lerobotVersion: 'v3.0',
+          totalFrames: 240,
+          demonstrationCount: 2,
+          status: 'ready',
+          fps: 30,
+        }),
+      );
+    });
+
+    it('writes a DatasetProvenance row naming the scene and the operator', async () => {
+      // The model has existed since the EU AI Act work and nothing had ever
+      // written one.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+        startedAt: new Date('2026-08-22T10:00:00Z'),
+      });
+      mockAgentRecording.stop.mockResolvedValue(AGENT_RESULT);
+      updatePassesThrough({ ...CREATED, status: 'completed' });
+
+      await service.endSession('session-1');
+
+      expect(mockProvenance.recordProvenance).toHaveBeenCalledWith(
+        'ds-created-id',
+        expect.objectContaining({
+          sourceType: 'collected',
+          sourceName: 'MuJoCo sim — g1_dex3_house_scene.xml',
+        }),
+        'op-1',
+      );
+      const dto = mockProvenance.recordProvenance.mock.calls[0]![1];
+      expect(dto.collectionMethod).toMatch(/29\.85 fps, 3 dropped frames/);
+    });
+
+    it('does not auto-export the empty frame table next to the real dataset', async () => {
+      // An agent-recorded session's frames are a parquet file on the robot.
+      // Treating it as frame-based would export a second, hollow dataset.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+        startedAt: new Date('2026-08-22T10:00:00Z'),
+      });
+      mockAgentRecording.stop.mockResolvedValue(AGENT_RESULT);
+      updatePassesThrough({ ...CREATED, status: 'completed' });
+
+      await service.endSession('session-1');
+      expect(mockExportSession).not.toHaveBeenCalled();
+    });
+
+    it('says why there is no dataset when the robot recorded nothing', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+        startedAt: new Date('2026-08-22T10:00:00Z'),
+      });
+      mockAgentRecording.stop.mockResolvedValue({
+        ...AGENT_RESULT,
+        ok: false,
+        datasetPath: null,
+        totalFrames: 0,
+        totalEpisodes: 0,
+        episodes: [],
+        error: 'no frames recorded — teleop is not engaged',
+      });
+      updatePassesThrough({ ...CREATED, status: 'completed' });
+
+      await service.endSession('session-1');
+      const data = mockPrisma.teleoperationSession.update.mock.calls.at(-1)![0].data;
+      expect(data.errorMessage).toMatch(/teleop is not engaged/);
+      expect(mockDatasetRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('prefers persisted episode summaries, which carry drops the frames never could', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'completed',
+        recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([
+        { episodeIndex: 0, frameCount: 120, droppedFrames: 1, durationS: 4.01, fpsActual: 29.9 },
+      ]);
+      const episodes = await service.listEpisodes('session-1');
+      expect(episodes).toEqual([
+        {
+          episodeIndex: 0,
+          frameCount: 120,
+          startTime: 0,
+          endTime: 4.01,
+          durationS: 4.01,
+          droppedFrames: 1,
+          fpsActual: 29.9,
+        },
+      ]);
+      expect(mockPrisma.teleoperationFrame.groupBy).not.toHaveBeenCalled();
+    });
+
+    it('asks the robot for live episode numbers while it is still recording', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([]);
+      mockAgentRecording.status.mockResolvedValue({
+        ...AGENT_STATUS,
+        episodes: [{ episodeIndex: 0, frames: 42, dropped: 2, durationS: 1.4, fpsActual: 29.3 }],
+      });
+      const episodes = await service.listEpisodes('session-1');
+      expect(episodes).toEqual([
+        {
+          episodeIndex: 0,
+          frameCount: 42,
+          startTime: 0,
+          endTime: 1.4,
+          durationS: 1.4,
+          droppedFrames: 2,
+          fpsActual: 29.3,
+        },
+      ]);
     });
   });
 });

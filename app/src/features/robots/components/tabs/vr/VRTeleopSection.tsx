@@ -41,7 +41,19 @@ const AVAILABILITY_HINT: Record<XrAvailability, string> = {
   unsupported: 'Open this page in a Meta Quest browser to enter VR. Launch to preview the robot.',
 };
 
-export function VRTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
+export interface VRTeleopSectionProps {
+  robot: TeleopTabProps['robot'];
+  /**
+   * End the current episode and start the next — bound to the LEFT stick click
+   * inside the headset, and listed on the modal's mapping card only when it is
+   * supplied. Absent on the robot detail page, which has no session.
+   */
+  onNextEpisode?: () => void;
+  /** The episode being captured, for the wrist HUD's REC line. */
+  recording?: { episode: number; frames: number } | null;
+}
+
+export function VRTeleopSection({ robot, onNextEpisode, recording }: VRTeleopSectionProps) {
   const [open, setOpen] = useState(false);
   const [sessionSupported, setSessionSupported] = useState<boolean | null>(null);
 
@@ -109,6 +121,8 @@ export function VRTeleopSection({ robot }: { robot: TeleopTabProps['robot'] }) {
           availability={availability}
           sessionSupported={sessionSupported}
           onClose={() => setOpen(false)}
+          onNextEpisode={onNextEpisode}
+          recording={recording}
         />
       </Modal>
     </>

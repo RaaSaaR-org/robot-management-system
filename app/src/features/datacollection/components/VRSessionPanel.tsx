@@ -19,6 +19,15 @@ import type { Robot } from '../../robots/types/robots.types';
 
 export interface VRSessionPanelProps {
   robot: Robot | null;
+  /**
+   * End the current episode and start the next one. Threaded down to the WebXR
+   * rig, which binds it to the LEFT thumbstick click — an operator wearing a
+   * Quest cannot reach the "Next episode" button on this page, and until they
+   * could, episode boundaries were a thing only the person at the desk could set.
+   */
+  onNextEpisode?: () => void;
+  /** The episode being captured, for the in-headset REC line. Null when idle. */
+  recording?: { episode: number; frames: number } | null;
 }
 
 const STATUS_LABEL: Record<SimInputStatus, string> = {
@@ -33,7 +42,7 @@ const STATUS_DOT: Record<SimInputStatus, string> = {
   streaming: 'bg-green-500 animate-pulse',
 };
 
-export function VRSessionPanel({ robot }: VRSessionPanelProps) {
+export function VRSessionPanel({ robot, onNextEpisode, recording }: VRSessionPanelProps) {
   const [simulate, setSimulate] = useState(false);
   const [showKeyboard, setShowKeyboard] = useState(false);
   const simStatus = useSimulatedVrInput({ robot, enabled: simulate });
@@ -49,7 +58,7 @@ export function VRSessionPanel({ robot }: VRSessionPanelProps) {
   return (
     <div className="space-y-3" data-testid="vr-session-panel">
       {/* Real headset path: WebXR rig (launcher card + full-screen modal) */}
-      <VRTeleopSection robot={robot} />
+      <VRTeleopSection robot={robot} onNextEpisode={onNextEpisode} recording={recording} />
 
       {/* Headset-less testing: synthetic input driver */}
       <Card className="!p-4">

@@ -45,7 +45,21 @@ export interface VrSceneProps {
   send: (payload: unknown) => void;
   onRecenter: () => void;
   onEstop: () => void;
+  /**
+   * End the current episode and start the next — bound to the LEFT stick click.
+   * Absent on the robot detail page, which has no session behind it, and the rig
+   * leaves the binding unwired when it is.
+   */
+  onNextEpisode?: () => void;
 }
+
+/*
+ * There is deliberately no `recording` prop here. The REC line reaches the wrist
+ * HUD through `telemetryRef`, which the modal already mirrors it onto — the same
+ * route `estopLatched`, `link` and `rttMs` take, and for the same reason: this
+ * scene re-renders the whole R3F tree, so a frame counter arriving as a prop
+ * would rebuild the canvas every time the server ticked it.
+ */
 
 export function VrScene({
   store,
@@ -65,6 +79,7 @@ export function VrScene({
   send,
   onRecenter,
   onEstop,
+  onNextEpisode,
 }: VrSceneProps) {
   const cameraPos: [number, number, number] = modelType === 'so101' ? [0.5, 0.4, 0.5] : [1.5, 1.0, 1.5];
 
@@ -139,6 +154,7 @@ export function VrScene({
           send={send}
           onRecenter={onRecenter}
           onEstop={onEstop}
+          onNextEpisode={onNextEpisode}
           headingRef={headingRef}
           robotHeadingRef={robotHeadingRef}
           robotPositionsRef={robotPositionsRef}

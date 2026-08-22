@@ -146,23 +146,36 @@ export class DatasetService extends EventEmitter {
       }
     }
 
-    // Generate storage path
-    const datasetId = uuidv4();
-    const storagePath = `${datasetId}/`;
+    // Two very different things share this door.
+    //
+    // Without `storagePath`: mint an empty dataset and a prefix to upload into.
+    // Everything is zero because nothing has been uploaded yet, and `uploading`
+    // is the honest status.
+    //
+    // With `storagePath`: something already produced a dataset — the robot's
+    // own episode recorder (TASK-215), a curation run, a converter — and this
+    // is a registration, not a reservation. Zeroing fps and frame counts here
+    // would throw away numbers the caller measured, and calling it `uploading`
+    // would leave a finished dataset waiting forever for an upload that is not
+    // coming.
+    const registering = typeof dto.storagePath === 'string' && dto.storagePath.trim().length > 0;
+    const storagePath = registering ? dto.storagePath!.trim() : `${uuidv4()}/`;
 
-    // Create dataset with uploading status
     const input: CreateDatasetInput = {
       name: dto.name,
       description: dto.description,
       robotTypeId: dto.robotTypeId,
       skillId: dto.skillId,
       storagePath,
-      lerobotVersion: 'v3.0',
-      fps: 0,
-      totalFrames: 0,
-      totalDuration: 0,
-      demonstrationCount: 0,
-      status: 'uploading',
+      lerobotVersion: dto.lerobotVersion ?? 'v3.0',
+      fps: registering ? (dto.fps ?? 0) : 0,
+      totalFrames: registering ? (dto.totalFrames ?? 0) : 0,
+      totalDuration: registering ? (dto.totalDuration ?? 0) : 0,
+      demonstrationCount: registering ? (dto.demonstrationCount ?? 0) : 0,
+      status: registering ? 'ready' : 'uploading',
+      ...(registering && dto.infoJson
+        ? { infoJson: dto.infoJson as unknown as CreateDatasetInput['infoJson'] }
+        : {}),
     };
 
     const dataset = await datasetRepository.create(input);

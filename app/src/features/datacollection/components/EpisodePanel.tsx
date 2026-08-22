@@ -127,6 +127,22 @@ export function EpisodePanel({
                 <span className="text-theme-muted truncate">
                   {ep.frameCount.toLocaleString(UI_DATE_LOCALE)} frames · {formatSeconds(ep.durationS)}
                 </span>
+                {/* Only when there ARE drops. "0 dropped" on every healthy
+                    episode teaches the operator to stop reading the line, which
+                    is exactly the line they need to notice on the one episode
+                    where the recorder could not keep up. Yellow, not the red
+                    this file uses for the live dot and the discard button: a
+                    frame the recorder missed is a degraded episode, not a
+                    destroyed one, and it must not read as the same event as the
+                    pulsing red "live" marker two spans to its left. */}
+                {typeof ep.droppedFrames === 'number' && ep.droppedFrames > 0 && (
+                  <span
+                    className="text-yellow-400 shrink-0"
+                    data-testid={`episode-dropped-${ep.episodeIndex}`}
+                  >
+                    · {ep.droppedFrames.toLocaleString(UI_DATE_LOCALE)} dropped
+                  </span>
+                )}
               </div>
               {canDiscard && (
                 <button

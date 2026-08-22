@@ -28,6 +28,7 @@ import { createTelemetryWebSocket } from './api/websocket.js';
 import { createPointCloudWebSocket } from './api/pointcloud-websocket.js';
 import { createAgentModeWebSocket } from './api/agent-mode-websocket.js';
 import { agentModeController } from './agent-mode/agent-mode-controller.js';
+import { recordingController } from './recording/recording-controller.js';
 import { IncarnationLog } from './agent-mode/incarnations.js';
 import {
   EMBODIMENT_TAG_BY_ROBOT_TYPE,
@@ -435,7 +436,13 @@ async function main() {
   // The order lives in `agent-runtime.ts`, where it is documented and tested.
   const runtime = createAgentRuntime({
     confirmIncarnation: () => incarnations.confirm(),
-    attachController: () => agentModeController.attach(robotStateManager),
+    attachController: () => {
+      agentModeController.attach(robotStateManager);
+      // Same event, same reason: the episode recorder reads the commanded
+      // pose straight off this manager, so it must not exist before the
+      // process has decided it is the robot.
+      recordingController.attach(robotStateManager);
+    },
     reassertRestoredStop: () => {
       if (robotStateManager.reassertRestoredSafetyStop()) {
         console.log('[SimulatedRobot] restored E-Stop latch re-asserted on the hardware');
@@ -527,6 +534,18 @@ async function main() {
     // Persist state synchronously before anything else (Task 39)
     robotStateManager.saveStateSync();
     console.log('[SimulatedRobot] State persisted to disk');
+
+    // A recording in flight writes what it has rather than losing it. The
+    // frames are already on disk as JPEGs; all that is missing is the parquet
+    // and the encode, and both are quick.
+    try {
+      const recorded = await recordingController.stopIfRecording();
+      if (recorded?.datasetPath) {
+        console.log(`[Recording] wrote ${recorded.totalFrames} frames to ${recorded.datasetPath}`);
+      }
+    } catch (err) {
+      console.warn('[Recording] could not finish the open session:', err);
+    }
 
     // …and close the incarnation right next to it, still before the network
     // phase below: this line is what makes the next boot read as clean rather

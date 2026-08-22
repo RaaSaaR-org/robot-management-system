@@ -15,6 +15,7 @@ in simulation and on hardware. Only the DDS peer changes.
 | `sim_node.py` | MuJoCo + DDS peer + optional sidecar-compatible HTTP facade |
 | `test_loco_state.py` | pytest for the state machine |
 | `test_lidar.py` | pytest for the ray LiDAR: range gates, table-front range against the MJCF, no self-hits |
+| `test_snapshot_options.py` | pytest for the snapshot render options (`?shadows=0` &c., no leak into the shared scene) and the 43 joints `/state` reports |
 | `e2e_loco_check.py` | Integration check: drives the sim with a real `LocoClient` and asserts the physics |
 | `cine_recorder.py` | Cinematic MP4 recording (follow / orbit / wide / any MJCF camera) → ffmpeg; `--record` flag and `/record/*` routes |
 | `demo_clip.py` | One Agent Mode command → captioned explainer clip (records, runs the plan, burns block captions) |
@@ -66,6 +67,63 @@ nothing about the wire.
 every time the node starts, so anything the agent built in the odometry frame is
 only valid within one boot. The robot-agent keys its persisted occupancy map
 (TASK-206) on this id and throws the map away when it changes.
+
+## Camera snapshots
+
+`GET /cameras/<name>/snapshot` renders one frame from the named MJCF camera. It
+takes four optional query parameters, each defaulting to what the route has
+always done:
+
+| Parameter | Default | What |
+|---|---|---|
+| `shadows=0` | on | drop MuJoCo's shadow pass |
+| `reflection=0` | on | drop the floor mirror |
+| `quality=NN` | 85 | JPEG quality, 1..100 |
+| `format=raw` | base64 | answer `image/jpeg` bytes instead of base64-in-JSON |
+
+Measured on `g1_dex3_house_scene.xml` at 640x480, request in to bytes out, on an
+Apple Silicon laptop:
+
+| Request | ms/frame | fps | payload |
+|---|---|---|---|
+| default | 48–54 | 19–21 | 93 KB |
+| `?shadows=0&reflection=0&format=raw` | 8–12 | 84–127 | 29 KB |
+
+**Read the ratio, not the milliseconds.** Four measurement runs on this machine
+put the default between 48 and 54 ms and the cheap form between 7.9 and 12 ms —
+the absolute numbers move with whatever else the box is doing (the shadowed form
+is the noisy half; the cheap one is stable to a millisecond), while the ratio
+stays between 4.5x and 8x. The offscreen render is most of it: 37.7 ms shadowed
+and 4.9 ms flat on an idle machine, 66.7 and 8.2 on a busy one.
+
+The render cost is **flat in resolution** — 160x120 measures the same as 640x480,
+on every run — so the lighting is the only lever there is. Six lights, each
+costing a pass over 187 geoms; asking for a smaller camera buys nothing.
+
+Defaults are unchanged on purpose: the MJPEG stream and Agent Mode's `look` still
+get the lit picture, and only a caller that asks for the cheap one pays with it.
+The episode recorder (TASK-215) asks: at 30 Hz a ~50 ms frame cannot be delivered
+at all, and the picture it is filming is training data rather than a demo video.
+
+One trap for whoever adds the next parameter: `do_GET` used to route on
+`self.path` whole, so **any** query string fell through to the 404 rather than
+being served with the option ignored. It now splits the path off first.
+
+## `/state` reports the hands, and the sim clock
+
+`GET /state` and `/state/fast` list **43 joints**: the 29 body joints first, then
+the 14 Dex3 finger joints (7 per hand), in the same order `/action` has always
+accepted them. The fingers used not to be reported at all — and
+`HardwareClient.getStateNow()` maps the reply **by name** into the embodiment's
+joint order and fills anything absent with `0.0`, so on a `g1_edu` every finger
+read back as fully open no matter where it really was. A recorded demonstration
+with a constant zero column for both hands is worse than one with no hand column.
+
+The reply also carries `sim_time` (MuJoCo's `data.time`) alongside the existing
+wall-clock `timestamp`. The two diverge whenever the loop catches up after a
+render, and a recorder that needs to know its frames really are 1/fps apart *in
+the world it filmed* wants the second one. `timestamp` stays wall time — that is
+the sidecar contract, and the real `g1_sidecar.py` has no other clock to offer.
 
 ## Point-cloud routes (ray LiDAR)
 

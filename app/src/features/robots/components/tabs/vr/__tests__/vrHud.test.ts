@@ -14,6 +14,7 @@ import {
   onPositionsSent,
   onStateReceived,
   HUD_COLORS,
+  HUD_MAX_LINES,
   RTT_EMA_ALPHA,
   type HudState,
 } from '../vrHud';
@@ -93,6 +94,75 @@ describe('composeHud', () => {
     const lines = composeHud({ ...BASE, vx: Number.NaN, vy: Number.NaN, omega: Infinity });
     expect(lines[2].text).toBe('SPEED -- fwd -- left');
     expect(lines[3].text).toBe('TURN -- rad/s');
+  });
+
+  // `BASE` deliberately has no `recording` key at all: the field is optional so
+  // that the robot detail page's teleop modal, which has no session behind it,
+  // never has to supply one. These tests spread it as-is, which is the proof.
+  it('says nothing about recording when nothing is recording', () => {
+    expect(composeHud(BASE).some((l) => l.id === 'rec')).toBe(false);
+    expect(composeHud({ ...BASE, recording: null }).some((l) => l.id === 'rec')).toBe(false);
+  });
+
+  it('puts REC first while an episode is being captured', () => {
+    const lines = composeHud({ ...BASE, recording: { episode: 3, frames: 412 } });
+    expect(lines[0].id).toBe('rec');
+    expect(lines[0].text).toBe('REC ● ep 3 · 412 fr');
+  });
+
+  it('colours REC red — what every camera ever built means by "capturing"', () => {
+    const lines = composeHud({ ...BASE, recording: { episode: 1, frames: 0 } });
+    expect(lines[0].color).toBe(HUD_COLORS.bad);
+  });
+
+  // THE LINE BUDGET. 512 x 256 px of plate at `linePx: 52` holds five lines and
+  // `VrWristHud` has already committed the fifth to RTT, so a sixth would be
+  // drawn off the canvas. TURN pays for REC because turning in this rig is
+  // physical — the operator's own inner ear reports the yaw — which makes it the
+  // only line whose information the wearer has a second source for.
+  it('drops TURN to pay for REC rather than overflowing the plate', () => {
+    const driving = { ...BASE, driving: true, vx: 0.3, omega: -0.4 };
+    expect(composeHud(driving).map((l) => l.id)).toEqual(['link', 'mode', 'speed', 'turn']);
+    expect(composeHud({ ...driving, recording: { episode: 2, frames: 9 } }).map((l) => l.id)).toEqual(
+      ['rec', 'link', 'mode', 'speed'],
+    );
+  });
+
+  it('never composes more than the plate can hold, recording or not', () => {
+    const states: HudState[] = [
+      BASE,
+      { ...BASE, armLeft: true, armRight: true, driving: true, vx: 1, vy: 1, omega: 1 },
+      { ...BASE, recording: { episode: 12, frames: 99999 } },
+      { ...BASE, estopLatched: true, recording: { episode: 12, frames: 99999 } },
+    ];
+    for (const state of states) {
+      expect(composeHud(state).length).toBeLessThanOrEqual(HUD_MAX_LINES);
+      // Stricter, and the one that actually matters: `VrWristHud` appends RTT to
+      // whatever comes back, so `composeHud` may only ever use four of the five.
+      expect(composeHud(state).length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+    }
+  });
+
+  it('a latched E-Stop still returns exactly its two red lines while recording', () => {
+    const lines = composeHud({
+      ...BASE,
+      estopLatched: true,
+      recording: { episode: 3, frames: 412 },
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0].text).toBe('E-STOP LATCHED');
+    expect(lines.every((l) => l.color === HUD_COLORS.bad)).toBe(true);
+    expect(lines.some((l) => l.id === 'rec')).toBe(false);
+  });
+
+  it('shows -- rather than NaN, and never a negative count, on the REC line', () => {
+    const lines = composeHud({ ...BASE, recording: { episode: Number.NaN, frames: -3 } });
+    expect(lines[0].text).toBe('REC ● ep -- · 0 fr');
+  });
+
+  it('rounds a fractional frame count instead of printing a float at the wrist', () => {
+    const lines = composeHud({ ...BASE, recording: { episode: 1.4, frames: 412.6 } });
+    expect(lines[0].text).toBe('REC ● ep 1 · 413 fr');
   });
 });
 

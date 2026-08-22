@@ -23,6 +23,33 @@ export function stickAxis(v: number | undefined): number {
 }
 
 /**
+ * The bit of `@react-three/xr`'s per-component gamepad reading this file cares
+ * about. Structural rather than imported, so the predicate below stays pure and
+ * testable without a WebXR session to produce one.
+ */
+export interface StickComponentState {
+  state?: 'default' | 'touched' | 'pressed' | (string & {});
+}
+
+/**
+ * Is the thumbstick actually CLICKED, as opposed to merely deflected?
+ *
+ * This is the whole reason the stick click is safe to bind to something that
+ * costs an episode boundary. `@pmndrs/xr` (`dist/controller/gamepad.js`)
+ * classifies each named component as
+ * `pressed ? 'pressed' : touched ? 'touched' : 'default'`, where `pressed` comes
+ * only from the button — `gamepadButton.pressed || value === 1` — and `touched`
+ * is set by ANY axis past `AxisTouchThreshold = 0.1`. So the same component
+ * object that serves the drive and elbow axes reports `'touched'` for a stick
+ * pushed to its stop and `'pressed'` only for the click under it. Driving the
+ * robot can therefore never advance an episode, and this is the fact that keeps
+ * that true — see the test next door, which drives the library's own classifier.
+ */
+export function isStickClick(component: StickComponentState | null | undefined): boolean {
+  return component?.state === 'pressed';
+}
+
+/**
  * Pick the stick that is actually being pushed, out of the candidates the rig
  * offers (one per hand, `null` for a hand that is absent or holding an arm).
  *

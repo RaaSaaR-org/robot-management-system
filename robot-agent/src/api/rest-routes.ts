@@ -20,6 +20,8 @@ import type { SecureBootVerifier } from '../security/secure-boot.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { RolloutStrategies, type RolloutStrategy } from '../vla/types.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
+import { recordingController } from '../recording/recording-controller.js';
+import { RecordingError } from '../recording/EpisodeRecorder.js';
 import { hardwareClient, getSidecarUrl } from '../hardware/HardwareClient.js';
 import http from 'node:http';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
@@ -1213,6 +1215,139 @@ export function createRestRoutes(
     });
     return true;
   };
+
+  // ---------------------------------------------------------------------------
+  // Episode recording (TASK-215)
+  //
+  // Deliberately `/recording/*` and not `/record/*`: the sim's HTTP facade
+  // already serves `/record/start|stop` for `cine_recorder.py`, which produces a
+  // demo MP4 and is not a dataset. Two verbs that differ by one letter and mean
+  // different things is a bug waiting for a tired evening.
+  // ---------------------------------------------------------------------------
+
+  const recordingError = (res: Response, err: unknown): void => {
+    // The recorder says what kind of failure this is; nothing here reads the
+    // message. Matching prose with a regex is how this started, and it turns
+    // any rewording into a status-code change nobody notices.
+    if (err instanceof RecordingError) {
+      res.status(err.status).json({ code: err.code, message: err.message });
+      return;
+    }
+    res.status(500).json({
+      code: 'RECORDING_FAILED',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  };
+
+  // POST /robots/:id/recording/start
+  //   {sessionId, fps?, cameras?, task?, shadows?, inputMode?}
+  router.post('/robots/:id/recording/start', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const sessionId = req.body?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      res.status(400).json({
+        code: 'INVALID_REQUEST',
+        message: 'body must be {sessionId: string, fps?, cameras?, task?, shadows?, inputMode?}',
+      });
+      return;
+    }
+    // Every optional field is either the right type or a 400. Dropping a
+    // wrong-typed one and applying the default is worse than refusing: a client
+    // that sends fps as "30" would record at whatever the default happens to be
+    // and never be told the number it asked for was ignored.
+    const wrongType = (name: string, value: unknown, want: string): boolean =>
+      value !== undefined && typeof value !== want;
+    for (const [name, value, want] of [
+      ['fps', req.body?.fps, 'number'],
+      ['task', req.body?.task, 'string'],
+      ['shadows', req.body?.shadows, 'boolean'],
+      ['inputMode', req.body?.inputMode, 'string'],
+    ] as const) {
+      if (wrongType(name, value, want)) {
+        res.status(400).json({ code: 'INVALID_REQUEST', message: `${name} must be a ${want}` });
+        return;
+      }
+    }
+    const cameras = req.body?.cameras;
+    if (cameras !== undefined && !(Array.isArray(cameras) && cameras.every((c) => typeof c === 'string'))) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'cameras must be string[]' });
+      return;
+    }
+    try {
+      const status = await recordingController.start({
+        sessionId: sessionId.trim(),
+        ...(typeof req.body?.fps === 'number' ? { fps: req.body.fps } : {}),
+        ...(cameras !== undefined ? { cameras: cameras as string[] } : {}),
+        ...(typeof req.body?.task === 'string' ? { task: req.body.task } : {}),
+        ...(typeof req.body?.shadows === 'boolean' ? { shadows: req.body.shadows } : {}),
+        ...(typeof req.body?.inputMode === 'string' ? { inputMode: req.body.inputMode } : {}),
+      });
+      res.json({ ok: true, ...status });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/next-episode
+  router.post('/robots/:id/recording/next-episode', (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    try {
+      res.json({ ok: true, episodeIndex: recordingController.nextEpisode() });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/episodes/:index/discard
+  router.post('/robots/:id/recording/episodes/:index/discard', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    // Strict, not `parseInt`: that reads "1e3" as 1, "2.7" as 2 and "3xyz" as
+    // 3, so a typo would discard a DIFFERENT episode and answer success.
+    const raw = req.params.index ?? '';
+    if (!/^\d+$/.test(raw)) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'index must be a non-negative integer' });
+      return;
+    }
+    const index = Number.parseInt(raw, 10);
+    try {
+      const discarded = await recordingController.discardEpisode(index);
+      if (!discarded) {
+        // "There was no take 3" and "take 3 is gone" must not look the same to
+        // an operator who is deciding whether to re-record it.
+        res.status(404).json({
+          code: 'EPISODE_NOT_FOUND',
+          message: `this recording has no episode ${index}`,
+        });
+        return;
+      }
+      res.json({ ok: true, episodeIndex: index });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // POST /robots/:id/recording/stop -> the dataset it wrote, or why it did not
+  router.post('/robots/:id/recording/stop', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    try {
+      res.json(await recordingController.stop());
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // GET /robots/:id/recording/status
+  router.get('/robots/:id/recording/status', async (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    try {
+      // Cheap, and the only place `behind_s` is refreshed — the tick must not
+      // spend its budget asking the sim how it is feeling.
+      await recordingController.refreshHealth().catch(() => {});
+      res.json({ ok: true, ...recordingController.status() });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
 
   // GET /robots/:id/agent-mode — full AgentModeState
   //

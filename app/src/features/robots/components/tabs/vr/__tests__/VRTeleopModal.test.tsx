@@ -328,3 +328,37 @@ describe('VRTeleopModalBody — agent messages', () => {
     expect(screen.getByRole('button', { name: 'Reset E-Stop' })).toBeInTheDocument();
   });
 });
+
+describe('VRTeleopModalBody — controller mapping card', () => {
+  // The BINDING itself is in `VrTeleopRig`'s frame loop and is not tested here
+  // for the reason at the top of this file; what the card PROMISES is DOM, and
+  // this is the only place that can tell whether the promise matches the props.
+  it('says nothing about episodes when the host has none to advance', () => {
+    // The robot detail page opens this same modal with no session behind it. A
+    // card that lists a control the session does not have is a lie the operator
+    // only finds out about by pressing it and watching nothing happen.
+    renderModal();
+    expect(screen.queryByText('L-Stick')).not.toBeInTheDocument();
+    expect(screen.getByText('Safety and view')).toBeInTheDocument();
+  });
+
+  it('lists the L-Stick episode control when the session supplies one', () => {
+    renderModal({ onNextEpisode: () => {} });
+    expect(screen.getByText('L-Stick')).toBeInTheDocument();
+    expect(
+      screen.getByText('Click to end this episode and start the next'),
+    ).toBeInTheDocument();
+    // The heading moves with the rows.
+    expect(screen.getByText('Safety, view and recording')).toBeInTheDocument();
+    expect(screen.queryByText('Safety and view')).not.toBeInTheDocument();
+  });
+
+  it('leaves both face-button bindings exactly where they were', () => {
+    // Both are bound on BOTH hands on purpose. The stick click exists precisely
+    // so that adding a recording control did not have to buy a face button back.
+    renderModal({ onNextEpisode: () => {} });
+    expect(screen.getByText('B / Y')).toBeInTheDocument();
+    expect(screen.getByText('E-STOP — either hand, either button')).toBeInTheDocument();
+    expect(screen.getByText('A / X')).toBeInTheDocument();
+  });
+});

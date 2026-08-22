@@ -6,7 +6,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { stickAxis, pickDriveStick } from '../vrDrive';
+// The classifier that decides 'default' | 'touched' | 'pressed' for every named
+// controller component. Reached through `@pmndrs/xr`'s published `/internals`
+// subpath (it is what `@react-three/xr` runs under the hood, and the only place
+// the rule actually lives) so the test below asserts the LIBRARY's behaviour
+// rather than a restatement of it. If a version bump ever made a deflected stick
+// report 'pressed', the left stick would start ending an episode every time the
+// operator walked the robot — that is the regression this import exists to catch.
+import { updateXRControllerGamepadState } from '@pmndrs/xr/internals';
+import { stickAxis, pickDriveStick, isStickClick } from '../vrDrive';
 import { STICK_DEADZONE } from '../vrConstants';
 
 describe('stickAxis', () => {
@@ -81,5 +89,61 @@ describe('pickDriveStick', () => {
     expect(pickDriveStick([bad, good])).toBe(good);
     expect(pickDriveStick([bad])).toBeNull();
     expect(pickDriveStick([{ fwd: 0, left: Infinity }])).toBeNull();
+  });
+});
+
+describe('isStickClick', () => {
+  it('accepts only a real click', () => {
+    expect(isStickClick({ state: 'pressed' })).toBe(true);
+    expect(isStickClick({ state: 'touched' })).toBe(false);
+    expect(isStickClick({ state: 'default' })).toBe(false);
+  });
+
+  it('says no for a hand that is not tracked at all', () => {
+    expect(isStickClick(undefined)).toBe(false);
+    expect(isStickClick(null)).toBe(false);
+    expect(isStickClick({})).toBe(false);
+  });
+
+  /**
+   * A synthetic Quest thumbstick: axes 2/3 and the click on button 3, which is
+   * the `xr-standard` layout `@pmndrs/xr` ships for the Meta controllers.
+   */
+  function readStick(axes: [number, number], clicked: boolean) {
+    const target: Record<string, { state?: string }> = {};
+    const buttons = [0, 1, 2, 3].map((i) => ({
+      value: i === 3 && clicked ? 1 : 0,
+      pressed: i === 3 && clicked,
+      touched: false,
+    }));
+    updateXRControllerGamepadState(
+      target as never,
+      { gamepad: { buttons, axes: [0, 0, axes[0], axes[1]] } } as never,
+      { components: { 'xr-standard-thumbstick': { gamepadIndices: { button: 3, xAxis: 2, yAxis: 3 } } } } as never,
+    );
+    return target['xr-standard-thumbstick'];
+  }
+
+  it('does not fire for a stick that is merely DEFLECTED — that is driving', () => {
+    // The same component object serves the drive axes and the elbow axes, so a
+    // click that fired on deflection would end an episode on every walk command.
+    const walking = readStick([0.9, -0.7], false);
+    expect(walking?.state).toBe('touched');
+    expect(isStickClick(walking)).toBe(false);
+
+    const fullTravel = readStick([1, 1], false);
+    expect(fullTravel?.state).toBe('touched');
+    expect(isStickClick(fullTravel)).toBe(false);
+  });
+
+  it('fires for the click under the stick, deflected or not', () => {
+    expect(isStickClick(readStick([0, 0], true))).toBe(true);
+    expect(isStickClick(readStick([0.9, -0.7], true))).toBe(true);
+  });
+
+  it('is quiet for a stick at rest', () => {
+    const resting = readStick([0, 0], false);
+    expect(resting?.state).toBe('default');
+    expect(isStickClick(resting)).toBe(false);
   });
 });

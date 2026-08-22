@@ -49,6 +49,19 @@ export interface TeleoperationSession {
   errorMessage: string | null;
   /** Target episode count (hardware sidecar or UI progress display) */
   numEpisodes?: number | null;
+  /** HF-style repo id, when the session was created with one. */
+  datasetRepoId?: string | null;
+  /** Path on the hardware sidecar where lerobot-record wrote its dataset. */
+  sidecarDatasetPath?: string | null;
+  /**
+   * Which recorder produced this session's data (TASK-215): `agent` wrote a
+   * LeRobot v3.0 tree on the robot, `sim` wrote TeleoperationFrame rows here,
+   * `sidecar` ran lerobot-record on the hardware. Null for sessions recorded
+   * before the distinction existed.
+   */
+  recorderKind?: 'agent' | 'sim' | 'sidecar' | null;
+  /** Path ON THE ROBOT where the agent's recorder wrote the dataset. */
+  agentDatasetPath?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,6 +92,14 @@ export interface EpisodeSummary {
   startTime: number;
   endTime: number;
   durationS: number;
+  /**
+   * Ticks the recorder wanted and did not get (TASK-215). Absent for sessions
+   * recorded before there was a recorder that could count them — a missing
+   * frame leaves no row, so this can never be derived from the frames.
+   */
+  droppedFrames?: number;
+  /** Frames per second the episode actually achieved. */
+  fpsActual?: number;
 }
 
 // ============================================================================
@@ -413,5 +434,7 @@ export interface TeleoperationEvent {
   qualityFeedback?: QualityFeedback;
   recordingProgress?: RecordingProgress;
   error?: string;
+  /** Human-readable detail for `quality:warning` — what is going wrong, in words. */
+  message?: string;
   timestamp: Date;
 }
