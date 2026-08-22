@@ -95,7 +95,7 @@ const S1_PINCH_WEIGHT = 5;
  * target, and there is no longer a reason to discount it — the grasp is
  * protected by `S1_PINCH_WEIGHT`, not by S2 being small. Measured over a human
  * hand curling from flat to a fist: at 0.25 the robot's index reached 0.60 rad
- * of the 1.41 available, at 1.0 it reaches 0.96, while a pinch closes to 33 mm
+ * of the 1.41 available, at 1.0 it reaches 0.95, while a pinch closes to 33 mm
  * against the Dex3's own 29 mm floor.
  */
 const S2_WEIGHT = 1;
