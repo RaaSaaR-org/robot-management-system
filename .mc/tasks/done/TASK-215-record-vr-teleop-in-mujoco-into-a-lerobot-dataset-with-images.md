@@ -4,7 +4,7 @@ aliases:
 - TASK-215
 title: Record VR teleop in MuJoCo into a LeRobot dataset with images
 slug: record-vr-teleop-in-mujoco-into-a-lerobot-dataset-with-images
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
