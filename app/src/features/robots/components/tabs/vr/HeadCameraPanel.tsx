@@ -29,6 +29,15 @@ import {
 
 /** Freshness checks per second. See `SAMPLE_PX` for why this is nearly free. */
 const LIVENESS_HZ = 2;
+
+/**
+ * Seconds between reconnect attempts once the stream has gone stale.
+ *
+ * Long enough that a camera which is genuinely gone does not become a reconnect
+ * storm against the robot, short enough that a sim restart recovers on its own
+ * before the operator gives up and takes the headset off.
+ */
+const REARM_INTERVAL_S = 5;
 /**
  * Edge of the square the frame is downscaled into before it is checksummed.
  *
@@ -171,6 +180,9 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
    */
   useEffect(() => () => texture.dispose(), [texture]);
 
+  /** R3F clock time of the last reconnect attempt, for the re-arm below. */
+  const lastRearm = useRef(0);
+
   useEffect(() => {
     // Also reset per-robot, and this is why: `failed` is what swaps in the
     // CAMERA OFFLINE plate, and leaving it set meant one robot's missing camera
@@ -180,6 +192,7 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     // the stale clock may carry the previous robot's frame across.
     lastUploaded.current = undefined;
     liveness.current = null;
+    lastRearm.current = 0;
     image.onerror = () => setFailed(true);
     image.src = cameraStreamUrl(robotId);
     return () => {
@@ -238,6 +251,24 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     }
     const badge = badgeRef.current;
     if (badge) badge.visible = isStale;
+
+    // RE-ARM. A dead upstream does not reach an `<img>` on a
+    // `multipart/x-mixed-replace` as an error — the connection simply stops
+    // producing parts — so `onerror` never fires and the panel had no way back:
+    // it latched to STALE and stayed there until the operator closed and
+    // reopened the modal. Restarting the sim mid-session, which is routine, cost
+    // a headset removal.
+    //
+    // Reassigning `src` drops the old connection and opens a new one. Rate
+    // limited, because a camera that is genuinely gone must not become a
+    // reconnect storm, and only while stale — a live stream is never touched.
+    if (isStale && now - lastRearm.current >= REARM_INTERVAL_S) {
+      lastRearm.current = now;
+      lastUploaded.current = undefined;
+      liveness.current = null;
+      image.src = '';
+      image.src = cameraStreamUrl(robotId);
+    }
     if (isStale) {
       badgePlate.draw([
         // One decimal: the operator needs to know whether the number is climbing,

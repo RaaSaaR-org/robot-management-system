@@ -280,6 +280,15 @@ export function createKeyboardTeleopWebSocket(
     // block for the duration of the motion, and a 10 Hz stick would otherwise
     // stack requests until the queue, not the operator, decided where the robot
     // went.
+    /** Set by `cleanup`. Declared here because `drive`'s drain guard reads it. */
+    let cleanedUp = false;
+    /**
+     * When the client last asked for motion, as `Date.now()`. `0` means never.
+     *
+     * The ramp below refreshes the dead-man TTL ON ITS OWN, so without this the
+     * agent kept accelerating a robot whose operator had already gone quiet.
+     */
+    let lastMoveAt = 0;
     let moveInFlight = false;
     /**
      * Latest-wins slot for a command that arrived while one was in flight.
@@ -305,6 +314,9 @@ export function createKeyboardTeleopWebSocket(
     let commanded: BaseVelocity = ZERO_VELOCITY;
     /** Where the stick is, while the ramp is still catching up to it. */
     let rampTarget: BaseVelocity | null = null;
+
+    /** True when a velocity would actually move the robot. */
+    const isMoving = (v: BaseVelocity): boolean => v.vx !== 0 || v.vy !== 0 || v.omega !== 0;
 
     /** Wire values are never trusted: anything non-finite is a zero, not a NaN. */
     const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -336,7 +348,24 @@ export function createKeyboardTeleopWebSocket(
         moveInFlight = false;
         const next = pendingMove;
         pendingMove = null;
-        if (next) {
+        // A PENDING VELOCITY IS A PAST INTENT, AND `locoMove` MAY BLOCK FOR
+        // SECONDS (the sidecar's timeout is `duration + 5s`). Everything that
+        // cancels motion — the latch, the socket closing — could therefore be
+        // OVERTAKEN by a walk command that was already in the slot when it
+        // happened, re-armed with a fresh TTL. Two real shapes:
+        //
+        //   1. The latch goes up somewhere else (fleet console, safety monitor,
+        //      a second operator) while an RPC is stalled. Later `{move}`s are
+        //      correctly refused — and then the stalled call returns and this
+        //      drain issues the walk anyway.
+        //   2. The socket closes. `cleanup` sends its zero, then this drain
+        //      re-commands the walk behind it — the dead-man defeated at the
+        //      exact moment nobody is watching.
+        //
+        // A pending ZERO is always delivered: that is a stop, and a stop is
+        // never stale. Only motion is dropped.
+        const stillMotion = next !== null && isMoving(next.velocity);
+        if (next && !(stillMotion && (cleanedUp || robotStateManager.isEStopTriggered()))) {
           void drive(next.velocity.vx, next.velocity.vy, next.velocity.omega, next.ttlS);
         }
       }
@@ -370,6 +399,10 @@ export function createKeyboardTeleopWebSocket(
       // entirely. The robot is standing still during a latch; `commanded` has to
       // say so, or the ramp starts from a speed that no longer exists.
       commanded = ZERO_VELOCITY;
+      // And the pending slot, for the same reason: a velocity queued behind a
+      // blocked RPC is a past intent, and the drain would otherwise deliver it
+      // after the stop.
+      pendingMove = null;
       sendError('estop_latched', 'an emergency stop is latched — reset it before driving');
       return true;
     };
@@ -419,9 +452,27 @@ export function createKeyboardTeleopWebSocket(
       // steady state `rampTarget` is null and the client's own ~10 Hz `{move}`
       // stream is the only thing refreshing the TTL, so this adds no RPC rate.
       if (rampTarget) {
-        const next = slewBaseVelocity(commanded, rampTarget, dt);
-        if (next.vx === rampTarget.vx && next.vy === rampTarget.vy) rampTarget = null;
-        issueBase(next, MOVE_TTL_S);
+        // THE RAMP MUST NOT OUTLIVE THE OPERATOR. `issueBase` refreshes
+        // `MOVE_TTL_S` on every tick it runs, so a single `{move}` from a
+        // hard-pushed stick followed by silence — Wi-Fi gone, headset off, tab
+        // throttled, which are the exact cases `MOVE_TTL_S` exists for — had the
+        // agent accelerating the robot to full walk speed BY ITSELF for half a
+        // second, then coasting the TTL on top. Roughly a quarter of a metre of
+        // unattended travel, against a documented promise that the robot coasts
+        // to a stop within the window.
+        //
+        // A ramp is only ever the tail of a live stick, so once the client has
+        // gone quiet for longer than the dead-man, abandon it: the sidecar's own
+        // TTL has already stopped the robot, and `commanded` has to agree or the
+        // next ramp starts from a speed that no longer exists.
+        if (Date.now() - lastMoveAt > MOVE_TTL_S * 1000) {
+          rampTarget = null;
+          commanded = ZERO_VELOCITY;
+        } else {
+          const next = slewBaseVelocity(commanded, rampTarget, dt);
+          if (next.vx === rampTarget.vx && next.vy === rampTarget.vy) rampTarget = null;
+          issueBase(next, MOVE_TTL_S);
+        }
       }
     }, TICK_MS);
 
@@ -462,6 +513,9 @@ export function createKeyboardTeleopWebSocket(
         velocity.clear();
         rampTarget = null;
         commanded = ZERO_VELOCITY;
+        // Anything already queued behind a blocked RPC is cancelled here too,
+        // rather than left for the drain to deliver after the stop.
+        pendingMove = null;
         // DIRECT, deliberately bypassing `drive`'s in-flight guard and its
         // pending slot. Everything else may be coalesced; this may not be
         // delayed behind an RPC that is allowed to block for seconds, and it is
@@ -490,6 +544,12 @@ export function createKeyboardTeleopWebSocket(
           sendState();
           return;
         }
+        // ONLY `home` HOMES. This was `if (preset === 'stop') … else home`, so
+        // every other value on an unauthenticated socket — `{preset:'reset'}`,
+        // `{preset:''}`, `{preset:42}` — commanded a full-body move of all 43
+        // joints to their default pose. The declared type is `'home' | 'stop'`;
+        // a wire value is not a type.
+        if (msg.preset !== 'home') return;
         if (refusedByEStop()) return;
         // Homing is a large commanded motion, so it is gated like any other.
         robotStateManager.homeTeleopJoints();
@@ -509,7 +569,10 @@ export function createKeyboardTeleopWebSocket(
         // rather than left to expire: waiting out MOVE_TTL_S would let the robot
         // drift on after the operator let go, which is the one moment they are
         // most likely to be stopping for a reason.
-        if (!stopping) hasDriven = true;
+        if (!stopping) {
+          hasDriven = true;
+          lastMoveAt = Date.now();
+        }
         const next = slewBaseVelocity(commanded, target, dt);
         rampTarget = next.vx === target.vx && next.vy === target.vy ? null : target;
         issueBase(next, stopping ? 0 : MOVE_TTL_S);
@@ -563,7 +626,8 @@ export function createKeyboardTeleopWebSocket(
     // 'error' is normally followed by 'close', and a socket must never release
     // more holders of the lock than the one it claimed — that is what let a
     // second view's disconnect free a lock a live operator was still holding.
-    let cleanedUp = false;
+    // (`cleanedUp` is declared with the rest of this socket's lifetime state
+    // above, because `drive`'s drain guard reads it.)
     const cleanup = () => {
       if (cleanedUp) return;
       cleanedUp = true;

@@ -110,6 +110,26 @@ const send = (ws: FakeWs, payload: unknown) => ws.emit('message', Buffer.from(JS
 /** Let the handler's `await` on the mocked RPC settle. */
 const settle = () => new Promise((r) => setImmediate(r));
 
+/**
+ * HOLD the stick, the way a real client does: `VrTeleopRig` re-sends `{move}`
+ * every `DRIVE_SEND_INTERVAL_S` (~100 ms) for as long as the stick is deflected.
+ *
+ * The ramp tests used to send ONE `{move}` and then advance a second of timers,
+ * which quietly asserted that the agent keeps accelerating a robot whose
+ * operator has gone silent — the agent refreshes `MOVE_TTL_S` on every tick the
+ * ramp runs, so a single frame from a hard-pushed stick bought half a second of
+ * unattended acceleration plus the TTL on top. It does not do that any more (see
+ * `keyboard-teleop.ts`, the ramp block), so a test that wants a completed ramp
+ * has to hold the stick like the thing it is standing in for.
+ */
+async function hold(ws: FakeWs, move: { vx: number; vy: number; omega: number }, ms: number) {
+  const STEP = 100;
+  for (let elapsed = 0; elapsed < ms; elapsed += STEP) {
+    send(ws, { move });
+    await vi.advanceTimersByTimeAsync(Math.min(STEP, ms - elapsed));
+  }
+}
+
 beforeEach(() => {
   locoMove.mockClear();
   locoMove.mockImplementation(async () => ({ ok: true }));
@@ -410,7 +430,7 @@ describe('the ramp on the wire', () => {
     const first = (locoMove.mock.calls[0] as unknown as number[])[0];
     expect(first).toBeLessThan(MAX_MPS / 4);
 
-    await vi.advanceTimersByTimeAsync(1000);
+    await hold(ws, { vx: 99, vy: 0, omega: 0 }, 1000);
     const speeds = (locoMove.mock.calls as unknown as number[][]).map((c) => c[0]);
     for (let i = 1; i < speeds.length; i += 1) {
       expect(speeds[i]).toBeGreaterThanOrEqual(speeds[i - 1]);
@@ -424,10 +444,35 @@ describe('the ramp on the wire', () => {
     expect(locoMove.mock.calls.length).toBe(settled);
   });
 
+  it('abandons the ramp when the client goes silent, instead of accelerating alone', async () => {
+    // `issueBase` refreshes `MOVE_TTL_S` on every tick the ramp runs, so the ramp
+    // was its own dead-man reset: one `{move}` from a hard-pushed stick followed
+    // by silence — Wi-Fi gone, headset off, tab throttled, the exact cases the
+    // TTL exists for — had the agent walking the robot up to full speed BY
+    // ITSELF, then coasting the TTL on top. About a quarter of a metre of
+    // unattended travel, against a documented promise of a stop within 0.35 s.
+    const ws = connect();
+    send(ws, { move: { vx: 99, vy: 0, omega: 0 } });
+    await vi.advanceTimersByTimeAsync(0);
+    const opening = (locoMove.mock.calls[0] as unknown as number[])[0];
+
+    // Silence from here. The dead-man is 350 ms; give it a full second.
+    await vi.advanceTimersByTimeAsync(1000);
+    const speeds = (locoMove.mock.calls as unknown as number[][]).map((c) => c[0]);
+
+    // It may coast out the remaining TTL, but it must never have reached the
+    // speed the abandoned stick was asking for.
+    expect(Math.max(...speeds)).toBeLessThan(MAX_MPS);
+    // And it must stop issuing entirely.
+    const quiet = locoMove.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(locoMove.mock.calls.length).toBe(quiet);
+    expect(opening).toBeLessThan(MAX_MPS / 4);
+  });
+
   it('ends a diagonal push at the limit, on the heading that was asked for', async () => {
     const ws = connect();
-    send(ws, { move: { vx: 99, vy: 99, omega: 0 } });
-    await vi.advanceTimersByTimeAsync(1000);
+    await hold(ws, { vx: 99, vy: 99, omega: 0 }, 1000);
 
     const [vx, vy] = locoMove.mock.calls.at(-1) as unknown as number[];
     expect(Math.hypot(vx, vy)).toBeCloseTo(MAX_MPS, 6);
@@ -488,8 +533,7 @@ describe('an E-Stop raised somewhere other than this socket', () => {
     // at full speed — bypassing the acceleration limit at the exact moment the
     // ramp exists for.
     const { ws, state } = connectWithState();
-    send(ws, { move: { vx: 99, vy: 0, omega: 0 } });
-    await vi.advanceTimersByTimeAsync(1000);
+    await hold(ws, { vx: 99, vy: 0, omega: 0 }, 1000);
     const steady = (locoMove.mock.calls.at(-1) as unknown as number[])[0];
     expect(steady).toBeCloseTo(MAX_MPS, 6);
 
@@ -502,6 +546,61 @@ describe('an E-Stop raised somewhere other than this socket', () => {
     await vi.advanceTimersByTimeAsync(0);
     const first = (locoMove.mock.calls[0] as unknown as number[])[0];
     expect(first).toBeLessThan(MAX_MPS / 4);
+  });
+
+  it('never delivers a queued walk after the latch goes up', async () => {
+    // THE CRITICAL ONE. `pendingMove` is a latest-wins slot drained when the
+    // in-flight RPC resolves, and `locoMove` is allowed to block for SECONDS
+    // (the sidecar's timeout is `duration + 5 s`). Nothing used to clear that
+    // slot, so a stop could be overtaken by a walk that was already queued when
+    // it happened — re-armed with a fresh TTL.
+    const { ws, state } = connectWithState();
+    let release: (v: { ok: boolean }) => void = () => {};
+    locoMove.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+
+    send(ws, { move: { vx: 99, vy: 0, omega: 0 } });   // stalls in flight
+    await vi.advanceTimersByTimeAsync(0);
+    send(ws, { move: { vx: 99, vy: 0, omega: 0 } });   // lands in pendingMove
+    await vi.advanceTimersByTimeAsync(1);
+
+    // The latch goes up somewhere ELSE — fleet console, safety monitor, a
+    // second operator. This socket is not told; it discovers it on the tick.
+    state.isEStopTriggered.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(100);
+
+    locoMove.mockClear();
+    release({ ok: true });                             // the stalled RPC answers
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(100);
+
+    const motion = (locoMove.mock.calls as unknown as number[][]).filter(
+      (c) => c[0] !== 0 || c[1] !== 0 || c[2] !== 0,
+    );
+    expect(motion).toEqual([]);
+  });
+
+  it('never delivers a queued walk behind the stop that closes the socket', async () => {
+    // Same slot, the other trigger. `cleanup()` sends its zero directly — and the
+    // drain then re-commanded the walk behind it, defeating the dead-man at the
+    // exact moment nobody is watching any more.
+    const ws = connect();
+    let release: (v: { ok: boolean }) => void = () => {};
+    locoMove.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+
+    send(ws, { move: { vx: 99, vy: 0, omega: 0 } });
+    await vi.advanceTimersByTimeAsync(0);
+    send(ws, { move: { vx: 99, vy: 0, omega: 0 } });
+    await vi.advanceTimersByTimeAsync(1);
+
+    ws.emit('close');
+    locoMove.mockClear();
+    release({ ok: true });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const motion = (locoMove.mock.calls as unknown as number[][]).filter(
+      (c) => c[0] !== 0 || c[1] !== 0 || c[2] !== 0,
+    );
+    expect(motion).toEqual([]);
   });
 
   it('reports the refusal again on a SECOND latch, not once per socket lifetime', async () => {

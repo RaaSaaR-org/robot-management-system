@@ -31,6 +31,7 @@ import {
   DRIVE_MAX_MPS,
   DRIVE_SEND_INTERVAL_S,
   GRIP_THRESHOLD,
+  HEADING_GAP_RESET_S,
   SEND_INTERVAL_S,
   TURN_MAX_RAD_S,
 } from './vrConstants';
@@ -195,6 +196,14 @@ export function VrTeleopRig({
 
   /** Wearer's heading last frame; NaN means "no history", see `limitHeadingStep`. */
   const prevHeading = useRef(Number.NaN);
+  /**
+   * Seconds of frames since a heading sample was last ACCEPTED.
+   *
+   * `limitHeadingStep` measures a rate, and a rate needs the elapsed time since
+   * the reading it is compared against — not since the last frame. Those are the
+   * same number only while samples keep arriving.
+   */
+  const headingGap = useRef(0);
   const lastDriveRef = useRef(0);
   /** True while the last thing we sent was motion, so we can send one final stop. */
   const wasDriving = useRef(false);
@@ -230,6 +239,7 @@ export function VrTeleopRig({
    */
   useEffect(() => {
     prevHeading.current = Number.NaN;
+    headingGap.current = 0;
     robotHeadingRef.current = Number.NaN;
     wasDriving.current = false;
     gripHeld.current = { left: false, right: false };
@@ -299,8 +309,24 @@ export function VrTeleopRig({
     // conflict, and the robot then turns to follow.
     state.camera.getWorldQuaternion(camQuat);
     const sample = headingFromCamera(camQuat);
+    // THE GAP IS PART OF THE RATE. `headingFromCamera` returns null whenever the
+    // gaze is steeper than ~75°, which is precisely the pose an operator holds
+    // while watching the robot's own hands. There was no `else` here, so the
+    // clock never advanced across that gap and the next sample was rate-checked
+    // against a per-FRAME delta — about 10° of allowance. Turn your body further
+    // than that while looking down and every sample afterwards was rejected
+    // against a stale `prev`, permanently: the base stopped turning, "forward"
+    // walked off-axis, and `retargetArm` drove `shoulder_yaw` into its soft
+    // range by the same error. Only an A/X recenter cleared it, and nothing told
+    // the operator to press it.
+    headingGap.current += delta;
     if (sample !== null) {
-      const step = limitHeadingStep(prevHeading.current, sample, delta);
+      // Long enough without a reading and there is no rate worth measuring —
+      // the honest answer is "no history", which `limitHeadingStep` accepts
+      // outright, rather than a rejection against a heading from another pose.
+      if (headingGap.current > HEADING_GAP_RESET_S) prevHeading.current = Number.NaN;
+      const step = limitHeadingStep(prevHeading.current, sample, headingGap.current);
+      if (!step.rejected) headingGap.current = 0;
       prevHeading.current = step.heading;
       // Published continuously, not just on recenter: `VrOrigin` seeds this and
       // the closed loop below reads it every frame.

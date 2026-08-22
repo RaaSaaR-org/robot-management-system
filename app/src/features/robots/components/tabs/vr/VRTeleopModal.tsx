@@ -315,10 +315,39 @@ export function VRTeleopModalBody({ robot, availability, sessionSupported, onClo
     }
   }, []);
 
+  /**
+   * The socket URL, as a STRING — and the dependency of the effect below.
+   *
+   * THIS MUST NOT BE THE `robot` OBJECT. `robotDetail` is replaced wholesale
+   * (`robotsStore`: `{ ...state.robotDetail, ...robotUpdate }`) on every
+   * `robot_status_changed` frame from the fleet socket, and the server's health
+   * check broadcasts one roughly every 30 s — battery is compared with `!==` on
+   * a continuously draining number, and a walking robot moves, so it fires
+   * essentially every cycle.
+   *
+   * Keyed on the object, this effect therefore tore the control link down and
+   * rebuilt it every ~30 seconds MID-SESSION. Each teardown reaches the agent's
+   * `cleanup()`, which commands the base to zero and drops teleop mode, which
+   * releases the sidecar's `/action` ramp — so a walking robot stuttered to a
+   * stop and the arms lost and re-acquired authority on a fixed cadence, with
+   * nothing to show the wearer but a flicker on the LINK readout. Worse, the old
+   * socket's un-awaited `releaseAction()` could land AFTER the new socket had
+   * begun forwarding, dropping the fresh ramp.
+   *
+   * Only the address matters here, and the address does not change when the
+   * battery does.
+   */
+  const socketUrl = useMemo(
+    () => `${getWsBaseUrl(robot)}/ws/keyboard-teleop`,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: the
+    // identity of `robot` changes constantly, its address does not.
+    [robot.id, robot.a2aAgentUrl],
+  );
+
   // Connect on open; tear down on close (this body unmounts when the modal closes).
   useEffect(() => {
     const link = createTeleopLink({
-      url: `${getWsBaseUrl(robot)}/ws/keyboard-teleop`,
+      url: socketUrl,
       onMessage: handleMessage,
       onStatus: setStatus,
     });
@@ -328,7 +357,7 @@ export function VRTeleopModalBody({ robot, availability, sessionSupported, onClo
       link.dispose();
       linkRef.current = null;
     };
-  }, [robot, handleMessage]);
+  }, [socketUrl, handleMessage]);
 
   // The status row's numbers, on a timer rather than on message arrival: the
   // agent answers at 20 Hz and re-rendering this modal — canvas included — 20

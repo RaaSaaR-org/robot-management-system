@@ -290,6 +290,15 @@ robotRoutes.get('/:id/camera/:name', async (req: Request, res: Response) => {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Connection': 'close',
       });
+      // `pipe` ends `res` on the source's 'end' but NOT on 'error'/'aborted'.
+      // Without this, a sidecar or agent restart mid-stream — routine in
+      // development — left this response open forever: no end, no error, just a
+      // browser `<img>` on a `multipart/x-mixed-replace` that never fires
+      // `onerror`. The viewer saw a frozen frame and a dangling socket at every
+      // hop, and only closing the modal recovered it.
+      const drop = () => { stream.unpipe(res); res.destroy(); };
+      stream.on('error', drop);
+      stream.on('aborted', drop);
       stream.pipe(res);
     });
     upstream.on('error', () => {

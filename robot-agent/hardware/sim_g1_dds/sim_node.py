@@ -1481,6 +1481,20 @@ def make_handler(node: SimNode, bridge: _LocoBridge):
         # and turned that into 50 connections and 50 threads a second. Safe here
         # because `_send` is the only reply path and always sets Content-Length.
         protocol_version = "HTTP/1.1"
+        # ...and a keep-alive connection MUST be able to die on its own.
+        # `BaseHTTPRequestHandler.timeout` is None by default, so between two
+        # requests the handler blocks in `rfile.readline()` forever. Under the
+        # old HTTP/1.0 default every connection closed after one response, so
+        # this could not arise; with keep-alive on, a robot-agent that vanishes
+        # WITHOUT closing its sockets -- Wi-Fi off, lid closed, box powered down,
+        # none of which send a FIN -- strands one thread and one file descriptor
+        # per pooled connection for the life of the sim, and they accumulate over
+        # every such event.
+        #
+        # 30 s is far longer than any real gap: Agent Mode polls at 2 Hz and
+        # teleop at 50 Hz. `handle_one_request` turns the resulting socket
+        # timeout into `close_connection`, which ends the thread.
+        timeout = 30
 
         def _send(self, code: int, payload: dict) -> None:
             body = json.dumps(payload).encode()

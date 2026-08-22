@@ -1760,6 +1760,19 @@ export class RobotStateManager {
     reason: string
   ): void {
     this.safetyMonitor.triggerEmergencyStop(triggeredBy, reason);
+    // AND DROP THE TELEOP TARGET. Only the teleop socket's own `{estop}` used to
+    // do this, so every OTHER stop path — the fleet console, `POST
+    // /safety/estop` (which is what the VR modal's own STOP button reaches), a
+    // zone trigger, Agent Mode — left `teleopJoints` holding the pre-stop target
+    // with the 20 ms forwarder still running, gated only by `isEStopTriggered`.
+    //
+    // The consequence was a stop that resumed: operator mid-reach, the console
+    // latches, `executeStop` releases the sidecar ramp so the arm halts
+    // half-way, the operator takes the headset off and puts the controllers
+    // down — and whoever clicks Reset E-Stop gets the interrupted reach
+    // completed at 50 Hz with nobody at the controls. Clearing a stop must never
+    // itself be a motion command.
+    this.disableTeleop();
     // Durable (TASK-196): this is the E-Stop path that never touches Agent Mode
     // — the fleet route, A2A, a zone trigger. Without the write-through, a stop
     // taken here would be gone on the next boot while its warning survived.

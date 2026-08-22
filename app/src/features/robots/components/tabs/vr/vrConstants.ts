@@ -135,3 +135,16 @@ export const XR_EMULATOR = resolveXrEmulator();
 /** True when the WebXR emulator is wired up (dev `?xremu` on localhost). */
 export const EMULATOR_ACTIVE =
   XR_EMULATOR !== false && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+
+/**
+ * After this many seconds without an accepted heading sample, the heading
+ * history is discarded rather than rate-checked against.
+ *
+ * `MAX_HEAD_TURN_RAD_S` is 720°/s, so a gap of 0.25 s already permits a 180°
+ * step — and 180° is the largest step `wrapAngle` can even express. Past that
+ * point the rate check cannot reject anything, so pretending it still means
+ * something only risks rejecting a real turn against a heading read in a
+ * different pose. "No history" is the honest state, and `limitHeadingStep`
+ * accepts the first sample outright.
+ */
+export const HEADING_GAP_RESET_S = 0.25;

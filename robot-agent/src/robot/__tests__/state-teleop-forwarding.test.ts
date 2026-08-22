@@ -246,7 +246,19 @@ describe('RobotStateManager — teleop reaches the robot', () => {
       expect(hw.sendAction.mock.calls.length).toBe(sentAtStop);
     });
 
-    it('resumes on its own once the latch is cleared', async () => {
+    it('does NOT resume on its own once the latch is cleared', async () => {
+      // This test used to assert the opposite, and the opposite was a defect.
+      //
+      // Only the teleop socket's own `{estop}` dropped the teleop target; every
+      // other stop path — `POST /safety/estop` (what the VR modal's STOP button
+      // and the fleet console both reach), a zone trigger, Agent Mode — left
+      // `teleopJoints` holding the PRE-STOP target with the 20 ms forwarder
+      // still running, gated only on the latch. So: operator mid-reach, the
+      // console latches, the arm halts half-way, the operator takes the headset
+      // off and puts the controllers down — and whoever clicks Reset E-Stop gets
+      // the interrupted reach completed at 50 Hz with nobody at the controls.
+      //
+      // Clearing a stop must never itself be a motion command.
       hw.connected = true;
       mgr.enableTeleop();
       mgr.triggerEmergencyStop('remote', 'operator hit the button');
@@ -259,6 +271,13 @@ describe('RobotStateManager — teleop reaches the robot', () => {
       expect(mgr.resetEmergencyStop()).toBe(true);
       await tick(3);
 
+      expect(hw.sendAction.mock.calls.length).toBe(stalled);
+
+      // It resumes when an OPERATOR asks for it, which is the whole difference:
+      // re-entering teleop re-seeds from where the robot actually is, so the
+      // motion that follows is one somebody commanded from the real pose.
+      mgr.enableTeleop();
+      await tick(3);
       expect(hw.sendAction.mock.calls.length).toBeGreaterThan(stalled);
     });
 
