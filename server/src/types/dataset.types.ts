@@ -4,6 +4,8 @@
  * @feature datasets
  */
 
+import type { DatasetStructureReport, ValidationFinding } from '../services/lerobot/validateDataset.js';
+
 import type { Dataset, DatasetStatus, LeRobotInfo, LeRobotStats } from './vla.types.js';
 
 // ============================================================================
@@ -164,6 +166,19 @@ export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
     version: string;
   };
   qualityBreakdown?: QualityScoreBreakdown;
+  /**
+   * What structural validation found (TASK-217). Absent means nothing has ever
+   * opened this dataset's files — not the same as "validated and clean".
+   */
+  validation?: {
+    validatedAt?: string;
+    valid: boolean;
+    lerobotVersion: string;
+    errors: ValidationFinding[];
+    warnings: ValidationFinding[];
+    imageKeys: string[];
+    fileCount: number;
+  };
 }
 
 /**
@@ -207,11 +222,20 @@ export const QUALITY_THRESHOLDS = {
   DEMO_COUNT_MAX: 50,
   /** Max duration in seconds for full points */
   DURATION_MAX: 3600,
+  /** Cameras that earn the whole sensor-coverage share. */
+  CAMERAS_FOR_FULL: 2,
   /** Points allocation */
   POINTS: {
     DEMO_COUNT: 40,
     DURATION: 30,
-    DIVERSITY: 20,
+    /**
+     * Sensor coverage and structural integrity, measured from the files.
+     *
+     * Still surfaced as `diversity` on {@link QualityScoreBreakdown} because
+     * the field is on the wire and in the UI; the NUMBER is no longer a
+     * two-valued placeholder derived from the episode count.
+     */
+    COVERAGE: 20,
     FORMAT_COMPLIANCE: 10,
   },
 } as const;
@@ -244,6 +268,16 @@ export interface DatasetValidationResult {
   lerobotVersion: string;
   /** FPS from info.json */
   fps: number;
+  /**
+   * The full structural report, with per-finding codes and the list of files
+   * that were actually opened (TASK-217).
+   *
+   * `errors` and `warnings` above are its messages flattened, kept because
+   * every existing caller reads them. This carries what a UI needs to decide
+   * what to SHOW — a missing camera is a different thing to surface from a
+   * missing parquet, and prose cannot be branched on.
+   */
+  report?: DatasetStructureReport;
 }
 
 /**

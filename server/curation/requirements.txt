@@ -7,3 +7,7 @@ huggingface_hub>=0.25
 # neural_traj (TASK-182) mock backend: video writer for the synthetic clips.
 imageio>=2.31
 imageio-ffmpeg>=0.4.9
+# The converter and its tests (TASK-217): lerobot_v3_to_v2.py needs pyarrow only,
+# but the test suite reads tasks.parquet through pandas and the round-trip test
+# shells out to ffmpeg/ffprobe (CURATION_FFMPEG, or on PATH).
+pytest>=8

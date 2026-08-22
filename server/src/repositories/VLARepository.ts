@@ -185,9 +185,26 @@ function dbDatasetToDomain(db: PrismaDataset): Dataset {
     status: db.status as DatasetStatus,
     huggingFaceRepoId: db.huggingFaceRepoId ?? undefined,
     annotations: parseAnnotations(db.annotationsJson),
+    validation: parseValidation((db as { validationJson?: string | null }).validationJson),
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
+}
+
+/**
+ * Parse the validationJson column (TASK-217).
+ *
+ * `undefined` for null AND for an unparseable value, because both mean the
+ * same thing to a caller: there is no report to show. `null` would have to be
+ * distinguished from "validated and found nothing", which it is not.
+ */
+function parseValidation(val: string | null | undefined): unknown {
+  if (!val) return undefined;
+  try {
+    return JSON.parse(val) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Parse the annotationsJson column (TASK-179); tolerate legacy/invalid rows. */
@@ -692,6 +709,13 @@ export class DatasetRepository {
       if (input.status !== undefined) updateData.status = input.status;
       if (input.huggingFaceRepoId !== undefined) updateData.huggingFaceRepoId = input.huggingFaceRepoId;
       if (input.annotations !== undefined) updateData.annotationsJson = JSON.stringify(input.annotations);
+      if (input.fps !== undefined) updateData.fps = input.fps;
+      if (input.totalFrames !== undefined) updateData.totalFrames = input.totalFrames;
+      if (input.totalDuration !== undefined) updateData.totalDuration = input.totalDuration;
+      if (input.demonstrationCount !== undefined) updateData.demonstrationCount = input.demonstrationCount;
+      if (input.lerobotVersion !== undefined) updateData.lerobotVersion = input.lerobotVersion;
+      if (input.validation !== undefined) updateData.validationJson = JSON.stringify(input.validation);
+      if (input.storagePath !== undefined) updateData.storagePath = input.storagePath;
 
       const dataset = await prisma.dataset.update({
         where: { id },

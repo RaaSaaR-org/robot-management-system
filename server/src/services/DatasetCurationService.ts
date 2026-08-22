@@ -12,6 +12,26 @@
  *   from `curate.py suggest`, optionally enriched by a Gemini VLM pass when
  *   CURATION_VLM=gemini and GOOGLE_API_KEY are configured.
  * @feature datasets
+ *
+ * WHAT A v3.0 DATASET GETS, AND WHY (TASK-217). `curate.py` reads v2.1 — one
+ * parquet and one mp4 per episode — so trim and suggest used to refuse a v3.0
+ * dataset outright with `V3_TRIM_UNSUPPORTED` and `V3_SUGGEST_UNSUPPORTED`.
+ * Since every dataset this platform writes is v3.0, the datasets it produced
+ * were the ones it could not curate.
+ *
+ * The source is now resolved through `resolveLocalView`, which converts a v3.0
+ * tree into a v2.1 view once and caches it. That makes the decision the task
+ * asked to be made explicit:
+ *
+ *   A CURATED REVISION OF A v3.0 DATASET IS WRITTEN AS v2.1, and the original
+ *   v3.0 dataset is untouched.
+ *
+ * Not because v2.1 is preferred — decision 1 of TASK-217 is that v3.0 is the
+ * format we WRITE — but because the alternative is a v3.0-native trimmer, and
+ * `curate.py` is the tested tool that exists. The revision is a new Dataset row
+ * either way, so nothing is downgraded in place; what a v3.0 dataset gains is
+ * that trimming it is possible at all. Re-aggregating a curated revision back
+ * to v3.0 is its own task.
  */
 
 import { existsSync } from 'fs';
@@ -25,6 +45,7 @@ import { datasetRepository } from '../repositories/index.js';
 import { getRustFSClient, isRustFSInitialized } from '../storage/rustfs-client.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import { datasetService } from './DatasetService.js';
+import { resolveLocalView } from './lerobot/LocalDatasetView.js';
 import {
   episodeCurationService,
   type CurationBackend,
@@ -73,6 +94,12 @@ interface ResolvedSource {
   /** Temp root for rustfs mode (output dir lives next to the download). */
   tmpRoot?: string;
   cleanup: () => Promise<void>;
+  /** Which curate.py backend can read `dir`, decided by what is IN `dir`. */
+  backend: CurationBackend;
+  /** What the dataset declared before the view was resolved. */
+  sourceVersion: string;
+  /** True when `dir` is a converted view rather than the dataset itself. */
+  converted: boolean;
 }
 
 const NOOP_CLEANUP = async (): Promise<void> => {};
@@ -126,13 +153,11 @@ export class DatasetCurationService {
     explicitPath?: string,
   ): Promise<DatasetCurationResult> {
     const dataset = await this.findDataset(datasetId);
-    const backend = this.backendFor(dataset);
-
-    if (op.type === 'trim' && backend === 'lerobot') {
-      throw new CurationError('trim not supported for v3.0 datasets yet', 'V3_TRIM_UNSUPPORTED');
-    }
-
     const source = await this.resolveSource(datasetId, dataset, explicitPath);
+    // From what is ON DISK after the view is resolved, not from the row: a
+    // v3.0 dataset resolves to a v2.1 view, and asking the row would send it to
+    // a backend that cannot read the directory it was handed.
+    const backend = source.backend;
     try {
       const label = op.type === 'delete' ? 'del' : 'trim';
       const outDir =
@@ -174,12 +199,6 @@ export class DatasetCurationService {
     opts?: { episode?: number; datasetPath?: string },
   ): Promise<DatasetSuggestResult> {
     const dataset = await this.findDataset(datasetId);
-    if (this.backendFor(dataset) === 'lerobot') {
-      throw new CurationError(
-        'suggestions not supported for v3.0 datasets yet',
-        'V3_SUGGEST_UNSUPPORTED',
-      );
-    }
 
     const source = await this.resolveSource(datasetId, dataset, opts?.datasetPath, {
       skipVideos: true,
@@ -255,18 +274,40 @@ export class DatasetCurationService {
     explicitPath?: string,
     opts?: { skipVideos?: boolean },
   ): Promise<ResolvedSource> {
+    /**
+     * Put the v2.1 view in front of whatever directory we ended up with.
+     *
+     * `curate.py` reads v2.1. A v3.0 directory is converted once and cached;
+     * an already-v2.1 one is returned untouched, so nothing changes for the
+     * datasets that worked before.
+     */
+    const viewOf = async (dir: string, rest: Omit<ResolvedSource, 'dir' | 'backend' | 'sourceVersion' | 'converted'>)
+      : Promise<ResolvedSource> => {
+      try {
+        const view = await resolveLocalView(dir);
+        return {
+          ...rest,
+          dir: view.root,
+          backend: 'native',
+          sourceVersion: view.sourceVersion,
+          converted: view.converted,
+        };
+      } catch {
+        // A directory with no readable `meta/info.json` is not something to
+        // fail resolution over: `curate.py` will report what is wrong with it
+        // far more usefully than a view resolver can.
+        return { ...rest, dir, backend: 'native', sourceVersion: 'unknown', converted: false };
+      }
+    };
+
     if (explicitPath) {
-      return { dir: explicitPath, mode: 'local', cleanup: NOOP_CLEANUP };
+      return viewOf(explicitPath, { mode: 'local', cleanup: NOOP_CLEANUP });
     }
 
     if (dataset) {
       const storagePath = dataset.storagePath ?? '';
       if (this.isLocalDir(storagePath)) {
-        return {
-          dir: storagePath.replace(/[\\/]+$/, ''),
-          mode: 'local',
-          cleanup: NOOP_CLEANUP,
-        };
+        return viewOf(storagePath.replace(/[\\/]+$/, ''), { mode: 'local', cleanup: NOOP_CLEANUP });
       }
       if (!isRustFSInitialized()) {
         throw new Error(
@@ -276,17 +317,16 @@ export class DatasetCurationService {
       const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'neodem-curation-'));
       const dir = path.join(tmpRoot, 'src');
       await this.downloadPrefix(storagePath, dir, opts?.skipVideos ?? false);
-      return {
-        dir,
+      return viewOf(dir, {
         mode: 'rustfs',
         tmpRoot,
         cleanup: () => rm(tmpRoot, { recursive: true, force: true }),
-      };
+      });
     }
 
     // Legacy/dev fallback: datasets living under CURATION_DATASETS_ROOT/:id.
     const root = process.env.CURATION_DATASETS_ROOT ?? '/tmp/neodem-datasets';
-    return { dir: path.join(root, datasetId), mode: 'local', cleanup: NOOP_CLEANUP };
+    return viewOf(path.join(root, datasetId), { mode: 'local', cleanup: NOOP_CLEANUP });
   }
 
   /** Download every object under `prefix` in TRAINING_DATASETS to `destDir`. */
