@@ -88,13 +88,20 @@ cd app && npm run dev
 ```
 
 `test-all.sh` runs, in order: typecheck (server, app, robot-agent), vitest
-(server, app, robot-agent), the `sim_g1_dds` pytest suite, and the Playwright UI
-tests. Every stage runs even when an earlier one fails, so one invocation gives the
-whole picture.
+(server, app, robot-agent), the `sim_g1_dds` pytest suite, the curation +
+LeRobot-converter pytest suite, and the Playwright UI tests. Every stage runs
+even when an earlier one fails, so one invocation gives the whole picture.
 
-The pytest stage needs the cyclonedds+mujoco venv described in
-`robot-agent/hardware/sim_g1_dds/README.md` — point `SIM_PYTHON` at it. Without it
-the stage reports as SKIPPED, never as passed.
+Two stages need their own interpreter, and **both report as SKIPPED rather than
+failed when it is missing** — so a run that says "all tests passed" may have run
+neither:
+
+- `SIM_PYTHON` → the cyclonedds+mujoco venv described in
+  `robot-agent/hardware/sim_g1_dds/README.md`
+- `CURATION_PYTHON` → a venv with pyarrow + pandas + pytest, described in
+  `server/curation/README.md`. Defaults to `server/curation/.venv/bin/python`
+  when that exists, so creating it there needs no env var. The server looks in
+  the same place when it converts a v3.0 dataset to a readable view.
 
 ### Environment Setup
 
