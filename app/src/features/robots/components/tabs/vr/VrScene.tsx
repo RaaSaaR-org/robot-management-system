@@ -50,7 +50,11 @@ export interface VrSceneProps {
    * Absent on the robot detail page, which has no session behind it, and the rig
    * leaves the binding unwired when it is.
    */
-  onNextEpisode?: () => void;
+  /**
+   * Resolves to whether the boundary was actually drawn — the rig only
+   * buzzes the controller when it was. See `VrTeleopRig`.
+   */
+  onNextEpisode?: () => boolean | Promise<boolean>;
 }
 
 /*

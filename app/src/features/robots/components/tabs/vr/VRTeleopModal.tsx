@@ -168,7 +168,11 @@ export interface VRTeleopModalProps {
    * inside the headset. Only the data-collection session page supplies it; when
    * it is absent the binding and its row on the mapping card both disappear.
    */
-  onNextEpisode?: () => void;
+  /**
+   * Resolves to whether the boundary was actually drawn — the rig only
+   * buzzes the controller when it was. See `VrTeleopRig`.
+   */
+  onNextEpisode?: () => boolean | Promise<boolean>;
   /**
    * The episode being captured right now, for the wrist HUD's REC line. Null
    * (or absent) when nothing is recording.

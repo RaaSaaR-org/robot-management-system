@@ -144,6 +144,19 @@ interface LiveEpisode {
    */
   firstFrameAtMs: number | null;
   lastFrameAtMs: number | null;
+  /**
+   * Milliseconds this episode spent paused, between its first and last frame.
+   * Subtracted from the span so a session parked for a minute does not report
+   * itself as having recorded at one frame a minute.
+   */
+  pausedMs: number;
+  /**
+   * Bumped every time the episode is discarded. A tick that was already in
+   * flight when the operator discarded the take carries the epoch it started
+   * under, and drops rather than appending a frame the operator has just thrown
+   * away — and whose image the discard deleted.
+   */
+  epoch: number;
 }
 
 /**
@@ -203,6 +216,14 @@ export class EpisodeRecorder {
   private timer: ReturnType<typeof setInterval> | null = null;
   private tickInFlight = false;
   private stopping = false;
+  /**
+   * A stop is past the timer and into the encode. `start()` refuses while this
+   * is set: the encode can take tens of seconds, and the stop's own cleanup
+   * would otherwise delete the scratch tree of whatever session started in the
+   * meantime and null out its session id.
+   */
+  private encoding = false;
+  private paused = false;
 
   private sessionId: string | null = null;
   private task = 'teleoperation';
@@ -218,6 +239,7 @@ export class EpisodeRecorder {
   private episodes: LiveEpisode[] = [];
   private current: LiveEpisode | null = null;
   private startedAtMs = 0;
+  private pausedAtMs: number | null = null;
   private firstFrameAtMs: number | null = null;
   private lastFrameAtMs: number | null = null;
   private acceptedFrames = 0;
@@ -258,6 +280,13 @@ export class EpisodeRecorder {
    * that only shows up hours into a training run.
    */
   async start(req: StartRecordingRequest): Promise<RecordingStatus> {
+    if (this.encoding) {
+      throw new RecordingError(
+        'the previous recording is still being written — try again in a moment',
+        'RECORDING_UNAVAILABLE',
+        503,
+      );
+    }
     if (this.timer) {
       throw new RecordingError(
         this.sessionId === req.sessionId
@@ -319,6 +348,8 @@ export class EpisodeRecorder {
     this.consecutiveDrops = 0;
     this.lastDropReason = null;
     this.stopping = false;
+    this.paused = false;
+    this.pausedAtMs = null;
     this.startedAtMs = this.now();
     this.firstFrameAtMs = null;
     this.lastFrameAtMs = null;
@@ -337,7 +368,7 @@ export class EpisodeRecorder {
   }
 
   /** Close the current episode and open the next. Cheap; no flush. */
-  nextEpisode(): number {
+  async nextEpisode(): Promise<number> {
     if (!this.current) {
       throw new RecordingError('not recording', 'RECORDING_REFUSED', 409);
     }
@@ -345,9 +376,39 @@ export class EpisodeRecorder {
     finished.endedAtMs = this.now();
     this.episodes.push(finished);
     const next = this.openEpisode(finished.index + 1);
+    // AWAITED, not fired and forgotten: a tick that lands before the
+    // directories exist drops with an ENOENT nobody asked for, and a mkdir that
+    // rejects with no handler takes the agent process down.
+    await this.prepareEpisodeDirs(next);
     this.current = next;
-    void this.prepareEpisodeDirs(next);
     return next.index;
+  }
+
+  /**
+   * Stop capturing without ending the session.
+   *
+   * Ticks return early and are NOT counted as drops — the operator asked for
+   * this, and a drop counter that ticks up while a session is deliberately
+   * parked would report a recorder that is failing rather than one that is
+   * waiting.
+   */
+  pause(): void {
+    if (this.paused || !this.timer) return;
+    this.paused = true;
+    this.pausedAtMs = this.now();
+  }
+
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.pausedAtMs !== null && this.current) {
+      this.current.pausedMs += this.now() - this.pausedAtMs;
+    }
+    this.pausedAtMs = null;
+  }
+
+  isPaused(): boolean {
+    return this.paused;
   }
 
   /**
@@ -366,7 +427,19 @@ export class EpisodeRecorder {
     this.acceptedFrames -= found.frames.length;
     found.frames = [];
     found.images = new Map();
+    found.firstFrameAtMs = null;
+    found.lastFrameAtMs = null;
+    found.pausedMs = 0;
+    found.epoch += 1;
     await rm(this.episodeDir(index), { recursive: true, force: true }).catch(() => {});
+    // Discarding the episode that is STILL RECORDING is a first-class action —
+    // the panel offers it on the live row. Without re-creating the directories
+    // the rm just removed, every remaining tick of that take fails with ENOENT
+    // and is counted as a drop, and the operator records nothing until they
+    // press Next episode.
+    if (this.current && this.current.index === index) {
+      await this.prepareEpisodeDirs(this.current);
+    }
     return true;
   }
 
@@ -380,6 +453,7 @@ export class EpisodeRecorder {
       return this.emptyResult('not recording');
     }
     this.stopping = true;
+    this.encoding = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
 
@@ -399,6 +473,7 @@ export class EpisodeRecorder {
 
     if (kept.length === 0) {
       await discardScratch(this.scratchDir());
+      this.encoding = false;
       const result = this.emptyResult(
         this.lastDropReason
           ? `no frames recorded — ${this.lastDropReason}`
@@ -447,7 +522,7 @@ export class EpisodeRecorder {
       dropped: ep.dropped,
       wallDurationS:
         ep.firstFrameAtMs !== null && ep.lastFrameAtMs !== null
-          ? (ep.lastFrameAtMs - ep.firstFrameAtMs) / 1000
+          ? Math.max(0, ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000
           : 0,
     }));
 
@@ -479,9 +554,20 @@ export class EpisodeRecorder {
         },
       });
 
+      // The dataset is on disk, so the JPEGs it was built from are no longer
+      // the only copy. Until this line they were: a missing ffmpeg or a full
+      // disk used to delete them anyway, taking the whole session with it.
+      await discardScratch(this.scratchDir());
+
+      // Report the indices the DATASET ended up with. The writer re-indexes
+      // densely, so an operator who discarded take 1 of three leaves episodes
+      // 0 and 2 here and 0 and 1 in the file. Reporting the recorder's own
+      // numbering would give the platform episode ids that address nothing.
+      const reports = this.episodeReports(kept).map((r, i) => ({ ...r, episodeIndex: i }));
+
       await writeFile(
         join(root, 'neodem-episodes.json'),
-        JSON.stringify(this.episodeReports(kept), null, 2),
+        JSON.stringify(reports, null, 2),
         'utf-8',
       );
 
@@ -493,13 +579,23 @@ export class EpisodeRecorder {
         totalFrames: written.totalFrames,
         totalDropped: this.totalDropped,
         fpsActual: fpsForFile,
-        episodes: this.episodeReports(kept),
+        episodes: reports,
         videoFeatures: written.videoFeatures,
         scene: this.scene,
         bootId: this.bootId,
       };
+    } catch (err) {
+      // The frames are still on disk. Say so, and say where — a session that
+      // died at the encode is recoverable by hand, and a 500 with no path is
+      // the difference between "re-run ffmpeg" and "re-record everything".
+      const why = err instanceof Error ? err.message : String(err);
+      const result = this.emptyResult(
+        `the dataset could not be written: ${why}. The captured frames are still ` +
+          `at ${this.scratchDir()}`,
+      );
+      return { ...result, totalFrames: this.acceptedFrames };
     } finally {
-      await discardScratch(this.scratchDir());
+      this.encoding = false;
       this.sessionId = null;
       this.episodes = [];
     }
@@ -511,6 +607,7 @@ export class EpisodeRecorder {
 
   private async tick(): Promise<void> {
     if (this.stopping || !this.current) return;
+    if (this.paused) return; // deliberate; not a drop
     if (this.tickInFlight) {
       // The previous tick has not come back. Skipping is the whole design:
       // queueing would build a backlog that never drains and would stretch the
@@ -529,6 +626,7 @@ export class EpisodeRecorder {
 
     this.tickInFlight = true;
     const episode = this.current;
+    const epoch = episode.epoch;
     try {
       const layout = layoutFor(this.robotType);
       const commandedPose = this.hooks.getCommanded();
@@ -549,21 +647,57 @@ export class EpisodeRecorder {
         return;
       }
 
-      // Everything is in hand — from here the frame is accepted, so the images
-      // and the row are written together and cannot disagree.
+      // The session may have ended, or this episode been closed or discarded,
+      // while the snapshots were in flight. Appending now would put frames in an
+      // episode the writer already owns, or images in a directory that has been
+      // removed.
+      if (this.stopping || this.current !== episode || episode.epoch !== epoch) {
+        this.drop('the episode ended while the frame was still being captured');
+        return;
+      }
+
+      // Everything is in hand, so from here the frame is accepted — but the
+      // WRITES can still fail, and a failure on the second of two cameras would
+      // otherwise leave the first camera's JPEG on disk with no row behind it.
+      // That is not a cosmetic leak: the sequence is what the encoder counts, so
+      // one orphan makes that camera's video one frame longer than the parquet
+      // and every frame after it a frame out of step with the joints.
       const frameNo = episode.frames.length;
+      const written: string[] = [];
+      try {
+        for (let i = 0; i < this.cameras.length; i++) {
+          const cam = this.cameras[i]!;
+          const jpeg = shots[i] as Buffer;
+          if (!this.imageSize) this.imageSize = jpegSize(jpeg);
+          const path = join(
+            this.episodeDir(episode.index),
+            cam.key,
+            `f_${String(frameNo).padStart(6, '0')}.jpg`,
+          );
+          await writeFile(path, jpeg);
+          written.push(path);
+        }
+      } catch (err) {
+        await Promise.all(written.map((f) => rm(f, { force: true }).catch(() => {})));
+        this.drop(
+          `could not write frame ${frameNo}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      // Re-checked AFTER the writes, not only before them: writing the images
+      // is itself two or three awaits, and a discard landing in that window
+      // would otherwise put a frame the operator threw away into an episode
+      // that has already been emptied.
+      if (this.stopping || this.current !== episode || episode.epoch !== epoch) {
+        await Promise.all(written.map((f) => rm(f, { force: true }).catch(() => {})));
+        this.drop('the episode ended while the frame was still being written');
+        return;
+      }
+
       for (let i = 0; i < this.cameras.length; i++) {
         const cam = this.cameras[i]!;
-        const jpeg = shots[i] as Buffer;
-        if (!this.imageSize) this.imageSize = jpegSize(jpeg);
-        const path = join(
-          this.episodeDir(episode.index),
-          cam.key,
-          `f_${String(frameNo).padStart(6, '0')}.jpg`,
-        );
-        await writeFile(path, jpeg);
         const list = episode.images.get(cam.key) ?? [];
-        list.push(path);
+        list.push(written[i]!);
         episode.images.set(cam.key, list);
       }
 
@@ -599,12 +733,24 @@ export class EpisodeRecorder {
    * is no interval to measure and the target is the only honest answer left.
    */
   private measuredFps(): number {
-    if (this.acceptedFrames < 2 || this.firstFrameAtMs === null || this.lastFrameAtMs === null) {
-      return this.fpsTarget;
+    // Summed over the EPISODES, not taken from the session's first frame to its
+    // last. The gap between one take and the next — the operator walking back
+    // to the start, a pause, a discarded take that left no frames — is not
+    // recording that happened slowly. Averaged across it, a session with two
+    // brisk takes ten minutes apart would declare about 1 fps, and every
+    // timestamp in the file plus the mp4's own framerate would inherit that.
+    const live = this.current ? [...this.episodes, this.current] : this.episodes;
+    let frames = 0;
+    let spanS = 0;
+    for (const ep of live) {
+      if (ep.frames.length < 2 || ep.firstFrameAtMs === null || ep.lastFrameAtMs === null) continue;
+      const span = (ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000;
+      if (span <= 0) continue;
+      frames += ep.frames.length - 1; // n frames span n-1 intervals
+      spanS += span;
     }
-    const spanS = (this.lastFrameAtMs - this.firstFrameAtMs) / 1000;
-    if (spanS <= 0) return this.fpsTarget;
-    return (this.acceptedFrames - 1) / spanS;
+    if (frames === 0 || spanS <= 0) return this.fpsTarget;
+    return frames / spanS;
   }
 
   status(): RecordingStatus {
@@ -641,7 +787,7 @@ export class EpisodeRecorder {
       // recording that happened slowly, it is recording that did not happen.
       const spanS =
         ep.firstFrameAtMs !== null && ep.lastFrameAtMs !== null
-          ? (ep.lastFrameAtMs - ep.firstFrameAtMs) / 1000
+          ? Math.max(0, ep.lastFrameAtMs - ep.firstFrameAtMs - ep.pausedMs) / 1000
           : 0;
       const fps = ep.frames.length > 1 && spanS > 0 ? (ep.frames.length - 1) / spanS : 0;
       return {
@@ -664,6 +810,8 @@ export class EpisodeRecorder {
       endedAtMs: null,
       firstFrameAtMs: null,
       lastFrameAtMs: null,
+      pausedMs: 0,
+      epoch: 0,
     };
     return ep;
   }

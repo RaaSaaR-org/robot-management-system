@@ -9,6 +9,13 @@
 import { HttpClient, HttpClientError, HTTP_TIMEOUTS } from './HttpClient.js';
 import { agentServiceAuthHeaders } from './agentServiceAuth.js';
 
+/**
+ * How long to wait for `/recording/stop`. The encode happens inside it.
+ * Five minutes covers a long session on a slow box; past that something is
+ * wrong and the caller should hear about it rather than wait forever.
+ */
+const STOP_TIMEOUT_MS = 300_000;
+
 /** One episode as the agent's recorder saw it. */
 export interface AgentEpisodeReport {
   episodeIndex: number;
@@ -200,6 +207,34 @@ export class AgentRecordingService {
   }
 
   /**
+   * Park the robot's recorder without ending the session.
+   *
+   * `false` means the robot did not take it — an old agent, or one that is not
+   * recording — and the caller has to decide whether that matters. It does:
+   * a pause the robot did not hear leaves it filling the dataset with whatever
+   * the arms do while nobody is driving them.
+   */
+  async pause(robotId: string): Promise<boolean> {
+    return this.toggle(robotId, 'pause');
+  }
+
+  async resume(robotId: string): Promise<boolean> {
+    return this.toggle(robotId, 'resume');
+  }
+
+  private async toggle(robotId: string, verb: 'pause' | 'resume'): Promise<boolean> {
+    const client = await this.client(robotId, HTTP_TIMEOUTS.SHORT);
+    if (!client) return false;
+    try {
+      await client.post<unknown>(this.path(robotId, `/${verb}`));
+      return true;
+    } catch (error) {
+      this.classify(error, `${verb} on ${robotId}`);
+      return false;
+    }
+  }
+
+  /**
    * Stop and collect the result.
    *
    * The encode happens inside this call, so it gets the LONG timeout: a
@@ -208,7 +243,12 @@ export class AgentRecordingService {
    * dataset nobody is waiting for.
    */
   async stop(robotId: string): Promise<AgentRecordingStopResult | null> {
-    const client = await this.client(robotId, HTTP_TIMEOUTS.LONG);
+    // Not LONG (30 s): the encode runs INSIDE this call, and a two-minute
+    // session at 30 fps with two cameras is thousands of JPEGs going through
+    // ffmpeg. Hanging up at 30 s would leave the robot writing a dataset nobody
+    // is waiting for, and the session would be completed with no dataset while
+    // one appeared on the robot's disk a minute later.
+    const client = await this.client(robotId, STOP_TIMEOUT_MS);
     if (!client) return null;
     try {
       const answer = await client.post<unknown>(this.path(robotId, '/stop'));

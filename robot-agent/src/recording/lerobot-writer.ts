@@ -97,8 +97,15 @@ export class VideoEncodeError extends Error {
 const chunk = (n: number): string => `chunk-${String(n).padStart(3, '0')}`;
 const file = (n: number): string => `file-${String(n).padStart(3, '0')}`;
 
-export const DATA_PATH_TEMPLATE = 'data/chunk-{episode_chunk:03d}/file-{episode_file:03d}.parquet';
-export const VIDEO_PATH_TEMPLATE = 'videos/{video_key}/chunk-{episode_chunk:03d}/file-{file_index:03d}.mp4';
+/**
+ * The placeholder names are `chunk_index` and `file_index`, NOT the v2.1
+ * `episode_chunk`/`episode_file`. `lerobot/datasets/utils.py` builds both from
+ * `CHUNK_FILE_PATTERN = "chunk-{chunk_index:03d}/file-{file_index:03d}"`, and
+ * formats them with exactly those keyword arguments — a template carrying the
+ * v2.1 spelling raises `KeyError` the moment lerobot looks for a file.
+ */
+export const DATA_PATH_TEMPLATE = 'data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet';
+export const VIDEO_PATH_TEMPLATE = 'videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4';
 
 // ---------------------------------------------------------------------------
 // Stats
@@ -213,6 +220,12 @@ export function buildInfo(options: BuildInfoOptions): Record<string, unknown> {
     total_videos: options.cameras.length,
     total_chunks: Math.max(1, Math.ceil(options.totalEpisodes / CHUNKS_SIZE)),
     chunks_size: CHUNKS_SIZE,
+    // Upstream's own `create_empty_dataset_info` writes both; they are the file
+    // sizes at which lerobot would roll to a new chunk. We only ever write one
+    // chunk, but a reader that computes with them should see the same numbers
+    // it would see on any other v3.0 dataset.
+    data_files_size_in_mb: 100,
+    video_files_size_in_mb: 500,
     data_path: DATA_PATH_TEMPLATE,
     video_path: options.cameras.length > 0 ? VIDEO_PATH_TEMPLATE : null,
     splits: { train: `0:${options.totalEpisodes}` },
@@ -281,6 +294,76 @@ async function encodeCamera(
 }
 
 // ---------------------------------------------------------------------------
+// tasks.parquet
+// ---------------------------------------------------------------------------
+
+/**
+ * `meta/tasks.parquet`, keyed by the task STRING.
+ *
+ * This file is not a table of two columns. lerobot writes it from a pandas
+ * DataFrame whose INDEX is the instruction —
+ * `pd.DataFrame({"task_index": …}, index=tasks).to_parquet(path)` — and reads
+ * the instruction back off that index: `LeRobotDataset.__getitem__` ends with
+ * `item["task"] = self.meta.tasks.iloc[task_idx].name`. Written as two ordinary
+ * columns, `.name` is the ROW NUMBER, so every sample handed to a
+ * language-conditioned policy carries `task = 0` instead of the sentence, and
+ * `get_task_index("pick up the cup")` finds nothing.
+ *
+ * pandas materialises an index as a column called `__index_level_0__` plus a
+ * `pandas` key in the file's key-value metadata naming it. Both halves are
+ * required: without the metadata, `pd.read_parquet` hands back an ordinary
+ * column with an ugly name and a RangeIndex. The block below is a transcription
+ * of what `pandas.to_parquet` emits for exactly this frame, checked against a
+ * real one.
+ */
+export async function writeTasksParquet(path: string, tasks: readonly string[]): Promise<void> {
+  const writer = await ParquetWriter.openFile(
+    new ParquetSchema({
+      task_index: { type: 'INT64' },
+      __index_level_0__: { type: 'UTF8' },
+    }),
+    path,
+  );
+  writer.setMetadata(
+    'pandas',
+    JSON.stringify({
+      index_columns: ['__index_level_0__'],
+      column_indexes: [
+        {
+          name: null,
+          field_name: null,
+          pandas_type: 'unicode',
+          numpy_type: 'object',
+          metadata: { encoding: 'UTF-8' },
+        },
+      ],
+      columns: [
+        {
+          name: 'task_index',
+          field_name: 'task_index',
+          pandas_type: 'int64',
+          numpy_type: 'int64',
+          metadata: null,
+        },
+        {
+          name: null,
+          field_name: '__index_level_0__',
+          pandas_type: 'unicode',
+          numpy_type: 'object',
+          metadata: null,
+        },
+      ],
+      creator: { library: 'neodem', version: '1' },
+      pandas_version: '2.2.0',
+    }),
+  );
+  for (let i = 0; i < tasks.length; i++) {
+    await writer.appendRow({ task_index: i, __index_level_0__: tasks[i]! });
+  }
+  await writer.close();
+}
+
+// ---------------------------------------------------------------------------
 // The writer
 // ---------------------------------------------------------------------------
 
@@ -323,7 +406,11 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
     episode_index: { type: 'INT64' },
     index: { type: 'INT64' },
     task_index: { type: 'INT64' },
-    next_done: { type: 'BOOLEAN' },
+    // No `next_done`. `LeRobotExportService` writes one, but lerobot v3.0 has no
+    // such feature, and it loads the data parquet by CASTING it to a schema
+    // built from `info.json.features` — so a column that is in the file and not
+    // in `features` is a hard `CastError`, and the whole dataset fails to open.
+    // Declaring it instead would work too; not writing it matches upstream.
   });
   const dataWriter = await ParquetWriter.openFile(
     dataSchema,
@@ -349,7 +436,6 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
         episode_index: ep.episodeIndex,
         index: globalIndex,
         task_index: 0,
-        next_done: i === ep.frames.length - 1,
       });
       globalIndex += 1;
     }
@@ -370,6 +456,16 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
     tasks: { type: 'UTF8', repeated: true },
     dataset_from_index: { type: 'INT64' },
     dataset_to_index: { type: 'INT64' },
+    // How lerobot FINDS an episode's parquet: `get_data_file_path` reads
+    // `ep['data/chunk_index']` and `ep['data/file_index']` and formats
+    // `data_path` with them. The video equivalents below were written from the
+    // start; these two are their data-side twins and are just as required.
+    'data/chunk_index': { type: 'INT64' },
+    'data/file_index': { type: 'INT64' },
+    // And how it finds the episode metadata file itself, when it walks from one
+    // episode to the next (`lerobot_dataset.py:127,345`).
+    'meta/episodes/chunk_index': { type: 'INT64' },
+    'meta/episodes/file_index': { type: 'INT64' },
     // Not LeRobot's: what the recorder could not get, kept next to the episode
     // it happened in rather than in a log nobody reads.
     dropped_frames: { type: 'INT64' },
@@ -403,6 +499,10 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
       tasks: [ep.task],
       dataset_from_index: range.from,
       dataset_to_index: range.to,
+      'data/chunk_index': 0,
+      'data/file_index': 0,
+      'meta/episodes/chunk_index': 0,
+      'meta/episodes/file_index': 0,
       dropped_frames: ep.dropped,
       wall_duration_s: Math.round(ep.wallDurationS * 1000) / 1000,
     };
@@ -440,18 +540,18 @@ export async function writeLeRobotV3(options: WriteDatasetOptions): Promise<Writ
     JSON.stringify({ task_index: 0, task }) + '\n',
     'utf-8',
   );
-  const taskWriter = await ParquetWriter.openFile(
-    new ParquetSchema({ task_index: { type: 'INT64' }, task: { type: 'UTF8' } }),
-    join(metaDir, 'tasks.parquet'),
-  );
-  await taskWriter.appendRow({ task_index: 0, task });
-  await taskWriter.close();
+  await writeTasksParquet(join(metaDir, 'tasks.parquet'), [task]);
 
   const allStates = episodes.flatMap((e) => e.frames.map((f) => f.state));
   const allActions = episodes.flatMap((e) => e.frames.map((f) => f.action));
-  // State and action only, as both existing writers in this repo do. Image
-  // stats would mean decoding every JPEG a second time; LeRobot computes them
-  // when it needs them.
+  // State and action only, as both existing writers in this repo do.
+  //
+  // Image stats are ABSENT, not deferred: computing them means decoding every
+  // JPEG a second time, and lerobot does not fill them in on load. A recipe
+  // that normalises images from `stats.json` therefore has to supply its own —
+  // most normalise with fixed ImageNet constants and never look. Saying this
+  // plainly beats the comment that used to stand here, which claimed lerobot
+  // recomputed them.
   await writeFile(
     join(metaDir, 'stats.json'),
     JSON.stringify(

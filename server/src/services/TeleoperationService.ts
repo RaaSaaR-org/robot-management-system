@@ -235,6 +235,19 @@ export class TeleoperationService extends EventEmitter {
         this.simRecorders.delete(sessionId);
       }
       this.stopSidecarProgressPoller(sessionId);
+      this.stopAgentProgressPoller(sessionId);
+
+      // A robot recording a session that is being deleted has to be told. It
+      // has no other way to find out: nothing else stops its tick, and it would
+      // keep filming — and refuse the next session as "busy" — until the agent
+      // is restarted.
+      const doomed = await this.prisma.teleoperationSession.findUnique({
+        where: { id: sessionId },
+      });
+      if (doomed?.recorderKind === 'agent') {
+        await agentRecordingService.stop(doomed.robotId).catch(() => null);
+      }
+
       this.lastQualityFeedback.delete(sessionId);
       this.clientEpisodeIndex.delete(sessionId);
       this.progressTicks.delete(sessionId);
@@ -403,6 +416,15 @@ export class TeleoperationService extends EventEmitter {
     // Sim frame recorder: stop sampling while paused (no frames while paused)
     this.simRecorders.get(sessionId)?.pause();
 
+    // …and the agent's recorder, which holds the frames for an agent-recorded
+    // session. Without this the dataset kept growing while the console said the
+    // session was parked, and the pause landed in the data as a stretch of
+    // whatever the robot happened to be doing while nobody was driving it.
+    if (session.recorderKind === 'agent') {
+      await agentRecordingService.pause(session.robotId);
+      this.stopAgentProgressPoller(sessionId);
+    }
+
     const updated = await this.prisma.teleoperationSession.update({
       where: { id: sessionId },
       data: { status: 'paused' },
@@ -439,11 +461,21 @@ export class TeleoperationService extends EventEmitter {
     // Sim frame recorder: resume sampling. If the recorder is gone (e.g. the
     // server restarted mid-session) and this is a frame-based session,
     // restart one initialized from the persisted frames.
-    const existingRecorder = this.simRecorders.get(sessionId);
-    if (existingRecorder) {
-      existingRecorder.resume();
-    } else if (!session.sidecarDatasetPath) {
-      await this.startSimRecorder(session as TeleoperationSession);
+    if (session.recorderKind === 'agent') {
+      // The agent owns this session's frames. Starting a SimFrameRecorder here
+      // — which is what the `else` below used to do, because there is never a
+      // `simRecorders` entry for an agent session — would run a second,
+      // joints-only recorder alongside it, writing TeleoperationFrame rows that
+      // then look like a frame-based session to `endSession`.
+      await agentRecordingService.resume(session.robotId);
+      this.startAgentProgressPoller(sessionId, session.robotId);
+    } else {
+      const existingRecorder = this.simRecorders.get(sessionId);
+      if (existingRecorder) {
+        existingRecorder.resume();
+      } else if (!session.sidecarDatasetPath) {
+        await this.startSimRecorder(session as TeleoperationSession);
+      }
     }
 
     const updated = await this.prisma.teleoperationSession.update({
@@ -796,31 +828,50 @@ export class TeleoperationService extends EventEmitter {
       orderBy: { episodeIndex: 'asc' },
     });
     if (persisted.length > 0) {
-      return persisted.map((e) => ({
-        episodeIndex: e.episodeIndex,
-        frameCount: e.frameCount,
-        startTime: 0,
-        endTime: e.durationS,
-        durationS: Math.round(e.durationS * 100) / 100,
-        droppedFrames: e.droppedFrames,
-        fpsActual: Math.round(e.fpsActual * 100) / 100,
-      }));
+      // `startTime` is where the episode begins in the SESSION's timeline, and
+      // for an agent-recorded session that is the sum of what came before it —
+      // the recorder reports each episode's own duration, not an offset. Every
+      // row read 0.0s before this, which the review table renders as a column
+      // of zeroes that looks like a bug in the recorder rather than in the sum.
+      let cursor = 0;
+      return persisted.map((e) => {
+        const startTime = Math.round(cursor * 100) / 100;
+        cursor += e.durationS;
+        return {
+          episodeIndex: e.episodeIndex,
+          frameCount: e.frameCount,
+          startTime,
+          endTime: Math.round(cursor * 100) / 100,
+          durationS: Math.round(e.durationS * 100) / 100,
+          droppedFrames: e.droppedFrames,
+          fpsActual: Math.round(e.fpsActual * 100) / 100,
+        };
+      });
     }
 
     // A live agent-recorded session has no rows yet — they are written when it
     // stops — so ask the robot what it has so far.
-    if (session.recorderKind === 'agent' && session.status === 'recording') {
+    //
+    // NOT gated on `status === 'recording'`: a PAUSED session still has
+    // episodes, and gating on the status made the panel go empty the moment an
+    // operator paused, which reads as "your takes are gone".
+    if (session.recorderKind === 'agent') {
       const live = await agentRecordingService.status(session.robotId);
       if (live) {
-        return live.episodes.map((e) => ({
-          episodeIndex: e.episodeIndex,
-          frameCount: e.frames,
-          startTime: 0,
-          endTime: e.durationS,
-          durationS: e.durationS,
-          droppedFrames: e.dropped,
-          fpsActual: e.fpsActual,
-        }));
+        let cursor = 0;
+        return live.episodes.map((e) => {
+          const startTime = Math.round(cursor * 100) / 100;
+          cursor += e.durationS;
+          return {
+            episodeIndex: e.episodeIndex,
+            frameCount: e.frames,
+            startTime,
+            endTime: Math.round(cursor * 100) / 100,
+            durationS: e.durationS,
+            droppedFrames: e.dropped,
+            fpsActual: e.fpsActual,
+          };
+        });
       }
     }
 
@@ -1746,7 +1797,13 @@ export class TeleoperationService extends EventEmitter {
           collectionMethod:
             `Teleoperation (${session.type}) recorded on the robot agent at ` +
             `${result.fpsActual} fps, ${result.totalDropped} dropped frames, ` +
-            `cameras: ${result.videoFeatures.join(', ') || 'none'}`,
+            `cameras: ${result.videoFeatures.join(', ') || 'none'}` +
+            // The sim boot belongs here, with the rest of how the data was
+            // collected. It was in `copyrightCompliance`, which an EU AI Act
+            // report renders under a heading about rights clearance — a
+            // reviewer reading "Simulation boot 585f1c…" there learns nothing
+            // and mistrusts the field.
+            (result.bootId ? `, simulation boot ${result.bootId}` : ''),
           collectionPeriod: {
             start: (session.startedAt ?? new Date()).toISOString(),
             end: new Date().toISOString(),
@@ -1759,7 +1816,8 @@ export class TeleoperationService extends EventEmitter {
             'Frames the recorder could not complete were dropped, not interpolated',
             'Episodes discarded by the operator were removed before the dataset was written',
           ],
-          ...(result.bootId ? { copyrightCompliance: `Simulation boot ${result.bootId}` } : {}),
+          copyrightCompliance:
+            'Simulation-derived: no third-party material, no recorded persons.',
         },
         session.operatorId
       );

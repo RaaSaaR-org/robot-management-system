@@ -830,10 +830,14 @@ export class HardwareClient {
    * One-shot camera snapshot as raw JPEG bytes.
    *
    * Prefers the sim facade's `?format=raw`, which answers `image/jpeg` and
-   * skips a base64 round trip the recorder would only undo. A sidecar that does
-   * not know the parameter answers its usual JSON — `g1_sidecar.py` ignores
-   * query strings — so the JSON body is decoded instead and nothing has to know
-   * in advance which one it is talking to.
+   * skips a base64 round trip the recorder would only undo.
+   *
+   * A sidecar that does not know the parameter does NOT quietly ignore it:
+   * `g1_sidecar.py` matches its routes on the whole path, so the query string
+   * makes the request miss and come back 404. So the fallback is a real retry
+   * on the plain URL, not a hopeful `if` on the content type — and it happens
+   * once per snapshot, not once per process, because a recorder that guessed
+   * wrong at startup would drop every frame of the session.
    *
    * `shadows: false` drops MuJoCo's shadow and reflection passes: on
    * `g1_dex3_house_scene.xml` a frame costs ~50 ms with them and ~8 ms without,
@@ -853,8 +857,18 @@ export class HardwareClient {
     }
     if (opts.quality !== undefined) params.set('quality', String(opts.quality));
 
-    const url = `${getSidecarUrl()}/cameras/${encodeURIComponent(name)}/snapshot?${params.toString()}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 2000) });
+    const base = `${getSidecarUrl()}/cameras/${encodeURIComponent(name)}/snapshot`;
+    const timeout = opts.timeoutMs ?? 2000;
+
+    let res = await fetch(`${base}?${params.toString()}`, {
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (res.status === 404 || res.status === 400) {
+      // This sidecar does not take parameters. Ask it the way it expects, and
+      // accept that the render options — including the cheap lighting — do not
+      // reach it.
+      res = await fetch(base, { signal: AbortSignal.timeout(timeout) });
+    }
     const contentType = res.headers.get('content-type') ?? '';
 
     if (res.ok && contentType.startsWith('image/')) {

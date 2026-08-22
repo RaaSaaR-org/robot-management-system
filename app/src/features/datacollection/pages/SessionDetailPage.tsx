@@ -148,12 +148,22 @@ export function SessionDetailPage() {
     return () => clearInterval(timer);
   }, [id, isWsConnected, sessionStatus, fetchSession]);
 
-  const handleNextEpisode = useCallback(async () => {
-    if (!session || session.status !== 'recording') return;
+  /**
+   * Returns whether the boundary was actually drawn.
+   *
+   * The VR rig buzzes the controller on the way back, and a buzz is a promise:
+   * an operator who feels it stops watching and starts the next take. Buzzing
+   * for a refused boundary — the session is paused, the robot said no — would
+   * be worse than not buzzing at all.
+   */
+  const handleNextEpisode = useCallback(async (): Promise<boolean> => {
+    if (!session || session.status !== 'recording') return false;
     try {
       await storeNextEpisode(session.id);
+      return true;
     } catch {
       /* surfaced via store error */
+      return false;
     }
   }, [session, storeNextEpisode]);
 
@@ -579,7 +589,18 @@ export function SessionDetailPage() {
               // review table's `Ep 0` is a 0-based storage index and is a
               // different thing.
               recording={
-                isRecording ? { episode: currentEpisode + 1, frames: liveFrameCount } : null
+                isRecording
+                  ? {
+                      episode: currentEpisode + 1,
+                      // The CURRENT episode's frames, not the session's. The
+                      // HUD reads `ep 2 · 412 fr`, and 412 has to be this
+                      // take's count or the two halves of that line contradict
+                      // each other.
+                      frames:
+                        episodes.find((e) => e.episodeIndex === currentEpisode)?.frameCount ??
+                        liveFrameCount,
+                    }
+                  : null
               }
             />
           ) : (

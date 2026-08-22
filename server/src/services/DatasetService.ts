@@ -4,6 +4,8 @@
  * @feature datasets
  */
 
+import { existsSync } from 'fs';
+import { isAbsolute, join } from 'path';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -160,6 +162,23 @@ export class DatasetService extends EventEmitter {
     // coming.
     const registering = typeof dto.storagePath === 'string' && dto.storagePath.trim().length > 0;
     const storagePath = registering ? dto.storagePath!.trim() : `${uuidv4()}/`;
+
+    // A registration says "there is already a dataset here". Take the claim
+    // seriously for a LOCAL path, which this server can check: a row marked
+    // `ready` pointing at an empty or missing directory is a dataset that
+    // appears in the list, offers itself for training, and fails hours later
+    // inside a job. A RustFS prefix is not checkable from here and is taken on
+    // trust, exactly as `exportToLeRobot` already does.
+    if (registering && isAbsolute(storagePath)) {
+      if (!existsSync(storagePath)) {
+        throw new Error(`storagePath does not exist: ${storagePath}`);
+      }
+      if (!existsSync(join(storagePath, 'meta', 'info.json'))) {
+        throw new Error(
+          `storagePath is not a LeRobot dataset — no meta/info.json under ${storagePath}`
+        );
+      }
+    }
 
     const input: CreateDatasetInput = {
       name: dto.name,

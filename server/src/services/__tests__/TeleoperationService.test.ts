@@ -12,6 +12,7 @@ const { mockPrisma, mockDatasetRepository, mockRobotTypeRepository } = vi.hoiste
     teleoperationSession: {
       findUnique: vi.fn(),
       update: vi.fn(),
+      delete: vi.fn(),
     },
     teleoperationFrame: {
       findMany: vi.fn(),
@@ -90,6 +91,8 @@ const { mockAgentRecording, mockProvenance } = vi.hoisted(() => ({
     start: vi.fn().mockResolvedValue(null),
     nextEpisode: vi.fn().mockResolvedValue(null),
     discardEpisode: vi.fn().mockResolvedValue(false),
+    pause: vi.fn().mockResolvedValue(true),
+    resume: vi.fn().mockResolvedValue(true),
     stop: vi.fn().mockResolvedValue(null),
     status: vi.fn().mockResolvedValue(null),
   },
@@ -172,6 +175,8 @@ describe('TeleoperationService', () => {
     mockAgentRecording.stop.mockResolvedValue(null);
     mockAgentRecording.status.mockResolvedValue(null);
     mockAgentRecording.nextEpisode.mockResolvedValue(null);
+    mockAgentRecording.pause.mockResolvedValue(true);
+    mockAgentRecording.resume.mockResolvedValue(true);
     mockProvenance.recordProvenance.mockResolvedValue({ id: 'prov-1' });
     service = TeleoperationService.getInstance();
   });
@@ -807,6 +812,85 @@ describe('TeleoperationService', () => {
       expect(mockDatasetRepository.create).not.toHaveBeenCalled();
     });
 
+    it('pauses the recorder that holds the frames, not just the one that does not', async () => {
+      // Without this the dataset kept growing while the console said the
+      // session was parked, and the pause landed in the data as a stretch of
+      // whatever the arms did while nobody was driving them.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+      });
+      updatePassesThrough({ ...CREATED, status: 'paused' });
+      await service.pauseSession('session-1');
+      expect(mockAgentRecording.pause).toHaveBeenCalledWith('robot-1');
+    });
+
+    it('resumes the agent instead of starting a second, joints-only recorder', async () => {
+      // There is never a `simRecorders` entry for an agent session, so the old
+      // `else` branch fell through to `startSimRecorder` — a second recorder
+      // writing TeleoperationFrame rows that then look like a frame-based
+      // session to endSession.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'paused',
+        recorderKind: 'agent',
+      });
+      updatePassesThrough({ ...CREATED, status: 'recording' });
+      await service.resumeSession('session-1');
+      expect(mockAgentRecording.resume).toHaveBeenCalledWith('robot-1');
+      expect(mockPrisma.teleoperationFrame.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('tells the robot to stop when the session it is recording is deleted', async () => {
+      // The robot has no other way to find out. It would keep filming, and
+      // refuse the next session as "busy", until the agent was restarted.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationSession.delete.mockResolvedValue({});
+      expect(await service.deleteSession('session-1')).toBe(true);
+      expect(mockAgentRecording.stop).toHaveBeenCalledWith('robot-1');
+    });
+
+    it('lays the episodes out on the session timeline instead of starting all of them at zero', async () => {
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'completed',
+        recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([
+        { episodeIndex: 0, frameCount: 120, droppedFrames: 0, durationS: 4, fpsActual: 30 },
+        { episodeIndex: 1, frameCount: 90, droppedFrames: 0, durationS: 3, fpsActual: 30 },
+      ]);
+      const episodes = await service.listEpisodes('session-1');
+      expect(episodes.map((e) => [e.startTime, e.endTime])).toEqual([
+        [0, 4],
+        [4, 7],
+      ]);
+    });
+
+    it('does not file the simulation boot under copyright compliance', async () => {
+      // An AI Act report renders that field under a heading about rights
+      // clearance; "Simulation boot 585f1c…" there teaches a reviewer nothing
+      // and makes them mistrust the rest of the record.
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'recording',
+        recorderKind: 'agent',
+        startedAt: new Date('2026-08-22T10:00:00Z'),
+      });
+      mockAgentRecording.stop.mockResolvedValue(AGENT_RESULT);
+      updatePassesThrough({ ...CREATED, status: 'completed' });
+
+      await service.endSession('session-1');
+      const dto = mockProvenance.recordProvenance.mock.calls[0]![1];
+      expect(dto.copyrightCompliance).not.toMatch(/boot-1/);
+      expect(dto.collectionMethod).toMatch(/simulation boot boot-1/);
+    });
+
     it('prefers persisted episode summaries, which carry drops the frames never could', async () => {
       mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
         ...CREATED,
@@ -829,6 +913,26 @@ describe('TeleoperationService', () => {
         },
       ]);
       expect(mockPrisma.teleoperationFrame.groupBy).not.toHaveBeenCalled();
+    });
+
+    it('still lists the episodes of a PAUSED session', async () => {
+      // The rows are only written when the session ends, so gating the live
+      // query on `status === 'recording'` made the panel go empty the moment an
+      // operator paused — which reads as "your takes are gone".
+      mockPrisma.teleoperationSession.findUnique.mockResolvedValue({
+        ...CREATED,
+        status: 'paused',
+        recorderKind: 'agent',
+      });
+      mockPrisma.teleoperationEpisode.findMany.mockResolvedValue([]);
+      mockAgentRecording.status.mockResolvedValue({
+        ...AGENT_STATUS,
+        recording: false,
+        episodes: [{ episodeIndex: 0, frames: 42, dropped: 0, durationS: 1.4, fpsActual: 30 }],
+      });
+      const episodes = await service.listEpisodes('session-1');
+      expect(episodes).toHaveLength(1);
+      expect(episodes[0]!.frameCount).toBe(42);
     });
 
     it('asks the robot for live episode numbers while it is still recording', async () => {

@@ -95,8 +95,16 @@ export class RecordingController {
     return this.ensure().start(req);
   }
 
-  nextEpisode(): number {
+  async nextEpisode(): Promise<number> {
     return this.ensure().nextEpisode();
+  }
+
+  pause(): void {
+    this.ensure().pause();
+  }
+
+  resume(): void {
+    this.ensure().resume();
   }
 
   async discardEpisode(index: number): Promise<boolean> {

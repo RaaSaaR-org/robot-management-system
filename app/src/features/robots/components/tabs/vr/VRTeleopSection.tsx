@@ -48,7 +48,11 @@ export interface VRTeleopSectionProps {
    * inside the headset, and listed on the modal's mapping card only when it is
    * supplied. Absent on the robot detail page, which has no session.
    */
-  onNextEpisode?: () => void;
+  /**
+   * Resolves to whether the boundary was actually drawn — the rig only
+   * buzzes the controller when it was. See `VrTeleopRig`.
+   */
+  onNextEpisode?: () => boolean | Promise<boolean>;
   /** The episode being captured, for the wrist HUD's REC line. */
   recording?: { episode: number; frames: number } | null;
 }

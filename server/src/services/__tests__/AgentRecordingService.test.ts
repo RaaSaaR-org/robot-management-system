@@ -219,13 +219,36 @@ describe('stop', () => {
     const post = vi.fn(async () => RESULT);
     const { service, calls } = build({ post });
     await service.stop('robot-1');
-    expect(calls[0]!.timeout).toBeGreaterThanOrEqual(30000);
+    // Well beyond the 30 s LONG default: a two-minute session at 30 fps with
+    // two cameras is thousands of JPEGs going through ffmpeg inside this call.
+    expect(calls[0]!.timeout).toBeGreaterThanOrEqual(120_000);
   });
 
   it('uses a short timeout for status, which only reads counters', async () => {
     const { service, calls } = build();
     await service.status('robot-1');
     expect(calls[0]!.timeout).toBeLessThanOrEqual(5000);
+  });
+});
+
+describe('pause and resume', () => {
+  it('parks and restarts the recorder that holds the frames', async () => {
+    const post = vi.fn(async (_url: string) => ({ ok: true }));
+    const { service } = build({ post });
+    expect(await service.pause('robot-1')).toBe(true);
+    expect(await service.resume('robot-1')).toBe(true);
+    expect(post.mock.calls.map((c) => c[0])).toEqual([
+      '/api/v1/robots/robot-1/recording/pause',
+      '/api/v1/robots/robot-1/recording/resume',
+    ]);
+  });
+
+  it('reports false rather than pretending an old agent heard it', async () => {
+    const post = vi.fn(async () => {
+      throw new HttpClientError('HTTP 404', 404, '/x');
+    });
+    const { service } = build({ post });
+    expect(await service.pause('robot-1')).toBe(false);
   });
 });
 

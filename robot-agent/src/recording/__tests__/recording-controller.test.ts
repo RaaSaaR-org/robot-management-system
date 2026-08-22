@@ -109,7 +109,7 @@ describe('RecordingController', () => {
   it('refuses every verb before a RobotStateManager is attached, and says which one is missing', async () => {
     expect(controller.isAttached()).toBe(false);
     expect(() => controller.status()).toThrow(/RobotStateManager/);
-    expect(() => controller.nextEpisode()).toThrow(/RobotStateManager/);
+    await expect(controller.nextEpisode()).rejects.toThrow(/RobotStateManager/);
     await expect(controller.start({ sessionId: 'session-1' })).rejects.toThrow(/RobotStateManager/);
     await expect(controller.stop()).rejects.toThrow(/RobotStateManager/);
     await expect(controller.refreshHealth()).rejects.toThrow(/RobotStateManager/);

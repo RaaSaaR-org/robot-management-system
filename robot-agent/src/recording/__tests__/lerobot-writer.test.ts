@@ -106,8 +106,13 @@ describe('buildInfo', () => {
   it('declares v3.0 and the v3 path templates', () => {
     const info = buildInfo({ ...base, cameras: [{ key: 'cam_right_high', framesDir: '', width: 640, height: 480 }] });
     expect(info.codebase_version).toBe(LEROBOT_CODEBASE_VERSION);
-    expect(info.data_path).toBe('data/chunk-{episode_chunk:03d}/file-{episode_file:03d}.parquet');
-    expect(info.video_path).toBe('videos/{video_key}/chunk-{episode_chunk:03d}/file-{file_index:03d}.mp4');
+    // The placeholders lerobot's own CHUNK_FILE_PATTERN formats. The v2.1
+    // spelling (`episode_chunk`/`episode_file`) raises KeyError the moment it
+    // looks for a file, so this assertion is the template's whole contract.
+    expect(info.data_path).toBe('data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet');
+    expect(info.video_path).toBe(
+      'videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4',
+    );
   });
 
   it('writes the MEASURED fps, decimals and all', () => {
@@ -268,12 +273,29 @@ describe.skipIf(!HAVE_FFMPEG)('writeLeRobotV3 produces a v3.0 tree', () => {
     expect(Number(rows[4]!.timestamp)).toBeCloseTo(0, 5); // episode 1 restarts
   });
 
-  it('marks the last frame of each episode done', async () => {
+  it('writes no column that info.json does not declare', async () => {
+    // lerobot loads the data parquet by CASTING it to a schema built from
+    // `info.json.features`. A column in the file that is not in `features` is a
+    // hard CastError and the dataset does not open at all — which is how a
+    // stray `next_done`, copied from the v2.1 exporter, made every dataset this
+    // writer produced unloadable.
     const rows = await readRows(join(root, 'data/chunk-000/file-000.parquet'));
-    expect(rows.map((r) => r.next_done)).toEqual([
-      false, false, false, true,
-      false, false, false, false, true,
-    ]);
+    const info = JSON.parse(await readFile(join(root, 'meta/info.json'), 'utf-8'));
+    const declared = new Set(Object.keys(info.features));
+    for (const column of Object.keys(rows[0]!)) {
+      expect(declared.has(column), `column ${column} is not declared in info.json`).toBe(true);
+    }
+  });
+
+  it('gives every episode the coordinates lerobot finds its parquet by', async () => {
+    // `get_data_file_path` reads these two and formats `data_path` with them.
+    const rows = await readRows(join(root, 'meta/episodes/chunk-000/file-000.parquet'));
+    for (const row of rows) {
+      expect(Number(row['data/chunk_index'])).toBe(0);
+      expect(Number(row['data/file_index'])).toBe(0);
+      expect(Number(row['meta/episodes/chunk_index'])).toBe(0);
+      expect(Number(row['meta/episodes/file_index'])).toBe(0);
+    }
   });
 
   it('gives each episode the video window a viewer slices by', async () => {
@@ -338,11 +360,24 @@ describe.skipIf(!HAVE_FFMPEG)('writeLeRobotV3 produces a v3.0 tree', () => {
     }
   });
 
-  it('names exactly one task, in both spellings', async () => {
+  it('keys tasks.parquet by the instruction, not by a row number', async () => {
+    // lerobot reads the sentence off the parquet's INDEX
+    // (`self.meta.tasks.iloc[task_idx].name`). Written as two ordinary columns,
+    // `.name` is the row number, and every sample handed to a
+    // language-conditioned policy carries `task = 0` instead of the sentence.
     const jsonl = (await readFile(join(root, 'meta/tasks.jsonl'), 'utf-8')).trim();
     expect(JSON.parse(jsonl)).toEqual({ task_index: 0, task: 'pick up the block' });
+
     const rows = await readRows(join(root, 'meta/tasks.parquet'));
-    expect(rows).toEqual([{ task_index: 0n, task: 'pick up the block' }]);
+    expect(rows).toEqual([{ task_index: 0n, __index_level_0__: 'pick up the block' }]);
+
+    // …and the pandas metadata without which `read_parquet` gives back an
+    // ordinary column called `__index_level_0__` and a RangeIndex.
+    const reader = await ParquetReader.openFile(join(root, 'meta/tasks.parquet'));
+    const meta = JSON.parse(String(reader.metadata?.key_value_metadata
+      ?.find((kv: { key: string }) => kv.key === 'pandas')?.value ?? '{}'));
+    await reader.close();
+    expect(meta.index_columns).toEqual(['__index_level_0__']);
   });
 });
 

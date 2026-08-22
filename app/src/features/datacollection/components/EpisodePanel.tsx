@@ -23,7 +23,7 @@ export interface EpisodePanelProps {
   isRecording: boolean;
   /** True while created/recording/paused — discard allowed */
   canDiscard: boolean;
-  onNextEpisode: () => Promise<void> | void;
+  onNextEpisode: () => unknown | Promise<unknown>;
   onDiscardEpisode: (episodeIndex: number) => Promise<void> | void;
 }
 

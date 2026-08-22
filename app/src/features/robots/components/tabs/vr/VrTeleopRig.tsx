@@ -141,7 +141,7 @@ export interface VrTeleopRigProps {
    * to advance; a click there must do nothing rather than throw or, worse, buzz
    * a confirmation for something that did not happen.
    */
-  onNextEpisode?: () => void;
+  onNextEpisode?: () => boolean | Promise<boolean>;
   /**
    * WEARER heading — the compass bearing the operator's body is facing. Seeded
    * by `VrOrigin` on a recenter and kept current here every frame.
@@ -208,6 +208,8 @@ export function VrTeleopRig({
   const estopHeld = useRef(false);
   /** Left stick click last frame — the episode boundary is edge-triggered too. */
   const nextEpisodeHeld = useRef(false);
+  /** The XR clock, readable from the async episode-boundary callback. */
+  const clockRef = useRef(0);
 
   // Smoothed absolute targets we actually stream.
   const targetsRef = useRef<JointTargets>({});
@@ -282,6 +284,7 @@ export function VrTeleopRig({
   useFrame((state, delta, frame) => {
     const referenceSpace = state.gl.xr.getReferenceSpace?.();
     const now = state.clock.elapsedTime;
+    clockRef.current = now;
     const telemetry = telemetryRef.current;
     // No cast: `XRInputSource` satisfies `HapticSource` structurally
     // (`handedness` is a string, `gamepad` is typed `unknown` there precisely
@@ -323,8 +326,19 @@ export function VrTeleopRig({
     // the operator will be waiting for.
     const nextEpisodePressed = isStickClick(left?.gamepad['xr-standard-thumbstick']);
     if (nextEpisodePressed && !nextEpisodeHeld.current && onNextEpisode) {
-      pendingBuzz.current = { preset: HAPTICS.episodeMark, until: now + BUZZ_RETRY_WINDOW_S };
-      onNextEpisode();
+      // Buzz on the ANSWER, not on the press. A buzz is a promise the operator
+      // acts on — they stop watching and start the next take — so confirming a
+      // boundary the session refused (paused, or the robot said no) is worse
+      // than confirming nothing. `state.clock.elapsedTime` is read again inside
+      // the callback because the frame that resolves is not this one.
+      void Promise.resolve(onNextEpisode()).then((accepted) => {
+        if (accepted) {
+          pendingBuzz.current = {
+            preset: HAPTICS.episodeMark,
+            until: clockRef.current + BUZZ_RETRY_WINDOW_S,
+          };
+        }
+      });
     }
     nextEpisodeHeld.current = nextEpisodePressed;
 

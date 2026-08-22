@@ -120,7 +120,7 @@ function renderModal(
       robot={makeRobot()}
       availability="ready"
       sessionSupported
-      onClose={() => {}}
+      onClose={() => true}
       {...props}
     />,
   );
@@ -343,7 +343,7 @@ describe('VRTeleopModalBody — controller mapping card', () => {
   });
 
   it('lists the L-Stick episode control when the session supplies one', () => {
-    renderModal({ onNextEpisode: () => {} });
+    renderModal({ onNextEpisode: () => true });
     expect(screen.getByText('L-Stick')).toBeInTheDocument();
     expect(
       screen.getByText('Click to end this episode and start the next'),
@@ -356,7 +356,7 @@ describe('VRTeleopModalBody — controller mapping card', () => {
   it('leaves both face-button bindings exactly where they were', () => {
     // Both are bound on BOTH hands on purpose. The stick click exists precisely
     // so that adding a recording control did not have to buy a face button back.
-    renderModal({ onNextEpisode: () => {} });
+    renderModal({ onNextEpisode: () => true });
     expect(screen.getByText('B / Y')).toBeInTheDocument();
     expect(screen.getByText('E-STOP — either hand, either button')).toBeInTheDocument();
     expect(screen.getByText('A / X')).toBeInTheDocument();

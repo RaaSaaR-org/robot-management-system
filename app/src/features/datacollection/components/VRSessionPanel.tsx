@@ -25,7 +25,11 @@ export interface VRSessionPanelProps {
    * Quest cannot reach the "Next episode" button on this page, and until they
    * could, episode boundaries were a thing only the person at the desk could set.
    */
-  onNextEpisode?: () => void;
+  /**
+   * Resolves to whether the boundary was actually drawn — the rig only
+   * buzzes the controller when it was. See `VrTeleopRig`.
+   */
+  onNextEpisode?: () => boolean | Promise<boolean>;
   /** The episode being captured, for the in-headset REC line. Null when idle. */
   recording?: { episode: number; frames: number } | null;
 }

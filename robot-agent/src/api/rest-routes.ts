@@ -1289,14 +1289,30 @@ export function createRestRoutes(
   });
 
   // POST /robots/:id/recording/next-episode
-  router.post('/robots/:id/recording/next-episode', (req: Request, res: Response) => {
+  router.post('/robots/:id/recording/next-episode', async (req: Request, res: Response) => {
     if (wrongRobot(req, res)) return;
     try {
-      res.json({ ok: true, episodeIndex: recordingController.nextEpisode() });
+      res.json({ ok: true, episodeIndex: await recordingController.nextEpisode() });
     } catch (err) {
       recordingError(res, err);
     }
   });
+
+  // POST /robots/:id/recording/pause | /resume — stop and restart capture
+  // without ending the session. Without these, a session the operator paused
+  // keeps writing frames into the dataset while the UI says it is parked.
+  for (const verb of ['pause', 'resume'] as const) {
+    router.post(`/robots/:id/recording/${verb}`, (req: Request, res: Response) => {
+      if (wrongRobot(req, res)) return;
+      try {
+        if (verb === 'pause') recordingController.pause();
+        else recordingController.resume();
+        res.json({ ok: true, ...recordingController.status() });
+      } catch (err) {
+        recordingError(res, err);
+      }
+    });
+  }
 
   // POST /robots/:id/recording/episodes/:index/discard
   router.post('/robots/:id/recording/episodes/:index/discard', async (req: Request, res: Response) => {

@@ -404,6 +404,8 @@ describe('episode recording routes', () => {
     expect(paths.filter((p) => p.includes('/recording/')).sort()).toEqual([
       '/robots/:id/recording/episodes/:index/discard',
       '/robots/:id/recording/next-episode',
+      '/robots/:id/recording/pause',
+      '/robots/:id/recording/resume',
       '/robots/:id/recording/start',
       '/robots/:id/recording/status',
       '/robots/:id/recording/stop',

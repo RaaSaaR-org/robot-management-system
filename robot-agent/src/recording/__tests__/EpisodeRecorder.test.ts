@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
+import { ParquetReader } from '@dsnp/parquetjs';
 import { EpisodeRecorder, jpegSize, type RecorderHooks } from '../EpisodeRecorder.js';
 import { G1_DEX3_JOINTS } from '../dex3-layout.js';
 
@@ -27,6 +28,23 @@ beforeAll(() => {
   );
   JPEG = res.status === 0 ? res.stdout : Buffer.alloc(0);
 });
+
+async function readParquet(path: string): Promise<Record<string, unknown>[]> {
+  const reader = await ParquetReader.openFile(path);
+  const cursor = reader.getCursor();
+  const rows: Record<string, unknown>[] = [];
+  let row: Record<string, unknown> | null;
+  while ((row = (await cursor.next()) as Record<string, unknown> | null)) {
+    if (Object.keys(row).length === 0) break;
+    rows.push(row);
+  }
+  await reader.close();
+  return rows;
+}
+
+function listValues(cell: unknown): number[] {
+  return ((cell as { list?: { element?: number }[] })?.list ?? []).map((e) => e.element ?? 0);
+}
 
 function fullPose(offset: number): Record<string, number> {
   const pose: Record<string, number> = {};
@@ -154,7 +172,10 @@ describe('EpisodeRecorder', () => {
 
     h.flags.teleop = true;
     await run(h, 100);
-    expect(rec.status().frames).toBeGreaterThan(0);
+    // Exact, not "> 0": 100 ms at the default 30 fps is a 33 ms period, so
+    // three ticks land. A recorder that quietly ticked at the wrong rate would
+    // pass a `toBeGreaterThan(0)` and fail this.
+    expect(rec.status().frames).toBe(3);
   });
 
   it('refuses to start when the sidecar does not report every joint', async () => {
@@ -190,17 +211,31 @@ describe('EpisodeRecorder', () => {
   // -- the tick -------------------------------------------------------------
 
   it('records commanded and measured as different arrays', async () => {
+    // The harness drives them 0.1 rad apart on every joint, so this reads the
+    // PARQUET and proves the two columns are different — the earlier version of
+    // this test only checked info.json's shape and would have passed with
+    // `action: state`, which is exactly the bug the recorder exists to fix.
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
     await run(h, 200);
-    const status = rec.status();
-    expect(status.frames).toBeGreaterThan(0);
+    expect(rec.status().frames).toBe(4);
     const stop = await rec.stop();
     expect(stop.ok).toBe(true);
-    const rows = JSON.parse(
-      await readFile(join(stop.datasetPath!, 'meta', 'info.json'), 'utf-8'),
-    );
-    expect(rows.robot_type).toBe('Unitree_G1_Dex3');
-    expect(rows.features['observation.state'].shape).toEqual([28]);
+
+    const info = JSON.parse(await readFile(join(stop.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info.robot_type).toBe('Unitree_G1_Dex3');
+    expect(info.features['observation.state'].shape).toEqual([28]);
+
+    const rows = await readParquet(join(stop.datasetPath!, 'data/chunk-000/file-000.parquet'));
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      const state = listValues(row['observation.state']);
+      const action = listValues(row['action']);
+      expect(state).toHaveLength(28);
+      expect(action).toHaveLength(28);
+      expect(action).not.toEqual(state);
+      // The harness's fixed offset, so a swap or a copy is visible here.
+      expect(state[0]! - action[0]!).toBeCloseTo(0.1, 6);
+    }
   });
 
   it('drops a tick while an emergency stop is latched, and says so', async () => {
@@ -256,7 +291,7 @@ describe('EpisodeRecorder', () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
     await run(h, 200);
     const firstCount = rec.status().frames;
-    expect(rec.nextEpisode()).toBe(1);
+    expect(await rec.nextEpisode()).toBe(1);
     expect(rec.status().frames).toBe(0);
     await run(h, 200);
 
@@ -270,7 +305,7 @@ describe('EpisodeRecorder', () => {
   it('forgets a discarded episode and its images', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
     await run(h, 200);
-    rec.nextEpisode();
+    await rec.nextEpisode();
     await run(h, 200);
     const before = rec.status().totalFrames;
     vi.useRealTimers();
@@ -322,12 +357,131 @@ describe('EpisodeRecorder', () => {
     expect(info._neodem.fpsTarget).toBe(50);
   });
 
+  // -- what the review found ------------------------------------------------
+
+  it('keeps recording after the LIVE episode is discarded', async () => {
+    // The episode panel offers discard on the live row. The rm that removes the
+    // take also removed the directory the next tick writes into, so every
+    // remaining frame failed with ENOENT and the operator recorded nothing
+    // until they pressed Next episode.
+    // Real JPEG writes here, so the counts are I/O-paced rather than exact —
+    // what matters is that recording RESUMES, which it did not before.
+    await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
+    await run(h, 600);
+    expect(rec.status().frames).toBeGreaterThan(0);
+
+    await rec.discardEpisode(0);
+    expect(rec.status().frames).toBe(0);
+
+    await run(h, 600);
+    expect(rec.status().frames).toBeGreaterThan(0);
+    expect(rec.status().lastDropReason ?? '').not.toMatch(/ENOENT/);
+  });
+
+  it('leaves no image behind when a later camera fails to write', async () => {
+    // One orphan JPEG makes that camera's video one frame longer than the
+    // parquet, and every frame after it a frame out of step with the joints.
+    // 5 fps so the ticks cannot overlap: at 20 the "previous frame had not
+    // finished" drop arrives too and masks the reason under test.
+    await rec.start({ sessionId: 's1', fps: 5, cameras: ['head_camera', 'house_iso'] });
+    await rm(join(dir, 'scratch', 's1', 'ep_000', 'cam_third_person'), {
+      recursive: true,
+      force: true,
+    });
+
+    await run(h, 600);
+    const status = rec.status();
+    expect(status.frames).toBe(0);
+    expect(status.dropped).toBeGreaterThan(0);
+    expect(status.lastDropReason).toMatch(/could not write frame/);
+
+    // Park the recorder so no further tick can re-create the file, then let the
+    // last failed tick's cleanup land — it unlinks camera 1's image, and that
+    // unlink is itself I/O. Bounded rather than a fixed sleep: with the fix it
+    // converges in a tick or two, and without it the orphan never goes away.
+    rec.pause();
+    const camDir = join(dir, 'scratch', 's1', 'ep_000', 'cam_right_high');
+    for (let i = 0; i < 50 && (await readdir(camDir)).length > 0; i++) {
+      await run(h, 20);
+    }
+    expect(await readdir(camDir)).toEqual([]);
+  });
+
+  it('does not average the fps across the gap between two takes', async () => {
+    // Two brisk takes ten minutes apart are not a session recorded at one frame
+    // a minute — but a rate measured from the session's first frame to its last
+    // says exactly that, and every timestamp and the mp4's framerate inherit it.
+    await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
+    await run(h, 200);
+    await rec.nextEpisode();
+    h.clock.ms += 600_000; // the operator walks back to the start
+    await run(h, 200);
+
+    expect(rec.status().fpsActual).toBeGreaterThan(15);
+    expect(rec.status().fpsActual).toBeLessThan(25);
+  });
+
+  it('refuses a new session while the previous one is still being written', async () => {
+    // The encode can take tens of seconds, and the old stop's cleanup would
+    // delete the new session's scratch tree and null out its id.
+    await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
+    await run(h, 200);
+    vi.useRealTimers();
+    const stopping = rec.stop();
+    await expect(rec.start({ sessionId: 's2', cameras: [] })).rejects.toThrow(
+      /still being written/,
+    );
+    await stopping;
+  });
+
+  it('pauses without counting the parked ticks as dropped frames', async () => {
+    await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
+    await run(h, 200);
+    const droppedBefore = rec.status().dropped;
+    rec.pause();
+    await run(h, 400);
+    expect(rec.status().frames).toBe(4);
+    expect(rec.status().dropped).toBe(droppedBefore);
+    expect(rec.isPaused()).toBe(true);
+
+    rec.resume();
+    await run(h, 200);
+    expect(rec.status().frames).toBe(8);
+    // …and the pause did not halve the rate it reports.
+    expect(rec.status().fpsActual).toBeGreaterThan(15);
+  });
+
+  it('reports the episode numbers the dataset ended up with, not its own', async () => {
+    // The writer re-indexes densely, so an operator who discards take 1 of
+    // three leaves 0 and 2 in the recorder and 0 and 1 in the file. Handing the
+    // platform its own numbering would give it episode ids that address nothing.
+    await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
+    await run(h, 200);
+    await rec.nextEpisode();
+    await run(h, 200);
+    await rec.nextEpisode();
+    await run(h, 200);
+    vi.useRealTimers();
+    await rec.discardEpisode(1);
+
+    const result = await rec.stop();
+    expect(result.ok).toBe(true);
+    expect(result.episodes.map((e) => e.episodeIndex)).toEqual([0, 1]);
+    const lines = (await readFile(join(result.datasetPath!, 'meta/episodes.jsonl'), 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.episode_index)).toEqual([0, 1]);
+    expect(result.totalEpisodes).toBe(2);
+  });
+
   it('records the scene, the sim boot and the drop count as provenance', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [], inputMode: 'vr_controller' });
     await run(h, 200);
     vi.useRealTimers();
     const result = await rec.stop();
     const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
+    expect(info._neodem.droppedFrames).toBe(result.totalDropped);
     expect(info._neodem).toMatchObject({
       scene: 'g1_dex3_house_scene.xml',
       simBootId: 'boot-1',
