@@ -378,6 +378,13 @@ export interface Dataset {
   // annotationsJson. Optional so pre-existing fixtures/partials stay valid;
   // the repository mapper always sets it ([] when none).
   annotations?: EpisodeAnnotation[];
+  /**
+   * What structural validation found when it last opened this dataset's files
+   * (TASK-217), or undefined when nothing has ever validated it — which is the
+   * state every locally registered dataset is in, because registration wrote
+   * `status: 'ready'` without a check.
+   */
+  validation?: unknown;
   createdAt: Date;
   updatedAt: Date;
 
@@ -414,6 +421,29 @@ export interface UpdateDatasetInput {
   status?: DatasetStatus;
   huggingFaceRepoId?: string;
   annotations?: EpisodeAnnotation[];
+  /**
+   * The four numbers validation MEASURES. They were absent here, so
+   * `validateAndUpdateDataset` computed them, could not write them, and left a
+   * comment in `DatasetService` saying so — the row kept whatever the creating
+   * caller had guessed at. `register-local-dataset.ts` guesses from
+   * `info.json`, and a dataset whose manifest disagrees with its files kept the
+   * manifest's numbers precisely in the case where they are wrong.
+   */
+  fps?: number;
+  totalFrames?: number;
+  totalDuration?: number;
+  demonstrationCount?: number;
+  /** Version read off the tree, which need not be what registration assumed. */
+  lerobotVersion?: string;
+  /** The structural report, stored so the UI shows findings rather than a guess. */
+  validation?: unknown;
+  /**
+   * Where the dataset now lives.
+   *
+   * Writable because unpacking an upload MOVES it: the row is created pointing
+   * at a bucket key and, once the archive is extracted, points at the tree.
+   */
+  storagePath?: string;
 }
 
 export interface DatasetQueryParams {

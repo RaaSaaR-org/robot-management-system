@@ -88,6 +88,8 @@ __pycache__/
 
 # Robot agent update backups (auto-generated)
 robot-agent/data/update-backups/
+# Same thing written relative to the repo root when the server is started there.
+/data/update-backups/
 
 # Simulation run artifacts (frames, results.json per job)
 /data/sim_runs/

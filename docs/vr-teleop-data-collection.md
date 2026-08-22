@@ -27,7 +27,7 @@ xr_teleoperate teleop_hand_and_arm.py   --arm G1_29 --ee dex3 --input-mode hand
 raw episodes  <task>/episode_XXXX/{data.json, colors/, depths/, audios/}
    ▼  sort_and_rename_folders.py + convert_unitree_json_to_lerobot.py
        --robot-type Unitree_G1_Dex3          (LeRobot v3.0, 28-dim, 4 cams)
-   ▼  convert_v3_to_v2.py                    (v2.1 — REQUIRED for local serving)
+   ▼  (no conversion step — NeoDEM reads v3.0 since TASK-217)
    ▼  register in NeoDEM (script) → Datasets page / episode viewer / curation
 ```
 
@@ -112,33 +112,51 @@ python $env:UNITREE_ROOT/unitree_lerobot/unitree_lerobot/utils/convert_unitree_j
 `~\.cache\huggingface\lerobot\local\<name>` — v3.0, 28-dim state/action
 (2×7 arm + 2×7 Dex3), 4 cameras (head L/R eye + both wrists), AV1 mp4s.
 
-## D) Convert v3.0 → v2.1 and import into NeoDEM
+## D) Import into NeoDEM — no conversion step
 
-NeoDEM's **local-directory** dataset serving
-(`server/src/routes/datasets.routes.ts`) reads the LeRobot **v2.1** layout
-(`meta/episodes.jsonl`, `data/chunk-000/episode_XXXXXX.parquet`,
-`videos/chunk-000/<cam>/episode_XXXXXX.mp4`). The Unitree converter emits
-v3.0-chunked, so the v3→v2.1 step is mandatory for local import (v3.0 is fine
-for the RustFS upload flow).
+**This used to require an external script and does not any more (TASK-217).**
+The instruction here was to run `convert_v3_to_v2.py` out of an
+`Isaac-GR00T` checkout, in PowerShell, with `ffmpeg` manually put on PATH, and
+it was called mandatory. A mandatory pipeline step that lives on one person's
+disk is not a pipeline.
 
-```powershell
-conda activate unitree_lerobot
-$env:PATH = "$env:UNITREE_ROOT/_data/vr_teleop_pipeline_test/bin;$env:PATH"   # ffmpeg
-python $env:UNITREE_ROOT/Isaac-GR00T/scripts/lerobot_conversion/convert_v3_to_v2.py --repo-id local/<name>
-Copy-Item -Recurse $HOME\.cache\huggingface\lerobot\local\<name> $env:UNITREE_ROOT/_data/<target>
+NeoDEM now reads v3.0 directly. The local-directory readers are still v2.1 —
+they are the paths that work and are tested — so a v3.0 dataset is served
+through a v2.1 **view** that `server/curation/lerobot_v3_to_v2.py` builds on
+first read and caches. Nothing to run by hand, and the original v3.0 tree is
+what the `Dataset` row points at.
+
+If you want the conversion as a file, it is the same script:
+
+```bash
+python server/curation/lerobot_v3_to_v2.py <v3-dir> <out-dir>
 ```
 
+It needs `pyarrow` and, for the videos, `ffmpeg` (`CURATION_FFMPEG` or on
+PATH). `server/curation/.venv` is found automatically by both the server and
+`scripts/test-all.sh`; `CURATION_PYTHON` overrides it.
+
 Registration: `POST /api/datasets` does not accept a `storagePath`, so local
-directories are registered by script — follow the pattern of
-`server/src/scripts/seed-synthetic-demo.ts` (a ready adaptation,
-`register_dataset.ts`, sits in `$UNITREE_ROOT/_data/vr_teleop_pipeline_test/`).
-Run it from `server/` with an **absolute** database URL
-(`DATABASE_URL=file:$UNITREE_ROOT/robot-management-system/server/prisma/dev.db` —
-a relative `file:./dev.db` resolves against the generated client and opens the
+directories are registered by script:
+
+```bash
+cd server
+npx tsx src/scripts/register-local-dataset.ts \
+  --dir /abs/path/to/dataset --name "Robot day teleop" \
+  --robot-type-id <id> --validate
+```
+
+`--validate` opens every file `info.json` names before the row is written, and
+marks the dataset `failed` with the reasons rather than `ready` unchecked.
+`GET /api/datasets/robot-types` lists the ids. Run it with an **absolute**
+database URL (`DATABASE_URL=file:$UNITREE_ROOT/robot-management-system/server/prisma/dev.db`
+— a relative `file:./dev.db` resolves against the generated client and opens the
 wrong SQLite file, surfacing as Prisma `P2021`).
 
 Verify: `GET /api/datasets/<id>/episodes`, `.../episodes/0/frames`,
-`.../episodes/0/video/<camera>` — all should return data / `video/mp4`.
+`.../episodes/0/video/<camera>` — all should return data / `video/mp4`. A
+dataset that has already been registered can be re-checked at any time with
+`POST /api/datasets/<id>/validate`.
 
 ## Open gaps before a real Quest session
 

@@ -5,7 +5,7 @@
  */
 
 import { useRef, useState } from 'react';
-import { Database, Play, Trash2, Sparkles } from 'lucide-react';
+import { Database, Play, Trash2, Sparkles, AlertTriangle, CameraOff, ShieldQuestion } from 'lucide-react';
 import { Card, Badge, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
@@ -48,6 +48,13 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
   const isSynthetic = !!dataset.infoJson?._synthetic;
   const showThumb = isSynthetic && dataset.status === 'ready' && dataset.totalFrames > 0;
 
+  // What validation found, if anything ever looked. Three states, and the
+  // third is the one that used to be invisible: a dataset registered straight
+  // to `ready` that nobody has checked looks identical to a checked one.
+  const validation = dataset.validation;
+  const noImages = validation?.warnings.some((w) => w.code === 'NO_IMAGE_FEATURES') ?? false;
+  const errorCount = validation?.errors.length ?? 0;
+
   return (
     <Card
       onClick={onClick}
@@ -85,6 +92,40 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
           </div>
         </div>
 
+        {/* THE line that would have saved a training run. A dataset with no
+            camera feature validates perfectly and then dies hours into a
+            training job with "All image features are missing from the batch".
+            It is a warning and not a failure — a state-only dataset is a
+            legitimate thing to hold — so it needs somewhere to be seen. */}
+        {noImages && (
+          <div
+            data-testid="dataset-no-images"
+            className="mt-3 flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+          >
+            <CameraOff className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>No camera features — a VLA policy cannot train on this.</span>
+          </div>
+        )}
+
+        {errorCount > 0 && (
+          <div
+            data-testid="dataset-validation-errors"
+            className="mt-3 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-300"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <span className="font-medium">
+                  {errorCount === 1 ? '1 structural problem' : `${errorCount} structural problems`}
+                </span>
+                {/* The first one in full. A count alone sends whoever reads it
+                    to the logs, which are on a machine they may not have. */}
+                <p className="mt-0.5 break-words">{validation!.errors[0]!.message}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-theme-tertiary">Frames</span>
@@ -107,6 +148,19 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
             <p className="font-medium text-theme-primary">{dataset.fps}</p>
           </div>
         </div>
+
+        {/* Not validated is a THIRD state, and it was invisible: locally
+            registered datasets are written straight to `ready` without a check,
+            so a green badge on one meant nothing had been looked at. */}
+        {!validation && dataset.status === 'ready' && (
+          <div
+            data-testid="dataset-not-validated"
+            className="mt-3 flex items-start gap-2 text-sm text-theme-tertiary"
+          >
+            <ShieldQuestion className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>Not validated — nothing has opened this dataset&rsquo;s files.</span>
+          </div>
+        )}
 
         {qualityPercent !== null && (
           <div className="mt-4">

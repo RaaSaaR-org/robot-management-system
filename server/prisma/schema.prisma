@@ -2244,7 +2244,11 @@ model Dataset {
   skillId            String?
   storagePath        String // RustFS storage location
   lerobotVersion     String // LeRobot v3 format version
-  fps                Int
+  // Float, not Int (TASK-217 review). A recording's real rate is 10.12 or
+  // 29.97 as often as it is 30, and rounding it to an Int while deriving
+  // `totalDuration` from the unrounded value left three columns that cannot
+  // all be true: 253 frames at "10 fps" is 25.3 s, and the recording is 25.0.
+  fps                Float
   totalFrames        Int
   totalDuration      Float // Duration in seconds
   demonstrationCount Int
@@ -2254,6 +2258,14 @@ model Dataset {
   status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
   huggingFaceRepoId  String? // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
   annotationsJson    String   @default("[]") // JSON: EpisodeAnnotation[] from lerobot-annotate jobs (TASK-179)
+  // JSON: DatasetStructureReport — what validation actually found when it
+  // opened the files (TASK-217). Nullable, and null means NOT VALIDATED, which
+  // is a different thing from validated-and-clean: every locally registered
+  // dataset was written straight to `ready` without a check, and there has to
+  // be a way to tell those apart. The response used to reconstruct an
+  // approximation of the score breakdown from the row's own numbers, which
+  // could only ever agree with itself.
+  validationJson     String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -2418,6 +2430,40 @@ model EpisodeReward {
 
   @@unique([datasetId, episodeIndex, rewardType])
   @@index([datasetId])
+}
+
+// DatasetEpisodeFlag - an operator's judgement about one episode (TASK-217)
+//
+// Keyed on (datasetId, episodeIndex) rather than on an Episode model, exactly
+// as EpisodeReward above is: there is no Episode row to hang it off, because an
+// episode lives in a parquet on disk or in a bucket and the database has never
+// held one. A model for it would have to be kept in step with a file nobody
+// writes through this server.
+//
+// This exists because `PATCH /:id/episodes/:index/flag` answered `{success:
+// true}` and stored nothing, `GET /:id/flagged` always answered `[]`, and the
+// viewer showed a flag control for both. Three endpoints agreeing on a fiction
+// is not a feature.
+model DatasetEpisodeFlag {
+  id           String   @id @default(uuid())
+  tenantId     String?
+  datasetId    String
+  episodeIndex Int
+  flagged      Boolean  @default(true)
+  // Why it was flagged, when a caller says. Free text: the reasons an operator
+  // gives are not a closed set and guessing one would only be re-litigated.
+  reason       String?
+  // Set when the flag has been reviewed: 'keep' or 'remove'. Null while the
+  // episode is flagged and nobody has decided yet.
+  reviewDecision String?
+  reviewedAt     DateTime?
+  reviewedBy     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([datasetId, episodeIndex])
+  @@index([datasetId])
+  @@index([datasetId, flagged])
 }
 
 // InterventionEpisode - DAgger-style human intervention during a rollout

@@ -298,7 +298,11 @@ describe('DatasetCurationService — RustFS mode', () => {
 // ----------------------------------------------------------------------------
 
 describe('DatasetCurationService — backend selection', () => {
-  it('uses the lerobot backend for v3.0 datasets on delete', async () => {
+  it('chooses the backend from the DIRECTORY, not from the row (TASK-217)', async () => {
+    // The row says v3.0; what is on disk is v2.1 — which is what
+    // `makeLocalSourceDir` writes, and what a v3.0 dataset resolves to once
+    // its view is built. Asking the row would send `curate.py` to a backend
+    // that cannot read the directory it was handed.
     const src = makeLocalSourceDir();
     mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: src, lerobotVersion: 'v3.0' }));
     stubCurationWritesOutput(mockCuration.deleteEpisodes);
@@ -306,25 +310,31 @@ describe('DatasetCurationService — backend selection', () => {
     await service.deleteEpisodes('ds1', [1]);
 
     const opts = mockCuration.deleteEpisodes.mock.calls[0][3];
-    expect(opts).toEqual({ backend: 'lerobot' });
+    expect(opts).toEqual({ backend: 'native' });
   });
 
-  it('rejects trim for v3.0 datasets with V3_TRIM_UNSUPPORTED', async () => {
-    mockRepo.findById.mockResolvedValue(makeDataset({ lerobotVersion: 'v3.0' }));
+  it('trims a v3.0 dataset instead of refusing it', async () => {
+    // `V3_TRIM_UNSUPPORTED` is gone. Every dataset this platform writes is
+    // v3.0, so refusing them meant the datasets it produced were the ones it
+    // could not curate. The source resolves through the v2.1 view.
+    const src = makeLocalSourceDir();
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: src, lerobotVersion: 'v3.0' }));
+    stubCurationWritesOutput(mockCuration.trimEpisode);
 
-    await expect(service.trimEpisode('ds1', 0, 0, 10)).rejects.toMatchObject({
-      code: 'V3_TRIM_UNSUPPORTED',
-    });
-    expect(mockCuration.trimEpisode).not.toHaveBeenCalled();
+    await service.trimEpisode('ds1', 0, 0, 10);
+
+    expect(mockCuration.trimEpisode).toHaveBeenCalledTimes(1);
+    expect(mockCuration.trimEpisode.mock.calls[0][5]).toEqual({ backend: 'native' });
   });
 
-  it('rejects suggest for v3.0 datasets with V3_SUGGEST_UNSUPPORTED', async () => {
-    mockRepo.findById.mockResolvedValue(makeDataset({ lerobotVersion: 'v3.0' }));
+  it('suggests against a v3.0 dataset instead of refusing it', async () => {
+    const src = makeLocalSourceDir();
+    mockRepo.findById.mockResolvedValue(makeDataset({ storagePath: src, lerobotVersion: 'v3.0' }));
+    mockCuration.suggest.mockResolvedValue({ suggestions: [], episodes: 0 });
 
-    await expect(service.suggest('ds1')).rejects.toBeInstanceOf(CurationError);
-    await expect(service.suggest('ds1')).rejects.toMatchObject({
-      code: 'V3_SUGGEST_UNSUPPORTED',
-    });
+    await service.suggest('ds1');
+
+    expect(mockCuration.suggest).toHaveBeenCalledTimes(1);
   });
 });
 

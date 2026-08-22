@@ -11,9 +11,11 @@
 # typechecks and Playwright, so the ~6500 unit tests across server/app/robot-agent never
 # ran from the documented entry point and new suites could rot unnoticed.
 #
-# The pytest stage needs the cyclonedds+mujoco venv from
-# robot-agent/hardware/sim_g1_dds/README.md — point SIM_PYTHON at it. Without it the
-# stage is reported as SKIPPED, never as passed.
+# The sim pytest stage needs the cyclonedds+mujoco venv from
+# robot-agent/hardware/sim_g1_dds/README.md — point SIM_PYTHON at it. The curation
+# pytest stage needs pyarrow + pandas — point CURATION_PYTHON at an interpreter that
+# has them (server/curation/.venv/bin/python is found automatically). Without either,
+# that stage is reported as SKIPPED, never as passed.
 #
 # Every stage runs even when an earlier one fails, so one invocation gives the full
 # picture. Exits 0 if all tests pass, non-zero otherwise.
@@ -68,6 +70,24 @@ if [ -n "$SIM_PY" ] && "$SIM_PY" -c 'import mujoco' >/dev/null 2>&1; then
   (cd "$SIM_DIR" && "$SIM_PY" -m pytest -q) || { echo "  sim_g1_dds pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
   step "Sim state machine (SKIPPED — set SIM_PYTHON, see $SIM_DIR/README.md)"
+fi
+
+# ---------------------------------------------------- 3b. Curation / LeRobot format
+# The converter and the dataset tooling are python, and their tests existed for two
+# tasks without ever running from this script — which is how a mandatory pipeline step
+# ends up untested. Same rule as the sim stage: a missing interpreter is SKIPPED, never
+# a pass. The video tests inside additionally skip themselves without ffmpeg.
+CURATION_DIR="$REPO_ROOT/server/curation"
+CURATION_PY="${CURATION_PYTHON:-}"
+if [ -z "$CURATION_PY" ] && [ -x "$CURATION_DIR/.venv/bin/python" ]; then
+  CURATION_PY="$CURATION_DIR/.venv/bin/python"
+fi
+if [ -n "$CURATION_PY" ] && "$CURATION_PY" -c 'import pyarrow, pandas' >/dev/null 2>&1; then
+  step "Curation + LeRobot converter (pytest)"
+  (cd "$CURATION_DIR" && "$CURATION_PY" -m pytest tests -q) \
+    || { echo "  curation pytest FAILED"; FAILURES=$((FAILURES + 1)); }
+else
+  step "Curation + LeRobot converter (SKIPPED — set CURATION_PYTHON to a python with pyarrow+pandas)"
 fi
 
 # Training E2E — now in separate training-worker repo (run ../training-worker/scripts/test-e2e.sh)

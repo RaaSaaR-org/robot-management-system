@@ -13,6 +13,7 @@
  */
 
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
@@ -72,7 +73,15 @@ function pythonFor(backend: CurationBackend): string {
     }
     return py;
   }
-  return process.env.CURATION_PYTHON ?? 'python3';
+  if (process.env.CURATION_PYTHON) return process.env.CURATION_PYTHON;
+  // `server/curation/.venv/bin/python` before bare `python3`: that venv is what
+  // `server/curation/README.md` tells you to create and what `test-all.sh`
+  // looks for, and requiring an env var as well meant curation failed with
+  // "No module named 'pyarrow'" on a machine that had everything it needed.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const venv = path.resolve(here, '../../curation/.venv/bin/python');
+  if (existsSync(venv)) return venv;
+  return 'python3';
 }
 
 export class EpisodeCurationService {

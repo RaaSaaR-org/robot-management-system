@@ -5,8 +5,13 @@
  * @feature datasets
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { Readable } from 'stream';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { DatasetValidationResult } from '../../types/dataset.types.js';
+import type { DatasetStructureReport } from '../lerobot/validateDataset.js';
 
 // ---------------------------------------------------------------------------
 // Mocks for external boundaries (DB repos, storage, NATS/messaging, KV)
@@ -17,12 +22,14 @@ const {
   deleteDatasetFromStorage,
   rustfsExists,
   rustfsDownload,
+  rustfsList,
   jsPublish,
 } = vi.hoisted(() => ({
   getDatasetUploadUrl: vi.fn(),
   deleteDatasetFromStorage: vi.fn(),
   rustfsExists: vi.fn(),
   rustfsDownload: vi.fn(),
+  rustfsList: vi.fn(async (_prefix: string) => [] as string[]),
   jsPublish: vi.fn(),
 }));
 
@@ -52,6 +59,13 @@ vi.mock('../../storage/model-storage.js', () => ({
   modelStorage: {
     getDatasetUploadUrl,
     deleteDataset: deleteDatasetFromStorage,
+    // The upload is streamed to the scratch file rather than buffered whole:
+    // a multi-GB dataset tarball was materialised twice in the API process
+    // before a byte reached disk.
+    getDatasetStream: async (id: string, version: string) => {
+      const buffer = await rustfsDownload('training-datasets', `${id}/${version}/data.bin`);
+      return Readable.from([buffer]);
+    },
   },
 }));
 
@@ -60,6 +74,24 @@ vi.mock('../../storage/rustfs-client.js', () => ({
   getRustFSClient: vi.fn(() => ({
     exists: rustfsExists,
     download: rustfsDownload,
+    // `RustFsDatasetTree` asks for a size, not a boolean: validation now cares
+    // that a file is non-empty, not only that it is listed.
+    getMetadata: async (_bucket: string, key: string) => {
+      if (!(await rustfsExists(_bucket, key))) {
+        // Shaped like the AWS SDK's HeadObject 404, because that is what the
+        // tree branches on: anything that is NOT a 404 is now a store outage,
+        // and an outage must not be recorded as a broken dataset.
+        const err = new Error('NotFound');
+        err.name = 'NotFound';
+        throw err;
+      }
+      return { contentLength: 1024 };
+    },
+    listAll: async function* (_bucket: string, prefix: string) {
+      for (const key of await rustfsList(prefix)) {
+        yield { key, size: 1024, lastModified: new Date() };
+      }
+    },
   })),
 }));
 
@@ -98,6 +130,33 @@ import { kvGet } from '../../messaging/kv-stores.js';
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/**
+ * A real .tar.gz holding a minimal dataset, built once.
+ *
+ * A real archive rather than a stub, because the thing under test is that
+ * `completeUpload` UNPACKS what was uploaded — a mocked extractor would only
+ * prove the call was made.
+ */
+let tarballCache: Buffer | null = null;
+async function tarballFixture(): Promise<Buffer> {
+  if (tarballCache) return tarballCache;
+  const { execFile } = await import('child_process');
+  const { promisify } = await import('util');
+  const { mkdtemp, mkdir, readFile, writeFile } = await import('fs/promises');
+  const { join } = await import('path');
+  const { tmpdir } = await import('os');
+  const dir = await mkdtemp(join(tmpdir(), 'dataset-tarball-'));
+  await mkdir(join(dir, 'src', 'meta'), { recursive: true });
+  await writeFile(
+    join(dir, 'src', 'meta', 'info.json'),
+    JSON.stringify({ codebase_version: 'v2.1', robot_type: 'so101', fps: 30, features: {} }),
+  );
+  const archive = join(dir, 'ds.tar.gz');
+  await promisify(execFile)('tar', ['-czf', archive, '-C', join(dir, 'src'), 'meta']);
+  tarballCache = await readFile(archive);
+  return tarballCache;
+}
 
 function makeDataset(overrides: Record<string, unknown> = {}) {
   return {
@@ -146,6 +205,25 @@ function makeValidation(overrides: Partial<DatasetValidationResult> = {}): Datas
     ...overrides,
   };
 }
+
+/**
+ * Where the upload test unpacks.
+ *
+ * It used to unpack into `server/data/uploaded-datasets` — inside the
+ * developer's checkout — and leave the tree there. Gitignored, so it never
+ * showed up in a commit, which is exactly why it went unnoticed.
+ */
+let uploadDir: string;
+
+beforeAll(async () => {
+  uploadDir = await mkdtemp(join(tmpdir(), 'dataset-upload-test-'));
+  process.env.DATASET_UPLOAD_DIR = uploadDir;
+});
+
+afterAll(async () => {
+  delete process.env.DATASET_UPLOAD_DIR;
+  await rm(uploadDir, { recursive: true, force: true });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -414,12 +492,16 @@ describe('initiateUpload', () => {
     const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
 
     const result = await datasetService.initiateUpload('ds1', 'application/x-tar', 123);
+    // ONE key, named once. The response used to say `<id>/data.tar.gz` while
+    // the presigned URL wrote `<id>/latest/data.bin` and validation looked for
+    // `<id>/meta/info.json` — three strings for one object.
     expect(result).toEqual({
       uploadUrl: 'https://signed-url',
       expiresIn: 3600,
-      storagePath: 'ds1/data.tar.gz',
+      storagePath: 'ds1/upload/data.bin',
     });
-    expect(getDatasetUploadUrl).toHaveBeenCalledWith('ds1', 'latest', 'application/x-tar');
+    // And the key the URL is signed against is the key the response names.
+    expect(getDatasetUploadUrl).toHaveBeenCalledWith('ds1', 'upload', 'application/x-tar');
     expect(events.some((e) => e.type === 'dataset:upload:initiated')).toBe(true);
     unsub();
   });
@@ -446,19 +528,42 @@ describe('completeUpload', () => {
     );
   });
 
-  it('queues a validation job via NATS when connected', async () => {
+  it('unpacks the uploaded archive, then queues validation against the tree', async () => {
+    // The step that was missing entirely. `completeUpload` used to go straight
+    // to validation against a `storagePath` that pointed at an object nothing
+    // had unpacked, so the modal's only outcome was `failed`.
     vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
     vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
     vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsDownload.mockResolvedValue(await tarballFixture());
 
     await datasetService.completeUpload('ds1');
 
     expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'validating' });
+    // The row now points at the unpacked tree, not at the archive.
+    const moved = vi.mocked(datasetRepository.update).mock.calls
+      .map((c) => c[1] as { storagePath?: string })
+      .find((input) => typeof input.storagePath === 'string');
+    expect(moved?.storagePath?.startsWith(uploadDir)).toBe(true);
     expect(jsPublish).toHaveBeenCalledWith(
       'jobs.dataset.validate',
       expect.any(Uint8Array),
       expect.objectContaining({ msgID: 'validate-ds1' })
     );
+  });
+
+  it('marks the dataset failed, with the reason, when the archive will not unpack', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    rustfsDownload.mockResolvedValue(Buffer.from(''));
+
+    await datasetService.completeUpload('ds1');
+
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    expect(jsPublish).not.toHaveBeenCalled();
   });
 
   it('runs validation synchronously when NATS is unavailable', async () => {
@@ -495,11 +600,139 @@ describe('getUploadProgress', () => {
 // validateStructure
 // ===========================================================================
 
+/**
+ * Real parquet buffers, built once with the library the reader uses.
+ *
+ * "Not a parquet" would be honestly reported as unreadable, which is right and
+ * is not what these cases are about — a dataset whose files are all present and
+ * all readable is the baseline the failure cases are measured against.
+ */
+let parquetCache: { data: Buffer; episodes: Buffer } | null = null;
+async function parquetFixtures(): Promise<{ data: Buffer; episodes: Buffer }> {
+  if (parquetCache) return parquetCache;
+  const { ParquetSchema, ParquetWriter, ParquetFieldBuilder } = await import('@dsnp/parquetjs');
+  const { mkdtemp, readFile } = await import('fs/promises');
+  const { join } = await import('path');
+  const { tmpdir } = await import('os');
+  const dir = await mkdtemp(join(tmpdir(), 'dataset-parquet-'));
+
+  const dataPath = join(dir, 'data.parquet');
+  const dataWriter = await ParquetWriter.openFile(
+    new ParquetSchema({
+      'observation.state': ParquetFieldBuilder.createListField('FLOAT', false),
+      action: ParquetFieldBuilder.createListField('FLOAT', false),
+    }),
+    dataPath,
+  );
+  const asList = (v: number[]) => ({ list: v.map((element) => ({ element })) });
+  const vec = [0, 1, 2, 3, 4, 5];
+  for (let i = 0; i < 150; i++) {
+    await dataWriter.appendRow({ 'observation.state': asList(vec), action: asList(vec) });
+  }
+  await dataWriter.close();
+
+  const episodesPath = join(dir, 'episodes.parquet');
+  const episodesWriter = await ParquetWriter.openFile(
+    new ParquetSchema({ episode_index: { type: 'INT64' }, length: { type: 'INT64' } }),
+    episodesPath,
+  );
+  for (let ep = 0; ep < 5; ep++) await episodesWriter.appendRow({ episode_index: ep, length: 30 });
+  await episodesWriter.close();
+
+  parquetCache = { data: await readFile(dataPath), episodes: await readFile(episodesPath) };
+  return parquetCache;
+}
+
+/**
+ * A RustFS dataset that is COMPLETE — info.json plus every file it names.
+ *
+ * Building the whole tree is the point. Until TASK-217 `validateStructure`
+ * asked whether `meta/info.json` existed and read four fields out of it, so a
+ * manifest with nothing behind it validated clean; these tests describe a check
+ * that opens what the manifest names.
+ */
+async function mockCompleteDataset(options: {
+  version?: string;
+  cameras?: string[];
+  withStats?: boolean;
+  omit?: string[];
+} = {}): Promise<Record<string, unknown>> {
+  const parquets = await parquetFixtures();
+  const version = options.version ?? 'v3.0';
+  const cameras = options.cameras ?? ['observation.images.cam_high'];
+  const omit = new Set(options.omit ?? []);
+  const features: Record<string, unknown> = {};
+  for (const cam of cameras) features[cam] = { dtype: 'video', shape: [64, 64, 3] };
+  features['observation.state'] = { dtype: 'float32', shape: [6] };
+  features.action = { dtype: 'float32', shape: [6] };
+  // Declared because the fixture parquet carries them and nothing else:
+  // a column in the file that `features` does not declare is a hard CastError
+  // inside lerobot, so validation reports it.
+
+  const info = {
+    codebase_version: version,
+    robot_type: 'so101',
+    fps: 30,
+    total_episodes: 5,
+    total_frames: 150,
+    total_chunks: 1,
+    chunks_size: 1000,
+    features,
+  };
+
+  const present = new Set<string>(['meta/info.json']);
+  present.add('data/chunk-000/file-000.parquet');
+  for (const cam of cameras) present.add(`videos/${cam}/chunk-000/file-000.mp4`);
+  if (options.withStats) present.add('meta/stats.json');
+  const episodeShard = 'meta/episodes/chunk-000/file-000.parquet';
+
+  for (const path of omit) present.delete(path);
+
+  rustfsExists.mockImplementation(async (_bucket: string, key: string) => {
+    const rel = key.replace(/^ds1\//, '');
+    if (rel === episodeShard) return !omit.has(episodeShard);
+    return present.has(rel);
+  });
+  rustfsList.mockImplementation(async (prefix: string) =>
+    prefix.includes('meta/episodes') && !omit.has(episodeShard) ? [`ds1/${episodeShard}`] : [],
+  );
+  rustfsDownload.mockImplementation(async (_bucket: string, key: string) => {
+    if (key.endsWith('info.json')) return Buffer.from(JSON.stringify(info));
+    if (key.endsWith('stats.json')) return Buffer.from(JSON.stringify({ mean: [1, 2, 3] }));
+    if (key.includes('meta/episodes/')) return parquets.episodes;
+    if (key.endsWith('.parquet')) return parquets.data;
+    return Buffer.from('mp4-ish');
+  });
+  return info;
+}
+
 describe('validateStructure', () => {
+  it('separates "the file is not there" from "the store did not answer"', async () => {
+    // `RustFsDatasetTree.stat` caught every exception and returned null, so a
+    // timeout, a 500 or an expired credential all read as a missing parquet —
+    // and the dataset was written `failed` for files that were all present.
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    await mockCompleteDataset();
+    rustfsExists.mockImplementation(async () => {
+      const err = new Error('connection reset by peer');
+      err.name = 'TimeoutError';
+      throw err;
+    });
+
+    const result = await datasetService.validateStructure('ds1/');
+
+    expect(result.storeUnavailable).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(' ')).toContain('could not reach the object store');
+  });
+
   it('returns invalid with an error when storage is unavailable', async () => {
     vi.mocked(isRustFSInitialized).mockReturnValue(false);
     const result = await datasetService.validateStructure('ds1/');
     expect(result.valid).toBe(false);
+    // NOT "this dataset is broken" — nowhere to look. Recording it as a
+    // validation failure would mark a good dataset failed because a store was
+    // briefly down.
     expect(result.errors).toContain('Storage service not available');
   });
 
@@ -508,7 +741,8 @@ describe('validateStructure', () => {
     rustfsExists.mockResolvedValue(false);
     const result = await datasetService.validateStructure('ds1/');
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain('Missing required file: meta/info.json');
+    expect(result.errors[0]).toContain('Missing required file: meta/info.json');
+    expect(result.report?.errors.map((e) => e.code)).toEqual(['MISSING_INFO']);
   });
 
   it('collects errors for missing required info.json fields', async () => {
@@ -530,88 +764,156 @@ describe('validateStructure', () => {
     );
   });
 
-  it('validates a complete dataset and warns about missing stats/episodes', async () => {
+  it('FAILS a manifest with nothing behind it — the case that used to pass', async () => {
+    // THE regression this task exists for. `info.json` alone, complete and
+    // well-formed, naming a parquet and a video that are not there. The old
+    // check called this valid and scored it; a training run found out hours
+    // later.
     vi.mocked(isRustFSInitialized).mockReturnValue(true);
-    rustfsExists.mockImplementation(async (_bucket: string, path: string) =>
-      path.endsWith('info.json')
-    );
-    rustfsDownload.mockResolvedValue(
-      Buffer.from(
-        JSON.stringify({
-          codebase_version: 'v3.0',
-          robot_type: 'so101',
-          fps: 30,
-          features: { observation: {} },
-          total_episodes: 20,
-          total_frames: 600,
-        })
-      )
-    );
+    await mockCompleteDataset({
+      omit: [
+        'data/chunk-000/file-000.parquet',
+        'videos/observation.images.cam_high/chunk-000/file-000.mp4',
+        'meta/episodes/chunk-000/file-000.parquet',
+      ],
+    });
 
     const result = await datasetService.validateStructure('ds1/');
-    expect(result.valid).toBe(true);
-    expect(result.episodeCount).toBe(20);
-    expect(result.totalFrames).toBe(600);
-    expect(result.totalDuration).toBe(20); // 600 / 30
-    expect(result.warnings).toContain(
-      'Missing stats.json - normalization statistics not available'
-    );
-    expect(result.warnings).toContain(
-      'Missing episodes.json - episode boundaries not available'
-    );
+    expect(result.valid).toBe(false);
+    const codes = result.report!.errors.map((e) => e.code);
+    expect(codes).toContain('MISSING_DATA_FILE');
+    expect(codes).toContain('MISSING_VIDEO_FILE');
+    expect(codes).toContain('MISSING_EPISODE_META');
+  });
+
+  it('reports the files it opened, and still warns about a missing stats.json', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    await mockCompleteDataset();
+
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.lerobotVersion).toBe('v3.0');
+    expect(result.fps).toBe(30);
+    expect(result.report!.files.map((f) => f.path)).toEqual(expect.arrayContaining([
+      'meta/info.json',
+      'data/chunk-000/file-000.parquet',
+      'videos/observation.images.cam_high/chunk-000/file-000.mp4',
+    ]));
+    expect(result.warnings.join(' ')).toContain('stats.json');
   });
 
   it('parses stats.json when present', async () => {
     vi.mocked(isRustFSInitialized).mockReturnValue(true);
-    rustfsExists.mockResolvedValue(true); // info, stats, episodes all exist
-    rustfsDownload.mockImplementation(async (_bucket: string, path: string) => {
-      if (path.endsWith('info.json')) {
-        return Buffer.from(
-          JSON.stringify({
-            codebase_version: 'v3.0',
-            robot_type: 'so101',
-            fps: 30,
-            features: { x: {} },
-            total_episodes: 5,
-            total_frames: 150,
-          })
-        );
-      }
-      return Buffer.from(JSON.stringify({ mean: [1, 2, 3] }));
-    });
+    await mockCompleteDataset({ withStats: true });
 
     const result = await datasetService.validateStructure('ds1/');
-    expect(result.valid).toBe(true);
     expect(result.stats).toEqual({ mean: [1, 2, 3] });
-    expect(result.warnings).toHaveLength(0);
+    expect(result.report!.warnings.map((w) => w.code)).not.toContain('MISSING_STATS');
+  });
+
+  it('warns when the dataset declares no camera at all', async () => {
+    // A warning and not an error — a state-only dataset is a legitimate thing
+    // to hold. What it cannot do is train a VLA, and that used to surface only
+    // inside the training job as "All image features are missing from the batch".
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    await mockCompleteDataset({ cameras: [] });
+
+    const result = await datasetService.validateStructure('ds1/');
+    expect(result.report!.warnings.map((w) => w.code)).toContain('NO_IMAGE_FEATURES');
+    expect(result.report!.imageKeys).toEqual([]);
   });
 
   it('captures download/parse exceptions as a validation error', async () => {
     vi.mocked(isRustFSInitialized).mockReturnValue(true);
     rustfsExists.mockResolvedValue(true);
-    rustfsDownload.mockRejectedValue(new Error('network blip'));
+    rustfsDownload.mockRejectedValue(new Error('boom'));
 
     const result = await datasetService.validateStructure('ds1/');
     expect(result.valid).toBe(false);
-    expect(result.errors.some((e) => e.includes('network blip'))).toBe(true);
+    expect(result.errors.join(' ')).toMatch(/boom|not valid JSON/);
   });
 });
 
-// ===========================================================================
-// computeQualityScore (pure function)
-// ===========================================================================
+/** A structural report, for the coverage half of the score. */
+function makeReport(over: Partial<DatasetStructureReport> = {}): DatasetStructureReport {
+  return {
+    valid: true,
+    layout: 'v3',
+    lerobotVersion: 'v3.0',
+    errors: [],
+    warnings: [],
+    fps: 30,
+    episodeCount: 0,
+    totalFrames: 0,
+    totalDuration: 0,
+    imageKeys: [],
+    observedStateWidth: null,
+    observedActionWidth: null,
+    files: [],
+    ...over,
+  };
+}
 
 describe('computeQualityScore', () => {
-  it('scores a minimal/empty dataset low but with format compliance points', () => {
+  it('gives no coverage points to a dataset nothing has opened', () => {
+    // The 20-point slot used to be `episodeCount > 10 ? 16 : 8` under the name
+    // "diversity", with a comment admitting it analysed nothing. A component
+    // that takes one of two values and measures nothing is worse than a missing
+    // one, because it moves the total and so reads as information. With no
+    // report there is nothing measured, and the slot scores zero.
     const score = datasetService.computeQualityScore(
       makeValidation({ episodeCount: 0, totalDuration: 0, valid: true })
     );
-    // demo=0, duration=0, diversity = 20*0.4=8, compliance: valid only => 3
     expect(score.demonstrationCount).toBe(0);
     expect(score.duration).toBe(0);
-    expect(score.diversity).toBe(8);
-    expect(score.formatCompliance).toBe(3);
-    expect(score.total).toBe(11);
+    expect(score.diversity).toBe(0);
+    expect(score.formatCompliance).toBe(3); // valid only
+    expect(score.total).toBe(3);
+  });
+
+  it('scores sensor coverage from the cameras the files actually declare', () => {
+    // Two cameras and a clean structural report is the whole 20: 70% for
+    // sensors, 30% for every promised file being present and non-empty.
+    const twoCameras = datasetService.computeQualityScore(
+      makeValidation({
+        episodeCount: 0,
+        totalDuration: 0,
+        valid: true,
+        report: makeReport({ imageKeys: ['observation.images.a', 'observation.images.b'] }),
+      })
+    );
+    expect(twoCameras.diversity).toBe(20);
+
+    const oneCamera = datasetService.computeQualityScore(
+      makeValidation({
+        episodeCount: 0, totalDuration: 0, valid: true,
+        report: makeReport({ imageKeys: ['observation.images.a'] }),
+      })
+    );
+    expect(oneCamera.diversity).toBe(13); // 20*0.7*0.5 + 20*0.3
+
+    // A state-only dataset gets the integrity share and none of the sensor
+    // share, because it cannot train a vision-language-action policy at all.
+    const noCamera = datasetService.computeQualityScore(
+      makeValidation({
+        episodeCount: 0, totalDuration: 0, valid: true,
+        report: makeReport({ imageKeys: [] }),
+      })
+    );
+    expect(noCamera.diversity).toBe(6); // 20*0.3
+  });
+
+  it('withholds the integrity share from a dataset with structural errors', () => {
+    const score = datasetService.computeQualityScore(
+      makeValidation({
+        episodeCount: 0, totalDuration: 0, valid: false,
+        report: makeReport({
+          valid: false,
+          imageKeys: ['observation.images.a', 'observation.images.b'],
+          errors: [{ code: 'MISSING_DATA_FILE', message: 'gone' }],
+        }),
+      })
+    );
+    expect(score.diversity).toBe(14); // sensors only: 20*0.7
   });
 
   it('awards full marks at or beyond thresholds and caps total at 100', () => {
@@ -622,13 +924,14 @@ describe('computeQualityScore', () => {
         valid: true,
         info: { codebase_version: 'v3.0' } as never,
         stats: { mean: [] } as never,
+        report: makeReport({ imageKeys: ['observation.images.a', 'observation.images.b'] }),
       })
     );
     expect(score.demonstrationCount).toBe(40);
     expect(score.duration).toBe(30);
-    expect(score.diversity).toBe(16); // 20 * 0.8 because episodeCount > 10
+    expect(score.diversity).toBe(20);
     expect(score.formatCompliance).toBe(10); // info(4) + stats(3) + valid(3)
-    expect(score.total).toBe(96);
+    expect(score.total).toBe(100);
     expect(score.total).toBeLessThanOrEqual(100);
   });
 });
@@ -737,36 +1040,46 @@ describe('computeStats', () => {
 
 describe('validateAndUpdateDataset', () => {
   it('marks the dataset failed and emits validation:failed when structure is invalid', async () => {
-    vi.mocked(isRustFSInitialized).mockReturnValue(false); // structure invalid
+    // A REACHABLE store holding a manifest with nothing behind it. This used to
+    // be written as "turn RustFS off", which is a different thing entirely —
+    // see the test below.
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    await mockCompleteDataset({ omit: ['data/chunk-000/file-000.parquet'] });
     vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
 
     const events: { type: string }[] = [];
     const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
 
-    await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+    const outcome = await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
 
-    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', { status: 'failed' });
+    expect(outcome).toBe('failed');
+    expect(datasetRepository.update).toHaveBeenCalledWith('ds1', expect.objectContaining({
+      status: 'failed',
+    }));
     expect(events.some((e) => e.type === 'dataset:validation:failed')).toBe(true);
     unsub();
   });
 
+  it('leaves the row ALONE when the store cannot be reached', async () => {
+    // The comment in `validateStructure` says an unreachable store must not be
+    // recorded as a validation failure — and then the caller wrote
+    // `status: 'failed'` on exactly that, so one RustFS outage turned every
+    // dataset anyone revalidated red. Nothing was opened, so nothing is known.
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+
+    const outcome = await datasetService.validateAndUpdateDataset('ds1', 'ds1/');
+
+    expect(outcome).toBe('unavailable');
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
   it('marks the dataset ready with a quality score on a valid structure', async () => {
     vi.mocked(isRustFSInitialized).mockReturnValue(true);
-    rustfsExists.mockImplementation(async (_bucket: string, path: string) =>
-      path.endsWith('info.json')
-    );
-    rustfsDownload.mockResolvedValue(
-      Buffer.from(
-        JSON.stringify({
-          codebase_version: 'v3.0',
-          robot_type: 'so101',
-          fps: 30,
-          features: { x: {} },
-          total_episodes: 20,
-          total_frames: 600,
-        })
-      )
-    );
+    // A COMPLETE tree, not a lone manifest: a manifest with nothing behind it
+    // now fails, which is the point of the task.
+    await mockCompleteDataset();
     vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
     vi.mocked(datasetRepository.findById).mockResolvedValue(
       makeDataset({ status: 'ready', qualityScore: 50 })

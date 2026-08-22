@@ -4,7 +4,7 @@ aliases:
 - TASK-216
 title: Give the VR rig real inverse kinematics and finger retargeting
 slug: give-the-vr-rig-real-inverse-kinematics-and-finger-retargeting
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []

@@ -63,6 +63,8 @@ const TENANT_SCOPED_MODELS = new Set<string>([
   'PatrolRoute',
   'PatrolRun',
   'PatrolFinding',
+  // TASK-217 dataset episode flags
+  'DatasetEpisodeFlag',
   // TASK-213 host mode
   'TourRoute',
   'TourRun',

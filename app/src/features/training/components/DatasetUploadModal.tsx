@@ -4,11 +4,18 @@
  * @feature training
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { AlertTriangle, CameraOff, CheckCircle2, XCircle } from 'lucide-react';
 import { Modal, Button, Input, ProgressBar, Spinner } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils/error';
 import { trainingApi } from '../api';
-import type { RobotType } from '../types';
+import type { Dataset, RobotType } from '../types';
+
+/** How often to ask, and how long to keep asking. */
+const VALIDATION_POLL_MS = 1000;
+const VALIDATION_TIMEOUT_MS = 60_000;
 
 export interface DatasetUploadModalProps {
   isOpen: boolean;
@@ -18,6 +25,18 @@ export interface DatasetUploadModalProps {
 }
 
 type Step = 'metadata' | 'upload' | 'validating' | 'complete';
+
+/**
+ * What the poll concluded — not just "here is a dataset, or null".
+ *
+ * `null` used to mean two different things: the deadline passed, and every
+ * single status request failed. Both were rendered as the green tick with
+ * "Still validating", which asserts something no successful reply ever said.
+ */
+type PollResult =
+  | { kind: 'dataset'; dataset: Dataset }
+  | { kind: 'timeout'; dataset: Dataset | null }
+  | { kind: 'unreachable'; message: string };
 
 interface FormState {
   name: string;
@@ -43,16 +62,73 @@ export function DatasetUploadModal({
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  /** The dataset as the server left it, once validation finished. */
+  const [validated, setValidated] = useState<Dataset | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [_datasetId, setDatasetId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fetchedTypes, setFetchedTypes] = useState<RobotType[]>([]);
+  const [typesError, setTypesError] = useState<string | null>(null);
+  const [typesFailed, setTypesFailed] = useState(false);
+  const [typesLoading, setTypesLoading] = useState(false);
+  const [typesAttempt, setTypesAttempt] = useState(0);
+  /** Bumped on close/unmount/reset, so a poll in flight stops writing state. */
+  const pollToken = useRef(0);
+  /** True while an upload is running, so a second click cannot start another. */
+  const uploading = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [pollOutcome, setPollOutcome] = useState<PollResult | null>(null);
+
+  // The select had no source. `robotTypes` defaults to `[]`, `DatasetsPage`
+  // never passed it, and `robotTypeId` is required — so the modal could not be
+  // completed from the page that opens it, whatever the server did.
+  useEffect(() => {
+    if (!isOpen || robotTypes.length > 0) return;
+    let cancelled = false;
+    setTypesLoading(true);
+    setTypesError(null);
+    setTypesFailed(false);
+    trainingApi.listRobotTypes()
+      .then((types) => { if (!cancelled) setFetchedTypes(types); })
+      .catch((err: unknown) => {
+        // Kept, not swallowed. An empty select in front of a required field
+        // sends the operator to "Please fill in all required fields" about a
+        // field that has nothing to fill it with — the exact dead end this
+        // endpoint was added to remove.
+        if (cancelled) return;
+        setFetchedTypes([]);
+        // The detail, not another copy of the headline: the api client's own
+        // message for a failed GET is already a sentence, and prefixing it with
+        // the same words rendered "Could not load robot types: Could not load
+        // robot types".
+        // `getErrorMessage`, not `String(err)`: the api client rejects with a
+        // plain `ApiError` object, so `String` on it renders "[object Object]".
+        const detail = getErrorMessage(err, '');
+        setTypesError(!detail || /robot types/i.test(detail) ? null : detail);
+        setTypesFailed(true);
+      })
+      .finally(() => { if (!cancelled) setTypesLoading(false); });
+    return () => { cancelled = true; };
+  }, [isOpen, robotTypes.length, typesAttempt]);
+
+  const availableTypes = robotTypes.length > 0 ? robotTypes : fetchedTypes;
+  const noTypes = availableTypes.length === 0;
 
   const resetForm = useCallback(() => {
+    // Stop any poll still running for the previous upload before clearing:
+    // it would otherwise finish and write `step: 'complete'` into a modal the
+    // operator has closed, so the NEXT open landed on the last upload's result
+    // screen instead of the metadata form.
+    pollToken.current += 1;
+    uploading.current = false;
+    setBusy(false);
+    setPollOutcome(null);
     setStep('metadata');
     setForm({ name: '', description: '', robotTypeId: '' });
     setFile(null);
     setUploadProgress(0);
     setError(null);
+    setValidated(null);
     setDatasetId(null); // eslint-disable-line @typescript-eslint/no-unused-vars
   }, []);
 
@@ -60,6 +136,8 @@ export function DatasetUploadModal({
     resetForm();
     onClose();
   }, [resetForm, onClose]);
+
+  useEffect(() => () => { pollToken.current += 1; }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -121,15 +199,67 @@ export function DatasetUploadModal({
     setStep('upload');
   }, [form]);
 
+  /**
+   * Wait for the server to finish validating, and return the dataset.
+   *
+   * Gives up after `VALIDATION_TIMEOUT_MS` and returns whatever the row says
+   * then — a still-`validating` dataset is a real answer ("it is taking a
+   * while"), and better than a green tick that means nothing.
+   */
+  const pollValidation = useCallback(async (
+    id: string,
+    token: number,
+    /** True once the completion call has failed — nothing will move the row. */
+    abandoned: () => boolean,
+  ): Promise<PollResult | null> => {
+    const deadline = Date.now() + VALIDATION_TIMEOUT_MS;
+    let lastError = 'the server did not answer';
+    let everAnswered = false;
+    for (;;) {
+      // Checked after every await: `null` means "this modal moved on, drop it".
+      if (pollToken.current !== token) return null;
+      try {
+        const dataset = await trainingApi.getDataset(id);
+        everAnswered = true;
+        if (pollToken.current !== token) return null;
+        if (dataset.status !== 'validating' && dataset.status !== 'uploading') {
+          return { kind: 'dataset', dataset };
+        }
+        // The row has not been picked up AND the request that would have picked
+        // it up has already failed. Waiting out the deadline would spin for a
+        // minute on something that is never going to happen.
+        if (dataset.status === 'uploading' && abandoned()) {
+          return { kind: 'dataset', dataset };
+        }
+        if (Date.now() > deadline) return { kind: 'timeout', dataset };
+      } catch (err) {
+        lastError = getErrorMessage(err, 'the server did not answer');
+        if (Date.now() > deadline) {
+          // Never once read the status vs read it and it is still going: the
+          // first must not be painted as a green tick.
+          return everAnswered ? { kind: 'timeout', dataset: null } : { kind: 'unreachable', message: lastError };
+        }
+      }
+      await new Promise((r) => setTimeout(r, VALIDATION_POLL_MS));
+    }
+  }, []);
+
   const handleUpload = useCallback(async () => {
     if (!file) {
       setError('Please select a file');
       return;
     }
+    // A second click used to create a SECOND Dataset row and re-upload the
+    // file, which is what an operator does when the first attempt looks stuck.
+    if (uploading.current) return;
+    uploading.current = true;
+    setBusy(true);
 
     setError(null);
     setUploadProgress(0);
+    const token = pollToken.current;
 
+    let datasetId: string | null = null;
     try {
       // Create dataset record
       const dataset = await trainingApi.createDataset({
@@ -138,6 +268,7 @@ export function DatasetUploadModal({
         robotTypeId: form.robotTypeId,
       });
 
+      datasetId = dataset.id;
       setDatasetId(dataset.id);
 
       // Get presigned upload URL
@@ -150,19 +281,66 @@ export function DatasetUploadModal({
       // Upload file with progress tracking
       await uploadFileWithProgress(uploadUrl, file, setUploadProgress);
 
-      // Mark upload as complete
-      await trainingApi.completeUpload(dataset.id);
-
+      // The bytes are in the bucket. Everything after this point is the server
+      // working on them, so the wizard moves on BEFORE asking it to — the
+      // completion call now unpacks the archive and (without NATS) validates it
+      // inside the request, and the shared axios client aborts at 30 s. Waiting
+      // on it and treating a rejection as failure reported "Upload failed" for
+      // every upload big enough to be worth making.
       setStep('validating');
-
-      // Simulating validation wait (in reality, would poll or use WebSocket)
-      setTimeout(() => {
-        setStep('complete');
-      }, 2000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
+      uploading.current = false;
+      setBusy(false);
+      setError(getErrorMessage(err, 'Upload failed'));
+      return;
     }
-  }, [file, form]);
+
+    // The completion call and the poll run TOGETHER, not one after the other.
+    // Completion downloads the archive, unpacks it and — without NATS —
+    // validates it inside the request, which is minutes on a real dataset; the
+    // row reaches `validating` and then `ready` while it is still open. Waiting
+    // for it first meant the poll that exists to show that progress could not
+    // run until there was nothing left to show.
+    let completionError: string | null = null;
+    const completion = trainingApi.completeUpload(datasetId).catch((err: unknown) => {
+      // Not a failed upload on its own: a dropped connection or a proxy's idle
+      // timeout leaves the server working and the row still carries the answer.
+      // Only used below if the poll ALSO never saw the row move.
+      completionError = getErrorMessage(err, 'the completion request failed');
+    });
+
+    // POLL the real thing. This used to be `setTimeout(2000)` with a comment
+    // saying "in reality, would poll", followed unconditionally by a green
+    // tick and "your dataset will be ready for training soon" — including for
+    // a dataset that had just failed. Validation now opens every file the
+    // manifest names, so it has something to say and the operator should see
+    // it here rather than find out during a training run.
+    const outcome = await pollValidation(datasetId, token, () => completionError !== null);
+    if (outcome === null) return; // the modal was closed or reset under us
+
+    // Only wait on the completion call when the poll did NOT get a terminal
+    // answer. A row that reached `ready` or `failed` is the server's verdict,
+    // and blocking on a request that may never return would hide it.
+    const settled = outcome.kind === 'dataset' && outcome.dataset.status !== 'uploading';
+    if (!settled) await completion;
+    if (pollToken.current !== token) return;
+    uploading.current = false;
+    setBusy(false);
+
+    // The one case that IS a failed upload: the completion request errored and
+    // the row never moved off `uploading`, so nothing on the server ever took
+    // the archive. Anything else — a row that reached ready or failed — is the
+    // server's answer and outranks a broken HTTP call.
+    if (completionError && !settled) {
+      setError(completionError);
+      setStep('upload');
+      return;
+    }
+
+    setPollOutcome(outcome);
+    setValidated(outcome.kind === 'unreachable' ? null : outcome.dataset);
+    setStep('complete');
+  }, [file, form, pollValidation]);
 
   const handleComplete = useCallback(() => {
     onSuccess?.();
@@ -230,12 +408,38 @@ export function DatasetUploadModal({
                 className="w-full px-3 py-2 rounded-brand border border-theme-secondary/30 bg-theme-primary text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
               >
                 <option value="">Select robot type...</option>
-                {robotTypes.map((rt) => (
+                {availableTypes.map((rt) => (
                   <option key={rt.id} value={rt.id}>
                     {rt.name} ({rt.manufacturer})
                   </option>
                 ))}
               </select>
+              {/* An empty select in front of a required field is a dead end.
+                  Say which kind it is, because they need different actions. */}
+              {typesLoading && noTypes && (
+                <p className="mt-1 text-sm text-theme-secondary">Loading robot types…</p>
+              )}
+              {!typesLoading && typesFailed && (
+                <p
+                  data-testid="robot-types-error"
+                  className="mt-1 flex items-center gap-2 text-sm text-red-600 dark:text-red-400"
+                >
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>Could not load robot types{typesError ? `: ${typesError}` : '.'}</span>
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => setTypesAttempt((n) => n + 1)}
+                  >
+                    Retry
+                  </button>
+                </p>
+              )}
+              {!typesLoading && !typesFailed && noTypes && (
+                <p data-testid="robot-types-empty" className="mt-1 text-sm text-theme-secondary">
+                  No robot types are registered yet — one has to exist before a dataset can name it.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -281,10 +485,13 @@ export function DatasetUploadModal({
               )}
             </div>
 
-            {uploadProgress > 0 && uploadProgress < 100 && (
+            {uploadProgress > 0 && (
               <div>
                 <div className="flex justify-between text-sm mb-1">
-                  <span>Uploading...</span>
+                  {/* At 100% the bytes are sent and the server is unpacking.
+                      Hiding the bar there left the modal looking idle for the
+                      whole time the work was actually happening. */}
+                  <span>{uploadProgress < 100 ? 'Uploading...' : 'Uploaded — unpacking on the server...'}</span>
                   <span>{uploadProgress}%</span>
                 </div>
                 <ProgressBar value={uploadProgress} />
@@ -304,28 +511,77 @@ export function DatasetUploadModal({
         )}
 
         {step === 'complete' && (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-              <svg
-                className="w-8 h-8 text-green-600"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <p className="mt-4 text-lg font-medium text-theme-primary">
-              Dataset uploaded successfully!
-            </p>
-            <p className="text-sm text-theme-secondary mt-1">
-              Your dataset is now being validated and will be ready for training soon.
-            </p>
+          <div className="py-8">
+            {/* What the server ACTUALLY found. This step used to show a green
+                tick and "will be ready for training soon" unconditionally, two
+                seconds after the upload, including for a dataset that had just
+                failed validation — and before TASK-217 the upload path could
+                not succeed at all, so that was the only thing it ever showed. */}
+            {pollOutcome?.kind === 'unreachable' ? (
+              /* Never read the status even once. A green tick here asserts
+                 something no reply ever said — it was what the modal showed
+                 through 61 consecutive HTTP 500s. */
+              <div className="text-center" data-testid="upload-status-unknown">
+                <div className="w-16 h-16 bg-amber-100 dark:bg-amber-500/15 rounded-full flex items-center justify-center mx-auto">
+                  <AlertTriangle className="w-8 h-8 text-amber-600 dark:text-amber-400" />
+                </div>
+                <p className="mt-4 text-lg font-medium text-theme-primary">
+                  Uploaded — could not read the validation status
+                </p>
+                <p className="text-sm text-theme-secondary mt-1">
+                  The file is on the server. {pollOutcome.message}
+                </p>
+              </div>
+            ) : validated?.status === 'failed' ? (
+              <div className="text-center" data-testid="upload-failed">
+                <div className="w-16 h-16 bg-red-100 dark:bg-red-500/15 rounded-full flex items-center justify-center mx-auto">
+                  <XCircle className="w-8 h-8 text-red-600 dark:text-red-400" />
+                </div>
+                <p className="mt-4 text-lg font-medium text-theme-primary">
+                  Uploaded, but it did not validate
+                </p>
+                <p className="text-sm text-theme-secondary mt-1">
+                  The files are on the server; the dataset cannot be trained on as it stands.
+                </p>
+                {validated.validation?.errors.length ? (
+                  <ul className="mt-4 text-left text-sm text-red-700 dark:text-red-300 space-y-1 max-h-40 overflow-y-auto">
+                    {validated.validation.errors.slice(0, 6).map((finding) => (
+                      <li key={`${finding.code}-${finding.message}`} className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span className="break-words">{finding.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-center" data-testid="upload-complete">
+                <div className="w-16 h-16 bg-green-100 dark:bg-green-500/15 rounded-full flex items-center justify-center mx-auto">
+                  <CheckCircle2 className="w-8 h-8 text-green-600 dark:text-green-400" />
+                </div>
+                <p className="mt-4 text-lg font-medium text-theme-primary">
+                  {validated?.status === 'ready' ? 'Dataset uploaded and validated' : 'Dataset uploaded'}
+                </p>
+                <p className="text-sm text-theme-secondary mt-1">
+                  {validated?.status === 'ready'
+                    ? `${validated.demonstrationCount} ${validated.demonstrationCount === 1 ? 'episode' : 'episodes'}, `
+                      + `${validated.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames.`
+                    : 'Still validating — it will finish in the background.'}
+                </p>
+                {validated?.validation?.warnings.some((w) => w.code === 'NO_IMAGE_FEATURES') && (
+                  <div
+                    data-testid="upload-no-images"
+                    className="mt-4 flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-800 dark:text-amber-300"
+                  >
+                    <CameraOff className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>
+                      No camera features. A vision-language-action policy cannot train on this —
+                      training fails with &ldquo;All image features are missing from the batch&rdquo;.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -346,8 +602,11 @@ export function DatasetUploadModal({
             <Button onClick={handleMetadataSubmit}>Continue</Button>
           )}
 
+          {/* The Upload button is disabled while an upload is running. It
+              stayed enabled through the whole server-side unpack, and clicking
+              it again created a second Dataset row and re-uploaded the file. */}
           {step === 'upload' && (
-            <Button onClick={handleUpload} isLoading={uploadProgress > 0 && uploadProgress < 100}>
+            <Button onClick={handleUpload} disabled={busy} isLoading={busy}>
               Upload
             </Button>
           )}

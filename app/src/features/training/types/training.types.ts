@@ -190,9 +190,36 @@ export interface Dataset {
   statsJson: LeRobotStats;
   status: DatasetStatus;
   huggingFaceRepoId?: string;
+  /**
+   * What structural validation found when it last opened this dataset's files
+   * (TASK-217).
+   *
+   * ABSENT means nothing has ever opened them — not "clean". Every dataset
+   * registered from a local directory is in that state, because registration
+   * wrote `status: 'ready'` without a check. The card says which.
+   */
+  validation?: DatasetValidation;
   createdAt: string;
   updatedAt: string;
   robotType?: RobotType;
+}
+
+/** One thing validation found, with a code a UI can branch on. */
+export interface ValidationFinding {
+  code: string;
+  message: string;
+}
+
+export interface DatasetValidation {
+  validatedAt?: string;
+  valid: boolean;
+  lerobotVersion: string;
+  errors: ValidationFinding[];
+  warnings: ValidationFinding[];
+  /** `observation.images.*` features. Empty is the warning that matters most. */
+  imageKeys: string[];
+  /** How many files were opened to decide all this. */
+  fileCount: number;
 }
 
 export interface CreateDatasetInput {

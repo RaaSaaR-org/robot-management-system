@@ -367,6 +367,8 @@ export interface FlaggedTrajectoriesResponse {
 export interface UnflagTrajectoryRequest {
   reviewDecision: 'keep' | 'remove';
   reviewNotes?: string;
+  /** Who decided. Recorded on the flag row so a review has an author. */
+  reviewedBy?: string;
 }
 
 /**

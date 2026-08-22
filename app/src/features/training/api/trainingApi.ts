@@ -27,6 +27,7 @@ import type {
   CurationResult,
   CurationSuggestResponse,
   EpisodeAnnotation,
+  RobotType,
 } from '../types';
 
 const ENDPOINTS = {
@@ -106,6 +107,18 @@ export const trainingApi = {
   },
 
   /**
+   * Robot types a dataset can be created against.
+   *
+   * The upload modal needs these and had no source for them — its `robotTypes`
+   * prop defaulted to `[]`, nothing passed it, and `robotTypeId` is required,
+   * so the modal could not be completed at all.
+   */
+  async listRobotTypes(): Promise<RobotType[]> {
+    const response = await apiClient.get<{ robotTypes: RobotType[] }>('/datasets/robot-types');
+    return response.data.robotTypes;
+  },
+
+  /**
    * Create a new dataset record
    */
   async createDataset(input: CreateDatasetInput): Promise<Dataset> {
@@ -139,7 +152,11 @@ export const trainingApi = {
    * Mark dataset upload as complete, trigger validation
    */
   async completeUpload(datasetId: string): Promise<void> {
-    await apiClient.post(ENDPOINTS.datasetUploadComplete(datasetId));
+    // No client timeout. This one request downloads the archive out of the
+    // object store, unpacks it and — when NATS is absent, the documented dev
+    // default — validates every file inside the request. The shared client
+    // aborts at 30 s, which is shorter than any real dataset takes.
+    await apiClient.post(ENDPOINTS.datasetUploadComplete(datasetId), undefined, { timeout: 0 });
   },
 
   // ============================================================================

@@ -21,8 +21,13 @@ import type {
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
 import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
+import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
+import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
+import { robotTypeRepository } from '../repositories/index.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import type {
+  FlaggedTrajectoriesResponse,
+  FlaggedTrajectorySummary,
   TriggerValidationRequest,
   UnflagTrajectoryRequest,
 } from '../types/data-quality.types.js';
@@ -32,18 +37,25 @@ import { fileURLToPath } from 'url';
 import { createReadStream, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
 import type { Readable } from 'stream';
+import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDatasetView.js';
 
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
 
 // ============================================================================
-// Local on-disk datasets (synthetic / Cosmos 3 — TASK-178)
+// Local on-disk datasets (synthetic / Cosmos 3 — TASK-178; v3.0 — TASK-217)
 //
-// Synthetic datasets are stored as a LeRobot v2.1 directory on the local disk
-// (absolute storagePath) rather than in RustFS. These helpers let the standard
+// Local datasets are a LeRobot directory on this disk (absolute storagePath)
+// rather than an object-key prefix in RustFS. These helpers let the standard
 // episodes / frames / video routes serve them, so the existing viewer works
 // unchanged. All branches are guarded by `isLocalDataset`, so RustFS/HF
 // datasets are entirely unaffected.
+//
+// The readers below are v2.1: one parquet and one mp4 per episode. A v3.0
+// dataset — which is everything this platform now writes — is served through a
+// converted v2.1 VIEW instead of a second set of readers; `resolveLocalView`
+// builds it once and caches it. See `services/lerobot/LocalDatasetView.ts` for
+// why that way round.
 // ============================================================================
 
 function isLocalDataset(storagePath: string): boolean {
@@ -54,6 +66,27 @@ function isLocalDataset(storagePath: string): boolean {
 
 function padEpisode(index: number): string {
   return String(index).padStart(6, '0');
+}
+
+/**
+ * The directory to read a local dataset from, converting a v3.0 tree if needed.
+ *
+ * Returns null and answers the request itself when the conversion fails, so the
+ * caller neither falls through to the RustFS path (which cannot serve a local
+ * dataset either) nor swallows the reason. A missing ffmpeg is the likely one
+ * and it is worth saying out loud rather than showing an empty viewer.
+ */
+async function localReadRoot(storagePath: string, res: Response): Promise<string | null> {
+  try {
+    const view = await resolveLocalView(storagePath);
+    return view.root;
+  } catch (error) {
+    const code = error instanceof DatasetViewError ? error.code : 'VIEW_FAILED';
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[datasets] local view failed for ${storagePath}: ${code}: ${detail}`);
+    res.status(503).json({ error: 'Dataset view unavailable', code, detail });
+    return null;
+  }
 }
 
 /** Camera keys are simple identifiers; anything else could traverse the path. */
@@ -273,6 +306,26 @@ datasetRoutes.post('/', async (req: Request, res: Response) => {
     console.error('[DatasetRoutes] Error creating dataset:', error);
     const message = error instanceof Error ? error.message : 'Failed to create dataset';
     res.status(400).json({ error: message });
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/robot-types - Robot types a dataset can be created against
+// ============================================================================
+//
+// Declared BEFORE `/:id`, or Express would match `robot-types` as a dataset id.
+//
+// This exists because the upload modal's Robot Type select had no source: the
+// prop defaults to `[]`, `DatasetsPage` never passed it, and `robotTypeId` is
+// required — so the modal could not be completed from the page it opens on,
+// whatever the server did. There was no robot-type listing endpoint anywhere.
+datasetRoutes.get('/robot-types', async (_req: Request, res: Response) => {
+  try {
+    const robotTypes = await robotTypeRepository.findAll();
+    res.json({ robotTypes });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error listing robot types:', error);
+    res.status(500).json({ error: 'Failed to list robot types' });
   }
 });
 
@@ -840,11 +893,21 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
       : dataset.infoJson;
     const fps = info?.fps ?? dataset.fps ?? 30;
 
-    // Local synthetic datasets (TASK-178): read meta/episodes.json from disk.
+    // `flagged` was hardcoded false in front of a flag control that wrote
+    // nowhere. Read once, up here: the review found the fix had only been
+    // applied to the local branch, so a flagged episode on a RustFS or
+    // HuggingFace dataset still came back `flagged: false`.
+    const flags = await datasetEpisodeFlagRepository.flaggedIndices(dataset.id);
+
+    // Local datasets (TASK-178, v3.0 via a converted view since TASK-217).
     if (isLocalDataset(dataset.storagePath)) {
-      const local = await readLocalEpisodes(dataset.storagePath, fps);
+      const root = await localReadRoot(dataset.storagePath, res);
+      if (root === null) return;
+      const local = await readLocalEpisodes(root, fps);
       if (local && local.length > 0) {
-        return res.json({ episodes: local });
+        return res.json({
+          episodes: local.map((e) => ({ ...e, flagged: flags.has(e.index) })),
+        });
       }
     }
 
@@ -882,7 +945,7 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
             index: epIndex,
             frameCount,
             durationSeconds: fps > 0 ? parseFloat((frameCount / fps).toFixed(2)) : 0,
-            flagged: false,
+            flagged: flags.has(epIndex),
             ...(Object.keys(videoWindows).length > 0 ? { videoWindows } : {}),
           });
         }
@@ -902,7 +965,7 @@ datasetRoutes.get('/:id/episodes', async (req: Request, res: Response) => {
           index: i,
           frameCount: avgFrames,
           durationSeconds: fps > 0 ? parseFloat((avgFrames / fps).toFixed(2)) : 0,
-          flagged: false,
+          flagged: flags.has(i),
         });
       }
     }
@@ -950,7 +1013,9 @@ datasetRoutes.get('/:id/episodes/:index/frames', async (req: Request, res: Respo
     // below: a missing parquet is a 404, a present one returns its real frames
     // (even if the requested offset slice is empty) with the true episode total.
     if (isLocalDataset(dataset.storagePath)) {
-      const local = await readLocalFrames(dataset.storagePath, episodeIndex, fps, offset, limit);
+      const root = await localReadRoot(dataset.storagePath, res);
+      if (root === null) return;
+      const local = await readLocalFrames(root, episodeIndex, fps, offset, limit);
       if (local === null) {
         return res.status(404).json({ error: 'Episode frames not found' });
       }
@@ -1040,8 +1105,10 @@ datasetRoutes.get('/:id/episodes/:index/video/:camera', async (req: Request, res
 
     // Local synthetic datasets (TASK-178): stream the v2.1 per-episode mp4 from disk.
     if (isLocalDataset(dataset.storagePath)) {
-      if (streamLocalVideo(dataset.storagePath, episodeIndex, camera, req, res)) return;
-      return res.status(404).json({ error: 'Video not found for synthetic dataset' });
+      const root = await localReadRoot(dataset.storagePath, res);
+      if (root === null) return;
+      if (streamLocalVideo(root, episodeIndex, camera, req, res)) return;
+      return res.status(404).json({ error: 'Video not found for this dataset' });
     }
 
     // Optional exact chunk/file coordinates from the episodes API's
@@ -1154,14 +1221,27 @@ datasetRoutes.patch('/:id/episodes/:index/flag', async (req: Request, res: Respo
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    const { flagged } = req.body as { flagged: boolean };
+    const { flagged, reason } = req.body as { flagged: boolean; reason?: string };
     if (typeof flagged !== 'boolean') {
       return res.status(400).json({ error: 'flagged must be a boolean' });
     }
 
-    // In a full implementation, this would store the flag in the database
-    // For now, acknowledge the request
-    res.json({ success: true });
+    // An index past the end of the dataset is a typo, not a flag. Storing it
+    // made `/quality` count more flagged episodes than the dataset has and
+    // report a negative clean percentage.
+    const episodeCount = dataset.demonstrationCount ?? 0;
+    if (episodeCount > 0 && episodeIndex >= episodeCount) {
+      return res.status(400).json({
+        error: `Episode ${episodeIndex} is out of range — this dataset has ${episodeCount}`,
+        code: 'EPISODE_OUT_OF_RANGE',
+      });
+    }
+
+    // Stored, as of TASK-217. This used to answer `{success:true}` and write
+    // nothing, while `GET /:id/flagged` always answered `[]` and the viewer
+    // showed a flag control in front of both.
+    const record = await datasetEpisodeFlagRepository.set(id, episodeIndex, flagged, reason);
+    res.json({ success: true, flag: record });
   } catch (error) {
     console.error('[DatasetRoutes] Error flagging episode:', error);
     res.status(500).json({ error: 'Failed to flag episode' });
@@ -1182,8 +1262,15 @@ datasetRoutes.get('/:id/quality', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    // For now, return quality breakdown from existing data
-    // In a full implementation, this would fetch from a stored quality report
+    const [flaggedCount, flaggedList] = await Promise.all([
+      datasetEpisodeFlagRepository.countFlagged(id),
+      datasetEpisodeFlagRepository.listFlagged(id, 1, 50),
+    ]);
+    const flaggedRows = flaggedList.rows;
+
+    // The breakdown is the STORED one now — see `DatasetService.toResponse`.
+    // It used to be reconstructed on every read from the row's own numbers,
+    // so it agreed with itself whatever the files said.
     const response = {
       datasetId: id,
       hasQualityReport: !!dataset.qualityBreakdown,
@@ -1195,14 +1282,29 @@ datasetRoutes.get('/:id/quality', async (req: Request, res: Response) => {
             overallScore: dataset.qualityScore ?? 0,
             scoreBreakdown: dataset.qualityBreakdown,
             trajectoryCount: dataset.demonstrationCount,
-            flaggedTrajectoryCount: 0, // Would be computed in full implementation
+            // Real counts. These were `0`, `0` and `100` with a comment saying
+            // they would be computed in a full implementation — three numbers
+            // that said "nothing is wrong with this dataset" about a dataset
+            // nobody had looked at.
+            flaggedTrajectoryCount: flaggedCount,
+            // Still zero, and now honestly so: anomaly detection is the
+            // `validate-advanced` pipeline, which returns 501 because it does
+            // not exist. `DataQualityService` has the metrics; nothing runs
+            // them over a dataset.
             anomalousTrajectoryCount: 0,
-            cleanTrajectoryPercentage: 100,
-            statistics: null, // Would include per-metric stats
-            flaggedSummary: [],
+            // Clamped: a flag left behind by an episode count that later
+            // shrank must not read as "-25% clean".
+            cleanTrajectoryPercentage: dataset.demonstrationCount > 0
+              ? Math.max(0, Math.round(((dataset.demonstrationCount - flaggedCount) / dataset.demonstrationCount) * 100))
+              : 100,
+            statistics: null,
+            flaggedSummary: flaggedRows.map(toFlaggedSummary),
             validationStatus: 'completed',
           }
         : null,
+      // What structural validation found, when something has validated this.
+      // Absent means nothing has ever opened this dataset's files.
+      validation: dataset.validation ?? null,
     };
 
     res.json(response);
@@ -1231,17 +1333,61 @@ datasetRoutes.get('/:id/trajectories/:idx/metrics', async (req: Request, res: Re
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    // In a full implementation, this would fetch pre-computed metrics from storage
-    // For now, return a placeholder response
-    res.json({
+    // 501 for the same reason as `validate-advanced`: nothing computes these
+    // and nothing stores them, so a 200 with a `message` field looked to a
+    // client like a metrics response that happened to be empty.
+    res.status(501).json({
+      error: 'Per-trajectory metrics are not implemented',
+      code: 'NOT_IMPLEMENTED',
       datasetId: id,
       trajectoryIndex,
-      message: 'Per-trajectory metrics require advanced validation to be run first',
-      hint: 'POST /api/datasets/:id/validate-advanced to compute metrics',
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error getting trajectory metrics:', error);
     res.status(500).json({ error: 'Failed to get trajectory metrics' });
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/:id/validate - Re-run structural validation
+// ============================================================================
+//
+// There was no way to validate a dataset that had not just been uploaded.
+// Validation ran once, inside `completeUpload`, so every dataset registered any
+// other way — from a local directory, from HuggingFace, as a curated revision —
+// could never be checked at all. That is most of the datasets in this database.
+//
+// Synchronous on purpose: it is the only way for a caller to know the answer,
+// and it opens files rather than training on them.
+datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const dataset = await datasetService.get(id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    const outcome = await datasetService.validateAndUpdateDataset(id, dataset.storagePath);
+    if (outcome === 'unavailable') {
+      // 503, not 200-with-`validation: null`. Nothing was opened, the row was
+      // deliberately left alone, and the caller's next move is to retry — not
+      // to go looking at a dataset that is probably fine.
+      return res.status(503).json({
+        error: 'Dataset storage is not reachable — nothing was validated',
+        code: 'STORE_UNAVAILABLE',
+        datasetId: id,
+      });
+    }
+    const updated = await datasetService.get(id);
+    res.json({
+      datasetId: id,
+      status: updated?.status,
+      qualityScore: updated?.qualityScore,
+      validation: updated?.validation ?? null,
+    });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error validating dataset:', error);
+    res.status(500).json({ error: 'Failed to validate dataset' });
   }
 });
 
@@ -1267,31 +1413,56 @@ datasetRoutes.post('/:id/validate-advanced', async (req: Request, res: Response)
       });
     }
 
-    // In a full implementation, this would:
-    // 1. Queue a NATS job for advanced validation
-    // 2. The worker would load trajectories from RustFS
-    // 3. Compute all metrics using dataQualityService
-    // 4. Store results in database
-
-    // For now, return a queued response
-    res.json({
+    // 501, not `{status:'queued'}`. There is no worker, no job subject and no
+    // table for the results, so a queued response was a promise the platform
+    // could not keep — a caller polling for the outcome waits forever, and the
+    // UI reported "validation in progress" for a job that did not exist.
+    // `DataQualityService` has the metrics; what is missing is the pipeline
+    // that loads trajectories and stores what it computes.
+    //
+    // Structural validation is a different thing and DOES run: see
+    // `POST /:id/validate`, which opens every file `info.json` names.
+    void body;
+    res.status(501).json({
+      error: 'Advanced trajectory validation is not implemented',
+      code: 'NOT_IMPLEMENTED',
       datasetId: id,
-      status: 'queued',
-      message: 'Advanced validation job queued',
-      config: body?.config ?? {
-        computePerTrajectory: true,
-        computeDTW: false,
-        runOODDetection: false,
-        anomalyZScoreThreshold: 3.0,
-        velocitySpikeThreshold: 5.0,
-        force: false,
-      },
+      hint: 'Structural validation runs at POST /api/datasets/:id/validate. '
+        + 'Per-trajectory smoothness, DTW and OOD detection have metric implementations '
+        + 'in DataQualityService but no job that runs them over a dataset.',
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error triggering advanced validation:', error);
     res.status(500).json({ error: 'Failed to trigger advanced validation' });
   }
 });
+
+/**
+ * One operator flag, in the shape the repo's own types declare for it.
+ *
+ * Both endpoints built untyped object literals, so tsc never compared them to
+ * `FlaggedTrajectorySummary` — and they disagreed with each other as well as
+ * with the type: `episodeIndex` in one response, `trajectoryIndex` in its
+ * sibling, `reason` where the type says `flagReason`. A client written against
+ * the declared types read `undefined` from both.
+ *
+ * `anomalyTypes` and `qualityScore` are empty and 0 because nothing computes
+ * them: `validate-advanced` is the pipeline that would, and it answers 501.
+ */
+function toFlaggedSummary(row: EpisodeFlag): FlaggedTrajectorySummary {
+  return {
+    trajectoryIndex: row.episodeIndex,
+    flagReason: row.reason ?? 'flagged by an operator',
+    anomalyTypes: [],
+    qualityScore: 0,
+    reviewed: row.reviewedAt !== null,
+    ...(row.reviewedAt ? { reviewedAt: row.reviewedAt } : {}),
+    ...(row.reviewedBy ? { reviewedBy: row.reviewedBy } : {}),
+    ...(row.reviewDecision
+      ? { reviewDecision: row.reviewDecision as 'keep' | 'remove' | 'pending' }
+      : {}),
+  };
+}
 
 // ============================================================================
 // GET /api/datasets/:id/flagged - List flagged trajectories for review
@@ -1310,16 +1481,15 @@ datasetRoutes.get('/:id/flagged', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    // In a full implementation, this would fetch from database
-    // For now, return empty list
-    res.json({
+    const { rows, total } = await datasetEpisodeFlagRepository.listFlagged(id, page, limit);
+    const payload: FlaggedTrajectoriesResponse & { page: number; limit: number } = {
       datasetId: id,
-      total: 0,
+      total,
       page,
       limit,
-      flagged: [],
-      message: 'Run advanced validation to generate flagged trajectories',
-    });
+      flagged: rows.map(toFlaggedSummary),
+    };
+    res.json(payload);
   } catch (error) {
     console.error('[DatasetRoutes] Error getting flagged trajectories:', error);
     res.status(500).json({ error: 'Failed to get flagged trajectories' });
@@ -1352,13 +1522,23 @@ datasetRoutes.post('/:id/trajectories/:idx/unflag', async (req: Request, res: Re
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    // In a full implementation, this would update the database record
+    // A review is only a review if it lands on something. This used to return
+    // a `reviewedAt` timestamp for a review it did not record, so the same
+    // episode came back flagged on the next read with no trace of the decision.
+    const record = await datasetEpisodeFlagRepository.review(
+      id, trajectoryIndex, body.reviewDecision, body.reviewedBy,
+    );
+    if (!record) {
+      return res.status(404).json({
+        error: `Episode ${trajectoryIndex} of this dataset is not flagged`,
+      });
+    }
     res.json({
       success: true,
       datasetId: id,
       trajectoryIndex,
-      reviewDecision: body.reviewDecision,
-      reviewedAt: new Date().toISOString(),
+      reviewDecision: record.reviewDecision,
+      reviewedAt: record.reviewedAt?.toISOString(),
       message: `Trajectory ${trajectoryIndex} marked as ${body.reviewDecision}`,
     });
   } catch (error) {

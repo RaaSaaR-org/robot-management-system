@@ -210,8 +210,21 @@ Env vars (see `server/.env.example`):
 
 - `CURATION_PYTHON` — interpreter for the native backend (pyarrow + pandas;
   default `python3`)
-- `CURATION_LEROBOT_PYTHON` — interpreter with lerobot >= 0.6 for v3.0 datasets
-  (no default; v3 requests fail with a clear error when unset)
+- `CURATION_LEROBOT_PYTHON` — interpreter with lerobot >= 0.6, for the
+  `--backend lerobot` path in `curate.py`. **Not needed for a v3.0 dataset**
+  since TASK-217: a v3.0 tree is converted once to a v2.1 view by
+  `lerobot_v3_to_v2.py` (which needs only pyarrow, i.e. `CURATION_PYTHON`) and
+  `curate.py` reads that. The README said this variable was required for v3.0
+  and it was not.
+- `DATASET_VIEW_CACHE_DIR` — where those converted views are built (default
+  `server/data/dataset-views`). Regenerable and safe to delete; a view is keyed
+  by the source path, the source's `meta/` contents and the converter's own
+  version, and superseded copies are removed after a successful rebuild.
+- `DATASET_VIEW_CONVERT_TIMEOUT_MS` — how long one conversion may run
+  (default 900000). `DATASET_VIEW_FAILURE_COOLDOWN_MS` — how long a failed
+  conversion is remembered before it is retried (default 30000).
+- `DATASET_UPLOAD_MAX_BYTES` / `DATASET_UPLOAD_MAX_MEMBERS` — caps on what one
+  uploaded archive may extract to (defaults 20 GiB and 200000 members).
 - `CURATION_DATASETS_ROOT` — legacy path-mode root (default `/tmp/neodem-datasets`)
 - `CURATION_FFMPEG` — ffmpeg binary for video re-cuts (default: `ffmpeg` on PATH)
 - `CURATION_VLM` — set to `gemini` (with a real `GOOGLE_API_KEY`) to enrich
