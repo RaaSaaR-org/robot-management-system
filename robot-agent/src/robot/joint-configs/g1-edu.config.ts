@@ -22,10 +22,15 @@ import { G1_FINGER_CHAINS } from '../../teleop/g1-chains.generated.js';
  * - They were SYMMETRIC between the sides, and the hardware is not. The left
  *   index flexes toward negative and the right toward positive.
  * - So `left_hand_index_1_joint` was declared `[0, 1.7453]` where the model says
- *   `[-1.7453, 0]` — two ranges that overlap at the single point 0. Every
- *   command to close the left hand was clamped to zero by `setTeleopJoint`, and
- *   the left hand could not be closed at all, by any input path. The same for
- *   `right_hand_thumb_2_joint` in the other direction.
+ *   `[-1.7453, 0]` — two ranges that overlap at the single point 0, leaving the
+ *   joint with NO usable travel: every command to flex it was clamped to zero
+ *   by `setTeleopJoint`, by any input path, silently.
+ * - FOUR joints were dead that way, and the damage was mirrored, which is
+ *   exactly what a symmetric table does to an asymmetric hand: the LEFT hand
+ *   lost `index_1` and `middle_1` — its fingers could not flex, though its
+ *   thumb was untouched — and the RIGHT hand lost `thumb_1` and `thumb_2`, so
+ *   its thumb could not close while its fingers were fine. Four more
+ *   (`index_0` and `middle_0` on both sides) kept 37% of their travel.
  * - Nine of the fourteen disagreed with the model in total; all fourteen ARM
  *   joints agreed, which is why this went unnoticed for as long as nothing
  *   drove the fingers.

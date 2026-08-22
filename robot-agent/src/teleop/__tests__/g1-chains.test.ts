@@ -196,3 +196,63 @@ describe('the teleop joint config agrees with the model', () => {
     }
   });
 });
+
+describe('the placeholder limits, and exactly what they cost', () => {
+  /** The hand-written limits `g1-edu.config.ts` carried before TASK-216. */
+  const PLACEHOLDERS: Record<string, [number, number]> = {
+    thumb_0: [-1.0472, 1.0472],
+    thumb_1: [0, 1.5708],
+    thumb_2: [0, 1.7453],
+    index_0: [-0.5236, 0.5236],
+    index_1: [0, 1.7453],
+    middle_0: [-0.5236, 0.5236],
+    middle_1: [0, 1.7453],
+  };
+
+  it('would have left four joints with no usable travel — mirrored between the hands', () => {
+    // Kept as a test rather than as a paragraph because the shape of the
+    // mistake is the lesson: a table written symmetrically, applied to a hand
+    // that is not symmetric, does mirrored damage. The LEFT hand lost its
+    // fingers' flexion and kept its thumb; the RIGHT hand lost its thumb and
+    // kept its fingers. Anyone who "tidies" the generated limits back into one
+    // symmetric table gets this back.
+    const dead: string[] = [];
+    for (const side of ['left', 'right'] as const) {
+      for (const finger of ['thumb', 'index', 'middle'] as const) {
+        for (const link of G1_FINGER_CHAINS[side][finger].links) {
+          const suffix = link.joint.replace(`${side}_hand_`, '').replace('_joint', '');
+          const [lo, hi] = PLACEHOLDERS[suffix]!;
+          // The closing end of the joint's REAL range, which is what any
+          // grasp drives toward.
+          const closing = Math.abs(link.lower) > Math.abs(link.upper) ? link.lower : link.upper;
+          const allowed = Math.min(hi, Math.max(lo, closing));
+          if (Math.abs(allowed) < 1e-9 && Math.abs(closing) > 1e-9) dead.push(link.joint);
+        }
+      }
+    }
+    expect(dead.sort()).toEqual([
+      'left_hand_index_1_joint',
+      'left_hand_middle_1_joint',
+      'right_hand_thumb_1_joint',
+      'right_hand_thumb_2_joint',
+    ]);
+  });
+
+  it('agrees with the model on the joints it happened to get right', () => {
+    // Five of the fourteen did agree, which is the other half of why this
+    // survived: driving the hand produced SOME motion, just not a grasp.
+    const agreed: string[] = [];
+    for (const side of ['left', 'right'] as const) {
+      for (const finger of ['thumb', 'index', 'middle'] as const) {
+        for (const link of G1_FINGER_CHAINS[side][finger].links) {
+          const suffix = link.joint.replace(`${side}_hand_`, '').replace('_joint', '');
+          const [lo, hi] = PLACEHOLDERS[suffix]!;
+          if (Math.abs(lo - link.lower) < 1e-3 && Math.abs(hi - link.upper) < 1e-3) {
+            agreed.push(link.joint);
+          }
+        }
+      }
+    }
+    expect(agreed).toHaveLength(5);
+  });
+});

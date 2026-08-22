@@ -11,7 +11,7 @@
  * on a Jetson against ~4 ms on an x86 host. TASK-216 says to prototype the
  * cheap answer first and measure: this file is the cheap answer. It is 7 joints
  * and a 6×6 solve, it needs no Python process on the robot, and
- * `ik.bench.test.ts` records what it actually costs.
+ * `ik.test.ts` records what it actually costs.
  *
  * The wrist is NOT spherical — the yaw axis is offset 46 mm from the
  * roll/pitch intersection — so there is no closed form to fall back to and the
