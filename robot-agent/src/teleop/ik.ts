@@ -437,6 +437,9 @@ export function solveIk(
         * (mobility ? (mobility[i] ?? 1) : 1);
     }
     if (!capStep(dq, opt.maxStep)) break;
+    const prevQ = q.slice();
+    const prevPose = pose;
+    const prevRes = res;
     let moved = 0;
     for (let i = 0; i < n; i++) {
       const link = chain.links[i]!;
@@ -448,11 +451,20 @@ export function solveIk(
     iterations++;
     if (moved < 1e-9) break;
     pose = forwardKinematics(chain, q);
-    const before = res.posErr;
     res = residual(pose, target);
     // The polish must never make things worse — if it does, the pose it just
-    // left was the better one and there is nothing here to gain.
-    if (res.posErr >= before) break;
+    // left was the better one, so put it back. Taking the step and then
+    // breaking without restoring is not the same thing: it returns the pose
+    // this line has just measured as worse. Rare (~4% of solves, and only ones
+    // that already missed the tolerance) but real — 12 mm on the worst case
+    // found, enough to push an answer from inside TASK-216's 30 mm acceptance
+    // bound to outside it.
+    if (res.posErr >= prevRes.posErr) {
+      for (let i = 0; i < n; i++) q[i] = prevQ[i]!;
+      pose = prevPose;
+      res = prevRes;
+      break;
+    }
   }
 
   const clamped = q.some((v, i) => {

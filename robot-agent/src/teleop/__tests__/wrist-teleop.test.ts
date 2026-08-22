@@ -277,6 +277,68 @@ describe('the rate limit', () => {
     }
   });
 
+  it('limits the SECOND arm of a two-handed frame too', () => {
+    // Both hands travel in one `{wrists}` message, and the handler solves them
+    // back to back within the same millisecond. With one shared clock the
+    // second side saw dt = 0, which the code read as "unlimited" — so on every
+    // frame of two-handed teleop the right arm was written with the solver's
+    // raw output and told the caller `slewing: false`. Measured at 0.85 rad in
+    // one 50 ms tick against the 0.15 rad the left arm got.
+    const measuredBoth = {
+      ...Object.fromEntries(G1_ARM_CHAINS.left.links.map((l, i) => [l.joint, ARM_REST.left[i]!])),
+      ...Object.fromEntries(G1_ARM_CHAINS.right.links.map((l, i) => [l.joint, ARM_REST.right[i]!])),
+    };
+    const { robot } = fakeRobot(measuredBoth);
+    const c = clock();
+    const teleop = new WristTeleop(robot, c.now);
+    const tipOf = (side: 'left' | 'right', q: number[]) =>
+      ({ position: forwardKinematics(G1_ARM_CHAINS[side], q).tip, rotation: null });
+
+    // Frame one establishes both clocks.
+    teleop.solve('left', tipOf('left', ARM_REST.left.slice()));
+    teleop.solve('right', tipOf('right', ARM_REST.right.slice()));
+    const before = {
+      left: teleop.lastCommanded('left')!.slice(),
+      right: teleop.lastCommanded('right')!.slice(),
+    };
+
+    // Frame two: 50 ms later, both sides in the same tick of the clock.
+    c.advance(50);
+    const far = {
+      left: tipOf('left', [-1.4, 1.4, -1.2, 2.0, 1.0, -1.0, 1.0]),
+      right: tipOf('right', [-1.4, -1.4, 1.2, 2.0, -1.0, 1.0, -1.0]),
+    };
+    const reports = {
+      left: teleop.solve('left', far.left),
+      right: teleop.solve('right', far.right),
+    };
+    for (const side of ['left', 'right'] as const) {
+      const after = teleop.lastCommanded(side)!;
+      expect(reports[side].slewing).toBe(true);
+      for (let i = 0; i < after.length; i++) {
+        expect(Math.abs(after[i]! - before[side][i]!)).toBeLessThanOrEqual(0.15 + 1e-9);
+      }
+    }
+  });
+
+  it('gives a frame repeated inside one millisecond no allowance at all', () => {
+    // The same hole from the other side: a client that sends the same frame
+    // twice back to back used to advance the arm twice, because "no time has
+    // passed" was read as "no limit".
+    const { robot } = fakeRobot({ ...measured });
+    const c = clock();
+    const teleop = new WristTeleop(robot, c.now);
+    const far = targetFor([-1.4, 1.4, -1.2, 2.0, 1.0, -1.0, 1.0]);
+    c.advance(50);
+    teleop.solve('left', far);
+    const after1 = teleop.lastCommanded('left')!.slice();
+    teleop.solve('left', far); // same millisecond
+    const after2 = teleop.lastCommanded('left')!;
+    for (let i = 0; i < after2.length; i++) {
+      expect(after2[i]!).toBeCloseTo(after1[i]!, 12);
+    }
+  });
+
   it('starts over after a reset', () => {
     const { robot } = fakeRobot({ ...measured });
     const c = clock();
@@ -287,3 +349,89 @@ describe('the rate limit', () => {
     expect(teleop.lastCommanded('left')).toBeNull();
   });
 });
+
+describe('orientation, end to end through the wire', () => {
+  it('lands the palm on the rotation the wire asked for', () => {
+    // The only test in the repo that carries a rotation from a WIRE QUATERNION
+    // all the way to a commanded pose. Everything else either solves position
+    // only or reads `positionError` back, which is exactly why the whole
+    // orientation half of the solver could be deleted with the suite green.
+    //
+    // It pins the (x, y, z, w) -> (w, x, y, z) boundary as well: a swapped
+    // order is a different rotation and shows up here as tens of degrees.
+    const chain = G1_ARM_CHAINS.left;
+    // A target whose orientation the position task does NOT reach on its own:
+    // seeded from a pose across the workspace, position-only tracking lands on
+    // the point with the palm turned right round. That is the whole point of
+    // choosing it — a target the arm happens to arrive at correctly proves
+    // nothing about the orientation task.
+    const goal = [1.202, 0.873, 0.405, 1.046, -0.559, -0.116, 1.116];
+    const from = [0.111, 0.318, -1.558, -0.734, 0.826, 0.332, 0.093];
+    const pose = forwardKinematics(chain, goal);
+    // Back onto the wire: head-relative position, and the tip rotation as the
+    // browser would send it.
+    const q = mat3ToQuatXyzw(pose.tipRot);
+    const wire = {
+      p: [
+        pose.tip[0] - HEAD_SITE_IN_TORSO[0],
+        pose.tip[1] - HEAD_SITE_IN_TORSO[1],
+        pose.tip[2] - HEAD_SITE_IN_TORSO[2],
+      ],
+      q,
+    };
+    const parsed = parseWristPose(wire);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.rotation).not.toBeNull();
+
+    const measured = Object.fromEntries(chain.links.map((l, i) => [l.joint, from[i]!]));
+    const { robot } = fakeRobot(measured);
+    const c = clock();
+    const teleop = new WristTeleop(robot, c.now);
+    // Two seconds of tracking at 20 Hz, exactly as the socket drives it — the
+    // rate limit has to walk the arm across the workspace first.
+    for (let i = 0; i < 40; i++) {
+      c.advance(50);
+      teleop.solve('left', parsed!);
+    }
+    const landed = forwardKinematics(chain, teleop.lastCommanded('left')! as number[]);
+    const degrees = angleBetween(landed.tipRot, pose.tipRot) * 180 / Math.PI;
+    // 3.1 degrees measured. With `rotationWeight` at zero the same reach lands
+    // 178 degrees out — the palm turned right over — and reading the wire
+    // quaternion as (w, x, y, z) instead of (x, y, z, w) lands 67 degrees out.
+    expect(degrees).toBeLessThan(15);
+    // And it did not buy that with position: still on the point.
+    const off = Math.hypot(
+      landed.tip[0] - pose.tip[0], landed.tip[1] - pose.tip[1], landed.tip[2] - pose.tip[2],
+    );
+    expect(off).toBeLessThan(0.005);
+  });
+});
+
+/** A rotation matrix as the wire's (x, y, z, w). Row-major, like `Mat3`. */
+function mat3ToQuatXyzw(m: number[]): [number, number, number, number] {
+  const trace = m[0]! + m[4]! + m[8]!;
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    return [(m[7]! - m[5]!) / s, (m[2]! - m[6]!) / s, (m[3]! - m[1]!) / s, 0.25 * s];
+  }
+  if (m[0]! > m[4]! && m[0]! > m[8]!) {
+    const s = Math.sqrt(1 + m[0]! - m[4]! - m[8]!) * 2;
+    return [0.25 * s, (m[1]! + m[3]!) / s, (m[2]! + m[6]!) / s, (m[7]! - m[5]!) / s];
+  }
+  if (m[4]! > m[8]!) {
+    const s = Math.sqrt(1 + m[4]! - m[0]! - m[8]!) * 2;
+    return [(m[1]! + m[3]!) / s, 0.25 * s, (m[5]! + m[7]!) / s, (m[2]! - m[6]!) / s];
+  }
+  const s = Math.sqrt(1 + m[8]! - m[0]! - m[4]!) * 2;
+  return [(m[2]! + m[6]!) / s, (m[5]! + m[7]!) / s, 0.25 * s, (m[3]! - m[1]!) / s];
+}
+
+/** The angle of the rotation taking `a` to `b`, radians. */
+function angleBetween(a: number[], b: number[]): number {
+  // trace(Aᵀ B) = 1 + 2 cos(theta)
+  let trace = 0;
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) trace += a[j * 3 + i]! * b[j * 3 + i]!;
+  }
+  return Math.acos(Math.min(1, Math.max(-1, (trace - 1) / 2)));
+}

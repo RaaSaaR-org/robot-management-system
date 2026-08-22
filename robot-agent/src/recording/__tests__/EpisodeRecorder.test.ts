@@ -656,5 +656,42 @@ describe('per-episode retargeting labels (TASK-216)', () => {
     const lines = await readFile(join(stopped.datasetPath!, 'meta', 'episodes.jsonl'), 'utf-8');
     const rows = lines.trim().split('\n').map((l) => JSON.parse(l) as { retarget_modes: string[] });
     expect(rows[0]!.retarget_modes).toEqual(['hand-tracking']);
+
+    // And in the file lerobot ACTUALLY reads. `episodes.jsonl` is this repo's
+    // own twin of it, written twenty lines away from the parquet row and from
+    // a different expression — `[...modes]` there against `modes.join('+')`
+    // here — so asserting the jsonl says nothing about what a trainer opening
+    // the dataset would see.
+    const episodes = await readParquet(
+      join(stopped.datasetPath!, 'meta/episodes/chunk-000/file-000.parquet'),
+    );
+    expect(episodes[0]!.retarget_modes).toBe('hand-tracking');
+  });
+
+  it('joins several modes with + in the parquet, and drops them with the take', async () => {
+    await rec.start({ sessionId: 's', fps: 20, cameras: [] });
+    markTeleopMode('orientation');
+    await run(h, 300);
+    // Discard the LIVE take and re-record it driven purely by IK. Before this
+    // was fixed the mode set survived the discard — the `LiveEpisode` object is
+    // reused for the re-recorded frames — and the dataset claimed
+    // `ik+orientation` with not one orientation-driven frame in it. That mixed
+    // provenance is the exact claim this column exists to prevent.
+    await rec.discardEpisode(0);
+    markTeleopMode('ik');
+    await run(h, 300);
+    await rec.nextEpisode();
+    markTeleopMode('ik');
+    markTeleopMode('hand-tracking');
+    await run(h, 300);
+    vi.useRealTimers();
+    const stopped = await rec.stop();
+    expect(stopped.ok).toBe(true);
+    expect(stopped.episodes[0]!.retargetModes).toEqual(['ik']);
+    const episodes = await readParquet(
+      join(stopped.datasetPath!, 'meta/episodes/chunk-000/file-000.parquet'),
+    );
+    expect(episodes[0]!.retarget_modes).toBe('ik');
+    expect(episodes[1]!.retarget_modes).toBe('hand-tracking+ik');
   });
 });

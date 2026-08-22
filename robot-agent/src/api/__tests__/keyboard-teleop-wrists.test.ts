@@ -60,14 +60,28 @@ const LEFT_REACHABLE = [0.17, 0.2, -0.37];
 const RIGHT_REACHABLE = [0.17, -0.2, -0.37];
 
 /**
- * Four fingertips in the robot's hand frame, metres, origin at the wrist —
- * a hand that is open, with the thumb standing off the palm.
+ * Four fingertips in the HAND's own frame, metres, origin at the wrist joint —
+ * an adult hand held open, thumb abducted.
+ *
+ * Human anthropometry, not the robot's dimensions. The retargeting compares
+ * these against a Dex3 whose fingertips sit 215 mm from the chain root and
+ * whose thumb rests splayed 110 mm across the palm, and a fixture written at
+ * the robot's scale is how an open hand came out as a fist with every test
+ * passing.
  */
 const OPEN_HAND = {
   wrist: [0, 0, 0],
-  thumb: [0.06, 0.02, 0.03],
-  index: [0.09, 0, 0.02],
-  middle: [0.09, 0, -0.01],
+  thumb: [0.098, 0.022, 0.058],
+  index: [0.176, 0, 0.013],
+  middle: [0.190, 0, -0.010],
+};
+
+/** The same hand closed: fingertips in to the palm, thumb over them. */
+const CLOSED_HAND = {
+  wrist: [0, 0, 0],
+  thumb: [0.100, 0.055, 0.020],
+  index: [0.070, 0.075, 0.014],
+  middle: [0.072, 0.082, -0.008],
 };
 
 /** A fake ws connection: an EventEmitter that records what was sent. */
@@ -263,6 +277,26 @@ describe('keyboard-teleop {wrists} — one side solves, and only that side moves
     sendMsg(ws, { wrists: { left: { p: LEFT_REACHABLE }, right: { p: RIGHT_REACHABLE } } });
 
     expect(state.jointsWritten()).toEqual([...ARM_JOINTS.left, ...ARM_JOINTS.right]);
+  });
+
+  it('takes the first key it recognises, so a combined frame drops the second', () => {
+    // ONE KEY PER FRAME is this socket's protocol for all nine message kinds
+    // and predates the wrist stream — `{move}` + `{positions}` behaves the same
+    // way. The `HandsMessage` JSDoc used to promise the opposite ("a message
+    // may carry either or both"), which is a trap: a client written against it
+    // gets working arms and permanently frozen fingers with no diagnostic. The
+    // browser sends two `send()` calls, and the doc now says so.
+    const state = makeG1Stub();
+    const ws = connect(state);
+
+    sendMsg(ws, {
+      wrists: { left: { p: LEFT_REACHABLE } },
+      hands: { left: CLOSED_HAND },
+    });
+
+    const written = state.jointsWritten();
+    expect(written).toEqual(ARM_JOINTS.left);
+    expect(written.some((j) => j.includes('hand'))).toBe(false);
   });
 });
 

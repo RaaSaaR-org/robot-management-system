@@ -17,8 +17,10 @@ import * as THREE from 'three';
 import { retargetArm, type RetargetResult, type VrJointMap } from './vrRetarget';
 import {
   handKeypointsToRobotFrame,
+  isStopPinch,
   wristToRobotFrame,
   HAND_JOINT_NAMES,
+  STOP_HOLD_S,
   type RobotHandKeypoints,
   type RobotWristPose,
   type XrRigidTransform,
@@ -248,6 +250,15 @@ export function VrTeleopRig({
   // taking the headset off.
   const recenterHeld = useRef(false);
   const estopHeld = useRef(false);
+  /**
+   * When both hands started making the stop gesture, or null.
+   *
+   * The hands-only stop. It is edge-triggered like B/Y — `stopPinchFired` holds
+   * until the gesture is released — so an operator who keeps holding it while
+   * the robot stops does not re-fire the stop every frame.
+   */
+  const stopPinchSince = useRef<number | null>(null);
+  const stopPinchFired = useRef(false);
   /** Left stick click last frame — the episode boundary is edge-triggered too. */
   const nextEpisodeHeld = useRef(false);
   /** The XR clock, readable from the async episode-boundary callback. */
@@ -325,6 +336,24 @@ export function VrTeleopRig({
   // in-session, and lets us keep the headset view clean (no controller gizmos).
   useFrame((state, delta, frame) => {
     const referenceSpace = state.gl.xr.getReferenceSpace?.();
+    /**
+     * The stop gesture, read straight off the joints.
+     *
+     * Deliberately NOT inside `readHand`: that returns null the moment any
+     * retargeting input is missing or `handTracking` is off, and a stop must
+     * not depend on the retargeting being healthy. This asks the two joints it
+     * needs and nothing else.
+     */
+    const stopPinched = (hand: HandState): boolean => {
+      const joints = hand?.inputSource?.hand;
+      if (!joints || !referenceSpace || !frame) return false;
+      const at = (name: string): { x: number; y: number; z: number } | null => {
+        const space = joints.get(name as never);
+        if (!space) return null;
+        return frame.getJointPose?.(space, referenceSpace)?.transform.position ?? null;
+      };
+      return isStopPinch(at(HAND_JOINT_NAMES.thumbTip), at(HAND_JOINT_NAMES.pinkyTip));
+    };
     const now = state.clock.elapsedTime;
     clockRef.current = now;
     const telemetry = telemetryRef.current;
@@ -395,6 +424,25 @@ export function VrTeleopRig({
       onEstop();
     }
     estopHeld.current = estopPressed;
+
+    // The same stop, reachable with no controller in the room: thumb to little
+    // finger on BOTH hands, held. Read every frame regardless of `handTracking`
+    // — a stop the operator has to have armed the right toggle to reach is not
+    // a stop — and it costs two joint lookups per hand when no hand is tracked.
+    const stopping = stopPinched(leftHand) && stopPinched(rightHand);
+    if (!stopping) {
+      stopPinchSince.current = null;
+      stopPinchFired.current = false;
+    } else {
+      if (stopPinchSince.current === null) stopPinchSince.current = now;
+      if (!stopPinchFired.current && now - stopPinchSince.current >= STOP_HOLD_S) {
+        stopPinchFired.current = true;
+        // No haptics to promise it with: a tracked hand has no actuator. The
+        // confirmation the operator gets is the arm stopping and the HUD's red
+        // banner, which is why the HUD had to follow the hands too.
+        onEstop();
+      }
+    }
 
     // ---- link-lost buzz --------------------------------------------------
     if (telemetry.link === 'lost' && prevLink.current !== 'lost') {
@@ -580,6 +628,7 @@ export function VrTeleopRig({
       return { wrist, keypoints };
     };
 
+
     /** One controller's wrist pose, behind the same grip clutch as the arms. */
     const readController = (ctrl: ControllerState, side: 'left' | 'right'): RobotWristPose | null => {
       if (!ctrl || !referenceSpace || !headTransform) return null;
@@ -606,7 +655,15 @@ export function VrTeleopRig({
     telemetry.right.tracked = null;
     const trackedLeft = readHand(leftHand, 'left');
     const trackedRight = readHand(rightHand, 'right');
-    const ikOn = retargetMode === 'ik' || trackedLeft !== null || trackedRight !== null;
+    // The MODE decides how the arm is retargeted; a tracked hand is only a
+    // different SOURCE for the pose. It used to decide both — `|| trackedLeft
+    // !== null` — which meant one hand drifting into view silently moved both
+    // arms onto IK while the mode button still read "Orientation", and on a
+    // robot the agent has no arm chain for (an H1 advertises no wrist joints)
+    // it put both arms on a retargeting the agent answers with one
+    // `ik_unsupported` and then nothing. `handTracking` cannot be armed unless
+    // the mode is IK — see the Hands button in VRTeleopModal.
+    const ikOn = retargetMode === 'ik';
     const wristLeft = ikOn ? (trackedLeft?.wrist ?? readController(left, 'left')) : null;
     const wristRight = ikOn ? (trackedRight?.wrist ?? readController(right, 'right')) : null;
 

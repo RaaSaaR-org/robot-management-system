@@ -180,6 +180,47 @@ describe('robustness', () => {
     expect(percentile(errors, 0.95)).toBeLessThan(0.03);
   });
 
+  it('actually reaches the orientation it is given, tracking frame to frame', () => {
+    // The gap the review found: `IkResult.rotationError` was never asserted
+    // anywhere, so every line that makes orientation work — the null-space
+    // projector, the sign of the compensation term, the distance gate — could
+    // be deleted or inverted and the whole suite stayed green while the
+    // operator's palm ended up 70 degrees out.
+    //
+    // WARM-STARTED on purpose. The cold-start sweep above is a different
+    // measurement: from the rest pose to a uniformly random configuration the
+    // healthy solver's rotation p95 is 2.37 rad, because most of those targets
+    // are most of a revolution away and 24 iterations do not get there. That
+    // number cannot discriminate anything. Teleoperation is not that: the seed
+    // is the pose the arm is already in, one frame ago.
+    const chain = G1_ARM_CHAINS.left;
+    const rnd = lcg(4242);
+    const errors: number[] = [];
+    const positions: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      const q = chain.links.map((l) => l.lower + rnd() * (l.upper - l.lower));
+      const pose = forwardKinematics(chain, q);
+      // One frame of travel away, which is what a 20 Hz stream delivers.
+      const seed = q.map((v, j) => {
+        const link = chain.links[j]!;
+        return Math.min(link.upper, Math.max(link.lower, v + (rnd() - 0.5) * 0.2));
+      });
+      const result = solveIk(chain, { position: pose.tip, rotation: pose.tipRot }, seed,
+        { restPose: ARM_REST.left, mobility: ARM_MOBILITY });
+      errors.push(result.rotationError);
+      positions.push(result.positionError);
+    }
+    // The orientation task does not converge to zero — it reaches a stationary
+    // point of the projected problem and stops, at 0.12 rad median here — so
+    // the bound is set where the mutations land, not at zero. Measured on this
+    // fixed seed: shipped 0.351, compensation sign flipped 0.556, null-space
+    // projector dropped 0.759, orientation task deleted 1.404.
+    expect(percentile(errors, 0.95)).toBeLessThan(0.45);
+    // And the position-only polish pass, which had no bound of its own: 1.97 mm
+    // measured with it, 8.57 mm with POLISH_ITERATIONS set to zero.
+    expect(percentile(positions, 0.95)).toBeLessThan(0.004);
+  });
+
   it('keeps the elbow near the rest posture when it has a choice', () => {
     // Seven joints for three constraints leaves four spare. Without the
     // null-space pull the solver spends them wherever the arithmetic lands,

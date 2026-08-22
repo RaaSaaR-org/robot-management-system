@@ -204,7 +204,10 @@ interface HandsMessage {
    * +z toward the index side, metres, origin at the wrist).
    *
    * Independent of `wrists`: an operator can have finger tracking without arm
-   * IK and the reverse, and a message may carry either or both.
+   * IK and the reverse. Send them as SEPARATE messages, though — this socket
+   * dispatches on the first key it recognises and returns, for all nine
+   * message kinds, so a frame carrying both silently drops the second. The
+   * browser sends two `send()` calls for exactly this reason.
    */
   hands: {
     left?: { wrist?: unknown; thumb?: unknown; index?: unknown; middle?: unknown } | null;

@@ -452,6 +452,13 @@ export class EpisodeRecorder {
     found.lastFrameAtMs = null;
     found.pausedMs = 0;
     found.epoch += 1;
+    // The modes go with the frames. Leaving them behind on the LIVE episode
+    // makes the re-recorded take claim provenance it does not have — record a
+    // bad take with the controller mapping, discard it, re-do it purely on IK,
+    // and the dataset says `ik+orientation` with not one orientation-driven
+    // frame in it. That mixed-provenance claim is the exact thing this column
+    // exists to prevent.
+    found.modes = new Set();
     await rm(this.episodeDir(index), { recursive: true, force: true }).catch(() => {});
     // Discarding the episode that is STILL RECORDING is a first-class action —
     // the panel offers it on the live row. Without re-creating the directories
@@ -459,6 +466,10 @@ export class EpisodeRecorder {
     // and is counted as a drop, and the operator records nothing until they
     // press Next episode.
     if (this.current && this.current.index === index) {
+      // Drain what was marked since the last tick too, for the same reason —
+      // otherwise the first tick of the re-recorded take picks it straight
+      // back up. `start()` does this at the other boundary.
+      takeTeleopModes();
       await this.prepareEpisodeDirs(this.current);
     }
     return true;

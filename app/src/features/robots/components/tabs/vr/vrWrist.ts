@@ -188,7 +188,52 @@ export const HAND_JOINT_NAMES = {
   indexTip: 'index-finger-tip',
   middleProximal: 'middle-finger-phalanx-proximal',
   middleTip: 'middle-finger-tip',
+  /** Not retargeted — read only for the stop gesture below. */
+  pinkyTip: 'pinky-finger-tip',
 } as const;
+
+/**
+ * How close thumb and little finger must come to count, metres.
+ *
+ * The STOP gesture, and it is thumb-to-PINKY on purpose. Every other pinch a
+ * hand can make is work: thumb-index and thumb-middle are the two pairs
+ * DexPilot retargets into a grasp, and a fist is how you hold something. The
+ * little finger is the one digit the retargeting never looks at, so touching it
+ * to the thumb cannot happen while the operator is picking something up.
+ */
+export const STOP_PINCH_M = 0.025;
+
+/**
+ * How long BOTH hands must hold it, seconds.
+ *
+ * Long enough not to fire on a stretch, short enough to be a stop. Both hands,
+ * because one hand can make this shape while resting at the operator's side.
+ */
+export const STOP_HOLD_S = 0.8;
+
+/**
+ * Is this hand making the stop gesture?
+ *
+ * WHY THIS EXISTS. A hands-only session — the Hands toggle on and the
+ * controllers put down, which is the only way the feature is worth having —
+ * has no reachable stop at all: B/Y, A/X and the episode boundary are read off
+ * `useXRInputSourceState('controller', …)` and every one of them is undefined,
+ * the desktop STOP button is not on screen inside an immersive session, and the
+ * arms follow the hands with no clutch. The operator's only recourse was to
+ * take the headset off. Taking the hands out of the tracking volume does hold
+ * the arm, but it latches nothing and raises no alert.
+ */
+export function isStopPinch(
+  thumbTip: Point3 | null | undefined,
+  pinkyTip: Point3 | null | undefined,
+): boolean {
+  if (!thumbTip || !pinkyTip) return false;
+  const dx = thumbTip.x - pinkyTip.x;
+  const dy = thumbTip.y - pinkyTip.y;
+  const dz = thumbTip.z - pinkyTip.z;
+  const d = Math.hypot(dx, dy, dz);
+  return Number.isFinite(d) && d < STOP_PINCH_M;
+}
 
 type Point3 = { x: number; y: number; z: number };
 

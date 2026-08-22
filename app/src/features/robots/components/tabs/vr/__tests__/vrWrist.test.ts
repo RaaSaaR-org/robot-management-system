@@ -12,6 +12,8 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import {
   AXIS_MAP,
+  isStopPinch,
+  STOP_PINCH_M,
   wristToRobotFrame,
   handKeypointsToRobotFrame,
   type XrRigidTransform,
@@ -394,5 +396,31 @@ describe('handKeypointsToRobotFrame', () => {
       ...FLAT_HAND,
       indexProximal: { x: 0, y: 0, z: -0.12 },
     })).toBeNull();
+  });
+});
+
+describe('the hands-only stop gesture', () => {
+  const at = (x: number, y: number, z: number) => ({ x, y, z });
+
+  it('fires on thumb to little finger, and not on the pinches that are work', () => {
+    // Thumb-index and thumb-middle are the two pairs DexPilot retargets into a
+    // grasp; the little finger is the one digit the retargeting never reads,
+    // which is the whole reason the stop is bound to it. A gesture that also
+    // means "pick that up" is not a stop.
+    expect(isStopPinch(at(0, 0, 0), at(0.01, 0, 0))).toBe(true);
+    expect(isStopPinch(at(0, 0, 0), at(0, 0, STOP_PINCH_M * 0.9))).toBe(true);
+    expect(isStopPinch(at(0, 0, 0), at(0, 0, STOP_PINCH_M * 1.1))).toBe(false);
+    // An open hand: the little finger is a hand's width away.
+    expect(isStopPinch(at(0.098, 0.022, 0.058), at(0.16, 0, -0.05))).toBe(false);
+  });
+
+  it('is false rather than true when a joint is missing', () => {
+    // It gates a stop, so an absent joint must not fire one — but note the
+    // failure direction is deliberate in BOTH senses: a hand that stops being
+    // tracked also stops driving the arm, so refusing to fire here does not
+    // leave the robot running on an untracked hand.
+    expect(isStopPinch(null, at(0, 0, 0))).toBe(false);
+    expect(isStopPinch(at(0, 0, 0), undefined)).toBe(false);
+    expect(isStopPinch(at(Number.NaN, 0, 0), at(0, 0, 0))).toBe(false);
   });
 });

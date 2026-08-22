@@ -191,7 +191,15 @@ export class WristTeleop {
   private readonly seed: Record<Side, number[] | null> = { left: null, right: null };
   /** What was last COMMANDED, which is what the rate limit moves from. */
   private readonly commanded: Record<Side, number[] | null> = { left: null, right: null };
-  private lastAt: number | null = null;
+  /**
+   * When each side was last commanded. PER SIDE on purpose: one shared clock
+   * gives the second arm solved in a `{wrists}` frame a `dt` of zero, and a
+   * zero `dt` used to mean "unlimited". Both hands travel in one message on
+   * every frame of two-handed teleop, so that made the limiter inert for the
+   * right arm every single frame — measured at 0.85 rad in one 50 ms tick,
+   * reported back as `slewing: false`.
+   */
+  private readonly lastAt: Record<Side, number | null> = { left: null, right: null };
 
   constructor(
     private readonly robot: RobotStateManager,
@@ -263,10 +271,16 @@ export class WristTeleop {
     // seed — those differ exactly while the limiter is catching up, and running
     // it from the seed would let the arm advance a full step every frame and
     // defeat the limit entirely.
+    // A zero `dt` means NO TIME HAS PASSED, which is a budget of zero, not an
+    // infinite one — otherwise a client that sends the same frame twice in a
+    // millisecond advances the arm twice with no limit. Only the genuinely
+    // first solve for a side is unlimited: there is nothing to move from.
     const at = this.now();
-    const dt = this.lastAt === null ? 0 : Math.min(MAX_RATE_DT_S, Math.max(0, (at - this.lastAt) / 1000));
-    this.lastAt = at;
-    const budget = dt > 0 ? MAX_JOINT_RATE_RAD_S * dt : Number.POSITIVE_INFINITY;
+    const last = this.lastAt[side];
+    this.lastAt[side] = at;
+    const budget = last === null
+      ? Number.POSITIVE_INFINITY
+      : MAX_JOINT_RATE_RAD_S * Math.min(MAX_RATE_DT_S, Math.max(0, (at - last) / 1000));
     const from = this.commanded[side] ?? seed;
     const next: number[] = [];
     let slewing = false;
@@ -310,7 +324,8 @@ export class WristTeleop {
     this.seed.right = null;
     this.commanded.left = null;
     this.commanded.right = null;
-    this.lastAt = null;
+    this.lastAt.left = null;
+    this.lastAt.right = null;
   }
 
   /** The joint targets last written, per side, for tests and diagnostics. */

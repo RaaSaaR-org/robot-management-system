@@ -25,11 +25,33 @@
  *   S2, the three wrist-to-tip vectors. These carry the hand's overall shape,
  *       and are weighted well below S1 — an open hand should look open, but not
  *       at the cost of a grasp.
+ *
+ * WHERE THIS DEPARTS FROM THE REFERENCE: the two hands are CALIBRATED against
+ * each other before the vectors are compared (see `taskFrames`). `unitree_dex3.yml`
+ * compares the human's vectors to the robot's directly, scaled by one number,
+ * which only works when the two hands have similar proportions AND similar zero
+ * poses. The Dex3 has neither: its fingertips sit 215 mm from the chain root
+ * where an adult's sit ~176 mm from the wrist joint, and its thumb rests
+ * splayed 110 mm across the palm, 190 mm from its own index tip, where an open
+ * human hand's thumb-to-index gap is ~90 mm. Compared raw, an OPEN human hand
+ * is a 100 mm error on the thumb-index task, and the cheapest way for the
+ * solver to close 100 mm is to curl the index in: measured, a flat open hand
+ * drove `index_1` to -1.737 rad against a -1.745 stop, i.e. deeper than the
+ * full-trigger fist. The operator holds their hand open and the robot makes a
+ * fist. So each of the six tasks gets a scale and a rotation fixed once, such
+ * that a canonical open hand maps EXACTLY onto the robot's own open pose, and
+ * the objective then carries the operator's DEPARTURE from open rather than
+ * the difference between two hands' anatomy.
  */
 
 import {
+  axisAngleToMat3,
+  cross,
   forwardKinematics,
+  matVec,
+  norm,
   solveSymmetric,
+  type Mat3,
   type Vec3,
 } from './kinematics.js';
 import { G1_FINGER_CHAINS, type Chain, type Finger, type Side } from './g1-chains.generated.js';
@@ -62,19 +84,66 @@ export const ESCAPE_DIST_M = 0.05;
 /** Weight on a tip-to-tip vector, and on one that has snapped to a pinch. */
 const S1_WEIGHT = 1;
 const S1_PINCH_WEIGHT = 5;
-/** Weight on a wrist-to-tip vector. Shape matters, but not as much as grasp. */
-const S2_WEIGHT = 0.25;
+/**
+ * Weight on a wrist-to-tip vector.
+ *
+ * `unitree_dex3.yml` discounts these heavily and this port copied it at 0.25.
+ * That was damage limitation, not design: comparing the two hands' vectors raw,
+ * S2 asked the robot for 40 mm of reach it does not have, and a high weight on
+ * a task that can never be satisfied drags the whole hand. With the tasks
+ * calibrated (`taskFrames`) S2 is a clean shape signal with an achievable
+ * target, and there is no longer a reason to discount it — the grasp is
+ * protected by `S1_PINCH_WEIGHT`, not by S2 being small. Measured over a human
+ * hand curling from flat to a fist: at 0.25 the robot's index reached 0.60 rad
+ * of the 1.41 available, at 1.0 it reaches 0.96, while a pinch closes to 33 mm
+ * against the Dex3's own 29 mm floor.
+ */
+const S2_WEIGHT = 1;
 
 /**
- * Human hand to robot hand scale.
+ * Operator hand size, relative to `HUMAN_OPEN_HAND`.
  *
- * 1.0, following `unitree_dex3.yml`. It is close to right by accident rather
- * than by design: a Dex3 finger is 94 mm from root to tip and an adult index
- * finger is about 90 mm, so the two hands span nearly the same distances. It is
- * a constant here so that a smaller operator can be given a smaller number
- * without touching the objective.
+ * 1.0 is the canonical adult hand below. This does NOT scale the human vectors
+ * directly — the per-task calibration would divide any such factor straight
+ * back out. It scales the REFERENCE hand the calibration is built from, which
+ * is the thing a hand size actually changes: give a smaller operator 0.9 and
+ * every task's scale rises by the same 11%, so their smaller reach still opens
+ * the robot's hand all the way.
  */
 export const HAND_SCALE = 1;
+
+/**
+ * A canonical adult open hand, RIGHT, in the frame `handKeypointsToRobotFrame`
+ * produces: origin at the wrist joint, +x along the fingers, +z from the middle
+ * knuckle toward the index knuckle, +y = z x x (which is the palm side on the
+ * right hand and the back of the hand on the left — the frame mirrors with the
+ * anatomy, which is why one table serves both and only y flips).
+ *
+ * Anthropometry, not measurement of one person: wrist joint to middle tip
+ * 190 mm and to index tip 176 mm, adjacent fingertips ~27 mm apart, the thumb
+ * abducted to 98 mm out and 58 mm across toward the index, sitting 22 mm off
+ * the palm plane. Every number here is a REFERENCE POSE, not a threshold: being
+ * a centimetre off makes the robot's open hand a few degrees off zero, and
+ * `HAND_SCALE` is the knob for an operator who is a long way from it.
+ */
+export const HUMAN_OPEN_HAND: Readonly<HandKeypoints> = {
+  wrist: [0, 0, 0],
+  thumb: [0.098, 0.022, 0.058],
+  index: [0.176, 0, 0.013],
+  middle: [0.190, 0, -0.010],
+};
+
+/** The same pose for a given hand — y mirrors, exactly as the robot's does. */
+export function openHandReference(side: Side): HandKeypoints {
+  const flip = side === 'left' ? -1 : 1;
+  const m = (v: Vec3): Vec3 => [v[0] * HAND_SCALE, v[1] * flip * HAND_SCALE, v[2] * HAND_SCALE];
+  return {
+    wrist: m(HUMAN_OPEN_HAND.wrist),
+    thumb: m(HUMAN_OPEN_HAND.thumb),
+    index: m(HUMAN_OPEN_HAND.index),
+    middle: m(HUMAN_OPEN_HAND.middle),
+  };
+}
 
 /** The six vector tasks, in a fixed order: three S1 pairs, then three S2. */
 const S1_PAIRS: readonly [Finger, Finger][] = [
@@ -90,6 +159,8 @@ export interface FingerSolveOptions {
   maxStep?: number;
   /** Stop once every task vector is this close, metres. */
   tolerance?: number;
+  /** Pull toward the open hand where the vector tasks do not care. */
+  restGain?: number;
 }
 
 const FINGER_DEFAULTS = {
@@ -97,6 +168,7 @@ const FINGER_DEFAULTS = {
   damping: 0.02,
   maxStep: 0.35,
   tolerance: 0.002,
+  restGain: 0.02,
 };
 
 export interface FingerSolveResult {
@@ -135,6 +207,95 @@ function slices(side: Side): { finger: Finger; chain: Chain; at: number }[] {
 
 function sub3(a: Vec3, b: Vec3): [number, number, number] {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+/**
+ * How one task's human vector becomes a robot target: turn it into the robot's
+ * own open direction for that task, then stretch it to the robot's own span.
+ */
+interface TaskFrame {
+  scale: number;
+  rot: Mat3;
+}
+
+const IDENTITY3: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/** The rotation taking `from` onto `to`, both treated as directions. */
+function alignRotation(from: Vec3, to: Vec3): Mat3 {
+  const nf = norm(from);
+  const nt = norm(to);
+  if (!(nf > 1e-9) || !(nt > 1e-9)) return IDENTITY3;
+  const f: Vec3 = [from[0] / nf, from[1] / nf, from[2] / nf];
+  const t: Vec3 = [to[0] / nt, to[1] / nt, to[2] / nt];
+  const axis = cross(f, t);
+  const sin = norm(axis);
+  const cos = f[0] * t[0] + f[1] * t[1] + f[2] * t[2];
+  if (sin < 1e-9) {
+    // Parallel, or antiparallel. Antiparallel needs SOME perpendicular axis;
+    // which one does not matter, every choice gives the same result on `f`.
+    if (cos > 0) return IDENTITY3;
+    const seed: Vec3 = Math.abs(f[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const perp = cross(f, seed);
+    const n = norm(perp);
+    return axisAngleToMat3([perp[0] / n, perp[1] / n, perp[2] / n], Math.PI);
+  }
+  return axisAngleToMat3([axis[0] / sin, axis[1] / sin, axis[2] / sin], Math.atan2(sin, cos));
+}
+
+/** The robot's own fingertip positions with every finger joint at zero. */
+function robotOpenTips(side: Side): Record<Finger, Vec3> {
+  const out = {} as Record<Finger, Vec3>;
+  for (const finger of FINGER_ORDER) {
+    const chain = G1_FINGER_CHAINS[side][finger];
+    out[finger] = forwardKinematics(chain, new Array<number>(chain.links.length).fill(0)).tip;
+  }
+  return out;
+}
+
+const TASK_FRAME_CACHE: Partial<Record<Side, readonly TaskFrame[]>> = {};
+
+/**
+ * The six task calibrations for one hand, in `S1_PAIRS` then `FINGER_ORDER`
+ * order.
+ *
+ * Fixed geometry on both sides, so it is computed once per hand and cached.
+ * The property that matters: fed `openHandReference(side)`, every task's target
+ * comes out EXACTLY equal to the robot's own vector at q = 0, so the residual
+ * is zero and an open hand stays open. Everything else is measured as the
+ * operator's departure from that pose.
+ */
+function taskFrames(side: Side): readonly TaskFrame[] {
+  const cached = TASK_FRAME_CACHE[side];
+  if (cached) return cached;
+  const robot = robotOpenTips(side);
+  const human = openHandReference(side);
+  const humanTip: Record<Finger, Vec3> = {
+    thumb: human.thumb, index: human.index, middle: human.middle,
+  };
+  const frames: TaskFrame[] = [];
+  const build = (h: Vec3, r: Vec3): TaskFrame => {
+    const nh = norm(h);
+    return {
+      // A degenerate reference vector would be a broken constant, not a
+      // runtime condition — fall back to the identity rather than NaN.
+      scale: nh > 1e-9 ? norm(r) / nh : 1,
+      rot: alignRotation(h, r),
+    };
+  };
+  for (const [a, b] of S1_PAIRS) {
+    frames.push(build(sub3(humanTip[a], humanTip[b]), sub3(robot[a], robot[b])));
+  }
+  for (const finger of FINGER_ORDER) {
+    frames.push(build(sub3(humanTip[finger], human.wrist), robot[finger]));
+  }
+  TASK_FRAME_CACHE[side] = frames;
+  return frames;
+}
+
+/** A human task vector, expressed as a target in the robot's hand. */
+function toRobotTask(frame: TaskFrame, v: Vec3): [number, number, number] {
+  const r = matVec(frame.rot, v);
+  return [r[0] * frame.scale, r[1] * frame.scale, r[2] * frame.scale];
 }
 
 /**
@@ -202,10 +363,15 @@ export class FingerRetargeter {
     const humanTip: Record<Finger, Vec3> = {
       thumb: human.thumb, index: human.index, middle: human.middle,
     };
+    const frames = taskFrames(this.side);
     const targets: { v: [number, number, number]; w: number }[] = [];
     const pinchedNow: [Finger, Finger][] = [];
-    for (const [a, b] of S1_PAIRS) {
+    for (let t = 0; t < S1_PAIRS.length; t++) {
+      const [a, b] = S1_PAIRS[t]!;
       const raw = sub3(humanTip[a], humanTip[b]);
+      // The pinch thresholds are HUMAN distances and stay human — the operator
+      // decides they are touching by touching, not by what the calibration
+      // makes of it.
       const d = Math.hypot(raw[0], raw[1], raw[2]);
       const key = `${a}-${b}`;
       // Hysteresis: close at PROJECT_DIST_M, release only past ESCAPE_DIST_M.
@@ -216,18 +382,12 @@ export class FingerRetargeter {
         pinchedNow.push([a, b]);
         targets.push({ v: [0, 0, 0], w: S1_PINCH_WEIGHT });
       } else {
-        targets.push({
-          v: [raw[0] * HAND_SCALE, raw[1] * HAND_SCALE, raw[2] * HAND_SCALE],
-          w: S1_WEIGHT,
-        });
+        targets.push({ v: toRobotTask(frames[t]!, raw), w: S1_WEIGHT });
       }
     }
-    for (const finger of FINGER_ORDER) {
-      const raw = sub3(humanTip[finger], human.wrist);
-      targets.push({
-        v: [raw[0] * HAND_SCALE, raw[1] * HAND_SCALE, raw[2] * HAND_SCALE],
-        w: S2_WEIGHT,
-      });
+    for (let f = 0; f < FINGER_ORDER.length; f++) {
+      const raw = sub3(humanTip[FINGER_ORDER[f]!], human.wrist);
+      targets.push({ v: toRobotTask(frames[S1_PAIRS.length + f]!, raw), w: S2_WEIGHT });
     }
 
     const rows = targets.length * 3;
@@ -279,8 +439,9 @@ export class FingerRetargeter {
       }
       for (let f = 0; f < FINGER_ORDER.length; f++) {
         const finger = FINGER_ORDER[f]!;
-        // S2 is measured from the chain root, which IS the wrist frame's
-        // origin — so the robot vector is just the tip position.
+        // The robot's S2 vector is just the tip position: the chain root is
+        // the origin these are measured from. The human's wrist joint is NOT
+        // in the same place — `taskFrames` is what reconciles the two.
         push(tips[finger]!, tipJ[finger]!, null, targets[S1_PAIRS.length + f]!);
       }
 
@@ -301,7 +462,16 @@ export class FingerRetargeter {
         }
         let acc = 0;
         for (let r = 0; r < rows; r++) acc += J[r * n + i]! * e[r]!;
-        g[i] = acc;
+        // Tikhonov pull toward the open hand — DexPilot's own posture term,
+        // which this port had dropped. Seven joints against eighteen rows is
+        // over-constrained on paper and badly conditioned in fact: the thumb
+        // runs out of travel long before its two tip-to-tip tasks are
+        // satisfied, and with nothing to say otherwise the solver pays the
+        // remaining error down by CURLING THE INDEX, which moves the same
+        // vectors just as well. Measured: an index finger 8 mm shorter than
+        // the reference hand drove `index_1` to its stop before this term.
+        A[i * n + i]! += opt.restGain;
+        g[i] = acc + opt.restGain * (0 - q[i]!);
       }
       const dq = solveSymmetric(A, g, n);
       if (!dq) break;

@@ -12,26 +12,56 @@ import {
   PROJECT_DIST_M,
   gripPose,
   jointNames,
+  openHandReference,
   type HandKeypoints,
 } from '../dexpilot.js';
 import { G1_FINGER_CHAINS, type Side } from '../g1-chains.generated.js';
 import { forwardKinematics } from '../kinematics.js';
 
-/** A relaxed open hand in the robot's hand frame: fingers along +x, index at +z. */
+/**
+ * A relaxed open HUMAN hand, in the frame the browser sends: origin at the
+ * wrist joint, +x along the fingers, +z toward the index side, y the palm
+ * normal (which mirrors between hands, hence `palm`).
+ *
+ * Written from anthropometry and deliberately NOT equal to the module's own
+ * `HUMAN_OPEN_HAND` — a fixture copied from the constant the calibration is
+ * built on proves only that the code agrees with itself. This one has a
+ * slightly longer index, a wider fingertip spread and a flatter thumb.
+ *
+ * The previous version of this fixture was written in the ROBOT's geometry —
+ * fingertips 56 mm apart (the Dex3's own spacing; a human's are ~25 mm) and the
+ * thumb 75 mm off the palm plane (a human's is ~20 mm) — which is how a solver
+ * that curled an open hand 100 degrees passed every test in this file.
+ */
 function openHand(side: Side): HandKeypoints {
   const palm = side === 'left' ? -1 : 1; // the thumb sits on the palm side
   return {
     wrist: [0, 0, 0],
-    thumb: [0.075, palm * 0.075, 0],
-    index: [0.19, palm * 0.005, 0.028],
-    middle: [0.19, palm * 0.005, -0.028],
+    thumb: [0.093, palm * 0.017, 0.062],
+    index: [0.181, palm * 0.002, 0.016],
+    middle: [0.194, 0, -0.009],
   };
 }
 
-/** Thumb tip brought onto the index tip. */
+/**
+ * Thumb tip brought onto a fully extended index tip. A hard case on purpose:
+ * the thumb travels the whole way alone, which is near the edge of what a human
+ * hand can do and the edge of what the Dex3's short thumb can follow.
+ */
 function pinchHand(side: Side): HandKeypoints {
   const open = openHand(side);
   return { ...open, thumb: [open.index[0] - 0.005, open.index[1] + 0.004, open.index[2] - 0.002] };
+}
+
+/** How a person actually pinches: the index comes to meet the thumb. */
+function realPinch(side: Side): HandKeypoints {
+  const palm = side === 'left' ? -1 : 1;
+  return {
+    wrist: [0, 0, 0],
+    thumb: [0.120, palm * 0.045, 0.020],
+    index: [0.124, palm * 0.043, 0.018],
+    middle: openHand(side).middle,
+  };
 }
 
 /** Settle the filter, then read a converged answer. */
@@ -81,17 +111,52 @@ describe('the joint order this module works in', () => {
 
 describe('the two hands are mirrors, and the code knows it', () => {
   it('answers a mirrored human hand with a mirrored robot hand', () => {
-    // THE test for a mirrored hand. The two solves share no code path that
-    // could accidentally agree: they read different chains, with different
-    // limits, from different halves of the generated table. If someone builds
-    // one side's table from the other's by swapping "left" for "right", the
-    // signs below stop matching.
+    // THE test for a mirrored hand, stated in TIP POSITIONS. The two solves
+    // share no code path that could accidentally agree: they read different
+    // chains, with different limits, from different halves of the generated
+    // table. Positions rather than joint values because a joint value's sign is
+    // a convention of its axis and a position is what the operator sees.
+    const left = tipsOf('left', settle(new FingerRetargeter('left', 1), openHand('left')));
+    const right = tipsOf('right', settle(new FingerRetargeter('right', 1), openHand('right')));
+    for (const finger of ['thumb', 'index', 'middle'] as const) {
+      expect(left[finger]![0]!).toBeCloseTo(right[finger]![0]!, 6);
+      expect(left[finger]![1]!).toBeCloseTo(-right[finger]![1]!, 6);
+      expect(left[finger]![2]!).toBeCloseTo(right[finger]![2]!, 6);
+    }
+  });
+
+  it('mirrors each joint the way its own axis says it should', () => {
+    // The joint-value form of the same statement, and it is NOT "every value
+    // negates". Mirroring is about y, so a joint whose axis is y — thumb_0, the
+    // one that swings the thumb across the palm — mirrors with the SAME sign,
+    // and the six z-axis flexion joints with the opposite one. The expected
+    // sign is read off the two tables rather than written down, so a table
+    // built by find-and-replacing "left" for "right" fails here.
     const left = settle(new FingerRetargeter('left', 1), openHand('left'));
     const right = settle(new FingerRetargeter('right', 1), openHand('right'));
     expect(left).toHaveLength(7);
-    for (let i = 0; i < 7; i++) {
-      expect(left[i]!).toBeCloseTo(-right[i]!, 6);
+    let at = 0;
+    let sameSign = 0;
+    for (const finger of ['thumb', 'index', 'middle'] as const) {
+      const L = G1_FINGER_CHAINS.left[finger].links;
+      const R = G1_FINGER_CHAINS.right[finger].links;
+      for (let i = 0; i < L.length; i++) {
+        const aL = L[i]!.axis;
+        const aR = R[i]!.axis;
+        // A rotation mirrored about y is a rotation about (-M a) by the same
+        // angle, M = diag(1,-1,1). So the stored left axis being the NEGATIVE
+        // of the mirrored right axis means the two hands share a sign.
+        const dot = aL[0]! * aR[0]! + aL[1]! * -aR[1]! + aL[2]! * aR[2]!;
+        const sign = dot < 0 ? 1 : -1;
+        if (sign === 1) sameSign++;
+        expect(left[at]!).toBeCloseTo(sign * right[at]!, 6);
+        at++;
+      }
     }
+    // And the law is not vacuous: exactly one joint per hand mirrors the same
+    // way round. A blanket `left === -right` passes only while thumb_0 sits at
+    // zero, which is what the fixture used to arrange by accident.
+    expect(sameSign).toBe(1);
   });
 
   it('curls each hand toward its own palm, not toward the robot\'s other side', () => {
@@ -105,6 +170,92 @@ describe('the two hands are mirrors, and the code knows it', () => {
       const palmSign = side === 'left' ? -1 : 1;
       expect(palmSign * shut.index![1]!).toBeGreaterThan(palmSign * open.index![1]!);
     }
+  });
+});
+
+describe('an open hand is an open hand', () => {
+  // THE regression this file was missing. Before the two hands were calibrated
+  // against each other, a flat open human hand drove `index_1` to -1.737 rad
+  // against a -1.745 stop — MORE closed than `gripPose(side, 1)`, the
+  // full-trigger fist. Every test in this file passed, because the fixture they
+  // all shared was written in the robot's geometry rather than a hand's.
+
+  it('leaves every joint near zero for the hand the calibration is built on', () => {
+    for (const side of ['left', 'right'] as const) {
+      const q = settle(new FingerRetargeter(side, 1), openHandReference(side));
+      for (let i = 0; i < q.length; i++) expect(Math.abs(q[i]!)).toBeLessThan(1e-3);
+    }
+  });
+
+  it('leaves it open for any plausible adult hand, not just that one', () => {
+    // A grid over the anthropometry that actually varies between operators:
+    // index and middle length, fingertip spread, and where the thumb rests.
+    // The reference hand is one point in it; the bound has to hold at all of
+    // them, because nobody is going to measure their hand before putting the
+    // headset on.
+    const fist = gripPose('left', 1).left_hand_index_1_joint!;
+    let worst = 0;
+    let worstJoint = '';
+    let count = 0;
+    for (const side of ['left', 'right'] as const) {
+      const names = jointNames(side);
+      const palm = side === 'left' ? -1 : 1;
+      for (const indexX of [0.164, 0.176, 0.188]) {
+        for (const middleX of [0.178, 0.190, 0.202]) {
+          for (const indexZ of [0.006, 0.014, 0.024]) {
+            for (const thumbX of [0.086, 0.098, 0.112]) {
+              for (const thumbZ of [0.046, 0.058, 0.072]) {
+                for (const thumbY of [0.004, 0.022, 0.040]) {
+                  const q = settle(new FingerRetargeter(side, 1), {
+                    wrist: [0, 0, 0],
+                    thumb: [thumbX, palm * thumbY, thumbZ],
+                    index: [indexX, 0, indexZ],
+                    middle: [middleX, 0, -0.010],
+                  }, 30);
+                  count++;
+                  for (let i = 0; i < q.length; i++) {
+                    if (Math.abs(q[i]!) > worst) {
+                      worst = Math.abs(q[i]!);
+                      worstJoint = names[i]!;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(count).toBe(1458);
+    // 0.22 rad measured, so 0.3 leaves room for the geometry to be re-derived
+    // without re-tuning. What it must never approach again is the 1.57 rad of
+    // the full-trigger fist.
+    expect(worst, `worst joint ${worstJoint}`).toBeLessThan(0.3);
+    expect(worst).toBeLessThan(Math.abs(fist) / 4);
+  });
+
+  it('still curls when the human hand curls — the fix is not a hand held open', () => {
+    // The other half: a solver that ignored its input would also pass the two
+    // tests above. A human hand closing from flat to a fist has to take the
+    // robot's fingers a long way, monotonically.
+    const side = 'right' as const;
+    const flex: number[] = [];
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const a = t * 1.9;
+      const q = settle(new FingerRetargeter(side, 1), {
+        wrist: [0, 0, 0],
+        thumb: openHand(side).thumb,
+        index: [0.06 + 0.121 * Math.cos(a), 0.121 * Math.sin(a), 0.016],
+        middle: [0.065 + 0.129 * Math.cos(a), 0.129 * Math.sin(a), -0.009],
+      }, 30);
+      flex.push(q[3]!); // right_hand_index_0_joint, positive is closing
+    }
+    expect(flex[0]!).toBeLessThan(0.05);
+    for (let i = 1; i < flex.length; i++) expect(flex[i]!).toBeGreaterThan(flex[i - 1]! - 0.05);
+    // Two thirds of the travel `gripPose` uses at full trigger.
+    expect(flex[flex.length - 1]!).toBeGreaterThan(
+      gripPose(side, 1).right_hand_index_0_joint! * 0.6,
+    );
   });
 });
 
@@ -124,11 +275,29 @@ describe('the pinch', () => {
         shutTips.thumb![1] - shutTips.index![1],
         shutTips.thumb![2] - shutTips.index![2],
       );
-      expect(shutGap).toBeLessThan(openGap / 2);
-      // The Dex3's thumb is short: it does not literally touch. What matters is
-      // that it commits rather than hovering half-open, which is exactly what
-      // DexPilot's snap-to-zero is for.
-      expect(shutGap).toBeLessThan(0.03);
+      expect(shutGap).toBeLessThan(openGap / 5);
+      // 33 mm, not zero — and NOT because the hand cannot: searched over its
+      // joint ranges the Dex3 closes its thumb to within 0.8 mm of its index.
+      // What holds it open here is the objective, correctly: the human's
+      // thumb-middle pair is still wide, and one thumb cannot satisfy both. It
+      // is a hard input by design (see `pinchHand`) — `realPinch` below is what
+      // a person's pinch actually costs.
+      expect(shutGap).toBeLessThan(0.035);
+    }
+  });
+
+  it('closes to a grip when the human pinch is one a human actually makes', () => {
+    // The index comes to meet the thumb rather than the thumb travelling alone,
+    // which is both how people pinch and what the Dex3's short thumb can
+    // follow. 15 mm between the fingertips is a grasp; 33 mm is not.
+    for (const side of ['left', 'right'] as const) {
+      const tips = tipsOf(side, settle(new FingerRetargeter(side, 1), realPinch(side)));
+      const gap = Math.hypot(
+        tips.thumb![0] - tips.index![0],
+        tips.thumb![1] - tips.index![1],
+        tips.thumb![2] - tips.index![2],
+      );
+      expect(gap).toBeLessThan(0.02);
     }
   });
 
