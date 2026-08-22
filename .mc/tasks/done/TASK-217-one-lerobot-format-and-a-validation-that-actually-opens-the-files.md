@@ -4,7 +4,7 @@ aliases:
 - TASK-217
 title: One LeRobot format, and a validation that actually opens the files
 slug: one-lerobot-format-and-a-validation-that-actually-opens-the-files
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,7 +15,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 
