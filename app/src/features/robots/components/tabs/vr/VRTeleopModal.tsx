@@ -112,18 +112,40 @@ interface ControlGroup {
  * card; listing both rows flat left the operator to infer the mode from a
  * parenthetical.
  */
-function controlGroups(trigger: EndEffectorMode, hasNextEpisode: boolean): ControlGroup[] {
+function controlGroups(
+  trigger: EndEffectorMode,
+  hasNextEpisode: boolean,
+  retargetMode: 'orientation' | 'ik',
+  handTracking: boolean,
+): ControlGroup[] {
+  // The two modes are DIFFERENT CONTROLS, not the same controls described
+  // differently. Under IK the stick is not the elbow — it is nothing, because
+  // the arm follows where the hand is — and a card that says otherwise is
+  // something the operator only finds out about by pressing it.
+  const armRows: ControlRow[] = retargetMode === 'ik'
+    ? [
+      { id: 'grip', keys: 'Grip', label: 'Hold to take that arm; release and it holds its pose' },
+      { id: 'reach', keys: 'Reach', label: 'The robot’s hand goes where yours goes — forward, across, up' },
+      { id: 'twist-ik', keys: 'Twist', label: 'The wrist follows your hand as far as the arm can manage' },
+      { id: 'trigger', keys: 'Trigger', label: TRIGGER_LABEL[trigger] },
+      ...(handTracking
+        ? [{ id: 'fingers', keys: 'Fingers', label: 'Tracked hands drive each finger; no grip clutch on a hand' }]
+        : []),
+    ]
+    : [
+      { id: 'grip', keys: 'Grip', label: 'Hold to take that arm; release and it stops being commanded' },
+      { id: 'tilt', keys: 'Tilt', label: 'Shoulder pitch and yaw, 1:1 with your hand' },
+      { id: 'twist', keys: 'Twist', label: 'Wrist roll' },
+      { id: 'stick-arm', keys: 'Stick', label: 'Elbow (up/down) and shoulder roll (left/right)' },
+      { id: 'trigger', keys: 'Trigger', label: TRIGGER_LABEL[trigger] },
+    ];
   return [
     {
       id: 'arm',
-      title: 'Arm — while the grip is held',
-      rows: [
-        { id: 'grip', keys: 'Grip', label: 'Hold to take that arm; release and it stops being commanded' },
-        { id: 'tilt', keys: 'Tilt', label: 'Shoulder pitch and yaw, 1:1 with your hand' },
-        { id: 'twist', keys: 'Twist', label: 'Wrist roll' },
-        { id: 'stick-arm', keys: 'Stick', label: 'Elbow (up/down) and shoulder roll (left/right)' },
-        { id: 'trigger', keys: 'Trigger', label: TRIGGER_LABEL[trigger] },
-      ],
+      title: retargetMode === 'ik'
+        ? 'Arm — while the grip is held (IK)'
+        : 'Arm — while the grip is held (orientation)',
+      rows: armRows,
     },
     {
       id: 'drive',
@@ -758,7 +780,7 @@ export function VRTeleopModalBody({
 
       {/* Controller mapping */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {controlGroups(trigger, !!onNextEpisode).map((group) => (
+        {controlGroups(trigger, Boolean(onNextEpisode), retargetMode, handTracking).map((group) => (
           <div key={group.id} className="rounded-lg border border-theme-subtle bg-theme-secondary p-3">
             <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-theme-tertiary">
               {group.title}
