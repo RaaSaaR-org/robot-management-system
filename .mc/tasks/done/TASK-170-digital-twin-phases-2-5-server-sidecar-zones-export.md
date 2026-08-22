@@ -47,9 +47,9 @@ real MID-360 LiDAR capture + the real Open3D mesh/occupancy pipeline
 
 ## Status update (2026-07-11) — most of the Phase-5 hardware path is now proven
 
-- **Real MID-360 capture happened** (2026-07-07, dz-226): 240,480-point capture
+- **Real MID-360 capture happened** (2026-07-07, GPU_BOX): 240,480-point capture
   from the real G1's LiDAR via DDS (read-only), durable copy at
-  `C:\Unitree\_data\g1_lidar\`.
+  `$UNITREE_ROOT/_data/g1_lidar/`.
 - **Real-data twin build proven end-to-end**: the capture was imported through
   the point-cloud import endpoint (sensor-scans bucket), `../twin-builder`
   built the twin (incl. the percentile-floor fix, twin-builder commit
@@ -65,7 +65,7 @@ real MID-360 LiDAR capture + the real Open3D mesh/occupancy pipeline
 
 The live scan-session path would have SILENTLY produced empty frames on robot
 day: the sidecar's only live MID-360 source was ROS2 (`rclpy`/`livox_ros_driver2`
-— not installed on dz-226), and both DDS venvs (`.venv-g1-dds`, `.venv-g1-sidecar`)
+— not installed on GPU_BOX), and both DDS venvs (`.venv-g1-dds`, `.venv-g1-sidecar`)
 were broken (created under another user's uv Python). Fixed PC-side:
 
 - **New `dds` LiDAR source in `g1_sidecar.py`** (`G1_LIDAR_SOURCE=dds`, in the
@@ -74,13 +74,13 @@ were broken (created under another user's uv Python). Fixed PC-side:
   ROS2. Env: `G1_LIDAR_DDS_TOPIC/_DOMAIN/_IFACE/_TIMEOUT_S` (domain default 0;
   iface falls back to `G1_NET_INTERFACE`). Subscribe-only — the LiDAR-enable
   write (`rt/utlidar/switch=ON`) stays outside the sidecar
-  (`C:\Unitree\_data\g1_lidar\g1_lidar_capture.py`, `--off` to disable).
+  (`$UNITREE_ROOT/_data/g1_lidar/g1_lidar_capture.py`, `--off` to disable).
 - **Venvs rebuilt** (uv, py3.10.20, cyclonedds 0.10.2 + pyzmq + numpy):
   `.venv-g1-dds` (bridge + capture scripts; old broken one parked as
   `.venv-g1-dds.broken-marco`) and `.venv-g1-sidecar` (sidecar).
   ⚠ Sidecar MUST run with `PYTHONUTF8=1` (cp1252 console crashes on its
-  emoji/arrow prints — hit during the test) + `PYTHONPATH=C:\Unitree\unitree_sdk2_python`.
-- **Restored `C:\Unitree\_data\g1_lidar\pointcloud_common.py`** (the capture
+  emoji/arrow prints — hit during the test) + `PYTHONPATH=$UNITREE_ROOT/unitree_sdk2_python`.
+- **Restored `$UNITREE_ROOT/_data/g1_lidar/pointcloud_common.py`** (the capture
   script's import — was never copied from the capture-day scratchpad) and added
   `g1_lidar_dds_replayer.py` (publishes the real 240k-pt capture as
   PointCloud2_ frames on DDS domain 1).

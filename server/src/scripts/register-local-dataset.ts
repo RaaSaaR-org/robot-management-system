@@ -6,8 +6,8 @@
  * @feature training
  *
  * Usage (from the server dir, DATABASE_URL must be ABSOLUTE):
- *   $env:DATABASE_URL='file:C:/Unitree/robot-management-system/server/prisma/dev.db'
- *   npx tsx src/scripts/register-local-dataset.ts --dir C:/Unitree/_data/<dataset_v2.1> --name "Robot Day Teleop 2026-07-XX" [--robot-type-id <id>] [--description "..."]
+ *   $env:DATABASE_URL="file:$env:UNITREE_ROOT/robot-management-system/server/prisma/dev.db"
+ *   npx tsx src/scripts/register-local-dataset.ts --dir $env:UNITREE_ROOT/_data/<dataset_v2.1> --name "Robot Day Teleop 2026-07-XX" [--robot-type-id <id>] [--description "..."]
  *
  * The --dir must contain LeRobot v2.1 layout (meta/info.json, data/chunk-000/, videos/).
  * Run convert_v3_to_v2.py first — the Unitree converter outputs v3.0, which the

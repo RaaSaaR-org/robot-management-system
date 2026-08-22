@@ -20,7 +20,7 @@ due_date: ''
 created: 2026-08-02
 updated: 2026-08-02
 status_note: 'CLOSED 2026-08-02 — merged as part of PR #216 (squashed to 4a9a7f2).
-Verified live on dz-226 against the warehouse scene with the real planner
+Verified live on GPU_BOX against the warehouse scene with the real planner
 (gemma4:e2b) and VLM (qwen2.5vl:7b), checking every claim against the
 simulator''s own odometry and a point-in-polygon over places.warehouse.json
 rather than against the agent''s word:

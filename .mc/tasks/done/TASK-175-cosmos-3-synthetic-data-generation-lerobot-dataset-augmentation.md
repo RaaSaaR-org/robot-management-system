@@ -17,7 +17,7 @@ depends_on:
 due_date: ''
 created: 2026-06-28
 updated: 2026-07-11
-status_note: 'DONE 2026-07-11 — all 4 AC complete. Real-vs-synthetic ACT ablation ran locally on dz-226 (RTX 5090, no rented GPU needed): 16 real bridge_orig "flip cup upright" eps vs same+10 Cosmos3-Nano synthetic eps (ZeroGPU ~5.3 GPU-min), 2x identical 10k-step ACT trainings, eval on 8 held-out real eps. Result mixed/inconclusive (n=8): first-action L2 -14% with synthetic, chunk-MSE +17.5%; neither significant. Full report: C:\Unitree\_data\task175_ablation\REPORT.md (dz-226).'
+status_note: 'DONE 2026-07-11 — all 4 AC complete. Real-vs-synthetic ACT ablation ran locally on GPU_BOX (, no rented GPU needed): 16 real bridge_orig "flip cup upright" eps vs same+10 Cosmos3-Nano synthetic eps (ZeroGPU ~5.3 GPU-min), 2x identical 10k-step ACT trainings, eval on 8 held-out real eps. Result mixed/inconclusive (n=8): first-action L2 -14% with synthetic, chunk-MSE +17.5%; neither significant. Full report: $UNITREE_ROOT/_data/task175_ablation/REPORT.md (GPU_BOX).'
 ---
 
 
@@ -74,7 +74,7 @@ Recommend tracking as a follow-up under training-worker rather than blocking thi
 ## Acceptance Criteria
 - [x] Generate ≥N synthetic episodes for a supported embodiment and export valid LeRobotDataset — 4 bridge episodes, LeRobot v2.1
 - [x] Synthetic dataset passes existing dataset-validation worker — real `validateStructure` test passes
-- [x] Ablation result (real vs real+synthetic) recorded — **ran 2026-07-11 locally on dz-226 (5090), no rented GPU**: mixed/inconclusive (first-action L2 −14% w/ synthetic, chunk-MSE +17.5%, n=8 holdout — not significant; the 10 synthetic eps add visual diversity but repetitive action structure from only 2 source trajectories). Full setup/numbers: `C:\Unitree\_data\task175_ablation\REPORT.md`
+- [x] Ablation result (real vs real+synthetic) recorded — **ran 2026-07-11 locally on GPU_BOX, no rented GPU**: mixed/inconclusive (first-action L2 −14% w/ synthetic, chunk-MSE +17.5%, n=8 holdout — not significant; the 10 synthetic eps add visual diversity but repetitive action structure from only 2 source trajectories). Full setup/numbers: `$UNITREE_ROOT/_data/task175_ablation/REPORT.md`
 - [x] Pipeline documented well enough to re-run — `cosmos3_synth.py` + README + runbook
 
 ## Test Strategy

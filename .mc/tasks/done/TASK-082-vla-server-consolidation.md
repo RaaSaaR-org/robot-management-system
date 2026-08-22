@@ -39,7 +39,7 @@ robot-management-system/
     ├── models/
     │   ├── base.py          ← VLAModel ABC (load / predict / reset / info)
     │   ├── smolvla.py       ← SmolVLA via LeRobot (von vla-inference/ portieren + fixen)
-    │   └── pi05.py          ← pi0.5 via LeRobot (für Peters GPU)
+    │   └── pi05.py          ← pi0.5 via LeRobot (für des GPU_BOX GPU)
     ├── pyproject.toml       ← uv-kompatibel, optionale torch/lerobot deps
     ├── config.yaml.example  ← device: mps | cuda | cpu
     └── README.md            ← Eine klare Setup-Anleitung für Mac UND Linux
@@ -106,7 +106,7 @@ Sidecar `/vla/start` startet `VLARunner` als Thread statt `subprocess.Popen(clie
    - `server.py`: FastAPI, gleiches HTTP-Interface wie smolvla-server
    - `models/base.py`: VLAModel ABC
    - `models/smolvla.py`: SmolVLA via LeRobot (von vla-inference/models/smolvla.py portieren + fixen für LeRobot 0.4.3 API)
-   - `models/pi05.py`: pi0.5 via LeRobot policy_server-Protokoll (stub, TODO für Peters GPU)
+   - `models/pi05.py`: pi0.5 via LeRobot policy_server-Protokoll (stub, TODO für des GPU_BOX GPU)
    - `pyproject.toml`: `uv pip install -e ".[smolvla]"` installiert torch+lerobot
    - `config.yaml.example`: device, model, port
    - `README.md`: Setup für Mac (MPS) + Linux (CUDA) in einer Datei
@@ -143,5 +143,5 @@ Sidecar `/vla/start` startet `VLARunner` als Thread statt `subprocess.Popen(clie
 ## Nicht in diesem Task
 
 - gRPC-Migration (später wenn Streaming gebraucht wird)
-- pi0.5 full integration (Peters GPU — separater Task nach TASK-078)
+- pi0.5 full integration (des GPU_BOX GPU — separater Task nach TASK-078)
 - Training Pipeline (TASK-058)

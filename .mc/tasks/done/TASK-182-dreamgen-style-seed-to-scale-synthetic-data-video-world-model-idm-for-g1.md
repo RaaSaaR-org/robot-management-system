@@ -28,7 +28,7 @@ status_note: 'ACs 1-3+5 DONE, AC 4 offline-half DONE 2026-07-14 (closed-loop hal
   Unitree_G1_Dex3 (h264) + meta/provenance.json, registered _synthetic via new
   server/src/scripts/register-neural-synthetic.ts (validation rules green),
   2/2 live Playwright (datasets UI + local episode/frames/video serving);
-  dataset: C:\Unitree\_data\task182_spike\g1_dex3_pickbottle_synthetic. (2)
+  dataset: $UNITREE_ROOT/_data/task182_spike/g1_dex3_pickbottle_synthetic. (2)
   neural_traj wsl.py backend WIRED to real pipeline (76_dreams_one_episode.sh,
   b64 prompt), 9/9 pytest, typecheck green. (3) AC 4 offline ablation
   (GR00T-N1-2B = DreamGen paper base, 3000 steps bs8 identical arms): real
@@ -37,8 +37,8 @@ status_note: 'ACs 1-3+5 DONE, AC 4 offline-half DONE 2026-07-14 (closed-loop hal
   protocol (5 unseen dreams excluded from training). (4) AC 5 DONE: RES-001
   §4.10 = GO for scale-out (conditions: closed-loop confirm, dream filter).
   Closed-loop Isaac eval + N1.7 rerun = split out to [[TASK-185]] (user
-  decision 2026-07-14): fully prepared (g1-eval distro = user-owned vhdx copy
-  with zema runtime), blocked only on the pending Windows reboot that
+  decision 2026-07-14): fully prepared (eval distro = user-owned vhdx copy
+  with the GPU-box runtime), blocked only on the pending Windows reboot that
   activates staged driver 610.43 (WSL CUDA currently segfaults machine-wide,
   see memory wsl-cuda-aslr-segfault-fix). Full story:
   _data\task182_spike\LEARNING_REPORT.md §8.'
@@ -47,50 +47,50 @@ completed: 2026-07-14
 
 ## Kickoff (prep 2026-07-12 — start here)
 
-**Decision:** run the full stage-1–3 spike locally on the 5090 via GR00T-Dreams
+**Decision:** run the full stage-1–3 spike locally on the GPU box via GR00T-Dreams
 + Cosmos-Predict2-**2B**; rented GPU (14B/Cosmos3) only if 2B quality fails.
 
 ### Step 0 — WSL access (MANUAL, elevated shell, one-time)
 
-The Ubuntu-22.04 runtime (user `zema`, all envs) lives in
-`C:\WSL\Ubuntu22.04\ext4.vhdx` (454 GB) but is registered only for the
-colleague's Windows account. `wsl --import-in-place` as sebastian.heusser fails
+The Ubuntu-22.04 runtime (one user account, all envs) lives in
+`<wsl-vhdx>` (454 GB) but is registered only for the
+colleague's Windows account. `wsl --import-in-place` as <user> fails
 with `E_ACCESSDENIED` (account has Modify, not Full Control — WSL can't add the
 VM-identity ACE). Fix in an **elevated** PowerShell (UAC), then everything else
 runs unelevated:
 
 ```powershell
-icacls "C:\WSL\Ubuntu22.04\ext4.vhdx" /grant "zema\sebastian.heusser:(F)"
-wsl --import-in-place Ubuntu-22.04 "C:\WSL\Ubuntu22.04\ext4.vhdx"
+icacls "<wsl-vhdx>" /grant "<domain>\<user>:(F)"
+wsl --import-in-place Ubuntu-22.04 "<wsl-vhdx>"
 ```
 
 ⚠ Standing rules for the shared vhdx: **never `wsl --unregister Ubuntu-22.04`**
 (deletes the shared 454 GB disk for everyone); never run the distro from two
 Windows accounts at once (second start fails on the file lock — coordinate with
 the colleague). Nothing was running it as of 2026-07-12 (last write 07-06).
-`--import-in-place` registers as root default user — use `wsl -d Ubuntu-22.04 -u zema`.
+`--import-in-place` registers as root default user — use `wsl -d Ubuntu-22.04 -u <user>`.
 
 ### Step 1 — session bring-up (every WSL restart)
 
-- `sudo bash ~/unitree/fix_wsl_gpu_libs.sh` then verify `nvidia-smi` in WSL.
+- `sudo bash $UNITREE_ROOT/fix_wsl_gpu_libs.sh` then verify `nvidia-smi` in WSL.
 - Stop Ollama before any WFM run (`gpt-oss:20b` holds ~13–16 GB of the 32 GB).
-- Sanity: `bash ~/unitree/verify_envs.sh`.
+- Sanity: `bash $UNITREE_ROOT/verify_envs.sh`.
 
 ### Step 2 — recon (not yet done, needs step 0)
 
-- Locate the 1,410-episode seed set in `~/unitree` (LeRobot v3.0
+- Locate the 1,410-episode seed set in `$UNITREE_ROOT` (LeRobot v3.0
   `Unitree_G1_Dex3`), list per-task episode counts, pick the seed task
   (most episodes / cleanest video).
 - Check free disk inside the vhdx (`df -h ~`).
 
 ### Step 3 — environment spike
 
-- Clone `github.com/nvidia/GR00T-dreams` into `~/unitree` (own env, never
+- Clone `github.com/nvidia/GR00T-dreams` into `$UNITREE_ROOT` (own env, never
   shared — repo is Apache-2.0). It requires **cosmos-predict2** installed first
   (its setup guide) plus `pip install openai tyro numpydantic albumentations
   tianshou git+https://github.com/facebookresearch/pytorch3d.git`; use cu128
   wheels (Blackwell), expect a possible flash-attn sm_120 rebuild.
-- Prove Cosmos-Predict2-2B-Video2World **inference** on the 5090 first.
+- Prove Cosmos-Predict2-2B-Video2World **inference** on the GPU box first.
   ⚠ **Primary risk:** NVIDIA lists 2B video2world inference at ~26–33 GB —
   borderline on 32 GB. Mitigations: the GR00T 480p config
   (`predict2_video2world_training_2b_groot_gr1_480`), batch 1, model
@@ -131,7 +131,7 @@ The existing Cosmos pipeline (`server/curation/cosmos3_synth.py`, TASK-175, UI
 wizard TASK-178) does **action-conditioned forward dynamics**: it replays *real*
 action windows and generates matching video. That can only add **visual**
 diversity — the action distribution stays a copy of the seed. The TASK-175
-ablation confirmed it (`C:\Unitree\_data\task175_ablation\REPORT.md`,
+ablation confirmed it (`$UNITREE_ROOT/_data/task175_ablation/REPORT.md`,
 2026-07-11): mixed/inconclusive, "repetitive action structure from only 2
 source trajectories".
 
@@ -152,17 +152,17 @@ that GR00T N1/N1.5 are trained on, and the GR00T-Dreams DROID run generated
   view, not the dataset), used by the
   TASK-180 multi-task GR00T-N1.7 finetune. Teleop collection keeps running on
   pz-264 (Quest 3 → JSON → LeRobot).
-- Training + eval loop proven locally: GR00T-N1.7 full finetunes on dz-226
-  (RTX 5090, TASK-179/180); offline + Isaac-DDS eval in `C:\Unitree\vla-training`.
+- Training + eval loop proven locally: GR00T-N1.7 full finetunes on GPU_BOX
+  (GPU_BOX, TASK-179/180); offline + Isaac-DDS eval in `$UNITREE_ROOT/vla-training`.
 - Cosmos access paths, costs, and limits fully mapped in [[RES-001]]
   (§4.2–4.7): HF PRO ZeroGPU for prototyping, DeepInfra/rented GPU for scale;
-  Cosmos3-Nano is 16B BF16 (~32 GB → does NOT fit the 5090 comfortably), but
+  Cosmos3-Nano is 16B BF16 (~32 GB → does NOT fit the GPU box comfortably), but
   **GR00T-Dreams uses Cosmos-Predict2 2B/14B — the 2B post-trains/runs on a
-  single 5090-class GPU**, so a fully local path exists.
+  single high-end consumer GPU**, so a fully local path exists.
 
 **Pipeline to build (4 stages, DreamGen recipe adapted to us):**
 1. **Post-train the video WFM on seed teleop videos** — start from
-   `github.com/nvidia/gr00t-dreams` (Cosmos-Predict2-2B) locally on dz-226;
+   `github.com/nvidia/gr00t-dreams` (Cosmos-Predict2-2B) locally on GPU_BOX;
    fall back to 14B / Cosmos3 on a rented GPU only if 2B quality is
    insufficient. Input: a subset of our real G1 episodes (videos + task strings).
 2. **Generate neural trajectories** — condition on an initial frame (real lab
@@ -188,11 +188,11 @@ that GR00T N1/N1.5 are trained on, and the GR00T-Dreams DROID run generated
 - `server/src/services/CosmosSyntheticService.ts` + `GenerateSyntheticModal.tsx`
   — extend generator choice (`forward-dynamics` | `neural-trajectory`) once the
   CLI pipeline is proven; UI work is a follow-up, not part of the core spike.
-- `C:\Unitree\vla-training` scripts — training/eval side (runs in WSL2).
+- `$UNITREE_ROOT/vla-training` scripts — training/eval side (runs in WSL2).
 
 **Scope guard:** stage 1–3 spike first (≤1 seed task, ≥20 generated episodes,
 IDM pseudo-label error report) before any scale-out spend. GPU budget beyond
-the local 5090 needs the RES-001 §4.2–4.3 numbers re-checked.
+the GPU box needs the RES-001 §4.2–4.3 numbers re-checked.
 
 ## Acceptance Criteria
 
@@ -281,4 +281,4 @@ generating video):**
   §4.9 G1 action-space decision (43-D custom head).
 - [[TASK-175]] / [[TASK-178]] — existing forward-dynamics pipeline + UI (kept,
   complementary). [[TASK-177]] — deferred Cosmos3-policy finetune (unchanged).
-- Ablation report: `C:\Unitree\_data\task175_ablation\REPORT.md`.
+- Ablation report: `$UNITREE_ROOT/_data/task175_ablation/REPORT.md`.

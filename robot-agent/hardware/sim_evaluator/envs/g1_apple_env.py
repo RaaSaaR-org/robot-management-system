@@ -6,7 +6,7 @@
     apple workflow (nvidia/GR00T-N1.7-AppleToPlate).
 
 Mirrors envs/g1_pickplace_env.py structurally but implements the 43-state /
-31-action contract of C:\\Unitree\\_data\\apple_pnp\\CONTRACT.md
+31-action contract of $UNITREE_ROOT/_data/apple_pnp/CONTRACT.md
 (meta/modality.json of the AppleToPlate dataset):
   * obs["state"]  : 43-dim float32 joint POSITIONS (radians) in the dataset
     layout [left_leg 0:6 | right_leg 6:12 | waist 12:15 | left_arm 15:22 |

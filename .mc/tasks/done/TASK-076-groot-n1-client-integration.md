@@ -72,8 +72,8 @@ cmd = [..., "--backend", backend, "--server-port", str(server_port), ...]
 
 ## Dependencies / Blockers
 
-- Peter's GPU: needs Isaac-GR00T installed + `run_gr00t_server.py` running
+- GPU_BOX: needs Isaac-GR00T installed + `run_gr00t_server.py` running
 - Fine-tuned SO-101 checkpoint needed for useful behavior
 - Depends on: TASK-075 (production hardening first)
-- See: `~/repos/vla-tests/groot/client/README.md` (architecture docs)
-- See: `~/repos/vla-tests/groot/server/README.md` (server setup docs)
+- See: `$VLA_TESTS/groot/client/README.md` (architecture docs)
+- See: `$VLA_TESTS/groot/server/README.md` (server setup docs)

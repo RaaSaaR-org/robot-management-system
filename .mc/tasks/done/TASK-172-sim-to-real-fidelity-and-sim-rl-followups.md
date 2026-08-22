@@ -50,7 +50,7 @@ hardware run, higher-fidelity room/robot geometry, and Phase 4 sim-RL training.
 
 ### A. Prove the full circle on hardware (runtime, not code)
 
-**2026-07-11 runtime validation (dz-226, live dev stack):** everything
+**2026-07-11 runtime validation (GPU_BOX, live dev stack):** everything
 software-side is now PROVEN through the live server; only the two real-robot
 bullets remain (see TASK-169 "Robot-day checklist" item 5).
 
@@ -59,7 +59,7 @@ bullets remain (see TASK-169 "Robot-day checklist" item 5).
       sceneId/twinId + nullable dataset cols, ModelVersion.modelType,
       SimToRealValidation nullable realSuccessRate/domainGapScore. Verified
       2026-07-11; the "production Prisma migration" open item is closed.
-- [x] Start the **VLA server on :8000** — running in `--stub` mode on dz-226
+- [x] Start the **VLA server on :8000** — running in `--stub` mode on GPU_BOX
       (health: `stub:true`); rollouts no longer die at `connect_backend`.
       ~~⚠ Stub emits 6-dim SO-101 sine actions → a **G1** VLA rollout fails with
       a (6,)-vs-(29,) shape error~~ **RESOLVED 2026-07-21:** stub action dim is
@@ -72,7 +72,7 @@ bullets remain (see TASK-169 "Robot-day checklist" item 5).
       RustFS up (job `7faa27d7` failed fast with "RustFS client not
       initialized"); scenes with local absolute-path MJCFs work without it.
 - [x] Ensure the `sim_evaluator` uv env is present on the host that runs jobs.
-      *(Created on dz-226 2026-07-11 via `uv sync`: mujoco 3.6.0, onnxruntime
+      *(Created on GPU_BOX 2026-07-11 via `uv sync`: mujoco 3.6.0, onnxruntime
       1.27.0; imports + `evaluate_policy.py --help` verified.)*
 - [x] **Sim rollout** to completion against a twin scene — validated 2026-07-11
       through the live server: rl_policy `7f7ebcb2` on twin scene "G1 Lab (real
@@ -281,7 +281,7 @@ build time; a claim-time selector cannot move it without re-running
 | ✅ **1 — Thin vertical slice (stub policy)** | `../sim-trainer` scaffold (poll loop copied) + `stub_rl.py`; claims a `sim_rl` job, rolls out `g1_empty_scene.xml`, uploads loadable `.zip`+`onnx`, posts `/complete` | `pytest` (mocked `ServerClient`, zip+onnx load) + worker glue test (claim→train→upload→complete, server+storage faked). *Live full-server smoke deferred (needs running server+RustFS).* |
 | ✅ **2 — Real PPO nav** | `g1_env.py` `obs_mode`; `nav_wrappers.py` (NavObs + alive-bonus ShapedReward + DR); `ppo_nav.py` (SubprocVecEnv + VecNormalize); SB3 callback → progress/heartbeat-cancel | `test_ppo_smoke`: `learn()` over SubprocVecEnv+VecNormalize; heartbeat `'stop'` aborts; `rgb_state` obs byte-identical. ⚠️ "beats random" is **xfail (non-strict)** — see review note: model-free PPO doesn't reliably beat random at CPU/single-env budget (real capability = MJX/CUDA, Phase 4) |
 | ✅ **3 — Gate consumability** | `policy_backend.py` + `evaluate_policy.py` + shared `nav_wrappers.py`; `SimulationService` `modelType` branch; sim-only `SimToRealValidation` row | Sim job runs `policy.onnx` in `G1Env` → `simSuccessRate` → validation → `DeploymentService` gates; train vs gate produce identical actions **and** identical normalization (real `VecNormalize` cross-checked) for a fixed obs |
-| **4 — Deferred** | Synthetic-traj export → `outputDatasetId`; `mjx_ppo.py` real CUDA/MJX gait; rl_policy serving | Out of v1 (needs a CUDA host) — **UPDATE 2026-07-11: the real-gait CUDA path SHIPPED via Isaac Lab instead of MJX**: `../sim-trainer/trainers/isaac_ppo.py` (`TRAINER=isaac`, Isaac Lab + rsl_rl PPO, `Isaac-Velocity-Flat-G1-v0`, obs-dim build-time guard, sim-trainer PRs #1/#2); SIM-RL PPO jobs have run through the platform on dz-226. `mjx_ppo.py` stays a placeholder. |
+| **4 — Deferred** | Synthetic-traj export → `outputDatasetId`; `mjx_ppo.py` real CUDA/MJX gait; rl_policy serving | Out of v1 (needs a CUDA host) — **UPDATE 2026-07-11: the real-gait CUDA path SHIPPED via Isaac Lab instead of MJX**: `../sim-trainer/trainers/isaac_ppo.py` (`TRAINER=isaac`, Isaac Lab + rsl_rl PPO, `Isaac-Velocity-Flat-G1-v0`, obs-dim build-time guard, sim-trainer PRs #1/#2); SIM-RL PPO jobs have run through the platform on GPU_BOX. `mjx_ppo.py` stays a placeholder. |
 
 #### Implementation status (2026-06-26)
 

@@ -1,7 +1,9 @@
 # G1 EDU 4 Lab-Bringup — Status & Log
 
+> **Platzhalter in diesem Dokument:** `GPU_BOX` = die GPU-Workstation im Lab · `$UNITREE_ROOT` = Wurzel der Unitree-Checkouts und Spike-Daten · `$CONDA_ENVS` = Conda-Env-Verzeichnis. Konkrete Hostnamen, Benutzer und absolute Pfade stehen bewusst nicht im Repo. In PowerShell-Blöcken stehen sie als `$env:UNITREE_ROOT` usw. — vor dem Kopieren als Umgebungsvariablen setzen.
+
 **Stand: 2026-07-03 (Feierabend — Roboter-Akku leer, alle Dienste gestoppt)**
-**Box:** dz-226 (Windows 11 nativ, RTX 5090) · **Roboter:** Unitree G1 EDU 4, PC2 = `192.168.123.164` · **Task:** `.mc/tasks/todo/TASK-169`
+**Box:** GPU_BOX (Windows, NVIDIA-GPU) · **Roboter:** Unitree G1 EDU 4, PC2 = `192.168.123.164` · **Task:** `.mc/tasks/todo/TASK-169`
 
 > **Sicherheits-Direktive (Owner, in Kraft):** Stufe 1 = Daten vom Roboter **nur lesen**.
 > Auf keinen Fall schreiben. Technisch erzwungen, nicht nur beabsichtigt (Details unten).
@@ -34,8 +36,8 @@ Die lerobot-Bridge (`run_g1_server.py`) loopt beim Start `MotionSwitcherClient.R
 SSH-Recon auf PC2 (Creds vom Owner) ergab: Jetson, Ubuntu 20.04, Python 3.8, Image `g1plus_pc4` — **kein `unitree_sdk2py`, kein pyzmq, kein Internet**; cyclonedds 0.10.2 hat keine aarch64-Wheels → Offline-Install unpraktikabel. Lösung: Die Workstation hängt mit `192.168.123.10` (Adapter „Ethernet") direkt im Roboter-Segment und tritt **DDS-Domain 0 selbst bei**. Die Bridge läuft lokal — auf PC2 wurde **nichts installiert und nichts verändert**.
 
 Setup dafür (bleibt bestehen):
-- venv `C:\Unitree\.venv-g1-dds` (Python 3.10 via uv — cyclonedds 0.10.2 hat nur Wheels bis cp310) mit `cyclonedds==0.10.2` (Win-Wheel), `pyzmq`, `numpy`
-- `C:\Unitree\unitree_sdk2_python` (Klon @ Pin `4f12b01`) — **nicht installiert**, nur via `PYTHONPATH` (pure Python)
+- venv `$UNITREE_ROOT/.venv-g1-dds` (Python 3.10 via uv — cyclonedds 0.10.2 hat nur Wheels bis cp310) mit `cyclonedds==0.10.2` (Win-Wheel), `pyzmq`, `numpy`
+- `$UNITREE_ROOT/unitree_sdk2_python` (Klon @ Pin `4f12b01`) — **nicht installiert**, nur via `PYTHONPATH` (pure Python)
 
 ### 5. Verifikationen (alle bestanden)
 
@@ -71,12 +73,12 @@ Der `RobotType`-Union der App fehlte `g1_edu` → Viewer fiel auf eine generisch
 
 ```powershell
 # 1. DDS→ZMQ-Bridge (read-only), im Repo-Root robot-management-system:
-$env:PYTHONPATH="C:\Unitree\unitree_sdk2_python"; $env:PYTHONIOENCODING="utf-8"
-C:\Unitree\.venv-g1-dds\Scripts\python.exe robot-agent\hardware\g1_state_bridge_readonly.py --iface Ethernet
+$env:PYTHONPATH="$env:UNITREE_ROOT/unitree_sdk2_python"; $env:PYTHONIOENCODING="utf-8"
+$env:UNITREE_ROOT/.venv-g1-dds/Scripts/python.exe robot-agent\hardware\g1_state_bridge_readonly.py --iface Ethernet
 
 # 2. Sidecar (read-only, Default):
 $env:G1_LOWSTATE_ENDPOINT="tcp://127.0.0.1:6001"; $env:PYTHONIOENCODING="utf-8"
-C:\Unitree\.venv-g1-sidecar\Scripts\python.exe robot-agent\hardware\g1_sidecar.py
+$env:UNITREE_ROOT/.venv-g1-sidecar/Scripts/python.exe robot-agent\hardware\g1_sidecar.py
 
 # 3. Server:            cd server && npm run dev
 # 4. G1-Agent (Git-Bash! POSIX-Env-Syntax):

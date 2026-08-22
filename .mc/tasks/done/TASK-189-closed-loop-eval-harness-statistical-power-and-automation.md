@@ -18,14 +18,14 @@ depends_on:
 due_date: ''
 created: 2026-07-17
 updated: 2026-07-19
-status_note: 'DONE 2026-07-19. Harness in C:\Unitree\_data\task189 (RUNBOOK.md): grid.py +
+status_note: 'DONE 2026-07-19. Harness in $UNITREE_ROOT/_data/task189 (RUNBOOK.md): grid.py +
   eval_rollouts.py + server.py + guards.py + stats.py + analyze.py, 51 offline tests,
   hardened by a 69-agent adversarial review (21 confirmed findings fixed). Live n=40
   replication grid ran unattended (~2.5 h, 5 cells, zero manual steps): null control 0/40;
   real_only place 3/40 (n=10 estimate 2/10 was optimistic); dreams place 0/40 (p=0.24 vs
   real_only — dreams deficit direction persists, still not significant); push proxy refused
   automatically — off-instruction 56/80 EQUALS on-instruction 56/80, the TASK-185 invalidity
-  replicated exactly. Results: C:\Unitree\_data\task189\runs\grid_n40_20260719\report.md.'
+  replicated exactly. Results: $UNITREE_ROOT/_data/task189/runs/grid_n40_20260719/report.md.'
 ---
 
 ## Description
@@ -36,7 +36,7 @@ honesty controls that caught two wrong answers last time, built in rather than r
 
 ## Details
 
-**Current state ([[TASK-185]], 2026-07-17):** `C:\Unitree\_data\task185\eval_g1_sim_groot_success.py`
+**Current state ([[TASK-185]], 2026-07-17):** `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py`
 works — it serves a checkpoint, drives the sim over DDS domain 1, and reads success from the sim's
 own `rt/rewards_state`. But each cell was run by hand, at n=10, with servers swapped manually.
 
@@ -70,16 +70,16 @@ affordable all along.
    failed.
 
 **Key files:**
-- `C:\Unitree\_data\task185\eval_g1_sim_groot_success.py` — harness (`--mode place|push`, `--probe`,
+- `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py` — harness (`--mode place|push`, `--probe`,
   `hard_exit()`); obs must be **nested** (`observation["video"|"state"|"language"]`), not flat keys.
-- `C:\Unitree\_data\task185_serve_n17.sh` — serve arm/port from WSL `g1-eval`; the sim on native
+- `$UNITREE_ROOT/_data/task185_serve_n17.sh` — serve arm/port from the WSL eval distro; the sim on native
   Windows reaches it via `127.0.0.1:<port>` (WSL2 localhost-forwarding — verified).
-- `C:\Unitree\_data\task185_summarize.py` — the cross-metric control, currently a separate script;
+- `$UNITREE_ROOT/_data/task185_summarize.py` — the cross-metric control, currently a separate script;
   fold it in.
-- `C:\Unitree\_data\task185_rollout*.bat` — the manual wrappers this replaces. Note `<DREAM>`
+- `$UNITREE_ROOT/_data/task185_rollout*.bat` — the manual wrappers this replaces. Note `<DREAM>`
   instructions contain `<`/`>`, which cmd parses as redirection — pass instructions via file or env,
   not as bare argv.
-- Sim: `C:\Unitree\unitree_sim_isaaclab\start_sim_pickplace_dex3.bat` (DDS **domain 1**).
+- Sim: `$UNITREE_ROOT/unitree_sim_isaaclab/start_sim_pickplace_dex3.bat` (DDS **domain 1**).
 
 Not in scope: the push/slide reward itself ([[TASK-186]]) — this task consumes whatever criteria
 the sim publishes.

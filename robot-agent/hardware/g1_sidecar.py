@@ -946,7 +946,7 @@ def _livox_pointcloud(target_count: int):
 # --- Livox MID-360 via Unitree DDS (rt/utlidar/cloud_livox_mid360) -----------
 # The G1's onboard bridge republishes the MID-360 as a sensor_msgs/PointCloud2
 # over Unitree DDS — no ROS2 needed (the proven path of the 2026-07-07 real
-# capture, see C:\Unitree\_data\g1_lidar\g1_lidar_capture.py). The cloud path
+# capture, see $UNITREE_ROOT/_data/g1_lidar/g1_lidar_capture.py). The cloud path
 # is subscribe-only; the ONE write this file performs is the LiDAR enable
 # switch below (set_lidar_switch) — see its docstring for the authorization.
 _dds_lidar_source = None

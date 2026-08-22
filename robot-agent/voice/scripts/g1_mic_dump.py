@@ -8,7 +8,7 @@ whether the 4-mic array signal is usable (level, clipping, silence).
     uv run python scripts/g1_mic_dump.py --seconds 15 --out out/g1_mic.wav
 
 Defaults match the robot: group 239.168.123.161, port 5555, joined via the
-NIC given by --local-ip (dz-226: 192.168.123.10 = "Ethernet 3"). Env vars
+NIC given by --local-ip (GPU_BOX: 192.168.123.10 = "Ethernet 3"). Env vars
 VOICE_G1_MCAST_GROUP / _PORT / VOICE_G1_LOCAL_IP override the defaults.
 
 If no packets arrive, the usual causes are, in order: Windows Firewall

@@ -1,12 +1,14 @@
 # Real-G1 Apple-to-Plate Runbook (robot day)
 
+> **Placeholders used here:** `GPU_BOX` = the lab's GPU workstation · `$UNITREE_ROOT` = root of the Unitree checkouts and spike data · `$CONDA_ENVS` = the conda env directory · `$VLA_TESTS` = the VLA test checkouts. Real host names, users and absolute paths are deliberately kept out of this repo. Inside PowerShell blocks they are written `$env:UNITREE_ROOT` etc. — set them as environment variables before copy-pasting.
+
 Our-stack equivalent of NVIDIA's GR00T E2E *deployment* lesson — but with
 **NO ROS**: instead of Jetson Thor + Isaac-ROS launch files, a single Python
 process (`robot-agent/hardware/real_g1_bridge/bridge.py`) closes the loop
 between the physical G1 EDU + Dex3-1 and our serving stack
 (GR00T PolicyServer → vla-server → bridge → `rt/arm_sdk`/`rt/dex3/*/cmd`).
 
-- Contract: `C:\Unitree\_data\apple_pnp\CONTRACT.md`
+- Contract: `$UNITREE_ROOT/_data/apple_pnp/CONTRACT.md`
 - Bridge usage + safety model: `robot-agent/hardware/real_g1_bridge/README.md`
 - Task: **"move the apple to the plate"** — state 43-dim, action 31-dim,
   chunk 16, exec-horizon 8, ego_view 640x480 @ 30 fps.
@@ -38,7 +40,7 @@ never commanded by this stack — the G1 balances via its own loco service.
       the bridge machine (`python -c "import pyrealsense2 as rs; print(rs.context().devices)"`),
       head-mounted ego view framing the tabletop like the dataset's
       `ego_view` (compare against a decoded reference frame from
-      `C:\Unitree\_data\apple_pnp\dataset\videos\chunk-000\observation.images.ego_view\episode_000000.mp4`).
+      `$UNITREE_ROOT/_data/apple_pnp/dataset/videos/chunk-000/observation.images.ego_view/episode_000000.mp4`).
 - [ ] **Scene staged:** table at **~0.75 m** height with **black
       tablecloth**, one **red apple** on the surface, one **white plate
       (~19 cm)**. Robot standing at the table like the NVIDIA reference
@@ -49,28 +51,28 @@ never commanded by this stack — the G1 balances via its own loco service.
 ## 2. Network bring-up
 
 - Robot PC2: `192.168.123.164`; workstation NIC on the robot LAN:
-  `192.168.123.10` (dz-226 port **"Ethernet 3"** — CycloneDDS takes the NIC
+  `192.168.123.10` (GPU_BOX port **"Ethernet 3"** — CycloneDDS takes the NIC
   *name*, not an IP).
 - **DDS domain 0 = real robot.** Never point mock tooling (domain 9) or sim
   (domain 1) at this network, and never run `mock_loop.py` while attached to
   the robot LAN.
 - Sanity: `ping 192.168.123.164`, then a passive topic sweep with the sensor
-  toolkit (read-only): `python C:\Unitree\g1-sensor-toolkit\g1_sensor_explorer.py --secs 10`
+  toolkit (read-only): `python $UNITREE_ROOT/g1-sensor-toolkit/g1_sensor_explorer.py --secs 10`
   — expect `rt/lowstate` ≈ 50–500 Hz and both `rt/dex3/*/state` topics OK.
 
-## 3. Serving bring-up (dz-226)
+## 3. Serving bring-up (GPU_BOX)
 
 Three processes, three terminals:
 
 ```powershell
 # 1) GR00T PolicyServer :6555 (groot conda env) — pick the best checkpoint
 #    (14k-class steps beat early ones on every task in prior evals)
-C:\Users\sebastian.heusser\.conda\envs\groot\python.exe -m gr00t.eval.run_gr00t_server `
-    --model-path C:\Unitree\_ft_out\apple_pnp\checkpoint-<best> `
+$env:CONDA_ENVS/groot/python.exe -m gr00t.eval.run_gr00t_server `
+    --model-path $env:UNITREE_ROOT/_ft_out/apple_pnp/checkpoint-<best> `
     --embodiment-tag new_embodiment --port 6555
 
 # 2) vla-server :8000 (vla-server repo, its own venv)
-cd C:\Unitree\vla-server
+cd $env:UNITREE_ROOT/vla-server
 python server.py --config configs/g1_apple_pnp.yaml
 
 # 3) sanity check BEFORE touching the robot
@@ -211,13 +213,13 @@ curl -X POST http://localhost:3001/api/simulation/validations \
    procedure.
 4. Stop vla-server and the PolicyServer; unset `G1_BRIDGE_ARMED`
    (`Remove-Item Env:G1_BRIDGE_ARMED`).
-5. Copy `run*.jsonl` + episode videos to `C:\Unitree\_data\apple_pnp\robot-day-<date>\`.
+5. Copy `run*.jsonl` + episode videos to `$UNITREE_ROOT/_data/apple_pnp/robot-day-<date>/`.
 
 ## 8. NVIDIA tutorial equivalence table
 
 | NVIDIA GR00T E2E deployment (Jetson Thor / Isaac-ROS) | Our stack (NO ROS) |
 |---|---|
-| Jetson Thor onboard inference | dz-226 RTX 5090: GR00T PolicyServer :6555 + vla-server :8000 |
+| Jetson Thor onboard inference | GPU_BOX: GR00T PolicyServer :6555 + vla-server :8000 |
 | ROS 2 launch of the policy node | `python bridge.py` (one process, conda env `env_isaaclab_51_unitree`) |
 | ROS topics joint_states / camera | DDS `rt/lowstate` + `rt/dex3/*/state` + pyrealsense2 D435 grab |
 | ROS arm command topic | DDS `rt/arm_sdk` (LowCmd, waist+arms only) + `rt/dex3/*/cmd` |

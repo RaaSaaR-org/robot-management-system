@@ -3,7 +3,7 @@
 The G1 continuously multicasts its 4-mic-array audio as raw 16 kHz mono
 s16le PCM on UDP 239.168.123.161:5555 (robot LAN 192.168.123.0/24). No SDK
 needed — a plain socket with an IGMP join on the workstation NIC
-(VOICE_G1_LOCAL_IP, e.g. 192.168.123.10 = "Ethernet 3" on dz-226).
+(VOICE_G1_LOCAL_IP, e.g. 192.168.123.10 = "Ethernet 3" on GPU_BOX).
 
 For robot-less testing the group may be a unicast address (e.g. 127.0.0.1):
 then we simply bind and receive (see scripts/g1_mcast_replayer.py).

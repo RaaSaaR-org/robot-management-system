@@ -39,7 +39,7 @@ than walking. This is the sole blocker on TASK-203 steps 2, 4 and 5.
 
 ### Current state — what was measured (2026-08-08)
 
-Checkout: `~/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/unitree_sim_isaaclab`
+Checkout: `$UNITREE_ROOT/unitree_sim_isaaclab`
 (third-party, detached HEAD, **not** vendored into this repo).
 
 * The sim logs `[Performance] A:116.6ms` out of a ~144 ms loop — i.e. **81% of wall time is inside

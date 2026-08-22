@@ -173,7 +173,7 @@ existing dataset pipeline.
   dataset utilities), `VideoUseService.ts` (Phase 2 VLM proposals)
 - `server/src/workers/` — batch video-use job
 - Reference (do NOT copy wholesale; format differs): Unitree desktop editor at
-  `../../zema/unitree_lerobot/data_editor/data_editor_EN.py`
+  `$UNITREE_ROOT/unitree_lerobot/data_editor/data_editor_EN.py`
 
 ## Open Questions / Decisions
 

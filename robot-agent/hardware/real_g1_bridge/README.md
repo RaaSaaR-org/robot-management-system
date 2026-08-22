@@ -13,7 +13,7 @@ G1 EDU (192.168.123.164, DDS domain 0)
   (ONLY when armed — see safety model)
 ```
 
-Authoritative contract: `C:\Unitree\_data\apple_pnp\CONTRACT.md`
+Authoritative contract: `$UNITREE_ROOT/_data/apple_pnp/CONTRACT.md`
 Robot-day procedure: `docs/real-g1-apple-runbook.md` (repo root).
 
 ## Files
@@ -29,7 +29,7 @@ Conda env **`env_isaaclab_51_unitree`** (cyclonedds 0.10.x + unitree_sdk2py +
 numpy + Pillow + requests):
 
 ```powershell
-C:\Users\sebastian.heusser\.conda\envs\env_isaaclab_51_unitree\python.exe bridge.py --help
+$CONDA_ENVS/env_isaaclab_51_unitree/python.exe bridge.py --help
 ```
 
 `pyrealsense2` is imported lazily — only needed when using the real D435
@@ -37,7 +37,7 @@ C:\Users\sebastian.heusser\.conda\envs\env_isaaclab_51_unitree\python.exe bridge
 
 DDS interface handling follows the loopback-validated `g1-sensor-toolkit`
 pattern: no `CYCLONEDDS_URI` needed; pass the NIC **name** (default
-`"Ethernet 3"` = the 192.168.123.10 robot-LAN port on dz-226) or `--no-iface`
+`"Ethernet 3"` = the 192.168.123.10 robot-LAN port on GPU_BOX) or `--no-iface`
 for loopback/mock runs. Domains: **0 = real robot, 1 = sim, 9 = mock tests.**
 
 ## Safety model

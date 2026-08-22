@@ -136,7 +136,7 @@ before.
 
 - **Mic:** the G1 multicasts its 4-mic array as 16 kHz mono s16le PCM on UDP
   `239.168.123.161:5555`. Set `VOICE_INPUT_BACKEND=g1` and
-  `VOICE_G1_LOCAL_IP` to the NIC on the robot LAN (dz-226: `192.168.123.10`,
+  `VOICE_G1_LOCAL_IP` to the NIC on the robot LAN (GPU_BOX: `192.168.123.10`,
   "Ethernet 3"). Windows Firewall must allow inbound UDP 5555 for python.exe.
 - **Speaker:** `adapters/g1_audio_adapter.py` wraps the Unitree SDK
   `AudioClient.PlayStream` (needs the Python 3.10 DDS venv with
@@ -170,7 +170,7 @@ uv run python scripts/smoke_stt.py              # Piper speech -> VAD -> Whisper
 uv run python scripts/smoke_roundtrip.py --lang de   # full loop against live agent + Ollama
 ```
 
-Measured on this box (RTX 5090, gpt-oss:20b): STT ≈ 0.3–0.5 s, agent ≈
+Measured on this box (the GPU box’s GPU, gpt-oss:20b): STT ≈ 0.3–0.5 s, agent ≈
 0.8–1.4 s, TTS ≈ 0.4 s ⇒ ~2 s from end-of-speech to first audio. VRAM:
 Ollama + Whisper ≈ 18.5 GB of 32 GB.
 

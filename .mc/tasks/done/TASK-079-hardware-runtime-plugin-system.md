@@ -67,7 +67,7 @@ Robot Agent (TypeScript, Port 41245)
              (gRPC 8080)  (ZMQ 5555) (rclpy)
                     │        │            │
               GPU Server  GPU Server  ROS2 Network
-              (Peter's)   (Peter's)   (lokal oder remote)
+              (GPU_BOX)      (GPU_BOX)   (lokal oder remote)
 ```
 
 **Hardware Runtime = erweiterter Sidecar mit:**
@@ -104,7 +104,7 @@ class VLABackend(ABC):
 ```json
 {
   "backend": "lerobot",     // "lerobot" | "groot" | "ros2"
-  "host": "100.125.78.40",
+  "host": "<gpu-box-ip>",
   "port": 8080,
   "prompt": "pick up the bottle",
   "cameraIndex": 0,

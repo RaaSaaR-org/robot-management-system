@@ -20,7 +20,7 @@ depends_on:
 due_date: ''
 created: 2026-06-25
 updated: 2026-07-11
-status_note: 'DONE — GLB→trimesh→CoACD pipeline shipped on PR #164; re-verified 2026-07-11 on dz-226: full sim_evaluator pytest suite green (50 passed, 1 skipped, incl. the concavity regression) on native Windows (conda neodem-svc + trimesh/coacd/obj2mjcf). Remaining walk-into-real-scanned-room validation folds into TASK-172 §A (robot day).'
+status_note: 'DONE — GLB→trimesh→CoACD pipeline shipped on PR #164; re-verified 2026-07-11 on GPU_BOX: full sim_evaluator pytest suite green (50 passed, 1 skipped, incl. the concavity regression) on native Windows (conda neodem-svc + trimesh/coacd/obj2mjcf). Remaining walk-into-real-scanned-room validation folds into TASK-172 §A (robot day).'
 ---
 
 # Real-to-Sim — proper GLB→MuJoCo room collision pipeline

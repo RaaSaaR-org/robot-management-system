@@ -63,13 +63,13 @@ describe('RobotDetailsDrawer', () => {
   });
 
   it('says which robot this is, and which life it is on', () => {
-    open({ operator: 'Sebastian', site: 'dz-226 Lab' });
+    open({ operator: 'Sebastian', site: 'Robot Lab' });
 
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveTextContent('Unitree G1 EDU (Dex3-1)');
     expect(dialog).toHaveTextContent('incarnation 47');
     expect(dialog).toHaveTextContent('Sebastian');
-    expect(dialog).toHaveTextContent('dz-226 Lab');
+    expect(dialog).toHaveTextContent('Robot Lab');
     // Nothing here may imply a plan outlives the session that made it.
     expect(dialog).toHaveTextContent('Plans are ephemeral and never persisted.');
   });

@@ -45,7 +45,7 @@ const AGE_TICK_MS = 10_000;
  * NOTE — what used to be here, and where it went.
  *
  * This file used to render a clause line:
- * `Nova · incarnation 47 · AISLE-3 · operator Sebastian · dz-226 Lab · 4s ago`.
+ * `Nova · incarnation 47 · AISLE-3 · operator Sebastian · Robot Lab · 4s ago`.
  * Every one of those clauses still exists, none of the honesty rules behind
  * them were dropped, but they are no longer read on every glance:
  *

@@ -8,7 +8,7 @@
     ==========================================================================
     Unitree G1 EDU (29 DoF) + Dex3-1 hands - 43-DOF fixed-base include
     ==========================================================================
-    Derived from C:/Unitree/gmr/assets/unitree_g1/g1_mocap_29dof_with_hands.xml
+    Derived from $UNITREE_ROOT/gmr/assets/unitree_g1/g1_mocap_29dof_with_hands.xml
     (Unitree meshes, BSD-3-Clause) by the WS2 pick-place workstream. STL meshes
     vendored under mjcf/g1_dex3/meshes/ (copied from gmr, byte-identical).
 
