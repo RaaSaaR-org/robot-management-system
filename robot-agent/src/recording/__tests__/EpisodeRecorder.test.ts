@@ -255,7 +255,7 @@ describe('EpisodeRecorder', () => {
     expect(rec.status().lastDropReason).toMatch(/teleop is not engaged/);
   });
 
-  it('drops a tick whose camera failed instead of writing a frame with no picture', async () => {
+  it.skipIf(!HAVE_FFMPEG)('drops a tick whose camera failed instead of writing a frame with no picture', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
     h.snapshotError = 'sidecar snapshot head_camera failed: HTTP 503';
     await run(h, 200);
@@ -265,14 +265,14 @@ describe('EpisodeRecorder', () => {
     expect(status.lastDropReason).toMatch(/503/);
   });
 
-  it('calls the sidecar with shadows off by default and 90 quality', async () => {
+  it.skipIf(!HAVE_FFMPEG)('calls the sidecar with shadows off by default and 90 quality', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
     await run(h, 120);
     expect(h.snapshotCalls.length).toBeGreaterThan(0);
     expect(h.snapshotCalls[0]).toEqual({ camera: 'head_camera', shadows: false, quality: 90 });
   });
 
-  it('keeps shadows when asked for them', async () => {
+  it.skipIf(!HAVE_FFMPEG)('keeps shadows when asked for them', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'], shadows: true });
     await run(h, 120);
     expect(h.snapshotCalls[0]?.shadows).toBe(true);
@@ -302,7 +302,7 @@ describe('EpisodeRecorder', () => {
     expect(status.totalFrames).toBe(status.episodes[0]!.frames + status.episodes[1]!.frames);
   });
 
-  it('forgets a discarded episode and its images', async () => {
+  it.skipIf(!HAVE_FFMPEG)('forgets a discarded episode and its images', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
     await run(h, 200);
     await rec.nextEpisode();
@@ -340,7 +340,10 @@ describe('EpisodeRecorder', () => {
     expect(rec.isRecording()).toBe(false);
   });
 
-  it('reports the fps it achieved, not the one it was asked for', async () => {
+  // Gated: it drives a camera, so without ffmpeg the fixture JPEG is empty and
+  // the encode fails — a hard failure where every other camera test in this file
+  // skips, which turns a machine that simply lacks ffmpeg into a red build.
+  it.skipIf(!HAVE_FFMPEG)('reports the fps it achieved, not the one it was asked for', async () => {
     // Every second snapshot fails, so frames land at half the tick rate.
     // Declaring 50 would put a timestamp on every row claiming the episode ran
     // twice as fast as it did — and the video, encoded at that fps, would agree
@@ -359,7 +362,7 @@ describe('EpisodeRecorder', () => {
 
   // -- what the review found ------------------------------------------------
 
-  it('keeps recording after the LIVE episode is discarded', async () => {
+  it.skipIf(!HAVE_FFMPEG)('keeps recording after the LIVE episode is discarded', async () => {
     // The episode panel offers discard on the live row. The rm that removes the
     // take also removed the directory the next tick writes into, so every
     // remaining frame failed with ENOENT and the operator recorded nothing
@@ -378,7 +381,7 @@ describe('EpisodeRecorder', () => {
     expect(rec.status().lastDropReason ?? '').not.toMatch(/ENOENT/);
   });
 
-  it('leaves no image behind when a later camera fails to write', async () => {
+  it.skipIf(!HAVE_FFMPEG)('leaves no image behind when a later camera fails to write', async () => {
     // One orphan JPEG makes that camera's video one frame longer than the
     // parquet, and every frame after it a frame out of step with the joints.
     // 5 fps so the ticks cannot overlap: at 20 the "previous frame had not
