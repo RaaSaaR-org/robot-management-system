@@ -26,11 +26,20 @@ What these protect:
 from __future__ import annotations
 
 import math
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 
-import sim_node
+# `sim_node` pulls in mujoco AND unitree_sdk2py at module scope, so a bare
+# `import sim_node` here is a COLLECTION error on a machine that has one and not
+# the other -- and `scripts/test-all.sh` gates this directory on `import mujoco`
+# alone. Without this guard that machine turns a stage designed to report SKIPPED
+# into one that reports FAILED for a reason that has nothing to do with the code.
+# Same guard, same reason, as `test_lidar.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sim_node = pytest.importorskip("sim_node")
 from joints import BODY, LHAND, N_BODY, RHAND
 
 L_SHOULDER = BODY.index("left_shoulder_pitch_joint")
