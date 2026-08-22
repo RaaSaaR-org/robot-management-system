@@ -20,7 +20,8 @@ import type { SecureBootVerifier } from '../security/secure-boot.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { RolloutStrategies, type RolloutStrategy } from '../vla/types.js';
 import { agentModeController } from '../agent-mode/agent-mode-controller.js';
-import { hardwareClient } from '../hardware/HardwareClient.js';
+import { hardwareClient, getSidecarUrl } from '../hardware/HardwareClient.js';
+import http from 'node:http';
 import { controlOwnerLock } from '../agent-mode/control-owner.js';
 import { INTENT_MAX_CHARS } from '../agent-mode/intents.js';
 import { getIdentityStore } from '../agent-mode/identity.js';
@@ -1448,6 +1449,52 @@ export function createRestRoutes(
       return;
     }
     res.type('image/jpeg').send(jpeg);
+  });
+
+  // GET /robots/:id/camera/:name/stream — live MJPEG, proxied from the sidecar.
+  //
+  // GATED for the same reason as the patrol photos, only more so: this is a LIVE
+  // view of whichever room the robot is standing in. It is the most personal
+  // thing this agent serves.
+  //
+  // Proxied rather than letting the browser talk to the sidecar directly. The
+  // sidecar URL is the agent's business (HARDWARE_SIDECAR_URL), and on a real
+  // robot it is not reachable from anywhere except the robot itself.
+  router.get('/robots/:id/camera/:name/stream', personalDataGate, (req: Request, res: Response) => {
+    if (wrongRobot(req, res)) return;
+    const name = String(req.params.name);
+    // The name goes into a URL path on the sidecar; keep it boring.
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      res.status(400).json({ code: 'INVALID_REQUEST', message: 'camera name must match [A-Za-z0-9_-]+' });
+      return;
+    }
+    const upstream = http.get(`${getSidecarUrl()}/cameras/${name}/stream`, (stream) => {
+      // The sidecar renders one frame before it commits to 200, so a bad camera
+      // name arrives here as a status we can still turn into an honest error.
+      if (stream.statusCode !== 200) {
+        stream.resume();
+        res.status(stream.statusCode === 503 ? 503 : 502).json({
+          code: 'CAMERA_UNAVAILABLE',
+          message: `sidecar answered ${stream.statusCode} for camera '${name}'`,
+        });
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': stream.headers['content-type'] ?? 'multipart/x-mixed-replace; boundary=FRAME',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Connection: 'close',
+      });
+      stream.pipe(res);
+    });
+    upstream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(502).json({ code: 'CAMERA_UNAVAILABLE', message: 'cannot reach the hardware sidecar' });
+      }
+    });
+    // Hang up upstream when the viewer leaves. Without this the sidecar keeps
+    // rendering for nobody, and every one of those frames is a render on the
+    // simulation's physics thread.
+    res.on('close', () => upstream.destroy());
   });
 
   // POST /robots/:id/agent-mode/patrol/findings/:findingId/normal — {runId} → {ok}

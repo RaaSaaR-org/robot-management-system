@@ -139,6 +139,43 @@ function extractBearerToken(req: Request): string | null {
 }
 
 /**
+ * Paths, relative to the `/api/robots` mount, that serve an MJPEG stream.
+ * `/:id/camera/:name` and nothing else.
+ */
+const CAMERA_STREAM_PATH = /^\/[^/]+\/camera\/[^/]+\/?$/;
+
+/**
+ * Move `?access_token=` into the Authorization header for a camera stream.
+ *
+ * WHY THIS EXISTS: `/api/robots/:id/camera/:name` is mounted in an `<img>` —
+ * that is the only way to render `multipart/x-mixed-replace` in a page — and an
+ * `<img>` cannot send an Authorization header, which is the only place
+ * `extractBearerToken` looks. So with auth enabled every camera frame in the app
+ * was a 401: the VR head-camera panel showed CAMERA OFFLINE, and the operator
+ * had no way to tell an authentication failure from a dead camera. It looked
+ * healthy only because dev runs `AUTH_DISABLED=true`.
+ *
+ * DELIBERATELY NARROW. A token in a URL leaks into access logs, `Referer` and
+ * browser history, so this accepts one for GET on the stream path alone, and
+ * only when no header was supplied. It grants nothing by itself — the token
+ * still goes through `authMiddleware` unchanged; this only carries it to where
+ * the validator reads.
+ */
+export function cameraStreamQueryToken(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  if (req.method !== 'GET' || req.headers.authorization) return next();
+  if (!CAMERA_STREAM_PATH.test(req.path)) return next();
+  const token = req.query.access_token;
+  if (typeof token === 'string' && token.length > 0) {
+    req.headers.authorization = `Bearer ${token}`;
+  }
+  next();
+}
+
+/**
  * Authentication middleware - requires valid JWT
  *
  * When AUTH_DISABLED=true, injects mock user and allows all requests.

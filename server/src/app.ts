@@ -87,7 +87,7 @@ import { teamRoutes } from './routes/team.routes.js';
 import { serviceAccountRoutes } from './routes/service-accounts.routes.js';
 
 // Import middleware
-import { authMiddleware } from './middleware/auth.middleware.js';
+import { authMiddleware, cameraStreamQueryToken } from './middleware/auth.middleware.js';
 
 // Import services
 import { robotManager } from './services/RobotManager.js';
@@ -197,8 +197,10 @@ export function createApp(): Express {
   app.use('/api/a2a/agent', authMiddleware, agentRoutes);
   app.use('/api/a2a/events', authMiddleware, eventsRoutes);
 
-  // Robot routes (protected)
-  app.use('/api/robots', authMiddleware, robotRoutes);
+  // Robot routes (protected). `cameraStreamQueryToken` runs first and only ever
+  // moves a `?access_token=` on the MJPEG stream path into the Authorization
+  // header an `<img>` cannot set — see its docstring. Auth itself is unchanged.
+  app.use('/api/robots', cameraStreamQueryToken, authMiddleware, robotRoutes);
 
   // Voice service proxy (say / events / volume) — robot-scoped, live-only
   app.use('/api/robots', authMiddleware, voiceRoutes);
