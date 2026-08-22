@@ -297,6 +297,23 @@ export function createLoopHealth(): LoopHealth {
 }
 
 /**
+ * Does this outbound frame carry a pose? Then it is an RTT probe.
+ *
+ * `wrists` counts. It was left out when IK was added and IK is now the default
+ * on a G1, so the one readout that measures the control loop went dead in the
+ * mode it was added for — `RTT --` on the desktop and no RTT line in the
+ * headset at all. Worse silently: an operator who drove in Orientation for a
+ * few seconds and switched back froze a stale number on the HUD for the rest of
+ * the session, painted green however badly the link then degraded. LINK does
+ * not substitute — a link that degrades but stays pipelined still delivers a
+ * state every ~50 ms and keeps reading LIVE.
+ */
+export function isPoseFrame(payload: unknown): boolean {
+  return typeof payload === 'object' && payload !== null
+    && ('positions' in payload || 'wrists' in payload);
+}
+
+/**
  * Record that a `{positions}` frame just went out.
  *
  * An already-pending timestamp is KEPT, not overwritten. The agent answers in

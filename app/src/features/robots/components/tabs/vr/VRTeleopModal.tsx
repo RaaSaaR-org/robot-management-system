@@ -28,7 +28,7 @@ import {
   type LinkStatus,
   type TeleopLink,
 } from './vrSession';
-import { createLoopHealth, onPositionsSent, onStateReceived, type LoopHealth } from './vrHud';
+import { createLoopHealth, isPoseFrame, onPositionsSent, onStateReceived, type LoopHealth } from './vrHud';
 import { EMULATOR_ACTIVE, XR_EMULATOR } from './vrConstants';
 import { getWsBaseUrl } from './vrUrls';
 import { VrScene } from './VrScene';
@@ -71,10 +71,6 @@ function meterLink(
   return linkState(now, lastStateAt);
 }
 
-/** Does this outbound frame carry a pose? Then it is an RTT probe. */
-function isPositionsFrame(payload: unknown): boolean {
-  return typeof payload === 'object' && payload !== null && 'positions' in payload;
-}
 
 const LINK_TONE: Record<LinkState, string> = {
   live: 'bg-green-500',
@@ -112,18 +108,40 @@ interface ControlGroup {
  * card; listing both rows flat left the operator to infer the mode from a
  * parenthetical.
  */
-function controlGroups(trigger: EndEffectorMode, hasNextEpisode: boolean): ControlGroup[] {
+function controlGroups(
+  trigger: EndEffectorMode,
+  hasNextEpisode: boolean,
+  retargetMode: 'orientation' | 'ik',
+  handTracking: boolean,
+): ControlGroup[] {
+  // The two modes are DIFFERENT CONTROLS, not the same controls described
+  // differently. Under IK the stick is not the elbow — it is nothing, because
+  // the arm follows where the hand is — and a card that says otherwise is
+  // something the operator only finds out about by pressing it.
+  const armRows: ControlRow[] = retargetMode === 'ik'
+    ? [
+      { id: 'grip', keys: 'Grip', label: 'Hold to take that arm; release and it holds its pose' },
+      { id: 'reach', keys: 'Reach', label: 'The robot’s hand goes where yours goes — forward, across, up' },
+      { id: 'twist-ik', keys: 'Twist', label: 'The wrist follows your hand as far as the arm can manage' },
+      { id: 'trigger', keys: 'Trigger', label: TRIGGER_LABEL[trigger] },
+      ...(handTracking
+        ? [{ id: 'fingers', keys: 'Fingers', label: 'Tracked hands drive each finger; no grip clutch on a hand' }]
+        : []),
+    ]
+    : [
+      { id: 'grip', keys: 'Grip', label: 'Hold to take that arm; release and it stops being commanded' },
+      { id: 'tilt', keys: 'Tilt', label: 'Shoulder pitch and yaw, 1:1 with your hand' },
+      { id: 'twist', keys: 'Twist', label: 'Wrist roll' },
+      { id: 'stick-arm', keys: 'Stick', label: 'Elbow (up/down) and shoulder roll (left/right)' },
+      { id: 'trigger', keys: 'Trigger', label: TRIGGER_LABEL[trigger] },
+    ];
   return [
     {
       id: 'arm',
-      title: 'Arm — while the grip is held',
-      rows: [
-        { id: 'grip', keys: 'Grip', label: 'Hold to take that arm; release and it stops being commanded' },
-        { id: 'tilt', keys: 'Tilt', label: 'Shoulder pitch and yaw, 1:1 with your hand' },
-        { id: 'twist', keys: 'Twist', label: 'Wrist roll' },
-        { id: 'stick-arm', keys: 'Stick', label: 'Elbow (up/down) and shoulder roll (left/right)' },
-        { id: 'trigger', keys: 'Trigger', label: TRIGGER_LABEL[trigger] },
-      ],
+      title: retargetMode === 'ik'
+        ? 'Arm — while the grip is held (IK)'
+        : 'Arm — while the grip is held (orientation)',
+      rows: armRows,
     },
     {
       id: 'drive',
@@ -142,6 +160,18 @@ function controlGroups(trigger: EndEffectorMode, hasNextEpisode: boolean): Contr
       title: hasNextEpisode ? 'Safety, view and recording' : 'Safety and view',
       rows: [
         { id: 'estop', keys: 'B / Y', label: 'E-STOP — either hand, either button' },
+        // The hands-only stop, listed whenever hand tracking is armed. An
+        // operator who has put the controllers down cannot reach B / Y, cannot
+        // reach this card either once they are in the headset, and has to have
+        // read it BEFORE going in — which is exactly why it is on the card the
+        // moment they arm the mode rather than only when a hand is tracked.
+        ...(handTracking
+          ? [{
+            id: 'estop-pinch',
+            keys: 'Pinch',
+            label: 'E-STOP with no controller: thumb to little finger, both hands, hold',
+          }]
+          : []),
         { id: 'recenter', keys: 'A / X', label: 'Recenter the view inside the robot’s head' },
         // Listed ONLY when the host actually wired one up. This modal is opened
         // from the robot detail page too, where there is no session and no
@@ -210,6 +240,15 @@ export function VRTeleopModalBody({
   const [copied, setCopied] = useState<string | null>(null);
   /** Bumped to put the viewpoint back in the robot's head. */
   const [recenterKey, setRecenterKey] = useState(0);
+  /**
+   * Whether tracked hands drive the wrists and fingers. Off by default, and
+   * that is TASK-216's decision rather than an oversight: `xr_teleoperate`'s
+   * own hand-tracking path is where its Quest 3 WebSocket-drop bug lives
+   * (issue #296) while controller mode keeps working, so controllers stay the
+   * reliable default and hands are opt-in.
+   */
+  const [handTracking, setHandTracking] = useState(false);
+  const [preferIk, setPreferIk] = useState(true);
   const recenter = useCallback(() => setRecenterKey((n) => n + 1), []);
   /** Wraps the posed model so its bounding box can be measured for the viewpoint. */
   const modelRef = useRef<THREE.Group>(null);
@@ -251,6 +290,22 @@ export function VRTeleopModalBody({
     return left === 'none' ? endEffectorMode('right', jointMap) : left;
   }, [jointMap]);
 
+  /**
+   * Whether the agent has an arm chain for this robot.
+   *
+   * Asked of the joints the robot ADVERTISED, exactly as the agent asks it of
+   * the joint config — so a G1 answers yes, an SO-101 answers no and keeps the
+   * orientation mapping, and neither has to be named here.
+   */
+  const ikCapable = useMemo(() => {
+    const names = new Set(joints.map((j) => j.name));
+    return (['left', 'right'] as const).every((side) =>
+      ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw']
+        .every((j) => names.has(`${side}_${j}_joint`)),
+    );
+  }, [joints]);
+  const retargetMode: 'orientation' | 'ik' = ikCapable && preferIk ? 'ik' : 'orientation';
+
   const canEnterVr = status === 'open' && (sessionSupported === true || EMULATOR_ACTIVE);
 
   const send = useCallback((payload: unknown): boolean => {
@@ -261,7 +316,7 @@ export function VRTeleopModalBody({
     // Only a pose frame is a round-trip probe: the agent answers those with a
     // `{type:'state'}` in the same handler, which is what makes the measurement
     // a real round trip and not an estimate.
-    if (isPositionsFrame(payload)) healthRef.current = onPositionsSent(healthRef.current, now);
+    if (isPoseFrame(payload)) healthRef.current = onPositionsSent(healthRef.current, now);
     return true;
   }, []);
 
@@ -335,6 +390,12 @@ export function VRTeleopModalBody({
           setEstopLatched(true);
           setEstopNote(entry.message);
         }
+        // An error is the agent saying it will not answer that frame — it sends
+        // no `{type:'state'}` for one it refused. `onPositionsSent` keeps the
+        // OLDEST outstanding send on purpose, so leaving the probe pending here
+        // measures the next successful reply from a frame the robot never acted
+        // on and reports an RTT nobody experienced.
+        healthRef.current = { ...healthRef.current, pendingSentAt: null };
         // Keyed by code, newest wins. The agent latches most codes for the life
         // of the socket, so a repeat normally means a reconnect — but it
         // deliberately re-arms `estop_latched` every time the latch clears, so
@@ -426,6 +487,13 @@ export function VRTeleopModalBody({
     if (status === 'open') return;
     healthRef.current = { ...healthRef.current, pendingSentAt: null };
   }, [status]);
+  // And when the rig changes which frame it streams. The probe outstanding at
+  // that moment belongs to the old mode's last frame; the next state to arrive
+  // answers the new mode's first one, and measuring one against the other
+  // reports a round trip that did not happen.
+  useEffect(() => {
+    healthRef.current = { ...healthRef.current, pendingSentAt: null };
+  }, [retargetMode, handTracking]);
   useEffect(() => {
     robotPositionsRef.current = positions;
   }, [positions]);
@@ -624,6 +692,43 @@ export function VRTeleopModalBody({
           >
             Home
           </Button>
+          <Button
+            variant={retargetMode === 'ik' ? 'primary' : 'ghost'}
+            size="sm"
+            disabled={!ikCapable}
+            data-testid="vr-retarget-mode"
+            title={ikCapable
+              ? 'IK: stream where your hand IS and let the robot solve the arm. Orientation: the older mapping, controller angles onto joint angles.'
+              : 'This robot has no arm chain the agent can solve — the orientation mapping is the only option'}
+            // Leaving IK takes hand tracking with it: a tracked hand supplies a
+            // WRIST POSE, which only the IK path knows what to do with. Leaving
+            // it armed would make the Hands button do nothing, silently.
+            onClick={() => setPreferIk((on) => {
+              if (on) setHandTracking(false);
+              return !on;
+            })}
+          >
+            {retargetMode === 'ik' ? 'IK' : 'Orientation'}
+          </Button>
+          <Button
+            variant={handTracking ? 'primary' : 'ghost'}
+            size="sm"
+            disabled={!ikCapable}
+            data-testid="vr-hand-tracking"
+            title={ikCapable
+              ? 'Use tracked hands where they are available. A tracked hand drives its own wrist and fingers and has no grip clutch; a side without one falls back to its controller. Turning it on switches the arms to IK, which is the only mapping that can use a wrist pose.'
+              : 'This robot has no arm chain the agent can solve, so a tracked wrist pose has nowhere to go'}
+            // Arming it switches the mode with it, VISIBLY — the button next to
+            // this one relabels to IK. The alternative, letting a tracked hand
+            // change the retargeting behind an unchanged label, is what this
+            // replaced.
+            onClick={() => setHandTracking((on) => {
+              if (!on) setPreferIk(true);
+              return !on;
+            })}
+          >
+            Hands
+          </Button>
           {inVr && (
             <Button variant="ghost" size="sm" onClick={recenter}>Recenter</Button>
           )}
@@ -702,6 +807,8 @@ export function VRTeleopModalBody({
           inVr={inVr}
           jointMap={jointMap}
           send={send}
+          retargetMode={retargetMode}
+          handTracking={handTracking}
           onRecenter={recenter}
           onEstop={onStopButton}
           onNextEpisode={onNextEpisode}
@@ -710,7 +817,7 @@ export function VRTeleopModalBody({
 
       {/* Controller mapping */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {controlGroups(trigger, !!onNextEpisode).map((group) => (
+        {controlGroups(trigger, Boolean(onNextEpisode), retargetMode, handTracking).map((group) => (
           <div key={group.id} className="rounded-lg border border-theme-subtle bg-theme-secondary p-3">
             <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-theme-tertiary">
               {group.title}

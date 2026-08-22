@@ -30,6 +30,10 @@ function episode(index: number, frames: number, offset = 0): WriterEpisode {
     task: 'pick up the block',
     dropped: index,
     wallDurationS: frames / 10,
+    // Different per episode, and one of them with two modes, so the '+' join
+    // is exercised rather than just the column's presence. Left empty and
+    // every row reads '' — which any mutation of the join also produces.
+    retargetModes: index === 0 ? ['ik'] : ['hand-tracking', 'ik'],
     frames: Array.from({ length: frames }, (_, i) => ({
       state: [offset + i * 0.01, offset + i * 0.02, offset + i * 0.03],
       // Deliberately NOT the state: the commanded/measured distinction is the
@@ -285,6 +289,24 @@ describe.skipIf(!HAVE_FFMPEG)('writeLeRobotV3 produces a v3.0 tree', () => {
     for (const column of Object.keys(rows[0]!)) {
       expect(declared.has(column), `column ${column} is not declared in info.json`).toBe(true);
     }
+  });
+
+  it('carries the retargeting label on the EPISODES parquet, never on the data one', async () => {
+    // Two different constraints, twenty lines apart in the writer. The data
+    // parquet is CAST against `info.json.features` and a column features does
+    // not declare is a hard CastError; the episodes parquet is not cast, which
+    // is why `dropped_frames`, `wall_duration_s` and now `retarget_modes` can
+    // live there at all. Putting this one in the wrong file makes every dataset
+    // unopenable, and the two files are written by the same loop.
+    const episodes = await readRows(join(root, 'meta/episodes/chunk-000/file-000.parquet'));
+    // The VALUE, off the parquet — this is the file lerobot opens. The
+    // `episodes.jsonl` twin is written from a different expression
+    // (`[...modes]` against `modes.join('+')`) and nothing forces them to
+    // agree, so asserting only the jsonl leaves this encoding unpinned.
+    expect(episodes[0]!.retarget_modes).toBe('ik');
+    expect(episodes[1]!.retarget_modes).toBe('hand-tracking+ik');
+    const data = await readRows(join(root, 'data/chunk-000/file-000.parquet'));
+    expect(data[0]!).not.toHaveProperty('retarget_modes');
   });
 
   it('gives every episode the coordinates lerobot finds its parquet by', async () => {

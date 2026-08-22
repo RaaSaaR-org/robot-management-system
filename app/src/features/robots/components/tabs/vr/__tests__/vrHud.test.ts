@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   composeHud,
   hudMode,
+  isPoseFrame,
   markerAppearance,
   createLoopHealth,
   onPositionsSent,
@@ -277,5 +278,29 @@ describe('LoopHealth', () => {
     const h = createLoopHealth();
     onStateReceived(onPositionsSent(h, 0), 10);
     expect(h).toEqual(createLoopHealth());
+  });
+});
+
+describe('isPoseFrame — what counts as an RTT probe', () => {
+  it('counts a wrist frame, which is the only thing IK mode sends', () => {
+    // The regression: `{wrists}` was not recognised, IK became the default on a
+    // G1, and the readout that measures the control loop went dead in its own
+    // default mode — `RTT --` on the desktop, no RTT line in the headset.
+    expect(isPoseFrame({ wrists: { left: { p: [0, 0, 0] } } })).toBe(true);
+    expect(isPoseFrame({ positions: { j0: 0 } })).toBe(true);
+  });
+
+  it('does not count a frame the agent answers with something other than state', () => {
+    for (const payload of [
+      { move: 'forward' },
+      { preset: 'home' },
+      { estop: true },
+      { hands: { left: {} } },
+      null,
+      'positions',
+      42,
+    ]) {
+      expect(isPoseFrame(payload)).toBe(false);
+    }
   });
 });

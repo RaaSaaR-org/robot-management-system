@@ -126,12 +126,18 @@ function renderModal(
   );
 }
 
+/** The fourteen arm joints the agent needs a chain for, as the agent asks it. */
+const G1_ARM_JOINTS = (['left', 'right'] as const).flatMap((side) =>
+  ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw']
+    .map((j) => ({ name: `${side}_${j}_joint`, min: -2, max: 2 })),
+);
+
 /** Bring the link up, the way the agent does: open, then the config frame. */
-function openLink(): FakeSocket {
+function openLink(joints: unknown[] = []): FakeSocket {
   const socket = FakeSocket.instances[0];
   act(() => {
     socket.open();
-    socket.deliver({ type: 'config', robotType: 'g1', joints: [], positions: {} });
+    socket.deliver({ type: 'config', robotType: 'g1', joints, positions: {} });
   });
   return socket;
 }
@@ -360,5 +366,52 @@ describe('VRTeleopModalBody — controller mapping card', () => {
     expect(screen.getByText('B / Y')).toBeInTheDocument();
     expect(screen.getByText('E-STOP — either hand, either button')).toBeInTheDocument();
     expect(screen.getByText('A / X')).toBeInTheDocument();
+  });
+});
+
+describe('VRTeleopModalBody — the retargeting mode and hand tracking', () => {
+  it('refuses hand tracking on a robot the agent has no arm chain for', () => {
+    // A tracked hand supplies a WRIST POSE, and only the IK path knows what to
+    // do with one. Before this, `ikOn` in the rig was
+    // `retargetMode === 'ik' || trackedLeft !== null || …`, so one hand drifting
+    // into view put BOTH arms onto a retargeting the agent cannot perform — an
+    // H1 advertises no wrist joints — while the mode button still read
+    // "Orientation" and the mapping card still described the stick as the
+    // elbow. The agent answers one `ik_unsupported`, `sendError` dedupes by
+    // code, and both arms then stop with nothing in the headset saying why.
+    renderModal();
+    openLink([{ name: 'left_shoulder_pitch_joint', min: -2, max: 2 }]);
+    expect(screen.getByTestId('vr-retarget-mode')).toBeDisabled();
+    expect(screen.getByTestId('vr-hand-tracking')).toBeDisabled();
+    expect(screen.getByTestId('vr-retarget-mode')).toHaveTextContent('Orientation');
+  });
+
+  it('arming hands switches the mode VISIBLY, and leaving IK disarms them', () => {
+    // The mode the operator can see has to be the mode that is running. Hand
+    // tracking implies IK, so the Hands button says so by moving the button
+    // next to it rather than by changing the retargeting behind its label.
+    renderModal();
+    openLink(G1_ARM_JOINTS);
+    const mode = screen.getByTestId('vr-retarget-mode');
+    const hands = screen.getByTestId('vr-hand-tracking');
+    expect(mode).toBeEnabled();
+    expect(hands).toBeEnabled();
+    const unarmed = hands.className;
+
+    // Off IK first, so arming Hands has something to move.
+    act(() => { fireEvent.click(mode); });
+    expect(mode).toHaveTextContent('Orientation');
+
+    act(() => { fireEvent.click(hands); });
+    expect(mode).toHaveTextContent('IK');
+    // Lit — the button paints `primary` while armed and `ghost` otherwise, so a
+    // changed class is the operator seeing it is on.
+    expect(hands.className).not.toBe(unarmed);
+
+    // And back: leaving IK takes hand tracking with it, rather than leaving a
+    // button lit that now does nothing.
+    act(() => { fireEvent.click(mode); });
+    expect(mode).toHaveTextContent('Orientation');
+    expect(hands.className).toBe(unarmed);
   });
 });

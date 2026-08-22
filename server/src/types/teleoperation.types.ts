@@ -100,6 +100,16 @@ export interface EpisodeSummary {
   droppedFrames?: number;
   /** Frames per second the episode actually achieved. */
   fpsActual?: number;
+  /**
+   * How this episode's joint targets were produced (TASK-216): `orientation`
+   * (the browser's controller mapping), `ik` (the agent's arm solver),
+   * `hand-tracking` (DexPilot fingers), `manual` (a joint moved by hand).
+   *
+   * Observed by the agent from the teleop socket rather than declared by the
+   * client, so a session that changed mode says so on the take that changed.
+   * Absent — NOT empty — for an episode recorded before the agent could tell.
+   */
+  retargetModes?: string[];
 }
 
 // ============================================================================

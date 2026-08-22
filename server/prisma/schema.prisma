@@ -1759,6 +1759,13 @@ model TeleoperationEpisode {
   durationS     Float    @default(0)
   /// Frames per second actually achieved, measured across those frames.
   fpsActual     Float    @default(0)
+  /// How this episode's joint targets were produced, '+'-joined: 'orientation'
+  /// (the browser's controller mapping), 'ik' (the agent's arm solver),
+  /// 'hand-tracking' (DexPilot fingers), 'manual' (a joint moved by hand).
+  /// OBSERVED by the agent from the teleop socket, not declared by the client —
+  /// an operator who switches mode mid-session gets both on the take that used
+  /// both. Null for every episode recorded before TASK-216.
+  retargetModes String?
   createdAt     DateTime @default(now())
 
   session TeleoperationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)

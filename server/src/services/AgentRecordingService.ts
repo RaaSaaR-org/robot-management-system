@@ -23,6 +23,15 @@ export interface AgentEpisodeReport {
   dropped: number;
   durationS: number;
   fpsActual: number;
+  /**
+   * How this episode's joint targets were produced — 'orientation', 'ik',
+   * 'hand-tracking', 'manual', or several (TASK-216).
+   *
+   * Optional because an older robot agent does not send it, and a session
+   * recorded by one must still register: the field says "we do not know", which
+   * is different from "orientation" and must not be defaulted to it.
+   */
+  retargetModes?: string[];
 }
 
 export interface AgentRecordingStatus {

@@ -7,28 +7,58 @@
 
 import type { JointConfig } from '../types.js';
 import { G1_JOINTS } from './g1.config.js';
+import { G1_FINGER_CHAINS } from '../../teleop/g1-chains.generated.js';
 
 /**
- * Unitree Dex3-1 dexterous hand — 7 DOF per hand.
- * Layout: thumb (3 DOF), index (2 DOF), middle (2 DOF).
+ * Unitree Dex3-1 dexterous hand — 7 DOF per hand: thumb (3), index (2),
+ * middle (2).
  *
- * NOTE: Limits below are reasonable placeholders for simulation/visualization.
- * Tune against the official Dex3-1 URDF before using for real-hardware control.
+ * THE LIMITS AND AXES COME FROM THE GENERATED CHAIN TABLE, which is read out of
+ * the same MJCF the simulator loads and cross-checked against MuJoCo's own
+ * `jnt_range` by `hardware/sim_g1_dds/test_teleop_chains.py`. They used to be
+ * hand-written "reasonable placeholders for simulation/visualization", and the
+ * placeholders were wrong in a way that quietly disabled half the hand:
+ *
+ * - They were SYMMETRIC between the sides, and the hardware is not. The left
+ *   index flexes toward negative and the right toward positive.
+ * - So `left_hand_index_1_joint` was declared `[0, 1.7453]` where the model says
+ *   `[-1.7453, 0]` — two ranges that overlap at the single point 0, leaving the
+ *   joint with NO usable travel: every command to flex it was clamped to zero
+ *   by `setTeleopJoint`, by any input path, silently.
+ * - FOUR joints were dead that way, and the damage was mirrored, which is
+ *   exactly what a symmetric table does to an asymmetric hand: the LEFT hand
+ *   lost `index_1` and `middle_1` — its fingers could not flex, though its
+ *   thumb was untouched — and the RIGHT hand lost `thumb_1` and `thumb_2`, so
+ *   its thumb could not close while its fingers were fine. Four more
+ *   (`index_0` and `middle_0` on both sides) kept 37% of their travel.
+ * - Nine of the fourteen disagreed with the model in total; all fourteen ARM
+ *   joints agreed, which is why this went unnoticed for as long as nothing
+ *   drove the fingers.
+ *
+ * Reading them from the table rather than transcribing them a third time is the
+ * point. `axis` has no consumer today, so it is metadata — but it was also
+ * wrong (every flexion joint was declared 'x' where the model says 'z') and a
+ * wrong fact waiting for its first reader is worth correcting while it is cheap.
  */
 function dex3HandJoints(side: 'left' | 'right'): JointConfig[] {
-  const p = `${side}_hand`;
-  return [
-    // Thumb (3 DOF)
-    { name: `${p}_thumb_0_joint`, axis: 'z', limitLower: -1.0472, limitUpper: 1.0472, defaultPosition: 0 },
-    { name: `${p}_thumb_1_joint`, axis: 'x', limitLower: 0, limitUpper: 1.5708, defaultPosition: 0 },
-    { name: `${p}_thumb_2_joint`, axis: 'x', limitLower: 0, limitUpper: 1.7453, defaultPosition: 0 },
-    // Index finger (2 DOF)
-    { name: `${p}_index_0_joint`, axis: 'z', limitLower: -0.5236, limitUpper: 0.5236, defaultPosition: 0 },
-    { name: `${p}_index_1_joint`, axis: 'x', limitLower: 0, limitUpper: 1.7453, defaultPosition: 0 },
-    // Middle finger (2 DOF)
-    { name: `${p}_middle_0_joint`, axis: 'z', limitLower: -0.5236, limitUpper: 0.5236, defaultPosition: 0 },
-    { name: `${p}_middle_1_joint`, axis: 'x', limitLower: 0, limitUpper: 1.7453, defaultPosition: 0 },
-  ];
+  const axisOf = (v: readonly [number, number, number]): 'x' | 'y' | 'z' => {
+    const i = v.findIndex((c) => Math.abs(c) > 0.5);
+    return (['x', 'y', 'z'] as const)[i === -1 ? 2 : i]!;
+  };
+  // Thumb, index, middle — the order the Dex3 chains are declared in. NOT the
+  // DDS wire order, which lists middle before index on the LEFT hand only
+  // (`hardware/sim_g1_dds/joints.py:25-27`); nothing here indexes by position.
+  return (['thumb', 'index', 'middle'] as const).flatMap((finger) =>
+    G1_FINGER_CHAINS[side][finger].links.map((link) => ({
+      name: link.joint,
+      axis: axisOf(link.axis),
+      limitLower: link.lower,
+      limitUpper: link.upper,
+      // Both limits bracket zero on every one of these joints, so the open hand
+      // is a legal pose on both sides.
+      defaultPosition: 0,
+    })),
+  );
 }
 
 /**
