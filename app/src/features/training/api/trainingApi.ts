@@ -27,6 +27,7 @@ import type {
   CurationResult,
   CurationSuggestResponse,
   EpisodeAnnotation,
+  RobotType,
 } from '../types';
 
 const ENDPOINTS = {
@@ -103,6 +104,18 @@ export const trainingApi = {
   async getDataset(id: string): Promise<Dataset> {
     const response = await apiClient.get<{ dataset: Dataset }>(ENDPOINTS.dataset(id));
     return response.data.dataset;
+  },
+
+  /**
+   * Robot types a dataset can be created against.
+   *
+   * The upload modal needs these and had no source for them — its `robotTypes`
+   * prop defaulted to `[]`, nothing passed it, and `robotTypeId` is required,
+   * so the modal could not be completed at all.
+   */
+  async listRobotTypes(): Promise<RobotType[]> {
+    const response = await apiClient.get<{ robotTypes: RobotType[] }>('/datasets/robot-types');
+    return response.data.robotTypes;
   },
 
   /**

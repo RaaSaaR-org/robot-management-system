@@ -22,6 +22,7 @@ import type {
 import type { DatasetStatus } from '../types/vla.types.js';
 import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
+import { robotTypeRepository } from '../repositories/index.js';
 import { BUCKETS } from '../storage/model-storage.js';
 import type {
   TriggerValidationRequest,
@@ -302,6 +303,26 @@ datasetRoutes.post('/', async (req: Request, res: Response) => {
     console.error('[DatasetRoutes] Error creating dataset:', error);
     const message = error instanceof Error ? error.message : 'Failed to create dataset';
     res.status(400).json({ error: message });
+  }
+});
+
+// ============================================================================
+// GET /api/datasets/robot-types - Robot types a dataset can be created against
+// ============================================================================
+//
+// Declared BEFORE `/:id`, or Express would match `robot-types` as a dataset id.
+//
+// This exists because the upload modal's Robot Type select had no source: the
+// prop defaults to `[]`, `DatasetsPage` never passed it, and `robotTypeId` is
+// required — so the modal could not be completed from the page it opens on,
+// whatever the server did. There was no robot-type listing endpoint anywhere.
+datasetRoutes.get('/robot-types', async (_req: Request, res: Response) => {
+  try {
+    const robotTypes = await robotTypeRepository.findAll();
+    res.json({ robotTypes });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error listing robot types:', error);
+    res.status(500).json({ error: 'Failed to list robot types' });
   }
 });
 
@@ -1309,6 +1330,39 @@ datasetRoutes.get('/:id/trajectories/:idx/metrics', async (req: Request, res: Re
   } catch (error) {
     console.error('[DatasetRoutes] Error getting trajectory metrics:', error);
     res.status(500).json({ error: 'Failed to get trajectory metrics' });
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/:id/validate - Re-run structural validation
+// ============================================================================
+//
+// There was no way to validate a dataset that had not just been uploaded.
+// Validation ran once, inside `completeUpload`, so every dataset registered any
+// other way — from a local directory, from HuggingFace, as a curated revision —
+// could never be checked at all. That is most of the datasets in this database.
+//
+// Synchronous on purpose: it is the only way for a caller to know the answer,
+// and it opens files rather than training on them.
+datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const dataset = await datasetService.get(id);
+    if (!dataset) {
+      return res.status(404).json({ error: 'Dataset not found' });
+    }
+
+    await datasetService.validateAndUpdateDataset(id, dataset.storagePath);
+    const updated = await datasetService.get(id);
+    res.json({
+      datasetId: id,
+      status: updated?.status,
+      qualityScore: updated?.qualityScore,
+      validation: updated?.validation ?? null,
+    });
+  } catch (error) {
+    console.error('[DatasetRoutes] Error validating dataset:', error);
+    res.status(500).json({ error: 'Failed to validate dataset' });
   }
 });
 

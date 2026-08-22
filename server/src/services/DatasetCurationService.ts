@@ -100,6 +100,15 @@ interface ResolvedSource {
   sourceVersion: string;
   /** True when `dir` is a converted view rather than the dataset itself. */
   converted: boolean;
+  /**
+   * Where the dataset itself lives, when that differs from `dir`.
+   *
+   * A curated result is a REAL dataset that gets its own row, so it must not be
+   * written next to a converted view: the view directory is a cache, documented
+   * as safe to delete, and a `__trim-<ts>` sibling in there is a dataset that
+   * disappears when the cache is cleared.
+   */
+  originalDir: string;
 }
 
 const NOOP_CLEANUP = async (): Promise<void> => {};
@@ -160,9 +169,12 @@ export class DatasetCurationService {
     const backend = source.backend;
     try {
       const label = op.type === 'delete' ? 'del' : 'trim';
+      // Named from the ORIGINAL directory, never from a converted view: the
+      // view lives in a cache that is documented as deletable, and the result
+      // of a trim is a real dataset with its own row.
       const outDir =
         source.mode === 'local'
-          ? `${source.dir}__${label}-${Date.now()}`
+          ? `${source.originalDir}__${label}-${Date.now()}`
           : path.join(source.tmpRoot as string, 'out');
 
       let summary: CurationResultSummary;
@@ -281,13 +293,16 @@ export class DatasetCurationService {
      * an already-v2.1 one is returned untouched, so nothing changes for the
      * datasets that worked before.
      */
-    const viewOf = async (dir: string, rest: Omit<ResolvedSource, 'dir' | 'backend' | 'sourceVersion' | 'converted'>)
-      : Promise<ResolvedSource> => {
+    const viewOf = async (
+      dir: string,
+      rest: Omit<ResolvedSource, 'dir' | 'backend' | 'sourceVersion' | 'converted' | 'originalDir'>,
+    ): Promise<ResolvedSource> => {
       try {
         const view = await resolveLocalView(dir);
         return {
           ...rest,
           dir: view.root,
+          originalDir: dir,
           backend: 'native',
           sourceVersion: view.sourceVersion,
           converted: view.converted,
@@ -296,7 +311,10 @@ export class DatasetCurationService {
         // A directory with no readable `meta/info.json` is not something to
         // fail resolution over: `curate.py` will report what is wrong with it
         // far more usefully than a view resolver can.
-        return { ...rest, dir, backend: 'native', sourceVersion: 'unknown', converted: false };
+        return {
+          ...rest, dir, originalDir: dir, backend: 'native',
+          sourceVersion: 'unknown', converted: false,
+        };
       }
     };
 
