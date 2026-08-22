@@ -74,11 +74,11 @@ Der `RobotType`-Union der App fehlte `g1_edu` → Viewer fiel auf eine generisch
 ```powershell
 # 1. DDS→ZMQ-Bridge (read-only), im Repo-Root robot-management-system:
 $env:PYTHONPATH="$env:UNITREE_ROOT/unitree_sdk2_python"; $env:PYTHONIOENCODING="utf-8"
-$env:UNITREE_ROOT/.venv-g1-dds/Scripts/python.exe robot-agent\hardware\g1_state_bridge_readonly.py --iface Ethernet
+& "$env:UNITREE_ROOT/.venv-g1-dds/Scripts/python.exe" robot-agent\hardware\g1_state_bridge_readonly.py --iface Ethernet
 
 # 2. Sidecar (read-only, Default):
 $env:G1_LOWSTATE_ENDPOINT="tcp://127.0.0.1:6001"; $env:PYTHONIOENCODING="utf-8"
-$env:UNITREE_ROOT/.venv-g1-sidecar/Scripts/python.exe robot-agent\hardware\g1_sidecar.py
+& "$env:UNITREE_ROOT/.venv-g1-sidecar/Scripts/python.exe" robot-agent\hardware\g1_sidecar.py
 
 # 3. Server:            cd server && npm run dev
 # 4. G1-Agent (Git-Bash! POSIX-Env-Syntax):

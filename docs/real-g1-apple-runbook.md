@@ -67,7 +67,7 @@ Three processes, three terminals:
 ```powershell
 # 1) GR00T PolicyServer :6555 (groot conda env) — pick the best checkpoint
 #    (14k-class steps beat early ones on every task in prior evals)
-$env:CONDA_ENVS/groot/python.exe -m gr00t.eval.run_gr00t_server `
+& "$env:CONDA_ENVS/groot/python.exe" -m gr00t.eval.run_gr00t_server `
     --model-path $env:UNITREE_ROOT/_ft_out/apple_pnp/checkpoint-<best> `
     --embodiment-tag new_embodiment --port 6555
 
