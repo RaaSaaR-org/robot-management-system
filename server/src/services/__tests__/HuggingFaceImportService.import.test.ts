@@ -481,15 +481,23 @@ describe('retryImport', () => {
     await expect(service.retryImport(DATASET_ID))
       .resolves.toEqual({ datasetId: DATASET_ID, status: 'importing' });
 
-    expect(datasetRepository.update).toHaveBeenCalledWith(
+    // Two writes, in this order and for a reason: the row is CLAIMED
+    // (`importing`, old reason cleared) before the Hub round-trips, so a second
+    // retry arriving inside that window is refused; the commit and the
+    // directory are written once they are known.
+    expect(datasetRepository.update).toHaveBeenNthCalledWith(
+      1,
       DATASET_ID,
       expect.objectContaining({
         status: 'importing',
-        sourceRevision: SHA,
         // A stale reason on a row that is trying again is a lie about the
         // row's current state.
         importError: null,
       }),
+    );
+    expect(datasetRepository.update).toHaveBeenCalledWith(
+      DATASET_ID,
+      expect.objectContaining({ status: 'importing', sourceRevision: SHA }),
     );
     // A SHA needs no resolving, so a retry cannot drift onto a newer commit.
     expect(requested.some((u) => u.includes('/revision/'))).toBe(false);
