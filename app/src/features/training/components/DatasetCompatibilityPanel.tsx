@@ -19,6 +19,7 @@ import { Spinner, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api';
 import type { AxisVerdict, CompatibilityReport, CompatibilityVerdict } from '../types';
+import { getErrorMessage } from '@/shared/utils';
 
 export interface DatasetCompatibilityPanelProps {
   datasetIds: string[];
@@ -84,7 +85,7 @@ export function DatasetCompatibilityPanel({
       onReportRef.current?.(result);
     } catch (err) {
       setReport(null);
-      setError(err instanceof Error ? err.message : 'Could not compare these datasets');
+      setError(getErrorMessage(err, 'Could not compare these datasets'));
     } finally {
       setIsLoading(false);
     }

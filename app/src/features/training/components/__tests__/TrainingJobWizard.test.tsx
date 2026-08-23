@@ -202,4 +202,104 @@ describe('what reaches the server', () => {
     // as a 400 after the modal has closed.
     expect(screen.getByRole('button', { name: 'Submit Training Job' })).toBeDisabled();
   });
+
+  // -------------------------------------------------------------------------
+  // Weights the server refuses.
+  //
+  // A weight is a sampling ratio, so finite-and-positive is the whole domain,
+  // and the server rejects the rest. `Number('') === 0`, so clearing the box —
+  // the most ordinary thing to do before typing a new number — used to submit
+  // a member the trainer would never sample, with nothing said about it.
+  // -------------------------------------------------------------------------
+
+  it('will not submit a weight of zero, and says which dataset', async () => {
+    const onSubmit = vi.fn();
+    render(
+      <TrainingJobWizard
+        isOpen
+        onClose={() => {}}
+        onSubmit={onSubmit}
+        datasets={DATASETS}
+        initialMixture={[{ datasetId: 'ds-groot' }, { datasetId: 'ds-dex3' }]}
+      />
+    );
+
+    const weight = await screen.findByLabelText('Weight for G1 Dex3 ObjectPlacement');
+    fireEvent.change(weight, { target: { value: '' } });
+
+    await advanceToReview();
+
+    expect(await screen.findByTestId('bad-weight-notice')).toHaveTextContent(
+      'G1 Dex3 ObjectPlacement'
+    );
+    expect(screen.getByRole('button', { name: 'Submit Training Job' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('will not submit a negative weight', async () => {
+    render(
+      <TrainingJobWizard
+        isOpen
+        onClose={() => {}}
+        onSubmit={vi.fn()}
+        datasets={DATASETS}
+        initialMixture={[{ datasetId: 'ds-groot' }, { datasetId: 'ds-dex3' }]}
+      />
+    );
+    const weight = await screen.findByLabelText('Weight for G1 Dex3 ObjectPlacement');
+    fireEvent.change(weight, { target: { value: '-2' } });
+
+    await advanceToReview();
+    expect(screen.getByRole('button', { name: 'Submit Training Job' })).toBeDisabled();
+  });
+
+  // The api client rejects with a PLAIN OBJECT — `createApiError` in
+  // api/client.ts returns `{code, message, details, statusCode}`, not an Error.
+  // So `err instanceof Error ? err.message : fallback` always took the
+  // fallback, and every message the server had carefully written — the
+  // incompatible-mixture headline, the 409 naming the jobs holding a dataset —
+  // was replaced on screen by a generic sentence.
+  it('shows the server\u2019s message, not a generic fallback', async () => {
+    const onSubmit = vi.fn().mockRejectedValue({
+      code: 'BAD_REQUEST',
+      message:
+        'This mixture cannot be trained: 25 fps and 30 fps do not divide, so no subsampling aligns them.',
+      statusCode: 400,
+    });
+
+    render(
+      <TrainingJobWizard
+        isOpen
+        onClose={() => {}}
+        onSubmit={onSubmit}
+        datasets={DATASETS}
+        initialMixture={[{ datasetId: 'ds-groot', weight: 3 }, { datasetId: 'ds-dex3', weight: 1 }]}
+      />
+    );
+    await screen.findByLabelText('Weight for GR00T AppleToPlate');
+    await advanceToReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Training Job' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('no subsampling aligns them');
+    expect(alert).not.toHaveTextContent('Failed to submit training job');
+  });
+
+  it('says nothing when every weight is fine', async () => {
+    render(
+      <TrainingJobWizard
+        isOpen
+        onClose={() => {}}
+        onSubmit={vi.fn()}
+        datasets={DATASETS}
+        initialMixture={[{ datasetId: 'ds-groot', weight: 3 }, { datasetId: 'ds-dex3', weight: 1 }]}
+      />
+    );
+    await screen.findByLabelText('Weight for GR00T AppleToPlate');
+    await advanceToReview();
+
+    expect(screen.queryByTestId('bad-weight-notice')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit Training Job' })).not.toBeDisabled();
+  });
 });

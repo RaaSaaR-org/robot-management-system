@@ -26,6 +26,7 @@ import type {
   TrainingJobKind,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils';
 
 export interface TrainingJobWizardProps {
   isOpen: boolean;
@@ -179,6 +180,13 @@ export function TrainingJobWizard({
 
   // The selection made on the Datasets page, as a value that only changes when
   // the selection does — an inline array prop is a new object every render.
+  // Weights the server will refuse (finite and positive is the whole domain of
+  // a sampling ratio). Checked here so the reason is visible next to the field
+  // rather than arriving as a 400 after the wizard has been dismissed — and
+  // `Number('') === 0`, so simply clearing the box lands here too.
+  const badWeights = (form: FormState) =>
+    form.mixture.filter((m) => !(Number.isFinite(m.weight) && m.weight > 0));
+
   const seededMixture = (initialMixture ?? [])
     .map((m) => `${m.datasetId}:${m.weight ?? 1}`)
     .join(',');
@@ -276,7 +284,7 @@ export function TrainingJobWizard({
       }
       handleClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit training job');
+      setError(getErrorMessage(err, 'Failed to submit training job'));
     }
   }, [form, onSubmit, handleClose]);
 
@@ -501,7 +509,7 @@ export function TrainingJobWizard({
                             Weight
                             <input
                               type="number"
-                              min={0}
+                              min={0.1}
                               step={0.1}
                               value={member.weight}
                               aria-label={`Weight for ${dataset.name}`}
@@ -669,6 +677,21 @@ export function TrainingJobWizard({
                 Review your configuration before submitting.
               </p>
 
+              {badWeights(form).length > 0 && (
+                <div
+                  className="p-3 rounded-brand bg-amber-500/10 text-sm text-amber-700 dark:text-amber-300"
+                  data-testid="bad-weight-notice"
+                >
+                  {badWeights(form)
+                    .map((m) => datasets.find((d) => d.id === m.datasetId)?.name ?? m.datasetId)
+                    .join(', ')}{' '}
+                  {badWeights(form).length === 1 ? 'has' : 'have'} a weight that is not a positive
+                  number. A weight is how often the trainer samples that dataset relative to the
+                  others, so zero would silently leave it out of the run. Go back and set it, or
+                  remove the dataset from the mixture.
+                </div>
+              )}
+
               <div className="space-y-4 p-4 bg-theme-secondary/10 rounded-lg" data-testid="review-summary">
                 <div className="grid grid-cols-2 gap-4">
                   {form.kind === 'sim_rl' ? (
@@ -793,9 +816,10 @@ export function TrainingJobWizard({
             <Button
               onClick={handleSubmit}
               isLoading={isSubmitting}
-              // The server refuses an incompatible mixture with a 400. Refusing
-              // it here means the reason is still on screen when it happens.
-              disabled={compatibility?.verdict === 'incompatible'}
+              // The server refuses an incompatible mixture with a 400, and a
+              // non-positive weight with another. Refusing both here means the
+              // reason is still on screen when it happens.
+              disabled={compatibility?.verdict === 'incompatible' || badWeights(form).length > 0}
             >
               Submit Training Job
             </Button>

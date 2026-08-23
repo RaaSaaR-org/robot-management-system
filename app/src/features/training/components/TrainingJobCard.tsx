@@ -12,6 +12,7 @@ import { trainingApi } from '../api';
 import type { TrainingJob, TrainingJobStatus } from '../types';
 import { simRlTrainerLabel } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils';
 
 export interface TrainingJobCardProps {
   job: TrainingJob;
@@ -83,7 +84,7 @@ export function TrainingJobCard({
       setExportWarnings(manifest.warnings ?? []);
       downloadJson(manifest, `neodem-run-${job.id}.json`);
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : 'Could not export this run');
+      setExportError(getErrorMessage(err, 'Could not export this run'));
     } finally {
       setIsExporting(false);
     }

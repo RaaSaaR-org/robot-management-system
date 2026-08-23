@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, createEvent } from '@testing-library/react';
 import { DatasetCard } from '../DatasetCard';
 import type { Dataset, DatasetValidation } from '../../types';
 
@@ -235,6 +235,63 @@ describe('reaching the card without a mouse', () => {
   it('is not a button when there is nothing to click', () => {
     render(<DatasetCard dataset={makeDataset()} />);
     expect(screen.queryByRole('button', { name: /Pick and place/ })).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // …and does NOT answer for the controls inside it.
+  //
+  // Keydown bubbles. The card's handler ran for Enter and Space raised on every
+  // control in the card, and called `preventDefault()` on the way: Enter on
+  // "Retry import" retried AND navigated away from the page you were retrying
+  // on, and Space on the mixture checkbox was cancelled before it could toggle.
+  // Keyboard users got a different card from mouse users.
+  // ---------------------------------------------------------------------------
+
+  it('does not navigate when Enter is pressed on a button inside it', () => {
+    const onClick = vi.fn();
+    const onRetryImport = vi.fn();
+    const dataset = makeDataset({
+      status: 'failed',
+      huggingFaceRepoId: 'nvidia/GR00T-N1.7-AppleToPlate',
+      importError: {
+        phase: 'download',
+        error: 'RustFS is unreachable at http://localhost:9000',
+        repoId: 'nvidia/GR00T-N1.7-AppleToPlate',
+        failedAt: '2026-08-23T01:20:11.361Z',
+      },
+    });
+    render(<DatasetCard dataset={dataset} onClick={onClick} onRetryImport={onRetryImport} />);
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Retry import' }), {
+      key: 'Enter',
+      bubbles: true,
+    });
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('does not swallow Space on the mixture checkbox', () => {
+    const onClick = vi.fn();
+    render(
+      <DatasetCard
+        dataset={makeDataset()}
+        selectable
+        checked={false}
+        onToggleChecked={() => {}}
+        onClick={onClick}
+      />
+    );
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Select Pick and place for a training mixture',
+    });
+
+    const event = createEvent.keyDown(checkbox, { key: ' ', bubbles: true });
+    fireEvent(checkbox, event);
+
+    // The browser toggles a focused checkbox on Space unless the default is
+    // prevented — which is exactly what the card used to do to it.
+    expect(event.defaultPrevented).toBe(false);
+    expect(onClick).not.toHaveBeenCalled();
   });
 });
 

@@ -24,6 +24,7 @@ import type {
   RobotType,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils';
 
 // ============================================================================
 // FEATURED DATASETS
@@ -168,6 +169,10 @@ export function HFDatasetBrowserModal({
   const [importState, setImportState] = useState<ImportState>('idle');
   const [importProgress, setImportProgress] = useState<HFImportProgress | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // The progress socket went away while an import was still running. Not an
+  // import failure — the import runs detached on the server and carries on —
+  // just the end of our ability to watch it.
+  const [feedLost, setFeedLost] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Null until the POST comes back with an id. Everything the socket says
@@ -196,6 +201,7 @@ export function HFDatasetBrowserModal({
     setPreviewError(null);
     setIncludeVideos(true);
     setVideosTouched(false);
+    setFeedLost(false);
     setImportState('idle');
     setImportProgress(null);
     setImportError(null);
@@ -273,7 +279,7 @@ export function HFDatasetBrowserModal({
 
       setSearchResults(results);
     } catch (err) {
-      setSearchError(err instanceof Error ? err.message : 'Search failed');
+      setSearchError(getErrorMessage(err, 'Search failed'));
     } finally {
       setIsSearching(false);
     }
@@ -291,7 +297,7 @@ export function HFDatasetBrowserModal({
       // re-check from undoing a decision the user has already made here.
       setIncludeVideos((current) => (keepChoice ? current : result.cameraKeys.length > 0));
     } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : 'Could not read this repository');
+      setPreviewError(getErrorMessage(err, 'Could not read this repository'));
     } finally {
       setPreviewLoading(false);
     }
@@ -355,8 +361,24 @@ export function HFDatasetBrowserModal({
       ws.onerror = () => {
         console.error('[HFImport] WebSocket error');
       };
+      // A socket that closes mid-import used to leave the modal on the spinner
+      // for ever: no further frames, no error, and the modal refuses backdrop
+      // and Escape while importing — so the operator was trapped watching a
+      // progress bar that would never move again. The import itself is
+      // unaffected (it runs detached on the server), so the honest thing is to
+      // say the feed is gone and let them out to the dataset list.
+      ws.onclose = () => {
+        // Every deliberate close goes through `closeSocket`, which nulls the
+        // ref first — on success, on failure, on cancel, on unmount. So a close
+        // arriving while the ref still points at THIS socket is one nobody
+        // asked for, and the import it was reporting on is still in flight.
+        if (wsRef.current !== ws) return;
+        wsRef.current = null;
+        setFeedLost(true);
+      };
     } catch {
       console.error('[HFImport] Failed to create WebSocket');
+      setFeedLost(true);
     }
   }, [handleSocketData]);
 
@@ -397,7 +419,7 @@ export function HFDatasetBrowserModal({
       }
     } catch (err) {
       setImportState('error');
-      setImportError(err instanceof Error ? err.message : 'Import failed');
+      setImportError(getErrorMessage(err, 'Import failed'));
       closeSocket();
     }
   }, [pendingRepoId, revision, robotTypeId, includeVideos, openSocket, applyMessage, closeSocket]);
@@ -564,8 +586,8 @@ export function HFDatasetBrowserModal({
       size="lg"
       // An import is a download of up to a gigabyte with no resume. A stray
       // click on the backdrop must not be able to abandon it.
-      closeOnBackdrop={!isImporting}
-      closeOnEscape={!isImporting}
+      closeOnBackdrop={!isImporting || feedLost}
+      closeOnEscape={!isImporting || feedLost}
     >
       <div className="space-y-6">
         {importState === 'idle' && (
@@ -646,7 +668,20 @@ export function HFDatasetBrowserModal({
           </div>
         )}
 
-        {importState === 'importing' && (
+        {importState === 'importing' && feedLost && (
+          <div className="py-8 space-y-4 text-center" data-testid="hf-import-feed-lost">
+            <p className="text-theme-primary font-medium">
+              Lost the live connection to the server
+            </p>
+            <p className="text-sm text-theme-secondary max-w-md mx-auto">
+              The import itself is still running — it does not depend on this window. Close this
+              and the dataset will show how it ended, with the reason if it failed.
+            </p>
+            <Button variant="secondary" onClick={handleClose}>Close</Button>
+          </div>
+        )}
+
+        {importState === 'importing' && !feedLost && (
           <div className="text-center py-8 space-y-4">
             <Spinner size="lg" />
             <p className="text-theme-primary font-medium">Importing dataset...</p>
@@ -820,8 +855,8 @@ function PreviewFacts({ preview }: { preview: HFDatasetPreview }) {
         <Fact label="Episodes" value={preview.totalEpisodes.toLocaleString(UI_DATE_LOCALE)} />
         <Fact label="Frames" value={preview.totalFrames.toLocaleString(UI_DATE_LOCALE)} />
         <Fact label="Files" value={preview.fileCount.toLocaleString(UI_DATE_LOCALE)} />
-        <Fact label="State width" value={String(preview.stateWidth)} />
-        <Fact label="Action width" value={String(preview.actionWidth)} />
+        <Fact label="State width" value={preview.stateWidth?.toString() ?? 'unknown'} />
+        <Fact label="Action width" value={preview.actionWidth?.toString() ?? 'unknown'} />
         <Fact label="License" value={preview.license ?? 'Not stated'} />
       </div>
 

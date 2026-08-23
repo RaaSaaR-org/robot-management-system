@@ -381,8 +381,12 @@ export interface HFDatasetPreview {
   fps: number;
   totalEpisodes: number;
   totalFrames: number;
-  stateWidth: number;
-  actionWidth: number;
+  // Nullable, exactly as the server sends them: `previewRepo` emits
+  // `declaredFeatureWidth(...) || null`, so a repo whose info.json declares no
+  // shape for observation.state has no width to report. Typed `number` here,
+  // the preview rendered the literal string "null" as the width.
+  stateWidth: number | null;
+  actionWidth: number | null;
   cameraKeys: string[];
   fileCount: number;
   dataBytes: number;

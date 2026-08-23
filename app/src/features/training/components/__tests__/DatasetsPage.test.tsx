@@ -28,6 +28,8 @@ const { listDatasets, listRobotTypes, trainingApiMock } = vi.hoisted(() => {
       getEpisodeVideoUrl: () => 'about:blank',
       listTrainingJobs: vi.fn().mockResolvedValue({ jobs: [], pagination: {} }),
       checkCompatibility: vi.fn(),
+      retryImport: vi.fn(),
+      deleteDataset: vi.fn(),
     },
   };
 });
@@ -165,5 +167,74 @@ describe('the filters', () => {
 
     expect(await screen.findByText('No datasets match your filters.')).toBeInTheDocument();
     expect(screen.queryByText('No datasets yet')).not.toBeInTheDocument();
+  });
+});
+
+
+// ===========================================================================
+// An action that did not happen, and why
+//
+// Both `handleConfirmDelete` and `handleRetryImport` used to end in
+// `console.error` alone. The operator clicked, nothing moved, and the reason
+// was visible only with devtools open — including the 409 that names the
+// training jobs still holding a dataset, which is the whole point of that
+// refusal being written carefully.
+// ===========================================================================
+
+describe('when a delete or a retry is refused', () => {
+  it('shows the server\u2019s reason for a refused delete', async () => {
+    trainingApiMock.deleteDataset.mockRejectedValue({
+      code: 'CONFLICT',
+      message:
+        '"GR00T-N1.7-AppleToPlate" is a member of 2 training jobs (job-a, job-b), so deleting it '
+        + 'would leave those runs citing data that no longer exists.',
+      statusCode: 409,
+    });
+
+    page();
+    await waitFor(() => expect(screen.getAllByText('Ready dataset').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Delete$/ }));
+
+    const banner = await screen.findByTestId('dataset-action-error');
+    expect(banner).toHaveTextContent('member of 2 training jobs');
+    expect(banner).toHaveTextContent('job-a, job-b');
+  });
+
+  it('shows why a retry could not start', async () => {
+    trainingApiMock.retryImport.mockRejectedValue({
+      code: 'IN_PROGRESS',
+      message: 'An import of this dataset is already running',
+      statusCode: 409,
+    });
+
+    // The Retry button only appears on a row that carries a recorded reason,
+    // which is the row this whole feature exists for.
+    listDatasets.mockResolvedValue({
+      datasets: [
+        DATASETS[0],
+        dataset({
+          id: 'ds-groot',
+          name: 'GR00T-N1.7-AppleToPlate',
+          status: 'failed',
+          huggingFaceRepoId: 'nvidia/GR00T-N1.7-AppleToPlate',
+          importError: {
+            phase: 'download',
+            error: 'RustFS is unreachable at http://localhost:9000',
+            repoId: 'nvidia/GR00T-N1.7-AppleToPlate',
+            failedAt: '2026-08-23T01:20:11.361Z',
+          },
+        }),
+      ],
+      pagination: { page: 1, pageSize: 20, total: 2, totalPages: 1 },
+    });
+
+    page();
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry import' }));
+
+    expect(await screen.findByTestId('dataset-action-error')).toHaveTextContent(
+      'already running'
+    );
   });
 });

@@ -36,6 +36,7 @@ class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
   closed = false;
 
   constructor(readonly url: string) {
@@ -48,6 +49,12 @@ class FakeWebSocket {
 
   emit(payload: unknown): void {
     this.onmessage?.({ data: JSON.stringify(payload) });
+  }
+
+  /** The server going away, a proxy timing out, a laptop lid closing. */
+  drop(): void {
+    this.closed = true;
+    this.onclose?.();
   }
 }
 
@@ -169,6 +176,21 @@ describe('what the modal shows before committing to a download', () => {
       expect.objectContaining({ revision: 'v1.1', robotTypeId: 'rt-g1' })
     );
   });
+  it('says "unknown" for a width the repo does not declare', async () => {
+    // The server sends `declaredFeatureWidth(...) || null`, so a repo whose
+    // info.json declares no shape has no width. Typed as `number` on the
+    // client, `String(null)` put the word "null" on screen as the answer.
+    previewHuggingFace.mockResolvedValue(
+      grootPreview({ stateWidth: null, actionWidth: null })
+    );
+
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    await openPreview();
+
+    const facts = await screen.findByTestId('hf-preview-facts');
+    expect(facts).toHaveTextContent('unknown');
+    expect(facts).not.toHaveTextContent('null');
+  });
 });
 
 describe('the progress socket', () => {
@@ -231,6 +253,72 @@ describe('the progress socket', () => {
     });
 
     await waitFor(() => expect(screen.queryByTestId('hf-import-error')).not.toBeInTheDocument());
+  });
+
+  // -------------------------------------------------------------------------
+  // …and when the socket goes away on its own.
+  //
+  // `onclose` was unhandled, so a server restart, a proxy timeout or a closed
+  // laptop lid left the modal on a spinner that would never move again — and
+  // the modal refuses backdrop and Escape while importing, so there was no way
+  // out of it. The import is unaffected: it runs detached on the server.
+  // -------------------------------------------------------------------------
+
+  it('says so when the feed drops, instead of spinning for ever', async () => {
+    importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
+
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    await openPreview();
+    await screen.findByTestId('hf-preview-facts');
+    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    FakeWebSocket.instances[0].drop();
+
+    const notice = await screen.findByTestId('hf-import-feed-lost');
+    // The distinction that matters: the feed died, the import did not.
+    expect(notice).toHaveTextContent(/still running/i);
+    expect(screen.queryByText('Importing dataset...')).not.toBeInTheDocument();
+  });
+
+  it('lets the operator out once the feed is gone', async () => {
+    const onClose = vi.fn();
+    importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
+
+    render(<HFDatasetBrowserModal isOpen onClose={onClose} />);
+    await openPreview();
+    await screen.findByTestId('hf-preview-facts');
+    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    FakeWebSocket.instances[0].drop();
+    await screen.findByTestId('hf-import-feed-lost');
+
+    // Escape works again — it is deliberately refused only while there is
+    // still a live import to watch.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does not cry about a socket the modal closed itself', async () => {
+    // The success path closes the socket on purpose. That must not be reported
+    // as a lost connection.
+    importFromHuggingFace.mockResolvedValue({ datasetId: 'ds-new' });
+
+    render(<HFDatasetBrowserModal isOpen onClose={() => {}} />);
+    await openPreview();
+    await screen.findByTestId('hf-preview-facts');
+    fireEvent.click(screen.getByRole('button', { name: /^Import/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    FakeWebSocket.instances[0].emit({
+      type: 'dataset:import:completed',
+      datasetId: 'ds-new',
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('hf-import-feed-lost')).not.toBeInTheDocument()
+    );
   });
 });
 

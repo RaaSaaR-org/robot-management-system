@@ -90,6 +90,12 @@ export function DatasetCard({
   // The card is a div, and a div with an onClick is invisible to a keyboard.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!onClick) return;
+    // ONLY when the card itself has focus. Keydown bubbles, so without this the
+    // card answered Enter and Space raised on every control inside it — the
+    // mixture checkbox, Retry import, Episodes, Delete, the Hugging Face link.
+    // Enter on Retry opened the dataset as well as retrying; Space on the
+    // checkbox was swallowed by the preventDefault below and never toggled it.
+    if (event.target !== event.currentTarget) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     // Space scrolls the page otherwise, which is what the button role promises
     // it will not do.

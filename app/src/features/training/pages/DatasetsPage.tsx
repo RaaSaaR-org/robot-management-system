@@ -29,6 +29,7 @@ import type {
   SubmitTrainingJobInput,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils';
 
 /** What POST /api/datasets/compatibility accepts in one request. */
 const MAX_MIXTURE_MEMBERS = 8;
@@ -61,6 +62,11 @@ export function DatasetsPage() {
   const [pushDataset, setPushDataset] = useState<Dataset | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  // Why the last delete or retry did not happen. Both used to go to
+  // console.error only: the operator clicked Delete, nothing moved, and the
+  // reason — including the 409 that names the training jobs still holding the
+  // dataset — was visible only with devtools open.
+  const [actionError, setActionError] = useState<string | null>(null);
   const [filters, setFilters] = useState<DatasetQueryParams>({});
   const [showSyntheticOnly, setShowSyntheticOnly] = useState(false);
   const [robotTypes, setRobotTypes] = useState<RobotType[]>([]);
@@ -131,11 +137,14 @@ export function DatasetsPage() {
   const handleConfirmDelete = async () => {
     if (!datasetToDelete) return;
     setIsDeleting(true);
+    setActionError(null);
     try {
       await deleteDataset(datasetToDelete.id);
       setDatasetToDelete(null);
     } catch (err) {
       console.error('Failed to delete dataset:', err);
+      setActionError(getErrorMessage(err, 'Could not delete this dataset'));
+      setDatasetToDelete(null);
     } finally {
       setIsDeleting(false);
     }
@@ -143,10 +152,14 @@ export function DatasetsPage() {
 
   const handleRetryImport = useCallback(
     async (dataset: Dataset) => {
+      setActionError(null);
       try {
         await retryImport(dataset.id);
       } catch (err) {
         console.error('Failed to retry import:', err);
+        setActionError(
+          getErrorMessage(err, `Could not restart the import of "${dataset.name}"`),
+        );
       }
     },
     [retryImport],
@@ -205,6 +218,22 @@ export function DatasetsPage() {
           </>
         }
       />
+
+      {/* An action the operator took that did not happen, and why. Separate
+          from `error` (which is the list failing to load) because this one is
+          answered by reading it, not by retrying the fetch. */}
+      {actionError && (
+        <div
+          className="p-4 bg-red-100 text-red-700 rounded-lg flex items-start justify-between gap-4"
+          data-testid="dataset-action-error"
+          role="alert"
+        >
+          <p className="text-sm">{actionError}</p>
+          <Button variant="ghost" size="sm" onClick={() => setActionError(null)}>
+            Dismiss
+          </Button>
+        </div>
+      )}
 
       {/* Error state */}
       {error && (
