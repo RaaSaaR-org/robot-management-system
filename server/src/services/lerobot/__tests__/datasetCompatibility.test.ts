@@ -365,3 +365,55 @@ describe('analyzeDatasetIds', () => {
     expect(axisOf(report, 'robotType').values[0].value).toBe('Unitree G1');
   });
 });
+
+// ===========================================================================
+// What a `compatible` verdict is allowed to promise
+//
+// It used to say "Nothing here changes the tensors the model sees" of every
+// compatible mixture. That is true when the members differ only in name or
+// robot-type row; it is false when they differ in camera keys (an encoder with
+// no input for half the batches) or in LeRobot version (two different layouts
+// on disk that no one loader opens as a single dataset).
+// ===========================================================================
+
+describe('a compatible verdict', () => {
+  it('does not promise clean concatenation when the camera keys differ', () => {
+    const report = analyzeCompatibility([
+      groot({ id: 'a' }),
+      groot({
+        id: 'b',
+        infoJson: info({ robotType: 'unitree_g1', width: 43, cameras: ['observation.images.wrist'] }),
+      }),
+    ]);
+
+    expect(report.verdict).toBe('compatible');
+    expect(report.headline).not.toMatch(/can be concatenated/);
+    expect(report.recommendation).not.toMatch(/Nothing here changes the tensors/);
+    expect(report.recommendation).toMatch(/mixture/i);
+  });
+
+  it('does not promise clean concatenation across LeRobot versions', () => {
+    const report = analyzeCompatibility([
+      groot({ id: 'a', lerobotVersion: 'v2.1' }),
+      groot({ id: 'b', lerobotVersion: 'v3.0' }),
+    ]);
+
+    expect(report.verdict).toBe('compatible');
+    expect(report.headline).not.toMatch(/can be concatenated/);
+  });
+
+  it('carries every differing axis\u2019s note into the recommendation', () => {
+    // The notes are where the actual instruction lives ("configure subsampling",
+    // "one embodiment tag per member"). A headline that summarised them away
+    // was the reason the blanket sentence went unnoticed for so long.
+    const report = analyzeCompatibility([
+      groot({ id: 'a', fps: 15 }),
+      groot({ id: 'b', fps: 30 }),
+    ]);
+
+    expect(report.verdict).toBe('compatible');
+    expect(report.headline).toMatch(/share an action space/);
+    expect(report.recommendation).toMatch(/subsample/i);
+    expect(report.recommendation).not.toMatch(/Nothing here changes the tensors/);
+  });
+});

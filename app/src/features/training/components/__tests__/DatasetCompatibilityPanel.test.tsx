@@ -147,7 +147,15 @@ describe('the comparison table', () => {
   });
 
   it('says the comparison failed instead of rendering an empty table', async () => {
-    checkCompatibility.mockRejectedValue(new Error('compatibility endpoint returned 500'));
+    // The shape `apiClient` ACTUALLY rejects with: `createApiError` returns a
+    // plain object, not an Error. Rejecting with `new Error(...)` here made the
+    // test pass against code whose `err instanceof Error` check was false for
+    // every real failure.
+    checkCompatibility.mockRejectedValue({
+      code: 'INTERNAL',
+      message: 'compatibility endpoint returned 500',
+      statusCode: 500,
+    });
     render(<DatasetCompatibilityPanel datasetIds={['ds-groot', 'ds-dex3']} />);
     expect(await screen.findByTestId('compatibility-error')).toHaveTextContent(
       'compatibility endpoint returned 500'

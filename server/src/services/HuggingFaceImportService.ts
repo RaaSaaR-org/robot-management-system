@@ -1057,11 +1057,15 @@ export class HuggingFaceImportService {
         return response;
       }
 
-      // Respect Retry-After header if present
-      const retryAfter = response.headers.get('retry-after');
-      const waitMs = retryAfter
-        ? parseInt(retryAfter, 10) * 1000
-        : delay;
+      // Respect Retry-After if it says something usable.
+      //
+      // RFC 7231 allows TWO forms, and only one of them is a number:
+      // `Retry-After: 120` and `Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`.
+      // `parseInt` of the date form is NaN, `Math.min(NaN, …)` is NaN, and
+      // `setTimeout(fn, NaN)` fires immediately — so a date-form header turned
+      // the backoff into five instant retries against a server that had just
+      // asked for a pause, and the import failed in milliseconds.
+      const waitMs = retryAfterMs(response.headers.get('retry-after')) ?? delay;
 
       console.log(
         `[HFImport] Rate limited (429) on ${url}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})`
@@ -1112,6 +1116,26 @@ export class HuggingFaceImportService {
  * `includeVideos` decides about, and `validateDataset` already treats a missing
  * one of either as the same class of problem.
  */
+/**
+ * `Retry-After` in milliseconds, or null when the header says nothing usable.
+ *
+ * Both RFC 7231 forms: delay-seconds, and an HTTP-date which is turned into a
+ * delay from now. Anything else — absent, malformed, negative, a date in the
+ * past — is null, and the caller falls back to its own exponential backoff
+ * rather than to NaN.
+ */
+export function retryAfterMs(header: string | null, now = Date.now()): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) ? seconds * 1000 : null;
+  }
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - now);
+}
+
 export function isVideoPath(path: string): boolean {
   return (path.startsWith('videos/') && path.endsWith('.mp4')) || path.startsWith('images/');
 }

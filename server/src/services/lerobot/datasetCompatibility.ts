@@ -381,15 +381,31 @@ function headlineFor(
             + 'embodiment from the mixture instead.',
       };
     }
-    case 'compatible':
+    case 'compatible': {
+      // This branch used to end with "Nothing here changes the tensors the
+      // model sees", and not one of the axes that can reach it is that
+      // harmless. Cameras: a key present in one member and absent in another
+      // leaves that encoder with no input for half the batches. Version: v2.1
+      // and v3.0 are different layouts on disk, read by different readers.
+      // Frame rate: something has to be configured to subsample, or the policy
+      // learns two playback speeds. Robot type: the run needs an embodiment tag
+      // per member and a policy that can carry more than one.
+      //
+      // So `compatible` means "these share an action space", not "these are
+      // interchangeable" — and the difference is stated rather than waved away.
+      // Every note is carried through, because the notes are where the actual
+      // instruction lives.
+      const named = differing.map((a) => a.label.toLowerCase()).join(', ');
       return {
         headline:
-          `These ${n} datasets can be concatenated; they differ only in `
-          + differing.map((a) => a.label.toLowerCase()).join(', ') + '.',
+          `These ${n} datasets share an action space, so one model can learn both — but they differ `
+          + `in ${named}, which the loader has to be told about rather than concatenated through.`,
         recommendation:
-          'Nothing here changes the tensors the model sees. Read the notes below so the differences '
-          + 'are a decision rather than a surprise.',
+          differing.map((a) => a.note).join(' ')
+          + ' Train them as a weighted mixture rather than as one dataset, or bring the members '
+          + 'into line first.',
       };
+    }
     default:
       return {
         headline:

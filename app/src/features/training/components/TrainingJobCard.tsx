@@ -339,12 +339,23 @@ function downloadJson(payload: unknown, filename: string): void {
   const url = URL.createObjectURL(
     new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
   );
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  // IN the document before it is clicked. A detached anchor's `click()` is a
+  // no-op in Firefox — it downloads in Chrome and Safari and silently does
+  // nothing there, which is the worst way for this to fail: the card says the
+  // run exported cleanly and no file ever appears.
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
   try {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
     anchor.click();
   } finally {
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    // NOT synchronously. `click()` only starts the download; revoking the
+    // object URL in the same tick pulls the bytes out from under a fetch that
+    // has not happened yet, and the browser cancels it. A tick later the
+    // download owns its own reference.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }

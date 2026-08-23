@@ -268,14 +268,34 @@ export class TrainingJobService extends EventEmitter {
     // in `TrainingJob.datasetId`, which is what every existing query, worker and
     // wizard already reads — `getJobDatasets` synthesises the member list for it.
     if (members) {
-      await prisma.trainingJobDataset.createMany({
-        data: members.map((member, position) => ({
-          trainingJobId: job.id,
-          datasetId: member.datasetId,
-          weight: member.weight ?? 1,
-          position,
-        })),
-      });
+      try {
+        await prisma.trainingJobDataset.createMany({
+          data: members.map((member, position) => ({
+            trainingJobId: job.id,
+            datasetId: member.datasetId,
+            weight: member.weight ?? 1,
+            position,
+          })),
+        });
+      } catch (error) {
+        // The job row already exists at this point, and a job with no member
+        // rows is INDISTINGUISHABLE from an ordinary single-dataset job —
+        // `getJobDatasets` synthesises one member from `datasetId` precisely so
+        // callers never have to branch. So a half-written mixture would not
+        // look broken: it would look like a job on one dataset, be claimed as
+        // one, train as one, and report success. Undone rather than left, and
+        // the failure is raised so the caller sees a refusal instead of a job.
+        //
+        // Deleting the job cascades any rows that did land
+        // (TrainingJobDataset.trainingJobId is ON DELETE CASCADE).
+        await trainingJobRepository.delete(job.id).catch((cleanupError) => {
+          console.error(
+            `[TrainingJobService] Job ${job.id} has no mixture rows and could not be removed:`,
+            cleanupError,
+          );
+        });
+        throw error;
+      }
     }
 
     // Add to NATS queue if available. The HTTP claim worker reads jobs

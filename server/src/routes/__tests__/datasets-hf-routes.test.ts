@@ -113,7 +113,16 @@ describe('dataset HuggingFace routes', () => {
         .query({ repoId: PREVIEW.repoId });
 
       expect(response.body).toEqual(PREVIEW);
-      expect(response.body.videoBytes).toBeGreaterThan(response.body.dataBytes);
+      // What the route is responsible for: reaching the service with the repo
+      // the caller named, and passing every field through untouched. Comparing
+      // `videoBytes > dataBytes` on the way back out would only compare two
+      // literals from this file to each other — the handler is `res.json(...)`,
+      // so no change to the route could ever make that fail.
+      expect(hf.previewRepo).toHaveBeenCalledWith(PREVIEW.repoId, 'main');
+      // The split is the point of the endpoint, so assert the fields EXIST
+      // rather than that one fixture number exceeds another.
+      expect(response.body).toHaveProperty('dataBytes');
+      expect(response.body).toHaveProperty('videoBytes');
     });
 
     it('passes a revision through when one is given', async () => {

@@ -632,4 +632,24 @@ describe('retryImport', () => {
     vi.mocked(datasetRepository.findById).mockResolvedValue(null);
     await expect(service.retryImport(DATASET_ID)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
+
+  it("records the phase as 'metadata' when a retry cannot read the repo", async () => {
+    // The phase is what tells the operator WHERE it broke, and 'downloading'
+    // was the only value any test had ever seen. A retry that fails before a
+    // byte is fetched must not claim it died downloading — and it must release
+    // the claim it took, or the row is stuck at `importing` for ever with
+    // nothing running.
+    installFakeHub({ revisionStatus: 404 });
+    vi.mocked(datasetRepository.findById).mockResolvedValue(failedRow as never);
+
+    await expect(service.retryImport(DATASET_ID)).rejects.toThrow();
+
+    expect(datasetRepository.update).toHaveBeenCalledWith(
+      DATASET_ID,
+      expect.objectContaining({
+        status: 'failed',
+        importError: expect.objectContaining({ phase: 'metadata', repoId: REPO }),
+      }),
+    );
+  });
 });

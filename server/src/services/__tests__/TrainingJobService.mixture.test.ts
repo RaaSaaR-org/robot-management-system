@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../repositories/index.js', () => ({
-  trainingJobRepository: { create: vi.fn(), findById: vi.fn(), update: vi.fn() },
+  trainingJobRepository: { create: vi.fn(), findById: vi.fn(), update: vi.fn(), delete: vi.fn() },
   datasetRepository: { findById: vi.fn() },
   simSceneRepository: { findById: vi.fn() },
 }));
@@ -101,6 +101,7 @@ beforeEach(() => {
   trainingJobRepository.create.mockResolvedValue(createdJob() as never);
   prisma.trainingJobDataset.createMany.mockResolvedValue({ count: 2 });
   prisma.trainingJobDataset.findMany.mockResolvedValue([]);
+  trainingJobRepository.delete.mockResolvedValue(true as never);
 });
 
 // ===========================================================================
@@ -238,6 +239,61 @@ describe('a submission that names several datasets', () => {
 });
 
 // ===========================================================================
+// A mixture that could not be written
+//
+// The job row is created first, and a job with NO member rows is
+// indistinguishable from an ordinary single-dataset job — `getJobDatasets`
+// synthesises one member from `datasetId` precisely so callers never branch. So
+// a half-written mixture does not look broken: it looks like a job on one
+// dataset, and it would be claimed as one, trained as one, and reported as a
+// success.
+// ===========================================================================
+
+describe('when the mixture rows cannot be written', () => {
+  it('removes the job rather than leaving one that trains on a single dataset', async () => {
+    prisma.dataset.findMany.mockResolvedValue([row('ds-a'), row('ds-b')]);
+    prisma.trainingJobDataset.createMany.mockRejectedValue(new Error('deadlock detected'));
+
+    await expect(
+      trainingJobService.submitJob({
+        datasetIds: ['ds-a', 'ds-b'],
+        baseModel: 'groot_n1_7',
+        fineTuneMethod: 'lora',
+      }),
+    ).rejects.toThrow('deadlock detected');
+
+    expect(trainingJobRepository.delete).toHaveBeenCalledWith('job-new');
+  });
+
+  it('still reports the original failure when the cleanup also fails', async () => {
+    prisma.dataset.findMany.mockResolvedValue([row('ds-a'), row('ds-b')]);
+    prisma.trainingJobDataset.createMany.mockRejectedValue(new Error('deadlock detected'));
+    trainingJobRepository.delete.mockRejectedValue(new Error('and the delete failed too'));
+
+    await expect(
+      trainingJobService.submitJob({
+        datasetIds: ['ds-a', 'ds-b'],
+        baseModel: 'groot_n1_7',
+        fineTuneMethod: 'lora',
+      }),
+    ).rejects.toThrow('deadlock detected');
+  });
+
+  it('leaves a single-dataset job alone — it writes no rows to fail at', async () => {
+    prisma.trainingJobDataset.createMany.mockRejectedValue(new Error('should never be called'));
+
+    await expect(
+      trainingJobService.submitJob({
+        datasetId: 'ds-a',
+        baseModel: 'smolvla',
+        fineTuneMethod: 'lora',
+      }),
+    ).resolves.toMatchObject({ id: 'job-new' });
+    expect(trainingJobRepository.delete).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
 // Weights
 //
 // A weight is a sampling ratio, so finite-and-positive is the whole domain.
@@ -338,7 +394,7 @@ describe('getJobDatasets', () => {
     ]);
   });
 
-  it('returns the stored members in position order', async () => {
+  it('maps every stored row to a member', async () => {
     prisma.trainingJobDataset.findMany.mockResolvedValue([
       { datasetId: 'ds-a', weight: 3, position: 0, dataset: { name: 'A' } },
       { datasetId: 'ds-b', weight: 1, position: 1, dataset: { name: 'B' } },
@@ -348,6 +404,24 @@ describe('getJobDatasets', () => {
       { datasetId: 'ds-a', name: 'A', weight: 3, position: 0 },
       { datasetId: 'ds-b', name: 'B', weight: 1, position: 1 },
     ]);
+  });
+
+  it('asks the database for them in position order', async () => {
+    // The ordering is done by the QUERY, and the mock returns whatever array it
+    // was handed regardless of the query object — so feeding it a pre-sorted
+    // array and asserting the output is sorted proves only that `.map` keeps
+    // order. Position is what decides which member becomes `job.datasetId` and
+    // which weight belongs to which dataset in the export manifest, so the
+    // `orderBy` is the thing worth pinning.
+    prisma.trainingJobDataset.findMany.mockResolvedValue([]);
+    await trainingJobService.getJobDatasets('job-1', 'ds-a');
+
+    expect(prisma.trainingJobDataset.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { trainingJobId: 'job-1' },
+        orderBy: { position: 'asc' },
+      }),
+    );
   });
 
   it('returns nothing for a job with no dataset at all (sim_rl)', async () => {

@@ -81,6 +81,7 @@ import {
   matchRobotType,
   selectRepoFiles,
   isVideoPath,
+  retryAfterMs,
 } from '../HuggingFaceImportService.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
@@ -596,12 +597,22 @@ describe('HuggingFaceImportService', () => {
       expect(Number.isNaN(Date.parse(importError.failedAt))).toBe(false);
     });
 
-    it('names the phase it died in rather than always saying "downloading"', async () => {
-      // A tree listing that fails falls back to the pattern list, so the phase
-      // that actually breaks first here is the metadata read of info.json.
+    it('creates no row at all when info.json cannot be read', async () => {
+      // Renamed from "names the phase it died in": with `missingInfo` the
+      // import fails BEFORE `datasetRepository.create`, so there is no row and
+      // therefore no `importError.phase` for a test to inspect — the old name
+      // promised an assertion the situation cannot support, and the body only
+      // checked that something threw.
+      //
+      // Not creating the row is the behaviour that actually matters here: a
+      // repo that cannot be read must not leave a dataset behind for somebody
+      // to find and wonder about. The phase field itself is covered by the
+      // download-failure test above (`phase` is 'downloading') and by the
+      // metadata-phase retry test in HuggingFaceImportService.import.test.ts.
       mockHub({ missingInfo: true });
 
       await expect(service.importDataset({ repoId: REPO })).rejects.toThrow(HuggingFaceImportError);
+      expect(datasetRepository.create).not.toHaveBeenCalled();
     });
 
     it('tolerates a missing stats.json, which is optional', async () => {
@@ -907,5 +918,41 @@ describe('HuggingFaceImportService', () => {
 
       expect((await service.fetchWithRetry('https://example.com', 1)).status).toBe(429);
     });
+  });
+});
+
+// ===========================================================================
+// Retry-After
+//
+// RFC 7231 allows two forms and only one is a number. `parseInt` of the date
+// form is NaN, `Math.min(NaN, …)` is NaN, and `setTimeout(fn, NaN)` fires
+// immediately — so a Hub that answered 429 with a date burned all five retries
+// in milliseconds against a server that had just asked for a pause.
+// ===========================================================================
+
+describe('retryAfterMs', () => {
+  const NOW = Date.parse('2026-08-23T12:00:00.000Z');
+
+  it('reads the delay-seconds form', () => {
+    expect(retryAfterMs('120', NOW)).toBe(120_000);
+  });
+
+  it('reads the HTTP-date form as a delay from now', () => {
+    expect(retryAfterMs('Sun, 23 Aug 2026 12:00:30 GMT', NOW)).toBe(30_000);
+  });
+
+  it('never returns NaN for a header it cannot read', () => {
+    for (const header of ['soon', '', '   ', 'Wed, 32 Foo 2015', '12.5s']) {
+      const result = retryAfterMs(header, NOW);
+      expect(result === null || Number.isFinite(result)).toBe(true);
+    }
+  });
+
+  it('returns null when there is no header, so the caller keeps its own backoff', () => {
+    expect(retryAfterMs(null, NOW)).toBeNull();
+  });
+
+  it('does not ask the caller to sleep for a date in the past', () => {
+    expect(retryAfterMs('Sun, 23 Aug 2026 11:59:00 GMT', NOW)).toBe(0);
   });
 });

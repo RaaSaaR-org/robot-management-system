@@ -113,15 +113,60 @@ describe('exporting a run', () => {
   });
 
   it('hands the manifest to the browser as a file', async () => {
+    // jsdom does not perform downloads, so asserting `createObjectURL` was
+    // called proves almost nothing — deleting `anchor.click()` entirely leaves
+    // that assertion green. What CAN be observed is the state of the anchor at
+    // the moment it is clicked, and both of the ways this silently produces no
+    // file are visible there.
+    const state: Array<{ inDocument: boolean; download: string; href: string }> = [];
+    // True only for as long as the synchronous stack that ran `click()` is
+    // still unwound. A microtask is the earliest thing that can run after it.
+    let inClickStack = false;
+    let revokedInClickStack = false;
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {
+      if (inClickStack) revokedInClickStack = true;
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        state.push({
+          inDocument: document.body.contains(this),
+          download: this.download,
+          href: this.href,
+        });
+        inClickStack = true;
+        queueMicrotask(() => { inClickStack = false; });
+      });
+
     render(<TrainingJobCard job={job()} />);
     fireEvent.click(screen.getByRole('button', { name: /Export run/ }));
 
-    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
+    await waitFor(() => expect(click).toHaveBeenCalled());
     await screen.findByTestId('export-clean');
+
+    // Firefox does not download from a detached anchor — it just does nothing,
+    // while Chrome and Safari do, which is how this ships looking fine.
+    expect(state[0].inDocument).toBe(true);
+    // Revoking in the same tick as the click cancels the download before the
+    // browser has fetched the blob.
+    expect(revokedInClickStack).toBe(false);
+    expect(state[0].download).toMatch(/\.json$/);
+    expect(state[0].href).toMatch(/^blob:/);
+
+    // …and it is still cleaned up afterwards, rather than leaking for the life
+    // of the document.
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalled());
+    expect(document.querySelector('a[download]')).toBeNull();
   });
 
   it('says so when the export fails instead of failing silently', async () => {
-    exportTrainingRun.mockRejectedValue(new Error('job has no dataset'));
+    // A plain object, which is what `createApiError` in api/client.ts rejects
+    // with — not an Error. See the note in DatasetCompatibilityPanel.test.tsx.
+    exportTrainingRun.mockRejectedValue({
+      code: 'NOT_FOUND',
+      message: 'job has no dataset',
+      statusCode: 404,
+    });
     render(<TrainingJobCard job={job()} />);
     fireEvent.click(screen.getByRole('button', { name: /Export run/ }));
 
