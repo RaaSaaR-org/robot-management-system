@@ -87,7 +87,7 @@ import { teamRoutes } from './routes/team.routes.js';
 import { serviceAccountRoutes } from './routes/service-accounts.routes.js';
 
 // Import middleware
-import { authMiddleware, cameraStreamQueryToken } from './middleware/auth.middleware.js';
+import { authMiddleware, cameraStreamTicket } from './middleware/auth.middleware.js';
 
 // Import services
 import { robotManager } from './services/RobotManager.js';
@@ -197,10 +197,15 @@ export function createApp(): Express {
   app.use('/api/a2a/agent', authMiddleware, agentRoutes);
   app.use('/api/a2a/events', authMiddleware, eventsRoutes);
 
-  // Robot routes (protected). `cameraStreamQueryToken` runs first and only ever
-  // moves a `?access_token=` on the MJPEG stream path into the Authorization
-  // header an `<img>` cannot set — see its docstring. Auth itself is unchanged.
-  app.use('/api/robots', cameraStreamQueryToken, authMiddleware, robotRoutes);
+  // Robot routes (protected). `cameraStreamTicket` runs first and only ever
+  // authenticates a GET on the MJPEG stream path from a `?ticket=` — the header
+  // an `<img>` cannot set — for the one robot and one camera that ticket names.
+  // See its docstring. Every other route here is bearer-authenticated as before.
+  //
+  // Mount order is load-bearing: `voiceRoutes` and `agentModeRoutes` below share
+  // this prefix and do NOT get the ticket middleware, so a ticket is inert on
+  // them. There are tests that hold that property down.
+  app.use('/api/robots', cameraStreamTicket, authMiddleware, robotRoutes);
 
   // Voice service proxy (say / events / volume) — robot-scoped, live-only
   app.use('/api/robots', authMiddleware, voiceRoutes);

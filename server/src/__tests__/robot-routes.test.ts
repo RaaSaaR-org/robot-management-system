@@ -42,6 +42,77 @@ describe('Robot Routes', () => {
     vi.clearAllMocks();
   });
 
+  describe('POST /api/robots/:id/camera/:name/ticket (TASK-214)', () => {
+    /**
+     * The route is mounted here WITHOUT authMiddleware, as every test in this
+     * file is, so `req.user` has to be supplied — which is also the case the
+     * route guards against: minting an unattributed ticket would be worse than
+     * refusing, because the stream authenticates FROM the ticket.
+     */
+    function appWithUser(user: unknown) {
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        (req as express.Request & { user?: unknown }).user = user;
+        next();
+      });
+      app.use('/api/robots', robotRoutes);
+      return app;
+    }
+
+    const USER = { id: 'user-7', email: 'op@neodem.local', role: 'operator', tenantId: 'tenant-a' };
+
+    it('mints a ticket scoped to that robot and that camera', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+      const { verifyCameraTicket } = await import('../security/cameraTicket.js');
+
+      const res = await request(appWithUser(USER))
+        .post('/api/robots/robot-001/camera/head_camera/ticket');
+
+      expect(res.status).toBe(200);
+      expect(typeof res.body.ticket).toBe('string');
+      expect(res.body.expiresIn).toBeGreaterThan(0);
+      expect(verifyCameraTicket(res.body.ticket)).toMatchObject({
+        robotId: 'robot-001',
+        cameraName: 'head_camera',
+        userId: 'user-7',
+        tenantId: 'tenant-a',
+      });
+    });
+
+    it('does not put a bearer credential in the response', async () => {
+      // The ticket ends up in a URL. The entire point of TASK-214 is that what
+      // sits there is not the caller's access token.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+
+      const res = await request(appWithUser(USER))
+        .post('/api/robots/robot-001/camera/head_camera/ticket');
+
+      expect(JSON.stringify(res.body)).not.toContain('access_token');
+      expect(Object.keys(res.body).sort()).toEqual(['expiresIn', 'ticket']);
+    });
+
+    it('404s for a robot that does not exist', async () => {
+      // A signature over a robot id that means nothing is not a ticket, and
+      // answering 200 would confirm which ids are real.
+      mockRobotManager.getRegisteredRobot.mockResolvedValue(null);
+
+      const res = await request(appWithUser(USER))
+        .post('/api/robots/nope/camera/head_camera/ticket');
+
+      expect(res.status).toBe(404);
+    });
+
+    it('401s when nothing authenticated the caller', async () => {
+      mockRobotManager.getRegisteredRobot.mockResolvedValue({ baseUrl: 'http://robot:41243' });
+
+      const res = await request(appWithUser(undefined))
+        .post('/api/robots/robot-001/camera/head_camera/ticket');
+
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe('GET /api/robots/:id/peers (TASK-207)', () => {
     it('refreshes poses first, then lists the other robots for the caller', async () => {
       mockRobotManager.getRegisteredRobot.mockResolvedValue({ robot: { id: 'r1' } });

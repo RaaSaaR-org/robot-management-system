@@ -9,6 +9,7 @@ import { authenticateServiceToken } from '../services/ServiceAccountService.js';
 import { DEFAULT_TENANT_ID, MULTI_TENANCY_ENABLED } from '../config/features.js';
 import { tenantStore } from './tenantContext.js';
 import { complianceLogService } from '../services/ComplianceLogService.js';
+import { verifyCameraTicket } from '../security/cameraTicket.js';
 
 /**
  * Unified role model (TASK-162).
@@ -142,36 +143,72 @@ function extractBearerToken(req: Request): string | null {
  * Paths, relative to the `/api/robots` mount, that serve an MJPEG stream.
  * `/:id/camera/:name` and nothing else.
  */
-const CAMERA_STREAM_PATH = /^\/[^/]+\/camera\/[^/]+\/?$/;
+const CAMERA_STREAM_PATH = /^\/([^/]+)\/camera\/([^/]+)\/?$/;
 
 /**
- * Move `?access_token=` into the Authorization header for a camera stream.
- *
- * WHY THIS EXISTS: `/api/robots/:id/camera/:name` is mounted in an `<img>` —
- * that is the only way to render `multipart/x-mixed-replace` in a page — and an
- * `<img>` cannot send an Authorization header, which is the only place
- * `extractBearerToken` looks. So with auth enabled every camera frame in the app
- * was a 401: the VR head-camera panel showed CAMERA OFFLINE, and the operator
- * had no way to tell an authentication failure from a dead camera. It looked
- * healthy only because dev runs `AUTH_DISABLED=true`.
- *
- * DELIBERATELY NARROW. A token in a URL leaks into access logs, `Referer` and
- * browser history, so this accepts one for GET on the stream path alone, and
- * only when no header was supplied. It grants nothing by itself — the token
- * still goes through `authMiddleware` unchanged; this only carries it to where
- * the validator reads.
+ * Marks a request whose identity came from a camera ticket rather than a
+ * bearer token. A module-private symbol, so nothing that arrives over the wire
+ * can set it: a header or body field named `cameraTicketAuthenticated` would
+ * otherwise be an authentication bypass in a string.
  */
-export function cameraStreamQueryToken(
-  req: Request,
+const TICKET_AUTHENTICATED = Symbol('cameraTicketAuthenticated');
+
+/**
+ * Authenticate a camera stream from a `?ticket=` in its URL (TASK-214).
+ *
+ * WHY A QUERY PARAMETER AT ALL: `/api/robots/:id/camera/:name` is rendered in
+ * an `<img>` — the only way a page can show `multipart/x-mixed-replace` — and
+ * an `<img>` cannot set an `Authorization` header, which is the only place
+ * `extractBearerToken` looks. Without something in the URL, every camera frame
+ * is a 401 the moment auth is enabled.
+ *
+ * WHAT CHANGED: this used to promote `?access_token=` into the header, so the
+ * user's real access token sat in a URL — valid everywhere, for its whole
+ * lifetime, in the one place URLs are logged and proxied. It now accepts a
+ * ticket instead, which opens one camera on one robot for two minutes and
+ * authorises nothing else (see `security/cameraTicket.ts`).
+ *
+ * STILL DELIBERATELY NARROW — the three guards are unchanged: GET only, the
+ * stream path only, and never when a real Authorization header was supplied.
+ * The ticket must additionally name the robot AND the camera in the path it
+ * arrived on, so a ticket for one camera cannot open another.
+ *
+ * A ticket is not a bearer credential, so this cannot hand `authMiddleware`
+ * something to validate — it establishes the identity itself and marks the
+ * request. `authMiddleware` honours the mark and does the tenant hand-off, so
+ * a ticketed stream runs inside exactly the same row-level isolation as the
+ * request that asked for the ticket.
+ */
+export function cameraStreamTicket(
+  req: AuthenticatedRequest,
   _res: Response,
   next: NextFunction
 ): void {
   if (req.method !== 'GET' || req.headers.authorization) return next();
-  if (!CAMERA_STREAM_PATH.test(req.path)) return next();
-  const token = req.query.access_token;
-  if (typeof token === 'string' && token.length > 0) {
-    req.headers.authorization = `Bearer ${token}`;
-  }
+  const match = CAMERA_STREAM_PATH.exec(req.path);
+  if (!match) return next();
+
+  const claims = verifyCameraTicket(req.query.ticket);
+  // A bad ticket is not refused here: it is simply not an identity. The request
+  // falls through to `authMiddleware`, which answers the same 401 it answers
+  // for anything else unauthenticated — one rejection path, not two.
+  if (!claims) return next();
+
+  // Express has already decoded the path segments; the ticket carries the raw
+  // ids, so compare decoded against raw.
+  const robotId = decodeURIComponent(match[1]);
+  const cameraName = decodeURIComponent(match[2]);
+  if (claims.robotId !== robotId || claims.cameraName !== cameraName) return next();
+
+  req.user = {
+    id: claims.userId,
+    email: '',
+    name: '',
+    role: claims.role as AuthUser['role'],
+    tenantId: claims.tenantId,
+    authType: 'human',
+  };
+  (req as AuthenticatedRequest & { [TICKET_AUTHENTICATED]?: boolean })[TICKET_AUTHENTICATED] = true;
   next();
 }
 
@@ -189,6 +226,13 @@ export async function authMiddleware(
   // Skip auth in development mode
   if (isAuthDisabled()) {
     req.user = MOCK_USER;
+    return continueWithTenant(req, req.user, next);
+  }
+
+  // A camera stream that presented a valid ticket is already identified
+  // (`cameraStreamTicket`, mounted immediately before this). The mark is a
+  // module-private symbol, so this is not reachable by setting a field.
+  if ((req as AuthenticatedRequest & { [TICKET_AUTHENTICATED]?: boolean })[TICKET_AUTHENTICATED]) {
     return continueWithTenant(req, req.user, next);
   }
 

@@ -4,7 +4,7 @@ aliases:
 - TASK-214
 title: Replace the camera stream's URL token with a short-lived scoped ticket
 slug: replace-the-camera-stream-url-token-with-a-scoped-ticket
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -14,9 +14,10 @@ tags:
 - compliance
 sprint: ''
 depends_on: []
+status_note: 'DONE 2026-08-23. `?access_token=` is gone: the stream now authenticates from a `?ticket=` signed with JWT_SECRET (HMAC-SHA256, security/cameraTicket.ts) that names one robot, one camera and a 120 s expiry, and carries the asker''s identity so the stream lands in the same tenant scope the ticket request had. TWO THINGS THIS TASK GOT WRONG, corrected in the implementation: (1) the frontend builder is NOT in vrUrls.ts — that file only knows the robot agent''s base URL. `cameraStreamUrl` was module-private in HeadCameraPanel.tsx and now lives in a new features/robots/api/cameraApi.ts. (2) The task says the middleware''s narrowness was verified against /voice/events; that verification was manual and NOTHING held it down — `grep -rn cameraStreamQueryToken server/src` matched only its own definition and its mount. There are now tests for it. A ticket cannot be promoted to a bearer header the way the old access token was (authMiddleware would reject it), so the verifier establishes the identity itself and marks the request with a module-private Symbol — unreachable from any header or body field — which authMiddleware honours for the tenant hand-off. THREE `<img>` consumers exist, not one: HeadCameraPanel (VR, was the only one sending a credential) and CockpitViewport are converted; datacollection/CameraStreamView is NOT — it is outside the frontend scope this task names (`under app/src/features/robots/`), it never sent a credential, and it 401s with auth on exactly as it did before. Worth its own task. The hardest spot was the VR panel''s re-arm, which runs inside useFrame and cannot await: the rate-limit stamp is now taken BEFORE the ticket fetch, so a slow endpoint cannot become a per-frame POST storm.'
 due_date: ''
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 

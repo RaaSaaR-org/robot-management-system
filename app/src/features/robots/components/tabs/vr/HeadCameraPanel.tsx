@@ -13,7 +13,7 @@ import { useFrame } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { brandColors } from '@/brand';
-import { tokenStorage } from '@/api/client';
+import { cameraStreamUrl, fetchCameraTicket } from '../../../api/cameraApi';
 import { initialLiveness, pollLiveness, type FrameSampler, type LivenessState } from './vrCamera';
 import { HAPTICS, pulsePreset, type HapticSource } from './vrHaptics';
 import { HUD_COLORS } from './vrHud';
@@ -55,27 +55,39 @@ const SAMPLE_PX = 8;
 const PANEL_TALL_M = PANEL_WIDTH_M * PANEL_ASPECT;
 
 /**
- * The MJPEG stream URL for one robot's head camera.
+ * Point the panel's `<img>` at a fresh stream, ticket and all.
  *
- * WHY THE TOKEN IS IN THE QUERY. `/api/robots/:id/camera/:name` sits behind the
- * server's `authMiddleware`, which reads the credential from
- * `req.headers.authorization` and from nowhere else — and an `<img>` cannot send
- * a header. With auth enabled every frame was a 401, `onerror` fired, and the
- * operator got the CAMERA OFFLINE plate with no hint that the cause was
- * authentication rather than a dead camera. It only ever looked fine because dev
- * runs `AUTH_DISABLED=true`. The server accepts `?access_token=` for GET on this
- * one path (`cameraStreamQueryToken`); everything else still requires the
- * header.
+ * WHY A TICKET. `/api/robots/:id/camera/:name` sits behind the server's
+ * `authMiddleware`, which reads the credential from `req.headers.authorization`
+ * and from nowhere else — and an `<img>` cannot send a header. With auth enabled
+ * every frame was a 401, `onerror` fired, and the operator got the CAMERA
+ * OFFLINE plate with no hint that the cause was authentication rather than a
+ * dead camera. It only ever looked fine because dev runs `AUTH_DISABLED=true`.
  *
- * Relative on purpose: this rides the app's own origin (Vite proxies /api), and
- * WebGL refuses to sample a cross-origin image without CORS. It is also what
+ * So something must ride in the URL. It used to be the user's real access token
+ * (PR #236, deliberately, as the smallest change that worked at all); it is now
+ * a ticket good for this one camera for about two minutes and nothing else
+ * (TASK-214). Every re-arm fetches a new one — a cached ticket would expire long
+ * before a panel that has been stale for an hour stops trying.
+ *
+ * The URL stays RELATIVE: this rides the app's own origin (Vite proxies /api),
+ * and WebGL refuses to sample a cross-origin image without CORS. It is also what
  * makes the 8x8 fingerprint read legal — a cross-origin draw would taint the
  * scratch canvas and `getImageData` would throw.
+ *
+ * @returns whether the stream was armed. `false` means no ticket, which the
+ *          caller must surface: an `<img>` whose `src` was never assigned fires
+ *          no `onerror`, so nothing else would ever say so.
  */
-function cameraStreamUrl(robotId: string): string {
-  const path = `/api/robots/${encodeURIComponent(robotId)}/camera/${PANEL_CAMERA}`;
-  const token = tokenStorage.getAccessToken();
-  return token ? `${path}?access_token=${encodeURIComponent(token)}` : path;
+async function armStream(image: HTMLImageElement, robotId: string): Promise<boolean> {
+  try {
+    const { ticket } = await fetchCameraTicket(robotId, PANEL_CAMERA);
+    image.src = '';
+    image.src = cameraStreamUrl(robotId, PANEL_CAMERA, ticket);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Stale badge geometry, in metres, and its texture size. */
@@ -182,6 +194,8 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
 
   /** R3F clock time of the last reconnect attempt, for the re-arm below. */
   const lastRearm = useRef(0);
+  /** A ticket fetch is in flight; a second re-arm must not race it. */
+  const arming = useRef(false);
 
   useEffect(() => {
     // Also reset per-robot, and this is why: `failed` is what swaps in the
@@ -194,8 +208,19 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     liveness.current = null;
     lastRearm.current = 0;
     image.onerror = () => setFailed(true);
-    image.src = cameraStreamUrl(robotId);
+    // Arming is a round trip now (fetch a ticket, then assign `src`), so the
+    // effect can outlive its own robot. `cancelled` is what keeps a slow ticket
+    // for robot A from pointing the panel at A's camera after the operator
+    // switched to B.
+    let cancelled = false;
+    void armStream(image, robotId).then((armed) => {
+      if (cancelled) return;
+      // No ticket, no `src`, and an unassigned `<img>` fires no `onerror` — the
+      // panel would sit blank and claim nothing. Say it is offline instead.
+      if (!armed) setFailed(true);
+    });
     return () => {
+      cancelled = true;
       // Drop the MJPEG connection. Leave it open and the sim keeps rendering
       // frames for a panel nobody is looking at — and every one of those frames
       // is a render on its physics thread.
@@ -262,12 +287,21 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     // Reassigning `src` drops the old connection and opens a new one. Rate
     // limited, because a camera that is genuinely gone must not become a
     // reconnect storm, and only while stale — a live stream is never touched.
-    if (isStale && now - lastRearm.current >= REARM_INTERVAL_S) {
+    if (isStale && now - lastRearm.current >= REARM_INTERVAL_S && !arming.current) {
+      // Stamped BEFORE the await, not after. `useFrame` is synchronous and runs
+      // at display rate, so a rate limit that only advanced on success would let
+      // a slow or failing ticket endpoint turn this into a ~72 Hz POST storm —
+      // the reconnect storm this limit exists to prevent, moved one hop
+      // upstream. `arming` covers the same window from the other side, so two
+      // fetches can never both be assigning `src`.
       lastRearm.current = now;
+      arming.current = true;
       lastUploaded.current = undefined;
       liveness.current = null;
       image.src = '';
-      image.src = cameraStreamUrl(robotId);
+      void armStream(image, robotId).finally(() => {
+        arming.current = false;
+      });
     }
     if (isStale) {
       badgePlate.draw([
