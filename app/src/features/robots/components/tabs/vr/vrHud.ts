@@ -78,6 +78,21 @@ export interface HudState {
   /** Commanded yaw rate, rad/s (CCW positive). */
   omega: number;
   /**
+   * True while the base sits in a non-locomoting FSM (damp / sit / zero-torque).
+   *
+   * Costs the SPEED and TURN lines rather than adding one, because while it is
+   * true those two are worse than absent: `SetVelocity` answers RPC_OK in a
+   * damped FSM and the base does not integrate it, so the rig goes on computing
+   * and displaying a commanded speed for a robot that will not move a
+   * millimetre. The readout that would lie is the readout that carries the
+   * explanation.
+   *
+   * NOT a full-plate takeover like the E-Stop: the arms are joint targets and
+   * never touch the loco FSM, so a damped robot is still perfectly usable for
+   * manipulation. Blanking the HUD would overstate it.
+   */
+  baseDamped?: boolean;
+  /**
    * The episode being captured right now, or null/absent when nothing is being
    * recorded.
    *
@@ -185,20 +200,30 @@ export function composeHud(state: HudState): HudLine[] {
     // m/s`. Both linear axes are labelled rather than packed onto one number:
     // a magnitude would hide which way the robot is going, and 512 px of plate
     // at a 37 px glyph will not carry a third figure on the SPEED line.
-    {
-      id: 'speed',
-      text: `SPEED ${fixed(state.vx, 2)} fwd ${fixed(state.vy, 2)} left`,
-      color: HUD_COLORS.text,
-    },
-    // Dropped while recording — see the docstring. `rec` buys this slot.
-    ...(rec
-      ? []
+    ...(state.baseDamped
+      ? [
+          {
+            id: 'damped',
+            text: 'BASE DAMPED — press Stand',
+            color: HUD_COLORS.warn,
+          },
+        ]
       : [
           {
-            id: 'turn',
-            text: `TURN ${fixed(state.omega, 2)} rad/s`,
+            id: 'speed',
+            text: `SPEED ${fixed(state.vx, 2)} fwd ${fixed(state.vy, 2)} left`,
             color: HUD_COLORS.text,
           },
+          // Dropped while recording — see the docstring. `rec` buys this slot.
+          ...(rec
+            ? []
+            : [
+                {
+                  id: 'turn',
+                  text: `TURN ${fixed(state.omega, 2)} rad/s`,
+                  color: HUD_COLORS.text,
+                },
+              ]),
         ]),
   ];
 }

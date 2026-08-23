@@ -167,6 +167,49 @@ describe('composeHud', () => {
   });
 });
 
+describe('composeHud — a damped base', () => {
+  it('replaces SPEED and TURN, because those two are the lines that would lie', () => {
+    // `SetVelocity` answers RPC_OK in a damped FSM and the base does not
+    // integrate it, so the rig goes on computing a commanded speed for a robot
+    // that will not move. Printing that number is worse than printing nothing.
+    const lines = composeHud({ ...BASE, baseDamped: true, driving: true, vx: 0.4, omega: 0.3 });
+
+    expect(lines.map((l) => l.id)).toEqual(['link', 'mode', 'damped']);
+    expect(lines[2].text).toContain('BASE DAMPED');
+    expect(lines.some((l) => l.text.includes('SPEED'))).toBe(false);
+    expect(lines.some((l) => l.text.includes('TURN'))).toBe(false);
+  });
+
+  it('leaves the rest of the plate alone — the arms still work', () => {
+    // Not a full-plate takeover like the E-Stop: the arms are joint targets and
+    // never touch the loco FSM, so a damped robot is still usable for
+    // manipulation and LINK/MODE still carry information.
+    const lines = composeHud({ ...BASE, baseDamped: true, armLeft: true, armRight: true });
+
+    expect(lines[0].text).toBe('LINK LIVE 42ms');
+    expect(lines[1].text).toBe('MODE ARM-LR');
+  });
+
+  it('stays out of the way when the base is standing', () => {
+    const lines = composeHud({ ...BASE, baseDamped: false, vx: 0.4 });
+    expect(lines.map((l) => l.id)).toEqual(['link', 'mode', 'speed', 'turn']);
+  });
+
+  it('is outranked by the E-Stop, which still replaces everything', () => {
+    const lines = composeHud({ ...BASE, baseDamped: true, estopLatched: true });
+    expect(lines.map((l) => l.id)).toEqual(['estop', 'estop-hint']);
+  });
+
+  it('still fits the plate while recording, which spends a line of its own', () => {
+    const lines = composeHud({
+      ...BASE, baseDamped: true, recording: { episode: 3, frames: 120 },
+    });
+    // REC, LINK, MODE, DAMPED — four, leaving the fifth for the modal's RTT.
+    expect(lines.map((l) => l.id)).toEqual(['rec', 'link', 'mode', 'damped']);
+    expect(lines.length).toBeLessThanOrEqual(HUD_MAX_LINES - 1);
+  });
+});
+
 describe('markerAppearance', () => {
   const g = { gripThreshold: 0.5, saturated: false };
 

@@ -2,7 +2,7 @@
 id: TASK-218
 aliases:
 - TASK-218
-title: The server suite has a supertest contention flake
+title: The test suites have a scheduling-sensitive contention flake
 slug: the-server-suite-has-a-supertest-contention-flake
 status: todo
 priority: 3
@@ -63,6 +63,41 @@ story. A `supertest` request that never completes points at the request itself
 (an unawaited handler, a listener that is never closed) rather than at a
 handler returning the wrong body. Reproduce by running one file in a loop, not
 only the whole suite.
+
+Third occurrence (2026-08-23, VR teleop work) — and this one is in the
+**robot-agent** suite, not the server's:
+
+```
+FAIL src/api/__tests__/agent-mode-routes.test.ts
+  > POST /agent-mode/intents arms an intent that the matcher then fires
+AssertionError: expected 401 to be 201
+```
+
+Measured rate on `main` with NO local changes: **1 failure in 5 full runs**
+(1898 tests). The file passes on its own. It was first noticed while adding a
+test file elsewhere in the agent — which changed how vitest distributes files
+across workers and made it show up twice in three runs — so the flake is
+scheduling-sensitive, not caused by any one change.
+
+The 401 narrows this one down further than the server's 404s do. That route is
+behind `personalDataGate` (`router.use('/robots/:id/agent-mode/intents', …)`),
+and with no `AGENT_MEMORY_TOKEN` set the gate answers 401 to any caller it
+cannot prove is loopback:
+
+```ts
+if (!isLoopbackAddress(req.socket.remoteAddress)) { res.status(401)… }
+```
+
+`isLoopbackAddress(undefined)` is `false`. All three test files that stub
+`AGENT_MEMORY_TOKEN` do call `vi.unstubAllEnvs()` in `afterEach`, so an env leak
+is ruled out — which leaves `req.socket.remoteAddress` being momentarily
+undefined on a socket under load as the candidate worth measuring first. These
+tests drive a REAL listening server with `fetch`, not supertest, so socket
+lifetime is genuinely in play.
+
+**Do not "fix" this by loosening the gate.** If the address really can be
+unreadable, the gate should say so with a distinct code rather than treat it as
+"off-box", and the test should stop racing its own server.
 
 ### Why the status code is the clue
 

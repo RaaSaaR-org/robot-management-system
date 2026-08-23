@@ -415,3 +415,71 @@ describe('VRTeleopModalBody — the retargeting mode and hand tracking', () => {
     expect(hands.className).toBe(unarmed);
   });
 });
+
+describe('VRTeleopModalBody — a damped base', () => {
+  /**
+   * WHY THIS BANNER IS NOT THE E-STOP BANNER. An E-Stop damps the base
+   * (StopMove, then `SetFsmId(1)`), and clearing the latch deliberately does not
+   * undo that — standing a collapsed humanoid up is an explicit operator act.
+   * So "latched" and "damped" are two facts with different lifetimes, and the
+   * second outlives the first: reset the stop and the arms come back while the
+   * legs stay dead. Nothing said so, because `SetVelocity` answers RPC_OK in a
+   * damped FSM and the base just does not integrate it.
+   */
+  it('renders the agent’s damped frame, and clears it when the agent says so', () => {
+    renderModal();
+    const socket = openLink();
+
+    expect(screen.queryByTestId('vr-base-damped')).not.toBeInTheDocument();
+
+    act(() => { socket.deliver({ type: 'base', damped: true, fsmId: 1 }); });
+    expect(screen.getByTestId('vr-base-damped')).toHaveTextContent('BASE DAMPED');
+
+    act(() => { socket.deliver({ type: 'base', damped: false, fsmId: 500 }); });
+    expect(screen.queryByTestId('vr-base-damped')).not.toBeInTheDocument();
+  });
+
+  it('stands the base over the SOCKET, which is the caller that holds control', () => {
+    // Not a REST call: the only other route to this FSM is Agent Mode's
+    // `posture stand`, and Agent Mode refuses everything while
+    // `controlOwnerLock` is held by teleop — which it is, for as long as this
+    // console is connected. The operator at the controls was the one caller who
+    // could not ask.
+    renderModal();
+    const socket = openLink();
+    act(() => { socket.deliver({ type: 'base', damped: true, fsmId: 1 }); });
+
+    act(() => { fireEvent.click(screen.getByTestId('vr-stand-base')); });
+
+    expect(socket.frames().filter((f) => f.posture === 'stand')).toHaveLength(1);
+    // No REST fallback smuggled in beside it.
+    expect(resetRobotEStop).not.toHaveBeenCalled();
+  });
+
+  it('refuses to stand while the latch is up — the damp IS the stop working', () => {
+    renderModal();
+    const socket = openLink();
+    act(() => {
+      socket.deliver({ type: 'estop', active: true, reason: 'operator' });
+      socket.deliver({ type: 'base', damped: true, fsmId: 1 });
+    });
+
+    const stand = screen.getByTestId('vr-stand-base');
+    expect(stand).toBeDisabled();
+    act(() => { fireEvent.click(stand); });
+    expect(socket.frames().some((f) => f.posture === 'stand')).toBe(false);
+  });
+
+  it('says the link is down rather than pretending the command went out', () => {
+    // `send()` returns false with no socket. A button that spins and then goes
+    // quiet is how an operator concludes the robot is standing when it is not.
+    renderModal();
+    const socket = openLink();
+    act(() => { socket.deliver({ type: 'base', damped: true, fsmId: 1 }); });
+    act(() => { socket.close(); });
+
+    act(() => { fireEvent.click(screen.getByTestId('vr-stand-base')); });
+
+    expect(screen.getByTestId('vr-base-damped')).toHaveTextContent('link is down');
+  });
+});
