@@ -150,7 +150,34 @@ export function VrScene({
           position={[0, modelType === 'so101' ? -0.05 : -0.75, 0]}
         />
 
-        <OrbitControls enablePan enableZoom enableRotate maxPolarAngle={Math.PI / 2} minDistance={0.5} maxDistance={10} />
+        {/* DISABLED INSIDE THE HEADSET, and that is not a tidiness measure.
+            drei's OrbitControls runs `controls.update()` in its own useFrame,
+            which WRITES `camera.position` and `camera.quaternion` from its
+            spherical state — every frame, session or not. Inside an immersive
+            session that lands on the same camera object three has just posed
+            from the XRViewerPose, so `state.camera` stopped reporting where the
+            wearer was looking and reported where the desktop preview was
+            pointing instead.
+
+            The rendering never showed it: the headset draws from the per-eye
+            views, not from this camera. What broke was everything DOWNSTREAM of
+            `headingFromCamera(camQuat)` in `VrTeleopRig` — with the preview
+            orbited above the robot the projection is shorter than
+            `FWD_MIN_HORIZONTAL`, so the bearing reads null every frame,
+            `robotHeadingRef` is never seeded, and `wristToRobotFrame` refuses
+            every pose for a non-finite heading. The arm then receives NOTHING,
+            for the whole session, with no error anywhere: measured through the
+            emulator as 0 `{wrists}` frames sent while the grip was held, and
+            the same `{move}` path working normally beside it. */}
+        <OrbitControls
+          enabled={!inVr}
+          enablePan
+          enableZoom
+          enableRotate
+          maxPolarAngle={Math.PI / 2}
+          minDistance={0.5}
+          maxDistance={10}
+        />
 
         {/* MOUNTED UNCONDITIONALLY. It used to be `{connected && <VrTeleopRig/>}`,
             so a dropped socket unmounted it — and inside the headset nothing
