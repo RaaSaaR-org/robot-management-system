@@ -4,7 +4,7 @@ aliases:
 - TASK-220
 title: Import a Hub dataset, mix it with another, and export the run to a cluster
 slug: import-a-hub-dataset-mix-it-and-export-the-run
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
