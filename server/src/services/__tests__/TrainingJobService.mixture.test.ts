@@ -148,7 +148,7 @@ describe('a submission that names several datasets', () => {
       datasetIds: ['ds-a', 'ds-b'],
       baseModel: 'groot_n1_7',
       fineTuneMethod: 'lora',
-    } as never);
+    });
 
     expect(trainingJobRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ datasetId: 'ds-a' }),
@@ -171,7 +171,7 @@ describe('a submission that names several datasets', () => {
       ],
       baseModel: 'groot_n1_7',
       fineTuneMethod: 'lora',
-    } as never);
+    });
 
     expect(trainingJobRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ datasetId: 'ds-b' }),
@@ -200,7 +200,7 @@ describe('a submission that names several datasets', () => {
         datasetIds: ['ds-a', 'ds-b'],
         baseModel: 'groot_n1_7',
         fineTuneMethod: 'lora',
-      } as never),
+      }),
     ).resolves.toMatchObject({ id: 'job-new' });
     expect(prisma.trainingJobDataset.createMany).toHaveBeenCalled();
   });
@@ -212,7 +212,7 @@ describe('a submission that names several datasets', () => {
       datasetIds: ['ds-a', 'ds-b'],
       baseModel: 'groot_n1_7',
       fineTuneMethod: 'lora',
-    } as never);
+    });
 
     await expect(submit).rejects.toBeInstanceOf(MixtureIncompatibleError);
     await submit.catch((error: MixtureIncompatibleError) => {
@@ -231,9 +231,96 @@ describe('a submission that names several datasets', () => {
         datasetIds: ['ds-a', 'ds-b'],
         baseModel: 'groot_n1_7',
         fineTuneMethod: 'lora',
-      } as never),
+      }),
     ).rejects.toBeInstanceOf(MixtureIncompatibleError);
     expect(trainingJobRepository.create).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Weights
+//
+// A weight is a sampling ratio, so finite-and-positive is the whole domain.
+// The value worth testing is `Infinity`, because it needs no hostile client:
+// `1e400` is a JSON number literal, `JSON.parse` yields `Infinity`, Postgres
+// stores it in a `Float` without complaint, and the export manifest then
+// divides by a total that excluded it and renders the result as
+// `"normalizedWeight": null` — a member with no share, in a document a cluster
+// is meant to execute.
+// ===========================================================================
+
+describe('mixture weights', () => {
+  const submit = (weight: unknown) =>
+    trainingJobService.submitJob({
+      baseModel: 'groot_n1_7',
+      fineTuneMethod: 'lora',
+      mixture: [
+        { datasetId: 'ds-a', weight: weight as number },
+        { datasetId: 'ds-b', weight: 1 },
+      ],
+    });
+
+  beforeEach(() => {
+    prisma.dataset.findMany.mockResolvedValue([row('ds-a'), row('ds-b')]);
+  });
+
+  it('refuses Infinity — which is what the JSON literal 1e400 parses to', async () => {
+    expect(JSON.parse('{"w":1e400}').w).toBe(Infinity); // the premise, not decoration
+    await expect(submit(Infinity)).rejects.toThrow(
+      'Mixture weight for ds-a must be a positive number; received Infinity',
+    );
+    expect(trainingJobRepository.create).not.toHaveBeenCalled();
+    expect(prisma.trainingJobDataset.createMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a negative weight, which would otherwise sum plausibly', async () => {
+    await expect(submit(-1)).rejects.toThrow(/received -1/);
+    expect(trainingJobRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses zero — a member sampled never is a member left out silently', async () => {
+    await expect(submit(0)).rejects.toThrow(/received 0/);
+  });
+
+  it('refuses NaN', async () => {
+    await expect(submit(Number.NaN)).rejects.toThrow(/received NaN/);
+  });
+
+  it('refuses a weight that is not a number at all', async () => {
+    await expect(submit('3')).rejects.toThrow(/received "3"/);
+  });
+
+  it('defaults a missing weight to 1 rather than refusing it', async () => {
+    await trainingJobService.submitJob({
+      baseModel: 'groot_n1_7',
+      fineTuneMethod: 'lora',
+      mixture: [{ datasetId: 'ds-a' }, { datasetId: 'ds-b' }],
+    });
+
+    expect(prisma.trainingJobDataset.createMany).toHaveBeenCalledWith({
+      data: [
+        { trainingJobId: 'job-new', datasetId: 'ds-a', weight: 1, position: 0 },
+        { trainingJobId: 'job-new', datasetId: 'ds-b', weight: 1, position: 1 },
+      ],
+    });
+  });
+
+  it('keeps a fractional weight exactly as given — it is not rounded or normalised here', async () => {
+    await trainingJobService.submitJob({
+      baseModel: 'groot_n1_7',
+      fineTuneMethod: 'lora',
+      mixture: [
+        { datasetId: 'ds-a', weight: 0.25 },
+        { datasetId: 'ds-b', weight: 3 },
+      ],
+    });
+
+    expect(prisma.trainingJobDataset.createMany).toHaveBeenCalledWith({
+      data: [
+        { trainingJobId: 'job-new', datasetId: 'ds-a', weight: 0.25, position: 0 },
+        { trainingJobId: 'job-new', datasetId: 'ds-b', weight: 3, position: 1 },
+      ],
+    });
   });
 });
 

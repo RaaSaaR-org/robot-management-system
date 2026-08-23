@@ -29,8 +29,15 @@ portable at all:
 | `uri` | `portable` | What the cluster does |
 | --- | --- | --- |
 | `hf://<repo>@<40-hex sha>` | `true` | `huggingface-cli download <repo> --revision <sha>` |
-| `s3://<bucket>/<prefix>` | `true` | Fetch with its own S3 credentials |
+| `s3://<bucket>/<prefix>` | `true` | Fetch with its own S3 credentials — **but see below** |
 | `file:///abs/path` | **`false`** | **Nothing. The path is on the NeoDEM server's disk.** |
+
+`s3://` names a bucket in **this deployment's** S3-compatible object store (RustFS), not a
+bucket in AWS. The URI carries no endpoint, because an S3 URI has nowhere to put one — so a
+cluster that resolves it with default credentials reaches public AWS, where the bucket either
+does not exist or belongs to a stranger. Every `s3://` member therefore also produces a
+`warnings` entry saying so. Give the cluster the endpoint and credentials out of band, or push
+the dataset to a Hub repo so it travels on its own.
 
 `file://` is not a failure of the export — it is the honest report of a dataset that only
 exists on one machine, which is what a locally recorded or synthetically generated dataset

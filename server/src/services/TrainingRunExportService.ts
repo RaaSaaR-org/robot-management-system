@@ -36,6 +36,7 @@ import { prisma } from '../database/index.js';
 import { trainingJobRepository } from '../repositories/index.js';
 import {
   analyzeCompatibility,
+  declaredWidth,
   type CompatibilityDatasetInput,
 } from './lerobot/datasetCompatibility.js';
 import { BUCKETS } from '../storage/model-storage.js';
@@ -136,10 +137,20 @@ export function resolveDatasetUri(dataset: MixtureRow['dataset']): ResolvedUri {
         + 'storage and export again, or copy the directory to the cluster and edit this URI by hand.',
     };
   }
+  // Reachable, but not from the address alone. `s3://training-datasets/…` with
+  // no endpoint resolves against public AWS, where this bucket is not — and
+  // `training-datasets` is a generic enough name that somebody else's bucket
+  // may well answer. So the URI stays (it is the correct key inside the store)
+  // and the warning carries the part the URI cannot: which store.
   return {
     uri: `s3://${BUCKETS.TRAINING_DATASETS}/${path}`,
     portable: true,
-    warning: null,
+    warning:
+      `"${dataset.name}" lives in this deployment's own S3-compatible object store (RustFS), not in `
+      + `AWS S3. \`s3://${BUCKETS.TRAINING_DATASETS}/…\` carries no endpoint, so a cluster that reads `
+      + 'it with default credentials will reach the wrong bucket or none at all. Supply the store '
+      + "endpoint and credentials to the cluster out of band, or push the dataset to Hugging Face if "
+      + 'it is meant to travel on its own.',
   };
 }
 
@@ -162,14 +173,29 @@ function readLicense(sourceLicense: string | null, infoJson: string | null): str
   return 'unknown';
 }
 
-function readWidths(validationJson: string | null): { state: number | null; action: number | null } {
+/**
+ * State and action width — measured if this dataset has been validated, and
+ * otherwise as `info.json` declares it.
+ *
+ * The fallback matters because the `compatibility` block in this same document
+ * already falls back (`readWidth` in `datasetCompatibility.ts`, which labels a
+ * fallen-back number "43 (declared)"). Reading only the measured value left one
+ * manifest asserting `"stateWidth": null` two hundred lines above an axis that
+ * said the widths were 43 and 28 and did not match. A document that contradicts
+ * itself is worse than one that admits it never measured.
+ */
+function readWidths(
+  validationJson: string | null,
+  infoJson: string | null,
+): { state: number | null; action: number | null } {
   const outer = parseJson(validationJson);
   const report = parseJson(outer?.report) ?? outer;
   const state = report?.observedStateWidth;
   const action = report?.observedActionWidth;
+  const info = parseJson(infoJson);
   return {
-    state: typeof state === 'number' ? state : null,
-    action: typeof action === 'number' ? action : null,
+    state: typeof state === 'number' ? state : declaredWidth(info, 'observation.state'),
+    action: typeof action === 'number' ? action : declaredWidth(info, 'action'),
   };
 }
 
@@ -262,7 +288,7 @@ export class TrainingRunExportService {
       const row = member.dataset;
       const located = resolveDatasetUri(row);
       if (located.warning) warnings.push(located.warning);
-      const widths = readWidths(row.validationJson);
+      const widths = readWidths(row.validationJson, row.infoJson);
       const info = parseJson(row.infoJson);
       const robotType = typeof info?.robot_type === 'string' && info.robot_type.trim()
         ? info.robot_type.trim()
@@ -288,22 +314,34 @@ export class TrainingRunExportService {
       };
     });
 
+    // A job with no members is one of two quite different things, and saying
+    // the wrong one is a lie in a document meant to be trusted. A `sim_rl` job
+    // never had a dataset — it trains in a simulated scene — so telling its
+    // reader that "the dataset was deleted" invents a loss that never happened.
+    const simulated = job.kind === 'sim_rl';
     const compatibility = members.length
       ? analyzeCompatibility(members.map((m) => toCompatibilityInput(m.dataset)))
       : {
           datasetIds: [],
           verdict: 'incompatible' as const,
-          headline: 'This job names no dataset that still exists, so there is nothing to train on.',
-          recommendation:
-            'The dataset this job was created from has been deleted. Create a new job against a '
-            + 'dataset that is still registered.',
+          headline: simulated
+            ? 'This is a sim_rl run: it trains in a simulated scene, so there are no datasets to compare.'
+            : 'This job names no dataset that still exists, so there is nothing to train on.',
+          recommendation: simulated
+            ? 'Nothing to reconcile here — a sim_rl run carries a scene, not recorded data. This '
+              + 'manifest does not yet describe that scene, so it cannot be run from this document alone.'
+            : 'The dataset this job was created from has been deleted. Create a new job against a '
+              + 'dataset that is still registered.',
           axes: [],
         };
     if (!members.length) {
       warnings.push(
-        'This run names no dataset. The job either predates its dataset being deleted, or is a kind '
-        + 'of job (sim_rl) that trains in a simulated scene rather than on recorded data — either '
-        + 'way, nothing here tells a cluster what to load.',
+        simulated
+          ? 'This is a sim_rl run, which trains in a simulated scene rather than on recorded data. '
+            + 'The scene is not part of this manifest, so a cluster cannot reproduce the run from '
+            + 'this document alone.'
+          : 'This run names no dataset — the dataset the job was created from no longer exists. '
+            + 'Nothing here tells a cluster what to load.',
       );
     }
     if (compatibility.verdict === 'incompatible' && members.length) {

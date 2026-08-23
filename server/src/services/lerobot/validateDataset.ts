@@ -488,10 +488,23 @@ export async function validateDatasetStructure(
   for (const key of stillKeys) {
     const entries = await tree.list(`images/${key}`);
     if (entries.length === 0) {
-      error(
-        'MISSING_IMAGE_FILES',
-        `info.json declares ${key} as a dtype:'image' feature and images/${key}/ is empty`,
-      );
+      // Same reasoning as VIDEO_NOT_IMPORTED above: a metadata-only import was
+      // asked not to fetch camera frames, so their absence is the operator's
+      // decision. `dtype: 'image'` needs its own branch because these frames
+      // live under `images/`, not `videos/`, and are selected separately.
+      if (metadataOnly) {
+        warn(
+          'VIDEO_NOT_IMPORTED',
+          `images/${key}/ was not fetched: this dataset was imported with importMode 'metadata', `
+          + 'which takes meta/ and data/ and no camera frames. Re-import with includeVideos to '
+          + 'train a vision policy on it.',
+        );
+      } else {
+        error(
+          'MISSING_IMAGE_FILES',
+          `info.json declares ${key} as a dtype:'image' feature and images/${key}/ is empty`,
+        );
+      }
       continue;
     }
     for (const entry of entries.slice(0, 4)) {

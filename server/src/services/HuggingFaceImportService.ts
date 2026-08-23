@@ -574,8 +574,18 @@ export class HuggingFaceImportService {
         const js = natsClient.getJetStream();
         if (js) {
           const payload = JSON.stringify({ datasetId, storagePath: sink.storagePath });
+          // The msgID is per ATTEMPT, not per dataset.
+          //
+          // `validate-${datasetId}` sat inside JetStream's dedup window, so the
+          // SECOND validation ever queued for a dataset was silently discarded
+          // by the server — acked as a duplicate, no error here, no consumer
+          // there. The row stays at `validating`, and `retryImport` refuses a
+          // `validating` row with IN_PROGRESS, so the dataset is wedged for
+          // good with no way out through the UI. Dedup is worth having for a
+          // publish that is genuinely repeated; a retry is a new attempt and
+          // must be allowed to queue its own work.
           await js.publish(DATASET_VALIDATION_SUBJECT, new TextEncoder().encode(payload), {
-            msgID: `validate-${datasetId}`,
+            msgID: `validate-${datasetId}-${uuidv4()}`,
           });
           console.log(`[HFImport] Queued validation job for ${datasetId}`);
         }
@@ -947,14 +957,30 @@ export class HuggingFaceImportService {
     let completedFiles = 0;
     const totalFiles = files.length;
 
-    // Concurrency-limited parallel download
+    // Concurrency-limited parallel download.
+    //
+    // THE FIRST FAILURE STOPS ALL FIVE. `Promise.all` rejects the moment one
+    // worker throws, but rejecting a promise does not cancel anything: the
+    // other four went on shifting files off the shared queue and writing them
+    // into the sink. `runImport` had already caught the rejection and marked
+    // the row `failed`, so for the rest of a 960 MB download those four kept
+    // filling a failed dataset's directory and — worse — kept calling
+    // `emitProgress` with `status: 'importing'`, which flipped the operator's
+    // card from Failed back to Importing and left it there.
+    //
+    // So the error is recorded rather than thrown, every worker checks the flag
+    // before it takes more work, and the join waits for all five to really stop
+    // before the failure is re-raised. When the caller marks the row failed,
+    // nothing is still writing to it.
     const queue = [...files];
     const workers: Promise<void>[] = [];
+    let failure: unknown = null;
 
     for (let i = 0; i < MAX_CONCURRENT_DOWNLOADS; i++) {
       workers.push(
         (async () => {
           while (queue.length > 0) {
+            if (failure) return;
             const file = queue.shift();
             if (!file) break;
 
@@ -967,9 +993,14 @@ export class HuggingFaceImportService {
               if (file === 'meta/stats.json' && error instanceof Error && error.message.includes('404')) {
                 console.log(`[HFImport] stats.json not found (optional), skipping`);
               } else {
-                throw error;
+                failure ??= error;
+                return;
               }
             }
+
+            // A worker that raced past the check above must not report progress
+            // for an import that has already failed.
+            if (failure) return;
 
             completedFiles++;
             const downloadProgress = 10 + Math.round((completedFiles / totalFiles) * 80);
@@ -989,6 +1020,7 @@ export class HuggingFaceImportService {
     }
 
     await Promise.all(workers);
+    if (failure) throw failure;
   }
 
   /**
@@ -1071,22 +1103,39 @@ export class HuggingFaceImportService {
 // FILE SELECTION
 // ============================================================================
 
+/**
+ * A file that holds camera frames, in either of the two forms LeRobot uses.
+ *
+ * `videos/…mp4` for a `dtype: 'video'` feature, and `images/<key>/…` PNGs for a
+ * `dtype: 'image'` one. They are one category as far as this import is
+ * concerned — both are the heavy visual half of a dataset, both are what
+ * `includeVideos` decides about, and `validateDataset` already treats a missing
+ * one of either as the same class of problem.
+ */
 export function isVideoPath(path: string): boolean {
-  return path.startsWith('videos/') && path.endsWith('.mp4');
+  return (path.startsWith('videos/') && path.endsWith('.mp4')) || path.startsWith('images/');
 }
 
 /**
  * The LeRobot files in a repo tree: all of `meta/`, every data parquet, and the
- * videos when they were asked for.
+ * camera frames when they were asked for.
  *
  * Selecting by prefix and extension rather than by a presumed `file-000` name
  * is what makes a v3.0 chunk that spilled into `file-001` come across whole.
+ *
+ * `images/` is here because `dtype: 'image'` is not a rare shape — it is what a
+ * dataset recorded without video encoding looks like, and plenty of Hub repos
+ * are one. Selecting only `videos/` meant those repos downloaded their metadata
+ * and parquet, then failed validation on `MISSING_IMAGE_FILES` for frames the
+ * import had never asked for: an import that reports failure for doing exactly
+ * what it was told.
  */
 export function selectRepoFiles(tree: RepoFile[], includeVideos: boolean): RepoFile[] {
   return tree.filter(({ path }) => {
     if (path.startsWith('meta/')) return true;
     if (path.startsWith('data/') && path.endsWith('.parquet')) return true;
     if (path.startsWith('videos/')) return includeVideos && path.endsWith('.mp4');
+    if (path.startsWith('images/')) return includeVideos;
     return false;
   });
 }

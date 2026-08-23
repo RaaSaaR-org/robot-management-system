@@ -80,7 +80,53 @@ export interface MixtureSubmitFields {
   mixture?: MixtureMemberInput[];
 }
 
-export type SubmitTrainingJobWithMixture = SubmitTrainingJobRequest & MixtureSubmitFields;
+/**
+ * A submission, with or without a mixture.
+ *
+ * `datasetId` becomes OPTIONAL here, which is the whole point of the type: a
+ * mixture names its datasets in `mixture`/`datasetIds` and the route already
+ * accepts that (`if (!hasMixture && !request.datasetId)`). Left required, every
+ * mixture caller had to be written `submitJob({ mixture: [...] } as never)` —
+ * and `as never` does not narrow the check, it removes it, so a typo in
+ * `fineTuneMethod` or a misspelled `mixtrue` key passed the compiler in exactly
+ * the calls that most needed checking. `submitJob` still refuses at runtime
+ * when neither is present.
+ */
+export type SubmitTrainingJobWithMixture =
+  Omit<SubmitTrainingJobRequest, 'datasetId'>
+  & { datasetId?: string }
+  & MixtureSubmitFields;
+
+/**
+ * A sampling weight, or a refusal naming the member that carried it.
+ *
+ * A weight is a ratio, so the only meaningful values are finite and positive.
+ * JSON reaches further than that: `1e400` parses to `Infinity` — no exotic
+ * client needed, just a number literal — and `Infinity` is a `Float` Postgres
+ * stores without complaint. It then survives all the way into the export
+ * manifest, where `buildManifest` excludes it from the total (it is not finite)
+ * but still divides by it, and `JSON.stringify` renders the result as
+ * `"normalizedWeight": null`. A cluster reads a mixture in which one member has
+ * no share and the rest sum to 1, and nothing anywhere said no.
+ *
+ * A negative weight is quieter and worse: it sums, so the totals still look
+ * plausible while one member is sampled a negative fraction of the time.
+ *
+ * Refused here, at the door, rather than defended against in the exporter —
+ * there is no reading of a negative or infinite sampling ratio to recover.
+ */
+function checkedWeight(weight: unknown, datasetId: string): number {
+  if (weight === undefined || weight === null) return 1;
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
+    // `JSON.stringify(Infinity)` is the string "null", which would report the
+    // one value most likely to be here as the one thing it is not.
+    const shown = typeof weight === 'number' ? String(weight) : JSON.stringify(weight);
+    throw new Error(
+      `Mixture weight for ${datasetId} must be a positive number; received ${shown}`,
+    );
+  }
+  return weight;
+}
 
 /**
  * The members a request asks for, or null when it names a single dataset the
@@ -90,7 +136,10 @@ function resolveMixtureMembers(
   request: SubmitTrainingJobWithMixture,
 ): MixtureMemberInput[] | null {
   if (request.mixture?.length) {
-    return request.mixture.map((m) => ({ datasetId: m.datasetId, weight: m.weight ?? 1 }));
+    return request.mixture.map((m) => ({
+      datasetId: m.datasetId,
+      weight: checkedWeight(m.weight, m.datasetId),
+    }));
   }
   if (request.datasetIds?.length) {
     return request.datasetIds.map((datasetId) => ({ datasetId, weight: 1 }));
@@ -175,6 +224,13 @@ export class TrainingJobService extends EventEmitter {
       }
     }
     const primaryDatasetId = members ? members[0].datasetId : request.datasetId;
+    // The route checks this too. Repeated here because the route is not the
+    // only caller and because `findById(undefined)` does not fail politely —
+    // Prisma raises its own argument error, which reaches the operator as an
+    // internal message about a `where` clause.
+    if (!primaryDatasetId) {
+      throw new Error('A training job must name a dataset, either as datasetId or as a mixture');
+    }
 
     // Validate dataset exists and is ready
     const dataset = await datasetRepository.findById(primaryDatasetId);

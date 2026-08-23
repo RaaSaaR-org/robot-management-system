@@ -183,6 +183,44 @@ describe('frame rate', () => {
     expect(report.verdict).toBe('compatible');
   });
 
+  it('checks EVERY rate against the slowest, not just the fastest', () => {
+    // 10, 25 and 30 Hz. Comparing only min and max sees 30 = 3 × 10 and calls
+    // the mixture subsamplable — while 25 divides by neither and is never
+    // looked at. The operator is told the rates align; the 25 Hz member then
+    // trains at a playback speed nothing corrects. A mixture holds up to eight
+    // datasets, so there is room between the extremes to hide in.
+    const report = analyzeCompatibility([
+      groot({ id: 'slow', fps: 10 }),
+      groot({ id: 'odd', fps: 25 }),
+      groot({ id: 'fast', fps: 30 }),
+    ]);
+    const fps = axisOf(report, 'fps');
+    expect(fps.verdict).toBe('blocking');
+    expect(fps.note).toMatch(/25 fps/);
+    expect(fps.note).toMatch(/10 fps/);
+  });
+
+  it('still passes a three-way mixture where every rate really does divide', () => {
+    const report = analyzeCompatibility([
+      groot({ id: 'a', fps: 10 }),
+      groot({ id: 'b', fps: 20 }),
+      groot({ id: 'c', fps: 30 }),
+    ]);
+    expect(axisOf(report, 'fps').verdict).toBe('differs');
+  });
+
+  it('does not treat a repeated slowest rate as an offender', () => {
+    // ratio 1 is not "an integer multiple >= 2", so a member AT the slowest
+    // rate must be excluded from the check rather than reported as unalignable.
+    const report = analyzeCompatibility([
+      groot({ id: 'a', fps: 15 }),
+      groot({ id: 'b', fps: 15 }),
+      groot({ id: 'c', fps: 30 }),
+    ]);
+    expect(axisOf(report, 'fps').verdict).toBe('differs');
+  });
+
+
   it('does not treat 29.97 and 30 as a multiple', () => {
     const report = analyzeCompatibility([groot({ fps: 29.97 }), groot({ id: 'b', fps: 30 })]);
     expect(axisOf(report, 'fps').verdict).toBe('blocking');

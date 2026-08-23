@@ -128,6 +128,19 @@ describe('dataset URIs', () => {
     expect(resolved.portable).toBe(true);
   });
 
+  it('says an s3:// bucket is THIS deployment\'s store, not AWS', () => {
+    // An S3 URI has nowhere to put an endpoint, so `s3://training-datasets/...`
+    // read with default credentials goes to public AWS — where this bucket is
+    // not, and where a bucket of that generic a name may belong to a stranger.
+    // The URI is still the right key; the warning is the only place the store
+    // can be named.
+    const resolved = resolveDatasetUri(
+      datasetRow({ huggingFaceRepoId: null, sourceRevision: null }) as never,
+    );
+    expect(resolved.warning).toMatch(/RustFS/);
+    expect(resolved.warning).toMatch(/not in\s+AWS S3/);
+  });
+
   it('tags an absolute path as file:// and marks it NOT portable', () => {
     const resolved = resolveDatasetUri(
       datasetRow({
@@ -276,6 +289,49 @@ describe('buildManifest', () => {
     expect(manifest?.datasets).toEqual([]);
     expect(manifest?.compatibility.verdict).toBe('incompatible');
     expect(manifest?.warnings.some((w) => /names no dataset/.test(w))).toBe(true);
+    // A supervised job with no dataset really did lose one.
+    expect(manifest?.compatibility.recommendation).toMatch(/has been deleted/);
+  });
+
+  it('does not tell a sim_rl run that its dataset was deleted — it never had one', async () => {
+    // Same empty member list, entirely different cause. `sim_rl` trains in a
+    // simulated scene; reporting a deletion invents a loss that never happened,
+    // in a document whose only value is that it can be trusted.
+    trainingJobRepository.findById.mockResolvedValue(
+      job({ kind: 'sim_rl', datasetId: null, sceneId: 'scene-warehouse' }) as never,
+    );
+    prisma.dataset.findUnique.mockResolvedValue(null);
+
+    const manifest = await trainingRunExportService.buildManifest('job-1');
+    expect(manifest?.compatibility.headline).toMatch(/sim_rl/);
+    expect(manifest?.compatibility.recommendation).not.toMatch(/deleted/);
+    expect(manifest?.warnings.some((w) => /simulated scene/.test(w))).toBe(true);
+    expect(manifest?.warnings.some((w) => /no longer exists/.test(w))).toBe(false);
+  });
+
+  it('falls back to the declared width when nothing has measured one', async () => {
+    // The compatibility block in this SAME document already falls back to the
+    // declared shape and labels it "43 (declared)". Reading only the measured
+    // value left the manifest asserting stateWidth: null a few hundred lines
+    // above an axis that said 43.
+    prisma.dataset.findUnique.mockResolvedValue(datasetRow({ validationJson: null }));
+
+    const manifest = await trainingRunExportService.buildManifest('job-1');
+    expect(manifest?.datasets[0].stateWidth).toBe(43);
+    expect(manifest?.datasets[0].actionWidth).toBe(43);
+  });
+
+  it('still prefers the measured width over the declared one', async () => {
+    prisma.dataset.findUnique.mockResolvedValue(
+      datasetRow({
+        validationJson: JSON.stringify({
+          report: { observedStateWidth: 28, observedActionWidth: 28 },
+        }),
+      }),
+    );
+
+    const manifest = await trainingRunExportService.buildManifest('job-1');
+    expect(manifest?.datasets[0].stateWidth).toBe(28);
   });
 });
 

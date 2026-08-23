@@ -338,7 +338,8 @@ export class TrainingOrchestrator extends EventEmitter {
   async claimNextPendingJob(
     workerId: string,
     device?: string,
-    kinds: string[] = ['supervised']
+    kinds: string[] = ['supervised'],
+    features: string[] = []
   ): Promise<TrainingJob | null> {
     // Pull pending/queued jobs; findAll returns newest-first so we pick
     // the oldest entry (closest to head of FIFO queue).
@@ -351,9 +352,37 @@ export class TrainingOrchestrator extends EventEmitter {
     // Filter by job kind so a supervised VLA worker never claims a sim_rl
     // job and vice-versa (TASK-172.C). Defaults to 'supervised' for back-compat
     // with existing training-workers that don't send `kinds`.
-    const matching = candidates.data.filter((j) =>
+    let matching = candidates.data.filter((j) =>
       kinds.includes(j.kind ?? 'supervised')
     );
+
+    // A mixture job names SEVERAL datasets with sampling weights (TASK-220),
+    // and the claim response has always carried exactly one `dataset` — the
+    // job's `datasetId`, which is member 0. A worker that predates mixtures
+    // would therefore claim a two-dataset run, train on the first, and report
+    // success: a job that says it trained on 43-wide whole-body data and
+    // 28-wide arm data when it only ever saw one of them. That is precisely the
+    // silent wrongness the compatibility report exists to prevent, and it is
+    // worse coming from the trainer than from the loader.
+    //
+    // So workers opt in, the same way `kinds` already lets a sim trainer take
+    // only sim_rl jobs: send `features: ['mixture']`. Until a worker does,
+    // mixture jobs stay pending — visibly waiting, which an operator can see and
+    // act on, rather than quietly half-trained.
+    if (!features.includes('mixture') && matching.length > 0) {
+      const members = await trainingJobService.getJobDatasetsForJobs(
+        matching.map((j) => ({ id: j.id, datasetId: j.datasetId ?? null }))
+      );
+      const skipped = matching.filter((j) => (members.get(j.id)?.length ?? 0) > 1);
+      if (skipped.length > 0) {
+        console.log(
+          `[TrainingOrchestrator] Worker ${workerId} does not declare features:['mixture']; `
+          + `leaving ${skipped.length} mixture job(s) pending: ${skipped.map((j) => j.id).join(', ')}`
+        );
+        const skippedIds = new Set(skipped.map((j) => j.id));
+        matching = matching.filter((j) => !skippedIds.has(j.id));
+      }
+    }
 
     // Touch the worker registry on every claim poll so idle workers
     // also show up in `listWorkers()`. The currentJobId is set below

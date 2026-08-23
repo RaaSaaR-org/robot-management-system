@@ -43,6 +43,7 @@ import type { Readable } from 'stream';
 import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDatasetView.js';
 // TASK-220 — POST /compatibility, at the bottom of this file.
 import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
+import { ConflictError } from '../utils/errors.js';
 
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
@@ -798,6 +799,12 @@ datasetRoutes.delete('/:id', async (req: Request, res: Response) => {
       message: 'Dataset deleted successfully',
     });
   } catch (error) {
+    // A dataset a training mixture still names is a refusal the caller can act
+    // on — it names the jobs holding it — not a server fault to log and hide
+    // behind "Failed to delete dataset".
+    if (error instanceof ConflictError) {
+      return res.status(409).json({ error: error.message });
+    }
     console.error('[DatasetRoutes] Error deleting dataset:', error);
     res.status(500).json({ error: 'Failed to delete dataset' });
   }

@@ -53,6 +53,9 @@ vi.mock('../TrainingJobService.js', () => ({
   trainingJobService: {
     updateJobStatus: vi.fn(),
     emitProgressEvent: vi.fn(),
+    // Which candidates are mixtures. Default: none, so every claim test that
+    // predates mixtures describes the same single-dataset world it always did.
+    getJobDatasetsForJobs: vi.fn(async () => new Map()),
   },
 }));
 
@@ -371,6 +374,75 @@ describe('claimNextPendingJob', () => {
     const workers = await trainingOrchestrator.listWorkers();
     expect(workers.workers.map((w) => w.workerId)).toContain('w1');
     expect(workers.workers[0].status).toBe('idle');
+  });
+
+  // -------------------------------------------------------------------------
+  // Mixture jobs and workers that predate them (TASK-220).
+  //
+  // The claim response carries ONE `dataset` — the job's `datasetId`, which for
+  // a mixture is member 0. A worker that has never heard of mixtures would
+  // claim a two-dataset run, train on the first, and report success: a job
+  // whose record says it saw 43-wide whole-body data and 28-wide arm data when
+  // it only ever saw one. Workers opt in with `features: ['mixture']`, the same
+  // shape `kinds` already uses; until one does, these jobs visibly wait.
+  // -------------------------------------------------------------------------
+
+  it('does not hand a mixture job to a worker that cannot express one', async () => {
+    const mixtureJob = makeJob({ id: 'mix' });
+    trainingJobRepository.findAll.mockResolvedValue({
+      data: [mixtureJob],
+      pagination: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
+    });
+    trainingJobService.getJobDatasetsForJobs.mockResolvedValue(
+      new Map([['mix', [{ datasetId: 'a' }, { datasetId: 'b' }]]]) as never,
+    );
+
+    const result = await trainingOrchestrator.claimNextPendingJob('old-worker', 'cuda');
+
+    expect(result).toBeNull();
+    // Left pending, not failed and not claimed — an operator can see it waiting.
+    expect(trainingJobService.updateJobStatus).not.toHaveBeenCalled();
+  });
+
+  it('hands the same job over once the worker declares features:[mixture]', async () => {
+    const mixtureJob = makeJob({ id: 'mix' });
+    trainingJobRepository.findAll.mockResolvedValue({
+      data: [mixtureJob],
+      pagination: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
+    });
+    trainingJobRepository.findById.mockResolvedValue(mixtureJob);
+    trainingJobService.updateJobStatus.mockResolvedValue(
+      makeJob({ id: 'mix', status: 'running' }),
+    );
+    trainingJobService.getJobDatasetsForJobs.mockResolvedValue(
+      new Map([['mix', [{ datasetId: 'a' }, { datasetId: 'b' }]]]) as never,
+    );
+
+    const result = await trainingOrchestrator.claimNextPendingJob(
+      'new-worker', 'cuda', ['supervised'], ['mixture'],
+    );
+
+    expect(result?.id).toBe('mix');
+  });
+
+  it('still hands over a single-dataset job to a worker with no features', async () => {
+    // The regression that would matter most: every worker in the field today
+    // sends no `features`, and every job in the field today has one dataset.
+    const solo = makeJob({ id: 'solo' });
+    trainingJobRepository.findAll.mockResolvedValue({
+      data: [solo],
+      pagination: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
+    });
+    trainingJobRepository.findById.mockResolvedValue(solo);
+    trainingJobService.updateJobStatus.mockResolvedValue(makeJob({ id: 'solo', status: 'running' }));
+    // getJobDatasetsForJobs synthesises exactly ONE member for a solo job.
+    trainingJobService.getJobDatasetsForJobs.mockResolvedValue(
+      new Map([['solo', [{ datasetId: 'a' }]]]) as never,
+    );
+
+    const result = await trainingOrchestrator.claimNextPendingJob('old-worker', 'cuda');
+
+    expect(result?.id).toBe('solo');
   });
 
   it('claims the oldest candidate and starts it', async () => {

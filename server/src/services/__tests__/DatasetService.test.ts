@@ -7,9 +7,9 @@
 
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { Readable } from 'stream';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import type { DatasetValidationResult } from '../../types/dataset.types.js';
 import type { DatasetStructureReport } from '../lerobot/validateDataset.js';
 
@@ -24,6 +24,7 @@ const {
   rustfsDownload,
   rustfsList,
   jsPublish,
+  findMixtureMembers,
 } = vi.hoisted(() => ({
   getDatasetUploadUrl: vi.fn(),
   deleteDatasetFromStorage: vi.fn(),
@@ -31,6 +32,15 @@ const {
   rustfsDownload: vi.fn(),
   rustfsList: vi.fn(async (_prefix: string) => [] as string[]),
   jsPublish: vi.fn(),
+  // Which training mixtures name the dataset being deleted. Default: none, so
+  // every pre-existing delete test keeps describing the ordinary case.
+  findMixtureMembers: vi.fn(async () => [] as { trainingJobId: string }[]),
+}));
+
+vi.mock('../../database/index.js', () => ({
+  prisma: {
+    trainingJobDataset: { findMany: findMixtureMembers },
+  },
 }));
 
 vi.mock('../../repositories/index.js', () => ({
@@ -117,7 +127,8 @@ vi.mock('uuid', () => ({
   v4: vi.fn(() => 'generated-uuid'),
 }));
 
-import { datasetService, DatasetService } from '../DatasetService.js';
+import { existsSync } from 'fs';
+import { datasetService, DatasetService, datasetStorageRoot } from '../DatasetService.js';
 import {
   datasetRepository,
   robotTypeRepository,
@@ -230,6 +241,10 @@ beforeEach(() => {
   // Default: storage and NATS unavailable unless a test opts in.
   vi.mocked(isRustFSInitialized).mockReturnValue(false);
   vi.mocked(natsClient.isConnected).mockReturnValue(false);
+  // `clearAllMocks` clears calls but keeps implementations, so a test that
+  // makes a dataset a mixture member would otherwise make every later test's
+  // delete refuse.
+  findMixtureMembers.mockResolvedValue([]);
 });
 
 // ===========================================================================
@@ -449,6 +464,118 @@ describe('delete', () => {
 
     const result = await datasetService.delete('ds1');
     expect(result).toBe(false);
+    expect(events.some((e) => e.type === 'dataset:deleted')).toBe(false);
+    unsub();
+  });
+
+  // -------------------------------------------------------------------------
+  // A dataset a training mixture still names.
+  //
+  // `TrainingJobDataset.datasetId` is ON DELETE RESTRICT, and this method
+  // removes the bytes BEFORE the row. Without the pre-flight below, deleting a
+  // mixture member ran `rm -rf` over the tree and emptied the bucket, then the
+  // row delete failed, `datasetRepository.delete` swallowed it and returned
+  // false, and the route answered "Dataset not found" — leaving a dataset
+  // listed as `ready` whose 960 MB no longer exist. These tests are about the
+  // ORDER, which is why they assert on the storage mocks, not just the throw.
+  // -------------------------------------------------------------------------
+
+  it('refuses before touching storage when a training mixture names it', async () => {
+    vi.mocked(isRustFSInitialized).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    findMixtureMembers.mockResolvedValue([{ trainingJobId: 'job-7' }]);
+
+    await expect(datasetService.delete('ds1')).rejects.toThrow(/member of 1 training job/);
+
+    // The bytes are the point: nothing was removed from the bucket, and the
+    // row delete was never attempted either.
+    expect(deleteDatasetFromStorage).not.toHaveBeenCalled();
+    expect(datasetRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('names the jobs holding it, so the operator knows what to delete first', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    findMixtureMembers.mockResolvedValue([
+      { trainingJobId: 'job-a' },
+      { trainingJobId: 'job-b' },
+    ]);
+
+    await expect(datasetService.delete('ds1')).rejects.toThrow(/job-a, job-b/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Two directory conventions, one delete.
+  //
+  // `unpackUploadedArchive` names its directory after the dataset id. The Hub
+  // importer mints a fresh uuid for the prefix (`createSink(uuidv4())`), so an
+  // imported tree lives under a name that appears nowhere but `storagePath`.
+  // Removing only `<id>/` left every imported dataset's bytes on disk for ever
+  // — and the bigger the import, the more it cost: 960 MB for one GR00T repo.
+  //
+  // These assert against the real filesystem, because the thing under test is
+  // that bytes stop existing.
+  // -------------------------------------------------------------------------
+
+  it('removes the imported tree, which is not named after the dataset id', async () => {
+    const root = datasetStorageRoot();
+    const importedId = '7eb3aa57-5b35-4c90-9b1e-67b335236b7a';
+    await mkdir(join(root, importedId, 'meta'), { recursive: true });
+    await writeFile(join(root, importedId, 'meta', 'info.json'), '{}');
+    await mkdir(join(root, 'ds1'), { recursive: true });
+
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ storagePath: `${join(root, importedId)}/` }),
+    );
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    await datasetService.delete('ds1');
+
+    expect(existsSync(join(root, importedId))).toBe(false);
+    // …and still the by-id directory, which is where an uploaded archive lands.
+    expect(existsSync(join(root, 'ds1'))).toBe(false);
+  });
+
+  it('leaves a storagePath that points outside the dataset root alone', async () => {
+    // `storagePath` is a database column. `rm -rf` on an unvalidated column is
+    // how a bug becomes a catastrophe, so anything resolving outside the root
+    // is ignored rather than removed.
+    const outside = await mkdtemp(join(tmpdir(), 'not-the-dataset-root-'));
+    await writeFile(join(outside, 'precious.txt'), 'do not delete me');
+
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ storagePath: `${outside}/` }),
+    );
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    await datasetService.delete('ds1');
+
+    expect(existsSync(join(outside, 'precious.txt'))).toBe(true);
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('does not let a traversal in storagePath climb out of the root', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'traversal-target-'));
+    await writeFile(join(outside, 'precious.txt'), 'do not delete me');
+
+    vi.mocked(datasetRepository.findById).mockResolvedValue(
+      makeDataset({ storagePath: `${datasetStorageRoot()}/../${basename(outside)}/` }),
+    );
+    vi.mocked(datasetRepository.delete).mockResolvedValue(true as never);
+
+    await datasetService.delete('ds1');
+
+    expect(existsSync(join(outside, 'precious.txt'))).toBe(true);
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('does not emit dataset:deleted for a refused delete', async () => {
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    findMixtureMembers.mockResolvedValue([{ trainingJobId: 'job-7' }]);
+
+    const events: { type: string }[] = [];
+    const unsub = datasetService.onDatasetEvent((e) => events.push(e as { type: string }));
+
+    await expect(datasetService.delete('ds1')).rejects.toThrow();
     expect(events.some((e) => e.type === 'dataset:deleted')).toBe(false);
     unsub();
   });

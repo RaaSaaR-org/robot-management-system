@@ -80,6 +80,7 @@ import {
   HuggingFaceImportService,
   matchRobotType,
   selectRepoFiles,
+  isVideoPath,
 } from '../HuggingFaceImportService.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
@@ -321,6 +322,41 @@ describe('HuggingFaceImportService', () => {
       expect(metaOnly.some((p) => p.endsWith('.mp4'))).toBe(false);
 
       expect(selectRepoFiles(TREE, true).some((f) => f.path.endsWith('.mp4'))).toBe(true);
+    });
+
+    // A `dtype: 'image'` dataset stores PNG frames under `images/<key>/` rather
+    // than mp4s under `videos/`. Selecting only `videos/` meant those repos
+    // downloaded metadata and parquet, then failed validation on
+    // MISSING_IMAGE_FILES — for frames the import had never asked the Hub for.
+    const IMAGE_TREE = [
+      { path: 'meta/info.json', size: 100 },
+      { path: 'data/chunk-000/episode_000000.parquet', size: 700 },
+      { path: 'images/observation.images.cam_high/episode_000000/frame_000000.png', size: 900 },
+      { path: 'images/observation.images.cam_high/episode_000000/frame_000001.png', size: 900 },
+    ];
+
+    it('takes images/ too — a dtype:image dataset keeps its frames in there', () => {
+      const withFrames = selectRepoFiles(IMAGE_TREE, true).map((f) => f.path);
+      expect(withFrames).toContain(
+        'images/observation.images.cam_high/episode_000000/frame_000000.png',
+      );
+      expect(withFrames).toHaveLength(4);
+    });
+
+    it('leaves images/ behind for a metadata-only import, like videos/', () => {
+      const metaOnly = selectRepoFiles(IMAGE_TREE, false).map((f) => f.path);
+      expect(metaOnly.some((p) => p.startsWith('images/'))).toBe(false);
+      expect(metaOnly).toEqual(['meta/info.json', 'data/chunk-000/episode_000000.parquet']);
+    });
+
+    it('counts image frames as visual bytes, not as data bytes', () => {
+      // The preview splits the download into "data" and "video" so the operator
+      // can see what the include-videos toggle is actually worth. PNG frames
+      // are the heavy visual half exactly as mp4s are.
+      expect(isVideoPath('images/observation.images.cam_high/episode_000000/frame_000000.png'))
+        .toBe(true);
+      expect(isVideoPath('data/chunk-000/episode_000000.parquet')).toBe(false);
+      expect(isVideoPath('meta/info.json')).toBe(false);
     });
   });
 

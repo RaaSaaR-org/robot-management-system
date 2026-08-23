@@ -71,6 +71,8 @@ import {
   selectRepoFiles,
 } from '../HuggingFaceImportService.js';
 import { datasetRepository, robotTypeRepository } from '../../repositories/index.js';
+import { natsClient } from '../../messaging/index.js';
+import { v4 as uuidv4 } from 'uuid';
 import { datasetService } from '../DatasetService.js';
 import type { LeRobotInfoV3 } from '../../types/dataset.types.js';
 import type { RobotType } from '../../types/vla.types.js';
@@ -122,8 +124,11 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function installFakeHub(options: { info?: LeRobotInfoV3; revisionStatus?: number } = {}): void {
+function installFakeHub(
+  options: { info?: LeRobotInfoV3; revisionStatus?: number; tree?: typeof TREE } = {},
+): void {
   const info = options.info ?? INFO;
+  const tree = options.tree ?? TREE;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
     requested.push(url);
@@ -133,7 +138,7 @@ function installFakeHub(options: { info?: LeRobotInfoV3; revisionStatus?: number
       return json({ sha: SHA, cardData: { license: 'cc-by-4.0' } });
     }
     if (url.includes('/api/datasets/') && url.includes('/tree/')) {
-      return json(TREE);
+      return json(tree);
     }
     const resolved = /\/resolve\/([^/]+)\/(.+)$/.exec(url);
     if (resolved) {
@@ -286,6 +291,110 @@ describe('when an import fails', () => {
       .map(([, input]) => (input as { importError?: { failedAt?: string } }).importError)
       .find(Boolean)!;
     expect(new Date(failure.failedAt!).toString()).not.toBe('Invalid Date');
+  });
+});
+
+// ============================================================================
+// One failure stops all five downloaders
+//
+// `Promise.all` REJECTS on the first throw, but it does not cancel the other
+// four workers — they went on shifting files off the shared queue and writing
+// them into a dataset `runImport` had already marked `failed`, and went on
+// broadcasting `status: 'importing'`, which flipped the operator's card back
+// from Failed to Importing mid-failure. The observable that pins it is how many
+// files the Hub is asked for after the first one fails.
+// ============================================================================
+
+describe('a failed download', () => {
+  /** 60 parquet files, so a queue that keeps draining is unmistakable. */
+  const BIG_TREE = [
+    { type: 'file', path: 'meta/info.json', size: 2261 },
+    ...Array.from({ length: 60 }, (_, i) => ({
+      type: 'file',
+      path: `data/chunk-000/file-${String(i).padStart(3, '0')}.parquet`,
+      size: 1000,
+    })),
+  ];
+
+  it('stops the other four workers instead of filling a failed dataset', async () => {
+    installFakeHub({ tree: BIG_TREE });
+    // The first file off the queue fails; 59 remain behind it.
+    brokenPaths.set('data/chunk-000/file-000.parquet', 500);
+
+    await service.importDataset({ repoId: REPO });
+
+    await settle(() => {
+      expect(datasetRepository.update).toHaveBeenCalledWith(
+        DATASET_ID,
+        expect.objectContaining({ status: 'failed' }),
+      );
+    });
+
+    // Give any worker that ignored the failure time to keep going.
+    await new Promise((r) => setTimeout(r, 150));
+
+    const downloaded = requested.filter((u) => /\/resolve\/.*\.parquet$/.test(u));
+    // Four workers are in flight when the fifth fails, so a handful of files
+    // beyond the failing one is expected. Draining all 60 is not.
+    expect(downloaded.length).toBeLessThan(15);
+  });
+
+  it('reports the download failure rather than swallowing it', async () => {
+    installFakeHub({ tree: BIG_TREE });
+    brokenPaths.set('data/chunk-000/file-000.parquet', 500);
+
+    await service.importDataset({ repoId: REPO });
+
+    // The error is recorded on a flag now rather than thrown out of a worker,
+    // so the thing to prove is that it still reaches the row.
+    await settle(() => {
+      expect(datasetRepository.update).toHaveBeenCalledWith(
+        DATASET_ID,
+        expect.objectContaining({
+          status: 'failed',
+          importError: expect.objectContaining({ error: expect.stringContaining('500') }),
+        }),
+      );
+    });
+  });
+});
+
+// ============================================================================
+// The validation job a retry queues must not be deduplicated away
+//
+// JetStream drops a publish whose `msgID` it has already seen inside the dedup
+// window — silently, with an ack. `validate-${datasetId}` is the same string on
+// every attempt, so the SECOND validation ever queued for a dataset vanished:
+// no error here, no consumer there, and the row sits at `validating` for ever.
+// `retryImport` then refuses a `validating` row with IN_PROGRESS, so the
+// dataset is wedged with no way out through the UI.
+// ============================================================================
+
+describe('the queued validation job', () => {
+  it('carries a fresh msgID per attempt, so a retry is not swallowed as a duplicate', async () => {
+    const publish = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    vi.mocked(natsClient.getJetStream).mockReturnValue({ publish } as never);
+    installFakeHub();
+
+    // The module-wide uuid mock is a constant (it fixes the storage directory
+    // for every other test here). For this one it has to actually vary, because
+    // what is under test is that two attempts produce two ids.
+    let n = 0;
+    vi.mocked(uuidv4).mockImplementation((() => `uuid-${++n}`) as never);
+
+    await service.importDataset({ repoId: REPO });
+    await settle(() => expect(publish).toHaveBeenCalledTimes(1));
+
+    // Second attempt at the same dataset — the case the dedup window ate.
+    await service.importDataset({ repoId: REPO });
+    await settle(() => expect(publish).toHaveBeenCalledTimes(2));
+
+    vi.mocked(uuidv4).mockImplementation((() => STORAGE_ID) as never);
+
+    const ids = publish.mock.calls.map(([, , opts]) => (opts as { msgID: string }).msgID);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(ids[0]).toContain(DATASET_ID);
   });
 });
 

@@ -340,10 +340,12 @@ import type {
 
 trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
   try {
-    const { workerId, device, kinds } = req.body as {
+    const { workerId, device, kinds, features } = req.body as {
       workerId?: string;
       device?: string;
       kinds?: string[];
+      /** Opt-ins. `'mixture'` = this worker can train on `datasets[]`. */
+      features?: string[];
     };
     if (!workerId) {
       return res.status(400).json({ error: 'workerId is required' });
@@ -355,10 +357,12 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
     // ({ job (incl. kind), dataset }) below.
     const claimKinds =
       Array.isArray(kinds) && kinds.length > 0 ? kinds : ['supervised'];
+    const workerFeatures = Array.isArray(features) ? features : [];
     const job = await trainingOrchestrator.claimNextPendingJob(
       workerId,
       device,
-      claimKinds
+      claimKinds,
+      workerFeatures
     );
     if (!job) {
       return res.status(204).send();
@@ -389,6 +393,30 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
     // is the RustFS prefix the worker should download from — it is a
     // separate UUID from `job.datasetId` for HF-imported datasets.
     const dataset = job.datasetId ? await datasetRepository.findById(job.datasetId) : null;
+
+    // `datasets` is every member of the mixture, with the sampling weight and
+    // the same storagePath/version fields `dataset` carries. `dataset` stays
+    // exactly as it was — member 0 — so a worker that has never heard of
+    // mixtures is unaffected; the orchestrator has already made sure such a
+    // worker is never handed a job where the difference would matter.
+    const members = await trainingJobService.getJobDatasets(job.id, job.datasetId ?? null);
+    const rows = await Promise.all(
+      members.map(async (member) => {
+        const row = member.datasetId === dataset?.id
+          ? dataset
+          : await datasetRepository.findById(member.datasetId);
+        return row
+          ? {
+              id: row.id,
+              storagePath: row.storagePath,
+              lerobotVersion: row.lerobotVersion,
+              weight: member.weight,
+              position: member.position,
+            }
+          : null;
+      })
+    );
+
     res.json({
       job,
       dataset: dataset
@@ -398,6 +426,7 @@ trainingRoutes.post('/workers/claim', async (req: Request, res: Response) => {
             lerobotVersion: dataset.lerobotVersion,
           }
         : null,
+      datasets: rows.filter((row): row is NonNullable<typeof row> => row !== null),
     });
   } catch (error) {
     console.error('[TrainingRoutes] Error claiming job:', error);

@@ -508,10 +508,50 @@ describe('Training Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.job.id).toBe('job-001');
       expect(response.body.dataset.storagePath).toBe('datasets/abc');
-      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith('worker-1', 'cuda', [
-        'supervised',
-      ]);
+      // The fourth argument is the worker's declared features. A worker that
+      // sends none gets an empty list — and therefore no mixture jobs.
+      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith(
+        'worker-1',
+        'cuda',
+        ['supervised'],
+        []
+      );
       expect(mockDatasetRepository.findById).toHaveBeenCalledWith('dataset-001');
+    });
+
+    it('carries every mixture member, not just the one in job.datasetId', async () => {
+      // `dataset` has always been member 0. A worker handed only that would
+      // train a two-dataset run on one dataset and report success, which is why
+      // the orchestrator refuses to give mixture jobs to workers that do not
+      // declare `features:['mixture']` — and why the ones that do need the rest.
+      mockTrainingOrchestrator.claimNextPendingJob.mockResolvedValue(MOCK_JOB);
+      mockTrainingJobService.getJobDatasets.mockResolvedValue([
+        { datasetId: 'dataset-001', name: 'GR00T', weight: 3, position: 0 },
+        { datasetId: 'dataset-002', name: 'Dex3', weight: 1, position: 1 },
+      ]);
+      mockDatasetRepository.findById.mockImplementation(async (id: string) => ({
+        id,
+        storagePath: `datasets/${id}`,
+        lerobotVersion: 'v2.1',
+      }));
+
+      const response = await request(app)
+        .post('/api/training/workers/claim')
+        .send({ workerId: 'worker-1', device: 'cuda', features: ['mixture'] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.datasets).toEqual([
+        { id: 'dataset-001', storagePath: 'datasets/dataset-001', lerobotVersion: 'v2.1', weight: 3, position: 0 },
+        { id: 'dataset-002', storagePath: 'datasets/dataset-002', lerobotVersion: 'v2.1', weight: 1, position: 1 },
+      ]);
+      // …and `dataset` is untouched, so an old worker sees what it always saw.
+      expect(response.body.dataset.id).toBe('dataset-001');
+      expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith(
+        'worker-1',
+        'cuda',
+        ['supervised'],
+        ['mixture']
+      );
     });
 
     it('returns null dataset when not found', async () => {
@@ -549,7 +589,8 @@ describe('Training Routes', () => {
       expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith(
         'sim-worker',
         'mps',
-        ['sim_rl']
+        ['sim_rl'],
+        []
       );
       // sim_rl must not look up a dataset.
       expect(mockDatasetRepository.findById).not.toHaveBeenCalled();
@@ -583,7 +624,8 @@ describe('Training Routes', () => {
       expect(mockTrainingOrchestrator.claimNextPendingJob).toHaveBeenCalledWith(
         'worker-1',
         'cuda',
-        ['supervised', 'reward_model', 'annotate']
+        ['supervised', 'reward_model', 'annotate'],
+        []
       );
     });
 

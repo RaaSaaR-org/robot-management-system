@@ -98,7 +98,7 @@ interface Width {
   source: WidthSource;
 }
 
-function declaredWidth(info: Record<string, unknown> | null, feature: string): number | null {
+export function declaredWidth(info: Record<string, unknown> | null, feature: string): number | null {
   const features = parseJson(info?.features);
   const entry = parseJson(features?.[feature]);
   const shape = entry?.shape;
@@ -213,16 +213,27 @@ function buildFpsAxis(datasets: CompatibilityDatasetInput[]): CompatibilityAxis 
 
   const slow = Math.min(...known);
   const fast = Math.max(...known);
-  if (isIntegerMultiple(slow, fast)) {
+
+  // EVERY rate has to divide down to the slowest, not just the fastest one.
+  //
+  // Comparing only min and max passes a mixture of 10, 25 and 30 Hz: 30 is 3×
+  // 10, so the axis reported "subsample the faster data down to the slower
+  // rate" — and 25 Hz, which divides by neither, was never looked at. The
+  // operator is told the mixture is alignable; the 25 Hz member then trains at
+  // a playback speed nothing corrects. A mixture holds up to eight datasets, so
+  // there is plenty of room between the two extremes to hide in.
+  const offenders = known.filter((rate) => rate !== slow && !isIntegerMultiple(slow, rate));
+  if (offenders.length === 0) {
     const factor = Math.round(fast / slow);
     return axis('fps', 'Frame rate', 'differs', datasets, value,
-      `${fpsLabel(fast)} is exactly ${factor}× ${fpsLabel(slow)}, so the trainer can subsample the `
-      + 'faster data down to the slower rate — it must be configured to, because mixing them '
-      + 'as-is trains the policy on two different playback speeds.');
+      `Every rate is an integer multiple of ${fpsLabel(slow)} (up to ${fpsLabel(fast)}, ${factor}×), `
+      + 'so the trainer can subsample the faster data down to the slowest rate — it must be '
+      + 'configured to, because mixing them as-is trains the policy on several playback speeds.');
   }
   return axis('fps', 'Frame rate', 'blocking', datasets, value,
-    `${fpsLabel(slow)} and ${fpsLabel(fast)} do not divide, so no subsampling aligns them; `
-    + 'resample one dataset offline before mixing, or train on them separately.');
+    `${distinct(offenders.map((r) => fpsLabel(r))).join(' and ')} ${offenders.length === 1 ? 'is' : 'are'} `
+    + `not an integer multiple of ${fpsLabel(slow)}, the slowest member, so no subsampling aligns `
+    + 'the mixture; resample offline before mixing, or train on these separately.');
 }
 
 function buildWidthAxis(
