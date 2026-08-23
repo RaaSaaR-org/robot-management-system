@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "frame": {
+    "id": "isaac-warehouse-sim",
+    "kind": "sim",
+    "units": "m",
+    "yawConvention": "deg,+x=0,CCW+"
+  },
+  "places": [
+    {
+      "id": "SOUTH-END",
+      "name": "South End",
+      "placeType": "staging",
+      "floor": 0,
+      "polygon": [[-5.2, -6.2], [-2.6, -6.2], [-2.6, -4.9], [-5.2, -4.9]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "NORTH-END",
+      "name": "North End",
+      "placeType": "staging",
+      "floor": 0,
+      "polygon": [[-5.2, 0.5], [-2.6, 0.5], [-2.6, 1.8], [-5.2, 1.8]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    },
+    {
+      "id": "WEST-AISLE",
+      "name": "West Aisle",
+      "placeType": "corridor",
+      "floor": 0,
+      "polygon": [[-5.4, -4.9], [-2.4, -4.9], [-2.4, 0.5], [-5.4, 0.5]],
+      "source": "surveyed",
+      "keepout": false,
+      "landmarks": []
+    }
+  ]
+}

@@ -72,6 +72,10 @@ mesh, so the robot's own body produces no self-returns (nothing to filter -- it 
 and neither would a second robot or a moving pallet. In this scene nothing moves except the robot,
 which is the only reason that omission is honest here.
 
+`--barrier X,Y,W,D,H[,YAW]` adds a static box to that mesh, for takes about the robot going around
+something. It is authored so the ray cast, the head camera and the place map all agree about where
+it is; `spawn_barriers()` says why that took three tries.
+
 @status new -- capture rig for demo footage; not part of the shipped robot software
 """
 from __future__ import annotations
@@ -263,6 +267,13 @@ def parse_args() -> argparse.Namespace:
                     help="where /loco/* is proxied — the DDS-speaking g1_sidecar.py")
     ap.add_argument("--lidar-probe", action="store_true",
                     help="cast once from the start pose, print ranges at 8 bearings, and exit")
+    ap.add_argument("--barrier", action="append", default=[], metavar="X,Y,W,D,H[,YAW]",
+                    help="add a static obstacle to the warehouse: centre x,y in metres, size "
+                         "w(x) d(y) h(z) in metres, optional yaw in degrees. Repeatable. See "
+                         "spawn_barriers() for why this is a MESH and why it lives under "
+                         "/World/Warehouse.")
+    ap.add_argument("--barrier-rgb", default="0.86,0.62,0.05",
+                    help="barrier diffuse colour r,g,b in 0..1")
     return ap
 
 
@@ -400,6 +411,119 @@ def _ray_fan_directions(n_azimuth: int, n_elevation: int, elev_min_deg: float,
     return np.stack([ce * np.cos(a), ce * np.sin(a), np.sin(e)], axis=1)
 
 
+def spawn_barriers(specs: list[str], rgb: str) -> None:
+    """Add static obstacles to the warehouse, for takes about going around them.
+
+    THE ONE THING THAT MADE THIS HARD. This authors USD by hand instead of calling
+    `sim_utils.MeshCuboidCfg`, and the reason is a unit mismatch in the warehouse asset. The stage
+    declares `metersPerUnit = 0.01`, but its geometry is authored at METRE scale -- the racking is
+    ~6 units across and the robot walks ~6 units to cross it. `WarehouseRaycaster` reads raw stage
+    coordinates and therefore agrees with the robot; Isaac Lab's spawners believe the declaration
+    and divide by `get_stage_units()`, so a 2.00 m barrier asked for at (-3.00, -1.80) is authored
+    as a 200-unit block at (-300, -180). MEASURED, with the world bounding box printed below:
+    `x[-400.00,-200.00] y[-197.50,-162.50] z[+0.00,+130.00]`. It was a perfectly good mesh, it
+    entered the BVH (+1 mesh, +12 triangles), it rendered -- and it was 300 m from the aisle, so
+    the lidar reported the aisle as clear and everything looked like it worked.
+
+    Writing the points directly means the numbers in `--barrier` are the numbers in the stage, and
+    the same numbers the raycaster and the occupancy map see. No conversion, in either direction.
+
+    THE OTHER TWO THINGS, both of which also produce a barrier the robot cannot sense:
+
+    - It must be a MESH. The raycaster collects `prim.IsA(UsdGeom.Mesh)`. A `UsdGeom.Cube` renders
+      perfectly and is invisible to the lidar, which is the most misleading failure this rig has:
+      the robot walks through a wall the viewer can see.
+    - It must live UNDER /World/Warehouse, which is the raycaster's `root_path`. A sibling at
+      /World/Barrier is outside the traversal and fails the same way.
+
+    And it must exist before `sim.reset()`, because the BVH is built once, afterwards, from
+    whatever is on the stage at that moment.
+
+    No collider and no rigid body, on purpose. This script writes the robot's root pose every frame
+    with gravity off, so nothing here is ever resolved by PhysX. The barrier exists to be SEEN --
+    by the ray cast and by the head camera -- and going around it is the navigator's job, on the
+    map, not the simulator's.
+    """
+    if not specs:
+        return
+    import omni.usd
+    from pxr import Gf, Usd, UsdGeom, UsdShade, Sdf
+
+    colour = tuple(float(v) for v in rgb.split(","))
+    if len(colour) != 3:
+        raise ValueError(f"--barrier-rgb wants r,g,b — got {rgb!r}")
+    stage = omni.usd.get_context().get_stage()
+
+    for n, spec in enumerate(specs):
+        parts = [float(v) for v in spec.split(",")]
+        if len(parts) not in (5, 6):
+            raise ValueError(f"--barrier wants X,Y,W,D,H[,YAW] — got {spec!r}")
+        bx, by, bw, bd, bh = parts[:5]
+        yaw_deg = parts[5] if len(parts) == 6 else 0.0
+        root = f"/World/Warehouse/Barrier_{n:02d}"
+
+        # THE TRANSFORM IS COMPOSED AGAINST THE PARENT'S INVERSE, and that is the whole fix.
+        # /World/Warehouse carries scale 100 (MEASURED: a prim authored under it with local points
+        # at +/-1.0 and translate (-3.00,-1.80) comes out at x[-400,-200], y[-197.5,-162.5]). The
+        # warehouse's own referenced content compensates for that internally, so everything the
+        # raycaster reads out of the asset is metre-scale; a prim authored directly under it does
+        # not, and lands 300 m away at 100x size. Writing `D * P^-1` as the local transform makes
+        # the world transform exactly D whatever the parent does -- no hard-coded 0.01, and it
+        # keeps working if the asset is ever re-exported in different units.
+        #
+        # USD is ROW-VECTOR: p_world = p_local * M_local * P. Setting M_local = D * P^-1 gives
+        # p_world = p_local * D. Transposing any of this silently mirrors the barrier.
+        parent = stage.GetPrimAtPath("/World/Warehouse")
+        P = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        D = (Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0, 0, 1), yaw_deg))
+             * Gf.Matrix4d().SetTranslate(Gf.Vec3d(bx, by, 0.0)))   # z 0: the box sits ON the floor
+        xform = UsdGeom.Xform.Define(stage, root)
+        UsdGeom.Xformable(xform).AddTransformOp().Set(D * P.GetInverse())
+
+        hw, hd = bw / 2.0, bd / 2.0
+        mesh = UsdGeom.Mesh.Define(stage, f"{root}/geom")
+        pts = [(-hw, -hd, 0.0), (hw, -hd, 0.0), (hw, hd, 0.0), (-hw, hd, 0.0),
+               (-hw, -hd, bh), (hw, -hd, bh), (hw, hd, bh), (-hw, hd, bh)]
+        faces = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
+                 (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+        mesh.CreatePointsAttr([Gf.Vec3f(*p) for p in pts])
+        mesh.CreateFaceVertexCountsAttr([4] * 6)
+        mesh.CreateFaceVertexIndicesAttr([i for f in faces for i in f])
+        mesh.CreateExtentAttr([Gf.Vec3f(-hw, -hd, 0.0), Gf.Vec3f(hw, hd, bh)])
+        # `none`, or the renderer smooths a box into a pillow and the lidar keeps the hard corners
+        # the map was drawn from -- picture and measurement would then disagree about the shape.
+        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        mesh.CreateDisplayColorAttr([Gf.Vec3f(*colour)])
+
+        mat = UsdShade.Material.Define(stage, f"{root}/Looks/Barrier")
+        shader = UsdShade.Shader.Define(stage, f"{root}/Looks/Barrier/Shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*colour))
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.7)
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        UsdShade.MaterialBindingAPI(mesh).Apply(mesh.GetPrim())
+        UsdShade.MaterialBindingAPI(mesh).Bind(mat)
+
+        # Print the WORLD bounding box, not the arguments, and REFUSE to continue if it is not the
+        # box that was asked for. Everything above can be right and the barrier still land
+        # somewhere else; a take shot against a barrier 300 m from the aisle looks exactly like a
+        # take shot against no barrier at all, and costs twenty-five minutes to find out.
+        cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        rng = cache.ComputeWorldBound(stage.GetPrimAtPath(root)).ComputeAlignedRange()
+        lo, hi = rng.GetMin(), rng.GetMax()
+        print(f"[capture] barrier {root}: asked {bw:.2f} x {bd:.2f} x {bh:.2f} m at "
+              f"({bx:+.2f}, {by:+.2f}) yaw {yaw_deg:+.0f} deg -> world box "
+              f"x[{lo[0]:+.2f},{hi[0]:+.2f}] y[{lo[1]:+.2f},{hi[1]:+.2f}] "
+              f"z[{lo[2]:+.2f},{hi[2]:+.2f}]", flush=True)
+        cx, cy = (lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0
+        if abs(cx - bx) > 0.05 or abs(cy - by) > 0.05 or abs((hi[2] - lo[2]) - bh) > 0.05:
+            raise RuntimeError(
+                f"barrier {root} was authored at ({cx:+.2f}, {cy:+.2f}) "
+                f"{hi[2] - lo[2]:.2f} m tall, not ({bx:+.2f}, {by:+.2f}) {bh:.2f} m — the stage's "
+                f"units and /World/Warehouse's scale disagree with this code")
+
+
 class WarehouseRaycaster:
     """A ray cast against the warehouse's own triangles, via warp on the CPU.
 
@@ -483,6 +607,12 @@ class WarehouseRaycaster:
             raise RuntimeError(f"{root_path} contains no visible UsdGeom.Mesh — nothing to cast at")
 
         points = np.concatenate(verts).astype(np.float32)
+        # The extent of the world the SENSOR believes in, in the coordinates it casts in. If this
+        # is not roughly the room the robot walks (metres, tens at most), then the stage's declared
+        # units and its authored geometry disagree and every range is off by a constant factor.
+        pmin, pmax = points.min(axis=0), points.max(axis=0)
+        print(f"[capture] cast volume x[{pmin[0]:+.1f},{pmax[0]:+.1f}] "
+              f"y[{pmin[1]:+.1f},{pmax[1]:+.1f}] z[{pmin[2]:+.1f},{pmax[2]:+.1f}]", flush=True)
         indices = np.concatenate(tris).astype(np.int32).reshape(-1)
         self.n_meshes = n_mesh
         self.n_triangles = len(indices) // 3
@@ -777,6 +907,8 @@ def main() -> int:
     warehouse_cfg.spawn.func("/World/Warehouse", warehouse_cfg.spawn,
                              translation=warehouse_cfg.init_state.pos,
                              orientation=warehouse_cfg.init_state.rot)
+
+    spawn_barriers(args.barrier, args.barrier_rgb)
 
     dome = sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=args.dome)
     dome.func("/World/DomeLight", dome)
