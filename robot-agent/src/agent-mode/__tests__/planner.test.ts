@@ -177,6 +177,156 @@ describe('Planner — malformed output', () => {
   });
 });
 
+// ===========================================================================
+// THE DEADLINE (TASK-202)
+// ===========================================================================
+//
+// Without one, "the local model is thinking" and "the local model is never
+// going to answer" are the same screen forever. Real timings, so these tests
+// also prove the deadline is honoured in wall-clock terms rather than only in
+// a fake-timer world where an unresolved promise cannot be distinguished from
+// a slow one.
+
+const FAST_TIMEOUT_MS = 60;
+
+/** A valid one-block answer, for the "slow but working" cases. */
+const VALID_ANSWER = JSON.stringify({
+  blocks: [{ kind: 'speak', text: 'ok', reasoning: 'Answer the operator.' }],
+});
+
+describe('Planner — the deadline', () => {
+  it('gives up on a call that never answers, within the deadline', async () => {
+    const generate = vi.fn(() => new Promise<GenerateResponse>(() => {}));
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: FAST_TIMEOUT_MS });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const started = Date.now();
+    const result = await planner.plan({ command: 'geh zum Tisch', sceneSummary: 'empty' });
+    const elapsed = Date.now() - started;
+
+    expect(result.fallback).toBe(true);
+    expect(result.timedOut).toBe(true);
+    // The budget covers the WHOLE round, so a wedged model costs one deadline,
+    // not one per attempt. This bound is what fails if that ever regresses.
+    expect(elapsed).toBeLessThan(FAST_TIMEOUT_MS * 2);
+    expect(generate).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('says what did not happen, to which model, and what to check', async () => {
+    const generate = vi.fn(() => new Promise<GenerateResponse>(() => {}));
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: FAST_TIMEOUT_MS });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await planner.plan({ command: 'geh zum Tisch', sceneSummary: 'empty' });
+
+    // A generic failure would be indistinguishable from a bad answer. The
+    // model name is the actionable part: the planner is a local model on this
+    // box and the operator can go look at it.
+    expect(result.error).toContain(MODEL_REF);
+    expect(result.error).toMatch(/did not answer/i);
+    expect(result.error).toContain('ollama ps');
+    // ...and the robot says so out loud rather than only logging it.
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0].kind).toBe('speak');
+    expect(String(result.blocks[0].params.text)).toContain('did not answer');
+    warn.mockRestore();
+  });
+
+  it('aborts the call instead of abandoning it', async () => {
+    // The task asks for this explicitly: a Promise.race alone leaves the
+    // request in flight, holding a socket on a model that is already wedged.
+    let signal: AbortSignal | undefined;
+    let aborted = false;
+    const generate = vi.fn((req: GenerateRequest) => {
+      signal = req.signal;
+      req.signal?.addEventListener('abort', () => {
+        aborted = true;
+      });
+      return new Promise<GenerateResponse>(() => {});
+    });
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: FAST_TIMEOUT_MS });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await planner.plan({ command: 'geh zum Tisch', sceneSummary: 'empty' });
+
+    expect(signal).toBeDefined();
+    expect(aborted).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('still accepts an answer that arrives just inside the deadline', async () => {
+    // The fix cannot be "fail everything slow": a 3.5 minute plan on the
+    // smallest supported model was legitimate, and this is that case in
+    // miniature.
+    const generate = vi.fn(
+      () =>
+        new Promise<GenerateResponse>((resolve) =>
+          setTimeout(() => resolve({ text: VALID_ANSWER, output: null }), FAST_TIMEOUT_MS / 3)
+        )
+    );
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: FAST_TIMEOUT_MS });
+
+    const result = await planner.plan({ command: 'sag hallo', sceneSummary: 'empty' });
+
+    expect(result.fallback).toBe(false);
+    expect(result.timedOut).toBeUndefined();
+    expect(result.blocks[0].kind).toBe('speak');
+  });
+
+  it('leaves the repair attempt alone when there is budget for it', async () => {
+    // A malformed FIRST answer must still buy its one retry — the deadline is
+    // about a model that does not answer, not about a model that answers badly.
+    const responses = ['not json at all', VALID_ANSWER];
+    const generate = vi.fn(async (): Promise<GenerateResponse> => {
+      const text = responses[Math.min(generate.mock.calls.length - 1, responses.length - 1)];
+      return { text, output: null };
+    });
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: FAST_TIMEOUT_MS });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await planner.plan({ command: 'sag hallo', sceneSummary: 'empty' });
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.fallback).toBe(false);
+    expect(result.timedOut).toBeUndefined();
+    warn.mockRestore();
+  });
+
+  it('does not open a call it has already run out of time for', async () => {
+    const generate = vi.fn(async (): Promise<GenerateResponse> => ({ text: '', output: null }));
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: 0 });
+
+    const result = await planner.plan({ command: 'geh zum Tisch', sceneSummary: 'empty' });
+
+    expect(generate).not.toHaveBeenCalled();
+    expect(result.attempts).toBe(0);
+    expect(result.timedOut).toBe(true);
+    expect(result.fallback).toBe(true);
+  });
+
+  it('tells a German speaker something a German speaker can act on', async () => {
+    // The English fallback quotes the technical reason; the German one never
+    // has, and a timeout is no reason to start reading `ollama ps` aloud in
+    // German. It still must not say "phrase it differently" — the phrasing was
+    // never the problem.
+    const generate = vi.fn(() => new Promise<GenerateResponse>(() => {}));
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: FAST_TIMEOUT_MS });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await planner.plan({
+      command: 'geh zum Tisch',
+      sceneSummary: 'empty',
+      language: 'de',
+    });
+
+    const spoken = String(result.blocks[0].params.text);
+    expect(spoken).toContain('nicht rechtzeitig geantwortet');
+    expect(spoken).not.toContain('anders');
+    warn.mockRestore();
+  });
+});
+
 describe('Planner — prompt contents', () => {
   it('tells the model that a room of the place graph is a `goto` with "place" (TASK-209)', async () => {
     const { planner, calls } = makePlanner([{ text: JSON.stringify({ blocks: [{ kind: 'goto', place: 'Kitchen' }] }) }]);

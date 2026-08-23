@@ -4,7 +4,7 @@ aliases:
 - TASK-202
 title: Give the planner call a timeout — a dead model leaves a plan in `planning` forever
 slug: give-the-planner-call-a-timeout
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,9 +15,10 @@ tags:
 - g1
 sprint: ''
 depends_on: []
+status_note: 'DONE 2026-08-23. AGENT_PLANNER_TIMEOUT_MS, default 300 s, is ONE budget for the planner round rather than one per call — a per-call deadline would let a wedged model cost 2x the number the operator was told. The default is pinned to both measurements in the task: the legitimate 3.5-minute plan sets the floor, the 240 s hang sets the ceiling. The call is cancelled through an AbortSignal (Genkit forwards it to the fetch) AND raced, because the thing being raced may ignore the signal; the abort is asserted, not assumed. On expiry the round stops without opening the repair attempt — there is no answer to repair from — and the robot speaks a sentence naming the model, the elapsed deadline and what to check (`ollama ps` can list a model whose worker has died). PlannerResult gained `timedOut` so nothing has to match on prose. SCOPE LINE, deliberate: a timed-out plan ends through the EXISTING planner-failure path (one honest speak block, plan `done`) rather than plan.status `failed` — `failed` feeds notePlanOutcome/lastPlanFailedAtMs and would change heartbeat behaviour, which is a different change from giving the call a deadline. The defect named in the title is fixed either way: the plan no longer sits in `planning`. Frontend: the rail counts up next to the Planning pill (1 s tick, where the page''s other two counters are 10 s and say they are coarse on purpose), measured from a new browser-clock `pendingCommand.sentAt` so robot-clock skew stays out of the number, clamped so it can never run backwards, and deliberately outside the page''s one live region. Stop path verified untouched by test: a STOPP lands with StopMove + Damp while the planner is still hung.'
 due_date: ''
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-23
 ---
 
 

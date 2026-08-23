@@ -785,6 +785,14 @@ export interface AgentPendingCommand {
   planId: string;
   text: string;
   robotId: string;
+  /**
+   * Browser-clock instant this console's command was accepted (TASK-202) — the
+   * t0 of the rail's planning counter. `plan.createdAt` is the ROBOT's clock,
+   * so measuring against it folds clock skew into the displayed number; this
+   * one is stamped and read in the same frame. Optional because a plan this
+   * tab did not send has no such stamp.
+   */
+  sentAt?: string;
 }
 
 // ============================================================================

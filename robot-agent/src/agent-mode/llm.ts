@@ -30,6 +30,14 @@ export interface GenerateRequest {
    * make it.
    */
   thinking?: boolean;
+  /**
+   * Cancels the request. Genkit forwards it to the underlying fetch, so an
+   * aborted call releases the socket instead of being abandoned in flight —
+   * the difference between a caller that stopped waiting and a request that
+   * stopped. A wedged Ollama worker is exactly the case where "abandoned in
+   * flight" accumulates.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -96,6 +104,11 @@ export const genkitGenerate: GenerateFn = async (req) => {
     model: req.model,
     prompt: req.prompt,
     ...(req.outputSchema ? { output: { schema: req.outputSchema } } : {}),
+    // A sibling of `config`, deliberately NOT inside it: `buildGenerateConfig`
+    // is spread into the OpenAI request body verbatim by `@genkit-ai/compat-oai`,
+    // so an AbortSignal put there would be serialised into the wire payload
+    // instead of cancelling anything.
+    ...(req.signal ? { abortSignal: req.signal } : {}),
     config: buildGenerateConfig(req),
   });
   return { text: response.text, output: response.output };

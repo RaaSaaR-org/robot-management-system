@@ -11,7 +11,14 @@
 
 import { z } from 'genkit';
 import { config } from '../config/config.js';
-import { extractJsonObject, genkitGenerate, agentModelRef, type GenerateFn } from './llm.js';
+import {
+  extractJsonObject,
+  genkitGenerate,
+  agentModelRef,
+  type GenerateFn,
+  type GenerateRequest,
+  type GenerateResponse,
+} from './llm.js';
 import { buildPlannerPrompt } from './prompts.js';
 import { REMEMBER_MAX_CHARS } from './workspace.js';
 import {
@@ -94,12 +101,27 @@ export interface PlannerResult {
   error?: string;
   /** Number of model calls made (1 or 2). 0 when no call was possible. */
   attempts: number;
+  /**
+   * Set when the round ran out of time rather than being answered badly
+   * (TASK-202). `error` already carries the sentence; this is here so callers
+   * can tell the two apart without matching on prose — "the model gave a bad
+   * answer" and "the model gave no answer at all" want different reactions
+   * from anything that ever automates on top of a failed plan.
+   */
+  timedOut?: boolean;
 }
 
 export interface PlannerDeps {
   generate?: GenerateFn;
   /** Override the model ref (tests). Default: `<prefix>/<AGENT_PLANNER_MODEL>`. */
   modelRef?: string;
+  /**
+   * Budget for the WHOLE round, both attempts together (tests; default
+   * `config.agentMode.plannerTimeoutMs`). Shared rather than per call on
+   * purpose: a per-call deadline lets a wedged model cost 2×, and the second
+   * call against a model that just proved it does not answer is a doomed one.
+   */
+  timeoutMs?: number;
 }
 
 const MAX_BLOCKS = 12;
@@ -403,35 +425,114 @@ function validate(candidate: unknown): { blocks: PlannedBlock[]; dropped: AgentB
 export function plannerFallback(
   command: string,
   reason: string,
-  language?: SpokenLanguage
+  language?: SpokenLanguage,
+  timedOut = false
 ): PlannedBlock[] {
   // The technical reason stays out of the German text on purpose: it is an
   // English model/schema error, and a German voice reading it aloud is noise
   // where a plain "I did not understand that" is information. The full reason
   // is logged and shown in the block result either way.
+  //
+  // A timeout is the one case that gets its own sentence in both languages,
+  // because the advice differs: "say it differently" is useless when the model
+  // never answered at all — nothing about the phrasing was the problem.
   const text =
     language === 'de'
-      ? `Ich konnte daraus keinen Plan machen: "${command}". ` +
-        `Bitte sag es noch einmal anders.`
-      : `I could not build a plan for "${command}". ` +
-        `The local planning model gave no valid answer (${reason}). ` +
-        `Please phrase the command differently.`;
+      ? timedOut
+        ? `Ich konnte daraus keinen Plan machen: "${command}". ` +
+          `Das Planungsmodell hat nicht rechtzeitig geantwortet.`
+        : `Ich konnte daraus keinen Plan machen: "${command}". ` +
+          `Bitte sag es noch einmal anders.`
+      : timedOut
+        ? `I could not build a plan for "${command}": ${reason}.`
+        : `I could not build a plan for "${command}". ` +
+          `The local planning model gave no valid answer (${reason}). ` +
+          `Please phrase the command differently.`;
   return [
     {
       kind: 'speak',
       params: { text },
-      reasoning: 'Planner failed twice — reporting the failure instead of moving.',
+      reasoning: timedOut
+        ? 'Planner did not answer in time — reporting the failure instead of moving.'
+        : 'Planner failed twice — reporting the failure instead of moving.',
     },
   ];
+}
+
+/**
+ * What a timeout says, in one sentence: what did not happen, to which model,
+ * after how long, and what to look at. The planner is a local model on this
+ * box, so naming it and the command that shows its health is the difference
+ * between a failure an operator can act on and a generic "planning failed".
+ *
+ * Seen live (GPU_BOX 2026-08-02): `ollama ps` listed the model as loaded with
+ * `size_vram=1.77GB` while its worker had died and every request hung — so the
+ * check to suggest is not "is it listed" but "does it answer".
+ */
+function timeoutMessage(model: string, timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 100) / 10;
+  return (
+    `the planner (${model}) did not answer within ${seconds} s — ` +
+    `check that it still answers (\`ollama ps\` can list a model whose worker has died; ` +
+    `restarting the Ollama server clears that)`
+  );
+}
+
+/**
+ * The planning round ran out of time. Distinct from a schema failure so
+ * {@link Planner.plan} can word its answer differently and set `timedOut`
+ * without matching on prose.
+ */
+export class PlannerTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlannerTimeoutError';
+  }
 }
 
 export class Planner {
   private readonly generate: GenerateFn;
   private readonly modelRefOverride: string | undefined;
+  private readonly timeoutMs: number;
 
   constructor(deps: PlannerDeps = {}) {
     this.generate = deps.generate ?? genkitGenerate;
     this.modelRefOverride = deps.modelRef;
+    this.timeoutMs = deps.timeoutMs ?? config.agentMode.plannerTimeoutMs;
+  }
+
+  /**
+   * One generate call, cancelled when the round's remaining budget runs out.
+   *
+   * Both halves are load-bearing. The `AbortSignal` is what actually cancels
+   * the request, so a wedged model does not keep a socket for the rest of the
+   * process; the race is what guarantees this promise settles even so, because
+   * the thing being raced may be a transport that ignores the signal (and, in
+   * tests, a double that never resolves at all). Abandoning the call with only
+   * a race would leave a request in flight per timed-out plan.
+   */
+  private async generateWithin(
+    req: GenerateRequest,
+    remainingMs: number,
+    model: string
+  ): Promise<GenerateResponse> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.generate({ ...req, signal: controller.signal }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new PlannerTimeoutError(timeoutMessage(model, this.timeoutMs)));
+          }, remainingMs);
+          // Never hold the process open for a deadline nobody is waiting on.
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async plan(input: PlannerInput): Promise<PlannerResult> {
@@ -440,11 +541,28 @@ export class Planner {
 
     let lastError = 'unknown error';
     let attempts = 0;
+    let timedOut = false;
+    // ONE budget for the whole round. A per-call deadline would let a wedged
+    // model cost 2× the configured timeout, and the operator was told one
+    // number. The repair attempt is cheap against a healthy model (~1 s), so a
+    // shared budget almost never costs a legitimate retry.
+    const deadline = Date.now() + this.timeoutMs;
 
     // Attempt 1, then exactly one repair attempt. No third try: a model that
     // fails twice is not going to succeed on the third, and the operator is
     // better served by an honest "I could not plan this".
     for (let attempt = 0; attempt < 2; attempt++) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        // Out of time before this attempt started. Reached either because the
+        // previous attempt consumed the whole budget or because the knob is
+        // configured to zero; in both cases the honest thing is not to open a
+        // call we already know we will not wait for.
+        timedOut = true;
+        lastError = timeoutMessage(model, this.timeoutMs);
+        break;
+      }
+
       const prompt = buildPlannerPrompt({
         command: input.command,
         sceneSummary: input.sceneSummary,
@@ -457,13 +575,17 @@ export class Planner {
       attempts++;
       let candidateForLog: unknown;
       try {
-        const res = await this.generate({
-          model,
-          prompt: [{ text: prompt }],
-          outputSchema: PlanSchema,
-          temperature: 0,
-          thinking: config.agentMode.plannerThinking,
-        });
+        const res = await this.generateWithin(
+          {
+            model,
+            prompt: [{ text: prompt }],
+            outputSchema: PlanSchema,
+            temperature: 0,
+            thinking: config.agentMode.plannerThinking,
+          },
+          remainingMs,
+          model
+        );
         // Prefer Genkit's structured output; small models often ignore the
         // constrained-decoding request, so fall back to parsing the raw text.
         const candidate = res.output ?? extractJsonObject(res.text ?? '');
@@ -497,6 +619,13 @@ export class Planner {
             : err instanceof Error
               ? err.message
               : String(err);
+        if (err instanceof PlannerTimeoutError) {
+          // Nothing to repair: the model produced no answer to repair FROM,
+          // and the budget it just consumed is the whole round's.
+          timedOut = true;
+          console.warn(`[AgentMode/Planner] attempt ${attempt + 1} timed out: ${lastError}`);
+          break;
+        }
         // Include what was actually rejected: with a local model the answer
         // shape is the thing you need to see, and it is otherwise unrecoverable.
         // When the call itself threw there is no candidate — say so rather than
@@ -513,10 +642,11 @@ export class Planner {
     }
 
     return {
-      blocks: plannerFallback(input.command, lastError, input.language),
+      blocks: plannerFallback(input.command, lastError, input.language, timedOut),
       fallback: true,
       error: lastError,
       attempts,
+      ...(timedOut ? { timedOut: true } : {}),
     };
   }
 }

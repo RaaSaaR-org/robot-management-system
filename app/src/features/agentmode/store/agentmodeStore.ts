@@ -401,7 +401,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           );
           state.pendingCommand =
             response.accepted && response.planId
-              ? { planId: response.planId, text: command, robotId }
+              ? { planId: response.planId, text: command, robotId, sentAt: new Date().toISOString() }
               : null;
         });
       } catch (error) {
@@ -1501,6 +1501,26 @@ export const selectMessages = (state: AgentModeStore) => state.messages;
 
 /** Select the command awaiting a plan */
 export const selectPendingCommand = (state: AgentModeStore) => state.pendingCommand;
+
+/**
+ * When the plan currently on screen started being planned, or null when
+ * nothing is planning (TASK-202).
+ *
+ * Prefers this console's own send stamp, which is in the browser's frame and
+ * therefore free of robot-clock skew; falls back to the robot's `createdAt`
+ * for a plan this tab did not start, where a skewed number is still better
+ * than a blank where an operator is asking "is it stuck?". Consumers clamp
+ * (see `useElapsedSince`), so skew can shorten the count but never run it
+ * backwards.
+ */
+export const selectPlanningStartedAt = (state: AgentModeStore): string | null => {
+  const plan = state.plan;
+  if (!plan || plan.status !== 'planning') return null;
+  if (state.pendingCommand?.planId === plan.id && state.pendingCommand.sentAt) {
+    return state.pendingCommand.sentAt;
+  }
+  return plan.createdAt ?? null;
+};
 
 /** Select the WebSocket connection status */
 export const selectConnectionStatus = (state: AgentModeStore) => state.connectionStatus;
