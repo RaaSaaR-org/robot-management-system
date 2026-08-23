@@ -15,7 +15,7 @@
  * behaviour change worth a red test.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { isAbsolute, join } from 'path';
@@ -175,6 +175,31 @@ interface HubOptions {
 
 /** Every URL the service asked for, in order. */
 let requested: string[] = [];
+
+/**
+ * A `fetch` that refuses everything, installed underneath the per-test spies.
+ *
+ * An import runs DETACHED — `importDataset` returns as soon as the row exists
+ * and the download continues in the background. A test that stops waiting
+ * therefore leaves work running, and `vi.restoreAllMocks()` in `afterEach` used
+ * to put the REAL `fetch` back underneath it: the leaked import then made
+ * genuine requests to huggingface.co, got 404s for paths this fixture invented,
+ * and wrote `status: 'failed'` into the NEXT test's freshly cleared mock — whose
+ * `settled()` accepts 'failed' and returned before that test's own download had
+ * finished. Green here, red on CI, and nothing in the failure naming the cause.
+ *
+ * `vi.restoreAllMocks` restores a spy to whatever it shadowed, so shadowing the
+ * real fetch once, for the whole file, is what makes that impossible.
+ */
+const realFetch = globalThis.fetch;
+beforeAll(() => {
+  globalThis.fetch = (async (input: unknown) => {
+    throw new Error(`unmocked fetch in this suite: ${String(input)}`);
+  }) as typeof globalThis.fetch;
+});
+afterAll(() => {
+  globalThis.fetch = realFetch;
+});
 
 function mockHub(options: HubOptions = {}): void {
   const info = options.info ?? GROOT_INFO;
@@ -875,13 +900,17 @@ describe('HuggingFaceImportService', () => {
       mockHub();
 
       await service.retryImport('ds-1', { includeVideos: true });
-      await settled();
 
       expect(updateWith((u) => u.importMode === 'full')).toBeDefined();
-      expect(existsSync(join(
-        env.storageRoot, 'store-1', 'videos', 'chunk-000',
-        'observation.images.ego_view', 'episode_000000.mp4',
-      ))).toBe(true);
+      // Waits for THIS test's own artifact rather than for `settled()`, which
+      // accepts any terminal status and can therefore be satisfied by a write
+      // from work left running by an earlier test.
+      await vi.waitFor(() => {
+        expect(existsSync(join(
+          env.storageRoot, 'store-1', 'videos', 'chunk-000',
+          'observation.images.ego_view', 'episode_000000.mp4',
+        ))).toBe(true);
+      }, { timeout: 4000, interval: 5 });
     });
   });
 
