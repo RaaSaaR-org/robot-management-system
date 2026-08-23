@@ -34,6 +34,7 @@ vi.mock('../../api', () => ({
     deleteDataset: vi.fn(),
     initiateUpload: vi.fn(),
     completeUpload: vi.fn(),
+    retryImport: vi.fn(),
     listTrainingJobs: vi.fn(),
     submitTrainingJob: vi.fn(),
     getTrainingJob: vi.fn(),
@@ -280,6 +281,37 @@ describe('trainingStore', () => {
       await useTrainingStore.getState().completeUpload('missing');
 
       expect(useTrainingStore.getState().datasets[0].status).toBe('uploading');
+    });
+  });
+
+  describe('retryImport', () => {
+    it('moves the row to importing and clears the failure it is retrying', async () => {
+      // The button's whole job is to make something visibly happen; leaving the
+      // card on "Failed" with its old error until the next poll makes it look
+      // like the click did nothing.
+      useTrainingStore.setState({
+        datasets: [makeDataset({
+          id: 'ds-1',
+          status: 'failed',
+          importError: { phase: 'download', error: 'RustFS is unreachable', failedAt: '2026-08-23T01:20:11.361Z' },
+        })],
+      });
+      vi.mocked(trainingApi.retryImport).mockResolvedValue({ datasetId: 'ds-1', status: 'importing' });
+
+      await useTrainingStore.getState().retryImport('ds-1');
+
+      expect(useTrainingStore.getState().datasets[0].status).toBe('importing');
+      expect(useTrainingStore.getState().datasets[0].importError).toBeNull();
+    });
+
+    it('lets a 409 reach the caller instead of pretending the retry started', async () => {
+      useTrainingStore.setState({ datasets: [makeDataset({ id: 'ds-1', status: 'failed' })] });
+      vi.mocked(trainingApi.retryImport).mockRejectedValue(new Error('import already running'));
+
+      await expect(useTrainingStore.getState().retryImport('ds-1')).rejects.toThrow(
+        'import already running'
+      );
+      expect(useTrainingStore.getState().datasets[0].status).toBe('failed');
     });
   });
 

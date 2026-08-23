@@ -41,6 +41,13 @@ import type {
   RewardModelHyperparameters,
   AnnotateHyperparameters,
 } from '../types/vla.types.js';
+import type {
+  CompatibilityReport,
+  MixtureMemberInput,
+  TrainingJobDatasetRef,
+} from '../types/mixture.types.js';
+import { analyzeDatasetIds, MixtureIncompatibleError } from './lerobot/datasetCompatibility.js';
+import { prisma } from '../database/index.js';
 
 // ============================================================================
 // DEFAULT VALUES
@@ -56,6 +63,40 @@ const DEFAULT_GPU_REQUIREMENTS: GpuRequirements = {
   count: 1,
   memory: 40,
 };
+
+// ============================================================================
+// DATASET MIXTURES (TASK-220)
+// ============================================================================
+
+/**
+ * The mixture half of a submission, kept beside `SubmitTrainingJobRequest`
+ * rather than inside it: a job that names one dataset is still the common case
+ * and its request shape is unchanged, `datasetId` and all.
+ */
+export interface MixtureSubmitFields {
+  /** Shorthand for an evenly weighted mixture. */
+  datasetIds?: string[];
+  /** The same thing with sampling weights. Wins when both are given. */
+  mixture?: MixtureMemberInput[];
+}
+
+export type SubmitTrainingJobWithMixture = SubmitTrainingJobRequest & MixtureSubmitFields;
+
+/**
+ * The members a request asks for, or null when it names a single dataset the
+ * old way — which is the signal to leave every existing code path alone.
+ */
+function resolveMixtureMembers(
+  request: SubmitTrainingJobWithMixture,
+): MixtureMemberInput[] | null {
+  if (request.mixture?.length) {
+    return request.mixture.map((m) => ({ datasetId: m.datasetId, weight: m.weight ?? 1 }));
+  }
+  if (request.datasetIds?.length) {
+    return request.datasetIds.map((datasetId) => ({ datasetId, weight: 1 }));
+  }
+  return null;
+}
 
 // ============================================================================
 // TRAINING JOB SERVICE
@@ -122,14 +163,26 @@ export class TrainingJobService extends EventEmitter {
   /**
    * Submit a new training job
    */
-  async submitJob(request: SubmitTrainingJobRequest): Promise<TrainingJob> {
+  async submitJob(request: SubmitTrainingJobWithMixture): Promise<TrainingJob> {
+    const members = resolveMixtureMembers(request);
+    // Judged before anything is written. The entire value of the report is that
+    // the operator hears "these two do not share an action space" at submission
+    // rather than from a data loader six GPU-hours later.
+    if (members) {
+      const report = await this.checkMixture(members);
+      if (report.verdict === 'incompatible') {
+        throw new MixtureIncompatibleError(report);
+      }
+    }
+    const primaryDatasetId = members ? members[0].datasetId : request.datasetId;
+
     // Validate dataset exists and is ready
-    const dataset = await datasetRepository.findById(request.datasetId);
+    const dataset = await datasetRepository.findById(primaryDatasetId);
     if (!dataset) {
-      throw new Error(`Dataset not found: ${request.datasetId}`);
+      throw new Error(`Dataset not found: ${primaryDatasetId}`);
     }
     if (dataset.status !== 'ready') {
-      throw new Error(`Dataset not ready: ${request.datasetId} (status: ${dataset.status})`);
+      throw new Error(`Dataset not ready: ${primaryDatasetId} (status: ${dataset.status})`);
     }
 
     // Merge with defaults
@@ -145,7 +198,7 @@ export class TrainingJobService extends EventEmitter {
 
     // Create job in database
     const jobInput: CreateTrainingJobInput = {
-      datasetId: request.datasetId,
+      datasetId: primaryDatasetId,
       baseModel: request.baseModel,
       fineTuneMethod: request.fineTuneMethod,
       hyperparameters,
@@ -155,6 +208,20 @@ export class TrainingJobService extends EventEmitter {
 
     const job = await trainingJobRepository.create(jobInput);
 
+    // Only a real mixture gets rows. A single-dataset job keeps living entirely
+    // in `TrainingJob.datasetId`, which is what every existing query, worker and
+    // wizard already reads — `getJobDatasets` synthesises the member list for it.
+    if (members) {
+      await prisma.trainingJobDataset.createMany({
+        data: members.map((member, position) => ({
+          trainingJobId: job.id,
+          datasetId: member.datasetId,
+          weight: member.weight ?? 1,
+          position,
+        })),
+      });
+    }
+
     // Add to NATS queue if available. The HTTP claim worker reads jobs
     // directly from the DB (status='pending'), so NATS is optional here.
     // Source the supervised-only fields from `request` (always non-null here)
@@ -162,7 +229,7 @@ export class TrainingJobService extends EventEmitter {
     if (this.jobQueue) {
       await this.jobQueue.addJob('finetune', {
         jobId: job.id,
-        datasetId: request.datasetId,
+        datasetId: primaryDatasetId,
         baseModel: request.baseModel,
         fineTuneMethod: request.fineTuneMethod,
         hyperparameters: job.hyperparameters,
@@ -183,6 +250,106 @@ export class TrainingJobService extends EventEmitter {
 
     console.log(`[TrainingJobService] Job submitted: ${job.id}`);
     return job;
+  }
+
+  /**
+   * Judge a mixture before a job exists for it.
+   *
+   * Public because the same report is what the compatibility endpoint returns
+   * and what the wizard shows; submission must not be able to apply a rule the
+   * preview did not.
+   */
+  async checkMixture(members: MixtureMemberInput[]): Promise<CompatibilityReport> {
+    return await analyzeDatasetIds(members.map((m) => m.datasetId));
+  }
+
+  /**
+   * The mixture behind a job, always as a list.
+   *
+   * A job created before mixtures existed — and every single-dataset job since —
+   * has no `TrainingJobDataset` rows, so one member is synthesised from
+   * `datasetId`. Callers therefore never have to branch on which kind of job
+   * they are holding, which is the only reason this returns a list for a job
+   * that names one dataset.
+   */
+  async getJobDatasets(
+    jobId: string,
+    datasetId: string | null,
+  ): Promise<TrainingJobDatasetRef[]> {
+    const rows = await prisma.trainingJobDataset.findMany({
+      where: { trainingJobId: jobId },
+      orderBy: { position: 'asc' },
+      include: { dataset: { select: { name: true } } },
+    });
+    if (rows.length > 0) {
+      return rows.map((row) => ({
+        datasetId: row.datasetId,
+        name: row.dataset?.name ?? row.datasetId,
+        weight: row.weight,
+        position: row.position,
+      }));
+    }
+    if (!datasetId) return [];
+    const dataset = await datasetRepository.findById(datasetId);
+    return [{
+      datasetId,
+      name: dataset?.name ?? datasetId,
+      weight: 1,
+      position: 0,
+    }];
+  }
+
+  /** `getJobDatasets` for a page of jobs, in one query instead of one per job. */
+  async getJobDatasetsForJobs(
+    jobs: Array<{ id: string; datasetId: string | null }>,
+  ): Promise<Map<string, TrainingJobDatasetRef[]>> {
+    const byJob = new Map<string, TrainingJobDatasetRef[]>();
+    if (jobs.length === 0) return byJob;
+
+    const rows = await prisma.trainingJobDataset.findMany({
+      where: { trainingJobId: { in: jobs.map((j) => j.id) } },
+      orderBy: { position: 'asc' },
+      include: { dataset: { select: { name: true } } },
+    });
+    for (const row of rows) {
+      const list = byJob.get(row.trainingJobId) ?? [];
+      list.push({
+        datasetId: row.datasetId,
+        name: row.dataset?.name ?? row.datasetId,
+        weight: row.weight,
+        position: row.position,
+      });
+      byJob.set(row.trainingJobId, list);
+    }
+
+    // The single-dataset jobs still need their one synthetic member, and their
+    // names come from one more query rather than one per job.
+    const soloIds = jobs
+      .filter((job) => !byJob.has(job.id) && job.datasetId)
+      .map((job) => job.datasetId as string);
+    const names = soloIds.length
+      ? new Map(
+          (await prisma.dataset.findMany({
+            where: { id: { in: [...new Set(soloIds)] } },
+            select: { id: true, name: true },
+          })).map((d) => [d.id, d.name]),
+        )
+      : new Map<string, string>();
+    for (const job of jobs) {
+      if (byJob.has(job.id)) continue;
+      byJob.set(
+        job.id,
+        job.datasetId
+          ? [{
+              datasetId: job.datasetId,
+              name: names.get(job.datasetId) ?? job.datasetId,
+              weight: 1,
+              position: 0,
+            }]
+          : [],
+      );
+    }
+    return byJob;
   }
 
   /**

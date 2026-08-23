@@ -9,6 +9,8 @@ export { DatasetCard } from './DatasetCard';
 export type { DatasetCardProps } from './DatasetCard';
 export { DatasetList } from './DatasetList';
 export type { DatasetListProps } from './DatasetList';
+export { DatasetCompatibilityPanel } from './DatasetCompatibilityPanel';
+export type { DatasetCompatibilityPanelProps } from './DatasetCompatibilityPanel';
 export { DatasetUploadModal } from './DatasetUploadModal';
 export type { DatasetUploadModalProps } from './DatasetUploadModal';
 export { GenerateSyntheticModal } from './GenerateSyntheticModal';

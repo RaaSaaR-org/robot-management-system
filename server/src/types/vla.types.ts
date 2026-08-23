@@ -12,6 +12,8 @@
  * - Fleet deployments
  */
 
+import type { TrainingJobDatasetRef } from './mixture.types.js';
+
 // ============================================================================
 // ENUMS & CONSTANTS
 // ============================================================================
@@ -355,6 +357,28 @@ export interface EpisodeAnnotation {
 }
 
 /**
+ * What an import was ASKED to fetch, and therefore what it is allowed to be
+ * missing (TASK-220).
+ *
+ * `metadata` fetches `meta/` and `data/` and no mp4 at all. Nothing else in the
+ * system can tell that apart from a full import whose videos never arrived, so
+ * validation raised MISSING_VIDEO_FILE once per declared mp4 — 402 errors on
+ * the GR00T repo — and marked `failed` a dataset that imported exactly as the
+ * operator asked.
+ */
+export type DatasetImportMode = 'full' | 'metadata';
+
+/** Why an import failed, kept on the row instead of only in a broadcast. */
+export interface DatasetImportError {
+  /** Which phase of the import it died in, same vocabulary as the progress events. */
+  phase: string;
+  error: string;
+  repoId?: string;
+  /** ISO-8601. */
+  failedAt: string;
+}
+
+/**
  * Training dataset in LeRobot v3 format
  */
 export interface Dataset {
@@ -374,6 +398,11 @@ export interface Dataset {
   statsJson: LeRobotStats;
   status: DatasetStatus;
   huggingFaceRepoId?: string;
+  /** The commit the source repo was AT, resolved from the branch at import time. */
+  sourceRevision?: string | null;
+  importMode?: DatasetImportMode | null;
+  /** Parsed from `importErrorJson`; undefined when the import did not fail. */
+  importError?: DatasetImportError | null;
   // VLM annotations from lerobot-annotate jobs (TASK-179); parsed from
   // annotationsJson. Optional so pre-existing fixtures/partials stay valid;
   // the repository mapper always sets it ([] when none).
@@ -409,12 +438,18 @@ export interface CreateDatasetInput {
   statsJson?: LeRobotStats;
   status?: DatasetStatus;
   huggingFaceRepoId?: string;
+  sourceRevision?: string | null;
+  importMode?: DatasetImportMode | null;
 }
 
 export interface UpdateDatasetInput {
   name?: string;
   description?: string;
   skillId?: string;
+  sourceRevision?: string | null;
+  importMode?: DatasetImportMode | null;
+  /** `null` clears the stored failure — what a retry that succeeds must do. */
+  importError?: DatasetImportError | null;
   qualityScore?: number;
   infoJson?: LeRobotInfo;
   statsJson?: LeRobotStats;
@@ -516,6 +551,15 @@ export interface TrainingJob {
 
   // Optional relations
   dataset?: Dataset;
+  /**
+   * Every dataset this job trains on, in mixture order (TASK-220).
+   *
+   * Optional here and not filled by the repository, because a job row does not
+   * know its mixture — `TrainingJobService.getJobDatasets` reads it, and the
+   * routes attach it. A single-dataset job gets one synthesised member so no
+   * reader has to handle two shapes.
+   */
+  datasets?: TrainingJobDatasetRef[];
   // ID of the most-recent ModelVersion produced by this job (populated
   // on job completion — worker POSTs /workers/complete, server creates
   // a ModelVersion and links its ID back here for the UI)

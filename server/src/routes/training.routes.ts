@@ -5,13 +5,20 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { trainingJobService } from '../services/TrainingJobService.js';
+import {
+  trainingJobService,
+  type SubmitTrainingJobWithMixture,
+} from '../services/TrainingJobService.js';
+import { trainingRunExportService } from '../services/TrainingRunExportService.js';
+import {
+  MixtureIncompatibleError,
+  UnknownDatasetError,
+} from '../services/lerobot/datasetCompatibility.js';
 import type {
-  SubmitTrainingJobRequest,
   SubmitSimRlJobRequest,
   ListTrainingJobsQuery,
 } from '../types/training.types.js';
-import type { TrainingJobStatus, BaseModel, FineTuneMethod } from '../types/vla.types.js';
+import type { TrainingJob, TrainingJobStatus, BaseModel, FineTuneMethod } from '../types/vla.types.js';
 
 export const trainingRoutes = Router();
 
@@ -48,10 +55,13 @@ trainingRoutes.post('/jobs', async (req: Request, res: Response) => {
       });
     }
 
-    const request = req.body as SubmitTrainingJobRequest;
+    const request = req.body as SubmitTrainingJobWithMixture;
 
-    // Validate required fields
-    if (!request.datasetId) {
+    // Validate required fields. A mixture names its datasets in `mixture` /
+    // `datasetIds` instead; every other caller still has to send `datasetId`
+    // and still gets the same message when it forgets.
+    const hasMixture = Boolean(request.mixture?.length || request.datasetIds?.length);
+    if (!hasMixture && !request.datasetId) {
       return res.status(400).json({ error: 'datasetId is required' });
     }
     if (!request.baseModel) {
@@ -77,12 +87,25 @@ trainingRoutes.post('/jobs', async (req: Request, res: Response) => {
     }
 
     const job = await trainingJobService.submitJob(request);
+    const datasets = await trainingJobService.getJobDatasets(job.id, job.datasetId);
 
     res.status(201).json({
-      job,
+      job: { ...job, datasets },
+      datasets,
       message: 'Training job submitted successfully',
     });
   } catch (error) {
+    // A refused mixture is not a malformed request — the caller gets the whole
+    // report so the UI can show WHICH axis blocked instead of one sentence.
+    if (error instanceof MixtureIncompatibleError) {
+      return res.status(400).json({
+        error: `This mixture cannot be trained: ${error.report.headline}`,
+        compatibility: error.report,
+      });
+    }
+    if (error instanceof UnknownDatasetError) {
+      return res.status(400).json({ error: error.message, datasetIds: error.datasetIds });
+    }
     console.error('[TrainingRoutes] Error submitting job:', error);
     const message = error instanceof Error ? error.message : 'Failed to submit training job';
     res.status(400).json({ error: message });
@@ -124,9 +147,14 @@ trainingRoutes.get('/jobs', async (req: Request, res: Response) => {
     }
 
     const result = await trainingJobService.getJobs(params);
+    // One query for the whole page, not one per job.
+    const mixtures = await trainingJobService.getJobDatasetsForJobs(result.data);
 
     res.json({
-      jobs: result.data,
+      jobs: result.data.map((job: TrainingJob) => ({
+        ...job,
+        datasets: mixtures.get(job.id) ?? [],
+      })),
       pagination: result.pagination,
     });
   } catch (error) {
@@ -147,14 +175,50 @@ trainingRoutes.get('/jobs/:id', async (req: Request, res: Response) => {
     if (!result) {
       return res.status(404).json({ error: 'Training job not found' });
     }
+    // Mirrored onto the envelope as well as the job: the contract puts
+    // `datasets` on the response, and a caller holding only `job` still needs
+    // it. Same array, so the two cannot disagree.
+    const datasets = await trainingJobService.getJobDatasets(id, result.job.datasetId);
 
     res.json({
-      job: result.job,
+      job: { ...result.job, datasets },
+      datasets,
       progress: result.progress,
     });
   } catch (error) {
     console.error('[TrainingRoutes] Error getting job:', error);
     res.status(500).json({ error: 'Failed to get training job' });
+  }
+});
+
+// ============================================================================
+// GET /api/training/jobs/:id/export - Portable run manifest
+// ============================================================================
+// Everything a cluster that cannot reach this server needs in order to run
+// this job: scheme-tagged dataset URIs, normalised mixture weights, the
+// compatibility verdict, and — loudly — what about this run is not portable.
+// ============================================================================
+
+trainingRoutes.get('/jobs/:id/export', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const manifest = await trainingRunExportService.buildManifest(id);
+    if (!manifest) {
+      return res.status(404).json({ error: 'Training job not found' });
+    }
+
+    // The id reaches a response header, so it is reduced to characters that
+    // cannot end the filename or the header early.
+    const safeId = id.replace(/[^A-Za-z0-9._-]/g, '');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="neodem-run-${safeId}.json"`);
+    // Indented: this document is read by people deciding whether to trust a
+    // run, not only by the machine that executes it.
+    res.send(JSON.stringify(manifest, null, 2));
+  } catch (error) {
+    console.error('[TrainingRoutes] Error exporting run:', error);
+    res.status(500).json({ error: 'Failed to export training run' });
   }
 });
 

@@ -4,11 +4,22 @@
  * @feature training
  */
 
-import { useRef, useState } from 'react';
-import { Database, Play, Trash2, Sparkles, AlertTriangle, CameraOff, ShieldQuestion } from 'lucide-react';
+import { useRef, useState, type KeyboardEvent } from 'react';
+import {
+  Database,
+  Play,
+  Trash2,
+  Sparkles,
+  AlertTriangle,
+  CameraOff,
+  ShieldQuestion,
+  ExternalLink,
+  RotateCw,
+} from 'lucide-react';
 import { Card, Badge, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { trainingApi } from '../api/trainingApi';
+import { datasetShape } from '../types';
 import type { Dataset, DatasetStatus } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
 
@@ -17,7 +28,14 @@ export interface DatasetCardProps {
   onClick?: () => void;
   onViewEpisodes?: () => void;
   onDelete?: () => void;
+  /** Re-run the import behind this row (it must have a huggingFaceRepoId). */
+  onRetryImport?: () => void;
   selected?: boolean;
+  /** Show the mixture-selection checkbox. */
+  selectable?: boolean;
+  /** Whether this dataset is in the current mixture selection. */
+  checked?: boolean;
+  onToggleChecked?: () => void;
   className?: string;
 }
 
@@ -40,7 +58,18 @@ const statusLabels: Record<DatasetStatus, string> = {
 /**
  * Card component for displaying dataset summary
  */
-export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, selected, className }: DatasetCardProps) {
+export function DatasetCard({
+  dataset,
+  onClick,
+  onViewEpisodes,
+  onDelete,
+  onRetryImport,
+  selected,
+  selectable,
+  checked,
+  onToggleChecked,
+  className,
+}: DatasetCardProps) {
   const qualityPercent = dataset.qualityScore
     ? Math.round(dataset.qualityScore)
     : null;
@@ -55,13 +84,31 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
   const noImages = validation?.warnings.some((w) => w.code === 'NO_IMAGE_FEATURES') ?? false;
   const errorCount = validation?.errors.length ?? 0;
 
+  const importError = dataset.importError;
+  const shape = datasetShape(dataset);
+
+  // The card is a div, and a div with an onClick is invisible to a keyboard.
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onClick) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    // Space scrolls the page otherwise, which is what the button role promises
+    // it will not do.
+    event.preventDefault();
+    onClick();
+  };
+
   return (
     <Card
       onClick={onClick}
       interactive={!!onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? handleKeyDown : undefined}
       className={cn(
-        'cursor-pointer overflow-hidden transition-all',
+        'overflow-hidden transition-all',
+        onClick && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-500',
         selected && 'ring-2 ring-cobalt-500',
+        checked && 'ring-2 ring-cobalt-400',
         className
       )}
     >
@@ -71,6 +118,20 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
       {showThumb ? <SyntheticThumb datasetId={dataset.id} /> : <PlaceholderThumb />}
       <Card.Body>
         <div className="flex items-start justify-between gap-2">
+          {selectable && (
+            <label
+              className="mt-1 flex shrink-0 items-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={!!checked}
+                onChange={() => onToggleChecked?.()}
+                aria-label={`Select ${dataset.name} for a training mixture`}
+                className="h-4 w-4"
+              />
+            </label>
+          )}
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-theme-primary truncate">{dataset.name}</h3>
             {dataset.description && (
@@ -91,6 +152,38 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
             </Badge>
           </div>
         </div>
+
+        {/* Why the import stopped. A "Failed" badge on its own sends whoever
+            reads it to the server's log, on a machine they may not have — and
+            the row that provoked this was 171,625 frames of nothing. */}
+        {importError && (
+          <div
+            data-testid="dataset-import-error"
+            className="mt-3 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-300"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <span className="font-medium">Import failed during {importError.phase}</span>
+                <p className="mt-0.5 break-words">{importError.error}</p>
+                <p className="mt-0.5 text-xs opacity-80">
+                  {new Date(importError.failedAt).toLocaleString(UI_DATE_LOCALE)}
+                </p>
+              </div>
+            </div>
+            {onRetryImport && dataset.huggingFaceRepoId && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); onRetryImport(); }}
+                className="mt-2 gap-1 px-2 py-1 h-auto text-xs"
+              >
+                <RotateCw className="h-3 w-3" />
+                Retry import
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* THE line that would have saved a training run. A dataset with no
             camera feature validates perfectly and then dies hours into a
@@ -148,6 +241,50 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
             <p className="font-medium text-theme-primary">{dataset.fps}</p>
           </div>
         </div>
+
+        {/* The facts a mixture is judged on. Two datasets of the same robot are
+            concatenable only if these agree, and the widths are what decide it —
+            43-wide GR00T next to a 28-wide Dex3 recording is a different action
+            space, not a bigger dataset. */}
+        <div
+          data-testid="dataset-shape"
+          className="mt-3 flex flex-wrap items-center gap-1.5 text-xs"
+        >
+          <ShapeChip label="Robot" value={shape.robotType ?? 'unknown'} unknown={!shape.robotType} />
+          <ShapeChip
+            label="State/Action"
+            value={
+              shape.stateWidth !== null || shape.actionWidth !== null
+                ? `${shape.stateWidth ?? '?'} / ${shape.actionWidth ?? '?'}`
+                : 'unknown'
+            }
+            unknown={shape.stateWidth === null && shape.actionWidth === null}
+          />
+          <ShapeChip
+            label="Cameras"
+            value={String(shape.cameraKeys.length)}
+            unknown={false}
+          />
+          {dataset.sourceRevision && (
+            <ShapeChip label="Rev" value={dataset.sourceRevision.slice(0, 7)} unknown={false} mono />
+          )}
+          {dataset.importMode === 'metadata' && (
+            <Badge variant="warning" size="sm">Metadata only</Badge>
+          )}
+        </div>
+
+        {dataset.huggingFaceRepoId && (
+          <a
+            href={`https://huggingface.co/datasets/${dataset.huggingFaceRepoId}`}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-2 inline-flex items-center gap-1 text-xs font-mono text-cobalt-400 hover:underline break-all"
+          >
+            <ExternalLink className="h-3 w-3 shrink-0" />
+            {dataset.huggingFaceRepoId}
+          </a>
+        )}
 
         {/* Not validated is a THIRD state, and it was invisible: locally
             registered datasets are written straight to `ready` without a check,
@@ -224,6 +361,36 @@ export function DatasetCard({ dataset, onClick, onViewEpisodes, onDelete, select
         </div>
       </Card.Body>
     </Card>
+  );
+}
+
+/**
+ * One fact from `datasetShape`. An unknown one is drawn dashed rather than
+ * merely spelled differently, so it does not read as a measured value.
+ */
+function ShapeChip({
+  label,
+  value,
+  unknown,
+  mono,
+}: {
+  label: string;
+  value: string;
+  unknown: boolean;
+  mono?: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded px-1.5 py-0.5',
+        unknown
+          ? 'border border-dashed border-theme-secondary/40 text-theme-tertiary'
+          : 'bg-theme-secondary/10 text-theme-secondary'
+      )}
+    >
+      <span className="text-theme-tertiary">{label}</span>
+      <span className={cn('font-medium text-theme-primary', mono && 'font-mono')}>{value}</span>
+    </span>
   );
 }
 

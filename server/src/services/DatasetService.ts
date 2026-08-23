@@ -30,7 +30,11 @@ import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
 export type ValidationOutcome = 'ready' | 'failed' | 'unavailable';
 import { ExtractError, extractDatasetArchive } from './lerobot/extractArchive.js';
 import { validateDatasetStructure } from './lerobot/validateDataset.js';
-import type { DatasetStructureReport, ExpectedDimensions } from './lerobot/validateDataset.js';
+import type {
+  DatasetStructureReport,
+  ExpectedDimensions,
+  ValidationContext,
+} from './lerobot/validateDataset.js';
 import { natsClient } from '../messaging/index.js';
 import { kvPut, kvGet, KV_STORE_NAMES } from '../messaging/kv-stores.js';
 import type { KV } from 'nats';
@@ -93,8 +97,16 @@ function uploadExtension(_id: string): string {
   return '.tar.gz';
 }
 
-/** Where uploaded datasets are unpacked. A volume, in a real deployment. */
-function uploadRoot(): string {
+/**
+ * Where a dataset this server holds itself lives on disk.
+ *
+ * A volume, in a real deployment. Exported as of TASK-220 because the
+ * HuggingFace import needs the same root when RustFS is not configured — and
+ * RustFS being optional (it is down on every dev machine) is exactly why that
+ * import used to die 300 ms in. Two conventions for "where datasets go" is how
+ * a tree gets written to one place and looked for in another.
+ */
+export function datasetStorageRoot(): string {
   const configured = process.env.DATASET_UPLOAD_DIR;
   if (configured) return resolvePath(configured);
   return resolvePath(dirname(fileURLToPath(import.meta.url)), '../../data/uploaded-datasets');
@@ -371,7 +383,7 @@ export class DatasetService extends EventEmitter {
     // And the unpacked tree, which `unpackUploadedArchive` wrote to local disk
     // and nothing else ever removes.
     try {
-      await rm(join(uploadRoot(), id), { recursive: true, force: true });
+      await rm(join(datasetStorageRoot(), id), { recursive: true, force: true });
     } catch (error) {
       console.warn(`[DatasetService] Failed to remove the unpacked upload for ${id}:`, error);
     }
@@ -530,7 +542,7 @@ export class DatasetService extends EventEmitter {
       if (written.size === 0) {
         throw new ExtractError('EMPTY_UPLOAD', `${key} is zero bytes — nothing was uploaded`);
       }
-      const target = join(uploadRoot(), id);
+      const target = join(datasetStorageRoot(), id);
       await rm(target, { recursive: true, force: true });
       const { datasetRoot, symlinksRemoved } = await extractDatasetArchive(archive, target);
       if (symlinksRemoved > 0) {
@@ -601,7 +613,11 @@ export class DatasetService extends EventEmitter {
    * against the robot's declared `proprioceptionDim`/`actionDim`, and one that
    * does not still gets everything else.
    */
-  async validateStructure(storagePath: string, robotTypeId?: string): Promise<DatasetValidationResult> {
+  async validateStructure(
+    storagePath: string,
+    robotTypeId?: string,
+    context: ValidationContext = {},
+  ): Promise<DatasetValidationResult> {
     const result: DatasetValidationResult = {
       valid: false,
       errors: [],
@@ -640,7 +656,7 @@ export class DatasetService extends EventEmitter {
 
     let report: DatasetStructureReport;
     try {
-      report = await validateDatasetStructure(tree, expected);
+      report = await validateDatasetStructure(tree, expected, context);
     } catch (error) {
       // A store that could not answer is not a dataset that is wrong. Marking
       // it `failed` here is what the guard above exists to prevent, and it was
@@ -686,7 +702,13 @@ export class DatasetService extends EventEmitter {
       // state vector on a 43-DOF G1 EDU is a dataset that cannot train it, and
       // the error it produces at training time names neither number.
       const existing = await datasetRepository.findById(datasetId);
-      const validation = await this.validateStructure(storagePath, existing?.robotTypeId);
+      // `importMode` travels with the row because the files cannot say it: a
+      // metadata-only import is missing every mp4 its info.json declares, and
+      // without this the validator reported one MISSING_VIDEO_FILE error per
+      // declared video and marked the dataset failed for arriving as ordered.
+      const validation = await this.validateStructure(storagePath, existing?.robotTypeId, {
+        importMode: existing?.importMode,
+      });
 
       await this.updateValidationProgress(datasetId, {
         datasetId,
@@ -980,6 +1002,12 @@ export class DatasetService extends EventEmitter {
       statsJson: dataset.statsJson,
       status: dataset.status,
       huggingFaceRepoId: dataset.huggingFaceRepoId,
+      // Always present, `null` rather than absent: the UI has to distinguish
+      // "this import failed and here is why" from "this row predates TASK-220",
+      // and an omitted key cannot say either.
+      sourceRevision: dataset.sourceRevision ?? null,
+      importMode: dataset.importMode ?? null,
+      importError: dataset.importError ?? null,
       createdAt: dataset.createdAt,
       updatedAt: dataset.updatedAt,
     };

@@ -25,6 +25,11 @@ const {
     retryJob: vi.fn(),
     getQueueStats: vi.fn(),
     getActiveJobs: vi.fn(),
+    // TASK-220: the job routes attach the mixture to every job they return.
+    // Defaults, not assertions — the mixture itself is covered in
+    // services/__tests__/TrainingJobService.mixture.test.ts.
+    getJobDatasets: vi.fn().mockResolvedValue([]),
+    getJobDatasetsForJobs: vi.fn().mockResolvedValue(new Map()),
   },
   mockTrainingOrchestrator: {
     validateHyperparameters: vi.fn(),
