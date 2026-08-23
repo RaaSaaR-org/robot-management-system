@@ -100,6 +100,15 @@ export interface VrRigTelemetry {
   right: VrHandTelemetry;
   // ---- written by the modal ------------------------------------------------
   estopLatched: boolean;
+  /**
+   * True while the base sits in a non-locomoting FSM — see `HudState`.
+   *
+   * Written by the modal from the agent's `{type:'base'}` frame, never inferred
+   * here: the browser cannot see the robot's FSM, and guessing it from "the
+   * stick is pushed and the odometry is not moving" would flag every robot that
+   * is simply standing against a wall.
+   */
+  baseDamped: boolean;
   link: LinkState;
   /** Age of the last `{type:'state'}` frame, ms. */
   msSinceState: number | null;
@@ -126,6 +135,10 @@ export function createRigTelemetry(): VrRigTelemetry {
     left: { squeeze: 0, saturated: false, tracked: null },
     right: { squeeze: 0, saturated: false, tracked: null },
     estopLatched: false,
+    // False until the agent says otherwise. The opposite default would put
+    // "BASE DAMPED" on the plate of every robot for the first tick of every
+    // session, and a warning that is usually wrong is a warning nobody reads.
+    baseDamped: false,
     // 'lost' until a state frame proves otherwise — the fail-safe direction for
     // a control link, and the same rule `linkState()` applies.
     link: 'lost',

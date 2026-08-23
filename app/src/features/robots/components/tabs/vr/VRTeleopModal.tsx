@@ -37,6 +37,17 @@ import { createRigTelemetry } from './VrTeleopRig';
 /** How often the status row re-reads the link meters, in ms. */
 const METER_INTERVAL_MS = 250;
 
+/**
+ * How long the Stand button stays busy, in ms.
+ *
+ * The FSM change is a DDS RPC through the sidecar and the agent answers it with
+ * a `{type:'base'}` frame, so the honest end of the wait is that frame — but a
+ * spinner that only ever ends on a frame is a spinner that hangs forever when
+ * the command is refused. This releases the button; the ROBOT's state is read
+ * off `baseDamped`, which is the agent's own answer either way.
+ */
+const STAND_SETTLE_MS = 1500;
+
 /** `{type:'error'}` as the agent sends it. `code` is sticky for the session. */
 interface AgentError {
   code: string;
@@ -230,6 +241,10 @@ export function VRTeleopModalBody({
   const [estopLatched, setEstopLatched] = useState(false);
   const [estopNote, setEstopNote] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+  /** The base sits in a non-locomoting FSM — see the `{type:'base'}` frame. */
+  const [baseDamped, setBaseDamped] = useState(false);
+  const [standing, setStanding] = useState(false);
+  const [standNote, setStandNote] = useState<string | null>(null);
   const [agentErrors, setAgentErrors] = useState<AgentError[]>([]);
   const [control, setControl] = useState<ControlFrame | null>(null);
   const [meters, setMeters] = useState<{ link: LinkState; msSinceState: number | null; rttMs: number | null }>({
@@ -364,6 +379,19 @@ export function VRTeleopModalBody({
           setEstopNote(null);
           setAgentErrors((prev) => prev.filter((e) => e.code !== 'estop_latched'));
         }
+        break;
+      }
+      case 'base': {
+        // The base's own FSM, sent on connect and on both edges — the same
+        // contract as `{type:'estop'}` and for the same reason. An E-Stop damps
+        // the base, and clearing the latch deliberately does not undo that, so
+        // "latched" and "damped" are two different facts about the robot and the
+        // console has to carry both. `damped !== false` is the fail-safe read:
+        // an agent old enough to omit the field is not one to believe about
+        // locomotion being fine.
+        const damped = frame.damped === true;
+        setBaseDamped(damped);
+        telemetryRef.current.baseDamped = damped;
         break;
       }
       case 'error': {
@@ -584,6 +612,38 @@ export function VRTeleopModalBody({
     }
   }, [robot.id]);
 
+  /**
+   * Stand the base back up.
+   *
+   * WHY THIS BUTTON EXISTS. An E-Stop damps the base — StopMove, then
+   * `SetFsmId(1)` — and `resetEstop` above deliberately does not undo that: a UI
+   * click must never stand a collapsed G1 up, so leaving damp is an explicit
+   * action. The trouble was that the operator had no way to take it. The only
+   * route out is Agent Mode's `posture stand`, and Agent Mode refuses every
+   * command while `controlOwnerLock` is held by teleop — which it is, for as
+   * long as this console's socket is open. So after a stop-and-reset the arms
+   * came back and the base did not, the HUD went on reading `SPEED 0.00`, and
+   * the only escape was to close the console, stand the robot from somewhere
+   * else, and reconnect.
+   *
+   * Over the SOCKET, not a REST call, for that exact reason: the socket is the
+   * one caller that already holds control, and the agent gates `{posture}` on
+   * the E-Stop latch like every other motion command.
+   */
+  const standBase = useCallback(() => {
+    setStanding(true);
+    setStandNote(null);
+    if (!send({ posture: 'stand' })) {
+      setStanding(false);
+      setStandNote('The link is down — the base cannot be stood up from here right now.');
+      return;
+    }
+    // No ack to await: the agent answers by flipping `{type:'base'}`, or with an
+    // `{type:'error'}` this console already renders. The spinner is released on
+    // a timer rather than left hanging on a frame that may never come.
+    setTimeout(() => setStanding(false), STAND_SETTLE_MS);
+  }, [send]);
+
   const copy = useCallback((id: string, text: string) => {
     navigator.clipboard
       ?.writeText(text)
@@ -753,6 +813,43 @@ export function VRTeleopModalBody({
             </div>
             <Button variant="outline" size="sm" disabled={resetting} onClick={() => void resetEstop()}>
               {resetting ? 'Resetting…' : 'Reset E-Stop'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Damped base. A SEPARATE banner from the E-Stop, and shown while the
+          latch is clear as well as under it, because the two are different facts
+          and the second outlives the first: the stop damps the base, the reset
+          clears only the latch, and what is left is a robot whose arms work and
+          whose legs will not. Amber rather than red — it is not a stop, and the
+          operator can go on manipulating. */}
+      {baseDamped && (
+        <div
+          className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-3"
+          role="status"
+          data-testid="vr-base-damped"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">BASE DAMPED</p>
+              <p className="mt-0.5 text-xs text-theme-secondary">
+                {standNote
+                  ?? 'The legs are in a damped FSM and will ignore every walk command — silently, because the '
+                    + 'sidecar still acknowledges them. The arms are unaffected.'}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={standing || estopLatched}
+              data-testid="vr-stand-base"
+              title={estopLatched
+                ? 'Clear the E-Stop first — the base is damped because somebody stopped the robot'
+                : 'Command the base back into its standing FSM'}
+              onClick={standBase}
+            >
+              {standing ? 'Standing…' : 'Stand'}
             </Button>
           </div>
         </div>

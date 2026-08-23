@@ -862,12 +862,38 @@ export function createRestRoutes(
     robotStateManager.updateServerHeartbeat();
 
     const success = robotStateManager.resetEmergencyStop();
+
+    // SYMMETRIC WITH `POST /safety/estop` ABOVE, and it was not.
+    //
+    // That route pushes the platform stop INTO Agent Mode (TASK-194) so the
+    // thing actually driving the robot stops too. The reset only ever cleared
+    // the SafetyMonitor, so after a platform stop-and-reset the fleet showed an
+    // armed robot while Agent Mode was still latched: `submitCommand` refused
+    // every command, and `posture stand` — the ONLY way out of the damped base
+    // that same stop caused — was refused with it. The robot could not be stood
+    // back up by any route short of restarting the agent.
+    //
+    // `AgentModeController.resetEstop()` calls `resetEmergencyStop()` again on
+    // its way through; the monitor answers `true` for an already-armed latch, so
+    // the second call is a no-op rather than a second reset.
+    let agentModeReset = false;
+    if (success) {
+      try {
+        agentModeReset = agentModeController.resetEstop().estopActive === false;
+      } catch (error) {
+        console.error('[REST] Agent Mode E-Stop reset failed during platform reset:', error);
+      }
+    }
+
     const estopState = robotStateManager.getEStopState();
 
     if (success) {
       res.json({
         robotId: robot.id,
         message: 'E-stop reset successfully',
+        // Honest report of what this reset actually reached — the same contract
+        // the stop route uses for `agentModeStopped`.
+        agentModeReset,
         ...estopState,
       });
     } else {

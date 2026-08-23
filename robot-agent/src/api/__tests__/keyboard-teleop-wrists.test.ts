@@ -151,6 +151,13 @@ function makeStateStub(joints: JointConfig[], seed: Record<string, number>) {
     getActiveJointConfig: vi.fn(() => joints),
     getState: vi.fn().mockReturnValue({ robotType: 'g1-edu' }),
     isEStopTriggered: vi.fn().mockReturnValue(false),
+    // The base's FSM, as the socket reads it every tick for `{type:'base'}`.
+    // Standing by default: a stub that reported a damped base would put every
+    // test in this file behind the state the feature exists to get OUT of.
+    getAgentSafetyState: vi.fn(() => ({
+      estopLatched: false, estopReason: null, estopAt: null,
+      damped: false, lastFsmId: 500, place: null, bootId: '',
+    })),
     getEStopState: vi.fn().mockReturnValue({ status: 'armed', reason: null }),
     triggerEmergencyStop: vi.fn(),
     onTeleopError: vi.fn((l: TeleopErrorListener) => {

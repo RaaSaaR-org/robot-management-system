@@ -139,6 +139,9 @@ export function clampPlanar(vx: number, vy: number, limit: number): { vx: number
  *   to solve. Sent ONCE, because a client that keeps streaming would otherwise
  *   be told 20 times a second, and because the honest answer is "this robot is
  *   not a G1", which does not change while the socket is open.
+ * - `bad_posture` — `{posture}` named something other than `stand`.
+ * - `stand_unavailable` — this agent was built with no base-posture path.
+ * - `stand_failed` — the FSM change was attempted and refused.
  */
 export type TeleopErrorCode =
   | 'loco_unavailable'
@@ -147,7 +150,10 @@ export type TeleopErrorCode =
   | 'sidecar_down'
   | 'estop_latched'
   | 'unknown_joints'
-  | 'ik_unsupported';
+  | 'ik_unsupported'
+  | 'bad_posture'
+  | 'stand_unavailable'
+  | 'stand_failed';
 
 interface DirectionMessage {
   joint: string;
@@ -205,7 +211,7 @@ interface HandsMessage {
    *
    * Independent of `wrists`: an operator can have finger tracking without arm
    * IK and the reverse. Send them as SEPARATE messages, though — this socket
-   * dispatches on the first key it recognises and returns, for all nine
+   * dispatches on the first key it recognises and returns, for all ten
    * message kinds, so a frame carrying both silently drops the second. The
    * browser sends two `send()` calls for exactly this reason.
    */
@@ -213,6 +219,19 @@ interface HandsMessage {
     left?: { wrist?: unknown; thumb?: unknown; index?: unknown; middle?: unknown } | null;
     right?: { wrist?: unknown; thumb?: unknown; index?: unknown; middle?: unknown } | null;
   };
+}
+interface PostureMessage {
+  /**
+   * Re-arm the base out of a damped FSM.
+   *
+   * Only `stand`. The other postures Agent Mode knows (`damp`, `sit`, and the
+   * two stand HEIGHTS, which are a different RPC entirely) are deliberately not
+   * offered on a teleop socket: an operator in a headset has no view of the
+   * robot's surroundings and no business folding it up from in there, and the
+   * one direction that matters here is OUT of a state that silently swallows
+   * every walk command.
+   */
+  posture: 'stand';
 }
 type TeleopMessage =
   | DirectionMessage
@@ -223,7 +242,8 @@ type TeleopMessage =
   | MoveMessage
   | EStopMessage
   | WristsMessage
-  | HandsMessage;
+  | HandsMessage
+  | PostureMessage;
 
 /**
  * One hand's four DexPilot keypoints off the wire, in the robot's hand frame.
@@ -252,8 +272,21 @@ function parseHandKeypoints(value: unknown): HandKeypoints | null {
   return { wrist, thumb, index, middle };
 }
 
+/** Injected so this module does not import the Agent Mode controller. */
+export interface KeyboardTeleopDeps {
+  /**
+   * Re-arm a damped base, on behalf of the operator who already holds control.
+   *
+   * Optional because three of the four test harnesses build this server with a
+   * state manager alone; a socket without it answers `{posture:'stand'}` with
+   * `stand_unavailable` rather than pretending.
+   */
+  standBase?: () => Promise<{ ok: boolean; error?: string }>;
+}
+
 export function createKeyboardTeleopWebSocket(
-  robotStateManager: RobotStateManager
+  robotStateManager: RobotStateManager,
+  deps: KeyboardTeleopDeps = {},
 ): WebSocketServer {
   // noServer: upgrades are routed by the shared dispatcher in index.ts.
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
@@ -323,6 +356,31 @@ export function createKeyboardTeleopWebSocket(
       }));
     };
     sendEStopState(wasEStopped);
+
+    /**
+     * Whether the base is sitting in a non-locomoting FSM, on the same
+     * connect-and-both-edges contract as the E-Stop above and for the same
+     * reason.
+     *
+     * An E-Stop DAMPS the base (`agentModeController.estop()` sends
+     * `SetFsmId(1)` after StopMove), and clearing the latch deliberately does
+     * not undo that — standing a collapsed humanoid back up is an explicit
+     * operator action, never a side effect of a UI click. So the state after
+     * every stop-and-reset is: arms work, base does not. The arms work because
+     * they are joint targets and never touch the loco FSM.
+     *
+     * Nothing said so. `SetVelocity` answers RPC_OK in a damped FSM and the
+     * base simply does not integrate it, so no error reached the client, the
+     * HUD went on reading `SPEED 0.00`, and the operator was left pushing a
+     * stick at a robot that had no intention of walking.
+     */
+    let wasDamped = robotStateManager.getAgentSafetyState().damped;
+    const sendBaseState = (damped: boolean): void => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const agent = robotStateManager.getAgentSafetyState();
+      ws.send(JSON.stringify({ type: 'base', damped, fsmId: agent.lastFsmId }));
+    };
+    sendBaseState(wasDamped);
 
     // Per-joint angular velocity (rad/s) for currently-held keys.
     const velocity = new Map<string, number>();
@@ -570,6 +628,16 @@ export function createKeyboardTeleopWebSocket(
         wasEStopped = latched;
         sendEStopState(latched);
       }
+      // Read every tick, not only around `{posture}`: the base can be damped by
+      // an E-Stop raised anywhere, by Agent Mode, or by another console, and a
+      // client that only learned about its own commands would show a stale
+      // "walking is fine" to an operator whose robot had been damped from the
+      // fleet page.
+      const damped = robotStateManager.getAgentSafetyState().damped;
+      if (damped !== wasDamped) {
+        wasDamped = damped;
+        sendBaseState(damped);
+      }
       if (latched) {
         velocity.clear();
         rampTarget = null;
@@ -676,6 +744,42 @@ export function createKeyboardTeleopWebSocket(
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'estop', active: true, reason }));
         }
+        return;
+      }
+
+      // ---- stand the base back up ------------------------------------------
+      // A LOCOMOTION command, so it lives on the socket that carries the other
+      // ones rather than behind a REST call. That is not a style choice: the
+      // only other route to this FSM is Agent Mode's `posture stand`, and Agent
+      // Mode refuses every command while `controlOwnerLock` is held by teleop —
+      // which it is, for as long as this socket is open. An operator in a
+      // headset therefore had to LEAVE the session to re-arm the base and then
+      // come back, and nothing in the headset told them so.
+      //
+      // Gated by the latch like every other motion command: a robot is damped
+      // after an E-Stop precisely because somebody stopped it.
+      if ('posture' in msg) {
+        if (msg.posture !== 'stand') {
+          sendError('bad_posture', `unknown posture ${JSON.stringify(msg.posture)}; only "stand" is offered here`);
+          return;
+        }
+        if (refusedByEStop()) return;
+        if (!deps.standBase) {
+          sendError('stand_unavailable', 'this agent was built without a base-posture path');
+          return;
+        }
+        void deps.standBase().then((result) => {
+          if (!result.ok) {
+            sendError('stand_failed', result.error ?? 'the locomotion sidecar refused to stand the base');
+            return;
+          }
+          // Report the OUTCOME, not the request. `wasDamped` is updated here so
+          // the tick's edge detector does not send a second, identical frame.
+          wasDamped = robotStateManager.getAgentSafetyState().damped;
+          sendBaseState(wasDamped);
+        }).catch((error: unknown) => {
+          sendError('stand_failed', error instanceof Error ? error.message : String(error));
+        });
         return;
       }
 

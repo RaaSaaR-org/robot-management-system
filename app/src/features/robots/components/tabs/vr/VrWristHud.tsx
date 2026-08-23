@@ -165,6 +165,7 @@ export function VrWristHud({ telemetryRef }: { telemetryRef: { current: VrRigTel
       vx: t.vx,
       vy: t.vy,
       omega: t.omega,
+      baseDamped: t.baseDamped,
       recording: t.recording,
     });
     // Appended, never inserted, and never while latched: `composeHud` guarantees

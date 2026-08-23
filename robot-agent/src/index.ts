@@ -400,7 +400,13 @@ async function main() {
   const pointCloudWss = createPointCloudWebSocket(robotStateManager);
   const frameRecorder = new FrameRecorder();
   const bilateralWss = createBilateralTeleopWebSocket(frameRecorder);
-  const keyboardWss = createKeyboardTeleopWebSocket(robotStateManager);
+  // `standBase` is injected rather than imported inside the socket: the teleop
+  // module has no other reason to know Agent Mode exists, and Agent Mode owns
+  // `lastFsmId` — a second writer would make `isDamped()` disagree with the
+  // robot. See `KeyboardTeleopDeps`.
+  const keyboardWss = createKeyboardTeleopWebSocket(robotStateManager, {
+    standBase: () => agentModeController.standBase(),
+  });
   const agentModeWss = createAgentModeWebSocket();
 
   // Single upgrade dispatcher routes each WebSocket path to its server.

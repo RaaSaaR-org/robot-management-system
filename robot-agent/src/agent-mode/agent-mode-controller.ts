@@ -30,6 +30,7 @@ import { IncarnationLog, type IncarnationOpenResult, type IncarnationRecord } fr
 import {
   BlockExecutor,
   G1_FSM_DAMP,
+  G1_FSM_IDS,
   G1_NON_LOCOMOTING_FSM_IDS,
   type BlockExecutorDeps,
 } from './block-executor.js';
@@ -1739,6 +1740,43 @@ export class AgentModeController {
     );
     this.emit('agent:state:changed');
     return this.getState();
+  }
+
+  /**
+   * Re-arm the base out of a damped FSM, for a caller that already holds
+   * control.
+   *
+   * `resetEstop` deliberately does NOT do this — see its docstring: a UI click
+   * must never stand a collapsed G1 up. But that left exactly one route back,
+   * `posture stand`, and it runs through {@link submitCommand}, which refuses
+   * everything while `controlOwnerLock` is held by teleop. So the human at the
+   * controls — the one person who can see the robot and is entitled to move it
+   * — was the one caller who could not ask for this. That is what this method
+   * is for; it is NOT a shortcut around the latch:
+   *
+   * - both latches must be clear, this controller's and the SafetyMonitor's,
+   *   because a damped base after an E-Stop is damped ON PURPOSE and the
+   *   operator has to clear the stop first, deliberately;
+   * - it goes through {@link commandFsm} like every other FSM change, so
+   *   `isDamped()`, the persisted snapshot and the `agent:state:changed` event
+   *   all follow.
+   */
+  async standBase(): Promise<LocoResult> {
+    if (this.estopActive || this.robotStateManager?.isEStopTriggered()) {
+      return { ok: false, error: 'an emergency stop is latched — clear it before standing the base' };
+    }
+    const stand = G1_FSM_IDS.stand;
+    if (stand === undefined) {
+      return { ok: false, error: 'this embodiment has no stand FSM' };
+    }
+    if (!this.isDamped()) {
+      // Not an error: the caller asked for a state the robot is already in, and
+      // re-sending the FSM would be a needless RPC on a robot that is standing.
+      return { ok: true };
+    }
+    const result = await this.commandFsm(stand);
+    if (result.ok) console.log(`[AgentMode] base re-armed by the operator (FSM ${stand})`);
+    return result;
   }
 
   /** Abort the running plan without touching the E-Stop latch. */
