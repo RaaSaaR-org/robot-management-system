@@ -173,6 +173,20 @@ export interface RobotType {
 // DOMAIN TYPES - Dataset
 // ============================================================================
 
+/**
+ * Why an import stopped, as the server recorded it (TASK-220).
+ *
+ * A failed import used to leave a card that said "Failed" and nothing else, so
+ * the only way to learn that (say) the object store was down was to read the
+ * server's log — on a machine the person looking at the card may not have.
+ */
+export interface DatasetImportError {
+  phase: string;
+  error: string;
+  repoId?: string;
+  failedAt: string;
+}
+
 export interface Dataset {
   id: string;
   name: string;
@@ -190,6 +204,15 @@ export interface Dataset {
   statsJson: LeRobotStats;
   status: DatasetStatus;
   huggingFaceRepoId?: string;
+  /** Resolved HF commit SHA the import pinned. Null for non-Hub datasets. */
+  sourceRevision?: string | null;
+  /**
+   * `metadata` means only info.json/stats came down — there are no frames on
+   * disk, so the row's episode and frame counts describe the Hub repo rather
+   * than anything local.
+   */
+  importMode?: 'full' | 'metadata' | null;
+  importError?: DatasetImportError | null;
   /**
    * What structural validation found when it last opened this dataset's files
    * (TASK-217).
@@ -222,6 +245,50 @@ export interface DatasetValidation {
   fileCount: number;
 }
 
+/**
+ * The four numbers that decide whether two datasets can be trained together.
+ *
+ * Derived on the client from `meta/info.json` as it was stored on the row, so a
+ * card can say "43-wide, 1 camera" without another round trip. Every field is
+ * nullable on purpose: an import that failed before it read info.json has none
+ * of them, and a card that guesses "0" there would be inventing a fact.
+ */
+export interface DatasetShape {
+  robotType: string | null;
+  stateWidth: number | null;
+  actionWidth: number | null;
+  cameraKeys: string[];
+}
+
+interface LeRobotFeature {
+  dtype?: string;
+  shape?: number[];
+}
+
+function featureWidth(features: Record<string, unknown>, key: string): number | null {
+  const feature = features[key] as LeRobotFeature | undefined;
+  const width = feature?.shape?.[0];
+  return typeof width === 'number' ? width : null;
+}
+
+export function datasetShape(dataset: Dataset): DatasetShape {
+  const features = (dataset.infoJson?.features ?? {}) as Record<string, unknown>;
+
+  // Validation's `imageKeys` is what was actually found on disk; info.json is
+  // only what the dataset claims. Prefer the former when it exists.
+  const declaredCameras = Object.keys(features).filter((key) => {
+    const dtype = (features[key] as LeRobotFeature | undefined)?.dtype;
+    return dtype === 'video' || dtype === 'image' || key.startsWith('observation.images.');
+  });
+
+  return {
+    robotType: dataset.robotType?.name ?? dataset.infoJson?.robot_type ?? null,
+    stateWidth: featureWidth(features, 'observation.state'),
+    actionWidth: featureWidth(features, 'action'),
+    cameraKeys: dataset.validation?.imageKeys ?? declaredCameras,
+  };
+}
+
 export interface CreateDatasetInput {
   name: string;
   description?: string;
@@ -236,6 +303,102 @@ export interface DatasetQueryParams {
   minQualityScore?: number;
   page?: number;
   pageSize?: number;
+}
+
+// ============================================================================
+// DATASET MIXTURES & COMPATIBILITY (TASK-220)
+// ============================================================================
+//
+// Mirrors `server/src/types/mixture.types.ts`. The four verdicts are not a
+// severity scale: `multi_embodiment` is a YES — two datasets with different
+// action spaces are exactly what GR00T's per-embodiment projectors exist for —
+// while `incompatible` is the only one that stops a run.
+
+export type CompatibilityVerdict =
+  | 'identical'
+  | 'compatible'
+  | 'multi_embodiment'
+  | 'incompatible';
+
+export type AxisVerdict = 'match' | 'differs' | 'blocking';
+
+export type CompatibilityAxisId =
+  | 'lerobotVersion'
+  | 'robotType'
+  | 'fps'
+  | 'stateWidth'
+  | 'actionWidth'
+  | 'cameraKeys'
+  | 'status';
+
+export interface CompatibilityAxis {
+  axis: CompatibilityAxisId;
+  label: string;
+  verdict: AxisVerdict;
+  values: Array<{ datasetId: string; datasetName: string; value: string }>;
+  /** One sentence: what this difference MEANS for training. */
+  note: string;
+}
+
+export interface CompatibilityReport {
+  datasetIds: string[];
+  verdict: CompatibilityVerdict;
+  headline: string;
+  recommendation: string;
+  axes: CompatibilityAxis[];
+}
+
+export interface MixtureMemberInput {
+  datasetId: string;
+  weight?: number;
+}
+
+/** One member of a training job's dataset mixture, as the server reports it. */
+export interface TrainingJobDatasetMember {
+  datasetId: string;
+  name: string;
+  weight: number;
+  position: number;
+}
+
+// ============================================================================
+// HUGGINGFACE IMPORT PREVIEW (TASK-220)
+// ============================================================================
+
+/**
+ * What GET /datasets/hf/preview reads out of a Hub repo without importing it.
+ *
+ * `dataBytes` and `videoBytes` are separate because the difference is the whole
+ * decision: GR00T-N1.7-AppleToPlate is 73 MB of parquet next to 929 MB of
+ * video, and "Include videos" is the checkbox that spends the second number.
+ */
+export interface HFDatasetPreview {
+  repoId: string;
+  revision: string;
+  resolvedRevision: string;
+  lerobotVersion: string;
+  robotType: string;
+  fps: number;
+  totalEpisodes: number;
+  totalFrames: number;
+  // Nullable, exactly as the server sends them: `previewRepo` emits
+  // `declaredFeatureWidth(...) || null`, so a repo whose info.json declares no
+  // shape for observation.state has no width to report. Typed `number` here,
+  // the preview rendered the literal string "null" as the width.
+  stateWidth: number | null;
+  actionWidth: number | null;
+  cameraKeys: string[];
+  fileCount: number;
+  dataBytes: number;
+  videoBytes: number;
+  license: string | null;
+}
+
+/** Body of POST /datasets/import/huggingface. */
+export interface HFImportOptions {
+  revision?: string;
+  robotTypeId?: string;
+  includeVideos?: boolean;
 }
 
 // ============================================================================
@@ -276,6 +439,13 @@ export interface TrainingJob {
   createdAt: string;
   updatedAt: string;
   dataset?: Dataset;
+  /**
+   * The mixture this job trains on, member 0 first. The server always sends it
+   * — synthesising a single entry from `datasetId` for a classic one-dataset
+   * job — but it is optional here because fixtures and rows cached from an
+   * older server have no such field.
+   */
+  datasets?: TrainingJobDatasetMember[];
 }
 
 export interface SubmitTrainingJobInput {
@@ -286,6 +456,10 @@ export interface SubmitTrainingJobInput {
   gpuRequirements?: Partial<GpuRequirements>;
   totalEpochs?: number;
   priority?: 'low' | 'normal' | 'high';
+  /** Mixture members with weights. `datasetId` above stays member 0. */
+  mixture?: MixtureMemberInput[];
+  /** Equal-weight shorthand for `mixture`. */
+  datasetIds?: string[];
 }
 
 /**
@@ -296,6 +470,7 @@ export interface SubmitSimRlJobInput {
   kind: 'sim_rl';
   sceneId: string;
   hyperparameters?: Partial<Hyperparameters>;
+  gpuRequirements?: Partial<GpuRequirements>;
   totalEpochs?: number;
   priority?: 'low' | 'normal' | 'high';
 }
@@ -425,6 +600,60 @@ export interface UploadInitiateResponse {
   expiresIn: number;
   storagePath: string;
   message: string;
+}
+
+// ============================================================================
+// TRAINING RUN MANIFEST (GET /training/jobs/:id/export — TASK-220)
+// ============================================================================
+
+export interface TrainingRunManifestDataset {
+  datasetId: string;
+  name: string;
+  /** Scheme-tagged: `hf://repo@rev`, `s3://bucket/prefix` or `file:///abs/path`. */
+  uri: string;
+  revision: string | null;
+  license: string | null;
+  weight: number;
+  normalizedWeight: number;
+  lerobotVersion: string;
+  robotType: string;
+  fps: number;
+  stateWidth: number | null;
+  actionWidth: number | null;
+  cameraKeys: string[];
+  totalEpisodes: number;
+  totalFrames: number;
+  /** False for `file://` members — a cluster elsewhere cannot reach them. */
+  portable: boolean;
+}
+
+export interface TrainingRunManifest {
+  schemaVersion: string;
+  runId: string;
+  createdAt: string;
+  sourceServer: string;
+  job: {
+    kind: string;
+    baseModel: string | null;
+    fineTuneMethod: string | null;
+    status: string;
+  };
+  datasets: TrainingRunManifestDataset[];
+  compatibility: CompatibilityReport;
+  hyperparameters: Partial<Hyperparameters>;
+  gpu: { count: number; memory: number; type?: string };
+  runtime: { image: string; command: string[]; entrypoint?: string };
+  compliance: {
+    datasetLicenses: string[];
+    residency: string | null;
+    notes: string[];
+  };
+  /**
+   * Why the run may not reproduce elsewhere — a `file://` member above being
+   * the usual reason. Shown next to the export action, because a warning only
+   * a downloaded file carries is a warning nobody reads.
+   */
+  warnings: string[];
 }
 
 // ============================================================================
@@ -606,6 +835,7 @@ export interface TrainingActions {
   deleteDataset: (id: string) => Promise<void>;
   initiateUpload: (datasetId: string, contentType: string, size: number) => Promise<UploadInitiateResponse>;
   completeUpload: (datasetId: string) => Promise<void>;
+  retryImport: (datasetId: string) => Promise<void>;
   setDatasetFilters: (filters: Partial<DatasetQueryParams>) => void;
 
   // Training Jobs

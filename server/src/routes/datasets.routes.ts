@@ -20,7 +20,10 @@ import type {
   PushToHubJobState,
 } from '../types/dataset.types.js';
 import type { DatasetStatus } from '../types/vla.types.js';
-import { huggingFaceImportService } from '../services/HuggingFaceImportService.js';
+import {
+  HuggingFaceImportError,
+  huggingFaceImportService,
+} from '../services/HuggingFaceImportService.js';
 import { datasetEpisodeFlagRepository } from '../repositories/DatasetEpisodeFlagRepository.js';
 import type { EpisodeFlag } from '../repositories/DatasetEpisodeFlagRepository.js';
 import { robotTypeRepository } from '../repositories/index.js';
@@ -38,6 +41,9 @@ import { createReadStream, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
 import type { Readable } from 'stream';
 import { DatasetViewError, resolveLocalView } from '../services/lerobot/LocalDatasetView.js';
+// TASK-220 — POST /compatibility, at the bottom of this file.
+import { analyzeDatasetIds, UnknownDatasetError } from '../services/lerobot/datasetCompatibility.js';
+import { ConflictError } from '../utils/errors.js';
 
 /** In-memory job state for push-to-hub operations */
 const pushJobs = new Map<string, PushToHubJobState>();
@@ -281,6 +287,29 @@ async function readParquetFromRustFS(storagePath: string, relativePath: string):
   return null;
 }
 
+/**
+ * Answer a failed HuggingFace call with the status the service already decided.
+ *
+ * Every import failure used to come back 400 after a chain of
+ * `message.includes` tests on English prose, so "no such repo" and "an import
+ * is already running" were indistinguishable to a client.
+ * {@link HuggingFaceImportError} carries the status and a stable code; anything
+ * else is still a 400 with its message.
+ */
+function sendImportError(res: Response, error: unknown, fallback: string): void {
+  if (error instanceof HuggingFaceImportError) {
+    res.status(error.status).json({ error: error.message, message: error.message, code: error.code });
+    return;
+  }
+  let message = fallback;
+  if (error instanceof Error) {
+    message = error.message.includes('Foreign key constraint')
+      ? 'Invalid robot type reference. Please try again.'
+      : error.message;
+  }
+  res.status(400).json({ error: message, message, code: 'IMPORT_ERROR' });
+}
+
 export const datasetRoutes = Router();
 
 // ============================================================================
@@ -391,20 +420,55 @@ datasetRoutes.post('/import/huggingface', async (req: Request, res: Response) =>
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error importing from HuggingFace:', error);
+    sendImportError(res, error, 'Failed to import dataset');
+  }
+});
 
-    let message = 'Failed to import dataset';
-    if (error instanceof Error) {
-      if (error.message.includes('Foreign key constraint')) {
-        message = 'Invalid robot type reference. Please try again.';
-      } else if (error.message.includes('info.json')) {
-        message = error.message;
-      } else if (error.message.includes('Failed to fetch')) {
-        message = `Could not reach HuggingFace: ${error.message}`;
-      } else {
-        message = error.message;
-      }
-    }
-    res.status(400).json({ error: message, message, code: 'IMPORT_ERROR' });
+// ============================================================================
+// GET /api/datasets/hf/preview - What a Hub repo is, WITHOUT importing it
+// ============================================================================
+//
+// Declared before `/:id`, or Express matches `hf` as a dataset id.
+//
+// The import modal used to ask someone to commit to a gigabyte on the strength
+// of a repo name: nothing told them the GR00T repo is 929 MB of video, 402
+// episodes and 43 wide until the import had already run. Three cheap requests
+// answer all of it.
+datasetRoutes.get('/hf/preview', async (req: Request, res: Response) => {
+  const repoId = typeof req.query.repoId === 'string' ? req.query.repoId.trim() : '';
+  const revision = typeof req.query.revision === 'string' && req.query.revision.trim()
+    ? req.query.revision.trim()
+    : 'main';
+
+  if (!repoId) {
+    return res.status(400).json({ error: 'repoId is required' });
+  }
+
+  try {
+    const preview = await huggingFaceImportService.previewRepo(repoId, revision);
+    res.json(preview);
+  } catch (error) {
+    console.error(`[DatasetRoutes] Preview failed for ${repoId}@${revision}:`, error);
+    sendImportError(res, error, 'Failed to preview repository');
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/:id/import/retry - Re-run the import for an HF dataset
+// ============================================================================
+
+datasetRoutes.post('/:id/import/retry', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as { includeVideos?: unknown };
+    const result = await huggingFaceImportService.retryImport(req.params.id, {
+      // Optional and off the contract: a retry with no body re-runs the import
+      // the row already describes, which is what the contract pins.
+      includeVideos: typeof body.includeVideos === 'boolean' ? body.includeVideos : undefined,
+    });
+    res.status(202).json(result);
+  } catch (error) {
+    console.error(`[DatasetRoutes] Retry failed for ${req.params.id}:`, error);
+    sendImportError(res, error, 'Failed to retry import');
   }
 });
 
@@ -735,6 +799,12 @@ datasetRoutes.delete('/:id', async (req: Request, res: Response) => {
       message: 'Dataset deleted successfully',
     });
   } catch (error) {
+    // A dataset a training mixture still names is a refusal the caller can act
+    // on — it names the jobs holding it — not a server fault to log and hide
+    // behind "Failed to delete dataset".
+    if (error instanceof ConflictError) {
+      return res.status(409).json({ error: error.message });
+    }
     console.error('[DatasetRoutes] Error deleting dataset:', error);
     res.status(500).json({ error: 'Failed to delete dataset' });
   }
@@ -1544,5 +1614,35 @@ datasetRoutes.post('/:id/trajectories/:idx/unflag', async (req: Request, res: Re
   } catch (error) {
     console.error('[DatasetRoutes] Error unflagging trajectory:', error);
     res.status(500).json({ error: 'Failed to unflag trajectory' });
+  }
+});
+
+// ============================================================================
+// POST /api/datasets/compatibility - Can these datasets be trained together?
+// ============================================================================
+// Body `{ datasetIds: string[] }` (1..8) -> CompatibilityReport. Asked by the
+// training wizard before a job exists, and by `POST /api/training/jobs` on the
+// way in, so the preview and the guard can never disagree about a mixture.
+// ============================================================================
+
+datasetRoutes.post('/compatibility', async (req: Request, res: Response) => {
+  try {
+    const { datasetIds } = req.body as { datasetIds?: unknown };
+    if (!Array.isArray(datasetIds) || datasetIds.some((id) => typeof id !== 'string')) {
+      return res.status(400).json({ error: 'datasetIds must be an array of dataset ids' });
+    }
+    if (datasetIds.length === 0) {
+      return res.status(400).json({ error: 'datasetIds must name at least one dataset' });
+    }
+
+    const report = await analyzeDatasetIds(datasetIds as string[]);
+    res.json(report);
+  } catch (error) {
+    if (error instanceof UnknownDatasetError) {
+      return res.status(404).json({ error: error.message, datasetIds: error.datasetIds });
+    }
+    console.error('[DatasetRoutes] Error analyzing compatibility:', error);
+    const message = error instanceof Error ? error.message : 'Failed to analyze compatibility';
+    res.status(400).json({ error: message });
   }
 });

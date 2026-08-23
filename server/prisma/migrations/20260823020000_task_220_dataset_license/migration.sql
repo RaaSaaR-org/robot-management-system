@@ -1,0 +1,14 @@
+-- TASK-220: keep the license the source repo declared.
+--
+-- The importer already fetched it — `fetchRepoInfo` reads `cardData.license`
+-- so the import preview can show it — and then dropped it on the floor. The
+-- consequence showed up at the far end of the pipeline: the exported training
+-- run manifest reported `"license": "unknown"` for
+-- nvidia/GR00T-N1.7-AppleToPlate, whose card says cc-by-4.0, and then attached
+-- a compliance note warning that a model trained on data of unknown license
+-- cannot be shown to be redistributable. The data was there the whole time.
+--
+-- Stored verbatim, not normalised to an SPDX id. "cc-by-4.0", "CC-BY-4.0" and
+-- "cc-by-nc-4.0" are the repo's own strings, and inferring which license was
+-- *meant* is exactly how a wrong license claim ends up in a technical file.
+ALTER TABLE "Dataset" ADD COLUMN "sourceLicense" TEXT;

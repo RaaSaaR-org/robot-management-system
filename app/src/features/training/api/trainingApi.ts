@@ -28,6 +28,10 @@ import type {
   CurationSuggestResponse,
   EpisodeAnnotation,
   RobotType,
+  HFDatasetPreview,
+  HFImportOptions,
+  CompatibilityReport,
+  TrainingRunManifest,
 } from '../types';
 
 const ENDPOINTS = {
@@ -65,8 +69,14 @@ const ENDPOINTS = {
 
   // HuggingFace Import & Push
   huggingFaceImport: '/datasets/import/huggingface',
+  huggingFacePreview: '/datasets/hf/preview',
+  datasetImportRetry: (id: string) => `/datasets/${id}/import/retry`,
   datasetPushToHub: (id: string) => `/datasets/${id}/push-to-hub`,
   datasetPushStatus: (id: string) => `/datasets/${id}/push-status`,
+
+  // Mixtures (TASK-220)
+  datasetCompatibility: '/datasets/compatibility',
+  trainingJobExport: (id: string) => `/training/jobs/${id}/export`,
 } as const;
 
 export const trainingApi = {
@@ -406,13 +416,66 @@ export const trainingApi = {
   // ============================================================================
 
   /**
-   * Import a dataset from HuggingFace Hub
+   * Read a Hub repo's info.json and file list WITHOUT importing it.
+   *
+   * The modal shows this before the user commits: the GR00T AppleToPlate repo
+   * is 73 MB of parquet and 929 MB of video, and which of those two numbers you
+   * are about to spend depends on a checkbox.
    */
-  async importFromHuggingFace(repoId: string, includeVideos?: boolean): Promise<{ datasetId: string }> {
+  async previewHuggingFace(repoId: string, revision?: string): Promise<HFDatasetPreview> {
+    const response = await apiClient.get<HFDatasetPreview>(ENDPOINTS.huggingFacePreview, {
+      params: revision ? { repoId, revision } : { repoId },
+    });
+    return response.data;
+  },
+
+  /**
+   * Import a dataset from HuggingFace Hub.
+   *
+   * Takes the options as one object rather than a positional `includeVideos`:
+   * the modal's single-argument call was silently dropping the flag, which is
+   * how every import ended up metadata-only. (TASK-220)
+   */
+  async importFromHuggingFace(
+    repoId: string,
+    options: HFImportOptions = {}
+  ): Promise<{ datasetId: string }> {
     const response = await apiClient.post<{ datasetId: string }>(
       ENDPOINTS.huggingFaceImport,
-      { repoId, includeVideos }
+      { repoId, ...options }
     );
+    return response.data;
+  },
+
+  /**
+   * Re-run the import for a dataset that already carries a huggingFaceRepoId.
+   * 409 when one is already in flight.
+   */
+  async retryImport(datasetId: string): Promise<{ datasetId: string; status: string }> {
+    const response = await apiClient.post<{ datasetId: string; status: string }>(
+      ENDPOINTS.datasetImportRetry(datasetId)
+    );
+    return response.data;
+  },
+
+  /**
+   * Ask the server whether these datasets can be trained together, and what
+   * their differences mean. 1..8 ids; a single id is a legal question.
+   */
+  async checkCompatibility(datasetIds: string[]): Promise<CompatibilityReport> {
+    const response = await apiClient.post<CompatibilityReport>(
+      ENDPOINTS.datasetCompatibility,
+      { datasetIds }
+    );
+    return response.data;
+  },
+
+  /**
+   * The run manifest: everything an offline cluster needs to reproduce a job,
+   * including the warnings about the parts of it that will not travel.
+   */
+  async exportTrainingRun(jobId: string): Promise<TrainingRunManifest> {
+    const response = await apiClient.get<TrainingRunManifest>(ENDPOINTS.trainingJobExport(jobId));
     return response.data;
   },
 
@@ -438,14 +501,19 @@ export const trainingApi = {
   },
 
   /**
-   * Search HuggingFace Hub for LeRobot datasets (public API, no backend proxy)
+   * Search HuggingFace Hub for datasets (public API, no backend proxy).
+   *
+   * `lerobotOnly` used to be hardcoded on, and the `lerobot` tag is applied by
+   * whoever uploads: nvidia/GR00T-N1.7-AppleToPlate is a LeRobot v2.1 dataset
+   * that does not carry it, so searching for it reported "No datasets found"
+   * for a repo that plainly exists. The caller decides now.
    */
-  async searchHuggingFace(query: string): Promise<HFDataset[]> {
+  async searchHuggingFace(query: string, lerobotOnly = true): Promise<HFDataset[]> {
     const params = new URLSearchParams({
       search: query,
-      filter: 'lerobot',
       limit: '20',
     });
+    if (lerobotOnly) params.set('filter', 'lerobot');
     const response = await fetch(
       `https://huggingface.co/api/datasets?${params.toString()}`
     );

@@ -8,21 +8,25 @@ import { useState, useCallback, useEffect } from 'react';
 import { Modal, Button, Badge } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
 import { HyperparameterForm, getDefaultHyperparameters } from './HyperparameterForm';
+import { DatasetCompatibilityPanel } from './DatasetCompatibilityPanel';
 import {
   useSimulationStore,
   selectScenes,
   selectScenesLoading,
 } from '@/features/simulation/store/simulationStore';
 import type {
+  CompatibilityReport,
   Dataset,
   BaseModel,
   FineTuneMethod,
   HyperparametersInput,
+  MixtureMemberInput,
   SubmitTrainingJobInput,
   SubmitSimRlJobInput,
   TrainingJobKind,
 } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils';
 
 export interface TrainingJobWizardProps {
   isOpen: boolean;
@@ -30,6 +34,8 @@ export interface TrainingJobWizardProps {
   onSubmit: (input: SubmitTrainingJobInput | SubmitSimRlJobInput) => Promise<void>;
   datasets: Dataset[];
   isSubmitting?: boolean;
+  /** Datasets picked elsewhere (the Datasets page's selection), pre-filled. */
+  initialMixture?: MixtureMemberInput[];
 }
 
 type Step = 'type' | 'dataset' | 'model' | 'scene' | 'hyperparams' | 'gpu' | 'review';
@@ -91,9 +97,17 @@ const TRAINING_PRESETS = {
   },
 } as const;
 
+/** One member of the mixture being assembled, with its sampling weight. */
+interface MixtureMember {
+  datasetId: string;
+  weight: number;
+}
+
 interface FormState {
   kind: TrainingJobKind;
+  /** Member 0 of `mixture`. Kept because the server's single-dataset path is it. */
   datasetId: string;
+  mixture: MixtureMember[];
   baseModel: BaseModel;
   fineTuneMethod: FineTuneMethod;
   sceneId: string;
@@ -105,6 +119,7 @@ interface FormState {
 const INITIAL_FORM: FormState = {
   kind: 'supervised',
   datasetId: '',
+  mixture: [],
   baseModel: 'pi0',
   fineTuneMethod: 'lora',
   sceneId: '',
@@ -144,10 +159,12 @@ export function TrainingJobWizard({
   onSubmit,
   datasets,
   isSubmitting,
+  initialMixture,
 }: TrainingJobWizardProps) {
   const [currentStep, setCurrentStep] = useState<Step>('type');
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [compatibility, setCompatibility] = useState<CompatibilityReport | null>(null);
 
   // SimScene registry (shared with the Simulation tab) for the sim_rl picker.
   const scenes = useSimulationStore(selectScenes);
@@ -161,6 +178,36 @@ export function TrainingJobWizard({
     }
   }, [isOpen, scenes.length, fetchScenes]);
 
+  // The selection made on the Datasets page, as a value that only changes when
+  // the selection does — an inline array prop is a new object every render.
+  // Weights the server will refuse (finite and positive is the whole domain of
+  // a sampling ratio). Checked here so the reason is visible next to the field
+  // rather than arriving as a 400 after the wizard has been dismissed — and
+  // `Number('') === 0`, so simply clearing the box lands here too.
+  const badWeights = (form: FormState) =>
+    form.mixture.filter((m) => !(Number.isFinite(m.weight) && m.weight > 0));
+
+  const seededMixture = (initialMixture ?? [])
+    .map((m) => `${m.datasetId}:${m.weight ?? 1}`)
+    .join(',');
+
+  useEffect(() => {
+    if (!isOpen || !seededMixture) return;
+    const members = seededMixture.split(',').map((entry) => {
+      const [datasetId, weight] = entry.split(':');
+      return { datasetId, weight: Number(weight) || 1 };
+    });
+    setForm((prev) => ({
+      ...prev,
+      kind: 'supervised',
+      mixture: members,
+      datasetId: members[0].datasetId,
+    }));
+    // Straight to the datasets, which is where the weights are: the person got
+    // here by choosing them, so the type step has nothing left to ask.
+    setCurrentStep('dataset');
+  }, [isOpen, seededMixture]);
+
   const steps = stepsFor(form.kind);
   const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
 
@@ -168,6 +215,7 @@ export function TrainingJobWizard({
     setCurrentStep('type');
     setForm(INITIAL_FORM);
     setError(null);
+    setCompatibility(null);
   }, []);
 
   const handleClose = useCallback(() => {
@@ -206,34 +254,64 @@ export function TrainingJobWizard({
   const handleSubmit = useCallback(async () => {
     setError(null);
     try {
+      // The GPU step's answer used to be collected and then dropped on the
+      // floor, so every job silently took the server's default.
+      const gpuRequirements = { type: form.gpuType };
+
       if (form.kind === 'sim_rl') {
         await onSubmit({
           kind: 'sim_rl',
           sceneId: form.sceneId,
           hyperparameters: form.hyperparameters,
+          gpuRequirements,
           priority: form.priority,
         });
       } else {
+        const members = form.mixture;
         await onSubmit({
-          datasetId: form.datasetId,
+          datasetId: members[0]?.datasetId ?? form.datasetId,
           baseModel: form.baseModel,
           fineTuneMethod: form.fineTuneMethod,
           hyperparameters: form.hyperparameters,
+          gpuRequirements,
           priority: form.priority,
+          // A single dataset stays exactly the request it was before mixtures
+          // existed; `mixture` only appears when there is one to describe.
+          ...(members.length > 1
+            ? { mixture: members.map((m) => ({ datasetId: m.datasetId, weight: m.weight })) }
+            : {}),
         });
       }
       handleClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit training job');
+      setError(getErrorMessage(err, 'Failed to submit training job'));
     }
   }, [form, onSubmit, handleClose]);
+
+  const toggleMember = useCallback((datasetId: string) => {
+    setForm((prev) => {
+      const exists = prev.mixture.some((m) => m.datasetId === datasetId);
+      const mixture = exists
+        ? prev.mixture.filter((m) => m.datasetId !== datasetId)
+        : [...prev.mixture, { datasetId, weight: 1 }];
+      return { ...prev, mixture, datasetId: mixture[0]?.datasetId ?? '' };
+    });
+    setCompatibility(null);
+  }, []);
+
+  const setMemberWeight = useCallback((datasetId: string, weight: number) => {
+    setForm((prev) => ({
+      ...prev,
+      mixture: prev.mixture.map((m) => (m.datasetId === datasetId ? { ...m, weight } : m)),
+    }));
+  }, []);
 
   const canProceed = useCallback(() => {
     switch (currentStep) {
       case 'type':
         return true;
       case 'dataset':
-        return !!form.datasetId;
+        return form.mixture.length > 0;
       case 'model':
         return !!form.baseModel && !!form.fineTuneMethod;
       case 'scene':
@@ -388,12 +466,14 @@ export function TrainingJobWizard({
             </div>
           )}
 
-          {/* Dataset selection */}
+          {/* Dataset selection — one dataset or a weighted mixture of them */}
           {currentStep === 'dataset' && (
             <div className="space-y-4">
-              <h3 className="text-lg font-medium text-theme-primary">Select Dataset</h3>
+              <h3 className="text-lg font-medium text-theme-primary">Select Datasets</h3>
               <p className="text-sm text-theme-secondary">
-                Choose a validated dataset for training.
+                Pick one validated dataset, or several to train as a mixture. A weight is how
+                often a dataset is sampled relative to the others — leave them at 1 for an even
+                split.
               </p>
 
               <div
@@ -401,22 +481,50 @@ export function TrainingJobWizard({
                 role="group"
                 aria-label="Dataset"
               >
-                {datasets.filter((d) => d.status === 'ready').map((dataset) => (
-                  <button
-                    key={dataset.id}
-                    aria-pressed={form.datasetId === dataset.id}
-                    onClick={() => setForm({ ...form, datasetId: dataset.id })}
-                    className={cn('p-4 text-left', selectCardCls(form.datasetId === dataset.id))}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-theme-primary">{dataset.name}</span>
-                      <Badge variant="success">Ready</Badge>
+                {datasets.filter((d) => d.status === 'ready').map((dataset) => {
+                  const member = form.mixture.find((m) => m.datasetId === dataset.id);
+                  return (
+                    <div
+                      key={dataset.id}
+                      className={cn('p-4', selectCardCls(!!member))}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <button
+                          aria-pressed={!!member}
+                          onClick={() => toggleMember(dataset.id)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-theme-primary truncate">
+                              {dataset.name}
+                            </span>
+                            <Badge variant="success">Ready</Badge>
+                          </div>
+                          <p className="text-sm text-theme-secondary mt-1">
+                            {dataset.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames
+                          </p>
+                        </button>
+                        {member && (
+                          <label className="shrink-0 text-xs text-theme-tertiary">
+                            Weight
+                            <input
+                              type="number"
+                              min={0.1}
+                              step={0.1}
+                              value={member.weight}
+                              aria-label={`Weight for ${dataset.name}`}
+                              onChange={(e) => {
+                                const next = Number(e.target.value);
+                                setMemberWeight(dataset.id, Number.isFinite(next) ? next : 1);
+                              }}
+                              className="mt-1 block w-20 rounded-brand border border-theme-secondary/30 bg-theme-primary px-2 py-1 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-cobalt-500"
+                            />
+                          </label>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-sm text-theme-secondary mt-1">
-                      {dataset.totalFrames.toLocaleString(UI_DATE_LOCALE)} frames
-                    </p>
-                  </button>
-                ))}
+                  );
+                })}
                 {datasets.filter((d) => d.status === 'ready').length === 0 && (
                   <p className="text-center py-8 text-theme-secondary">
                     No validated datasets available. Upload and validate a dataset first.
@@ -569,6 +677,21 @@ export function TrainingJobWizard({
                 Review your configuration before submitting.
               </p>
 
+              {badWeights(form).length > 0 && (
+                <div
+                  className="p-3 rounded-brand bg-amber-500/10 text-sm text-amber-700 dark:text-amber-300"
+                  data-testid="bad-weight-notice"
+                >
+                  {badWeights(form)
+                    .map((m) => datasets.find((d) => d.id === m.datasetId)?.name ?? m.datasetId)
+                    .join(', ')}{' '}
+                  {badWeights(form).length === 1 ? 'has' : 'have'} a weight that is not a positive
+                  number. A weight is how often the trainer samples that dataset relative to the
+                  others, so zero would silently leave it out of the run. Go back and set it, or
+                  remove the dataset from the mixture.
+                </div>
+              )}
+
               <div className="space-y-4 p-4 bg-theme-secondary/10 rounded-lg" data-testid="review-summary">
                 <div className="grid grid-cols-2 gap-4">
                   {form.kind === 'sim_rl' ? (
@@ -590,9 +713,28 @@ export function TrainingJobWizard({
                     </>
                   ) : (
                     <>
-                      <div>
-                        <span className="text-sm text-theme-tertiary">Dataset</span>
-                        <p className="font-medium text-theme-primary">{selectedDataset?.name}</p>
+                      <div data-testid="review-mixture">
+                        <span className="text-sm text-theme-tertiary">
+                          {form.mixture.length > 1 ? `Mixture (${form.mixture.length} datasets)` : 'Dataset'}
+                        </span>
+                        {form.mixture.length === 0 && (
+                          <p className="font-medium text-theme-primary">{selectedDataset?.name}</p>
+                        )}
+                        {form.mixture.map((member) => {
+                          const dataset = datasets.find((d) => d.id === member.datasetId);
+                          const total = form.mixture.reduce((sum, m) => sum + (m.weight || 0), 0);
+                          return (
+                            <p key={member.datasetId} className="font-medium text-theme-primary">
+                              {dataset?.name ?? member.datasetId}
+                              {form.mixture.length > 1 && (
+                                <span className="ml-2 text-sm font-normal text-theme-secondary">
+                                  weight {member.weight}
+                                  {total > 0 && ` · ${Math.round((member.weight / total) * 100)}%`}
+                                </span>
+                              )}
+                            </p>
+                          );
+                        })}
                       </div>
                       <div>
                         <span className="text-sm text-theme-tertiary">Base Model</span>
@@ -641,6 +783,15 @@ export function TrainingJobWizard({
                   </div>
                 </div>
               </div>
+
+              {/* What training these together actually means, on the last
+                  screen before it is submitted rather than in a log afterwards. */}
+              {form.kind !== 'sim_rl' && form.mixture.length > 1 && (
+                <DatasetCompatibilityPanel
+                  datasetIds={form.mixture.map((m) => m.datasetId)}
+                  onReport={setCompatibility}
+                />
+              )}
             </div>
           )}
         </div>
@@ -662,7 +813,14 @@ export function TrainingJobWizard({
           </Button>
 
           {currentStep === 'review' ? (
-            <Button onClick={handleSubmit} isLoading={isSubmitting}>
+            <Button
+              onClick={handleSubmit}
+              isLoading={isSubmitting}
+              // The server refuses an incompatible mixture with a 400, and a
+              // non-positive weight with another. Refusing both here means the
+              // reason is still on screen when it happens.
+              disabled={compatibility?.verdict === 'incompatible' || badWeights(form).length > 0}
+            >
               Submit Training Job
             </Button>
           ) : (

@@ -4,11 +4,15 @@
  * @feature training
  */
 
+import { useCallback, useState } from 'react';
+import { AlertTriangle, Download } from 'lucide-react';
 import { Card, Badge, ProgressBar, Button } from '@/shared/components/ui';
 import { cn } from '@/shared/utils/cn';
+import { trainingApi } from '../api';
 import type { TrainingJob, TrainingJobStatus } from '../types';
 import { simRlTrainerLabel } from '../types';
 import { UI_DATE_LOCALE } from '@/shared/utils/format';
+import { getErrorMessage } from '@/shared/utils';
 
 export interface TrainingJobCardProps {
   job: TrainingJob;
@@ -62,6 +66,30 @@ export function TrainingJobCard({
   const isRunning = job.status === 'running' || job.status === 'queued';
   const canRetry = job.status === 'failed' || job.status === 'cancelled';
 
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportWarnings, setExportWarnings] = useState<string[] | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const members = job.datasets ?? [];
+  const weightTotal = members.reduce((sum, m) => sum + (m.weight || 0), 0);
+
+  const handleExport = useCallback(async () => {
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const manifest = await trainingApi.exportTrainingRun(job.id);
+      // Shown on the card, not only inside the file: "this dataset lives on
+      // one laptop and the cluster cannot reach it" is exactly the thing
+      // nobody discovers by opening a downloaded JSON.
+      setExportWarnings(manifest.warnings ?? []);
+      downloadJson(manifest, `neodem-run-${job.id}.json`);
+    } catch (err) {
+      setExportError(getErrorMessage(err, 'Could not export this run'));
+    } finally {
+      setIsExporting(false);
+    }
+  }, [job.id]);
+
   return (
     <Card
       onClick={onClick}
@@ -110,6 +138,29 @@ export function TrainingJobCard({
             {statusLabels[job.status]}
           </Badge>
         </div>
+
+        {/* What the run is actually trained on. A mixture's weights are the
+            difference between "both datasets" and "mostly one of them". */}
+        {members.length > 0 && (
+          <div data-testid="job-mixture" className="mt-3 text-sm">
+            <span className="text-theme-tertiary">
+              {members.length > 1 ? `Mixture · ${members.length} datasets` : 'Dataset'}
+            </span>
+            <ul className="mt-1 space-y-0.5">
+              {members.map((member) => (
+                <li key={member.datasetId} className="flex items-baseline justify-between gap-2">
+                  <span className="truncate text-theme-primary">{member.name}</span>
+                  {members.length > 1 && (
+                    <span className="shrink-0 text-xs text-theme-secondary">
+                      weight {member.weight}
+                      {weightTotal > 0 && ` · ${Math.round((member.weight / weightTotal) * 100)}%`}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Progress bar for running jobs */}
         {isRunning && (
@@ -196,6 +247,36 @@ export function TrainingJobCard({
           )}
         </div>
 
+        {/* Why the exported manifest may not reproduce elsewhere. */}
+        {exportWarnings && exportWarnings.length > 0 && (
+          <div
+            data-testid="export-warnings"
+            role="alert"
+            className="mt-4 rounded-md bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <ul className="min-w-0 space-y-1">
+                {exportWarnings.map((warning) => (
+                  <li key={warning} className="break-words">{warning}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {exportWarnings && exportWarnings.length === 0 && (
+          <p data-testid="export-clean" className="mt-4 text-sm text-theme-tertiary">
+            Exported — every dataset in this run is reachable from another machine.
+          </p>
+        )}
+
+        {exportError && (
+          <div role="alert" className="mt-4 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-400">
+            {exportError}
+          </div>
+        )}
+
         {/* Actions */}
         <div className="mt-4 pt-3 border-t border-theme-secondary/20 flex items-center justify-between">
           <span className="text-xs text-theme-tertiary">
@@ -204,6 +285,18 @@ export function TrainingJobCard({
               : `Created ${new Date(job.createdAt).toLocaleString(UI_DATE_LOCALE)}`}
           </span>
           <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              isLoading={isExporting}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleExport();
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export run
+            </Button>
             {isRunning && onCancel && (
               <Button
                 variant="ghost"
@@ -233,4 +326,36 @@ export function TrainingJobCard({
       </Card.Body>
     </Card>
   );
+}
+
+/**
+ * Hand the manifest to the browser as a file.
+ *
+ * The warnings are put on the card before this runs, so a browser that refuses
+ * the download costs the file and not what the file had to say. The revoke is
+ * in a `finally` because an object URL otherwise lives as long as the document.
+ */
+function downloadJson(payload: unknown, filename: string): void {
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  );
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  // IN the document before it is clicked. A detached anchor's `click()` is a
+  // no-op in Firefox — it downloads in Chrome and Safari and silently does
+  // nothing there, which is the worst way for this to fail: the card says the
+  // run exported cleanly and no file ever appears.
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    // NOT synchronously. `click()` only starts the download; revoking the
+    // object URL in the same tick pulls the bytes out from under a fetch that
+    // has not happened yet, and the browser cancels it. A tick later the
+    // download owns its own reference.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }

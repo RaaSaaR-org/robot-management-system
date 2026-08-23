@@ -8,7 +8,7 @@ import { createWriteStream, existsSync } from 'fs';
 import { mkdtemp, rm, stat } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { tmpdir } from 'os';
-import { dirname, isAbsolute, join, resolve as resolvePath } from 'path';
+import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
@@ -30,7 +30,13 @@ import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
 export type ValidationOutcome = 'ready' | 'failed' | 'unavailable';
 import { ExtractError, extractDatasetArchive } from './lerobot/extractArchive.js';
 import { validateDatasetStructure } from './lerobot/validateDataset.js';
-import type { DatasetStructureReport, ExpectedDimensions } from './lerobot/validateDataset.js';
+import type {
+  DatasetStructureReport,
+  ExpectedDimensions,
+  ValidationContext,
+} from './lerobot/validateDataset.js';
+import { prisma } from '../database/index.js';
+import { ConflictError } from '../utils/errors.js';
 import { natsClient } from '../messaging/index.js';
 import { kvPut, kvGet, KV_STORE_NAMES } from '../messaging/kv-stores.js';
 import type { KV } from 'nats';
@@ -93,8 +99,16 @@ function uploadExtension(_id: string): string {
   return '.tar.gz';
 }
 
-/** Where uploaded datasets are unpacked. A volume, in a real deployment. */
-function uploadRoot(): string {
+/**
+ * Where a dataset this server holds itself lives on disk.
+ *
+ * A volume, in a real deployment. Exported as of TASK-220 because the
+ * HuggingFace import needs the same root when RustFS is not configured — and
+ * RustFS being optional (it is down on every dev machine) is exactly why that
+ * import used to die 300 ms in. Two conventions for "where datasets go" is how
+ * a tree gets written to one place and looked for in another.
+ */
+export function datasetStorageRoot(): string {
   const configured = process.env.DATASET_UPLOAD_DIR;
   if (configured) return resolvePath(configured);
   return resolvePath(dirname(fileURLToPath(import.meta.url)), '../../data/uploaded-datasets');
@@ -345,11 +359,41 @@ export class DatasetService extends EventEmitter {
 
   /**
    * Delete a dataset (DB record + storage)
+   *
+   * ORDER IS THE WHOLE POINT HERE. This method removes the bytes first and the
+   * row second, and `datasetRepository.delete` swallows its error and returns
+   * `false`. That was survivable while every foreign key pointing at `Dataset`
+   * was `ON DELETE SET NULL` — `TrainingJob.datasetId` still is. It stopped
+   * being survivable when `TrainingJobDataset.datasetId` arrived as `ON DELETE
+   * RESTRICT`: deleting a dataset that a mixture names would `rm -rf` the tree
+   * and empty the bucket, then fail to delete the row, then answer 404. The
+   * dataset stays listed as `ready`, pointing at a directory that is gone.
+   *
+   * So membership is asked BEFORE anything is destroyed. Refusing is also the
+   * honest answer on its own terms: an exported run manifest cites these
+   * datasets by id, and a job whose members can evaporate cannot be reproduced.
    */
   async delete(id: string): Promise<boolean> {
     const dataset = await datasetRepository.findById(id);
     if (!dataset) {
       return false;
+    }
+
+    const heldBy = await prisma.trainingJobDataset.findMany({
+      where: { datasetId: id },
+      select: { trainingJobId: true },
+      orderBy: { trainingJobId: 'asc' },
+    });
+    if (heldBy.length > 0) {
+      const jobIds = [...new Set(heldBy.map((row) => row.trainingJobId))];
+      const shown = jobIds.slice(0, 5).join(', ');
+      const rest = jobIds.length > 5 ? ` and ${jobIds.length - 5} more` : '';
+      throw new ConflictError(
+        `"${dataset.name}" is a member of ${jobIds.length} training `
+        + `${jobIds.length === 1 ? 'job' : 'jobs'} (${shown}${rest}), so deleting it would leave `
+        + 'those runs citing data that no longer exists. Delete the training jobs first, or keep '
+        + 'the dataset.',
+      );
     }
 
     // Delete from storage if RustFS is available.
@@ -368,10 +412,31 @@ export class DatasetService extends EventEmitter {
       }
     }
 
-    // And the unpacked tree, which `unpackUploadedArchive` wrote to local disk
-    // and nothing else ever removes.
+    // And the trees on local disk, which nothing else ever removes.
+    //
+    // TWO conventions, because there are two writers. `unpackUploadedArchive`
+    // names its directory after the dataset id. The Hub importer does not: it
+    // mints a fresh uuid for the storage prefix (`createSink(uuidv4())`), so a
+    // 960 MB GR00T import lives under a directory whose name appears nowhere
+    // except `storagePath`. Deleting only `<id>/` left every imported dataset's
+    // bytes on disk for ever, and the bigger the dataset the more it cost.
+    //
+    // `storagePath` is a database column, so it is not joined blindly: a path
+    // outside the dataset root is ignored rather than removed. `rm -rf` on an
+    // unvalidated column is how a bug becomes a catastrophe.
+    const root = datasetStorageRoot();
+    const targets = new Set<string>([join(root, id)]);
+    const stored = (dataset.storagePath ?? '').replace(/[\\/]+$/, '');
+    if (stored) {
+      const resolved = resolvePath(isAbsolute(stored) ? stored : join(root, stored));
+      if (resolved !== root && resolved.startsWith(root + sep)) {
+        targets.add(resolved);
+      }
+    }
     try {
-      await rm(join(uploadRoot(), id), { recursive: true, force: true });
+      for (const target of targets) {
+        await rm(target, { recursive: true, force: true });
+      }
     } catch (error) {
       console.warn(`[DatasetService] Failed to remove the unpacked upload for ${id}:`, error);
     }
@@ -530,7 +595,7 @@ export class DatasetService extends EventEmitter {
       if (written.size === 0) {
         throw new ExtractError('EMPTY_UPLOAD', `${key} is zero bytes — nothing was uploaded`);
       }
-      const target = join(uploadRoot(), id);
+      const target = join(datasetStorageRoot(), id);
       await rm(target, { recursive: true, force: true });
       const { datasetRoot, symlinksRemoved } = await extractDatasetArchive(archive, target);
       if (symlinksRemoved > 0) {
@@ -601,7 +666,11 @@ export class DatasetService extends EventEmitter {
    * against the robot's declared `proprioceptionDim`/`actionDim`, and one that
    * does not still gets everything else.
    */
-  async validateStructure(storagePath: string, robotTypeId?: string): Promise<DatasetValidationResult> {
+  async validateStructure(
+    storagePath: string,
+    robotTypeId?: string,
+    context: ValidationContext = {},
+  ): Promise<DatasetValidationResult> {
     const result: DatasetValidationResult = {
       valid: false,
       errors: [],
@@ -640,7 +709,7 @@ export class DatasetService extends EventEmitter {
 
     let report: DatasetStructureReport;
     try {
-      report = await validateDatasetStructure(tree, expected);
+      report = await validateDatasetStructure(tree, expected, context);
     } catch (error) {
       // A store that could not answer is not a dataset that is wrong. Marking
       // it `failed` here is what the guard above exists to prevent, and it was
@@ -686,7 +755,13 @@ export class DatasetService extends EventEmitter {
       // state vector on a 43-DOF G1 EDU is a dataset that cannot train it, and
       // the error it produces at training time names neither number.
       const existing = await datasetRepository.findById(datasetId);
-      const validation = await this.validateStructure(storagePath, existing?.robotTypeId);
+      // `importMode` travels with the row because the files cannot say it: a
+      // metadata-only import is missing every mp4 its info.json declares, and
+      // without this the validator reported one MISSING_VIDEO_FILE error per
+      // declared video and marked the dataset failed for arriving as ordered.
+      const validation = await this.validateStructure(storagePath, existing?.robotTypeId, {
+        importMode: existing?.importMode,
+      });
 
       await this.updateValidationProgress(datasetId, {
         datasetId,
@@ -980,6 +1055,13 @@ export class DatasetService extends EventEmitter {
       statsJson: dataset.statsJson,
       status: dataset.status,
       huggingFaceRepoId: dataset.huggingFaceRepoId,
+      // Always present, `null` rather than absent: the UI has to distinguish
+      // "this import failed and here is why" from "this row predates TASK-220",
+      // and an omitted key cannot say either.
+      sourceRevision: dataset.sourceRevision ?? null,
+      sourceLicense: dataset.sourceLicense ?? null,
+      importMode: dataset.importMode ?? null,
+      importError: dataset.importError ?? null,
       createdAt: dataset.createdAt,
       updatedAt: dataset.updatedAt,
     };

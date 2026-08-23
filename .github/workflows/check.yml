@@ -115,9 +115,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 24, not 22, and it has to be. `@dsnp/parquetjs@1.8.9` declares
+      # `engines: { node: ">=24.18.0" }`, so 22 was always the wrong runtime
+      # here — it only warned. What it eventually broke was `npm ci`: npm 10
+      # (which ships with Node 22) and npm 11 (Node 24) disagree about optional
+      # peer dependencies, and this tree has one — `@dsnp/parquetjs` ->
+      # `@zenfs/core` -> `kerium` -> `utilium@3.5.1`, whose optional peer is
+      # `@xterm/xterm@^6.0.0`. npm 11 writes a lockfile that omits it; npm 10
+      # reads that lockfile, decides it should be there, and refuses the whole
+      # install with "Missing: @xterm/xterm@6.0.0 from lock file". Every push to
+      # main was red on this before the runtime matched the lockfile's author.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: robot-agent/package-lock.json
 

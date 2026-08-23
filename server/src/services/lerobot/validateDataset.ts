@@ -23,6 +23,7 @@
  */
 
 import type { DatasetTree } from './DatasetTree.js';
+import type { DatasetImportMode } from '../../types/vla.types.js';
 
 /** How a dataset's files are laid out, derived from `codebase_version`. */
 export type LeRobotLayout = 'v2' | 'v3';
@@ -58,6 +59,18 @@ export interface DatasetStructureReport {
 export interface ExpectedDimensions {
   proprioceptionDim?: number | null;
   actionDim?: number | null;
+}
+
+/**
+ * What the caller knows about this dataset that its files cannot say.
+ *
+ * Only `importMode` so far, and it is here rather than read from the database
+ * inside this file on purpose: the validator opens a tree and reports on it,
+ * and a validator that also queries Prisma cannot be run against a fixture.
+ */
+export interface ValidationContext {
+  /** See {@link DatasetImportMode}. Absent means "assume everything was fetched". */
+  importMode?: DatasetImportMode | null;
 }
 
 const MAX_DATA_FILES_READ = 8;
@@ -224,6 +237,7 @@ function alternateVideoPath(path: string): string | null {
 export async function validateDatasetStructure(
   tree: DatasetTree,
   expected: ExpectedDimensions = {},
+  context: ValidationContext = {},
 ): Promise<DatasetStructureReport> {
   const report: DatasetStructureReport = {
     valid: false,
@@ -417,6 +431,7 @@ export async function validateDatasetStructure(
   }
 
   // ---- the files the manifest promised ------------------------------------
+  const metadataOnly = context.importMode === 'metadata';
   const expectedPaths = expectedFiles(info, report.layout, report.episodeCount, videoKeys, v3Refs);
   const presentData: string[] = [];
 
@@ -445,7 +460,19 @@ export async function validateDatasetStructure(
       }
     }
     if (!entry) {
-      error('MISSING_VIDEO_FILE', `info.json declares a camera feature and ${path} is not there`);
+      // A metadata-only import did not ask for the mp4s, so their absence is
+      // the operator's decision rather than a broken dataset. Recorded as a
+      // warning that NAMES the mode, because the same missing file in a `full`
+      // import is a real failure and the two must stay distinguishable.
+      if (metadataOnly) {
+        warn(
+          'VIDEO_NOT_IMPORTED',
+          `${path} was not fetched: this dataset was imported with importMode 'metadata', which `
+          + 'takes meta/ and data/ and no video. Re-import with includeVideos to train a vision policy on it.',
+        );
+      } else {
+        error('MISSING_VIDEO_FILE', `info.json declares a camera feature and ${path} is not there`);
+      }
       continue;
     }
     if (entry.size === 0) {
@@ -461,10 +488,23 @@ export async function validateDatasetStructure(
   for (const key of stillKeys) {
     const entries = await tree.list(`images/${key}`);
     if (entries.length === 0) {
-      error(
-        'MISSING_IMAGE_FILES',
-        `info.json declares ${key} as a dtype:'image' feature and images/${key}/ is empty`,
-      );
+      // Same reasoning as VIDEO_NOT_IMPORTED above: a metadata-only import was
+      // asked not to fetch camera frames, so their absence is the operator's
+      // decision. `dtype: 'image'` needs its own branch because these frames
+      // live under `images/`, not `videos/`, and are selected separately.
+      if (metadataOnly) {
+        warn(
+          'VIDEO_NOT_IMPORTED',
+          `images/${key}/ was not fetched: this dataset was imported with importMode 'metadata', `
+          + 'which takes meta/ and data/ and no camera frames. Re-import with includeVideos to '
+          + 'train a vision policy on it.',
+        );
+      } else {
+        error(
+          'MISSING_IMAGE_FILES',
+          `info.json declares ${key} as a dtype:'image' feature and images/${key}/ is empty`,
+        );
+      }
       continue;
     }
     for (const entry of entries.slice(0, 4)) {

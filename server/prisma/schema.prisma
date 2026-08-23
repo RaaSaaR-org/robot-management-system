@@ -2146,6 +2146,42 @@ model RobotType {
   @@index([manufacturer])
 }
 
+// One dataset's membership in one training job's mixture (TASK-220).
+//
+// WHY A MIXTURE AND NOT A MERGE. The obvious reading of "train on these two
+// datasets" is to concatenate them into a third. For LeRobot data that is
+// usually wrong and sometimes impossible: nvidia/GR00T-N1.7-AppleToPlate is
+// 43-wide `unitree_g1` in v2.1 layout, and unitreerobotics/G1_Dex3_* is
+// 28-wide `Unitree_G1_Dex3` in v3.0 — same manufacturer, same robot family,
+// different action space, because one drives the whole body and the other
+// drives two arms. Concatenating them would produce a parquet whose `action`
+// column has no single meaning.
+//
+// So the mixture references the datasets where they are and carries the ratio
+// to sample them at. That is also what the trainers actually consume —
+// LeRobot's MultiLeRobotDataset and GR00T's per-embodiment projectors both
+// take a LIST of datasets, not a merged one — and it is the only form that can
+// be exported to a cluster without moving a gigabyte.
+model TrainingJobDataset {
+  id            String @id @default(uuid())
+  trainingJobId String
+  datasetId     String
+  // Sampling ratio relative to the other members. Not normalised here: the
+  // export manifest normalises, so an operator can type 3 and 1 rather than
+  // 0.75 and 0.25.
+  weight        Float  @default(1)
+  // Order the operator put them in. The member at 0 is mirrored into
+  // `TrainingJob.datasetId`.
+  position      Int    @default(0)
+
+  trainingJob TrainingJob @relation(fields: [trainingJobId], references: [id], onDelete: Cascade)
+  dataset     Dataset     @relation(fields: [datasetId], references: [id])
+
+  @@unique([trainingJobId, datasetId])
+  @@index([trainingJobId])
+  @@index([datasetId])
+}
+
 // Embodiment - YAML-based embodiment configurations for VLA pipeline
 model Embodiment {
   id                String   @id @default(uuid())
@@ -2258,6 +2294,36 @@ model Dataset {
   status             String   @default("uploading") // 'uploading' | 'validating' | 'ready' | 'failed'
   huggingFaceRepoId  String? // HuggingFace repo ID (e.g. "lerobot/svla_so101_pickplace")
   annotationsJson    String   @default("[]") // JSON: EpisodeAnnotation[] from lerobot-annotate jobs (TASK-179)
+  // Which commit of the source repo this actually is (TASK-220).
+  //
+  // The HF revision was only ever kept inside the description STRING
+  // ("Imported from HuggingFace: nvidia/… (main)"), and "main" is not a
+  // revision — it is a moving pointer. A training run that cites its data as
+  // "main" cites nothing, which is a problem for reproducing a result and a
+  // bigger one for an EU AI Act technical file. Resolved to the commit SHA at
+  // import time and pinned here.
+  sourceRevision     String?
+  // The license the source repo declared, as declared (TASK-220).
+  //
+  // It was already being fetched — `fetchRepoInfo` reads `cardData.license`
+  // to show it in the import preview — and then thrown away, so the export
+  // manifest said "unknown" for a dataset whose card plainly says cc-by-4.0
+  // and attached a compliance note about it. Recorded verbatim rather than
+  // normalised: "cc-by-4.0" and "CC-BY-4.0" are the repo's own strings and
+  // guessing which SPDX id was meant is how a wrong licence claim gets made.
+  sourceLicense      String?
+  // 'full' — every file the repo declares. 'metadata' — meta/ + data/ only,
+  // no videos. Recorded because validation has to know: a metadata-only
+  // dataset is MISSING every mp4 its info.json declares, and that is a
+  // deliberate choice by the operator rather than a broken dataset.
+  importMode         String?
+  // JSON: { phase, error, repoId, failedAt }. Why an import failed, kept.
+  //
+  // It used to exist only as one WebSocket broadcast — fired, for a failure
+  // that takes 300 ms, before the browser had even opened its socket. The card
+  // then said "Failed" and nothing else, forever, and no reload could recover
+  // the reason.
+  importErrorJson    String?
   // JSON: DatasetStructureReport — what validation actually found when it
   // opened the files (TASK-217). Nullable, and null means NOT VALIDATED, which
   // is a different thing from validated-and-clean: every locally registered
@@ -2274,9 +2340,10 @@ model Dataset {
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
-  robotType    RobotType        @relation(fields: [robotTypeId], references: [id])
-  skill        SkillDefinition? @relation(fields: [skillId], references: [id])
+  robotType    RobotType            @relation(fields: [robotTypeId], references: [id])
+  skill        SkillDefinition?     @relation(fields: [skillId], references: [id])
   trainingJobs TrainingJob[]
+  mixtureIn    TrainingJobDataset[]
 
   @@index([robotTypeId])
   @@index([skillId])
@@ -2317,9 +2384,14 @@ model TrainingJob {
   tenant   Tenant? @relation(fields: [tenantId], references: [id])
 
   // Relations
-  dataset       Dataset?       @relation(fields: [datasetId], references: [id])
-  scene         SimScene?      @relation(fields: [sceneId], references: [id])
+  dataset       Dataset?             @relation(fields: [datasetId], references: [id])
+  scene         SimScene?            @relation(fields: [sceneId], references: [id])
   modelVersions ModelVersion[]
+  // The full mixture. `datasetId` above stays, and stays authoritative for a
+  // single-dataset job — every existing row, every existing query, and the
+  // wizard's single-select all keep working untouched. A multi-dataset job
+  // writes BOTH: `datasetId` = the first member, `datasets` = all of them.
+  datasets      TrainingJobDataset[]
 
   @@index([datasetId])
   @@index([status])
@@ -2445,21 +2517,21 @@ model EpisodeReward {
 // viewer showed a flag control for both. Three endpoints agreeing on a fiction
 // is not a feature.
 model DatasetEpisodeFlag {
-  id           String   @id @default(uuid())
-  tenantId     String?
-  datasetId    String
-  episodeIndex Int
-  flagged      Boolean  @default(true)
+  id             String    @id @default(uuid())
+  tenantId       String?
+  datasetId      String
+  episodeIndex   Int
+  flagged        Boolean   @default(true)
   // Why it was flagged, when a caller says. Free text: the reasons an operator
   // gives are not a closed set and guessing one would only be re-litigated.
-  reason       String?
+  reason         String?
   // Set when the flag has been reviewed: 'keep' or 'remove'. Null while the
   // episode is flagged and nobody has decided yet.
   reviewDecision String?
   reviewedAt     DateTime?
   reviewedBy     String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@unique([datasetId, episodeIndex])
   @@index([datasetId])

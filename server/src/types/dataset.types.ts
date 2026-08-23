@@ -6,7 +6,19 @@
 
 import type { DatasetStructureReport, ValidationFinding } from '../services/lerobot/validateDataset.js';
 
-import type { Dataset, DatasetStatus, LeRobotInfo, LeRobotStats } from './vla.types.js';
+import type {
+  Dataset,
+  DatasetImportError,
+  DatasetImportMode,
+  DatasetStatus,
+  LeRobotInfo,
+  LeRobotStats,
+} from './vla.types.js';
+
+// Provenance types live in the domain module (`vla.types.ts`) and are
+// re-exported here so an API consumer has one import for the whole response
+// shape rather than two.
+export type { DatasetImportError, DatasetImportMode };
 
 // ============================================================================
 // LEROBOT V3 FORMAT TYPES
@@ -80,6 +92,37 @@ export interface HuggingFaceImportRequest {
   robotTypeId?: string;
   /** Whether to include video files (can be very large), default: false */
   includeVideos?: boolean;
+}
+
+/**
+ * What a Hub repo IS, read without importing it (TASK-220).
+ *
+ * `fileCount`, `dataBytes` and `videoBytes` all describe the SAME set: the
+ * files a full import would fetch (`meta/`, `data/`, `videos/`). Repo furniture
+ * — README, .gitattributes — is deliberately excluded, so the three numbers
+ * agree with each other and with what the download will actually cost.
+ */
+export interface HuggingFacePreview {
+  repoId: string;
+  /** What the caller asked for, e.g. `main`. */
+  revision: string;
+  /** The commit that branch points at right now. What an import would pin. */
+  resolvedRevision: string;
+  lerobotVersion: string;
+  robotType: string;
+  fps: number;
+  totalEpisodes: number;
+  totalFrames: number;
+  /** `null` when info.json declares no shape for the feature. */
+  stateWidth: number | null;
+  actionWidth: number | null;
+  cameraKeys: string[];
+  fileCount: number;
+  /** meta/ + data/ bytes. */
+  dataBytes: number;
+  /** videos/ bytes — the half worth warning about. */
+  videoBytes: number;
+  license: string | null;
 }
 
 /**
@@ -166,6 +209,15 @@ export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
     version: string;
   };
   qualityBreakdown?: QualityScoreBreakdown;
+  /** The commit an import pinned, or null for a dataset that came from elsewhere. */
+  sourceRevision: string | null;
+  sourceLicense: string | null;
+  importMode: DatasetImportMode | null;
+  /**
+   * Why the last import failed, or null. Read off the row rather than off a
+   * WebSocket broadcast, which for a fast failure has already been missed.
+   */
+  importError: DatasetImportError | null;
   /**
    * What structural validation found (TASK-217). Absent means nothing has ever
    * opened this dataset's files — not the same as "validated and clean".

@@ -19,6 +19,7 @@ import { tmpdir } from 'os';
 import { ParquetSchema, ParquetWriter, ParquetFieldBuilder } from '@dsnp/parquetjs';
 import { LocalDatasetTree } from '../lerobot/DatasetTree.js';
 import { validateDatasetStructure } from '../lerobot/validateDataset.js';
+import type { ValidationContext } from '../lerobot/validateDataset.js';
 
 const STATE_DIM = 6;
 const FPS = 10;
@@ -44,6 +45,8 @@ interface FixtureOptions {
   omitData?: boolean;
   /** Write the camera mp4 as zero bytes. */
   emptyVideo?: boolean;
+  /** Write no mp4 at all — what a metadata-only import leaves on disk. */
+  omitVideos?: boolean;
   /** v3.0: spread the episodes across this many data + video files in chunk-000. */
   splitFiles?: number;
   /** v3.0: skip writing `file-<n>` even though the metadata points at it. */
@@ -237,6 +240,7 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
         await writeFile(join(dst, 'frame_000000.png'), 'not really a png, but non-empty');
         continue;
       }
+      if (options.omitVideos) continue;
       const dst = join(dir, 'videos', cam, 'chunk-000');
       await mkdir(dst, { recursive: true });
       for (let file = 0; file < splits; file++) {
@@ -265,6 +269,7 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
       await writeFile(join(dst, 'frame_000000.png'), 'not really a png, but non-empty');
     }
     for (const cam of cameras) {
+      if (options.omitVideos) continue;
       const dst = join(dir, 'videos', 'chunk-000', cam);
       await mkdir(dst, { recursive: true });
       for (let ep = 0; ep < perEpisode.length; ep++) {
@@ -278,8 +283,8 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
   return dir;
 }
 
-async function validate(dir: string, expected = {}) {
-  return validateDatasetStructure(new LocalDatasetTree(dir), expected);
+async function validate(dir: string, expected = {}, context: ValidationContext = {}) {
+  return validateDatasetStructure(new LocalDatasetTree(dir), expected, context);
 }
 
 beforeAll(async () => {
@@ -533,5 +538,95 @@ describe('the frame count, cross-checked against the metadata', () => {
     expect(codes(report.warnings)).toContain('PARTIAL_ROW_COUNT');
     // The full 186 from the episode metadata, not the 8 files the read got to.
     expect(report.totalFrames).toBe(episodes.reduce((a, b) => a + b, 0));
+  });
+});
+
+describe('a metadata-only import', () => {
+  // The GR00T repo declares 402 mp4s. Imported without videos — which is what
+  // `includeVideos: false`, the DEFAULT, asks for — the validator raised 402
+  // MISSING_VIDEO_FILE errors and the row went to `failed`, for a dataset that
+  // arrived exactly as ordered.
+
+  it('is a warning naming the mode, not 402 errors', async () => {
+    const dir = await fixture('v3-metadata-only', { omitVideos: true });
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    expect(codes(report.errors)).not.toContain('MISSING_VIDEO_FILE');
+    expect(codes(report.warnings)).toContain('VIDEO_NOT_IMPORTED');
+    // The mode is IN the message: whoever reads it has to be able to act on it
+    // without going back to the row to find out what was asked for.
+    expect(report.warnings.find((w) => w.code === 'VIDEO_NOT_IMPORTED')!.message)
+      .toContain("importMode 'metadata'");
+    expect(report.valid).toBe(true);
+  });
+
+  it('still fails a FULL import that is missing its videos', async () => {
+    // The other half, and the reason this is not just "stop erroring on
+    // missing mp4s": a full import with no video IS broken.
+    const dir = await fixture('v3-full-no-video', { omitVideos: true });
+    const report = await validate(dir, {}, { importMode: 'full' });
+
+    expect(codes(report.errors)).toContain('MISSING_VIDEO_FILE');
+    expect(codes(report.warnings)).not.toContain('VIDEO_NOT_IMPORTED');
+    expect(report.valid).toBe(false);
+  });
+
+  it('treats an unknown provenance as a full import', async () => {
+    // Every dataset registered before TASK-220 has a null importMode, and none
+    // of them may quietly stop being checked.
+    const dir = await fixture('v3-no-mode', { omitVideos: true });
+    expect(codes((await validate(dir)).errors)).toContain('MISSING_VIDEO_FILE');
+    expect(codes((await validate(dir, {}, { importMode: null })).errors))
+      .toContain('MISSING_VIDEO_FILE');
+  });
+});
+
+describe('a metadata-only import forgives the videos and NOTHING else', () => {
+  // The failure mode of the fix itself. "Do not error on a missing mp4" is one
+  // character away from "do not error on a missing file", and a metadata-only
+  // import whose parquet never arrived has to stay a failure.
+
+  it('still fails when the data parquet is absent', async () => {
+    const dir = await fixture('meta-only-no-data', { omitVideos: true, omitData: true });
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    expect(codes(report.errors)).toContain('MISSING_DATA_FILE');
+    expect(report.valid).toBe(false);
+  });
+
+  it('still fails when the data parquet is zero bytes', async () => {
+    const dir = await fixture('meta-only-empty-data', { omitVideos: true });
+    await writeFile(join(dir, 'data', 'chunk-000', 'file-000.parquet'), '');
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    expect(codes(report.errors)).toContain('EMPTY_FILE');
+    expect(report.valid).toBe(false);
+  });
+
+  it('still fails when meta/info.json is absent', async () => {
+    const dir = await fixture('meta-only-no-info', { omitVideos: true });
+    await rm(join(dir, 'meta', 'info.json'));
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    expect(codes(report.errors)).toContain('MISSING_INFO');
+    expect(report.valid).toBe(false);
+  });
+
+  it('still fails when the episode metadata is absent', async () => {
+    const dir = await fixture('meta-only-no-episodes', { omitVideos: true });
+    await rm(join(dir, 'meta', 'episodes'), { recursive: true });
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    expect(codes(report.errors)).toContain('MISSING_EPISODE_META');
+    expect(report.valid).toBe(false);
+  });
+
+  it('applies to the v2.1 layout too, where the mp4s are per episode', async () => {
+    const dir = await fixture('v21-metadata-only', { version: 'v2.1', omitVideos: true });
+    const report = await validate(dir, {}, { importMode: 'metadata' });
+
+    expect(codes(report.errors)).not.toContain('MISSING_VIDEO_FILE');
+    expect(codes(report.warnings)).toContain('VIDEO_NOT_IMPORTED');
+    expect(report.valid).toBe(true);
   });
 });

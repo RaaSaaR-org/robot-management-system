@@ -136,6 +136,22 @@ export const useTrainingStore = create<TrainingStore>()(
         });
       },
 
+      retryImport: async (datasetId: string) => {
+        const { status } = await trainingApi.retryImport(datasetId);
+
+        // Move the row to `importing` here rather than waiting for the next
+        // poll: the retry button's whole job is to make something visibly
+        // happen, and the failure box has to stop claiming a failure that is
+        // now being re-attempted.
+        set((state) => {
+          const index = state.datasets.findIndex((d) => d.id === datasetId);
+          if (index !== -1) {
+            state.datasets[index].status = status as Dataset['status'];
+            state.datasets[index].importError = null;
+          }
+        });
+      },
+
       setDatasetFilters: (filters: Partial<DatasetQueryParams>) => {
         set((state) => {
           state.datasetFilters = { ...state.datasetFilters, ...filters };

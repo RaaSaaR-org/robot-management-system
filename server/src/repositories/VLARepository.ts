@@ -35,6 +35,8 @@ import type {
   Dataset,
   CreateDatasetInput,
   UpdateDatasetInput,
+  DatasetImportError,
+  DatasetImportMode,
   DatasetQueryParams,
   EpisodeAnnotation,
   TrainingJob,
@@ -184,11 +186,30 @@ function dbDatasetToDomain(db: PrismaDataset): Dataset {
     statsJson: JSON.parse(db.statsJson) as LeRobotStats,
     status: db.status as DatasetStatus,
     huggingFaceRepoId: db.huggingFaceRepoId ?? undefined,
+    sourceRevision: db.sourceRevision ?? null,
+    sourceLicense: db.sourceLicense ?? null,
+    importMode: (db.importMode as DatasetImportMode | null) ?? null,
+    importError: parseImportError(db.importErrorJson),
     annotations: parseAnnotations(db.annotationsJson),
     validation: parseValidation((db as { validationJson?: string | null }).validationJson),
     createdAt: db.createdAt,
     updatedAt: db.updatedAt,
   };
+}
+
+/**
+ * Parse the importErrorJson column (TASK-220).
+ *
+ * Unreadable JSON reads as "no failure recorded" rather than throwing: a row
+ * whose error blob got mangled is still a row the list endpoint has to return.
+ */
+function parseImportError(val: string | null | undefined): DatasetImportError | null {
+  if (!val) return null;
+  try {
+    return JSON.parse(val) as DatasetImportError;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -632,6 +653,9 @@ export class DatasetRepository {
         statsJson: JSON.stringify(input.statsJson ?? {}),
         status: input.status ?? 'uploading',
         huggingFaceRepoId: input.huggingFaceRepoId,
+        sourceRevision: input.sourceRevision ?? null,
+        sourceLicense: input.sourceLicense ?? null,
+        importMode: input.importMode ?? null,
       },
     });
     return dbDatasetToDomain(dataset);
@@ -716,6 +740,14 @@ export class DatasetRepository {
       if (input.lerobotVersion !== undefined) updateData.lerobotVersion = input.lerobotVersion;
       if (input.validation !== undefined) updateData.validationJson = JSON.stringify(input.validation);
       if (input.storagePath !== undefined) updateData.storagePath = input.storagePath;
+      if (input.sourceRevision !== undefined) updateData.sourceRevision = input.sourceRevision;
+      if (input.sourceLicense !== undefined) updateData.sourceLicense = input.sourceLicense;
+      if (input.importMode !== undefined) updateData.importMode = input.importMode;
+      // `null` is a value here, not an absence: a retry that succeeds has to
+      // erase the previous failure, and `undefined` would leave it standing.
+      if (input.importError !== undefined) {
+        updateData.importErrorJson = input.importError === null ? null : JSON.stringify(input.importError);
+      }
 
       const dataset = await prisma.dataset.update({
         where: { id },

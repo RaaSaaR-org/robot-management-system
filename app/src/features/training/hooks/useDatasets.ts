@@ -28,6 +28,7 @@ export interface UseDatasetReturn {
   fetchDatasets: (params?: DatasetQueryParams) => Promise<void>;
   createDataset: (input: CreateDatasetInput) => Promise<Dataset>;
   deleteDataset: (id: string) => Promise<void>;
+  retryImport: (id: string) => Promise<void>;
   setFilters: (filters: Partial<DatasetQueryParams>) => void;
 }
 
@@ -62,6 +63,7 @@ export function useDatasets(): UseDatasetReturn {
   const storeFetchDatasets = useTrainingStore((state) => state.fetchDatasets);
   const storeCreateDataset = useTrainingStore((state) => state.createDataset);
   const storeDeleteDataset = useTrainingStore((state) => state.deleteDataset);
+  const storeRetryImport = useTrainingStore((state) => state.retryImport);
   const storeSetFilters = useTrainingStore((state) => state.setDatasetFilters);
 
   const fetchDatasets = useCallback(
@@ -85,6 +87,13 @@ export function useDatasets(): UseDatasetReturn {
     [storeDeleteDataset]
   );
 
+  const retryImport = useCallback(
+    async (id: string) => {
+      await storeRetryImport(id);
+    },
+    [storeRetryImport]
+  );
+
   const setFilters = useCallback(
     (filters: Partial<DatasetQueryParams>) => {
       storeSetFilters(filters);
@@ -102,6 +111,7 @@ export function useDatasets(): UseDatasetReturn {
       fetchDatasets,
       createDataset,
       deleteDataset,
+      retryImport,
       setFilters,
     }),
     [
@@ -113,6 +123,7 @@ export function useDatasets(): UseDatasetReturn {
       fetchDatasets,
       createDataset,
       deleteDataset,
+      retryImport,
       setFilters,
     ]
   );
