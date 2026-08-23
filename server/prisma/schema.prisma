@@ -2303,6 +2303,15 @@ model Dataset {
   // bigger one for an EU AI Act technical file. Resolved to the commit SHA at
   // import time and pinned here.
   sourceRevision     String?
+  // The license the source repo declared, as declared (TASK-220).
+  //
+  // It was already being fetched — `fetchRepoInfo` reads `cardData.license`
+  // to show it in the import preview — and then thrown away, so the export
+  // manifest said "unknown" for a dataset whose card plainly says cc-by-4.0
+  // and attached a compliance note about it. Recorded verbatim rather than
+  // normalised: "cc-by-4.0" and "CC-BY-4.0" are the repo's own strings and
+  // guessing which SPDX id was meant is how a wrong licence claim gets made.
+  sourceLicense      String?
   // 'full' — every file the repo declares. 'metadata' — meta/ + data/ only,
   // no videos. Recorded because validation has to know: a metadata-only
   // dataset is MISSING every mp4 its info.json declares, and that is a

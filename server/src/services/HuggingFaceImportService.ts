@@ -277,7 +277,7 @@ export class HuggingFaceImportService {
 
     // Phase 1: pin the commit, THEN read the metadata at it. The other order
     // reads info.json off a branch that can move before the download starts.
-    const sha = await this.resolveRevision(repoId, revision);
+    const { sha, license } = await this.resolveSource(repoId, revision);
     const info = await this.fetchInfoJson(repoId, sha);
 
     const resolvedRobotTypeId = await this.resolveRobotTypeId(robotTypeId, info);
@@ -299,6 +299,7 @@ export class HuggingFaceImportService {
       status: 'importing',
       huggingFaceRepoId: repoId,
       sourceRevision: sha,
+      sourceLicense: license,
       importMode,
     };
 
@@ -372,10 +373,20 @@ export class HuggingFaceImportService {
     await datasetRepository.update(datasetId, { status: 'importing', importError: null });
 
     let sha: string;
+    let license: string | null = null;
     let info: LeRobotInfoV3;
     let sink: ImportSink;
     try {
-      sha = await this.resolveRevision(repoId, existing.sourceRevision ?? 'main');
+      const source = await this.resolveSource(repoId, existing.sourceRevision ?? 'main');
+      sha = source.sha;
+      license = source.license;
+      // A row pinned to a sha resolves without a card request, so `license`
+      // comes back null and the row would keep whatever it had — which for
+      // every dataset imported before the licence was recorded is nothing.
+      // Ask once, at the pinned commit, so a retry is how those rows catch up.
+      if (license === null && !existing.sourceLicense) {
+        license = (await this.fetchRepoInfo(repoId, sha)).license;
+      }
       info = await this.fetchInfoJson(repoId, sha);
       sink = createSink(storageIdOf(existing.storagePath));
       await sink.prepare();
@@ -390,6 +401,10 @@ export class HuggingFaceImportService {
       status: 'importing',
       storagePath: sink.storagePath,
       sourceRevision: sha,
+      // Only when this attempt actually learned one. A retry against a pinned
+      // sha makes no card request, and `null` there means "did not ask", so
+      // writing it would erase a licence the first import recorded.
+      ...(license === null ? {} : { sourceLicense: license }),
       importMode,
     });
 
@@ -696,8 +711,26 @@ export class HuggingFaceImportService {
    * which is the defect this resolves — and would do it silently.
    */
   async resolveRevision(repoId: string, revision: string): Promise<string> {
-    if (SHA_RE.test(revision)) return revision;
-    return (await this.fetchRepoInfo(repoId, revision)).sha;
+    return (await this.resolveSource(repoId, revision)).sha;
+  }
+
+  /**
+   * The commit AND the declared licence, in one round trip.
+   *
+   * `resolveRevision` used to be the only caller of {@link fetchRepoInfo}, and
+   * it returned the sha and discarded the licence — which is why an exported
+   * run manifest reported `"license": "unknown"` for a repo whose card says
+   * cc-by-4.0, and then attached a compliance note about the risk of training
+   * on data of unknown licence. The information had already been fetched.
+   *
+   * A revision that is already a 40-hex sha needs no round trip, and there is
+   * therefore no licence to report for it — `null` means "not learned here",
+   * never "none declared", so a caller must not overwrite a stored licence
+   * with it.
+   */
+  async resolveSource(repoId: string, revision: string): Promise<{ sha: string; license: string | null }> {
+    if (SHA_RE.test(revision)) return { sha: revision, license: null };
+    return this.fetchRepoInfo(repoId, revision);
   }
 
   /**

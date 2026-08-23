@@ -211,6 +211,7 @@ export interface DatasetResponse extends Omit<Dataset, 'robotType' | 'skill'> {
   qualityBreakdown?: QualityScoreBreakdown;
   /** The commit an import pinned, or null for a dataset that came from elsewhere. */
   sourceRevision: string | null;
+  sourceLicense: string | null;
   importMode: DatasetImportMode | null;
   /**
    * Why the last import failed, or null. Read off the row rather than off a

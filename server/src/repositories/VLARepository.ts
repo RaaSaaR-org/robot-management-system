@@ -187,6 +187,7 @@ function dbDatasetToDomain(db: PrismaDataset): Dataset {
     status: db.status as DatasetStatus,
     huggingFaceRepoId: db.huggingFaceRepoId ?? undefined,
     sourceRevision: db.sourceRevision ?? null,
+    sourceLicense: db.sourceLicense ?? null,
     importMode: (db.importMode as DatasetImportMode | null) ?? null,
     importError: parseImportError(db.importErrorJson),
     annotations: parseAnnotations(db.annotationsJson),
@@ -653,6 +654,7 @@ export class DatasetRepository {
         status: input.status ?? 'uploading',
         huggingFaceRepoId: input.huggingFaceRepoId,
         sourceRevision: input.sourceRevision ?? null,
+        sourceLicense: input.sourceLicense ?? null,
         importMode: input.importMode ?? null,
       },
     });
@@ -739,6 +741,7 @@ export class DatasetRepository {
       if (input.validation !== undefined) updateData.validationJson = JSON.stringify(input.validation);
       if (input.storagePath !== undefined) updateData.storagePath = input.storagePath;
       if (input.sourceRevision !== undefined) updateData.sourceRevision = input.sourceRevision;
+      if (input.sourceLicense !== undefined) updateData.sourceLicense = input.sourceLicense;
       if (input.importMode !== undefined) updateData.importMode = input.importMode;
       // `null` is a value here, not an absence: a retry that succeeds has to
       // erase the previous failure, and `undefined` would leave it standing.

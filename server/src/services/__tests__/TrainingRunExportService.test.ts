@@ -245,6 +245,21 @@ describe('buildManifest', () => {
     expect(manifest?.compliance.notes.some((n) => /residency is null/.test(n))).toBe(true);
   });
 
+  it('prefers the licence the source repo declared over anything in the manifest', async () => {
+    // `sourceLicense` is the string off the repo's own card, captured at
+    // import. A LeRobot `info.json` does not normally carry a licence at all,
+    // so before that column existed every Hub-imported dataset exported as
+    // "unknown" — including nvidia/GR00T-N1.7-AppleToPlate, whose card says
+    // cc-by-4.0 — and dragged a "cannot be shown to be redistributable"
+    // compliance note along with it.
+    prisma.trainingJobDataset.findMany.mockResolvedValue([
+      { weight: 1, position: 0, dataset: datasetRow({ sourceLicense: 'cc-by-4.0', infoJson: '{}' }) },
+    ]);
+    const manifest = await trainingRunExportService.buildManifest('job-1');
+    expect(manifest?.datasets[0]!.license).toBe('cc-by-4.0');
+    expect(manifest?.compliance.notes.some((n) => /no license on record/.test(n))).toBe(false);
+  });
+
   it('carries each dataset license forward and flags the unknown ones', async () => {
     prisma.trainingJobDataset.findMany.mockResolvedValue([
       { weight: 1, position: 0, dataset: datasetRow() },

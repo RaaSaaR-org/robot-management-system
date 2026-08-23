@@ -59,6 +59,7 @@ interface MixtureRow {
     storagePath: string;
     huggingFaceRepoId: string | null;
     sourceRevision: string | null;
+    sourceLicense: string | null;
     infoJson: string;
     validationJson: string | null;
     totalFrames: number;
@@ -142,8 +143,17 @@ export function resolveDatasetUri(dataset: MixtureRow['dataset']): ResolvedUri {
   };
 }
 
-/** The dataset's license, from whatever recorded one. Never inferred. */
-function readLicense(infoJson: string | null): string {
+/**
+ * The dataset's license, from whatever recorded one. Never inferred.
+ *
+ * `sourceLicense` first: that is the string the source repo's own card
+ * declared, captured at import. Only then the manifest's own keys, which is
+ * where a locally recorded or uploaded dataset can carry one. A repo that
+ * declares nothing stays 'unknown' — guessing which license was meant is how a
+ * wrong license claim reaches a technical file.
+ */
+function readLicense(sourceLicense: string | null, infoJson: string | null): string {
+  if (typeof sourceLicense === 'string' && sourceLicense.trim()) return sourceLicense.trim();
   const info = parseJson(infoJson);
   for (const key of ['license', 'licence', '_license']) {
     const value = info?.[key];
@@ -263,7 +273,7 @@ export class TrainingRunExportService {
         name: row.name,
         uri: located.uri,
         revision: row.sourceRevision ?? null,
-        license: readLicense(row.infoJson),
+        license: readLicense(row.sourceLicense ?? null, row.infoJson),
         weight: member.weight,
         normalizedWeight: usableTotal ? member.weight / rawTotal : 1 / members.length,
         lerobotVersion: row.lerobotVersion,

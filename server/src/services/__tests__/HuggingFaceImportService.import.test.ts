@@ -499,8 +499,14 @@ describe('retryImport', () => {
       DATASET_ID,
       expect.objectContaining({ status: 'importing', sourceRevision: SHA }),
     );
-    // A SHA needs no resolving, so a retry cannot drift onto a newer commit.
-    expect(requested.some((u) => u.includes('/revision/'))).toBe(false);
+    // A retry cannot drift onto a newer commit. It may still ask the Hub about
+    // the pinned commit — a row imported before `sourceLicense` existed has no
+    // licence, and a retry is the only route it has to acquire one — but every
+    // such request names the SHA, never a branch. That is the invariant; "no
+    // request at all" was only ever a proxy for it.
+    const revisionCalls = requested.filter((u) => u.includes('/revision/'));
+    expect(revisionCalls.every((u) => u.includes(SHA))).toBe(true);
+    expect(requested.some((u) => u.includes('/revision/main'))).toBe(false);
   });
 
   it('refuses a dataset that did not come from the Hub, and one already running', async () => {

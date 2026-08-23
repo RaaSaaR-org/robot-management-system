@@ -400,6 +400,7 @@ export interface Dataset {
   huggingFaceRepoId?: string;
   /** The commit the source repo was AT, resolved from the branch at import time. */
   sourceRevision?: string | null;
+  sourceLicense?: string | null;
   importMode?: DatasetImportMode | null;
   /** Parsed from `importErrorJson`; undefined when the import did not fail. */
   importError?: DatasetImportError | null;
@@ -439,6 +440,7 @@ export interface CreateDatasetInput {
   status?: DatasetStatus;
   huggingFaceRepoId?: string;
   sourceRevision?: string | null;
+  sourceLicense?: string | null;
   importMode?: DatasetImportMode | null;
 }
 
@@ -447,6 +449,7 @@ export interface UpdateDatasetInput {
   description?: string;
   skillId?: string;
   sourceRevision?: string | null;
+  sourceLicense?: string | null;
   importMode?: DatasetImportMode | null;
   /** `null` clears the stored failure — what a retry that succeeds must do. */
   importError?: DatasetImportError | null;

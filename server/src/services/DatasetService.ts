@@ -1006,6 +1006,7 @@ export class DatasetService extends EventEmitter {
       // "this import failed and here is why" from "this row predates TASK-220",
       // and an omitted key cannot say either.
       sourceRevision: dataset.sourceRevision ?? null,
+      sourceLicense: dataset.sourceLicense ?? null,
       importMode: dataset.importMode ?? null,
       importError: dataset.importError ?? null,
       createdAt: dataset.createdAt,

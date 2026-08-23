@@ -459,6 +459,86 @@ describe('HuggingFaceImportService', () => {
   });
 
   // --------------------------------------------------------------------------
+  // THE LICENCE — fetched all along, and thrown away
+  // --------------------------------------------------------------------------
+
+  describe('the licence it records', () => {
+    it('keeps the licence the card declares, from the call it already makes', async () => {
+      // `resolveRevision` asked the Hub for the commit, got `cardData.license`
+      // in the same response, and returned only the sha. The consequence
+      // surfaced at the far end of the pipeline: an exported run manifest said
+      // `"license": "unknown"` for nvidia/GR00T-N1.7-AppleToPlate, whose card
+      // says cc-by-4.0, and attached a compliance note warning that a model
+      // trained on data of unknown licence cannot be shown to be
+      // redistributable. No extra round trip was ever needed.
+      mockHub();
+
+      await service.importDataset({ repoId: REPO });
+
+      expect(vi.mocked(datasetRepository.create).mock.calls[0]![0].sourceLicense)
+        .toBe('cc-by-4.0');
+    });
+
+    it('records no licence for a repo whose card declares none, rather than guessing', async () => {
+      mockHub();
+      const fetchSpy = vi.mocked(globalThis.fetch);
+      const inner = fetchSpy.getMockImplementation()!;
+      fetchSpy.mockImplementation(async (input, init) => {
+        if (String(input).includes('/revision/')) {
+          return new Response(JSON.stringify({ sha: SHA }), { status: 200 });
+        }
+        return inner(input, init);
+      });
+
+      await service.importDataset({ repoId: REPO });
+
+      expect(vi.mocked(datasetRepository.create).mock.calls[0]![0].sourceLicense).toBeNull();
+    });
+
+    it('backfills a row that predates the column, at the commit it is already pinned to', async () => {
+      // A pinned row resolves without a card request, so the retry learns no
+      // licence and must not blank the one on the row. But every dataset
+      // imported before this column existed has none — and a retry is the only
+      // route those rows have. So: ask once, at the pinned sha.
+      vi.mocked(datasetRepository.findById).mockResolvedValue({
+        id: 'ds-1',
+        huggingFaceRepoId: REPO,
+        status: 'failed' as const,
+        storagePath: `${join(env.storageRoot, 'store-1')}/`,
+        sourceRevision: SHA,
+        sourceLicense: null,
+        importMode: 'metadata' as const,
+      } as never);
+      mockHub();
+
+      await service.retryImport('ds-1');
+      await settled();
+
+      expect(updateWith((u) => u.sourceLicense === 'cc-by-4.0')).toBeDefined();
+    });
+
+    it('leaves a licence already on the row alone', async () => {
+      vi.mocked(datasetRepository.findById).mockResolvedValue({
+        id: 'ds-1',
+        huggingFaceRepoId: REPO,
+        status: 'failed' as const,
+        storagePath: `${join(env.storageRoot, 'store-1')}/`,
+        sourceRevision: SHA,
+        sourceLicense: 'apache-2.0',
+        importMode: 'metadata' as const,
+      } as never);
+      mockHub();
+
+      await service.retryImport('ds-1');
+      await settled();
+
+      // No card request at all, and nothing written over the stored value.
+      expect(requested.some((u) => u.includes('/revision/'))).toBe(false);
+      expect(updateWith((u) => 'sourceLicense' in u)).toBeUndefined();
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // DEFECT 3 — THE FAILURE REASON WAS UNRECOVERABLE
   // --------------------------------------------------------------------------
 
