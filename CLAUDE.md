@@ -32,7 +32,7 @@ The project uses Claude Code subagents for automated development. The pipeline i
 claude --agent ship
 ├── Phase 1: implement (blue)   → picks next task, branches, codes, typechecks, creates PR
 ├── Phase 2: test-frontend (cyan) → Playwright MCP UI testing (only if app/ changed)
-├── Phase 3: review (purple)    → code review, PR comment, fixes, merges via gh-igor
+├── Phase 3: review (purple)    → code review, PR comment, fixes, merges via gh
 └── Phase 4: deploy (orange)    → pull main, restart systemd services, health checks
 ```
 
@@ -41,7 +41,7 @@ claude --agent ship
 | Agent | File | Description |
 |-------|------|-------------|
 | **ship** | `ship.md` | Orchestrator — spawns the others, handles deploy |
-| **implement** | `implement.md` | Implements next task from MissionControl |
+| **implement** | `implement.md` | Implements the next task from `.mc/tasks/todo/` |
 | **review** | `review.md` | Reviews PR, posts findings on GitHub, merges |
 | **test-frontend** | `test-frontend.md` | Tests UI via Playwright MCP (desktop + mobile) |
 
@@ -56,10 +56,11 @@ claude --agent test-frontend         # Just test frontend via Playwright
 
 **Key tools:**
 
-- `~/.local/bin/gh-igor` — GitHub CLI wrapper with auto-injected token (all PR operations)
-- `~/.local/bin/github-token-igor` — generates GitHub App installation token
-- `~/.local/bin/git-push-igor` — git push with auto token
-- `mc` (MissionControl) — task management CLI (already on PATH)
+- `gh` — GitHub CLI; all PR operations go through it (`gh pr create`, `gh pr checks`, `gh pr merge`)
+- `git push origin <branch>` — pushing a feature branch
+
+**Tasks** live in `.mc/tasks/` as Markdown files — there is no task CLI. See
+[Task Management](#task-management) for how to read, create and close one.
 
 **GitHub repo:** `RaaSaaR-org/robot-management-system`
 
@@ -294,10 +295,10 @@ robot-management-system/
 ├── .claude/                # Claude Code configuration
 │   └── agents/             # Subagent definitions (ship, implement, review, test-frontend)
 │
-└── .mc/                    # MissionControl (task management)
-    ├── tasks/              # Task markdown files (todo/, done/)
-    ├── config.yml          # MC configuration
-    └── templates/          # Task/sprint templates
+└── .mc/                    # Task backlog (Markdown + YAML frontmatter)
+    ├── tasks/              # Task files, split into todo/ and done/
+    ├── config.yml          # Allowed statuses, priorities, id prefixes
+    └── templates/          # Task/sprint/proposal templates
 ```
 
 ## Development Guidelines
@@ -358,15 +359,27 @@ When building features across the stack:
 
 ## Task Management
 
-Project tasks are tracked in `.mc/tasks/` using MissionControl (mc CLI). Tasks are markdown files with YAML frontmatter, organized in `todo/` and `done/` folders.
+Project tasks live in `.mc/tasks/` as Markdown files with YAML frontmatter. There is
+no CLI for them — read, write and move the files directly. `todo/` holds everything
+unfinished, `done/` holds what shipped.
 
 ```bash
-mc task board                 # Show kanban board
-mc task next                  # Get next actionable task
-mc list tasks                 # List all tasks
-mc show TASK-001              # Show task details
-mc task move TASK-001 done    # Move task to done
-mc new task "Title" --priority 2 --tags core  # Create new task
+ls .mc/tasks/todo/                                   # the backlog
+cat .mc/tasks/todo/TASK-201-*.md                     # read one task
+grep -l 'status: in-progress' .mc/tasks/todo/*.md    # what is being worked on
+```
+
+**Creating one:** copy `.mc/templates/task.md` to
+`.mc/tasks/todo/TASK-NNN-<slug>.md`, taking the next free number, and fill in the
+frontmatter. `.mc/config.yml` lists the allowed values: `status` is one of `backlog`,
+`todo`, `in-progress`, `review`, `done`, `cancelled`; `priority` runs 1 (critical) to
+4 (low).
+
+**Closing one takes two steps** — the folder alone does not set the status:
+
+```bash
+git mv .mc/tasks/todo/TASK-NNN-*.md .mc/tasks/done/
+# then edit the frontmatter in that file: status: todo → status: done
 ```
 
 ### Task Authoring Guidelines
