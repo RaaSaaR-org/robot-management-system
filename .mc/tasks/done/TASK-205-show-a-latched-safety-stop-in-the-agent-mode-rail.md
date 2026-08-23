@@ -4,7 +4,7 @@ aliases:
 - TASK-205
 title: Show a SafetyMonitor-latched stop in the Agent Mode rail — and give the operator a reset button
 slug: show-a-latched-safety-stop-in-the-agent-mode-rail
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -16,9 +16,10 @@ tags:
 - agentmode
 sprint: ''
 depends_on: []
+status_note: 'DONE 2026-08-23. The code half shipped ahead of the task file, in 599f2c2f (post-merge review of TASK-206..212): getState() reports the effective latch as estopActive / estopSource / estopReason (agent-mode-controller.ts, latchedEstop + getState), and the flip is pushed the moment it happens by a two-feed latch watcher (publishLatchChange, wired to RobotStateManager.subscribe AND onSafetyEvent) rather than the onSafetyStop hook this task proposed — broader, because it also catches an operator reset on the safety route. The banner (EstopBanner.copyFor) names the safety monitor, quotes the reason, says one reset clears both latches and offers the existing button; no endpoint URL is quoted at a human any more. DESIGN DIVERGENCE on step 3: no eighth ConditionKey was added — the attribution rides on the existing `estop` condition as a separate store field, so the conditions.ts rule still holds (only notices.estop is coloured, rendered strictly by CONDITION_ORDER) and every hardcoded "seven" stays correct; the Test Strategy line about updating those counts is moot as built. Known and accepted consequence: CONDITION_ACTIVE_HEADLINE.estop stays source-agnostic, so the screen-reader announcement and the drawer checklist do not name the safety monitor the way the banner does. Closed by the test PR that covered the one hop nobody asserted — the server mirror carrying estopSource/estopReason through, and never inventing one.'
 due_date: ''
 created: 2026-08-09
-updated: 2026-08-09
+updated: 2026-08-23
 ---
 
 
