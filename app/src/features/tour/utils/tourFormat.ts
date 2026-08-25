@@ -232,6 +232,34 @@ export function currentLeg(run: TourRun | null | undefined): TourRun['legs'][num
   return run?.legs.find((l) => l.status === 'running') ?? null;
 }
 
+/** A stop named for display: its 1-based position and its headline. */
+export interface CurrentStop {
+  /** What the operator counts — stop 1, stop 2 — not the array index. Null when unknown. */
+  index: number | null;
+  /** The stop's headline. */
+  name: string;
+}
+
+/**
+ * "at stop 2: Workstation" — where in a tour the robot is; null when the answer
+ * is "not at a stop".
+ *
+ * ONE renderer, because two screens answer this question from two different
+ * sources: the /tour banner reads the RUN's legs (mirrored through the server,
+ * settled per leg) and the Agent Mode rail reads the RUNNING BLOCK's params
+ * (live, per block). An operator with both open must not be told the same robot
+ * is in two places in two different phrasings.
+ *
+ * Each caller phrases the null case itself: "walking" completes the banner's
+ * sentence and would be a claim of its own on a chip that can simply not render.
+ * An unknown `index` degrades to the headline alone rather than to "stop 0" —
+ * the headline is the answer, the number only locates it in the route.
+ */
+export function currentStopText(stop: CurrentStop | null | undefined): string | null {
+  if (!stop) return null;
+  return stop.index === null ? stop.name : `at stop ${stop.index}: ${stop.name}`;
+}
+
 /** The questions the facts did not cover — what the operator should author next. */
 export function declinedTurns(run: TourRun | null | undefined): TourRun['turns'] {
   return (run?.turns ?? []).filter((t) => t.answered === 'declined');

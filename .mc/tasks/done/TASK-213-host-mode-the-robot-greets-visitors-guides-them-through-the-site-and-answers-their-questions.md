@@ -4,7 +4,7 @@ aliases:
 - TASK-213
 title: Host mode — the robot greets a visitor, welcomes them to the site (ZeMA), walks them to the places it wants to show, demonstrates its workstation and answers their questions
 slug: host-mode-the-robot-greets-visitors-guides-them-through-the-site-and-answers-their-questions
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -24,7 +24,59 @@ depends_on:
 - '[[TASK-212]]'
 due_date: ''
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-25
+completed: 2026-08-25
+status_note: |
+  DONE 2026-08-25 — PR #234 (`737e7cfb`, merged 2026-08-21). Not yet released:
+  it ships in the pending v2026.08.25 (release PR #235, which already carries
+  its line). The task file simply never left `todo/`.
+  VERIFIED, and where the record lives: the #234 commit message
+  (`git show 737e7cfb`) records the live sim round in the warehouse scene
+  against a real Ollama — a person appears → greeting + AI disclosure + offer in
+  German with no planner call → "ja" → four stops walked with their talk tracks
+  → one question answered from the operator's facts, one ("wie viel hat der
+  Roboter gekostet?") honestly declined → "danke, tschüss" → farewell and back
+  to STAGING; plus the initiative gate refusing the greeting at 16 % battery,
+  an unanswered offer recorded as an `abandoned` run, and abort from the UI. An
+  adversarial review raised 45 findings, 24 confirmed and all 24 fixed before
+  merge — among them an operator-started tour that disclosed nothing, an
+  ungated transcript endpoint, and a privacy switch that dropped the counts
+  while still shipping the words. Unit suites (robot-agent `host.test.ts`,
+  server tour routes/service, app tour store + components) are green.
+  SHIPPED LATE, on 2026-08-25: the one deliverable of the Frontend section that
+  was never built — "when a tour is running, `BlockTimeline`'s leading area
+  shows the current stop headline". It is now
+  `app/src/features/agentmode/components/TourStopChip.tsx`, rendered by
+  `AgentModePage` into the rail's `leading` group (the rail itself stays generic
+  — see the chip's header for why it is the page's job and not
+  `BlockTimeline`'s). It reads the LIVE plan, not the tour run: `agent:tour:leg`
+  is only emitted once a leg has settled (`host.ts` `drive`), so a run snapshot
+  names no running stop for most of a visit — the blocks do, now that
+  `buildTourBlocks` puts `stopIndex`/`stopName` on every block of a stop, the
+  way patrol already puts `checkpointName` on `capture`. The wording comes from
+  `currentStopText` in `app/src/features/tour/utils/tourFormat.ts`, shared with
+  `ActiveRunBanner` so the /tour banner and the Agent Mode rail cannot drift
+  apart.
+  DELIBERATE DEVIATIONS from the plan above, recorded rather than hidden:
+  (1) the editor's `RouteOverlay` map preview was dropped — a route places its
+  stops by place id and a route with no run behind it has no poses to draw
+  honestly; the reasoning sits in the code at
+  `app/src/features/tour/components/RouteEditor.tsx:987-990`.
+  (2) a `demo` block calls the `SkillExecutor` IN-PROCESS through a `runSkill`
+  dependency rather than POSTing to `/skills/execute` on our own REST API — see
+  `robot-agent/src/agent-mode/block-executor.ts:222-227`; a demo must not depend
+  on the agent being reachable from itself.
+  NOT VERIFIED, in plain words: the hardware leg was never run. `TOUR_DEMO_MODE`
+  is `narrate` everywhere it has been exercised, no tour has run with
+  `TOUR_DEMO_MODE=execute`, and the p50/p95 stt/agent/tts turn latencies the
+  Test Strategy asks for do not exist — that leg is deferred until the G1 is on
+  the bench under [[TASK-169]]. No GPU, robot, lidar or hardware check happened
+  for this closure, and none happened for the chip shipped today either. There
+  is also no record anywhere of the Playwright frontend pass this task asked for
+  (editor → start → banner → transcript, dark mode, 390 px); today's chip is
+  covered by unit tests only
+  (`app/src/features/agentmode/components/__tests__/TourStopChip.test.tsx`,
+  `utils/__tests__/planQuery.test.ts`), and it has never been seen in a browser.
 ---
 
 # Host mode — the robot greets a visitor, welcomes them to the site, guides them through it and answers their questions
