@@ -453,6 +453,48 @@ export class PlaceTracker {
   }
 
   /**
+   * Add this sample's translation to the drift budget and advance `lastPose`.
+   *
+   * ONE method for what used to be two identical blocks (the registered and the
+   * unregistered-frame paths), because the two must accumulate the same metre:
+   * odometry TRANSLATION is frame-independent — the unknown is the origin
+   * offset, not the scale — which is the whole reason the budget runs at all in
+   * a frame the map cannot be compared with.
+   *
+   * DECISION D2 (TASK-201, 2026-08-09): there is deliberately NO automatic
+   * re-anchor here — nothing zeroes `driftSinceAnchorM` because the robot
+   * believes it has walked deep inside a small mapped place. It is tempting,
+   * because a robot standing well inside AISLE-2 "obviously" knows where it is,
+   * and it is wrong twice over:
+   *
+   *  1. It would fake a re-localisation this system does not have. This
+   *     accumulator is a SCALAR: zeroing it restores `confident` without
+   *     correcting x or y by a single centimetre, so the geofence would go back
+   *     to enforcing against coordinates that are still metres wrong.
+   *  2. It is self-referential. The place is DERIVED from the drifted pose, so
+   *     a robot that has drifted into believing it is deep inside AISLE-2 would
+   *     re-confidence itself on the strength of the very pose that drifted.
+   *
+   * `RobotStateManager.guardReanchorRelease` exists precisely so a release is
+   * taken by someone who can SEE the robot is nowhere near the boundary; an
+   * automatic re-anchor substitutes a machine for that someone. TASK-200 put
+   * pose correction explicitly out of scope.
+   *
+   * If 15 m proves too tight in practice the honest fixes are, in order:
+   * (i) make the not-enforcing state loud enough that an operator re-anchors
+   * deliberately — TASK-201, shipped; (ii) a per-site budget on `PlaceGraph`;
+   * (iii) real re-localisation (LiDAR / fiducial), a separate capability.
+   * Re-opening this is fine; re-opening it SILENTLY is what this comment is
+   * here to prevent.
+   */
+  private accumulateDrift(pose: PlacePose): void {
+    if (this.lastPose) {
+      this.driftSinceAnchorM += Math.hypot(pose.x - this.lastPose.x, pose.y - this.lastPose.y);
+    }
+    this.lastPose = { x: pose.x, y: pose.y };
+  }
+
+  /**
    * Offer one pose sample whose frame is NOT registered against this graph.
    *
    * The map cannot be consulted — the polygons and the pose are numbers about
@@ -477,10 +519,7 @@ export class PlaceTracker {
       return this.update(pose);
     }
 
-    if (this.lastPose) {
-      this.driftSinceAnchorM += Math.hypot(pose.x - this.lastPose.x, pose.y - this.lastPose.y);
-    }
-    this.lastPose = { x: pose.x, y: pose.y };
+    this.accumulateDrift(pose);
 
     if (!this.declaredPlace) {
       // Geometry answers nothing and nobody has declared anything: UNKNOWN.
@@ -514,10 +553,7 @@ export class PlaceTracker {
       return null;
     }
 
-    if (this.lastPose) {
-      this.driftSinceAnchorM += Math.hypot(pose.x - this.lastPose.x, pose.y - this.lastPose.y);
-    }
-    this.lastPose = { x: pose.x, y: pose.y };
+    this.accumulateDrift(pose);
 
     const hit = this.findPlace(pose);
     if (!hit) {

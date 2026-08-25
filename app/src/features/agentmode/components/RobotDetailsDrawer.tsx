@@ -131,7 +131,11 @@ const CONDITION_TICK_MS = 10_000;
  * This is the list that makes a quiet page trustworthy. Badges that only appear
  * when something is wrong cannot be told apart from badges that are broken, so
  * an operator who wants to know whether the robot is really clear has somewhere
- * to go and read all seven answers — including, and especially, the false ones.
+ * to go and read every answer — including, and especially, the false ones.
+ *
+ * The count is never written out in prose: it is rendered from the list itself,
+ * because a hard-coded "all seven" above an eight-row list turns the one check
+ * this section exists to support into the wrong answer.
  */
 function ConditionChecklist({ conditions }: { conditions: readonly Condition[] }) {
   return (
@@ -319,8 +323,8 @@ export function RobotDetailsDrawer({ isOpen, onClose, robotId }: RobotDetailsDra
 
           <Section title="Conditions">
             <p className="card-meta">
-              All seven, whether they are true or not — so a badge missing from the page
-              can be read here as false rather than broken.
+              All {conditions.length}, whether they are true or not — so a badge missing from
+              the page can be read here as false rather than broken.
             </p>
             <ConditionChecklist conditions={conditions} />
           </Section>

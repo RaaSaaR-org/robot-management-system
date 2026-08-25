@@ -89,6 +89,8 @@ vi.mock('../../config/config.js', async (importOriginal) => {
 
 const { RobotStateManager } = await import('../state.js');
 const { hardwareClient } = await import('../../hardware/HardwareClient.js');
+const { config: appConfig } = await import('../../config/config.js');
+const { GEOFENCE_ADVISORY_PREFIX } = await import('../../safety/types.js');
 
 function makeConfig(): RobotConfig {
   return {
@@ -240,6 +242,43 @@ describe('an UNREGISTERED place frame fails closed (TASK-200 review, finding 2)'
 
     expect(manager.getPlaceBelief()?.place).toBeNull();
     expect(manager.getState().location.place).toBeNull();
+  });
+
+  /**
+   * TASK-201, and the reason its label has THREE values rather than a boolean.
+   *
+   * A map that cannot be compared with the robot's odometry is a MAP problem,
+   * not a lapse: nothing was fencing and nothing stopped. Reporting it as
+   * `not-enforcing` would hang a permanent amber "the fence is off" condition on
+   * every robot whose survey nobody has registered — which is precisely how the
+   * one robot whose fence really has lapsed becomes invisible again, inside
+   * wallpaper.
+   *
+   * It survives the drift budget being spent too. `pose-drifted` reads as a
+   * lapse; on an unregistered frame that would be a claim about a fence that
+   * was never running.
+   */
+  it('reports the fence as `no-map`, never as a lapse, and raises no advisory', () => {
+    const { manager, emit } = makeManager();
+
+    emit(pose(3, 0));
+    expect(manager.getGeofenceState().enforcement).toBe('no-map');
+
+    // Spend the drift budget several times over — declaring a place first, so
+    // the belief exists to go `stale` at all. On a registered frame this is
+    // exactly the state that reads `not-enforcing`.
+    manager.declarePlace('AISLE-1');
+    for (let i = 1; i <= 100; i++) emit(pose(3 + i * 2, 0));
+    expect(manager.getPlaceBelief()?.driftSinceAnchorM ?? 0).toBeGreaterThan(
+      appConfig.place.driftBudgetM,
+    );
+    expect(manager.getPlaceBelief()?.place?.confidence).toBe('stale');
+    expect(manager.getGeofenceState().enforcement).toBe('no-map');
+
+    // Warn-only channel stays empty, and the stop path is untouched.
+    const status = manager.getSafetyStatus();
+    expect(status.warnings.some((w) => w.startsWith(GEOFENCE_ADVISORY_PREFIX))).toBe(false);
+    expect(status.estop.status).toBe('armed');
   });
 
   it('keeps an operator DECLARATION, which does not depend on the frame', () => {

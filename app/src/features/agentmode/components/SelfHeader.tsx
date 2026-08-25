@@ -333,8 +333,8 @@ export const SelfHeader = memo(function SelfHeader({ robotId, className }: SelfH
           // state in which the condition checklist matters MOST: with no self,
           // the rail carries no badges at all, and "no badges" is
           // indistinguishable from "the badges are broken". Without a trigger
-          // here the drawer, and with it the only place that lists all seven
-          // conditions including the false ones, would be unreachable on the
+          // here the drawer, and with it the only place that lists every
+          // condition including the false ones, would be unreachable on the
           // very page an unreachable robot is being diagnosed from.
           //
           // No name is invented for it: the button says what it opens, not who

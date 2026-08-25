@@ -103,10 +103,10 @@ export function evaluateGeofence(
 
   const pose = input.pose;
   if (pose === null || !Number.isFinite(pose.x) || !Number.isFinite(pose.y)) {
-    return { kind: 'unknown', reason: 'no pose sample' };
+    return { kind: 'unknown', cause: 'no-pose', reason: 'no pose sample' };
   }
   if (!input.poseTrusted) {
-    return { kind: 'unknown', reason: 'the pose has drifted past its budget' };
+    return { kind: 'unknown', cause: 'pose-drifted', reason: 'the pose has drifted past its budget' };
   }
 
   const floor = pose.floor ?? 0;
@@ -144,5 +144,7 @@ export function evaluateGeofence(
   // Not violating, but sitting in the release hysteresis band of some keepout:
   // report UNKNOWN rather than `clear` so a latched stop is held. Nothing is
   // being hidden — the robot is genuinely too close to say it is out.
-  return clearOfAll ? { kind: 'clear' } : { kind: 'unknown', reason: 'inside the keepout release margin' };
+  return clearOfAll
+    ? { kind: 'clear' }
+    : { kind: 'unknown', cause: 'release-margin', reason: 'inside the keepout release margin' };
 }

@@ -44,7 +44,7 @@ import { evaluateGeofence } from '../agent-mode/geofence.js';
 import { assessFrameRegistration, type FrameRegistration } from '../agent-mode/place-frame.js';
 import { PlaceGraphSource } from '../agent-mode/place-graph-source.js';
 import type { PoseSource } from '../agent-mode/scene-memory.js';
-import type { ScenePlace } from '../agent-mode/types.js';
+import type { AgentGeofenceState, ScenePlace } from '../agent-mode/types.js';
 import { SkillExecutor, skillExecutorRegistry } from '../vla/skill-executor.js';
 import { SimulationEngine } from './SimulationEngine.js';
 import { TaskQueue } from './TaskQueue.js';
@@ -55,6 +55,7 @@ import {
   type SafetyEventCallback,
   type EStopState,
   type GeofenceStatus,
+  geofenceEnforcement,
   type OperatingMode,
   type StopActuation,
 } from '../safety/index.js';
@@ -307,6 +308,17 @@ export class RobotStateManager {
    * PLACE from being read as evidence of CLEARANCE.
    */
   private reanchoredUnderZoneStop = false;
+  /**
+   * Whether the keepout fence is actually fencing (TASK-201), recomputed from
+   * every pose sample.
+   *
+   * Starts at `no-map`, and that is the honest cold start: before the first
+   * sample no graph has been consulted and no pose evaluated, so there is no
+   * fence to call enforcing or lapsed. Deliberately NOT `'enforcing'` — a
+   * default that claims the fence works is the failure this field exists to
+   * end.
+   */
+  private geofenceState: AgentGeofenceState = { enforcement: 'no-map', reason: null };
 
   /** Subscribers that must stop driving when a safety stop fires. */
   private safetyStopListeners = new Set<SafetyStopListener>();
@@ -605,12 +617,25 @@ export class RobotStateManager {
       ? tracker.updateUnregisteredFrame(placePose)
       : tracker.update(placePose);
     const previousPlaceId = this.placeBelief?.place?.id ?? null;
+    // Captured HERE, beside the place id, for one specific reason: the publish
+    // below is gated on the place id having changed, and the whole observed
+    // TASK-201 failure is a CONSTANT place id while the drift budget trips. A
+    // geofence transition detected after that gate would never fire.
+    const previousEnforcement = this.geofenceState.enforcement;
 
     // TASK-200: the same sample that names the place also enforces the fence.
     // The pose is trusted only while the drift budget holds — `stale` means it
     // may be tens of metres wrong, which is evidence neither that the robot is
     // inside a rack nor that it is out of one.
     const geofence = this.evaluateGeofenceForPose(pose, observation);
+    // TASK-201: the same verdict also answers "is the fence fencing?" — a
+    // question that had no answer anywhere before, which is how a robot could
+    // walk through a rack with `estop=armed` and `systemHealthy=true` and
+    // nothing on the console saying why.
+    this.geofenceState = {
+      enforcement: geofenceEnforcement(geofence),
+      reason: geofence.kind === 'unknown' ? geofence.reason : null,
+    };
 
     this.placeBelief = {
       place: observation ? toScenePlace(observation) : null,
@@ -631,17 +656,43 @@ export class RobotStateManager {
     const placeId = this.placeBelief.place?.id ?? null;
     this.state.location.place = placeId;
 
-    if (placeId === previousPlaceId) return;
-    // Only a CHANGE is worth the publish + durable write. The pose itself moves
-    // on every sample and is carried by the telemetry channel already; churning
-    // the persisted snapshot twice a second would buy nothing.
-    console.log(
-      `[RobotStateManager] Place: ${previousPlaceId ?? 'UNKNOWN'} → ${placeId ?? 'UNKNOWN'}` +
-        (this.placeBelief.poseM
-          ? ` at (${this.placeBelief.poseM.x.toFixed(2)}, ${this.placeBelief.poseM.y.toFixed(2)})`
-          : ' (no pose)'),
-    );
-    this.setAgentSafetyState({ place: placeId });
+    const placeChanged = placeId !== previousPlaceId;
+    const enforcementChanged = this.geofenceState.enforcement !== previousEnforcement;
+    // NOT a bare `if (placeChanged) return` any more. Both facts change on
+    // their own schedule — the fence lapses mid-aisle, with the place id
+    // constant for the whole traverse — so either one alone is worth telling
+    // the listeners about.
+    if (!placeChanged && !enforcementChanged) return;
+
+    if (placeChanged) {
+      // Only a CHANGE is worth the publish + durable write. The pose itself moves
+      // on every sample and is carried by the telemetry channel already; churning
+      // the persisted snapshot twice a second would buy nothing.
+      console.log(
+        `[RobotStateManager] Place: ${previousPlaceId ?? 'UNKNOWN'} → ${placeId ?? 'UNKNOWN'}` +
+          (this.placeBelief.poseM
+            ? ` at (${this.placeBelief.poseM.x.toFixed(2)}, ${this.placeBelief.poseM.y.toFixed(2)})`
+            : ' (no pose)'),
+      );
+      // The durable snapshot carries the PLACE only. Enforcement is derived
+      // fresh from the next pose sample on every boot, and a persisted
+      // `not-enforcing` restored into a process that has not yet seen a pose
+      // would be a claim about a fence nobody has evaluated.
+      this.setAgentSafetyState({ place: placeId });
+    }
+
+    if (enforcementChanged) {
+      // Logged on the TRANSITION, in the `Place: A → B` style directly above,
+      // and deliberately NOT as a one-shot latch: enforcement flips back and
+      // forth as the operator re-anchors and the budget is spent again, and a
+      // latch would report the first lapse and stay silent for every later one.
+      const line =
+        `[RobotStateManager] Geofence: ${previousEnforcement} → ${this.geofenceState.enforcement}` +
+        (this.geofenceState.reason ? ` (${this.geofenceState.reason})` : '');
+      if (this.geofenceState.enforcement === 'not-enforcing') console.warn(line);
+      else console.log(line);
+    }
+
     this.notifyListeners();
   }
 
@@ -662,6 +713,19 @@ export class RobotStateManager {
         insideKeepout: null,
       }
     );
+  }
+
+  /**
+   * Whether the keepout geofence is currently fencing (TASK-201).
+   *
+   * The answer that did not exist before: a robot whose pose has drifted past
+   * its budget walks through a keepout with `estop=armed` and
+   * `systemHealthy=true`, because a fence that cannot decide correctly declines
+   * to stop OR release. That reasoning is right and stays; what was missing is
+   * that nothing said so. This is the saying.
+   */
+  getGeofenceState(): AgentGeofenceState {
+    return { ...this.geofenceState };
   }
 
   /**
@@ -701,13 +765,14 @@ export class RobotStateManager {
     observation: PlaceObservation | null,
   ): GeofenceStatus {
     const graph = this.placeGraph;
-    if (!graph) return { kind: 'unknown', reason: 'no place graph' };
+    if (!graph) return { kind: 'unknown', cause: 'no-map', reason: 'no place graph' };
     // An unregistered frame is not a pose problem, it is a MAP problem: the
     // polygons and the pose are numbers about different origins, so both
     // `violating` and `clear` would be fiction. UNKNOWN is the only honest
-    // verdict, and the monitor changes nothing on it.
+    // verdict, and the monitor changes nothing on it. `no-map` for the same
+    // reason it says so in prose: nothing lapsed here, nothing was surveyed.
     if (this.placeFrame && !this.placeFrame.registered) {
-      return { kind: 'unknown', reason: this.placeFrame.reason };
+      return { kind: 'unknown', cause: 'no-map', reason: this.placeFrame.reason };
     }
 
     const status = evaluateGeofence(
@@ -745,8 +810,14 @@ export class RobotStateManager {
       return status;
     }
     if (status.kind !== 'clear') return status;
+    // `reanchor-hold`, not `pose-drifted`: this withholds a RELEASE, never a
+    // stop. A `violating` verdict still passes straight through and still
+    // stops the robot, so the fence is enforcing — reporting it as a lapse
+    // would tell an operator the fence was off at the one moment it is
+    // holding hardest.
     return {
       kind: 'unknown',
+      cause: 'reanchor-hold',
       reason:
         'the pose was re-anchored by an operator declaring a PLACE, which is not evidence of ' +
         'clearance from a keepout — reset the protective stop to release it',

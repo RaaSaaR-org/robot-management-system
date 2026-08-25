@@ -199,3 +199,91 @@ describe('PlaceChip', () => {
     expect(screen.getByText('Aisle 3')).toBeVisible();
   });
 });
+
+/**
+ * TASK-201. "Stale place" and "keepout fence not enforcing" are two different
+ * claims about one robot, and an operator must not have to infer the second
+ * from the first. They are therefore two separate markers, each of which can
+ * appear without the other.
+ */
+describe('the fence-off marker (TASK-201)', () => {
+  const NOT_ENFORCING = {
+    enforcement: 'not-enforcing' as const,
+    reason: 'the pose has drifted past its budget',
+  };
+
+  it('says the fence is off IN WORDS, not by colour alone', () => {
+    useAgentModeStore.setState({
+      scene: scene({ place: place() }),
+      geofence: NOT_ENFORCING,
+    });
+    render(<PlaceChip />);
+
+    // The visible word, reachable without a pointer and surviving a washed-out
+    // projector or a colour-blind operator — the same rule `· stale` follows.
+    expect(screen.getByTestId('agent-geofence-off')).toHaveTextContent(/fence off/i);
+    // And the full sentence in the DOM for a screen reader, not only on hover.
+    expect(screen.getByTestId('agent-geofence-off')).toHaveTextContent(
+      /would NOT be stopped from walking into a keepout/i
+    );
+  });
+
+  /**
+   * The decisive separation. A CONFIDENT place with the fence off is the
+   * realistic case for a dropped pose poll, and folding the marker into the
+   * `· stale` branch would have hidden it completely.
+   */
+  it('appears on a confident place — it is not a spelling of `· stale`', () => {
+    useAgentModeStore.setState({
+      scene: scene({ place: place({ confidence: 'confident' }) }),
+      geofence: NOT_ENFORCING,
+    });
+    render(<PlaceChip />);
+
+    expect(screen.getByTestId('agent-geofence-off')).toBeVisible();
+    expect(screen.getByTestId('agent-scene-place')).not.toHaveTextContent(/stale/i);
+  });
+
+  it('and a stale place still renders without it when the fence is holding', () => {
+    useAgentModeStore.setState({
+      scene: scene({ place: place({ confidence: 'stale' }) }),
+      geofence: { enforcement: 'enforcing', reason: null },
+    });
+    render(<PlaceChip />);
+
+    expect(screen.getByTestId('agent-scene-place')).toHaveTextContent(/stale/i);
+    expect(screen.queryByTestId('agent-geofence-off')).toBeNull();
+  });
+
+  /**
+   * The unknown-place branch returns early, and a robot with no pose at all has
+   * BOTH an unknown place and a fence that cannot fence. An unknown-place chip
+   * on its own reads as the milder of the two problems.
+   */
+  it('renders in the unknown-place branch too — no pose means both are true', () => {
+    useAgentModeStore.setState({
+      scene: null,
+      place: null,
+      geofence: { enforcement: 'not-enforcing', reason: 'no pose sample' },
+    });
+    render(<PlaceChip />);
+
+    expect(screen.getByTestId('agent-scene-place')).toHaveAttribute('data-place-known', 'no');
+    expect(screen.getByTestId('agent-geofence-off')).toBeVisible();
+  });
+
+  it('is absent for `no-map`, and for an agent that reports nothing at all', () => {
+    useAgentModeStore.setState({
+      scene: scene({ place: place() }),
+      geofence: { enforcement: 'no-map', reason: 'no place graph' },
+    });
+    const { unmount } = render(<PlaceChip />);
+    expect(screen.queryByTestId('agent-geofence-off')).toBeNull();
+    unmount();
+
+    // Absent must render as NOTHING — never as a claim in either direction.
+    useAgentModeStore.setState({ geofence: undefined });
+    render(<PlaceChip />);
+    expect(screen.queryByTestId('agent-geofence-off')).toBeNull();
+  });
+});

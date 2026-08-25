@@ -4,7 +4,7 @@ aliases:
 - TASK-201
 title: Say when the geofence is not enforcing — a stale pose silently disarms the keepout fence
 slug: say-when-the-geofence-is-not-enforcing
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -20,7 +20,81 @@ depends_on:
 - "[[TASK-205]]"
 due_date: ''
 created: 2026-08-02
-updated: 2026-08-09
+updated: 2026-08-25
+status_note: >-
+  Shipped. The geofence now carries a TYPED `cause` on its `unknown` verdict
+  (`no-pose` / `pose-drifted` / `no-map` / `release-margin` / `reanchor-hold`),
+  and one exhaustive function derives the operator-facing label
+  `enforcing | not-enforcing | no-map` from it — never by matching the reason
+  prose. All seven verdict sites in the task's table map as the table says.
+  `RobotStateManager` captures the previous enforcement label beside
+  `previousPlaceId`, so the bare early return on an unchanged place id no longer
+  swallows a lapse; it notifies listeners when EITHER changed and logs the
+  transition (`Geofence: enforcing -> not-enforcing (reason)`) rather than
+  latching once. `SafetyMonitor` gained a warn-only advisory on the tiltWarning
+  model, set BEFORE the `unknown` early return (which stays), surfaced only in
+  `getStatus().warnings`, containing none of 'Protective stop' / 'Emergency
+  stop' / 'Keepout violated' and never touching `estopState`. The new
+  `geofence` field is OPTIONAL in all three hand-mirrored `AgentModeState`
+  copies and `emptyState()` still fabricates nothing. Frontend: `geofence` is a
+  new ConditionKey at amber (level 2), and PlaceChip renders a separate
+  "· fence off" marker in words, independent of the "· stale" marker, in both
+  the known- and unknown-place branches. D1 is honoured: the two independent
+  `PLACE_DRIFT_BUDGET_M` defaults of 15 are collapsed to one shared constant
+  (config.ts imports `DEFAULT_PLACE_DRIFT_BUDGET_M`) and pinned by a test; the
+  budget itself is NOT retuned. D2 is recorded as a doc-comment on a new
+  `PlaceTracker.accumulateDrift()` that replaces the two duplicated
+  accumulation blocks.
+
+
+  REVIEW ROUND 1 closed a coverage hole and three inaccurate claims, no
+  behaviour change. The controller wire that actually carries the lapse to the
+  console — `getState().geofence` and `attach()`'s publish filter — had no test
+  at all: reverting either to its pre-fix form left the whole robot-agent suite
+  green. `agent-mode/__tests__/geofence-plumbing.test.ts` pins both. The three
+  REST `applyGeofence` call sites in the app store (fetchState, toggle,
+  resetEstop) were likewise unpinned and now are; fetchState is the one that
+  decides what the console says on FIRST load. The D1 test asserted two numbers
+  are equal, which two independent literals also satisfy, so it could not see
+  the collapse being undone; it now re-resolves the module graph with the
+  resolver's constant moved and requires `config.ts` to follow. The server
+  tests were runtime-vacuous (`isValidAgentModeSnapshot` never reads
+  `geofence`; one assertion compared an object to a string) and now pin the
+  ingest -> `getState()` carriage end to end. Copy fixes: the drawer's
+  "All seven" paragraph rendered above eight rows — the count is now taken from
+  the list and pinned; and the claim that a warning matcher could DELETE the
+  advisory was wrong (it is spliced into `getStatus()`, never written to
+  `state.warnings`), so both docstrings now say what the coupling really is.
+
+
+  VERIFIED ON THIS MACHINE (a macOS laptop, simulation only): `npx tsc
+  --noEmit` clean for robot-agent, app and server; full vitest green —
+  robot-agent 118 files / 1942 tests, app 111 files / 1975 tests, server 213
+  files / 5574 passed + 1 skipped. The integration test the task asked for
+  (`robot-agent/src/robot/__tests__/state-geofence-enforcement.test.ts`) drives
+  more than PLACE_DRIFT_BUDGET_M metres inside ONE place without a re-anchor,
+  then walks at RACK-A, and asserts the DISJUNCTION — either a stop fires or
+  the state says enforcement is off — never "a stop fires" alone. Ten mutations
+  were run to prove the tests bite, each reverted afterwards: the bare
+  `if (placeChanged) return` in state.ts (2 red); `pose-drifted` -> `enforcing`
+  (7 red); `geofence: null` in the controller snapshot (2 red); the controller
+  publish filter reverted to place-only (1 red); config.ts reverted to an
+  independent literal 15 (1 red); each of the three store call sites deleted
+  (1 red each); the server's ingest stripping the field, its validator gating
+  on the field, and `emptyState()` fabricating `enforcing` (1, 8 and 1 red);
+  the unregistered-frame verdict changed from `no-map` to `pose-drifted`
+  (1 red); and the drawer's row count re-typed as "seven" (1 red).
+
+
+  NOT VERIFIED HERE, and no substitute was run for it: the live re-check on the
+  GPU box is still OUTSTANDING. This machine has no GPU, no real or simulated
+  Unitree G1, no Isaac Sim, no VLA server and no lidar, so nothing was loaded
+  into the warehouse scene, no robot was driven >15 m, RACK-A was never
+  approached in a running sim, and the console was never looked at. The
+  runbook in this task's Description is unchanged and still needs executing on
+  GPU_BOX: load the warehouse scene, drive >15 m, approach RACK-A, confirm the
+  console says the fence is not enforcing, then re-anchor with "you are in
+  Aisle 1" and confirm the stop fires with the robot stationary.
 ---
 
 

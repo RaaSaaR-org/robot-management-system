@@ -404,6 +404,41 @@ export interface AgentModeState {
    * no `goto` is running. Optional so an older robot-agent stays compatible.
    */
   nav?: AgentNavPlan | null;
+  /**
+   * Whether the keepout geofence is actually fencing (TASK-201).
+   *
+   * Optional, and ABSENT MUST RENDER AS NOTHING — never as `enforcing`. An
+   * older agent that does not report this has not told us the fence works; it
+   * has told us nothing, and the defect this field exists to end was a fence
+   * that silently stopped fencing. Defaulting it anywhere in this mirror would
+   * reproduce that bug on the wire.
+   */
+  geofence?: AgentGeofenceState | null;
+}
+
+/**
+ * Whether the keepout fence is fencing (TASK-201). Mirrors
+ * `robot-agent/src/safety/types.ts`.
+ *
+ *  - `enforcing`     — a violation would stop the robot.
+ *  - `not-enforcing` — a violation would NOT stop it: the robot can walk
+ *    through a keepout with the E-Stop armed and the system reporting healthy.
+ *  - `no-map`        — there is no fence on this robot at all. Distinct from
+ *    `not-enforcing`: nothing lapsed, nothing was surveyed.
+ */
+export type GeofenceEnforcement = 'enforcing' | 'not-enforcing' | 'no-map';
+
+/**
+ * The geofence's state as carried in {@link AgentModeState} (TASK-201).
+ *
+ * `reason` is the robot's own sentence for why the fence is not fencing, null
+ * while it is. Render it; never branch on it — the label is `enforcement`, and
+ * it is derived on the robot from a typed cause precisely so no consumer has to
+ * pattern-match prose.
+ */
+export interface AgentGeofenceState {
+  enforcement: GeofenceEnforcement;
+  reason: string | null;
 }
 
 /** Summary of the robot-built occupancy map carried in {@link AgentModeState}. */
@@ -860,6 +895,12 @@ export interface AgentModeStore {
   map: AgentMapSummary | null | undefined;
   /** Where the robot believes it stands (undefined = not reported, null = unknown) */
   place: ScenePlace | null | undefined;
+  /**
+   * Whether the robot's keepout fence is fencing (TASK-201). `undefined` = the
+   * agent does not report it (older agent), `null` = it reported none. Neither
+   * may be rendered as `enforcing`.
+   */
+  geofence: AgentGeofenceState | null | undefined;
   /** The full map (grid, peers, keepouts) as last fetched by the map panel; null before / when unavailable. */
   robotMap: RobotMapPayload | null;
   robotMapStatus: RobotMapStatus;

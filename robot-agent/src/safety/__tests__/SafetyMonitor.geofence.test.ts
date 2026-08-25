@@ -27,7 +27,7 @@ const RACK: ZoneViolation = {
 
 const VIOLATING: GeofenceStatus = { kind: 'violating', violation: RACK };
 const CLEAR: GeofenceStatus = { kind: 'clear' };
-const UNKNOWN: GeofenceStatus = { kind: 'unknown', reason: 'no pose sample' };
+const UNKNOWN: GeofenceStatus = { kind: 'unknown', cause: 'no-pose', reason: 'no pose sample' };
 
 function makeMonitor() {
   const state = {

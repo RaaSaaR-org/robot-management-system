@@ -843,11 +843,22 @@ export class AgentModeController {
       this.emit('agent:state:changed');
       return true;
     };
+    // TASK-201: enforcement flips WITHOUT the place id changing — that is the
+    // whole observed failure, a constant place id for a whole traverse while
+    // the drift budget is spent. `RobotStateManager` now notifies its listeners
+    // on either change, so this callback has to look at either too; filtering
+    // on the place alone would swallow every geofence lapse and leave it to the
+    // 15 s liveness re-push.
+    let lastPublishedGeofence = robotStateManager.getGeofenceState?.()?.enforcement ?? null;
     robotStateManager.subscribe?.((state) => {
       const place = state.location?.place ?? null;
       const latchChanged = publishLatchChange();
-      if (place === lastPublishedPlace) return;
+      const geofence = robotStateManager.getGeofenceState?.()?.enforcement ?? null;
+      const geofenceChanged = geofence !== lastPublishedGeofence;
+      lastPublishedGeofence = geofence;
+      const placeChanged = place !== lastPublishedPlace;
       lastPublishedPlace = place;
+      if (!placeChanged && !geofenceChanged) return;
       if (!latchChanged) this.emit('agent:state:changed');
     });
     robotStateManager.onSafetyEvent?.(() => {
@@ -1026,6 +1037,11 @@ export class AgentModeController {
       map: this.mapKeeper?.summary() ?? null,
       place: this.scene.getPlace(),
       nav: this.navState ? { ...this.navState } : null,
+      // TASK-201. Optional call: test doubles for RobotStateManager are
+      // partial, and `null` from one of them means "this build does not
+      // report enforcement" — which the console renders as nothing, never
+      // as `enforcing`.
+      geofence: this.robotStateManager?.getGeofenceState?.() ?? null,
     };
   }
 

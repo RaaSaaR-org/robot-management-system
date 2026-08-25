@@ -8,6 +8,8 @@
  * @status live
  */
 
+import type { GeofenceEnforcement } from '../safety/types.js';
+
 /** Executable block vocabulary (v1). No `vla_skill` — deferred to TASK-188. */
 export const AgentBlockKinds = [
   'walk',
@@ -452,6 +454,30 @@ export interface AgentModeState {
    * compatible.
    */
   nav?: AgentNavPlan | null;
+  /**
+   * Whether the keepout geofence is actually fencing (TASK-201).
+   *
+   * Optional, and ABSENT MUST RENDER AS NOTHING — never as `enforcing`. An
+   * older agent that does not report this has not told us the fence works; it
+   * has told us nothing, and the defect this field exists to end was a fence
+   * that silently stopped fencing. A mirror that defaulted the field to
+   * `enforcing` would reproduce the bug on the wire.
+   */
+  geofence?: AgentGeofenceState | null;
+}
+
+/**
+ * The geofence's own state, as carried in {@link AgentModeState} (TASK-201).
+ *
+ * `reason` is the evaluator's own sentence for why the fence is not fencing —
+ * null while it is. The operator-facing label is {@link
+ * AgentGeofenceState.enforcement} and is derived on the robot from a typed
+ * cause, never by matching this prose: `reason` is for a human to read, not for
+ * a consumer to branch on.
+ */
+export interface AgentGeofenceState {
+  enforcement: GeofenceEnforcement;
+  reason: string | null;
 }
 
 /** Summary of the robot-built occupancy map that rides in {@link AgentModeState}. */

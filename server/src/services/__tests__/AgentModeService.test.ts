@@ -53,6 +53,18 @@ function event(partial: Partial<AgentModeEvent> & Pick<AgentModeEvent, 'type' | 
   return { timestamp: '2026-07-25T10:00:00.000Z', ...partial };
 }
 
+/** The least a snapshot can be and still replace the stored state. */
+function validSnapshot(robotId: string): AgentModeState {
+  return {
+    robotId,
+    enabled: true,
+    controlOwner: 'agent',
+    plan: null,
+    scene: null,
+    estopActive: false,
+  };
+}
+
 describe('AgentModeService', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -489,6 +501,61 @@ describe('AgentModeService', () => {
   });
 });
 
+/**
+ * TASK-201. The server is a pass-through mirror, and this is the whole of its
+ * part in saying that a fence has stopped fencing: what the robot reported must
+ * come back out of `getState()`, and what the robot did NOT report must not be
+ * invented.
+ */
+describe('the geofence through the mirror', () => {
+  it('serves back the lapse the robot reported', () => {
+    const robotId = nextRobotId();
+    const geofence = {
+      enforcement: 'not-enforcing' as const,
+      reason: 'the pose has drifted past its budget',
+    };
+
+    agentModeService.ingest(
+      event({
+        robotId,
+        type: 'agent:state:changed',
+        state: { ...validSnapshot(robotId), geofence },
+      })
+    );
+
+    // Read back through the query the route serves, not the ingest return —
+    // that is the hop an operator's console actually makes.
+    expect(agentModeService.getState(robotId)?.geofence).toEqual(geofence);
+  });
+
+  it('stays hydrated for an older agent that reports no geofence, and invents none', () => {
+    const robotId = nextRobotId();
+
+    agentModeService.ingest(
+      event({ robotId, type: 'agent:state:changed', state: validSnapshot(robotId) })
+    );
+
+    // Rejecting this snapshot would serve `emptyState()` for a robot that is
+    // talking to us — the defect, reproduced on the wire.
+    expect(agentModeService.isHydrated(robotId)).toBe(true);
+    expect(agentModeService.getState(robotId)?.geofence).toBeUndefined();
+  });
+
+  it('leaves `geofence` absent for a robot that has told us nothing usable', () => {
+    // An event whose `state` is not a valid snapshot falls back to
+    // `emptyState()`. Whatever that fills in is served as the robot's answer,
+    // so it must not fill in a fence that works.
+    const state = agentModeService.ingest({
+      robotId: 'never-heard-of-this-robot',
+      type: 'agent:state:changed',
+      timestamp: new Date().toISOString(),
+      state: {} as never,
+    });
+
+    expect(state.geofence).toBeUndefined();
+  });
+});
+
 describe('isValidAgentModeSnapshot', () => {
   const valid: AgentModeState = {
     robotId: 'robot-x',
@@ -512,6 +579,30 @@ describe('isValidAgentModeSnapshot', () => {
     expect(isValidAgentModeSnapshot({ ...valid, estopActive: true, estopSource: 'safety' })).toBe(
       true
     );
+  });
+
+  /**
+   * TASK-201: the geofence field is OPTIONAL for exactly this reason. Required
+   * would make this validator reject every agent built before it existed, and
+   * the mirror would then serve `emptyState()` for a robot whose fence has
+   * stopped fencing — the defect, reproduced on the wire.
+   *
+   * This validator reads three fields and `geofence` is not one of them, so
+   * what is on trial here is only that it STAYS that way — the end-to-end
+   * carriage is pinned in "the geofence through the mirror" above.
+   */
+  it('never gates a snapshot on the geofence, present or absent', () => {
+    expect(isValidAgentModeSnapshot(valid)).toBe(true);
+    expect(
+      isValidAgentModeSnapshot({
+        ...valid,
+        geofence: { enforcement: 'not-enforcing', reason: 'no pose sample' },
+      })
+    ).toBe(true);
+    // Even nonsense in the field cannot make an otherwise-valid snapshot
+    // invalid: this is a liveness contract about `enabled`/`estopActive`, and
+    // widening it to the fence would drop stopped robots on the floor.
+    expect(isValidAgentModeSnapshot({ ...valid, geofence: 'yes' as never })).toBe(true);
   });
 
   it.each([

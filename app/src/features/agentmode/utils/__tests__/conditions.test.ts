@@ -49,18 +49,18 @@ beforeEach(() => {
 });
 
 describe('selectConditions', () => {
-  it('returns all seven conditions, in severity order, whatever the state', () => {
+  it('returns all eight conditions, in severity order, whatever the state', () => {
     expect(conditions().map((c) => c.key)).toEqual([...CONDITION_ORDER]);
-    expect(conditions()).toHaveLength(7);
+    expect(conditions()).toHaveLength(8);
 
     useAgentModeStore.setState({ damped: true, estopActive: true, estopStatus: 'failed' });
     expect(conditions().map((c) => c.key)).toEqual([...CONDITION_ORDER]);
-    expect(conditions()).toHaveLength(7);
+    expect(conditions()).toHaveLength(8);
   });
 
   // The false entries are the point: an operator has to be able to check that
   // the rail is calm because nothing is wrong, not because the rail broke.
-  it('reports a calm robot as seven inactive conditions at level 0', () => {
+  it('reports a calm robot as eight inactive conditions at level 0', () => {
     for (const condition of conditions()) {
       expect(condition.active).toBe(false);
       expect(condition.level).toBe(0);
@@ -180,5 +180,57 @@ describe('identity', () => {
 
     useAgentModeStore.setState({ damped: false });
     expect(conditions()).not.toBe(first);
+  });
+});
+
+/**
+ * TASK-201. The three states that must NOT raise this condition matter as much
+ * as the one that must: a fence with no map to enforce, and an agent too old to
+ * report either, are not lapses — and a condition that fires on all of them
+ * becomes wallpaper, which is how the real lapse goes back to being invisible.
+ */
+describe('the geofence condition (TASK-201)', () => {
+  it('is active, amber, when the robot says the fence is not enforcing', () => {
+    useAgentModeStore.setState({
+      geofence: { enforcement: 'not-enforcing', reason: 'the pose has drifted past its budget' },
+    });
+
+    expect(byKey('geofence').active).toBe(true);
+    // Amber, not red: level 3 fires an assertive interrupt, and the commonest
+    // cause of a lapse is a dropped pose poll.
+    expect(byKey('geofence').level).toBe(2);
+    expect(conditionLevel(conditions())).toBe(2);
+  });
+
+  it('is inactive while the fence is enforcing', () => {
+    useAgentModeStore.setState({ geofence: { enforcement: 'enforcing', reason: null } });
+    expect(byKey('geofence').active).toBe(false);
+  });
+
+  it('is inactive for a robot with no map — nothing lapsed, nothing was surveyed', () => {
+    useAgentModeStore.setState({ geofence: { enforcement: 'no-map', reason: 'no place graph' } });
+    expect(byKey('geofence').active).toBe(false);
+  });
+
+  it('is inactive when the agent does not report one — absent is not `enforcing`', () => {
+    useAgentModeStore.setState({ geofence: undefined });
+    expect(byKey('geofence').active).toBe(false);
+    useAgentModeStore.setState({ geofence: null });
+    expect(byKey('geofence').active).toBe(false);
+  });
+
+  /**
+   * The two claims are independent and both have to survive. A stale place with
+   * the fence still holding is a naming problem; a fence that is off is a
+   * safety state; and they co-occur constantly, because the same spent drift
+   * budget causes both.
+   */
+  it('coexists with an E-Stop latch without either swallowing the other', () => {
+    useAgentModeStore.setState({
+      estopActive: true,
+      geofence: { enforcement: 'not-enforcing', reason: 'no pose sample' },
+    });
+
+    expect(conditions().filter((c) => c.active).map((c) => c.key)).toEqual(['estop', 'geofence']);
   });
 });

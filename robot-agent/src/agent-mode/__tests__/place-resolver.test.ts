@@ -20,7 +20,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { config as appConfig } from '../../config/config.js';
 import {
   DEFAULT_PLACE_DRIFT_BUDGET_M,
   DEFAULT_PLACE_HYSTERESIS_MARGIN_M,
@@ -242,6 +243,67 @@ describe('aisle-mouth flap test', () => {
 });
 
 describe('the drift budget', () => {
+  /**
+   * TASK-201, decision D1. `config.ts` used to carry its OWN literal `15` for
+   * `PLACE_DRIFT_BUDGET_M`, independent of the resolver's default, and only the
+   * resolver's was pinned by a test — so retuning either one moved the budget
+   * for some trackers and not others, silently.
+   *
+   * Do not "fix" a failure here by re-typing 15 into config.ts. The budget
+   * itself is deliberately unchanged by TASK-201 — see D1.
+   */
+  it('agrees with the app config today', () => {
+    expect(appConfig.place.driftBudgetM).toBe(DEFAULT_PLACE_DRIFT_BUDGET_M);
+  });
+
+  /**
+   * …and the same two numbers agreeing is NOT what D1 delivered — two
+   * independent literals both reading 15 agree too, which is exactly the state
+   * this task was asked to end. What D1 delivered is that `config.ts` READS the
+   * resolver's constant, so the two cannot be retuned apart.
+   *
+   * That is a dependency, not a value, and only re-resolving the module graph
+   * can see it: move the resolver's constant and the config must follow. A
+   * `toBe` between two numbers cannot — reverting `config.ts` to an independent
+   * `15` leaves it green, which is how this was reported.
+   */
+  it('is ONE default: moving the resolver constant moves the app config with it', async () => {
+    vi.resetModules();
+    // An explicit env var would win over BOTH defaults and hide the wiring.
+    const saved = process.env.PLACE_DRIFT_BUDGET_M;
+    delete process.env.PLACE_DRIFT_BUDGET_M;
+    vi.doMock('../place-resolver.js', async () => {
+      const actual = await vi.importActual<typeof import('../place-resolver.js')>(
+        '../place-resolver.js',
+      );
+      return { ...actual, DEFAULT_PLACE_DRIFT_BUDGET_M: 47.5 };
+    });
+
+    try {
+      const { config } = await import('../../config/config.js');
+      expect(config.place.driftBudgetM).toBe(47.5);
+    } finally {
+      vi.doUnmock('../place-resolver.js');
+      vi.resetModules();
+      if (saved === undefined) delete process.env.PLACE_DRIFT_BUDGET_M;
+      else process.env.PLACE_DRIFT_BUDGET_M = saved;
+    }
+  });
+
+  it('still lets PLACE_DRIFT_BUDGET_M override the shared default', async () => {
+    vi.resetModules();
+    const saved = process.env.PLACE_DRIFT_BUDGET_M;
+    process.env.PLACE_DRIFT_BUDGET_M = '3.5';
+    try {
+      const { config } = await import('../../config/config.js');
+      expect(config.place.driftBudgetM).toBe(3.5);
+    } finally {
+      vi.resetModules();
+      if (saved === undefined) delete process.env.PLACE_DRIFT_BUDGET_M;
+      else process.env.PLACE_DRIFT_BUDGET_M = saved;
+    }
+  });
+
   it('flips confidence to stale past the budget, and back on a re-anchor', () => {
     const tracker = new PlaceTracker({ graph: warehouse, driftBudgetM: 4 });
     expect(DEFAULT_PLACE_DRIFT_BUDGET_M).toBe(15);
