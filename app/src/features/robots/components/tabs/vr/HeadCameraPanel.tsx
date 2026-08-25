@@ -14,7 +14,13 @@ import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
 import { brandColors } from '@/brand';
 import { cameraStreamUrl, fetchCameraTicket } from '../../../api/cameraApi';
-import { initialLiveness, pollLiveness, type FrameSampler, type LivenessState } from './vrCamera';
+import {
+  initialLiveness,
+  isRealLoadFailure,
+  pollLiveness,
+  type FrameSampler,
+  type LivenessState,
+} from './vrCamera';
 import { HAPTICS, pulsePreset, type HapticSource } from './vrHaptics';
 import { HUD_COLORS } from './vrHud';
 import { useTextPlate } from './VrTextPlate';
@@ -75,13 +81,30 @@ const PANEL_TALL_M = PANEL_WIDTH_M * PANEL_ASPECT;
  * makes the 8x8 fingerprint read legal — a cross-origin draw would taint the
  * scratch canvas and `getImageData` would throw.
  *
+ * `isCurrent` is checked AFTER the await and before anything is assigned. The
+ * `<img>` is a single `useMemo(..., [])` element shared by every arming path, so
+ * a ticket that arrives late would otherwise write over whatever armed after it
+ * — pointing the panel at the previous robot's camera, or reopening a stream the
+ * cleanup had just dropped.
+ *
+ * The `''`-then-URL pair stays in ONE task on purpose. An empty `src` queues an
+ * `error` task; only a reassignment in the same task beats it to the queue.
+ * Split them across an await and every re-arm fires `onerror`.
+ *
  * @returns whether the stream was armed. `false` means no ticket, which the
  *          caller must surface: an `<img>` whose `src` was never assigned fires
- *          no `onerror`, so nothing else would ever say so.
+ *          no `onerror`, so nothing else would ever say so. It also means
+ *          "superseded", which needs no surfacing — whatever superseded it will
+ *          report for itself.
  */
-async function armStream(image: HTMLImageElement, robotId: string): Promise<boolean> {
+async function armStream(
+  image: HTMLImageElement,
+  robotId: string,
+  isCurrent: () => boolean,
+): Promise<boolean> {
   try {
     const { ticket } = await fetchCameraTicket(robotId, PANEL_CAMERA);
+    if (!isCurrent()) return false;
     image.src = '';
     image.src = cameraStreamUrl(robotId, PANEL_CAMERA, ticket);
     return true;
@@ -196,6 +219,12 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
   const lastRearm = useRef(0);
   /** A ticket fetch is in flight; a second re-arm must not race it. */
   const arming = useRef(false);
+  /**
+   * Bumped whenever the in-flight arming attempt stops being the current one —
+   * a robot change, an unmount, or a later re-arm. `arming` only stops two
+   * fetches overlapping; this is what stops a slow one landing after it lost.
+   */
+  const armEpoch = useRef(0);
 
   useEffect(() => {
     // Also reset per-robot, and this is why: `failed` is what swaps in the
@@ -207,13 +236,24 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     lastUploaded.current = undefined;
     liveness.current = null;
     lastRearm.current = 0;
-    image.onerror = () => setFailed(true);
+    // Guarded on `src`, because clearing it is how this component drops a
+    // connection — and an empty `src` is specified to fire `error`. That was
+    // harmless while arming was synchronous (`src = ''` then `src = url` in one
+    // task suppresses it); now that a ticket round trip sits between them, an
+    // unguarded handler latches CAMERA OFFLINE on the very re-arm that is busy
+    // fixing the stream, and `failed` gates the re-arm itself. Only a real load
+    // failure — one with a `src` to fail at — is an offline camera.
+    image.onerror = () => {
+      if (isRealLoadFailure(image.getAttribute('src'))) setFailed(true);
+    };
     // Arming is a round trip now (fetch a ticket, then assign `src`), so the
     // effect can outlive its own robot. `cancelled` is what keeps a slow ticket
     // for robot A from pointing the panel at A's camera after the operator
     // switched to B.
     let cancelled = false;
-    void armStream(image, robotId).then((armed) => {
+    armEpoch.current += 1;
+    const epoch = armEpoch.current;
+    void armStream(image, robotId, () => armEpoch.current === epoch).then((armed) => {
       if (cancelled) return;
       // No ticket, no `src`, and an unassigned `<img>` fires no `onerror` — the
       // panel would sit blank and claim nothing. Say it is offline instead.
@@ -221,6 +261,9 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
     });
     return () => {
       cancelled = true;
+      // Retire the in-flight attempt too, or its `src` assignment lands after
+      // the line below and reopens the connection this is closing.
+      armEpoch.current += 1;
       // Drop the MJPEG connection. Leave it open and the sim keeps rendering
       // frames for a panel nobody is looking at — and every one of those frames
       // is a render on its physics thread.
@@ -298,8 +341,16 @@ export function HeadCameraPanel({ robotId }: { robotId: string }) {
       arming.current = true;
       lastUploaded.current = undefined;
       liveness.current = null;
-      image.src = '';
-      void armStream(image, robotId).finally(() => {
+      // NOT `image.src = ''` here. `armStream` clears and reassigns in one task,
+      // which is what keeps the empty-`src` `error` event from firing; clearing
+      // it here instead leaves the `<img>` empty across the whole ticket round
+      // trip, which fires `error` (latching CAMERA OFFLINE) and drives
+      // `naturalWidth` to 0 (which the guard above turns into "never re-arm
+      // again"). Both latches are permanent — this is the panel's only way back
+      // from a sim restart.
+      armEpoch.current += 1;
+      const rearmEpoch = armEpoch.current;
+      void armStream(image, robotId, () => armEpoch.current === rearmEpoch).finally(() => {
         arming.current = false;
       });
     }

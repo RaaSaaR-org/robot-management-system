@@ -268,29 +268,41 @@ robotRoutes.get('/:id/telemetry/history', async (req: Request, res: Response) =>
  * so the stream request lands in the same tenant scope the ticket request had.
  */
 robotRoutes.post('/:id/camera/:name/ticket', async (req: Request, res: Response) => {
-  const user = (req as AuthenticatedRequest).user;
-  if (!user) {
-    // Only reachable if this route is ever mounted without authMiddleware.
-    // Minting an unattributed ticket would be worse than refusing.
-    return res.status(401).json({ error: 'Unauthorized' });
+  // try/catch, like every other async handler in this file: express 4 does not
+  // forward a rejected handler promise to the error middleware, and
+  // `getRegisteredRobot` reaches Prisma on a cache miss. Unhandled, a database
+  // blip here would hang the caller and take the process down with it — every
+  // open stream, socket and A2A connection included.
+  try {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
+      // Only reachable if this route is ever mounted without authMiddleware.
+      // Minting an unattributed ticket would be worse than refusing.
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // A ticket for a robot that does not exist would be a valid signature over
+    // nothing — and would tell the asker which robot ids are real.
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+
+    const ticket = signCameraTicket({
+      robotId: req.params.id,
+      cameraName: req.params.name,
+      userId: user.id,
+      tenantId: user.tenantId ?? null,
+      role: user.role,
+    });
+
+    res.json({ ticket, expiresIn: Math.floor(CAMERA_TICKET_TTL_MS / 1000) });
+  } catch (error) {
+    // Deliberately not echoing `error` into the body — the failure text comes
+    // from Prisma and this route should not narrate the database to a caller.
+    console.error('Error minting camera ticket:', error);
+    res.status(500).json({ error: 'Failed to mint camera ticket' });
   }
-
-  // A ticket for a robot that does not exist would be a valid signature over
-  // nothing — and would tell the asker which robot ids are real.
-  const registered = await robotManager.getRegisteredRobot(req.params.id);
-  if (!registered) {
-    return res.status(404).json({ error: 'Robot not found' });
-  }
-
-  const ticket = signCameraTicket({
-    robotId: req.params.id,
-    cameraName: req.params.name,
-    userId: user.id,
-    tenantId: user.tenantId ?? null,
-    role: user.role,
-  });
-
-  res.json({ ticket, expiresIn: Math.floor(CAMERA_TICKET_TTL_MS / 1000) });
 });
 
 /**

@@ -62,12 +62,19 @@ export const CockpitViewport = memo(function CockpitViewport({
     cameraName,
     apiClient.defaults.baseURL ?? '',
   );
-  const showCamera =
-    source.kind === 'camera' && !cameraErrored[source.name] && !ticketDenied && Boolean(streamUrl);
+  // Two states, not one. `cameraArmed` is "the operator asked for this camera
+  // and nothing has refused it"; `showCamera` adds "and its URL has arrived".
+  // Collapsing them would put the 3D viewer on screen for the ticket round trip
+  // of every camera switch — mounting and destroying a WebGL context and a GLTF
+  // load each time, for a view that is about to be an `<img>` again.
+  const cameraArmed =
+    source.kind === 'camera' && !cameraErrored[source.name] && !ticketDenied;
+  const showCamera = cameraArmed && Boolean(streamUrl);
+  const cameraPending = cameraArmed && !streamUrl;
 
   const sourceLabel = source.kind === 'camera' ? `CAM · ${source.name.toUpperCase()}` : 'MODEL · LIVE POSE';
   const liveLabel = source.kind === 'camera'
-    ? (showCamera ? 'STREAMING' : 'NO SIGNAL')
+    ? (showCamera ? 'STREAMING' : cameraPending ? 'ACQUIRING' : 'NO SIGNAL')
     : (telemetryConnected ? 'LIVE' : 'NO LINK');
   const isLive = source.kind === 'camera' ? showCamera : telemetryConnected;
 
@@ -91,6 +98,10 @@ export const CockpitViewport = memo(function CockpitViewport({
               setCameraErrored((m) => ({ ...m, [source.name]: true }))
             }
           />
+        ) : cameraPending ? (
+          <div className="flex h-full w-full items-center justify-center bg-[#06070A] font-mono text-[11px] tracking-wider text-theme-tertiary">
+            ACQUIRING STREAM…
+          </div>
         ) : (
           <Robot3DViewer
             robotType={robotType}

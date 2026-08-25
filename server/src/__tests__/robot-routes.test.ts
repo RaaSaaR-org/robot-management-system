@@ -111,6 +111,25 @@ describe('Robot Routes', () => {
 
       expect(res.status).toBe(401);
     });
+
+    it('500s when the lookup rejects, rather than rejecting into the void', async () => {
+      // express 4 does not forward a rejected handler promise to the error
+      // middleware, and `getRegisteredRobot` reaches Prisma on a cache miss. An
+      // unguarded handler answers nothing at all here and takes the process down
+      // on the unhandled rejection — every open camera stream, socket and A2A
+      // connection with it. The sibling GET on this path has always caught; so
+      // must this one.
+      mockRobotManager.getRegisteredRobot.mockRejectedValue(
+        new Error("Can't reach database server"),
+      );
+
+      const res = await request(appWithUser(USER))
+        .post('/api/robots/robot-001/camera/head_camera/ticket');
+
+      expect(res.status).toBe(500);
+      // And the database's own words do not travel to the caller.
+      expect(JSON.stringify(res.body)).not.toContain('database server');
+    });
   });
 
   describe('GET /api/robots/:id/peers (TASK-207)', () => {

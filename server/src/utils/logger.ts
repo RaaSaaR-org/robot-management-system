@@ -32,10 +32,13 @@ function getTransport(): pino.TransportSingleOptions | undefined {
  *
  * Sensitive fields are automatically redacted in log output.
  */
-export const logger = pino({
-  level: isTest ? 'silent' : isDev ? 'debug' : 'info',
-  redact: {
-    paths: [
+/**
+ * Property paths pino censors before anything is written.
+ *
+ * Exported so the redaction tests can assert against the list the server
+ * actually runs with — a test that retypes these paths tests its own copy.
+ */
+export const REDACT_PATHS = [
       'password',
       'newPassword',
       'currentPassword',
@@ -53,7 +56,33 @@ export const logger = pino({
       'body.refreshToken',
       'body.plaintext',
       'plaintext',
-    ],
+      // The camera stream ticket rides in the query string, because an `<img>`
+      // cannot send a header (TASK-214). It is short-lived and narrowly scoped,
+      // but it is still a replayable credential, and "a credential in a URL ends
+      // up in the logs" is the exact failure the ticket was introduced to shrink
+      // — so it must not end up in ours. This censors the parsed copy; the
+      // serializer below censors the one inside `req.url`.
+      'req.query.ticket',
+] as const;
+
+/**
+ * Strip a camera stream ticket out of a request URL.
+ *
+ * `redact` matches property paths, so it can censor the parsed `req.query.ticket`
+ * but cannot reach inside the URL string pino also logs. This handles that copy.
+ *
+ * Global and case-insensitive on purpose: a duplicated `?ticket=a&ticket=b`
+ * fails verification (express parses it to an array, which is not a string) but
+ * both halves would still be credentials sitting in a log line.
+ */
+export function scrubCameraTicket(url: string): string {
+  return url.replace(/([?&]ticket=)[^&]*/gi, '$1[REDACTED]');
+}
+
+export const logger = pino({
+  level: isTest ? 'silent' : isDev ? 'debug' : 'info',
+  redact: {
+    paths: [...REDACT_PATHS],
     censor: '[REDACTED]',
   },
   transport: getTransport(),
@@ -79,6 +108,27 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
  *
  * Uses the request-id set by `requestIdMiddleware`.
  */
+/**
+ * The stock pino request serializer, minus the camera ticket.
+ *
+ * `pino.stdSerializers.req` copies `req.originalUrl` into `url`, and that is
+ * where a camera stream ticket rides — an `<img>` cannot send an Authorization
+ * header, so the credential has to be in the URL (TASK-214). It is short-lived
+ * and scoped to one camera, but it is replayable, and "a credential in a URL
+ * ends up in the logs" is the exact failure the ticket was introduced to shrink.
+ *
+ * Exported so a test can run the serializer this server actually installs.
+ */
+export function ticketSafeReqSerializer(
+  req: Parameters<typeof pino.stdSerializers.req>[0],
+): ReturnType<typeof pino.stdSerializers.req> {
+  const serialized = pino.stdSerializers.req(req);
+  if (typeof serialized.url === 'string') {
+    serialized.url = scrubCameraTicket(serialized.url);
+  }
+  return serialized;
+}
+
 export const httpLogger = pinoHttp({
   logger,
   genReqId: (req) => (req as unknown as Record<string, unknown>).id as string || randomUUID(),
@@ -92,7 +142,7 @@ export const httpLogger = pinoHttp({
     return 'info';
   },
   serializers: {
-    req: pino.stdSerializers.req,
+    req: ticketSafeReqSerializer,
     res: pino.stdSerializers.res,
   },
 });

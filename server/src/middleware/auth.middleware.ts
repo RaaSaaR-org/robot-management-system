@@ -195,9 +195,18 @@ export function cameraStreamTicket(
   if (!claims) return next();
 
   // Express has already decoded the path segments; the ticket carries the raw
-  // ids, so compare decoded against raw.
-  const robotId = decodeURIComponent(match[1]);
-  const cameraName = decodeURIComponent(match[2]);
+  // ids, so compare decoded against raw. A malformed escape (`%zz`) throws here
+  // rather than mismatching, and an uncaught throw would turn what should be a
+  // 401 into a 500 — so it falls through to `authMiddleware` like any other
+  // ticket that does not name this path.
+  let robotId: string;
+  let cameraName: string;
+  try {
+    robotId = decodeURIComponent(match[1]);
+    cameraName = decodeURIComponent(match[2]);
+  } catch {
+    return next();
+  }
   if (claims.robotId !== robotId || claims.cameraName !== cameraName) return next();
 
   req.user = {

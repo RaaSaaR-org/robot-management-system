@@ -147,3 +147,26 @@ export function pollLiveness(
     staleForMs: r.staleForMs,
   };
 }
+
+/**
+ * Does an `error` event from the panel's `<img>` mean the camera is offline?
+ *
+ * Only if there was a `src` to fail at. Clearing `src` is how the panel drops an
+ * MJPEG connection — on unmount, and before a re-arm — and an empty `src` is
+ * specified to queue an `error` task of its own ("update the image data": the
+ * request goes to broken and fires `error`). Assigning a real URL in the SAME
+ * task beats that task to the queue and no error is seen, which is why this was
+ * invisible while arming was synchronous.
+ *
+ * It stopped being synchronous when the stream started needing a ticket
+ * (TASK-214): a `fetch` now sits between clearing `src` and reassigning it, so
+ * the empty-`src` error lands. Treated as a load failure it latches the panel to
+ * CAMERA OFFLINE — and `failed` is also what gates the re-arm, so the latch is
+ * permanent and takes the panel's only recovery from a sim restart with it.
+ *
+ * @param src The `<img>`'s `src` attribute as it reads NOW, at handler time —
+ *            `image.getAttribute('src')`, which is `''` after a clear.
+ */
+export function isRealLoadFailure(src: string | null): boolean {
+  return Boolean(src);
+}
