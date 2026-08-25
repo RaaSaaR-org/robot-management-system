@@ -1,13 +1,15 @@
 /**
  * @file scan-session.test.ts
  * @description Regression: getPointCloudFrame is unchanged with no active scan
- *   session, and pose-stamps frames once a session is started.
+ *   session, pose-stamps frames once a session is started, and (TASK-190)
+ *   forwards the active session across the hardware seam.
  * @feature robot
  * @status test
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { RobotStateManager } from '../state.js';
+import { hardwareClient } from '../../hardware/HardwareClient.js';
 import type { RobotConfig } from '../types.js';
 
 const config: RobotConfig = {
@@ -69,5 +71,58 @@ describe('RobotStateManager scan sessions', () => {
     expect(frame.pose).toBeUndefined();
     expect(frame.scanSessionId).toBeUndefined();
     expect(mgr.getScanStatus().active).toBe(false);
+  });
+});
+
+/**
+ * TASK-190: the hardware seam returns BEFORE the scan-session seam, so on a
+ * real G1 the session was invisible to the sidecar and it re-decided the
+ * MID-360 frame convention per frame. The active session must ride along with
+ * the snapshot request instead.
+ */
+describe('RobotStateManager scan sessions — hardware seam', () => {
+  let mgr: RobotStateManager;
+
+  beforeEach(() => {
+    mgr = new RobotStateManager({ ...config, id: 'robot-twin-hw-test' });
+    vi.spyOn(hardwareClient, 'isConnected').mockReturnValue(true);
+    vi.spyOn(hardwareClient, 'snapshotPointCloud').mockResolvedValue({
+      robotId: '',
+      sensor: 'mid360_lidar',
+      sensorType: 'lidar',
+      frame: 'base_link',
+      pointCount: 0,
+      positions: [],
+      intensities: [],
+      hasIntensity: true,
+      sequence: 0,
+      source: 'hardware',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  afterEach(() => {
+    mgr.stopScanSession();
+    vi.restoreAllMocks();
+  });
+
+  it('passes the active scan session to the sidecar snapshot', async () => {
+    mgr.startScanSession({ sessionId: 'sess_hw' });
+
+    await mgr.getPointCloudFrame();
+    await mgr.getPointCloudFrame();
+
+    expect(hardwareClient.snapshotPointCloud).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(hardwareClient.snapshotPointCloud).mock.calls) {
+      expect(call[1]).toEqual({ scanSessionId: 'sess_hw' });
+    }
+  });
+
+  it('passes no session when no scan is running', async () => {
+    await mgr.getPointCloudFrame();
+
+    expect(hardwareClient.snapshotPointCloud).toHaveBeenCalledWith('mid360_lidar', {
+      scanSessionId: undefined,
+    });
   });
 });

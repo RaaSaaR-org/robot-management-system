@@ -975,12 +975,23 @@ export class HardwareClient {
   /**
    * One-shot point-cloud snapshot from a real depth / LiDAR sensor.
    *
+   * `opts.scanSessionId` is forwarded as the `X-Scan-Session` header so the
+   * sidecar can hold ONE MID-360 frame convention for the whole scan session
+   * (TASK-190) instead of re-deciding it per frame — a frame with no floor
+   * return would otherwise be stitched into the twin mirrored. A header, not a
+   * query parameter, so a sidecar predating TASK-190 ignores it instead of
+   * 404-ing every frame.
+   *
    * @status hardware-pending — returns XYZ(+intensity) as flat arrays so it maps
    * 1:1 onto {@link PointCloudFrame}. The caller (RobotStateManager) fills in
    * robotId / sequence / timestamp.
    */
-  async snapshotPointCloud(name: string): Promise<PointCloudFrame> {
+  async snapshotPointCloud(
+    name: string,
+    opts: { scanSessionId?: string } = {},
+  ): Promise<PointCloudFrame> {
     const res = await fetch(`${getSidecarUrl()}/pointcloud/${encodeURIComponent(name)}/snapshot`, {
+      headers: opts.scanSessionId ? { 'X-Scan-Session': opts.scanSessionId } : {},
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) {

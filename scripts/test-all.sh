@@ -14,8 +14,10 @@
 # The sim pytest stage needs the cyclonedds+mujoco venv from
 # robot-agent/hardware/sim_g1_dds/README.md — point SIM_PYTHON at it. The curation
 # pytest stage needs pyarrow + pandas — point CURATION_PYTHON at an interpreter that
-# has them (server/curation/.venv/bin/python is found automatically). Without either,
-# that stage is reported as SKIPPED, never as passed.
+# has them (server/curation/.venv/bin/python is found automatically). The hardware
+# sidecar stage needs only numpy + pytest — point HARDWARE_PYTHON at one, or let it
+# reuse either venv above. Without an interpreter, that stage is reported as
+# SKIPPED, never as passed.
 #
 # Every stage runs even when an earlier one fails, so one invocation gives the full
 # picture. Exits 0 if all tests pass, non-zero otherwise.
@@ -88,6 +90,33 @@ if [ -n "$CURATION_PY" ] && "$CURATION_PY" -c 'import pyarrow, pandas' >/dev/nul
     || { echo "  curation pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
   step "Curation + LeRobot converter (SKIPPED — set CURATION_PYTHON to a python with pyarrow+pandas)"
+fi
+
+# ------------------------------------------------- 3c. Hardware sidecar (python)
+# robot-agent/hardware/tests/ existed for several tasks without ever running from
+# this script (TASK-190) — the MID-360 frame-convention logic in g1_sidecar.py had
+# no executed test at all. Same rule as the two stages above: a missing interpreter
+# is SKIPPED, never a pass.
+#
+# test_backends.py / test_vla_runner.py are deliberately NOT in this stage: they
+# need httpx, which no interpreter this repo documents provides, so including them
+# would turn the stage permanently red. Everything else in tests/ runs, and any new
+# file dropped in there is picked up automatically.
+HW_DIR="$REPO_ROOT/robot-agent/hardware"
+HW_PY="${HARDWARE_PYTHON:-}"
+if [ -z "$HW_PY" ] && [ -x "$HW_DIR/sim_g1_dds/.venv/bin/python" ]; then
+  HW_PY="$HW_DIR/sim_g1_dds/.venv/bin/python"
+fi
+if [ -z "$HW_PY" ] && [ -x "$REPO_ROOT/server/curation/.venv/bin/python" ]; then
+  HW_PY="$REPO_ROOT/server/curation/.venv/bin/python"
+fi
+if [ -n "$HW_PY" ] && "$HW_PY" -c 'import numpy' >/dev/null 2>&1; then
+  step "Hardware sidecar (pytest)"
+  (cd "$HW_DIR" && "$HW_PY" -m pytest tests -q \
+     --ignore=tests/test_backends.py --ignore=tests/test_vla_runner.py) \
+    || { echo "  hardware pytest FAILED"; FAILURES=$((FAILURES + 1)); }
+else
+  step "Hardware sidecar (SKIPPED — set HARDWARE_PYTHON to a python with numpy+pytest)"
 fi
 
 # Training E2E — now in separate training-worker repo (run ../training-worker/scripts/test-e2e.sh)

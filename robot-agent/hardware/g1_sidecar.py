@@ -27,6 +27,8 @@ Exposes a lightweight HTTP API on port 8767 (G1 EDU profile: HARDWARE_SIDECAR_UR
   GET  /cameras/<name>/snapshot → one-shot base64 JPEG
   GET  /pointcloud/sensors → list available depth/LiDAR sensor names
   GET  /pointcloud/<name>/snapshot → one-shot point cloud (flat XYZ + intensity)
+                        Optional `X-Scan-Session: <id>` scopes the MID-360
+                        frame convention to one scan session (TASK-190)
   POST /pointcloud/lidar/switch → {"on": true|false} → rt/utlidar/switch
                         (sensor enable — the single authorized write, no motion)
   POST /record/start  → spawn lerobot-record (G1 teleop + dataset)
@@ -128,6 +130,12 @@ TOPIC_ODOM = os.environ.get("G1_ODOM_TOPIC", "rt/odommodestate")
 # robot-agent/src/embodiment/configs/g1*.yaml `depth_sensors`.
 DEPTH_SENSORS = ["mid360_lidar", "d435i_depth"]
 
+# Scan-session id on /pointcloud/<name>/snapshot, set by the Node HardwareClient
+# from RobotStateManager's active ScanSession (TASK-190). A HEADER rather than a
+# query parameter on purpose: an older sidecar already deployed to a robot
+# ignores it silently, where an unknown query string would 404 every frame.
+SCAN_SESSION_HEADER = "X-Scan-Session"
+
 # The head MID-360 is mounted INVERTED (looking down — a walking robot needs
 # ground vision; effective FOV −52°…+7°, sensor ~1.3 m above the floor on a
 # standing G1). The raw cloud on rt/utlidar/cloud_livox_mid360 (frame_id
@@ -140,11 +148,12 @@ DEPTH_SENSORS = ["mid360_lidar", "d435i_depth"]
 # frames do once the blob below is removed). Additionally ~50 % of every raw
 # frame is a SELF-RETURN blob at the origin (the sensor seeing its own
 # housing, 3D range < 0.3 m) that must be filtered before any geometry.
-# `_normalize_mid360_frame` drops the blob, detects the frame convention per
-# frame (robust in case a robot-side utlidar/SLAM mode ever publishes
-# already-gravity-aligned clouds), and brings frames into the NeoDEM contract
-# frame (z-up, floor at z=0, matching the sim generator). Replay recordings
-# and RealSense frames stay untouched.
+# `_normalize_mid360_frame` drops the blob, detects the frame convention ONCE
+# PER SCAN SESSION (robust in case a robot-side utlidar/SLAM mode ever
+# publishes already-gravity-aligned clouds — but a walked scan must not switch
+# convention mid-sweep, see TASK-190), and brings frames into the NeoDEM
+# contract frame (z-up, floor at z=0, matching the sim generator). Replay
+# recordings and RealSense frames stay untouched.
 
 # 43 DOF: 29 G1 body + 14 Dex3-1 (7 per hand). Must match
 # robot-agent/src/embodiment/configs/g1_edu.yaml and g1-edu.config.ts.
@@ -1116,27 +1125,197 @@ def set_lidar_switch(on: bool) -> dict:
         return {"ok": False, "error": f"LiDAR switch failed: {e}"}
 
 
-_last_mid360_frame_note = None
+# ---------------------------------------------------------------------------
+# MID-360 frame convention — locked ONCE PER SCAN SESSION (TASK-190)
+# ---------------------------------------------------------------------------
+# Deciding invert/anchor/leave-raw independently for every frame is wrong on a
+# WALKED scan: a frame aimed at an open doorway finds no dominant floor plane
+# and was left raw (+z DOWN) while its neighbours were flipped, so that slice
+# stitched into the accumulated twin mirrored. The mount cannot change between
+# two consecutive frames, so the convention is a property of the SESSION, not
+# of the frame: lock it from the first `_MID360_LOCK_AFTER` frames that DO
+# carry a confident floor plane, then apply it to every later frame regardless
+# of that frame's own floor content. The per-frame heuristic survives only as
+# the fallback for frames seen BEFORE a convention could be established — and
+# `_MID360_LOCK_AFTER` frames IN A ROW that disagree re-lock the session, so a
+# source that genuinely switches convention (a robot-side SLAM mode publishing
+# gravity-aligned clouds) is still followed. Same evidence bar in both
+# directions: one odd frame can neither set nor overturn the convention.
+_MID360_LOCK_AFTER = 3
+# How far a frame's own floor plane may sit from the session anchor before it is
+# distrusted (a table top or a wall mistaken for the dominant plane). Within the
+# tolerance the frame anchors on its OWN floor — the sensor bobs while walking,
+# so per-frame anchoring stays more accurate than a fixed session height; the
+# session anchor then follows the floor across ramps and steps.
+_MID360_ANCHOR_TOLERANCE = 0.6
+# Frames that arrive with no scan session are still one continuous live view, so
+# they share a convention under this key rather than re-deciding per frame.
+_MID360_LIVE_SESSION = "(live)"
+# Sessions are sequential; a couple of spares cover an overlapping stop/start.
+_MID360_SESSION_CACHE = 4
 
 
-def _normalize_mid360_frame(positions: list, intensities: list) -> tuple[list, list]:
+class _Mid360Orientation:
+    """The MID-360 frame convention held for one scan session's lifetime.
+
+    Not thread-safe on its own — every entry point goes through
+    `_mid360_plan`, which holds `_mid360_orientation_lock`.
+    """
+
+    def __init__(self, session: str) -> None:
+        self.session = session
+        self.inverted: bool | None = None  # None until locked
+        self.anchor: float | None = None  # raw-frame height of the floor (m)
+        self._samples: list[float] = []
+        self._contradicting: list[float] = []
+        self._note: str | None = None
+
+    @property
+    def locked(self) -> bool:
+        return self.inverted is not None
+
+    def plan(self, plane_z: float | None) -> tuple[bool | None, float, str]:
+        """Decide how to transform one frame.
+
+        `plane_z` is this frame's confident floor plane in the raw frame, or
+        None when it has none. Returns `(inverted, anchor, note)`; `inverted`
+        is None only when no convention exists yet AND this frame cannot
+        supply one, in which case the frame is left raw as before.
+        """
+        if not self.locked:
+            if plane_z is not None:
+                self._observe(plane_z)
+            if not self.locked:
+                if plane_z is None:
+                    return None, 0.0, "raw (no convention yet, no floor in frame)"
+                # Pre-lock frame with a floor: the old per-frame heuristic.
+                inverted = plane_z > 0.5
+                return inverted, plane_z, f"learning ({'inverted' if inverted else 'upright'} from own floor {plane_z:+.2f})"
+        elif plane_z is not None:
+            self._check_for_a_changed_publisher(plane_z)
+
+        assert self.anchor is not None  # set together with `inverted`
+        if plane_z is not None and abs(plane_z - self.anchor) <= _MID360_ANCHOR_TOLERANCE:
+            self.anchor = plane_z  # track the floor as the robot walks
+            return self.inverted, plane_z, self._locked_note("own floor")
+        if plane_z is None:
+            return self.inverted, self.anchor, self._locked_note("session anchor — no floor in frame")
+        return self.inverted, self.anchor, self._locked_note(f"session anchor — own plane {plane_z:+.2f} implausible")
+
+    def _observe(self, plane_z: float) -> None:
+        self._samples.append(plane_z)
+        if len(self._samples) >= _MID360_LOCK_AFTER:
+            self._decide_from(self._samples, "LOCKED")
+
+    def _check_for_a_changed_publisher(self, plane_z: float) -> None:
+        """Re-lock if the SOURCE really did switch convention mid-session.
+
+        Locking must not cost the robustness the per-frame detection had: if a
+        robot-side utlidar/SLAM mode starts publishing already-gravity-aligned
+        clouds, the floor moves to the other side of the origin and stays
+        there. That needs the same weight of evidence as the original lock —
+        `_MID360_LOCK_AFTER` frames IN A ROW disagreeing — so a lone odd frame
+        (a table top read as the dominant plane) can never trip it.
+        """
+        if (plane_z > 0.5) == self.inverted:
+            self._contradicting.clear()
+            return
+        self._contradicting.append(plane_z)
+        if len(self._contradicting) >= _MID360_LOCK_AFTER:
+            self._decide_from(self._contradicting, "RE-LOCKED (source changed convention)")
+            self._contradicting.clear()
+            self._samples = []
+
+    def _decide_from(self, samples: list[float], why: str) -> None:
+        # Majority vote so one spurious frame cannot set the convention, and
+        # anchor on the median of the frames that agree with the winner.
+        inverted = sum(1 for z in samples if z > 0.5) * 2 > len(samples)
+        agreeing = sorted(z for z in samples if (z > 0.5) == inverted)
+        self.inverted = inverted
+        self.anchor = agreeing[len(agreeing) // 2]
+        print(
+            f"[G1 Sidecar] MID-360 convention {why} for session {self.session}: "
+            f"{'inverted raw' if inverted else 'upright'}, floor at {self.anchor:+.2f} "
+            f"(from {len(samples)} frame(s) with a floor)",
+            flush=True,
+        )
+
+    def _locked_note(self, how: str) -> str:
+        return f"{'inverted raw' if self.inverted else 'upright'}, anchored on {how}"
+
+    def announce(self, note: str) -> None:
+        """Log the note once per change, not once per frame."""
+        if note != self._note:
+            self._note = note
+            print(f"[G1 Sidecar] MID-360 frame convention [{self.session}]: {note}", flush=True)
+
+
+_mid360_orientations: dict[str, _Mid360Orientation] = {}
+_mid360_orientation_lock = threading.Lock()
+
+
+def _mid360_plan(session: str | None, plane_z: float | None) -> tuple[bool | None, float]:
+    """Session-scoped orientation decision for one frame (see `_Mid360Orientation`)."""
+    key = (session or "").strip() or _MID360_LIVE_SESSION
+    with _mid360_orientation_lock:
+        orient = _mid360_orientations.get(key)
+        if orient is None:
+            orient = _Mid360Orientation(key)
+            _mid360_orientations[key] = orient
+            while len(_mid360_orientations) > _MID360_SESSION_CACHE:
+                del _mid360_orientations[next(iter(_mid360_orientations))]
+        inverted, anchor, note = orient.plan(plane_z)
+        orient.announce(note)
+        return inverted, anchor
+
+
+def _mid360_floor_plane(a, np) -> float | None:
+    """Height of the dominant horizontal plane within 8 m, or None if there is none.
+
+    Purely a measurement — it says where the floor looks to be in THIS frame's
+    raw coordinates and never decides what to do about it.
+    """
+    r = np.hypot(a[:, 0], a[:, 1])
+    near_z = a[(r < 8.0), 2]
+    if len(near_z) < 200 or float(near_z.max() - near_z.min()) <= 0.3:
+        return None
+    hist, edges = np.histogram(near_z, bins=np.arange(near_z.min(), near_z.max() + 0.1, 0.1))
+    k = int(hist.argmax())
+    if hist[k] < max(150, 0.06 * len(near_z)):
+        return None
+    return float(edges[k]) + 0.05
+
+
+def _normalize_mid360_frame(
+    positions: list,
+    intensities: list,
+    session: str | None = None,
+) -> tuple[list, list]:
     """Bring a live MID-360 frame into the contract frame (z-up, floor z=0).
 
     See the frame-convention note above DEPTH_SENSORS. Steps:
       1. Drop the self-return blob (3D range < 0.3 m — the sensor seeing its
          own housing, ~50 % of a raw frame); intensities are filtered in
          lockstep so per-point data stays aligned.
-      2. Find the dominant horizontal plane within 8 m of the robot:
-         • plane near/below z≈0.5 → the frame is already gravity-aligned and
-           floor-anchored; snap the floor to exactly 0.
-         • plane clearly ABOVE the origin → raw frame of the inverted head
-           MID-360 (+z physically down); the plane IS the floor, so flip
-           (y, z) — 180° about x, keeping x=forward and right-handedness —
-           and anchor the floor at 0. (Which horizontal axis mirrors is an
-           assumption; only left/right in the viewer depends on it.)
-         • no dominant plane (sparse frame, open space) → orientation kept.
+      2. Measure the dominant horizontal plane within 8 m — the floor, when
+         the frame contains one.
+      3. Ask the SESSION for the convention (TASK-190), not this frame:
+         • session locked, inverted → the raw frame of the inverted head
+           MID-360 (+z physically down): flip (y, z) — 180° about x, keeping
+           x=forward and right-handedness — and anchor the floor at 0. (Which
+           horizontal axis mirrors is an assumption; only left/right in the
+           viewer depends on it.)
+         • session locked, upright → the frame is already gravity-aligned;
+           snap the floor to exactly 0.
+         • either way a frame with NO floor of its own is anchored on the
+           session's remembered floor height, so it lands in the same frame as
+           its neighbours instead of being stitched in mirrored.
+         • no convention yet AND no floor in this frame → orientation kept,
+           the pre-TASK-190 behaviour, now only reachable at session start.
+
+    `session` is the scan-session id from the X-Scan-Session request header;
+    frames without one share a single live-view convention.
     """
-    global _last_mid360_frame_note
     n = len(positions) // 3
     if n < 200:
         return positions, intensities  # heartbeat / too sparse to detect anything
@@ -1153,28 +1332,16 @@ def _normalize_mid360_frame(positions: list, intensities: list) -> tuple[list, l
     if len(intensities) == n:
         intensities = [v for v, k in zip(intensities, keep.tolist()) if k]
 
-    r = np.hypot(a[:, 0], a[:, 1])
-    near_z = a[(r < 8.0), 2]
-    note = "raw (no dominant plane)"
-    if len(near_z) >= 200 and float(near_z.max() - near_z.min()) > 0.3:
-        hist, edges = np.histogram(near_z, bins=np.arange(near_z.min(), near_z.max() + 0.1, 0.1))
-        k = int(hist.argmax())
-        if hist[k] >= max(150, 0.06 * len(near_z)):
-            plane_z = float(edges[k]) + 0.05
-            if plane_z <= 0.5:
-                a[:, 2] -= plane_z
-                note = f"floor-anchored (floor snapped from {plane_z:+.2f})"
-            else:
-                a[:, 1] = -a[:, 1]
-                a[:, 2] = plane_z - a[:, 2]
-                note = f"inverted raw (floor was at +{plane_z:.2f})"
-    if note != _last_mid360_frame_note:
-        _last_mid360_frame_note = note
-        print(f"[G1 Sidecar] MID-360 frame convention: {note}", flush=True)
+    inverted, anchor = _mid360_plan(session, _mid360_floor_plane(a, np))
+    if inverted is True:
+        a[:, 1] = -a[:, 1]
+        a[:, 2] = anchor - a[:, 2]
+    elif inverted is False:
+        a[:, 2] -= anchor
     return a.reshape(-1).tolist(), intensities
 
 
-def get_point_cloud(name: str) -> dict:
+def get_point_cloud(name: str, session: str | None = None) -> dict:
     """Read one point-cloud frame from a depth / LiDAR sensor.
 
     Source is chosen by G1_LIDAR_SOURCE ∈ {auto|dds|livox|realsense|replay}
@@ -1196,6 +1363,10 @@ def get_point_cloud(name: str) -> dict:
     Flat contract (matches the Node HardwareClient / PointCloudFrame):
       positions   = [x0,y0,z0, x1,y1,z1, ...]  (meters, base frame, x-fwd/y-left/z-up)
       intensities = [i0, i1, ...]              (normalized 0..1)
+
+    `session` is the caller's scan-session id (X-Scan-Session). It scopes the
+    MID-360 frame convention so every frame of one walked scan is brought into
+    the same frame — see `_normalize_mid360_frame`.
     """
     if name not in DEPTH_SENSORS:
         return {"ok": False, "error": f"no depth sensor '{name}'"}
@@ -1245,9 +1416,10 @@ def get_point_cloud(name: str) -> dict:
     if live:
         positions, intensities, has_i, label = live
         # Bring live MID-360 frames into the contract frame (floor at z=0) so
-        # the robot model stands correctly inside its own scan.
+        # the robot model stands correctly inside its own scan — under ONE
+        # convention for the whole scan session (TASK-190).
         if name == "mid360_lidar" and label in ("dds", "livox"):
-            positions, intensities = _normalize_mid360_frame(positions, intensities)
+            positions, intensities = _normalize_mid360_frame(positions, intensities, session)
         return {
             "ok": True,
             "sensor": name,
@@ -1792,7 +1964,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"sensors": DEPTH_SENSORS})
         elif self.path.startswith("/pointcloud/") and self.path.endswith("/snapshot"):
             name = self.path[len("/pointcloud/"):-len("/snapshot")]
-            self._send(200, get_point_cloud(name))
+            self._send(200, get_point_cloud(name, self.headers.get(SCAN_SESSION_HEADER)))
         elif self.path == "/record/status":
             self._send(200, recorder.status())
         elif self.path == "/loco/odom":

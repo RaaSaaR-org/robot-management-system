@@ -90,12 +90,13 @@ cd app && npm run dev
 
 `test-all.sh` runs, in order: typecheck (server, app, robot-agent), vitest
 (server, app, robot-agent), the `sim_g1_dds` pytest suite, the curation +
-LeRobot-converter pytest suite, and the Playwright UI tests. Every stage runs
-even when an earlier one fails, so one invocation gives the whole picture.
+LeRobot-converter pytest suite, the hardware-sidecar pytest suite, and the
+Playwright UI tests. Every stage runs even when an earlier one fails, so one
+invocation gives the whole picture.
 
-Two stages need their own interpreter, and **both report as SKIPPED rather than
-failed when it is missing** — so a run that says "all tests passed" may have run
-neither:
+Three stages need their own interpreter, and **all three report as SKIPPED
+rather than failed when it is missing** — so a run that says "all tests passed"
+may have run none of them:
 
 - `SIM_PYTHON` → the cyclonedds+mujoco venv described in
   `robot-agent/hardware/sim_g1_dds/README.md`
@@ -103,6 +104,11 @@ neither:
   `server/curation/README.md`. Defaults to `server/curation/.venv/bin/python`
   when that exists, so creating it there needs no env var. The server looks in
   the same place when it converts a v3.0 dataset to a readable view.
+- `HARDWARE_PYTHON` → `robot-agent/hardware/tests/` (the `g1_sidecar.py`
+  point-cloud/frame-convention tests). Needs only numpy + pytest, and falls back
+  to either venv above when neither env var is set, so it usually needs no
+  setup. `tests/test_backends.py` and `tests/test_vla_runner.py` are excluded
+  from the stage — they need `httpx`, which no documented interpreter has.
 
 ### Environment Setup
 

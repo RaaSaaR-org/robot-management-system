@@ -4,7 +4,7 @@ aliases:
 - TASK-190
 title: MID-360 frame orientation — decide once per scan session, not per frame
 slug: mid360-frame-orientation-per-session
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,10 +15,42 @@ tags:
 depends_on: []
 due_date: ''
 created: 2026-07-18
-updated: 2026-07-18
+updated: 2026-08-25
 status_note: 'Spun out of PR #198 review. Harmless for the stationary robot-day scan
   (twin 7d3cfc3e already flagged for rebuild) but a latent correctness bug on the
-  walked-scan path the digital-twin feature ultimately targets.'
+  walked-scan path the digital-twin feature ultimately targets. — 2026-08-25: SHIPPED.
+  g1_sidecar.py now holds the MID-360 convention in a session-scoped
+  `_Mid360Orientation`: it locks invert/upright plus a floor anchor from the first 3
+  frames that carry a confident floor plane, then transforms every later frame with
+  that convention regardless of the frame''s own floor content — a floorless doorway
+  frame is anchored on the session floor instead of being left raw (+z down). The
+  per-frame heuristic remains only for frames seen before a convention exists, and 3
+  frames IN A ROW whose own plane contradicts the lock re-lock the session, so a
+  robot-side publisher that genuinely switches to gravity-aligned clouds is still
+  followed while one spurious table-top plane cannot overturn anything. The session id
+  is threaded end to end: RobotStateManager passes its active ScanSession into
+  hardwareClient.snapshotPointCloud, which sends it as the `X-Scan-Session` header
+  (a header, not a query parameter, so a sidecar predating this change ignores it
+  rather than 404-ing every frame) and Handler.do_GET hands it to get_point_cloud.
+  Frames with no session share one live-view convention. VERIFIED ON THIS MACHINE
+  (no hardware involved): 13 new pytest cases in
+  robot-agent/hardware/tests/test_g1_sidecar_pointcloud.py driving synthetic
+  inverted / upright / floorless frames through g1_sidecar directly and over a real
+  ThreadingHTTPServer with the header (48 passed for the whole hardware stage),
+  23 vitest cases across the robot-agent scan-session and hardware-seam files plus the
+  998-case agent-mode suite that consumes the same seam, `npm run typecheck` clean, and both directions proved by mutation (disabling
+  the locked-session floorless branch turned 6 tests red; disabling the re-lock turned
+  1 red; dropping the session id in state.ts turned 2 red). Those tests were previously
+  unreachable from the documented entry point — robot-agent/hardware/tests/ was never
+  run by scripts/test-all.sh — so a SKIP-safe `Hardware sidecar (pytest)` stage was
+  added (HARDWARE_PYTHON, auto-detecting either existing venv, documented in
+  CLAUDE.md; test_backends.py / test_vla_runner.py stay excluded, they need httpx).
+  NOT VERIFIED HERE: the integration half of the Test Strategy. There is no MID-360,
+  no Unitree G1, no lidar and no recorded walked scan on this machine, so no real or
+  replayed walked scan was normalized and no accumulated twin was inspected for a
+  mirrored slice. Nothing was run against hardware, a GPU, Isaac Sim or a VLA server.
+  A live re-check on the robot — walk a scan through a doorway and confirm the twin
+  has no inverted slice — still remains to be done.'
 ---
 
 ## Description
