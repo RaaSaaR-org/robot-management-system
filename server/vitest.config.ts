@@ -5,6 +5,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Ephemeral test servers bind loopback, not the dual-stack wildcard, so a
+    // throwaway port cannot collide with a foreign IPv4 listener (TASK-218).
+    setupFiles: ['./vitest.setup.ts'],
     testTimeout: 30000,
     // Self-contained test env so suites don't depend on a gitignored .env
     // (CI has none). auth-middleware.test.ts overrides AUTH_DISABLED per-test.

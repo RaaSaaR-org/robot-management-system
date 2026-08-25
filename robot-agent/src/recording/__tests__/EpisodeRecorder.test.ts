@@ -123,6 +123,58 @@ async function run(h: Harness, ms: number, step = 10): Promise<void> {
   }
 }
 
+/**
+ * Advance until the open episode holds `frames` frames, and fail saying why if
+ * it never gets there.
+ *
+ * A tick with a camera on it writes a real JPEG, and a tick that fires while
+ * the previous one is still writing is dropped on purpose — "the previous frame
+ * had not finished" is the recorder's whole backpressure design. So how many of
+ * the four ticks in 200 ms at 20 fps actually produce a frame depends on how
+ * busy this disk is right now, and in a full suite run with a worker per core it
+ * can be none of them (TASK-218). A test that needs a frame to exist has to wait
+ * for one rather than assume a tick count produced it.
+ */
+async function runUntilFrames(
+  h: Harness,
+  rec: EpisodeRecorder,
+  frames: number,
+  budgetMs = 10_000,
+): Promise<void> {
+  for (let t = 0; t < budgetMs && rec.status().frames < frames; t += 10) {
+    h.clock.ms += 10;
+    await vi.advanceTimersByTimeAsync(10);
+  }
+  const status = rec.status();
+  if (status.frames < frames) {
+    throw new Error(
+      `recorder never reached ${frames} frame(s) in ${budgetMs} ms: ` +
+        `frames=${status.frames} dropped=${status.dropped} last=${status.lastDropReason}`,
+    );
+  }
+}
+
+/**
+ * Park the recorder and let whatever tick is mid-write land, so a count taken
+ * afterwards cannot be moved by I/O that was already in flight.
+ *
+ * Without this a frame can be accepted DURING the call under test: a discard
+ * that correctly drops one episode's frames then reads back the same total,
+ * because a straggler landed in the other episode meanwhile (TASK-218).
+ */
+async function quiesce(h: Harness, rec: EpisodeRecorder, budgetMs = 10_000): Promise<void> {
+  rec.pause();
+  let last = rec.status().totalFrames;
+  let unchangedSteps = 0;
+  for (let t = 0; t < budgetMs && unchangedSteps < 20; t += 10) {
+    h.clock.ms += 10;
+    await vi.advanceTimersByTimeAsync(10);
+    const total = rec.status().totalFrames;
+    unchangedSteps = total === last ? unchangedSteps + 1 : 0;
+    last = total;
+  }
+}
+
 describe('jpegSize', () => {
   it('reads the dimensions out of the SOF marker', () => {
     if (!HAVE_FFMPEG) return;
@@ -305,9 +357,16 @@ describe('EpisodeRecorder', () => {
 
   it.skipIf(!HAVE_FFMPEG)('forgets a discarded episode and its images', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
-    await run(h, 200);
+    // Both episodes have to end up with at least one frame for a discard to be
+    // observable at all, and with a camera attached each frame is a real JPEG
+    // write — so wait for the frame instead of counting on the tick.
+    await runUntilFrames(h, rec, 1);
     await rec.nextEpisode();
-    await run(h, 200);
+    await runUntilFrames(h, rec, 1);
+    // Park it before reading the count: a tick still writing when `before` is
+    // sampled lands during the discard and puts the frame back, so the discard
+    // looks like it removed nothing.
+    await quiesce(h, rec);
     const before = rec.status().totalFrames;
     vi.useRealTimers();
 
@@ -351,7 +410,10 @@ describe('EpisodeRecorder', () => {
     // with the lie.
     h.failEveryOther = true;
     await rec.start({ sessionId: 's1', fps: 50, cameras: ['head_camera'] });
-    await run(h, 400);
+    // A measured rate needs two frames to measure between, and each of them is
+    // a real JPEG write — so wait for them rather than assume 400 ms of ticks
+    // produced them.
+    await runUntilFrames(h, rec, 4);
     vi.useRealTimers();
     const result = await rec.stop();
     expect(result.ok).toBe(true);
@@ -371,13 +433,13 @@ describe('EpisodeRecorder', () => {
     // Real JPEG writes here, so the counts are I/O-paced rather than exact —
     // what matters is that recording RESUMES, which it did not before.
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
-    await run(h, 600);
+    await runUntilFrames(h, rec, 1);
     expect(rec.status().frames).toBeGreaterThan(0);
 
     await rec.discardEpisode(0);
     expect(rec.status().frames).toBe(0);
 
-    await run(h, 600);
+    await runUntilFrames(h, rec, 1);
     expect(rec.status().frames).toBeGreaterThan(0);
     expect(rec.status().lastDropReason ?? '').not.toMatch(/ENOENT/);
   });
@@ -385,19 +447,32 @@ describe('EpisodeRecorder', () => {
   it.skipIf(!HAVE_FFMPEG)('leaves no image behind when a later camera fails to write', async () => {
     // One orphan JPEG makes that camera's video one frame longer than the
     // parquet, and every frame after it a frame out of step with the joints.
-    // 5 fps so the ticks cannot overlap: at 20 the "previous frame had not
-    // finished" drop arrives too and masks the reason under test.
+    // 5 fps so the ticks are far apart, but that is not enough on its own: a
+    // failed tick's cleanup is real I/O, and when the box is busy it can still
+    // be running when the next tick fires, which then drops with "the previous
+    // frame had not finished" and overwrites the reason under test. So collect
+    // the reasons as they appear rather than reading the last one at the end
+    // (TASK-218).
     await rec.start({ sessionId: 's1', fps: 5, cameras: ['head_camera', 'house_iso'] });
     await rm(join(dir, 'scratch', 's1', 'ep_000', 'cam_third_person'), {
       recursive: true,
       force: true,
     });
 
-    await run(h, 600);
+    const reasons = new Set<string>();
+    const sawWriteFailure = (): boolean =>
+      [...reasons].some((reason) => /could not write frame/.test(reason));
+    for (let t = 0; t < 5000 && !sawWriteFailure(); t += 10) {
+      h.clock.ms += 10;
+      await vi.advanceTimersByTimeAsync(10);
+      const reason = rec.status().lastDropReason;
+      if (reason) reasons.add(reason);
+    }
+
     const status = rec.status();
     expect(status.frames).toBe(0);
     expect(status.dropped).toBeGreaterThan(0);
-    expect(status.lastDropReason).toMatch(/could not write frame/);
+    expect([...reasons]).toContainEqual(expect.stringMatching(/could not write frame/));
 
     // Park the recorder so no further tick can re-create the file, then let the
     // last failed tick's cleanup land — it unlinks camera 1's image, and that
@@ -518,7 +593,11 @@ describe.skipIf(!HAVE_FFMPEG)('EpisodeRecorder with cameras', () => {
       datasetRoot: join(dir, 'datasets'),
     });
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera', 'house_iso'] });
-    await run(h, 400);
+    // Two cameras means two real JPEG writes per tick, and a tick that fires
+    // while the previous one is still writing is dropped by design — so 400 ms
+    // of ticks can leave nothing to encode on a busy box (TASK-218). Wait for
+    // the frames instead.
+    await runUntilFrames(h, rec, 2);
     vi.useRealTimers();
     const result = await rec.stop();
 

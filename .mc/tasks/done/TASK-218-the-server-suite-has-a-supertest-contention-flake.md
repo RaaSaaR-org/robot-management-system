@@ -4,7 +4,7 @@ aliases:
 - TASK-218
 title: The test suites have a scheduling-sensitive contention flake
 slug: the-server-suite-has-a-supertest-contention-flake
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -15,7 +15,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-25
 ---
 
 
@@ -143,3 +143,93 @@ the same problem with a smaller number.
 
 Filed from TASK-217, where it cost a wrong first read of `./scripts/test-all.sh`
 output — the run reported a failure that a clean re-run did not have.
+
+## Resolution (2026-08-25)
+
+Three separate faults, not one. Measured on an otherwise idle 18-core macOS box,
+one suite at a time.
+
+### 1 — The wrong process answers the test (the 401s and every ETIMEDOUT)
+
+`listen(0)` with no host binds the DUAL-STACK wildcard `::`, and macOS picks the
+port by looking for a free one in the IPv6 table. A port another process already
+holds on **IPv4** is therefore handed out as free: the bind succeeds and
+`address().port` reports it, but the IPv4 connect that follows — supertest always
+talks to `127.0.0.1`, and so do the robot-agent route tests — is delivered to the
+OTHER listener.
+
+Proven, not inferred. Every failing request was logged with the response it got:
+
+- `127.0.0.1:63655` is **tailscaled's LocalAPI**, which answers `401 auth
+  required` to every path. The failures carried `tailscale-version: 1.102.2`
+  response headers. That is the whole of the `expected 401 to be 200/400/500`
+  shape, and of the robot-agent's `expected 401 to be 201`.
+- `*:63200` was an **ownerless orphan socket** (present in `netstat`, absent from
+  `lsof`) that never `accept()`s. Connects to it sat in SYN_RCVD until they gave
+  up: `ETIMEDOUT: Operation timed out`, which is supertest's rendering of a
+  `connect` ETIMEDOUT.
+
+A sweep confirms the mechanism and the fix: wildcard `listen(0)` drew both
+poisoned ports within 6000 attempts; `listen(0, '127.0.0.1')` drew neither in
+6000. An explicit `bind(127.0.0.1, 63200)` is refused with EADDRINUSE, so the
+kernel does see the conflict — only the port-0 allocator on `::` misses it.
+
+Fix: `server/vitest.setup.ts` and `robot-agent/vitest.setup.ts`, wired in via
+`setupFiles`. They turn an ephemeral wildcard `listen()` into a loopback bind.
+The bind has to stay SYNCHRONOUS because supertest reads `address().port` on the
+line after `app.listen(0)`, and the public `listen(0, host, …)` defers on a
+`dns.lookup` tick even for a literal IP — so it goes through `_listen2`, which is
+where Node's own `listen()` lands once it has a resolved address.
+`loopback-listen.test.ts` in each package guards the shim.
+
+**The hypotheses in this task were wrong, and worth recording as wrong:**
+mock state does not leak across files, no singleton survives another file's
+`clearAllMocks`, and `req.socket.remoteAddress` is never undefined.
+`personalDataGate` was never involved — the 401 came from tailscaled, not from
+the gate, and the gate is untouched.
+
+### 2 — Fake timers racing real disk I/O (`EpisodeRecorder.test.ts`)
+
+A recorder tick writes a real JPEG, and a tick that fires while the previous one
+is still writing is dropped on purpose. Tests that advanced a fixed 200/400/600
+ms of fake time and then assumed frames existed got none under load. One test
+also sampled a frame count while a tick was mid-write, so a straggler landed
+during the `discardEpisode` under test and put the frame back.
+
+Fix: `runUntilFrames` waits for the frames a test needs (and says why if they
+never arrive) and `quiesce` parks the recorder and drains in-flight I/O before a
+count is read. `leaves no image behind …` now collects drop reasons as they
+appear instead of reading `lastDropReason` once at the end, where a later
+"behind" drop had overwritten it.
+
+### 3 — A detached import outliving its test (`HuggingFaceImportService`)
+
+`retryImport` resolves once the row is claimed and lets the download run
+detached. The test returned while it was still writing, and the next test's
+`beforeEach` deleted that directory underneath it: `ENOTEMPTY … rmdir …/meta`,
+landing on whichever test happened to be next. Fix: the test now `settle`s on the
+`validating` write, which the service does after the last file.
+
+### Before / after
+
+| suite | before | after |
+| --- | --- | --- |
+| `server` | 18 failed runs in 96 (19%) | 0 in 75 |
+| `robot-agent` | 3 failed runs in 31 (10%) | 0 in 50 |
+
+"After" counts only runs on the final tree, and includes shuffled ones
+(`--sequence.shuffle.files`, which is what redistributes files across workers).
+
+### Residual uncertainty
+
+- Fault 1 is **environment-dependent by nature**: it needs a foreign IPv4
+  listener sitting in the ephemeral range. A clean CI container has no
+  tailscaled and no orphan socket, so this flake may never have fired in CI at
+  all, and CI green does not re-test the fix. The shim is preventive there.
+- The shim leans on `net.Server.prototype._listen2`, which is internal. It
+  degrades to stock behaviour if a future Node removes it, and
+  `loopback-listen.test.ts` fails loudly when that happens.
+- Faults 2 and 3 are load-dependent, so their rate is a property of this
+  machine's core count and disk. Both fixes replace a timing assumption with a
+  wait for the condition under test, which is not machine-specific — but the
+  measured "0 failures" is.
