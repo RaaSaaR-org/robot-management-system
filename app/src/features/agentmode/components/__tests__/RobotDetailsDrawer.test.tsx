@@ -131,9 +131,31 @@ describe('RobotDetailsDrawer', () => {
       for (const key of CONDITION_ORDER) {
         expect(dialog).toHaveTextContent(CONDITION_LABELS[key]);
         // Each false condition says what IT is, not a shared word. See the
-        // regression below for why one word for all seven is not good enough.
+        // regression below for why one word for every row is not good enough.
         expect(screen.getByText(CONDITION_CLEAR_HEADLINE[key])).toBeInTheDocument();
       }
+    });
+
+    /**
+     * The section's copy promises a COUNT ("All eight, whether they are true or
+     * not"), and that promise is the only reason a calm checklist can be read as
+     * "nothing is wrong" rather than "this list is broken". TASK-201 added an
+     * eighth row under a paragraph that still said seven, which turns the one
+     * check this section exists to support into the wrong answer.
+     *
+     * So the number is rendered FROM the list and this pins the two together.
+     * Re-typing a literal here or in the component is the failure mode.
+     */
+    it('promises exactly as many rows as it renders', () => {
+      open();
+
+      const dialog = screen.getByRole('dialog');
+      expect(dialog).toHaveTextContent(
+        `All ${CONDITION_ORDER.length}, whether they are true or not`
+      );
+      expect(dialog.querySelectorAll('ul > li').length).toBeGreaterThanOrEqual(
+        CONDITION_ORDER.length
+      );
     });
 
     it('names the ones that are true, and still lists the rest as clear', () => {
@@ -142,7 +164,7 @@ describe('RobotDetailsDrawer', () => {
 
       const dialog = screen.getByRole('dialog');
       expect(dialog).toHaveTextContent('damped — it cannot walk, turn or go to');
-      // Six conditions are false and every one of them still says so.
+      // Every other condition is false and every one of them still says so.
       for (const key of CONDITION_ORDER) {
         if (key === 'damped') continue;
         expect(screen.getByText(CONDITION_CLEAR_HEADLINE[key])).toBeInTheDocument();

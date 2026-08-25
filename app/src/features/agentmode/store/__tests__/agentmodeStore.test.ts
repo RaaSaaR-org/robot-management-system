@@ -23,6 +23,7 @@ import {
   selectStateReachability,
   selectStateUnavailableReason,
   selectStateUnknown,
+  selectGeofenceNotEnforcing,
 } from '../agentmodeStore';
 import type {
   AgentBlock,
@@ -1472,6 +1473,69 @@ describe('agentmodeStore', () => {
       const s = useAgentModeStore.getState();
       expect(s.enabled).toBe(false);
       expect(s.error).toBe('toggle failed');
+    });
+  });
+
+  // ==========================================================================
+  // The geofence reaches the store on EVERY path that carries a snapshot
+  //
+  // TASK-201. The websocket branch is the one an operator watching the page
+  // sees a lapse arrive on; it is NOT the one that decides what the page says
+  // when it first opens. `fetchState` is — and a robot standing still in one
+  // place may not push another `agent:state:changed` for a while, so a
+  // `fetchState` that dropped the field would leave the lapse invisible for the
+  // operator's whole first look at the console. `toggle` and `resetEstop` are
+  // proxied straight through to the robot, so they carry the freshest answer
+  // there is; dropping it there re-opens the same hole one interaction later.
+  // Each of these went green with its `applyGeofence` call deleted.
+  // ==========================================================================
+  describe('the geofence on the REST paths (TASK-201)', () => {
+    const lapsed = {
+      enforcement: 'not-enforcing' as const,
+      reason: 'the pose has drifted past its budget',
+    };
+
+    it('fetchState carries it — the first look at the page must show the lapse', async () => {
+      mockedApi.getState.mockResolvedValue(makeState({ geofence: lapsed }));
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().geofence).toEqual(lapsed);
+      expect(selectGeofenceNotEnforcing(useAgentModeStore.getState())).toBe(true);
+    });
+
+    it('fetchState from an agent that omits it leaves the store saying nothing', async () => {
+      mockedApi.getState.mockResolvedValue(makeState({}));
+      mockedApi.getScene.mockResolvedValue(null);
+
+      await useAgentModeStore.getState().fetchState(ROBOT_ID);
+
+      // `undefined` is "not told", which renders as nothing. `enforcing` here
+      // would be a claim about a fence nobody evaluated.
+      expect(useAgentModeStore.getState().geofence).toBeUndefined();
+      expect(selectGeofenceNotEnforcing(useAgentModeStore.getState())).toBe(false);
+    });
+
+    it('toggle carries it', async () => {
+      mockedApi.toggle.mockResolvedValue(makeState({ enabled: true, geofence: lapsed }));
+
+      await useAgentModeStore.getState().toggle(ROBOT_ID, true);
+
+      expect(useAgentModeStore.getState().geofence).toEqual(lapsed);
+    });
+
+    it('resetEstop carries it — clearing a latch does not clear the fence', async () => {
+      // The operator has just reset a stop. The fence is still not fencing, and
+      // this is the exact moment the console must not go quiet about it.
+      mockedApi.resetEstop.mockResolvedValue(
+        makeState({ estopActive: false, geofence: lapsed })
+      );
+
+      await useAgentModeStore.getState().resetEstop(ROBOT_ID);
+
+      expect(useAgentModeStore.getState().estopActive).toBe(false);
+      expect(useAgentModeStore.getState().geofence).toEqual(lapsed);
     });
   });
 

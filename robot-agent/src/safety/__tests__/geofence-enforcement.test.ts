@@ -99,13 +99,26 @@ describe('the warn-only advisory', () => {
   });
 
   /**
-   * `SafetyMonitor` filters robot-state warnings by these three substrings to
-   * decide which latch a warning belongs to (`resetEmergencyStop`,
-   * `clearZoneViolationStop`). An advisory caught by one of them would be
-   * deleted by the next reset, or read as a stop that is not latched.
+   * `SafetyMonitor` tells STOPS apart from everything else in `warnings` by
+   * these three substrings — that is how `resetEmergencyStop` and
+   * `clearZoneViolationStop` find the lines a reset is allowed to remove.
    *
-   * This is a string test on purpose: the coupling is a substring match in
-   * another file, and nothing but a substring test can see it.
+   * To be precise about the mechanism, because the obvious reading is wrong:
+   * this advisory is a private field spliced into a freshly built array in
+   * `getStatus()`, NOT a member of `SimulatedRobotState.warnings`, so no reset
+   * could delete it as things stand. The coupling is at the READ surface. The
+   * advisory shares one `warnings` array with the latched-stop lines, and
+   * anything that classifies those lines by substring — a matcher, a log
+   * filter, an operator scanning `/safety` — would read a fence advisory as a
+   * latched stop that `estop.status` says is not latched.
+   *
+   * Keeping the advisory outside those three substrings also keeps the door
+   * shut on the version where the rationale WOULD be literal: route this
+   * through `applyStopToState()` some day and a reset really could delete a
+   * live safety warning.
+   *
+   * A string test on purpose: the coupling is a substring match in another
+   * file, and nothing but a substring test can see it.
    */
   it('contains none of the three strings that existing warning matchers eat', () => {
     for (const cause of ['no-pose', 'pose-drifted'] as const) {

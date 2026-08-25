@@ -126,7 +126,7 @@ export const CONDITION_ACTIVE_HEADLINE: Record<ConditionKey, string> = {
 /**
  * The value of an INACTIVE condition, said specifically rather than as "clear".
  *
- * A single word reused for all seven rows is how the checklist starts lying by
+ * A single word reused for every row is how the checklist starts lying by
  * accident. `recovered` is the case that forced this: it means "there is an
  * UNACKNOWLEDGED recovery record", so a robot whose crash has been acknowledged
  * renders the row inactive — and "Boot recovery: clear" then reads as "no crash

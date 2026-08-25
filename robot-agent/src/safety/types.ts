@@ -145,10 +145,15 @@ export function geofenceEnforcement(status: GeofenceStatus): GeofenceEnforcement
  *
  * Deliberately contains NONE of `'Protective stop'`, `'Emergency stop'` or
  * {@link ZONE_VIOLATION_REASON_PREFIX}: `SafetyMonitor` matches all three to
- * decide which latch a warning belongs to, and an advisory caught by one of
- * those filters would be deleted by the next reset — or, worse, read as a stop
- * that is not latched. This advisory is a WARNING, never a stop; it never
- * touches `estopState`, so `systemHealthy` cannot flip because of it.
+ * tell a latched stop from everything else sharing the `warnings` array, and an
+ * advisory caught by one of those filters would be read as a stop that
+ * `estop.status` says is not latched.
+ *
+ * It is spliced into the array `getStatus()` builds rather than written to
+ * `SimulatedRobotState.warnings`, so no reset can delete it today — the
+ * constraint is about the read surface, and about keeping that true if the
+ * advisory ever moves onto the stop path. This is a WARNING, never a stop; it
+ * never touches `estopState`, so `systemHealthy` cannot flip because of it.
  */
 export const GEOFENCE_ADVISORY_PREFIX = 'Geofence not enforcing';
 

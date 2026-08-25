@@ -243,13 +243,23 @@ describe('a fence that has stopped fencing SAYS SO (TASK-201)', () => {
   });
 
   /**
-   * A robot nobody surveyed is `no-map`, and that is NOT a lapse. If it were,
-   * every un-surveyed robot would carry a permanent amber safety condition and
-   * the real lapse would be invisible again inside the noise.
+   * The value the field STARTS at, before any pose has been evaluated.
+   *
+   * `no-map` is the right initial answer and `enforcing` would be the wrong one
+   * for the same reason the whole task exists: a fence nobody has run yet is
+   * not a fence that works. It is not a lapse either — a `not-enforcing`
+   * default would put a permanent amber condition on every robot between boot
+   * and its first odometry sample, which is how a real lapse gets lost in
+   * wallpaper.
+   *
+   * NOTE this robot DOES have a place graph (see the `vi.mock` above): it
+   * reports `no-map` because nothing has been evaluated, not because nothing
+   * was surveyed. The un-surveyed and unregistered-frame paths are covered in
+   * `state-place-frame.test.ts`, which owns a graph that cannot be compared
+   * with the robot's odometry.
    */
-  it('a robot with no place graph reports `no-map` and raises no advisory', () => {
+  it('reads `no-map` before the first pose sample, and raises no advisory', () => {
     const { manager } = makeManager();
-    // No pose sample has arrived, so nothing has been evaluated.
     expect(manager.getGeofenceState().enforcement).toBe('no-map');
     expect(
       manager.getSafetyStatus().warnings.some((w) => w.startsWith(GEOFENCE_ADVISORY_PREFIX)),

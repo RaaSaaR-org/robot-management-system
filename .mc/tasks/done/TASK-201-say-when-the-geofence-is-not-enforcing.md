@@ -47,19 +47,43 @@ status_note: >-
   accumulation blocks.
 
 
+  REVIEW ROUND 1 closed a coverage hole and three inaccurate claims, no
+  behaviour change. The controller wire that actually carries the lapse to the
+  console — `getState().geofence` and `attach()`'s publish filter — had no test
+  at all: reverting either to its pre-fix form left the whole robot-agent suite
+  green. `agent-mode/__tests__/geofence-plumbing.test.ts` pins both. The three
+  REST `applyGeofence` call sites in the app store (fetchState, toggle,
+  resetEstop) were likewise unpinned and now are; fetchState is the one that
+  decides what the console says on FIRST load. The D1 test asserted two numbers
+  are equal, which two independent literals also satisfy, so it could not see
+  the collapse being undone; it now re-resolves the module graph with the
+  resolver's constant moved and requires `config.ts` to follow. The server
+  tests were runtime-vacuous (`isValidAgentModeSnapshot` never reads
+  `geofence`; one assertion compared an object to a string) and now pin the
+  ingest -> `getState()` carriage end to end. Copy fixes: the drawer's
+  "All seven" paragraph rendered above eight rows — the count is now taken from
+  the list and pinned; and the claim that a warning matcher could DELETE the
+  advisory was wrong (it is spliced into `getStatus()`, never written to
+  `state.warnings`), so both docstrings now say what the coupling really is.
+
+
   VERIFIED ON THIS MACHINE (a macOS laptop, simulation only): `npx tsc
-  --noEmit` clean for robot-agent, app and server; scoped vitest green —
-  robot-agent `src/safety src/agent-mode src/robot` (71 files, 1236 tests), app
-  `src/features/agentmode` (19 files, 372 tests), server AgentModeService +
-  routes (46 tests). The integration test the task asked for
+  --noEmit` clean for robot-agent, app and server; full vitest green —
+  robot-agent 118 files / 1942 tests, app 111 files / 1975 tests, server 213
+  files / 5574 passed + 1 skipped. The integration test the task asked for
   (`robot-agent/src/robot/__tests__/state-geofence-enforcement.test.ts`) drives
   more than PLACE_DRIFT_BUDGET_M metres inside ONE place without a re-anchor,
   then walks at RACK-A, and asserts the DISJUNCTION — either a stop fires or
-  the state says enforcement is off — never "a stop fires" alone. Two mutations
-  were run to prove the tests bite: restoring the bare `if (placeChanged)
-  return` in state.ts turned the two transition tests red, and mapping
-  `pose-drifted` to `enforcing` turned 7 tests across both new files red. Both
-  were reverted and the suites re-run green.
+  the state says enforcement is off — never "a stop fires" alone. Ten mutations
+  were run to prove the tests bite, each reverted afterwards: the bare
+  `if (placeChanged) return` in state.ts (2 red); `pose-drifted` -> `enforcing`
+  (7 red); `geofence: null` in the controller snapshot (2 red); the controller
+  publish filter reverted to place-only (1 red); config.ts reverted to an
+  independent literal 15 (1 red); each of the three store call sites deleted
+  (1 red each); the server's ingest stripping the field, its validator gating
+  on the field, and `emptyState()` fabricating `enforcing` (1, 8 and 1 red);
+  the unregistered-frame verdict changed from `no-map` to `pose-drifted`
+  (1 red); and the drawer's row count re-typed as "seven" (1 red).
 
 
   NOT VERIFIED HERE, and no substitute was run for it: the live re-check on the
