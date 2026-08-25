@@ -6,11 +6,12 @@
  * @feature agentmode
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BlockTimeline } from '../BlockTimeline';
 import { useAgentModeStore } from '../../store/agentmodeStore';
+import type { AgentPlan } from '../../types/agentmode.types';
 
 beforeEach(() => {
   useAgentModeStore.getState().reset();
@@ -147,5 +148,115 @@ describe('BlockTimeline', () => {
     expect(stop).toHaveTextContent('STOPP');
     expect(stop.getAttribute('aria-label')).toContain('STOPP');
     expect(screen.getByRole('button', { name: /STOPP/ })).toBe(stop);
+  });
+  // =========================================================================
+  // HOW LONG IT HAS BEEN PLANNING (TASK-202)
+  // =========================================================================
+  //
+  // A wedged local model and a slow one both render as "Planning". The counter
+  // is what turns "is it stuck?" into a question an operator can answer without
+  // reading a log on the robot.
+
+  describe('the planning counter', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const planningPlan = (createdAt: string) =>
+      ({
+        id: 'plan-1',
+        robotId: 'robot-1',
+        command: 'geh zum Tisch',
+        blocks: [],
+        cursor: -1,
+        status: 'planning',
+        createdAt,
+        updatedAt: createdAt,
+      }) as unknown as AgentPlan;
+
+    it('counts up once a second while the plan is still being planned', async () => {
+      useAgentModeStore.setState({ plan: planningPlan(new Date().toISOString()) });
+      render(<BlockTimeline onStop={() => {}} />);
+
+      // Advanced ONE tick at a time, deliberately. Jumping straight to 5 s
+      // would pass for any interval that divides 5000 — including 5 s itself,
+      // which is the "unreadable in the first seconds" behaviour
+      // PLANNING_TICK_MS exists to rule out. Asserting after each second is
+      // what actually pins the interval.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/1\.\ds/);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/2\.\ds/);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/5\.\ds/);
+    });
+
+    it('prefers this console own send stamp over the robot clock', async () => {
+      // The robot says the plan is 10 minutes old because its clock is ahead;
+      // this tab knows it sent the command two seconds ago. The browser-frame
+      // stamp wins, so the counter measures elapsed time rather than skew.
+      const robotClockAhead = new Date(Date.now() - 600_000).toISOString();
+      useAgentModeStore.setState({
+        plan: planningPlan(robotClockAhead),
+        pendingCommand: {
+          planId: 'plan-1',
+          text: 'geh zum Tisch',
+          robotId: 'robot-1',
+          sentAt: new Date(Date.now() - 2_000).toISOString(),
+        },
+      });
+      render(<BlockTimeline onStop={() => {}} />);
+
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/2\.\ds/);
+    });
+
+    it('never runs backwards when the robot clock is ahead', async () => {
+      // A plan stamped in the future would otherwise render a negative value,
+      // or a counter that ticks DOWN towards zero.
+      useAgentModeStore.setState({
+        plan: planningPlan(new Date(Date.now() + 30_000).toISOString()),
+      });
+      render(<BlockTimeline onStop={() => {}} />);
+
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent('0ms');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent('0ms');
+    });
+
+    it('shows nothing once the plan is running', () => {
+      useAgentModeStore.setState({
+        plan: { ...planningPlan(new Date().toISOString()), status: 'running' } as AgentPlan,
+      });
+      render(<BlockTimeline onStop={() => {}} />);
+
+      expect(screen.queryByTestId('agent-planning-elapsed')).toBeNull();
+    });
+
+    it('stays out of the page live region', () => {
+      // The page announces through ConditionAnnouncer alone. A per-second
+      // counter inside a live region would re-announce the rail every tick.
+      useAgentModeStore.setState({ plan: planningPlan(new Date().toISOString()) });
+      render(<BlockTimeline onStop={() => {}} />);
+
+      const rail = screen.getByTestId('agent-block-timeline');
+      expect(rail.querySelector('[aria-live]')).toBeNull();
+      expect(rail.getAttribute('aria-live')).toBeNull();
+    });
   });
 });

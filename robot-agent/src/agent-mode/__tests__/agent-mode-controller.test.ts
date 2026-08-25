@@ -368,6 +368,27 @@ describe('AgentModeController — E-Stop', () => {
       expect(h.fsms).toEqual([]);
       expect(h.actions).toEqual([]);
     });
+
+    it('stops while the planner is still hung on a previous command (TASK-202)', async () => {
+      // The planner gained a deadline (TASK-202), and the deadline is minutes
+      // long by design — a stop word must not wait for it. The stop path
+      // bypasses the LLM entirely, and this is the executable form of that
+      // claim: a planner that never answers, and a STOPP that lands anyway.
+      const h = makeController([], { plan: () => new Promise(() => {}) });
+
+      const first = await h.controller.submitCommand({ text: 'geh zum Tisch' });
+      expect(first.accepted).toBe(true);
+
+      const stopped = await h.controller.submitCommand({ text: 'stopp' });
+
+      expect(stopped.accepted).toBe(true);
+      expect(stopped.outcome).toBe('estop');
+      // Not just a latch: the base was actually told to stop and damp while
+      // the planner call was still in flight.
+      expect(h.actions).toContain('stop');
+      expect(h.fsms).toEqual([G1_FSM_DAMP]);
+      expect(h.controller.getState().estopActive).toBe(true);
+    });
   });
 
   it('refuses new commands while the E-Stop is latched, and accepts after a reset', async () => {

@@ -8,14 +8,21 @@
 
 import { memo, useMemo, type ReactNode } from 'react';
 import { cn } from '@/shared/utils';
-import { useAgentModeStore, selectPlan, selectEstopActive } from '../store/agentmodeStore';
+import {
+  useAgentModeStore,
+  selectPlan,
+  selectEstopActive,
+  selectPlanningStartedAt,
+} from '../store/agentmodeStore';
 import {
   blockKindGlyph,
   blockKindLabel,
   formatBlockParams,
+  formatDuration,
   planStatusStyle,
 } from '../utils/blockFormat';
 import { currentBlockOfPlan, upcomingBlocksOfPlan } from '../utils/planQuery';
+import { useElapsedSince } from '../hooks/useElapsedSince';
 import type { AgentBlock } from '../types/agentmode.types';
 
 export interface BlockTimelineProps {
@@ -39,6 +46,17 @@ export interface BlockTimelineProps {
 
 /** Max queued blocks rendered before the bar collapses into a `+n` chip. */
 const MAX_UPCOMING = 3;
+
+/**
+ * How often the planning counter re-renders (TASK-202).
+ *
+ * One second, where `SelfHeader`'s snapshot age and the details drawer's
+ * checklist both tick at ten and say so ("coarse on purpose — this is not a
+ * clock"). The departure is deliberate: those two label a value that changes
+ * slowly, this one exists so an operator can tell a slow model from a dead one,
+ * and that question is asked in the first seconds.
+ */
+const PLANNING_TICK_MS = 1_000;
 
 /**
  * The rail sticks BELOW the app's top bar, not at the viewport edge.
@@ -144,6 +162,12 @@ export const BlockTimeline = memo(function BlockTimeline({
 }: BlockTimelineProps) {
   const plan = useAgentModeStore(selectPlan);
   const estopActive = useAgentModeStore(selectEstopActive);
+  // A 1 s tick, where the other two counters on this page are deliberately
+  // coarse at 10 s (SelfHeader's age, the drawer's checklist). This one answers
+  // "is it stuck?", and a number that only moves every ten seconds is exactly
+  // as unreadable as no number at all for the first ten of them.
+  const planningSince = useAgentModeStore(selectPlanningStartedAt);
+  const planningMs = useElapsedSince(planningSince, PLANNING_TICK_MS);
 
   // Derived from `plan`, not subscribed: `upcomingBlocksOfPlan` allocates and
   // zustand v5 compares snapshots by identity.
@@ -208,6 +232,19 @@ export const BlockTimeline = memo(function BlockTimeline({
             )}
           >
             {status.label}
+          </span>
+        )}
+
+        {/* How long it has been planning. Deliberately NOT in a live region:
+            the page has exactly one (ConditionAnnouncer), and a per-second
+            counter inside it would re-announce the rail every tick and drown
+            the E-Stop announcements that region exists for. */}
+        {planningMs !== null && (
+          <span
+            data-testid="agent-planning-elapsed"
+            className="card-meta tabular-nums whitespace-nowrap shrink-0"
+          >
+            {formatDuration(planningMs)}
           </span>
         )}
 

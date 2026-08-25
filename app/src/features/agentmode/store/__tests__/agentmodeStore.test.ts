@@ -1291,11 +1291,17 @@ describe('agentmodeStore', () => {
         planId: 'plan-7',
       });
       expect(s.messages[1]).toMatchObject({ role: 'agent', planId: 'plan-7' });
-      expect(s.pendingCommand).toEqual({
+      expect(s.pendingCommand).toMatchObject({
         planId: 'plan-7',
         text: 'walk to the table with the hat',
         robotId: ROBOT_ID,
       });
+      // The browser-frame t0 of the rail's planning counter (TASK-202). Stamped
+      // here rather than read off the plan, whose `createdAt` is the ROBOT's
+      // clock — measuring against that would fold skew into the number.
+      const sentAt = s.pendingCommand?.sentAt;
+      expect(sentAt).toBeTruthy();
+      expect(Number.isNaN(Date.parse(sentAt as string))).toBe(false);
       expect(s.isSending).toBe(false);
     });
 

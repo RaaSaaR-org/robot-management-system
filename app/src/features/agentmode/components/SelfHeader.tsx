@@ -8,7 +8,7 @@
  * @feature agentmode
  */
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useState } from 'react';
 import { cn } from '@/shared/utils';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
 import {
@@ -20,6 +20,7 @@ import {
   selectSelfUpdatedAt,
 } from '../store/agentmodeStore';
 import type { AgentSelfState } from '../types/agentmode.types';
+import { useElapsedSince } from '../hooks/useElapsedSince';
 import { IdentityDialog } from './IdentityDialog';
 import { RobotDetailsDrawer } from './RobotDetailsDrawer';
 
@@ -79,23 +80,7 @@ function crashClause(self: AgentSelfState): string | null {
 
 /** Age of the snapshot in ms, re-computed on a coarse tick; null when unknown. */
 function useSnapshotAge(updatedAt: string | null): number | null {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!updatedAt) return;
-    // A new snapshot resets the clock immediately; the interval only keeps a
-    // page nobody touches from claiming the data is younger than it is.
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), AGE_TICK_MS);
-    return () => clearInterval(id);
-  }, [updatedAt]);
-
-  if (!updatedAt) return null;
-  const taken = new Date(updatedAt).getTime();
-  if (Number.isNaN(taken)) return null;
-  // A robot's clock is not this browser's clock, so a snapshot can arrive
-  // "from the future". Clamp rather than render a negative age.
-  return Math.max(0, now - taken);
+  return useElapsedSince(updatedAt, AGE_TICK_MS);
 }
 
 /** Compact age, seconds-resolution near zero — "12s ago" reads as live, "4 min ago" does not. */

@@ -79,6 +79,23 @@ export interface Config {
      */
     plannerThinking: boolean;
     /**
+     * How long a whole planning round may take before the plan gives up
+     * (`AGENT_PLANNER_TIMEOUT_MS`). One budget for the planner's two attempts,
+     * not one per call — a wedged model must not cost twice the deadline.
+     *
+     * Default 300 s, chosen against two measurements rather than taste. A
+     * legitimate plan took 3.5 minutes once on a healthy small model, so
+     * anything under ~4 minutes would fail work that was going to succeed.
+     * On the other side, GPU_BOX 2026-08-02: Ollama kept advertising
+     * `gemma4:e2b` as loaded after its worker had died, every request hung, and
+     * two commands sat in `planning` for the 240 s the harness allowed and were
+     * still there when it gave up. Without a deadline those two states — "a
+     * small model is thinking" and "the model is never going to answer" — are
+     * the same screen forever. 300 s keeps the slow-but-working case and turns
+     * the wedged one into an answer within minutes instead of a whole shift.
+     */
+    plannerTimeoutMs: number;
+    /**
      * Let the vision model think before answering (`AGENT_VISION_THINKING`).
      * Default ON.
      *
@@ -509,6 +526,11 @@ export const config: Config = {
     // Opt-IN for the planner, opt-OUT for vision: both env vars accept
     // 'true'/'false' and fall back to the measured default (see the interface).
     plannerThinking: process.env.AGENT_PLANNER_THINKING === 'true',
+    // envFloat, not parseInt: a NaN deadline is worse than a wrong one.
+    // `setTimeout(NaN)` fires on the next tick, so a typo'd value would time
+    // every plan out instantly — the failure this knob exists to prevent,
+    // caused by the knob itself.
+    plannerTimeoutMs: envFloat(process.env.AGENT_PLANNER_TIMEOUT_MS, 300_000),
     visionThinking: process.env.AGENT_VISION_THINKING !== 'false',
     ollamaBaseUrl:
       process.env.AGENT_OLLAMA_BASE_URL ||
@@ -664,7 +686,8 @@ export function validateConfig(): void {
   console.log(`  - Agent Mode: ${config.agentMode.enabled ? 'ENABLED' : 'disabled'}`);
   console.log(
     `    - Planner Model: ollama/${config.agentMode.plannerModel} ` +
-      `(thinking ${config.agentMode.plannerThinking ? 'on' : 'off'})`
+      `(thinking ${config.agentMode.plannerThinking ? 'on' : 'off'}, ` +
+      `timeout ${Math.round(config.agentMode.plannerTimeoutMs / 1000)}s)`
   );
   console.log(
     `    - Vision Model: ollama/${config.agentMode.visionModel} ` +

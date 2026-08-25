@@ -301,14 +301,28 @@ export function blockDurationMs(block: AgentBlock): number | null {
   return end - start;
 }
 
-/** Compact duration string, e.g. `0.8s` / `12.4s` / `1m 05s`. */
+/**
+ * Compact duration string, e.g. `0.8s` / `12.4s` / `1m 05s`.
+ *
+ * Both halves of the `m`/`s` form come from ONE rounded total. Rounding them
+ * separately — `floor` for the minutes, `round` for the remainder — disagrees
+ * whenever the remainder lands at 59.5 s or more and prints `1m 60s`. That was
+ * invisible while the only caller passed a finished block's fixed duration, but
+ * the Planning counter (TASK-202) re-renders a growing number every second, so
+ * for any plan whose sub-second offset is >= 500 ms it would show `1m 60s`,
+ * `2m 60s`, `3m 60s` — once a minute, on the one number the counter exists to
+ * make readable.
+ *
+ * The seconds branch stops at 59.95 for the same reason from the other side:
+ * `toFixed(1)` on 59.999 renders `60.0s`.
+ */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60);
-  return `${minutes}m ${String(rest).padStart(2, '0')}s`;
+  if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  return `${minutes}m ${String(total % 60).padStart(2, '0')}s`;
 }
 
 /** Bearing rendered as a compass-style signed degree value. */
