@@ -25,6 +25,7 @@ const { mockDatasetService, mockFlagRepo, mockRobotTypeRepo } = vi.hoisted(() =>
     get: vi.fn(),
     list: vi.fn(),
     requestValidation: vi.fn(),
+    getUploadProgress: vi.fn(),
     // Present so a route that still called it would be caught doing so, rather
     // than failing with "not a function" and looking like a wiring problem.
     validateAndUpdateDataset: vi.fn(),
@@ -164,5 +165,30 @@ describe('POST /:id/validate', () => {
     const res = await request(app).post('/api/datasets/ds1/validate');
 
     expect(res.status).toBe(500);
+  });
+
+  it('sends the caller to a URL that reports THIS pass, not the last verdict', async () => {
+    // The 202 promises a place to read the answer. That place used to answer
+    // out of the dataset row whenever the service had no progress record —
+    // `{status:'ready', progress:100}` for a pass that had not begun, which a
+    // client cannot tell from one that finished and passed. The service now
+    // always has a record for a pass it accepted (see
+    // `DatasetService.getUploadProgress`); the route must prefer it over the
+    // row it falls back to.
+    mockDatasetService.requestValidation.mockResolvedValue('started');
+    mockDatasetService.getUploadProgress.mockResolvedValue({
+      datasetId: 'ds1',
+      status: 'validating',
+      progress: 0,
+      message: 'Validation started',
+    });
+
+    const accepted = await request(app).post('/api/datasets/ds1/validate');
+    const progress = await request(app).get(accepted.body.progressUrl as string);
+
+    // The row still says `ready` — DATASET.status — and that must not be what
+    // comes back.
+    expect(progress.status).toBe(200);
+    expect(progress.body).toMatchObject({ status: 'validating', progress: 0 });
   });
 });

@@ -132,7 +132,10 @@ Rate limited: 20 requests per 15 minutes.
 `{datasetId, accepted, state, progressUrl}` — `state: "queued"` when NATS is
 connected (a `jobs.dataset.validate` worker runs it) and `state: "started"` when
 it is not (this process runs it detached from the request; NATS is optional and
-a dev box has none). Poll `GET /:id/progress`, or read the row, for the answer.
+a dev box has none). Poll `GET /:id/progress`, or read the row, for the answer:
+from the moment the 202 is sent, `/:id/progress` reports `status: "validating"`
+for THIS pass — not the previous verdict — and ends on `ready` or `failed` at
+100% with the errors, whether or not this deployment has a NATS KV store.
 While a validation for that dataset is running the endpoint answers `409
 VALIDATION_IN_FLIGHT` rather than starting a second pass; when neither backing
 store can be reached it answers `503 STORE_UNAVAILABLE` and leaves the row

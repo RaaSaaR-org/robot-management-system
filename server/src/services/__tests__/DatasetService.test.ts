@@ -31,7 +31,15 @@ const {
   rustfsExists: vi.fn(),
   rustfsDownload: vi.fn(),
   rustfsList: vi.fn(async (_prefix: string) => [] as string[]),
-  jsPublish: vi.fn(),
+  // A real PubAck shape: the publisher reads `duplicate` off it to tell "on the
+  // stream" from "discarded by the server" (TASK-219).
+  jsPublish: vi.fn(
+    async (_subject: string, _payload: Uint8Array, _options?: { msgID?: string }) => ({
+      stream: 'DATASET_VALIDATION',
+      seq: 1,
+      duplicate: false,
+    }),
+  ),
   // Which training mixtures name the dataset being deleted. Default: none, so
   // every pre-existing delete test keeps describing the ordinary case.
   findMixtureMembers: vi.fn(async () => [] as { trainingJobId: string }[]),
@@ -152,6 +160,7 @@ import {
 import { isRustFSInitialized } from '../../storage/rustfs-client.js';
 import { natsClient } from '../../messaging/index.js';
 import { kvGet } from '../../messaging/kv-stores.js';
+import { v4 as uuidv4 } from 'uuid';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -691,7 +700,7 @@ describe('completeUpload', () => {
     expect(jsPublish).toHaveBeenCalledWith(
       'jobs.dataset.validate',
       expect.any(Uint8Array),
-      expect.objectContaining({ msgID: 'validate-ds1' })
+      expect.objectContaining({ msgID: expect.stringMatching(/^validate-ds1-/) })
     );
   });
 
@@ -731,9 +740,33 @@ describe('completeUpload', () => {
 // ===========================================================================
 
 describe('getUploadProgress', () => {
-  it('returns null when no progress KV store is available', async () => {
-    // The shared singleton has not been initialized with a KV store.
-    expect(await datasetService.getUploadProgress('ds1')).toBeNull();
+  it('returns null for a dataset nothing has reported on, and asks no KV it has not got', async () => {
+    // The shared singleton has not been initialized with a KV store, and no
+    // pass has been run here for this dataset — so there is genuinely nothing
+    // to report, and the caller falls back to the row.
+    expect(await datasetService.getUploadProgress('ds-never-validated')).toBeNull();
+    expect(kvGet).not.toHaveBeenCalled();
+  });
+
+  it('reports what this process recorded when there is no KV to record it in', async () => {
+    // NATS is optional, so on most deployments there is no KV — and
+    // `GET /:id/progress` is where `POST /:id/validate` sends the caller for
+    // the verdict. Reporting nothing there sent them back to the row, which
+    // holds the PREVIOUS pass's status at 100%.
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+
+    await datasetService.validateAndUpdateDataset('ds-recorded', 'ds-recorded/');
+
+    // Storage off: nothing was opened, and the channel says so rather than
+    // saying nothing.
+    expect(await datasetService.getUploadProgress('ds-recorded')).toMatchObject({
+      datasetId: 'ds-recorded',
+      status: 'failed',
+      progress: 100,
+    });
     expect(kvGet).not.toHaveBeenCalled();
   });
 });
@@ -1332,10 +1365,74 @@ describe('requestValidation', () => {
     expect(jsPublish).toHaveBeenCalledWith(
       'jobs.dataset.validate',
       expect.any(Uint8Array),
-      expect.objectContaining({ msgID: 'validate-ds-queued' }),
+      expect.objectContaining({ msgID: expect.stringMatching(/^validate-ds-queued-/) }),
     );
     // Nothing was validated on the caller's thread.
     expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('gives every attempt its own message id, so JetStream cannot swallow the second', async () => {
+    // The stream this publishes onto has a 5-minute `duplicate_window`, so a
+    // stable `validate-<id>` msgID meant the second validation of a dataset
+    // inside that window was discarded by the SERVER: acked, never stored,
+    // never delivered. The route would have answered 202 and marked the dataset
+    // in flight over work that no worker was ever given. `HuggingFaceImport`
+    // was wedged by exactly this and fixed it the same way.
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+    // The id this file mocks `uuid` to is constant, which is the one thing a
+    // uniqueness test cannot use. Two known-different ones instead.
+    // `as never` only because `uuid`'s overload set makes the byte-buffer
+    // signature the one vitest infers here.
+    vi.mocked(uuidv4)
+      .mockReturnValueOnce('attempt-1' as never)
+      .mockReturnValueOnce('attempt-2' as never);
+
+    await datasetService.requestValidation('ds-remsg', `${treeDir}/`);
+    // The worker ran it and finished; the dataset is validatable again.
+    await datasetService.validateAndUpdateDataset('ds-remsg', `${treeDir}/`);
+    // Second click, two minutes later — inside the dedup window.
+    await datasetService.requestValidation('ds-remsg', `${treeDir}/`);
+
+    const ids = jsPublish.mock.calls
+      .filter((call) => call[0] === 'jobs.dataset.validate')
+      .map((call) => call[2]?.msgID);
+    expect(ids).toEqual(['validate-ds-remsg-attempt-1', 'validate-ds-remsg-attempt-2']);
+  });
+
+  it('does not claim a job the server discarded as a duplicate', async () => {
+    // The backstop for the above: a duplicate ack means the message is NOT on
+    // the stream. Reporting that as queued — and holding the in-flight marker
+    // for the 15-minute lease — is how a dataset becomes unvalidatable with
+    // nothing in the log to say why.
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    jsPublish.mockResolvedValueOnce({ stream: 'DATASET_VALIDATION', seq: 0, duplicate: true });
+
+    await expect(datasetService.requestValidation('ds-dup', `${treeDir}/`)).rejects.toThrow(
+      /duplicate/,
+    );
+    expect(datasetService.isValidating('ds-dup')).toBe(false);
+    // And the next attempt is free to go.
+    expect(await datasetService.requestValidation('ds-dup', `${treeDir}/`)).toBe('queued');
+  });
+
+  it('refuses the second of two requests that land in the same tick', async () => {
+    // The guard has to be synchronous with the check. While the marker was set
+    // only AFTER the JetStream publish resolved, two clicks both passed
+    // `isValidating` and both published — the queue's own dedup was the thing
+    // preventing a double pass, and that dedup is exactly what must not be
+    // relied on (see the msgID test above).
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+
+    const states = await Promise.all([
+      datasetService.requestValidation('ds-race', `${treeDir}/`),
+      datasetService.requestValidation('ds-race', `${treeDir}/`),
+    ]);
+
+    expect([...states].sort()).toEqual(['in-flight', 'queued']);
+    expect(jsPublish.mock.calls.filter((c) => c[0] === 'jobs.dataset.validate')).toHaveLength(1);
   });
 
   it('refuses a second request while the first is still in flight', async () => {
@@ -1391,6 +1488,70 @@ describe('requestValidation', () => {
     expect(jsPublish).not.toHaveBeenCalled();
     expect(datasetRepository.update).not.toHaveBeenCalled();
     expect(datasetService.isValidating('ds-nostore')).toBe(false);
+  });
+
+  it('makes the progress channel say a pass was accepted, not what the last one concluded', async () => {
+    // `POST /:id/validate` answers 202 and points the caller at
+    // `GET /:id/progress` for the verdict. There is no NATS KV on a deployment
+    // without NATS, so that endpoint had nothing to report and fell back to the
+    // dataset ROW — which still holds the PREVIOUS pass's status at 100%. A
+    // validation that had not begun read exactly like one that had passed.
+    //
+    // The queue path, deliberately: the job goes to a worker that is not this
+    // process, so nothing can advance the record between the two lines below.
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+
+    expect(await datasetService.getUploadProgress('ds-progress')).toBeNull();
+    expect(await datasetService.requestValidation('ds-progress', `${treeDir}/`)).toBe('queued');
+
+    expect(await datasetService.getUploadProgress('ds-progress')).toEqual({
+      datasetId: 'ds-progress',
+      status: 'validating',
+      progress: 0,
+      message: 'Queued for validation',
+    });
+  });
+
+  it('stops reporting an unfinished pass once its lease is up', async () => {
+    // The other half of the same promise. A job handed to a worker in another
+    // process finishes somewhere this one cannot hear, so an in-memory
+    // "validating" would otherwise stand forever and the row — which the worker
+    // DID update — would never be shown again.
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    await datasetService.requestValidation('ds-lease', `${treeDir}/`);
+    expect(await datasetService.getUploadProgress('ds-lease')).toMatchObject({
+      status: 'validating',
+    });
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60 * 1000);
+    try {
+      expect(await datasetService.getUploadProgress('ds-lease')).toBeNull();
+      expect(datasetService.isValidating('ds-lease')).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('reports the verdict on the same channel when the pass ran here', async () => {
+    vi.mocked(natsClient.isConnected).mockReturnValue(false);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    expect(await datasetService.requestValidation('ds-verdict', `${treeDir}/`)).toBe('started');
+
+    // An empty directory has no meta/info.json, so the pass fails — and the
+    // caller polling the URL the 202 handed back is told so, with the reason,
+    // rather than being left reading a stale 100%.
+    await vi.waitFor(async () => {
+      expect(await datasetService.getUploadProgress('ds-verdict')).toMatchObject({
+        datasetId: 'ds-verdict',
+        status: 'failed',
+        progress: 100,
+      });
+    });
+    const done = await datasetService.getUploadProgress('ds-verdict');
+    expect(done?.errors?.length).toBeGreaterThan(0);
   });
 
   it('lets the next request through once the pass has finished', async () => {

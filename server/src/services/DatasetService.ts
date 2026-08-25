@@ -107,6 +107,16 @@ const DATASET_PROGRESS_KV_PREFIX = 'dataset.progress.';
 const VALIDATION_LEASE_MS = 15 * 60 * 1000;
 
 /**
+ * How many datasets' progress records this process keeps in memory.
+ *
+ * The in-memory copy exists for deployments with no NATS KV to write progress
+ * into — every dev box. Bounded because it is keyed by dataset id and a
+ * long-lived process would otherwise accumulate one entry per dataset it ever
+ * validated; the oldest written is dropped first.
+ */
+const LOCAL_PROGRESS_MAX = 200;
+
+/**
  * The object version an upload is presigned against, and the key it lands on.
  *
  * `modelStorage.getDatasetKey` builds `<name>/<version>/data.bin`, so this is
@@ -161,6 +171,13 @@ export class DatasetService extends EventEmitter {
   private progressKV: KV | null = null;
   /** Dataset id → when its validation started. See {@link VALIDATION_LEASE_MS}. */
   private readonly validationsInFlight = new Map<string, number>();
+  /**
+   * Dataset id → the last progress record written for it, in this process.
+   *
+   * The KV store is the shared channel, and there isn't one unless NATS is
+   * connected. See {@link getUploadProgress} for what depends on this.
+   */
+  private readonly localProgress = new Map<string, DatasetValidationProgress>();
 
   private constructor() {
     super();
@@ -641,14 +658,36 @@ export class DatasetService extends EventEmitter {
   }
 
   /**
-   * Get upload progress from KV store
+   * The progress of the validation pass running for this dataset, if any.
+   *
+   * KV first — it is the only channel that can carry a worker in ANOTHER
+   * process — and this process's own copy when there is nothing in it.
+   *
+   * That fallback is not a nicety. `POST /:id/validate` answers 202 and tells
+   * the caller to poll `GET /:id/progress` for the verdict, and on a deployment
+   * with no NATS (every dev box) there is no KV, so this returned null and the
+   * route fell back to the dataset ROW — which still holds the previous pass's
+   * status at 100%. A validation that had not begun was then indistinguishable
+   * from one that had finished and passed.
    */
   async getUploadProgress(id: string): Promise<DatasetValidationProgress | null> {
-    if (!this.progressKV) {
+    if (this.progressKV) {
+      const key = `${DATASET_PROGRESS_KV_PREFIX}${id}`;
+      const shared = await kvGet<DatasetValidationProgress>(this.progressKV, key);
+      if (shared) return shared;
+    }
+
+    const local = this.localProgress.get(id);
+    if (!local) return null;
+    // An unfinished record for a pass this process is no longer running — a job
+    // consumed by a worker elsewhere, whose completion it cannot hear without a
+    // KV — would otherwise read "validating" forever. Past the lease, the row
+    // is the better answer. Same backstop {@link isValidating} uses.
+    if (local.progress < 100 && !this.isValidating(id)) {
+      this.localProgress.delete(id);
       return null;
     }
-    const key = `${DATASET_PROGRESS_KV_PREFIX}${id}`;
-    return await kvGet<DatasetValidationProgress>(this.progressKV, key);
+    return local;
   }
 
   // ============================================================================
@@ -669,9 +708,32 @@ export class DatasetService extends EventEmitter {
       storagePath,
     });
 
-    await js.publish(DATASET_VALIDATION_SUBJECT, new TextEncoder().encode(payload), {
-      msgID: `validate-${datasetId}`,
+    // The msgID is per ATTEMPT, not per dataset.
+    //
+    // `validate-${datasetId}` sat inside the DATASET_VALIDATION stream's
+    // 5-minute `duplicate_window` (see `messaging/streams.ts`), so the SECOND
+    // validation queued for a dataset inside that window was discarded by the
+    // server: acked as a duplicate, no error here, no message on the stream and
+    // no consumer ever delivered it. With `POST /:id/validate` on this path
+    // that is a dataset an operator cannot re-check — the request is answered
+    // 202, nothing runs, and the in-flight marker below then refuses every
+    // further attempt for the whole lease. `HuggingFaceImportService` hit this
+    // exact bug and fixed it the same way; so did `computeStats`. Dedup is
+    // worth having for a publish that is genuinely repeated (a retried write of
+    // the same message); a new request is new work and must queue its own.
+    const ack = await js.publish(DATASET_VALIDATION_SUBJECT, new TextEncoder().encode(payload), {
+      msgID: `validate-${datasetId}-${uuidv4()}`,
     });
+
+    // Cannot happen with a per-attempt id, and it is checked anyway because the
+    // failure it would cause is silent: a duplicate ack means the job is NOT on
+    // the stream, so claiming it is queued and marking the dataset in flight
+    // would lock it out of validation for the lease over work nobody will do.
+    if (ack?.duplicate) {
+      throw new Error(
+        `JetStream discarded the validation job for ${datasetId} as a duplicate — nothing was queued`,
+      );
+    }
 
     this.markValidationStarted(datasetId);
     console.log(`[DatasetService] Queued validation job for dataset: ${datasetId}`);
@@ -715,28 +777,60 @@ export class DatasetService extends EventEmitter {
     // whose store cannot be reached is not "queued", it is "nothing to open".
     if (!openDatasetTree(storagePath)) return 'store-unavailable';
 
-    if (natsClient.isConnected()) {
-      await this.queueValidationJob(datasetId, storagePath);
-      return 'queued';
-    }
+    const viaQueue = natsClient.isConnected();
 
-    // Marked BEFORE anything is awaited, so a second request landing in the
-    // same tick is refused rather than starting a second pass.
+    // Marked BEFORE anything is awaited, on BOTH paths, so a second request
+    // landing in the same tick is refused rather than starting a second pass.
+    // The check above and this line have to be one synchronous step: when the
+    // mark waited for the JetStream publish, two clicks both passed the check
+    // and both published, and the guard the whole endpoint depends on was doing
+    // nothing — the JetStream dedup was, by discarding the second job (which is
+    // its own bug, see `queueValidationJob`).
     this.markValidationStarted(datasetId);
-    this.emitEvent({
-      type: 'dataset:validation:started',
-      datasetId,
-      timestamp: new Date().toISOString(),
-    });
-    setImmediate(() => {
-      void this.validateAndUpdateDataset(datasetId, storagePath).catch((error: unknown) => {
-        // `validateAndUpdateDataset` records its own failures; this catch is
-        // for the ones it cannot, so a detached run can never take the process
-        // down with an unhandled rejection.
-        console.error(`[DatasetService] Detached validation for ${datasetId} threw:`, error);
+    try {
+      // The caller is told to poll `GET /:id/progress` for the verdict, so that
+      // channel must stop reporting the PREVIOUS pass's the moment this one is
+      // accepted. Without this the first poll after a 202 answered with the old
+      // status at 100% — a pass that had not started, reported as one that had
+      // finished and passed.
+      //
+      // The dataset ROW is deliberately left where it is. A `ready` dataset
+      // being re-checked is still usable, and a row flipped to `validating` by
+      // a pass that then dies with its process is a row nothing clears — the
+      // wedge `HuggingFaceImportService.retryImport` already has to work around.
+      await this.updateValidationProgress(datasetId, {
+        datasetId,
+        status: 'validating',
+        progress: 0,
+        message: viaQueue ? 'Queued for validation' : 'Validation started',
       });
-    });
-    return 'started';
+
+      if (viaQueue) {
+        await this.queueValidationJob(datasetId, storagePath);
+        return 'queued';
+      }
+
+      this.emitEvent({
+        type: 'dataset:validation:started',
+        datasetId,
+        timestamp: new Date().toISOString(),
+      });
+      setImmediate(() => {
+        void this.validateAndUpdateDataset(datasetId, storagePath).catch((error: unknown) => {
+          // `validateAndUpdateDataset` records its own failures; this catch is
+          // for the ones it cannot, so a detached run can never take the process
+          // down with an unhandled rejection.
+          console.error(`[DatasetService] Detached validation for ${datasetId} threw:`, error);
+        });
+      });
+      return 'started';
+    } catch (error) {
+      // Nothing was started, so nothing may hold the marker: leaving it set
+      // would refuse every retry until the lease expired.
+      this.validationsInFlight.delete(datasetId);
+      this.localProgress.delete(datasetId);
+      throw error;
+    }
   }
 
   /** Whether a validation for this dataset is running (or recently started). */
@@ -997,12 +1091,18 @@ export class DatasetService extends EventEmitter {
   }
 
   /**
-   * Update validation progress in KV store
+   * Record how far along a dataset's validation is.
+   *
+   * In the KV store when there is one — the only place a worker in another
+   * process can be heard through — and always in this process's own map, which
+   * is what `GET /:id/progress` reads on a deployment with no NATS.
    */
   private async updateValidationProgress(
     datasetId: string,
     progress: DatasetValidationProgress
   ): Promise<void> {
+    this.rememberProgress(datasetId, progress);
+
     if (this.progressKV) {
       const key = `${DATASET_PROGRESS_KV_PREFIX}${datasetId}`;
       await kvPut(this.progressKV, key, progress);
@@ -1015,6 +1115,19 @@ export class DatasetService extends EventEmitter {
       progress,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  /** Keep the newest progress record for this dataset, bounded. */
+  private rememberProgress(datasetId: string, progress: DatasetValidationProgress): void {
+    // Deleted before it is set, so the Map's insertion order stays a
+    // least-recently-written order and the cap drops the stalest entry.
+    this.localProgress.delete(datasetId);
+    this.localProgress.set(datasetId, progress);
+    while (this.localProgress.size > LOCAL_PROGRESS_MAX) {
+      const stalest = this.localProgress.keys().next().value;
+      if (stalest === undefined) break;
+      this.localProgress.delete(stalest);
+    }
   }
 
   // ============================================================================

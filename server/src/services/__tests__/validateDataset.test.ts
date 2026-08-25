@@ -48,6 +48,17 @@ interface FixtureOptions {
   emptyVideo?: boolean;
   /** Write no mp4 at all — what a metadata-only import leaves on disk. */
   omitVideos?: boolean;
+  /**
+   * v2.1: write the mp4s as `videos/<key>/chunk-000/episode_N.mp4` while
+   * `info.json` still declares the chunk-first template.
+   *
+   * Not a corruption — it is what several real converters emit, and why
+   * `alternateVideoPath` exists. It matters twice over now the tree is LISTED:
+   * a file found under the other ordering has to count as accounted for, or
+   * every dataset laid out this way collects an `UNEXPECTED_FILE` warning for
+   * each of its videos.
+   */
+  keyFirstVideos?: boolean;
   /** v3.0: spread the episodes across this many data + video files in chunk-000. */
   splitFiles?: number;
   /** v3.0: skip writing `file-<n>` even though the metadata points at it. */
@@ -280,7 +291,9 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
     }
     for (const cam of cameras) {
       if (options.omitVideos) continue;
-      const dst = join(dir, 'videos', 'chunk-000', cam);
+      const dst = options.keyFirstVideos
+        ? join(dir, 'videos', cam, 'chunk-000')
+        : join(dir, 'videos', 'chunk-000', cam);
       await mkdir(dst, { recursive: true });
       for (let ep = 0; ep < perEpisode.length; ep++) {
         await writeFile(
@@ -812,13 +825,32 @@ describe('a file the manifest never named', () => {
   it('says nothing about a sound dataset', async () => {
     // The failure mode of the warning itself. `expectedFiles` and the listing
     // have to agree exactly on a tree that IS complete, or every dataset in
-    // this database picks up a warning nobody can act on — including the v2.1
-    // trees whose mp4s are keyed the other way round.
+    // this database picks up a warning nobody can act on.
     const v3 = await validate(await fixture('extra-none-v3', { splitFiles: 3 }));
     expect(codes(v3.warnings)).not.toContain('UNEXPECTED_FILE');
 
     const v21 = await validate(await fixture('extra-none-v21', { version: 'v2.1' }));
     expect(codes(v21.warnings)).not.toContain('UNEXPECTED_FILE');
+  });
+
+  it('says nothing about a v2.1 tree whose mp4s are keyed the other way round', async () => {
+    // `videos/<key>/chunk-000/episode_N.mp4` against a manifest that declares
+    // `videos/chunk-000/<key>/...`. The existence check has always accepted
+    // either ordering, and now the listing has to as well: an mp4 found under
+    // the alternate path is the one the manifest named, not a stray.
+    const report = await validate(
+      await fixture('extra-none-v21-keyfirst', { version: 'v2.1', keyFirstVideos: true }),
+    );
+
+    expect(codes(report.warnings)).not.toContain('UNEXPECTED_FILE');
+    expect(report.errors).toEqual([]);
+    // And it really did find them where they are, rather than skipping the
+    // check: every episode's video is in the report, under its real path.
+    expect(report.files.filter((f) => f.kind === 'video').map((f) => f.path)).toEqual([
+      'videos/observation.images.cam_high/chunk-000/episode_000000.mp4',
+      'videos/observation.images.cam_high/chunk-000/episode_000001.mp4',
+      'videos/observation.images.cam_high/chunk-000/episode_000002.mp4',
+    ]);
   });
 
   it('counts them rather than listing thousands', async () => {
