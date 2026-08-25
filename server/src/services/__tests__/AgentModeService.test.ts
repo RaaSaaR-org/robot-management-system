@@ -344,6 +344,142 @@ describe('AgentModeService', () => {
     expect(agentModeService.getRecentEvents(robotId, 1)).toHaveLength(1);
   });
 
+  // ==========================================================================
+  // WHICH LATCH IS SET (TASK-205)
+  // ==========================================================================
+  //
+  // The robot reports WHICH latch forbids driving — its own STOPP or the
+  // SafetyMonitor's protective stop — as `estopSource`/`estopReason` on the
+  // snapshot. The mirror's only job is to carry them through untouched: the
+  // console words the banner from them ("E-Stop latched by the safety monitor"
+  // vs Agent Mode's own), and a mirror that invented an attribution would put
+  // the wrong sentence in front of the operator. Both fields are optional on
+  // the wire, so ABSENT ("this agent does not report which") must stay
+  // distinguishable from `null` ("nothing latched").
+
+  it('carries the latch attribution through unchanged', () => {
+    const robotId = nextRobotId();
+
+    const merged = agentModeService.ingest(
+      event({
+        type: 'agent:state:changed',
+        robotId,
+        state: {
+          robotId,
+          enabled: true,
+          controlOwner: 'agent',
+          plan: null,
+          scene: null,
+          estopActive: true,
+          estopSource: 'safety',
+          estopReason: 'Fall detected',
+        },
+      })
+    );
+
+    expect(merged).toMatchObject({
+      estopActive: true,
+      estopSource: 'safety',
+      estopReason: 'Fall detected',
+    });
+    expect(agentModeService.getState(robotId)).toMatchObject({
+      estopSource: 'safety',
+      estopReason: 'Fall detected',
+    });
+  });
+
+  it('keeps the attribution across a following partial event', () => {
+    // A plan event carries no snapshot, so it must not blank what the robot
+    // last said about the latch — the banner would silently lose its source
+    // the moment the next block started.
+    const robotId = nextRobotId();
+    agentModeService.ingest(
+      event({
+        type: 'agent:state:changed',
+        robotId,
+        state: {
+          robotId,
+          enabled: true,
+          controlOwner: 'agent',
+          plan: null,
+          scene: null,
+          estopActive: true,
+          estopSource: 'safety',
+          estopReason: 'Fall detected',
+        },
+      })
+    );
+
+    const merged = agentModeService.ingest(
+      event({ type: 'agent:plan:started', robotId, plan: makePlan(robotId) })
+    );
+
+    expect(merged).toMatchObject({
+      estopActive: true,
+      estopSource: 'safety',
+      estopReason: 'Fall detected',
+    });
+  });
+
+  it('never invents an attribution the robot did not send', () => {
+    // The `estopActive` twin of this guard is above ('seeds a neutral state
+    // from a plan-only event'). Absent must stay absent: `null` would read as
+    // "the robot says no latch is attributed", and `'agent'` would blame Agent
+    // Mode for a stop it did not latch.
+    const robotId = nextRobotId();
+
+    const seeded = agentModeService.ingest(
+      event({ type: 'agent:plan:started', robotId, plan: makePlan(robotId) })
+    );
+    expect(seeded.estopSource).toBeUndefined();
+    expect(seeded.estopReason).toBeUndefined();
+    expect('estopSource' in seeded).toBe(false);
+
+    // ...and an older agent's snapshot, which asserts the latch but not who
+    // holds it, must not be backfilled either.
+    const older = agentModeService.ingest(
+      event({
+        type: 'agent:state:changed',
+        robotId,
+        state: {
+          robotId,
+          enabled: true,
+          controlOwner: 'agent',
+          plan: null,
+          scene: null,
+          estopActive: true,
+        },
+      })
+    );
+    expect(older.estopActive).toBe(true);
+    expect(older.estopSource).toBeUndefined();
+  });
+
+  it('lets the robot clear the attribution when the latch clears', () => {
+    const robotId = nextRobotId();
+    const latched: AgentModeState = {
+      robotId,
+      enabled: true,
+      controlOwner: 'agent',
+      plan: null,
+      scene: null,
+      estopActive: true,
+      estopSource: 'safety',
+      estopReason: 'Fall detected',
+    };
+    agentModeService.ingest(event({ type: 'agent:state:changed', robotId, state: latched }));
+
+    const cleared = agentModeService.ingest(
+      event({
+        type: 'agent:state:changed',
+        robotId,
+        state: { ...latched, estopActive: false, estopSource: null, estopReason: null },
+      })
+    );
+
+    expect(cleared).toMatchObject({ estopActive: false, estopSource: null, estopReason: null });
+  });
+
   it('caps the recent-event log at 200 entries', () => {
     const robotId = nextRobotId();
     for (let i = 0; i < 250; i++) {
@@ -365,6 +501,17 @@ describe('isValidAgentModeSnapshot', () => {
 
   it('accepts a snapshot asserting enabled, estopActive and a known controlOwner', () => {
     expect(isValidAgentModeSnapshot(valid)).toBe(true);
+  });
+
+  it('accepts a latched snapshot from an agent that does not report which latch it is', () => {
+    // The wire-compat constraint of TASK-205, asserted on the case that costs
+    // something: rejecting this would drop an OLDER agent's latched state and
+    // leave the console reading `emptyState()` — `estopActive: false` — for a
+    // robot that is stopped.
+    expect(isValidAgentModeSnapshot({ ...valid, estopActive: true })).toBe(true);
+    expect(isValidAgentModeSnapshot({ ...valid, estopActive: true, estopSource: 'safety' })).toBe(
+      true
+    );
   });
 
   it.each([

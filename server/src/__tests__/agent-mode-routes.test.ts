@@ -273,6 +273,48 @@ describe('agent-mode routes', () => {
       expect(mockGet).not.toHaveBeenCalled();
     });
 
+    it('echoes which latch is set, and its reason (TASK-205)', async () => {
+      // The console words the E-Stop banner from `estopSource`: a safety-monitor
+      // stop reads "E-Stop latched by the safety monitor" and tells the operator
+      // one reset clears both latches, where Agent Mode's own latch reads
+      // differently. Dropping the field here would put the wrong sentence in
+      // front of the operator without any test noticing.
+      mockAgentModeService.getState.mockReturnValue({
+        ...STATE,
+        estopActive: true,
+        estopSource: 'safety',
+        estopReason: 'Fall detected',
+      });
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        estopActive: true,
+        estopSource: 'safety',
+        estopReason: 'Fall detected',
+      });
+    });
+
+    it('does not fabricate a latch source the robot never sent', async () => {
+      // Absent and `null` read the same to the console — `applyLatchSource`
+      // normalizes with `agentState?.estopSource ?? null`. What matters is that
+      // the mirror does not INVENT one. A server-side `'agent'` backfill would
+      // take the attributed branch in that fold and overwrite a `'safety'`
+      // attribution the store already holds, blanking its `estopReason` with
+      // it — turning a protective stop into Agent Mode's own STOPP in the
+      // banner, and hiding that one reset has to clear both latches.
+      mockAgentModeService.getState.mockReturnValue({ ...STATE, estopActive: true });
+      mockAgentModeService.isHydrated.mockReturnValue(true);
+
+      const res = await request(createApp()).get('/api/robots/robot-001/agent-mode');
+
+      expect(res.status).toBe(200);
+      expect(res.body.estopActive).toBe(true);
+      expect(res.body).not.toHaveProperty('estopSource');
+    });
+
     it('404s when nothing has been ingested for the robot', async () => {
       mockAgentModeService.getState.mockReturnValue(null);
 
