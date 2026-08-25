@@ -6,7 +6,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { blockKindLabel, demoMode, formatBlockParams, presentProgress } from '../blockFormat';
+import {
+  blockKindLabel,
+  demoMode,
+  formatBlockParams,
+  formatDuration,
+  presentProgress,
+} from '../blockFormat';
 import type { AgentBlock } from '../../types/agentmode.types';
 
 const block = (kind: AgentBlock['kind'], params: Record<string, unknown> = {}): AgentBlock => ({
@@ -117,5 +123,36 @@ describe('formatBlockParams', () => {
     // the one mistake this block kind exists to prevent.
     expect(demoMode(block('demo', {}))).toBeNull();
     expect(formatBlockParams(block('demo', { skillId: 'sk-1' }))).toBe('describes “sk-1” (not executed)');
+  });
+});
+
+describe('formatDuration', () => {
+  it('renders sub-second, seconds and minute forms', () => {
+    expect(formatDuration(0)).toBe('0ms');
+    expect(formatDuration(812)).toBe('812ms');
+    expect(formatDuration(1_000)).toBe('1.0s');
+    expect(formatDuration(12_400)).toBe('12.4s');
+    expect(formatDuration(65_000)).toBe('1m 05s');
+    expect(formatDuration(3_600_000)).toBe('60m 00s');
+  });
+
+  // REGRESSION (TASK-202). The Planning counter re-renders a growing number
+  // once a second, so a rounding seam that a finished block's fixed duration
+  // hit ~0.8% of the time is now on screen once a minute for the whole
+  // deadline. Both of these used to carry a 60 into a field that only goes to
+  // 59.
+  it('never renders a sixtieth second', () => {
+    expect(formatDuration(119_700)).toBe('2m 00s'); // was '1m 60s'
+    expect(formatDuration(59_999)).toBe('1m 00s'); // was '60.0s'
+    expect(formatDuration(179_500)).toBe('3m 00s'); // was '2m 60s'
+  });
+
+  it('still rounds the ordinary remainder the short way', () => {
+    expect(formatDuration(119_400)).toBe('1m 59s');
+    expect(formatDuration(59_800)).toBe('59.8s');
+    // The seconds branch keeps everything `toFixed(1)` can render honestly;
+    // 59.95 is the first value that would round up to a 60.
+    expect(formatDuration(59_940)).toBe('59.9s');
+    expect(formatDuration(59_950)).toBe('1m 00s');
   });
 });

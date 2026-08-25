@@ -206,10 +206,44 @@ describe('Planner — the deadline', () => {
 
     expect(result.fallback).toBe(true);
     expect(result.timedOut).toBe(true);
-    // The budget covers the WHOLE round, so a wedged model costs one deadline,
-    // not one per attempt. This bound is what fails if that ever regresses.
-    expect(elapsed).toBeLessThan(FAST_TIMEOUT_MS * 2);
+    // A timeout is not retried: the repair attempt exists for a model that
+    // answered badly, and one that answered nothing has not earned a second
+    // deadline. (This does NOT pin the shared round budget — only one call is
+    // made here, so a per-call deadline would look identical. The budget is
+    // pinned below, where attempt 1 actually spends some of it.)
     expect(generate).toHaveBeenCalledTimes(1);
+    expect(elapsed).toBeLessThan(FAST_TIMEOUT_MS * 2);
+    warn.mockRestore();
+  });
+
+  it('gives the repair attempt only what attempt 1 left of the budget', async () => {
+    // THE shared-budget test. Attempt 1 answers unparseable JSON after most of
+    // the deadline, which is the only shape that tells the two designs apart:
+    // with one budget for the round the repair attempt inherits the remainder
+    // and the whole plan lands near the deadline; with a per-call deadline it
+    // would get a fresh full one and land near 2x.
+    let n = 0;
+    const generate = vi.fn(() => {
+      n++;
+      if (n === 1) {
+        return new Promise<GenerateResponse>((resolve) =>
+          setTimeout(() => resolve({ text: 'not json', output: null }), 140)
+        );
+      }
+      return new Promise<GenerateResponse>(() => {});
+    });
+    const planner = new Planner({ generate, modelRef: MODEL_REF, timeoutMs: 200 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const started = Date.now();
+    const result = await planner.plan({ command: 'geh zum Tisch', sceneSummary: 'empty' });
+    const elapsed = Date.now() - started;
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.timedOut).toBe(true);
+    // Measured ~203 ms as written; ~343 ms if the call site stops subtracting
+    // what attempt 1 already spent.
+    expect(elapsed).toBeLessThan(320);
     warn.mockRestore();
   });
 

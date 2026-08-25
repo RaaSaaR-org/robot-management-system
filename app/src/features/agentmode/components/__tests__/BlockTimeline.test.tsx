@@ -178,19 +178,29 @@ describe('BlockTimeline', () => {
         updatedAt: createdAt,
       }) as unknown as AgentPlan;
 
-    it('counts up while the plan is still being planned', async () => {
+    it('counts up once a second while the plan is still being planned', async () => {
       useAgentModeStore.setState({ plan: planningPlan(new Date().toISOString()) });
       render(<BlockTimeline onStop={() => {}} />);
 
-      const before = screen.getByTestId('agent-planning-elapsed').textContent;
+      // Advanced ONE tick at a time, deliberately. Jumping straight to 5 s
+      // would pass for any interval that divides 5000 — including 5 s itself,
+      // which is the "unreadable in the first seconds" behaviour
+      // PLANNING_TICK_MS exists to rule out. Asserting after each second is
+      // what actually pins the interval.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/1\.\ds/);
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(1_000);
       });
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/2\.\ds/);
 
-      const after = screen.getByTestId('agent-planning-elapsed').textContent;
-      expect(after).not.toBe(before);
-      expect(after).toMatch(/5\.\ds/);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(screen.getByTestId('agent-planning-elapsed')).toHaveTextContent(/5\.\ds/);
     });
 
     it('prefers this console own send stamp over the robot clock', async () => {
