@@ -616,6 +616,18 @@ describe('retryImport', () => {
     const revisionCalls = requested.filter((u) => u.includes('/revision/'));
     expect(revisionCalls.every((u) => u.includes(SHA))).toBe(true);
     expect(requested.some((u) => u.includes('/revision/main'))).toBe(false);
+
+    // `retryImport` resolves once the row is CLAIMED and lets the download run
+    // detached. Leaving here without waiting for it leaves that download writing
+    // into the shared storage directory that the next test's `beforeEach`
+    // deletes — an `ENOTEMPTY` from `rm` that lands on whichever test happened
+    // to be next (TASK-218). `validating` is written after the last file.
+    await settle(() =>
+      expect(datasetRepository.update).toHaveBeenCalledWith(
+        DATASET_ID,
+        expect.objectContaining({ status: 'validating' }),
+      ),
+    );
   });
 
   it('refuses a dataset that did not come from the Hub, and one already running', async () => {
