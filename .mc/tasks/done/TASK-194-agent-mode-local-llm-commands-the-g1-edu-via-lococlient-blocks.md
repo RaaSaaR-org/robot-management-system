@@ -4,7 +4,7 @@ aliases:
 - TASK-194
 title: Agent Mode — local LLM commands the G1 EDU via LocoClient blocks
 slug: agent-mode-local-llm-commands-the-g1-edu-via-lococlient-blocks
-status: in-progress
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -18,7 +18,40 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-25
-updated: 2026-08-01
+updated: 2026-08-25
+completed: 2026-08-25
+status_note: |
+  DONE 2026-08-25 (bookkeeping only — the code shipped 2026-08-01). Agent Mode
+  merged as PR #212 (`00e21bae`) and the lidar-range follow-up as PR #214
+  (`705fb515`); both are in release v2026.08.09. The file simply never left
+  `todo/`, and its status said `in-progress` for three and a half weeks after
+  the feature was released.
+  VERIFIED, and where the record lives: five end-to-end runs against the sim and
+  a real Ollama, written up in this file under "Live acceptance round — five
+  end-to-end runs against sim + Ollama" (:491) with the per-run traces that
+  follow it; the PR #214 review's findings and the fixes made for them are under
+  "Follow-ups from the PR #214 review" (:903). Suites at merge: app 57 files /
+  1113 tests green, typecheck clean.
+  NOT VERIFIED, in plain words: acceptance criterion 4 ("the robot knows when it
+  has arrived") was declared UNMET at #212 (:554, :682, :894). The
+  arrival-by-contact and lidar-range work that addresses it —
+  `robot-agent/src/agent-mode/range.ts`, `navigator.ts:103-125`
+  (`CONTACT_STALL_M` / `CONTACT_SHORTFALL_RATIO` / `CONTACT_MAX_DISTANCE_M`),
+  `types.ts:110` (`measured`) — was never re-run against this task's own
+  scripted "geh zum Tisch mit dem Hut" and no such run is recorded here, so
+  criterion 4 is closed as SHIPPED-BUT-UNPROVEN, not as met. The `sim_g1_dds`
+  pytest stage reports SKIPPED without `SIM_PYTHON` and there is no record of it
+  running. Nothing here was ever exercised on a real G1: hardware validation is
+  deferred to [[TASK-169]] (lab bring-up). No GPU, robot or lidar check happened
+  for this closure.
+  STILL OPEN, carried out of here so closing this does not bury them: six of the
+  eight post-merge findings from the 2026-08-01 review of #214 (:903 to the end
+  of this file) are
+  live on released code and are now [[TASK-221]] — including the HIGH one, where
+  scene memory does not expire distances for motion Agent Mode did not command
+  and a `goto` can report "Arrived after 0 stages" without moving. The two LOW
+  robot-day observations (the `MIN_DURATION_S` floor, `forwardClearance` blind
+  inside 0.35 m) were left with [[TASK-169]] instead, where the robot is.
 ---
 
 
