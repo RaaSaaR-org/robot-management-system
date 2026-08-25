@@ -5,6 +5,12 @@
  */
 
 import type { RobotType } from '../robot/types.js';
+// The ONE default drift budget. It used to be written twice — an
+// independent literal `15` here and another in `place-resolver.ts` — with
+// only the resolver's pinned by a test, so retuning one would have moved the
+// budget for a `PlaceTracker` built from config while leaving every tracker
+// built from its own defaults on the old number (TASK-201, decision D1).
+import { DEFAULT_PLACE_DRIFT_BUDGET_M } from '../agent-mode/place-resolver.js';
 
 export type RobotClass = 'lightweight' | 'heavy-duty' | 'standard';
 
@@ -367,7 +373,9 @@ export interface Config {
     graphPath: string;
     /**
      * Accumulated translation, in metres, after which the place belief degrades
-     * to `stale` (`PLACE_DRIFT_BUDGET_M`, default 15).
+     * to `stale` (`PLACE_DRIFT_BUDGET_M`, default
+     * {@link DEFAULT_PLACE_DRIFT_BUDGET_M} = 15 — ONE constant, shared with the
+     * resolver's own default so the two cannot drift apart).
      *
      * 15 m is roughly one length of the 20 m warehouse hall: far enough that a
      * normal errand does not spend the budget, short enough that a robot which
@@ -627,7 +635,7 @@ export const config: Config = {
     // No default map: see the interface. UNKNOWN is the honest answer for a
     // robot nobody has handed a survey to.
     graphPath: process.env.PLACE_GRAPH_PATH || '',
-    driftBudgetM: envFloat(process.env.PLACE_DRIFT_BUDGET_M, 15),
+    driftBudgetM: envFloat(process.env.PLACE_DRIFT_BUDGET_M, DEFAULT_PLACE_DRIFT_BUDGET_M),
     hysteresisMarginM: envFloat(process.env.PLACE_HYSTERESIS_MARGIN_M, 0.3),
     faultNullPose: process.env.PLACE_FAULT_NULL_POSE === 'true',
     twinId: process.env.PLACE_TWIN_ID || '',

@@ -22,7 +22,12 @@ import type {
   GeofenceStatus,
   ZoneViolation,
 } from './types.js';
-import { DEFAULT_SAFETY_CONFIG, ZONE_VIOLATION_REASON_PREFIX, zoneViolationReason } from './types.js';
+import {
+  DEFAULT_SAFETY_CONFIG,
+  geofenceAdvisory,
+  ZONE_VIOLATION_REASON_PREFIX,
+  zoneViolationReason,
+} from './types.js';
 import type { SimulatedRobotState, RobotType } from '../robot/types.js';
 import { complianceLogClient } from '../compliance/ComplianceLogClient.js';
 import { hardwareClient } from '../hardware/HardwareClient.js';
@@ -308,6 +313,20 @@ export class SafetyMonitor {
    * that cascaded over it.
    */
   private zoneViolation: ZoneViolation | null = null;
+
+  /**
+   * The warn-only advisory for a geofence that has stopped fencing (TASK-201),
+   * or null when it is fencing (or when there is no map to fence with).
+   *
+   * Modelled on {@link tiltWarning} and for the same reason: it is a WARNING,
+   * self-clearing per verdict, surfaced through {@link getStatus} only. It
+   * never reaches `estopState`, never goes through `applyStopToState()` (which
+   * writes the persisted `warnings` array a reset then has to clean up), and
+   * therefore cannot flip `systemHealthy`. A fence that is not enforcing is not
+   * a stop — saying it with a stop's machinery would damp the base every time
+   * the sidecar drops a poll.
+   */
+  private geofenceWarning: string | null = null;
 
   /**
    * The one hook that turns a latch into an actual stop. Null = nothing is
@@ -836,6 +855,12 @@ export class SafetyMonitor {
    *    needs either an operator reset or positive evidence of clearance.
    */
   updateGeofence(status: GeofenceStatus): void {
+    // TASK-201, and it has to happen BEFORE the early return below — that
+    // return is where the information used to be lost. The return itself is
+    // correct and stays: `unknown` still changes no stop and releases no latch.
+    // What changes is that it no longer changes NOTHING AT ALL.
+    this.geofenceWarning = geofenceAdvisory(status);
+
     if (status.kind === 'unknown') return;
 
     if (status.kind === 'clear') {
@@ -1322,6 +1347,11 @@ export class SafetyMonitor {
           : []),
         ...(this.speedLimitActive ? [this.speedLimitReason] : []),
         ...(this.tiltWarning ? [this.tiltWarning] : []),
+        // A fence that is not fencing, said in the SAME payload that reports
+        // `systemHealthy: true` — the pairing the operator needs, because the
+        // two together are exactly the state that let a robot walk through a
+        // rack with nothing to read (TASK-201).
+        ...(this.geofenceWarning ? [this.geofenceWarning] : []),
         ...this.jointLimitWarnings,
       ],
       lastCheckTimestamp: new Date().toISOString(),

@@ -8,7 +8,11 @@
 import { memo } from 'react';
 import { cn } from '@/shared/utils';
 import { Tooltip } from '@/shared/components/ui/Tooltip';
-import { useAgentModeStore, selectPlace } from '../store/agentmodeStore';
+import {
+  useAgentModeStore,
+  selectPlace,
+  selectGeofenceNotEnforcing,
+} from '../store/agentmodeStore';
 import type { ScenePlace } from '../types';
 
 export interface PlaceChipProps {
@@ -41,6 +45,46 @@ const UNKNOWN_PROSE =
 /** Why a surveyed place can still be wrong. Same sentence in chip and tooltip. */
 const STALE_PROSE =
   'The map is surveyed, but the pose behind this has drifted further than the budget without a re-anchor. Treat the place as approximate.';
+
+/**
+ * What "fence off" means, in full (TASK-201). One constant, rendered as the
+ * marker's `title` and as its `sr-only` text, so pointer and screen reader get
+ * the same sentence.
+ */
+const FENCE_OFF_PROSE =
+  'The keepout geofence is not enforcing: the robot would NOT be stopped from walking into a keepout right now. Re-anchor the pose, or move the robot by hand.';
+
+/**
+ * The "fence off" marker (TASK-201).
+ *
+ * DELIBERATELY SEPARATE from the `· stale` marker below, and not folded into
+ * it: a stale place and a fence that has stopped fencing are two different
+ * claims that can each be true without the other. A stale place with the fence
+ * still holding is a naming problem; a fence that is off is a safety state, and
+ * an operator must not have to infer the second from the first.
+ *
+ * It renders in BOTH of this chip's branches — a robot with no pose at all has
+ * an unknown place AND a fence that cannot fence, which is precisely the case
+ * where an unknown-place chip alone would look like the milder of the two
+ * problems.
+ *
+ * Words, not colour: same rule as `· stale`, for the same colour-blind operator
+ * on the same washed-out projector.
+ */
+function FenceOffMarker() {
+  const notEnforcing = useAgentModeStore(selectGeofenceNotEnforcing);
+  if (!notEnforcing) return null;
+  return (
+    <span
+      data-testid="agent-geofence-off"
+      className="card-meta shrink-0 text-amber-600 dark:text-amber-400"
+      title={FENCE_OFF_PROSE}
+    >
+      · fence off
+      <span className="sr-only"> — {FENCE_OFF_PROSE}</span>
+    </span>
+  );
+}
 
 /**
  * Where the robot believes it is standing (TASK-195).
@@ -91,6 +135,7 @@ export const PlaceChip = memo(function PlaceChip({
             sentence is the honesty rule this chip exists for; it does not get
             to depend on a pointing device. */}
         <span className="sr-only">{UNKNOWN_PROSE}</span>
+        <FenceOffMarker />
       </div>
     );
   }
@@ -141,6 +186,7 @@ export const PlaceChip = memo(function PlaceChip({
           · stale
         </span>
       )}
+      <FenceOffMarker />
     </div>
   );
 });

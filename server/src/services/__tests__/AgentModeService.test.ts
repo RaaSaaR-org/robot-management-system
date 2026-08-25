@@ -489,6 +489,28 @@ describe('AgentModeService', () => {
   });
 });
 
+/**
+ * TASK-201: the neutral state served for a robot the server has never heard
+ * from must say NOTHING about the geofence. `enforcing` would be a claim about
+ * a fence nobody has evaluated — on a robot nobody has reached.
+ */
+describe('the neutral state does not fabricate a geofence answer', () => {
+  it('leaves `geofence` absent for a robot that has told us nothing usable', () => {
+    // An event whose `state` is not a valid snapshot falls back to
+    // `emptyState()`. Whatever that fills in is served as the robot's answer,
+    // so it must not fill in a fence that works.
+    const state = agentModeService.ingest({
+      robotId: 'never-heard-of-this-robot',
+      type: 'agent:state:changed',
+      timestamp: new Date().toISOString(),
+      state: {} as never,
+    });
+
+    expect(state.geofence).toBeUndefined();
+    expect(state.geofence).not.toBe('enforcing');
+  });
+});
+
 describe('isValidAgentModeSnapshot', () => {
   const valid: AgentModeState = {
     robotId: 'robot-x',
@@ -512,6 +534,22 @@ describe('isValidAgentModeSnapshot', () => {
     expect(isValidAgentModeSnapshot({ ...valid, estopActive: true, estopSource: 'safety' })).toBe(
       true
     );
+  });
+
+  /**
+   * TASK-201: the geofence field is OPTIONAL for exactly this reason. Required
+   * would make this validator reject every agent built before it existed, and
+   * the mirror would then serve `emptyState()` for a robot whose fence has
+   * stopped fencing — the defect, reproduced on the wire.
+   */
+  it('accepts a snapshot from an agent that does not report the geofence at all', () => {
+    expect(isValidAgentModeSnapshot(valid)).toBe(true);
+    expect(
+      isValidAgentModeSnapshot({
+        ...valid,
+        geofence: { enforcement: 'not-enforcing', reason: 'no pose sample' },
+      })
+    ).toBe(true);
   });
 
   it.each([

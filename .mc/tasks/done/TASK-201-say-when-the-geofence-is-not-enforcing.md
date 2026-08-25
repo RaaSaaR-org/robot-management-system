@@ -4,7 +4,7 @@ aliases:
 - TASK-201
 title: Say when the geofence is not enforcing — a stale pose silently disarms the keepout fence
 slug: say-when-the-geofence-is-not-enforcing
-status: todo
+status: done
 priority: 1
 owner: ''
 projects: []
@@ -20,7 +20,57 @@ depends_on:
 - "[[TASK-205]]"
 due_date: ''
 created: 2026-08-02
-updated: 2026-08-09
+updated: 2026-08-25
+status_note: >-
+  Shipped. The geofence now carries a TYPED `cause` on its `unknown` verdict
+  (`no-pose` / `pose-drifted` / `no-map` / `release-margin` / `reanchor-hold`),
+  and one exhaustive function derives the operator-facing label
+  `enforcing | not-enforcing | no-map` from it — never by matching the reason
+  prose. All seven verdict sites in the task's table map as the table says.
+  `RobotStateManager` captures the previous enforcement label beside
+  `previousPlaceId`, so the bare early return on an unchanged place id no longer
+  swallows a lapse; it notifies listeners when EITHER changed and logs the
+  transition (`Geofence: enforcing -> not-enforcing (reason)`) rather than
+  latching once. `SafetyMonitor` gained a warn-only advisory on the tiltWarning
+  model, set BEFORE the `unknown` early return (which stays), surfaced only in
+  `getStatus().warnings`, containing none of 'Protective stop' / 'Emergency
+  stop' / 'Keepout violated' and never touching `estopState`. The new
+  `geofence` field is OPTIONAL in all three hand-mirrored `AgentModeState`
+  copies and `emptyState()` still fabricates nothing. Frontend: `geofence` is a
+  new ConditionKey at amber (level 2), and PlaceChip renders a separate
+  "· fence off" marker in words, independent of the "· stale" marker, in both
+  the known- and unknown-place branches. D1 is honoured: the two independent
+  `PLACE_DRIFT_BUDGET_M` defaults of 15 are collapsed to one shared constant
+  (config.ts imports `DEFAULT_PLACE_DRIFT_BUDGET_M`) and pinned by a test; the
+  budget itself is NOT retuned. D2 is recorded as a doc-comment on a new
+  `PlaceTracker.accumulateDrift()` that replaces the two duplicated
+  accumulation blocks.
+
+
+  VERIFIED ON THIS MACHINE (a macOS laptop, simulation only): `npx tsc
+  --noEmit` clean for robot-agent, app and server; scoped vitest green —
+  robot-agent `src/safety src/agent-mode src/robot` (71 files, 1236 tests), app
+  `src/features/agentmode` (19 files, 372 tests), server AgentModeService +
+  routes (46 tests). The integration test the task asked for
+  (`robot-agent/src/robot/__tests__/state-geofence-enforcement.test.ts`) drives
+  more than PLACE_DRIFT_BUDGET_M metres inside ONE place without a re-anchor,
+  then walks at RACK-A, and asserts the DISJUNCTION — either a stop fires or
+  the state says enforcement is off — never "a stop fires" alone. Two mutations
+  were run to prove the tests bite: restoring the bare `if (placeChanged)
+  return` in state.ts turned the two transition tests red, and mapping
+  `pose-drifted` to `enforcing` turned 7 tests across both new files red. Both
+  were reverted and the suites re-run green.
+
+
+  NOT VERIFIED HERE, and no substitute was run for it: the live re-check on the
+  GPU box is still OUTSTANDING. This machine has no GPU, no real or simulated
+  Unitree G1, no Isaac Sim, no VLA server and no lidar, so nothing was loaded
+  into the warehouse scene, no robot was driven >15 m, RACK-A was never
+  approached in a running sim, and the console was never looked at. The
+  runbook in this task's Description is unchanged and still needs executing on
+  GPU_BOX: load the warehouse scene, drive >15 m, approach RACK-A, confirm the
+  console says the fence is not enforcing, then re-anchor with "you are in
+  Aisle 1" and confirm the stop fires with the robot stationary.
 ---
 
 

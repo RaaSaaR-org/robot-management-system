@@ -23,6 +23,7 @@ import type {
   AgentPendingCommand,
   AgentPlan,
   AgentPlanStatus,
+  AgentGeofenceState,
   AgentRecoveryState,
   AgentSelfState,
   AgentMapSummary,
@@ -72,6 +73,13 @@ const initialState = {
    * Independent of `scene`, which is null until the first observation.
    */
   place: undefined as ScenePlace | null | undefined,
+  /**
+   * Whether the robot's keepout fence is actually fencing (TASK-201).
+   * `undefined` = the agent does not report it (older agent) — which renders as
+   * NOTHING, never as `enforcing`. A default that claims the fence works is the
+   * exact defect this field exists to end.
+   */
+  geofence: undefined as AgentGeofenceState | null | undefined,
   robotMap: null as RobotMapPayload | null,
   robotMapStatus: 'idle' as RobotMapStatus,
   robotMapError: null as string | null,
@@ -255,6 +263,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           applySelf(state, agentState, mirrorObservedAt(agentState), false);
           applyMap(state, agentState);
           applyPlace(state, agentState);
+          applyGeofence(state, agentState);
           state.plan = agentState?.plan ?? null;
           state.scene = scene ?? agentState?.scene ?? null;
         });
@@ -477,6 +486,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           applySelf(state, agentState, new Date().toISOString(), true);
           applyMap(state, agentState);
           applyPlace(state, agentState);
+          applyGeofence(state, agentState);
         });
       } catch (error) {
         const message = getErrorMessage(error);
@@ -641,6 +651,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           applySelf(state, agentState, new Date().toISOString(), true);
           applyMap(state, agentState);
           applyPlace(state, agentState);
+          applyGeofence(state, agentState);
           if (agentState.estopActive) {
             // The agent still holds the latch — keep it and keep saying so.
             // A hardware-unconfirmed stop stays unconfirmed until it clears.
@@ -800,6 +811,7 @@ export const useAgentModeStore = createStore<AgentModeStore>(
             applySelf(state, event.state, event.timestamp, true);
             applyMap(state, event.state);
             applyPlace(state, event.state);
+            applyGeofence(state, event.state);
             if (event.state.scene) state.scene = event.state.scene;
             // A snapshot may only move the plan FORWARD — see `snapshotPlanIsStale`.
             if (event.state.plan && !snapshotPlanIsStale(state.plan, event.state.plan)) {
@@ -1217,6 +1229,21 @@ function applyPlace(
   state.place = reported.place;
 }
 
+/**
+ * Fold the robot's geofence state (TASK-201) into the store.
+ *
+ * Same rule as `applyPlace`: an agent that omits the field is left as it was.
+ * Absent is "not reported", which is not "enforcing" — the whole point of the
+ * field is that a fence which stops fencing must never read as one that works.
+ */
+function applyGeofence(
+  state: MutableState,
+  reported: { geofence?: AgentGeofenceState | null } | null | undefined
+): void {
+  if (!reported || reported.geofence === undefined) return;
+  state.geofence = reported.geofence;
+}
+
 function applySelf(
   state: MutableState,
   reported: { self?: AgentSelfState | null } | null | undefined,
@@ -1491,6 +1518,24 @@ export const selectScene = (state: AgentModeStore) => state.scene;
  */
 export const selectPlace = (state: AgentModeStore): ScenePlace | null =>
   state.scene?.place ?? state.place ?? null;
+
+/**
+ * Select the robot's geofence state (TASK-201). `undefined` = the agent does
+ * not report it, `null` = it reported none; neither may be rendered as
+ * `enforcing`.
+ */
+export const selectGeofence = (state: AgentModeStore) => state.geofence;
+
+/**
+ * Select whether the keepout fence is KNOWN not to be enforcing.
+ *
+ * True only for an explicit `not-enforcing`. `no-map`, `undefined` and `null`
+ * are all false — a robot nobody surveyed has no fence to lose, and an older
+ * agent has told us nothing. This is the predicate the amber condition and the
+ * place chip's marker both read, so the two cannot disagree about one robot.
+ */
+export const selectGeofenceNotEnforcing = (state: AgentModeStore): boolean =>
+  state.geofence?.enforcement === 'not-enforcing';
 
 /** Select the scene entity list (a shared empty array when nothing was seen yet) */
 export const selectSceneEntities = (state: AgentModeStore): SceneEntity[] =>

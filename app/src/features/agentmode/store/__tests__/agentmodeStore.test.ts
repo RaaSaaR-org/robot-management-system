@@ -1087,6 +1087,41 @@ describe('agentmodeStore', () => {
       expect(s.fsmId).toBe(1);
     });
 
+    /**
+     * TASK-201. The field is optional on the wire so an older agent stays
+     * structurally compatible — which makes "absent" the dangerous case: it
+     * means the agent told us nothing about the fence, and it must never be
+     * read as, or overwrite, a known state.
+     */
+    it('mirrors the geofence state, and an agent that omits it changes nothing', () => {
+      apply(
+        event({
+          type: 'agent:state:changed',
+          state: makeState({
+            geofence: { enforcement: 'not-enforcing', reason: 'the pose has drifted past its budget' },
+          }),
+        })
+      );
+      expect(useAgentModeStore.getState().geofence).toEqual({
+        enforcement: 'not-enforcing',
+        reason: 'the pose has drifted past its budget',
+      });
+
+      // An older agent, silent on the subject: the known lapse survives rather
+      // than being quietly cleared into "fine".
+      apply(event({ type: 'agent:state:changed', state: makeState({}) }));
+      expect(useAgentModeStore.getState().geofence?.enforcement).toBe('not-enforcing');
+
+      // An agent that positively reports the fence back on does clear it.
+      apply(
+        event({
+          type: 'agent:state:changed',
+          state: makeState({ geofence: { enforcement: 'enforcing', reason: null } }),
+        })
+      );
+      expect(useAgentModeStore.getState().geofence?.enforcement).toBe('enforcing');
+    });
+
     it('surfaces what the robot’s boot inherited (TASK-196)', () => {
       apply(
         event({

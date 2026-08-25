@@ -1,8 +1,8 @@
 /**
  * @file conditions.ts
  * @description The single source of truth for "what is wrong with this robot
- *              right now": the seven conditions the Agent Mode page can raise,
- *              always all seven, each with its current value and severity.
+ *              right now": the eight conditions the Agent Mode page can raise,
+ *              always all eight, each with its current value and severity.
  * @feature agentmode
  */
 
@@ -11,6 +11,7 @@ import {
   selectError,
   selectEstopActive,
   selectEstopStatus,
+  selectGeofenceNotEnforcing,
   selectRecovered,
   selectSelf,
   selectSelfAgeUnknown,
@@ -32,6 +33,7 @@ import type { AgentModeStore } from '../types/agentmode.types';
 export type ConditionKey =
   | 'stateUnknown'
   | 'estop'
+  | 'geofence'
   | 'recovered'
   | 'damped'
   | 'superseded'
@@ -76,6 +78,7 @@ export interface Condition {
 export const CONDITION_ORDER: readonly ConditionKey[] = [
   'stateUnknown',
   'estop',
+  'geofence',
   'recovered',
   'damped',
   'superseded',
@@ -92,6 +95,7 @@ export const CONDITION_ORDER: readonly ConditionKey[] = [
 export const CONDITION_LABELS: Record<ConditionKey, string> = {
   stateUnknown: 'Robot reachable',
   estop: 'E-Stop latch',
+  geofence: 'Keepout fence',
   recovered: 'Boot recovery',
   damped: 'Base arming',
   superseded: 'Snapshot process',
@@ -111,6 +115,7 @@ export const CONDITION_LABELS: Record<ConditionKey, string> = {
 export const CONDITION_ACTIVE_HEADLINE: Record<ConditionKey, string> = {
   stateUnknown: 'not reachable — its state is unknown',
   estop: 'latched — commands refused',
+  geofence: 'not enforcing — a keepout would not stop the robot',
   recovered: 'unacknowledged, the robot will not act on its own',
   damped: 'damped — it cannot walk, turn or go to',
   superseded: 'from a different process than last answered',
@@ -133,10 +138,17 @@ export const CONDITION_ACTIVE_HEADLINE: Record<ConditionKey, string> = {
  * claims more than the store knows: `superseded` says no mismatch was SEEN, not
  * that none exists, and `damped` says "not damped" rather than "it can walk",
  * which would be a positive claim about hardware nobody asked.
+ *
+ * `geofence` is the sharpest case of that rule. THREE different states render
+ * this row inactive — the fence is enforcing, the robot has no map to fence
+ * with, or the agent is too old to report either — so the row says only that no
+ * lapse was reported. "Enforcing" would be a claim about a fence that, in two
+ * of those three states, does not exist.
  */
 export const CONDITION_CLEAR_HEADLINE: Record<ConditionKey, string> = {
   stateUnknown: 'reachable',
   estop: 'not latched',
+  geofence: 'no lapse reported',
   recovered: 'nothing unacknowledged',
   damped: 'not damped',
   superseded: 'no mismatch seen',
@@ -234,6 +246,7 @@ export function selectConditions(state: AgentModeStore, now: number = Date.now()
   const active: Record<ConditionKey, boolean> = {
     stateUnknown: selectStateUnknown(state),
     estop: estopActive,
+    geofence: selectGeofenceNotEnforcing(state),
     recovered: selectRecovered(state) !== null,
     damped: selectDamped(state),
     superseded: selectSelfSuperseded(state),
@@ -257,6 +270,11 @@ export function selectConditions(state: AgentModeStore, now: number = Date.now()
 /** What an ACTIVE condition costs. See {@link ConditionLevel}. */
 function levelFor(key: ConditionKey, alarm: boolean): ConditionLevel {
   if (key === 'estop') return alarm ? 3 : 2;
+  // `geofence` is amber (the level-2 default below), deliberately not red.
+  // Level 3 is documented above as "a stop the hardware did NOT confirm" and
+  // fires an assertive screen-reader interrupt; the commonest cause of a fence
+  // lapse is a dropped pose poll, which is transient, so red here would
+  // interrupt the operator once per dropped poll until it meant nothing.
   // Not a safety condition: a failed request says something about this console,
   // not about the robot's latch or its base. Giving it the same amber as "the
   // base cannot walk" is how amber stops meaning anything.

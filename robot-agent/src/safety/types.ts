@@ -52,6 +52,39 @@ export interface ZoneViolation {
 }
 
 /**
+ * WHY an `unknown` verdict is unknown — a TYPED cause, deliberately not prose.
+ *
+ * Not every `unknown` means the fence stopped being a fence, and TASK-201 is
+ * about telling the two apart. The operator-facing label
+ * ({@link GeofenceEnforcement}) is derived from this field and from nothing
+ * else: deriving it by matching on `reason` would make a safety state depend on
+ * the wording of a sentence written for humans, so rephrasing the sentence
+ * would silently lose the lapse.
+ *
+ *  - `no-pose`        — no pose sample at all. There is a fence and it cannot
+ *    fence: NOT ENFORCING.
+ *  - `pose-drifted`   — the drift budget is spent, so the pose may be tens of
+ *    metres wrong. The fence cannot fence: NOT ENFORCING. This is the state
+ *    TASK-201 was raised for.
+ *  - `no-map`         — no place graph, or a frame that cannot be compared with
+ *    one. There is no fence to enforce. A missing or unregistered survey is a
+ *    MAP problem, and reporting it as a lapse would alarm on correct behaviour
+ *    for every robot nobody has handed a survey to.
+ *  - `release-margin` — the pose is TRUSTED and outside every keepout, but
+ *    inside the release hysteresis band of one. A `violating` verdict still
+ *    fires from here, so the fence IS enforcing; only a release is withheld.
+ *  - `reanchor-hold`  — a `clear` verdict withheld because an operator
+ *    re-anchored under a latched keepout stop. Again a withheld RELEASE, not a
+ *    withheld STOP: the fence is enforcing, and harder than usual.
+ */
+export type GeofenceUnknownCause =
+  | 'no-pose'
+  | 'pose-drifted'
+  | 'no-map'
+  | 'release-margin'
+  | 'reanchor-hold';
+
+/**
  * What the geofence knows this instant. THREE states, not a boolean, and that
  * is the whole point (TASK-199's fail-closed split, applied to a real boundary):
  *
@@ -65,9 +98,77 @@ export interface ZoneViolation {
  *    strength of having stopped being able to see the robot.
  */
 export type GeofenceStatus =
-  | { kind: 'unknown'; reason: string }
+  | { kind: 'unknown'; cause: GeofenceUnknownCause; reason: string }
   | { kind: 'clear' }
   | { kind: 'violating'; violation: ZoneViolation };
+
+/**
+ * Whether the keepout fence is actually fencing — the answer TASK-201 exists to
+ * publish.
+ *
+ *  - `enforcing`     — a violation would stop the robot.
+ *  - `not-enforcing` — a violation would NOT stop the robot, and the robot may
+ *    walk through a keepout with `estop=armed` and `systemHealthy=true`. This
+ *    is a real safety state and it must be said, not inferred.
+ *  - `no-map`        — there is no fence at all on this robot. Distinct from
+ *    `not-enforcing`: nothing lapsed, nothing was surveyed.
+ */
+export type GeofenceEnforcement = 'enforcing' | 'not-enforcing' | 'no-map';
+
+/**
+ * The one derivation of the operator-facing label from a verdict.
+ *
+ * Exhaustive over {@link GeofenceUnknownCause} on purpose: widening that union
+ * makes `tsc` come back here and demand an answer for the new cause, which is
+ * the property that stops a future `unknown` from defaulting into silence — the
+ * exact shape of the defect this function was written for.
+ *
+ * Both `clear` and `violating` are `enforcing`: the fence answered, and an
+ * answer either way is the fence working.
+ */
+export function geofenceEnforcement(status: GeofenceStatus): GeofenceEnforcement {
+  if (status.kind !== 'unknown') return 'enforcing';
+  switch (status.cause) {
+    case 'no-pose':
+    case 'pose-drifted':
+      return 'not-enforcing';
+    case 'no-map':
+      return 'no-map';
+    case 'release-margin':
+    case 'reanchor-hold':
+      return 'enforcing';
+  }
+}
+
+/**
+ * Opening words of the warn-only geofence advisory.
+ *
+ * Deliberately contains NONE of `'Protective stop'`, `'Emergency stop'` or
+ * {@link ZONE_VIOLATION_REASON_PREFIX}: `SafetyMonitor` matches all three to
+ * decide which latch a warning belongs to, and an advisory caught by one of
+ * those filters would be deleted by the next reset — or, worse, read as a stop
+ * that is not latched. This advisory is a WARNING, never a stop; it never
+ * touches `estopState`, so `systemHealthy` cannot flip because of it.
+ */
+export const GEOFENCE_ADVISORY_PREFIX = 'Geofence not enforcing';
+
+/**
+ * The `/safety` warning for a fence that has stopped fencing, or null when
+ * there is nothing to say.
+ *
+ * Null for `no-map` as well as for `enforcing`: a robot with no survey has no
+ * fence to lose, and a warning on every un-surveyed robot is how a warning
+ * channel becomes wallpaper.
+ */
+export function geofenceAdvisory(status: GeofenceStatus): string | null {
+  if (geofenceEnforcement(status) !== 'not-enforcing') return null;
+  // Narrowed by the guard above: only `unknown` maps to `not-enforcing`.
+  const reason = status.kind === 'unknown' ? status.reason : '';
+  return (
+    `${GEOFENCE_ADVISORY_PREFIX}: keepout places cannot stop the robot — ${reason}. ` +
+    'Re-anchor the pose, or move the robot by hand.'
+  );
+}
 
 /**
  * Prefix every `zone_violation` stop reason starts with. `SafetyMonitor` matches

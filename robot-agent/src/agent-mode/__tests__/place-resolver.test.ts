@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
+import { config as appConfig } from '../../config/config.js';
 import {
   DEFAULT_PLACE_DRIFT_BUDGET_M,
   DEFAULT_PLACE_HYSTERESIS_MARGIN_M,
@@ -242,6 +243,22 @@ describe('aisle-mouth flap test', () => {
 });
 
 describe('the drift budget', () => {
+  /**
+   * TASK-201, decision D1. `config.ts` used to carry its OWN literal `15` for
+   * `PLACE_DRIFT_BUDGET_M`, independent of the resolver's default, and only the
+   * resolver's was pinned by a test — so retuning either one moved the budget
+   * for some trackers and not others, silently. There is now one constant, and
+   * this asserts the collapse rather than the number: `appConfig` must read the
+   * SAME object the resolver defaults to, not a copy that happens to match
+   * today.
+   *
+   * Do not "fix" a failure here by re-typing 15 into config.ts. The budget
+   * itself is deliberately unchanged by TASK-201 — see D1.
+   */
+  it('is ONE default, shared by the resolver and the app config', () => {
+    expect(appConfig.place.driftBudgetM).toBe(DEFAULT_PLACE_DRIFT_BUDGET_M);
+  });
+
   it('flips confidence to stale past the budget, and back on a re-anchor', () => {
     const tracker = new PlaceTracker({ graph: warehouse, driftBudgetM: 4 });
     expect(DEFAULT_PLACE_DRIFT_BUDGET_M).toBe(15);
