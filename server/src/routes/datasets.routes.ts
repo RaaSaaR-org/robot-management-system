@@ -1427,8 +1427,18 @@ datasetRoutes.get('/:id/trajectories/:idx/metrics', async (req: Request, res: Re
 // other way — from a local directory, from HuggingFace, as a curated revision —
 // could never be checked at all. That is most of the datasets in this database.
 //
-// Synchronous on purpose: it is the only way for a caller to know the answer,
-// and it opens files rather than training on them.
+// 202, not 200 (TASK-219). This used to await the whole pass — every parquet
+// footer and every file the manifest names — inside the request. On a real
+// dataset that is seconds to minutes during which this process answers nothing
+// else, health checks included; the review measured 6 s of blocked event loop
+// for a single 100 MB parquet. The work is now handed to the same
+// `jobs.dataset.validate` queue the upload flow uses, or (no NATS, which is
+// every dev box) run detached in this process, and the caller reads the answer
+// from the row or from `GET /:id/progress` — the channel the upload modal
+// already polls.
+//
+// 409 while one is in flight: two clicks used to start two full passes over the
+// same files, both writing the same row.
 datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -1437,23 +1447,34 @@ datasetRoutes.post('/:id/validate', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dataset not found' });
     }
 
-    const outcome = await datasetService.validateAndUpdateDataset(id, dataset.storagePath);
-    if (outcome === 'unavailable') {
-      // 503, not 200-with-`validation: null`. Nothing was opened, the row was
-      // deliberately left alone, and the caller's next move is to retry — not
-      // to go looking at a dataset that is probably fine.
+    const state = await datasetService.requestValidation(id, dataset.storagePath);
+    if (state === 'in-flight') {
+      return res.status(409).json({
+        error: 'A validation for this dataset is already running',
+        code: 'VALIDATION_IN_FLIGHT',
+        datasetId: id,
+        progressUrl: `/api/datasets/${id}/progress`,
+      });
+    }
+    if (state === 'store-unavailable') {
+      // 503, not 202. Nothing was opened, the row is deliberately left alone,
+      // and the caller's next move is to retry — not to go looking at a dataset
+      // that is probably fine.
       return res.status(503).json({
         error: 'Dataset storage is not reachable — nothing was validated',
         code: 'STORE_UNAVAILABLE',
         datasetId: id,
       });
     }
-    const updated = await datasetService.get(id);
-    res.json({
+
+    res.status(202).json({
       datasetId: id,
-      status: updated?.status,
-      qualityScore: updated?.qualityScore,
-      validation: updated?.validation ?? null,
+      accepted: true,
+      // `queued` = a NATS worker has it; `started` = this process is running it
+      // off the request. Named rather than hidden, because the two differ in
+      // where a failure would show up.
+      state,
+      progressUrl: `/api/datasets/${id}/progress`,
     });
   } catch (error) {
     console.error('[DatasetRoutes] Error validating dataset:', error);

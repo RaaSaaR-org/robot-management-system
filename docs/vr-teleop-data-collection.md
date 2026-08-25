@@ -156,7 +156,10 @@ wrong SQLite file, surfacing as Prisma `P2021`).
 Verify: `GET /api/datasets/<id>/episodes`, `.../episodes/0/frames`,
 `.../episodes/0/video/<camera>` — all should return data / `video/mp4`. A
 dataset that has already been registered can be re-checked at any time with
-`POST /api/datasets/<id>/validate`.
+`POST /api/datasets/<id>/validate` — which answers `202` and runs the check off
+the request (queued to NATS, or detached in the server process when there is no
+NATS). Poll `GET /api/datasets/<id>/progress`, or re-read the row, for the
+verdict; a second POST while one is still running answers `409`.
 
 ## Open gaps before a real Quest session
 

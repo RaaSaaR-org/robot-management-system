@@ -14,7 +14,21 @@
  * job with "All image features are missing from the batch".
  *
  * The rule this file follows: if `info.json` names a parquet, read its footer.
- * If it names a video, stat it. Anything less is a spell-check on a manifest.
+ * If it names a video, look for it. Anything less is a spell-check on a
+ * manifest.
+ *
+ * WHAT IT COSTS (TASK-219). That rule used to be applied the expensive way: the
+ * footer was reached by pulling the WHOLE parquet through the API process, and
+ * "look for it" was one HEAD per file the manifest named — 1500 sequential
+ * round trips for a 500-episode two-camera dataset. Both were inside the
+ * request, so nothing else the server does was served during either. Now the
+ * parquet reads are ranged (footer, then at most one row group of two columns)
+ * and the existence check is two prefix listings compared in memory.
+ *
+ * A listing answers a question a HEAD cannot: it also names files that
+ * `info.json` does NOT. Those are reported as `UNEXPECTED_FILE` warnings rather
+ * than dropped — a stray parquet in `data/` is how a dataset ends up with more
+ * frames than its manifest declares.
  *
  * VERSIONS. v2.1 and v3.0 differ only in aggregation — v2.1 stores one parquet
  * and one mp4 per episode, v3.0 stores many episodes per file and addresses
@@ -22,7 +36,8 @@
  * disk in this deployment today; nothing is silently upgraded.
  */
 
-import type { DatasetTree } from './DatasetTree.js';
+import { DatasetStoreError } from './DatasetTree.js';
+import type { DatasetTree, TreeEntry } from './DatasetTree.js';
 import type { DatasetImportMode } from '../../types/vla.types.js';
 
 /** How a dataset's files are laid out, derived from `codebase_version`. */
@@ -75,6 +90,14 @@ export interface ValidationContext {
 
 const MAX_DATA_FILES_READ = 8;
 
+/**
+ * How many unexpected files are named one by one before the rest are counted.
+ *
+ * A tree with a stray directory under `data/` can hold thousands of them, and a
+ * report is only useful if a person can read it.
+ */
+const MAX_UNEXPECTED_REPORTED = 10;
+
 function pad3(n: number): string {
   return String(n).padStart(3, '0');
 }
@@ -83,34 +106,162 @@ function pad6(n: number): string {
   return String(n).padStart(6, '0');
 }
 
-/** Row count and column names from a parquet, without loading its rows. */
-async function readParquetShape(
-  buffer: Buffer,
-): Promise<{ rows: number; columns: string[] } | null> {
-  try {
+/** One column of one row group, as the parquet footer describes it. */
+interface ColumnChunkMeta {
+  meta_data?: {
+    /** `['observation.state','list','element']` for a list of floats. */
+    path_in_schema?: string[];
+    /** LEAF values in this chunk — rows x width, for a full fixed-width list. */
+    num_values?: number | bigint;
+  };
+}
+
+/** What `@dsnp/parquetjs` hands back, narrowed to what this file uses. */
+interface ParquetReaderLike {
+  getRowCount(): number | bigint;
+  getSchema(): { fields?: Record<string, unknown> };
+  getCursor(columns?: (string | string[])[]): { next(): Promise<unknown> };
+  close(): Promise<void>;
+  /** The decoded footer. Public on `ParquetReader`, and the point of TASK-219. */
+  metadata?: {
+    row_groups?: { num_rows?: number | bigint; columns?: ColumnChunkMeta[] }[];
+  } | null;
+}
+
+/** How to get a reader for one parquet. Called once per read, not shared. */
+type ParquetOpener = () => Promise<ParquetReaderLike>;
+
+/**
+ * A parquet opened over ranged reads — the footer, and then only the pages a
+ * cursor actually asks for.
+ *
+ * This is the TASK-219 half of the fix. `ParquetReader.openBuffer` needs the
+ * whole file in memory first, so learning a 100 MB parquet's row count cost a
+ * 100 MB read; the row count and the column names are both in the last few
+ * kilobytes. `ParquetEnvelopeReader` takes a read function instead, and the
+ * only bytes it fetches are the magic number, the footer, and whichever column
+ * chunks a cursor is asked for.
+ */
+function rangedParquet(tree: DatasetTree, path: string, size: number): ParquetOpener {
+  return async () => {
+    const { ParquetEnvelopeReader, ParquetReader } = await import('@dsnp/parquetjs');
+    const envelope = new ParquetEnvelopeReader(
+      (offset: number, length: number) => tree.readRange(path, offset, length),
+      () => undefined,
+      size,
+    );
+    return (await ParquetReader.openEnvelopeReader(envelope)) as unknown as ParquetReaderLike;
+  };
+}
+
+/** A parquet already in memory, for the small metadata files. */
+function bufferedParquet(buffer: Buffer): ParquetOpener {
+  return async () => {
     const { ParquetReader } = await import('@dsnp/parquetjs');
-    const reader = await ParquetReader.openBuffer(buffer);
-    const rows = Number(reader.getRowCount());
-    const columns = Object.keys(reader.getSchema().fields ?? {});
-    await reader.close();
-    return { rows, columns };
-  } catch {
+    return (await ParquetReader.openBuffer(buffer)) as unknown as ParquetReaderLike;
+  };
+}
+
+/**
+ * Run `use` against an open parquet, or return null if it will not open.
+ *
+ * A store that cannot answer is re-thrown rather than swallowed: "this file is
+ * not a parquet" and "the object store timed out" are different answers, and
+ * conflating them is what made a RustFS outage mark good datasets failed.
+ */
+async function withParquet<T>(
+  open: ParquetOpener,
+  use: (reader: ParquetReaderLike) => Promise<T>,
+): Promise<T | null> {
+  let reader: ParquetReaderLike | null = null;
+  try {
+    reader = await open();
+    return await use(reader);
+  } catch (err) {
+    if (err instanceof DatasetStoreError) throw err;
     return null;
+  } finally {
+    if (reader) await reader.close().catch(() => undefined);
   }
 }
 
-/** The first row of a parquet, for the width checks. */
-async function readFirstRow(buffer: Buffer): Promise<Record<string, unknown> | null> {
-  try {
-    const { ParquetReader } = await import('@dsnp/parquetjs');
-    const reader = await ParquetReader.openBuffer(buffer);
-    const cursor = reader.getCursor();
+/** Row count and column names from a parquet's footer, without its rows. */
+async function readParquetShape(
+  open: ParquetOpener,
+): Promise<{ rows: number; columns: string[] } | null> {
+  return withParquet(open, async (reader) => ({
+    rows: Number(reader.getRowCount()),
+    columns: Object.keys(reader.getSchema().fields ?? {}),
+  }));
+}
+
+/** The leaf columns of the named top-level fields, as the footer paths them. */
+function leafColumns(reader: ParquetReaderLike, names: string[]): string[][] {
+  const wanted = new Set(names);
+  return (reader.metadata?.row_groups?.[0]?.columns ?? [])
+    .map((column) => column.meta_data?.path_in_schema)
+    .filter((path): path is string[] => Array.isArray(path) && path.length > 0 && wanted.has(path[0]!));
+}
+
+/**
+ * The width of one vector column, from the footer alone.
+ *
+ * A `list<float32>` column stores one LEAF value per element, so the footer's
+ * `num_values` for `observation.state.list.element` divided by the row group's
+ * `num_rows` IS the width — no page is decoded, nothing is decompressed.
+ *
+ * Null when the file cannot answer that way: a column that is not a list, one
+ * with nulls or ragged rows (the ratio is then not a whole number), or a footer
+ * without row groups. The caller falls back to reading a row.
+ *
+ * What this does NOT catch is a file whose rows are ragged AROUND the declared
+ * width — 42 and 44 alternating averages to 43. Neither did reading row 0, which
+ * saw one row of the file and called it the width.
+ */
+function widthFromFooter(reader: ParquetReaderLike, name: string): number | null {
+  const group = reader.metadata?.row_groups?.[0];
+  if (!group) return null;
+  const rows = Number(group.num_rows ?? 0);
+  if (!Number.isFinite(rows) || rows <= 0) return null;
+  const leaves = (group.columns ?? []).filter((c) => c.meta_data?.path_in_schema?.[0] === name);
+  // Exactly one leaf, nested: a struct has several, a scalar has a bare path.
+  if (leaves.length !== 1) return null;
+  const meta = leaves[0]!.meta_data!;
+  if ((meta.path_in_schema?.length ?? 0) < 2) return null;
+  const values = Number(meta.num_values ?? 0);
+  if (!Number.isFinite(values) || values <= 0) return null;
+  const width = values / rows;
+  return Number.isInteger(width) && width > 0 ? width : null;
+}
+
+/**
+ * The width of each named vector column in one data file.
+ *
+ * The footer answers for every file lerobot writes. The fallback — decoding the
+ * first row group's copy of those columns — is what this used to do for every
+ * file, and it is expensive in exactly the case that matters: pyarrow puts a
+ * 100 MB data file in ONE row group, so "read the first row" read all of it.
+ */
+async function readVectorWidths(
+  open: ParquetOpener,
+  names: string[],
+): Promise<Record<string, number | null> | null> {
+  return withParquet(open, async (reader) => {
+    const widths: Record<string, number | null> = {};
+    const unanswered: string[] = [];
+    for (const name of names) {
+      const width = widthFromFooter(reader, name);
+      widths[name] = width;
+      if (width === null) unanswered.push(name);
+    }
+    if (unanswered.length === 0) return widths;
+
+    const leaves = leafColumns(reader, unanswered);
+    const cursor = reader.getCursor(leaves.length > 0 ? leaves : undefined);
     const row = (await cursor.next()) as Record<string, unknown> | null;
-    await reader.close();
-    return row;
-  } catch {
-    return null;
-  }
+    if (row) for (const name of unanswered) widths[name] = vectorWidth(row[name]);
+    return widths;
+  });
 }
 
 /**
@@ -121,23 +272,18 @@ async function readFirstRow(buffer: Buffer): Promise<Record<string, unknown> | n
  * malformed file cannot pull an unbounded number of rows into memory.
  */
 async function readAllRows(
-  buffer: Buffer,
+  open: ParquetOpener,
   cap = 200_000,
 ): Promise<Record<string, unknown>[] | null> {
-  try {
-    const { ParquetReader } = await import('@dsnp/parquetjs');
-    const reader = await ParquetReader.openBuffer(buffer);
+  return withParquet(open, async (reader) => {
     const cursor = reader.getCursor();
     const rows: Record<string, unknown>[] = [];
     let row: Record<string, unknown> | null;
     while (rows.length < cap && (row = (await cursor.next()) as Record<string, unknown> | null)) {
       rows.push(row);
     }
-    await reader.close();
     return rows;
-  } catch {
-    return null;
-  }
+  });
 }
 
 /** pyarrow `list<float32>` surfaces either as an array or as parquetjs's `{list}`. */
@@ -153,7 +299,9 @@ function vectorWidth(value: unknown): number | null {
  *
  * Derived from the templates in `info.json` rather than by listing the store:
  * the question this answers is "is everything the manifest promised actually
- * there", and a listing can only ever say what happens to be present.
+ * there", and a listing can only ever say what happens to be present. The
+ * listing is then compared against THIS set, in both directions — which is
+ * where `UNEXPECTED_FILE` comes from.
  */
 interface V3FileRefs {
   /** Distinct `data/chunk-CCC/file-FFF.parquet` the episode rows point at. */
@@ -216,6 +364,11 @@ function expectedFiles(
     }
   }
   return { data, video };
+}
+
+/** A listing by path, so the manifest can be compared against it in memory. */
+function index(entries: TreeEntry[]): Map<string, TreeEntry> {
+  return new Map(entries.map((entry) => [entry.path, entry]));
 }
 
 function alternateVideoPath(path: string): string | null {
@@ -342,8 +495,12 @@ export async function validateDatasetStructure(
           error('EMPTY_FILE', `${shard.path} is zero bytes`);
           continue;
         }
+        // Read whole, on purpose: this file is one row per episode of scalars,
+        // and every one of those rows is needed below. The data parquets are
+        // the ones that are read by footer.
         const buffer = await tree.read(shard.path);
-        const shape = await readParquetShape(buffer);
+        const openShard = bufferedParquet(buffer);
+        const shape = await readParquetShape(openShard);
         if (!shape) {
           error('UNREADABLE_PARQUET', `${shard.path} could not be opened as a parquet file`);
           continue;
@@ -359,7 +516,7 @@ export async function validateDatasetStructure(
         // The rows themselves, because v3.0's file list lives in them: which
         // parquet an episode's frames are in, and which mp4 its video window
         // cuts out of. Without this the validator was guessing.
-        const metaRows = await readAllRows(buffer);
+        const metaRows = await readAllRows(openShard);
         if (metaRows === null) {
           error('BAD_EPISODE_META', `${shard.path} opened but its rows could not be read`);
           continue;
@@ -431,31 +588,43 @@ export async function validateDatasetStructure(
   }
 
   // ---- the files the manifest promised ------------------------------------
+  //
+  // TWO listings, not one HEAD per file. `expectedFiles` produces one path per
+  // episode per camera, and every one of them used to be a separate sequential
+  // round trip to the object store — 1500 of them, before a byte of data was
+  // read, for a 500-episode two-camera dataset. `list` paginates and the
+  // comparison happens in memory.
   const metadataOnly = context.importMode === 'metadata';
   const expectedPaths = expectedFiles(info, report.layout, report.episodeCount, videoKeys, v3Refs);
-  const presentData: string[] = [];
+  const presentData: { path: string; size: number }[] = [];
+  const dataListing = index(await tree.list('data'));
+  const videoListing = index(await tree.list('videos'));
+  // What a listing revealed and the manifest accounted for. Everything else
+  // under those two prefixes is reported below.
+  const accountedFor = new Set<string>();
 
   for (const path of expectedPaths.data) {
-    const entry = await tree.stat(path);
+    const entry = dataListing.get(path);
     if (!entry) {
       error('MISSING_DATA_FILE', `info.json names ${path} and it is not there`);
       continue;
     }
+    accountedFor.add(path);
     if (entry.size === 0) {
       error('EMPTY_FILE', `${path} is zero bytes`);
       continue;
     }
     report.files.push({ path, size: entry.size, kind: 'data' });
-    presentData.push(path);
+    presentData.push({ path, size: entry.size });
   }
 
   for (const path of expectedPaths.video) {
-    let entry = await tree.stat(path);
+    let entry = videoListing.get(path);
     let found = path;
     if (!entry) {
       const alt = alternateVideoPath(path);
       if (alt) {
-        entry = await tree.stat(alt);
+        entry = videoListing.get(alt);
         found = alt;
       }
     }
@@ -475,11 +644,34 @@ export async function validateDatasetStructure(
       }
       continue;
     }
+    // Under whichever of the two orderings it turned up under: a v2.1 tree that
+    // keys its mp4s the other way round is accounted for, not unexpected.
+    accountedFor.add(found);
     if (entry.size === 0) {
       error('EMPTY_FILE', `${found} is zero bytes`);
       continue;
     }
     report.files.push({ path: found, size: entry.size, kind: 'video' });
+  }
+
+  // What the listing can say and a HEAD never could: a file that is THERE and
+  // that `info.json` does not name. A warning rather than an error — an extra
+  // parquet does not stop a dataset loading — but it is the shape of a
+  // half-finished re-export, and a data file nothing points at is frames that
+  // will not be trained on while the manifest reads as though they will.
+  const unexpected = [
+    ...[...dataListing.keys()].filter((path) => !accountedFor.has(path)),
+    ...[...videoListing.keys()].filter((path) => !accountedFor.has(path)),
+  ].sort();
+  for (const path of unexpected.slice(0, MAX_UNEXPECTED_REPORTED)) {
+    warn('UNEXPECTED_FILE', `${path} is on the store and info.json does not name it`);
+  }
+  if (unexpected.length > MAX_UNEXPECTED_REPORTED) {
+    warn(
+      'UNEXPECTED_FILE_COUNT',
+      `${unexpected.length} files under data/ and videos/ are not named by info.json; `
+      + `the first ${MAX_UNEXPECTED_REPORTED} are listed above`,
+    );
   }
 
   // A `dtype: 'image'` feature stores PNG frames, so the check is that the
@@ -513,9 +705,14 @@ export async function validateDatasetStructure(
   }
 
   // ---- open the data ------------------------------------------------------
-  // Bounded: a dataset with 500 chunks does not need 500 downloads to answer
-  // "does the schema match". What is NOT bounded is the existence check above,
-  // which is the cheap half and the half that catches a missing file.
+  // Bounded: a dataset with 500 chunks does not need 500 reads to answer "does
+  // the schema match". What is NOT bounded is the existence check above, which
+  // is the cheap half and the half that catches a missing file.
+  //
+  // Each of these is now a footer read — a few kilobytes at the end of the file
+  // — plus, once, one row group of two columns for the width check. It used to
+  // be the whole file, twice, through the API process: 100 MB and about a
+  // second of blocked event loop each, with nothing else served meanwhile.
   let rowsRead = 0;
   let readAll = true;
   const toRead = presentData.slice(0, MAX_DATA_FILES_READ);
@@ -528,9 +725,9 @@ export async function validateDatasetStructure(
     );
   }
 
-  for (const path of toRead) {
-    const buffer = await tree.read(path);
-    const shape = await readParquetShape(buffer);
+  for (const { path, size } of toRead) {
+    const open = rangedParquet(tree, path, size);
+    const shape = await readParquetShape(open);
     if (!shape) {
       error('UNREADABLE_PARQUET', `${path} could not be opened as a parquet file`);
       continue;
@@ -554,10 +751,14 @@ export async function validateDatasetStructure(
       }
     }
     if (report.observedStateWidth === null) {
-      const row = await readFirstRow(buffer);
-      if (row) {
-        report.observedStateWidth = vectorWidth(row['observation.state']);
-        report.observedActionWidth = vectorWidth(row['action']);
+      // Only the columns the widths come from, and only the ones this file has:
+      // a file missing `action` is already reported as MISSING_COLUMN and must
+      // still give up the width of what it does carry.
+      const wanted = ['observation.state', 'action'].filter((c) => shape.columns.includes(c));
+      const widths = wanted.length > 0 ? await readVectorWidths(open, wanted) : null;
+      if (widths) {
+        report.observedStateWidth = widths['observation.state'] ?? null;
+        report.observedActionWidth = widths['action'] ?? null;
       }
     }
   }

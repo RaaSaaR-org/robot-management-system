@@ -20,6 +20,7 @@ const { mockDatasetService, mockFlagRepo, mockRobotTypeRepo } = vi.hoisted(() =>
   mockDatasetService: {
     get: vi.fn(),
     list: vi.fn(),
+    requestValidation: vi.fn(),
     validateAndUpdateDataset: vi.fn(),
   },
   mockFlagRepo: {
@@ -187,32 +188,32 @@ describe('the two that do not exist', () => {
 });
 
 describe('POST /:id/validate', () => {
-  it('runs structural validation and reports what it found', async () => {
+  // The rest of this endpoint's contract — the 409 while one is in flight, the
+  // 503, and the fact that the request never waits for the pass — is in
+  // `dataset-validate-route.test.ts`.
+
+  it('starts structural validation and answers without waiting for it', async () => {
     // There was no way to validate a dataset that had not just been uploaded:
     // validation ran once, inside `completeUpload`. Every dataset registered
     // any other way could never be checked at all.
-    mockDatasetService.get
-      .mockResolvedValueOnce(DATASET)
-      .mockResolvedValueOnce({
-        ...DATASET,
-        status: 'failed',
-        qualityScore: 0,
-        validation: { valid: false, errors: [{ code: 'MISSING_DATA_FILE', message: 'gone' }] },
-      });
+    //
+    // It ran INSIDE the request until TASK-219, which is why this is a 202 with
+    // somewhere to poll rather than a 200 with the verdict.
+    mockDatasetService.requestValidation.mockResolvedValue('queued');
 
     const res = await request(app).post('/api/datasets/ds1/validate');
 
-    expect(res.status).toBe(200);
-    expect(mockDatasetService.validateAndUpdateDataset).toHaveBeenCalledWith('ds1', '/data/ds1/');
-    expect(res.body.status).toBe('failed');
-    expect(res.body.validation.errors[0].code).toBe('MISSING_DATA_FILE');
+    expect(res.status).toBe(202);
+    expect(mockDatasetService.requestValidation).toHaveBeenCalledWith('ds1', '/data/ds1/');
+    expect(res.body).toMatchObject({ state: 'queued', progressUrl: '/api/datasets/ds1/progress' });
+    expect(mockDatasetService.validateAndUpdateDataset).not.toHaveBeenCalled();
   });
 
   it('404s for a dataset that is not there', async () => {
     mockDatasetService.get.mockResolvedValue(null);
     const res = await request(app).post('/api/datasets/missing/validate');
     expect(res.status).toBe(404);
-    expect(mockDatasetService.validateAndUpdateDataset).not.toHaveBeenCalled();
+    expect(mockDatasetService.requestValidation).not.toHaveBeenCalled();
   });
 });
 

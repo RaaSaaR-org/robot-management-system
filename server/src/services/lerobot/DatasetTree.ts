@@ -11,13 +11,18 @@
  * `status: 'ready'`. The datasets nobody had checked were the ones this
  * platform produced itself.
  *
- * The interface is deliberately four methods wide. A validator that opens files
+ * The interface is deliberately five methods wide. A validator that opens files
  * needs to know a file is there, how big it is, and what is inside it; anything
  * more would be an object-store API leaking into a format check.
+ *
+ * `readRange` is the fifth, added by TASK-219. A parquet's row count and column
+ * names live in its footer, and `read()` is the only way to reach a footer if
+ * all you have is "the whole file" — which is how validation came to pull 100 MB
+ * through the API process to learn two numbers.
  */
 
 import { createReadStream, existsSync } from 'fs';
-import { readFile, readdir, stat } from 'fs/promises';
+import { open, readFile, readdir, stat } from 'fs/promises';
 import { isAbsolute, join, posix, relative, resolve, sep } from 'path';
 import type { Readable } from 'stream';
 import { getRustFSClient, isRustFSInitialized } from '../../storage/rustfs-client.js';
@@ -68,6 +73,11 @@ export interface DatasetTree {
   stat(path: string): Promise<TreeEntry | null>;
   /** The whole file. Callers are expected to know it is small enough. */
   read(path: string): Promise<Buffer>;
+  /**
+   * `length` bytes from `offset`, for a caller that wants a slice of a file it
+   * has no business holding whole. Short at the end of the file, empty past it.
+   */
+  readRange(path: string, offset: number, length: number): Promise<Buffer>;
   /** Everything under a prefix, recursively. Empty when the prefix is absent. */
   list(prefix: string): Promise<TreeEntry[]>;
 }
@@ -108,6 +118,20 @@ export class LocalDatasetTree implements DatasetTree {
     const full = this.absolute(path);
     if (!full) throw new Error(`Path escapes the dataset root: ${path}`);
     return readFile(full);
+  }
+
+  async readRange(path: string, offset: number, length: number): Promise<Buffer> {
+    const full = this.absolute(path);
+    if (!full) throw new Error(`Path escapes the dataset root: ${path}`);
+    if (length <= 0) return Buffer.alloc(0);
+    const handle = await open(full, 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, offset);
+      return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
   }
 
   async list(prefix: string): Promise<TreeEntry[]> {
@@ -173,6 +197,20 @@ export class RustFsDatasetTree implements DatasetTree {
       return await getRustFSClient().download(this.bucket, this.key(path));
     } catch (err) {
       if (isNotFound(err)) throw err;
+      throw new DatasetStoreError(path, err);
+    }
+  }
+
+  async readRange(path: string, offset: number, length: number): Promise<Buffer> {
+    if (length <= 0) return Buffer.alloc(0);
+    try {
+      return await getRustFSClient().downloadRange(this.bucket, this.key(path), offset, length);
+    } catch (err) {
+      if (isNotFound(err)) throw err;
+      // Same rule as `read`: anything that is not a 404 is the store failing to
+      // answer, and the caller must not record that as a broken dataset. The
+      // offsets come out of the file's own footer, so a range this store
+      // rejects is a store that did not answer, not a file that is wrong.
       throw new DatasetStoreError(path, err);
     }
   }

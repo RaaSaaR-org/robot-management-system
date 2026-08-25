@@ -184,6 +184,55 @@ export class RustFSClient {
   }
 
   /**
+   * Download `length` bytes starting at `start`.
+   *
+   * For the readers that need a slice rather than a file — the parquet footer
+   * validation reads to learn a file's row count and column names is a few
+   * kilobytes at the END of an object that is routinely 100 MB. Before this
+   * existed the only way to reach it was `download()`, which pulls the whole
+   * object into the API process.
+   *
+   * A store that does not implement `Range` answers with the whole object and
+   * no `Content-Range`; the window is cut out here rather than trusted, so a
+   * backend without range support stays correct (and merely slow).
+   */
+  async downloadRange(bucket: string, key: string, start: number, length: number): Promise<Buffer> {
+    if (length <= 0) return Buffer.alloc(0);
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Range: `bytes=${start}-${start + length - 1}`,
+      })
+    );
+
+    if (!response.Body) {
+      throw new Error(`Empty response body for ${bucket}/${key}`);
+    }
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+    // A store that served the range says so: `206` with a `Content-Range`. A
+    // store that ignored the header answers `200` with the whole object, and
+    // the window has to be cut out here.
+    //
+    // The test is the ANSWER, not the size of it. `buffer.length > length` used
+    // to stand in for "this looks like the whole object", and it is wrong for
+    // the one case where being wrong is silent: an object that is exactly
+    // `length` bytes, requested from `start > 0`, comes back whole, passes that
+    // check untouched, and is handed to the parquet reader as though it were
+    // the window — decoded at the wrong offset, with no error anywhere.
+    const served = Boolean(response.ContentRange) || response.$metadata?.httpStatusCode === 206;
+    if (!served) {
+      return buffer.subarray(start, start + length);
+    }
+    return buffer;
+  }
+
+  /**
    * Download a file as stream
    */
   async getStream(bucket: string, key: string): Promise<Readable> {

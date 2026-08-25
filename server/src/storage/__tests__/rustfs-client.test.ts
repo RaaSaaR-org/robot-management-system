@@ -270,6 +270,83 @@ describe('RustFSClient.download', () => {
 });
 
 // ---------------------------------------------------------------------------
+// downloadRange
+// ---------------------------------------------------------------------------
+
+describe('RustFSClient.downloadRange', () => {
+  // The read the parquet footer validation runs on: a few KB out of an object
+  // that is routinely 100 MB (TASK-219). Two things have to hold — the right
+  // `Range` header goes out, and whatever comes back is cut down to the window
+  // the caller asked for, because an S3-compatible store is allowed to ignore
+  // `Range` entirely and answer with the whole object.
+  const OBJECT = Buffer.from('0123456789');
+
+  it('asks for an inclusive byte range', async () => {
+    h.send.mockResolvedValue({
+      Body: fakeStream([OBJECT.subarray(2, 6)]),
+      ContentRange: 'bytes 2-5/10',
+      $metadata: { httpStatusCode: 206 },
+    });
+    const c = new RustFSClient(cfg);
+
+    const buf = await c.downloadRange('b', 'k', 2, 4);
+
+    expect(GetCmd.mock.calls[0][0]).toEqual({ Bucket: 'b', Key: 'k', Range: 'bytes=2-5' });
+    expect(buf.toString()).toBe('2345');
+  });
+
+  it('cuts the window out itself when the store ignored the Range header', async () => {
+    // A 200 with the whole object, which is what a store without range support
+    // answers. Trusting it would hand the parquet reader the head of the file
+    // where it asked for the footer.
+    h.send.mockResolvedValue({ Body: fakeStream([OBJECT]), $metadata: { httpStatusCode: 200 } });
+    const c = new RustFSClient(cfg);
+
+    expect((await c.downloadRange('b', 'k', 6, 4)).toString()).toBe('6789');
+  });
+
+  it('cuts it out even when the whole object is exactly the requested length', async () => {
+    // The case a size comparison cannot see. Asking for 10 bytes at offset 6 of
+    // an object that happens to be 10 bytes long, from a store that ignores
+    // `Range`: the reply is 10 bytes, the same length as the window, and the
+    // guard this replaced ("only slice if it came back BIGGER than asked")
+    // returned the head of the file as though it were the tail.
+    h.send.mockResolvedValue({ Body: fakeStream([OBJECT]), $metadata: { httpStatusCode: 200 } });
+    const c = new RustFSClient(cfg);
+
+    // Past the end is short, not wrong: bytes 6..9 are all there is.
+    expect((await c.downloadRange('b', 'k', 6, 10)).toString()).toBe('6789');
+  });
+
+  it('keeps a served range verbatim, however long it is', async () => {
+    // The mirror image: a store that DID serve the range says so, and its bytes
+    // already are the window — slicing them again would move the offset twice.
+    h.send.mockResolvedValue({
+      Body: fakeStream([OBJECT.subarray(6)]),
+      ContentRange: 'bytes 6-9/10',
+      $metadata: { httpStatusCode: 206 },
+    });
+    const c = new RustFSClient(cfg);
+
+    expect((await c.downloadRange('b', 'k', 6, 4)).toString()).toBe('6789');
+  });
+
+  it('never asks the store for an empty window', async () => {
+    const c = new RustFSClient(cfg);
+
+    expect((await c.downloadRange('b', 'k', 0, 0)).length).toBe(0);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('throws when the response has no Body', async () => {
+    h.send.mockResolvedValue({});
+    const c = new RustFSClient(cfg);
+
+    await expect(c.downloadRange('b', 'k', 0, 4)).rejects.toThrow('Empty response body for b/k');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getStream
 // ---------------------------------------------------------------------------
 
