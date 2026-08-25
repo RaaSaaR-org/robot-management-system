@@ -22,7 +22,7 @@ import {
   StatusDot,
 } from '@/features/patrol/components/patrolUi';
 import type { TourRun } from '../types/tour.types';
-import { currentLeg, runProgressText } from '../utils/tourFormat';
+import { currentLeg, currentStopText, runProgressText } from '../utils/tourFormat';
 
 export interface ActiveRunBannerProps {
   runs: TourRun[];
@@ -65,6 +65,10 @@ const ActiveRunCard = memo(function ActiveRunCard({
   now: number;
 }) {
   const current = currentLeg(run);
+  // Shared with the Agent Mode rail's tour chip — see `currentStopText`.
+  const stopText = currentStopText(
+    current ? { index: current.index + 1, name: current.name || current.placeId } : null
+  );
   const legs = run.legs.map((l) => ({ index: l.index, label: l.name || l.placeId, status: l.status }));
   return (
     <div
@@ -92,7 +96,7 @@ const ActiveRunCard = memo(function ActiveRunCard({
             match against what the robot is saying out loud right now. */}
         <span className="text-xs text-theme-secondary truncate" data-testid="tour-banner-stop">
           {robotNames[run.robotId] ?? run.robotId}
-          {current ? ` · at stop ${current.index + 1}: ${current.name || current.placeId}` : ' · walking'} · {runProgressText(run)}
+          {stopText ? ` · ${stopText}` : ' · walking'} · {runProgressText(run)}
         </span>
       </div>
 

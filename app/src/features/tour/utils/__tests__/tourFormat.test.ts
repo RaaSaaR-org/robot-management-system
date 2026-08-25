@@ -15,6 +15,7 @@ import {
   TOUR_SPEECH_CHARS_PER_S,
   TOUR_STOP_SPEECH_CAP_S,
   chunkTalkTrack,
+  currentStopText,
   declinedTurns,
   estimateSpeechSeconds,
   estimateTourSeconds,
@@ -169,6 +170,27 @@ describe('run summaries', () => {
     expect(isRunActive(run({ status: 'running' }))).toBe(true);
     expect(isRunActive(run({ status: 'declined' }))).toBe(false);
     expect(isRunActive(null)).toBe(false);
+  });
+});
+
+describe('currentStopText', () => {
+  // ONE renderer for two screens: the /tour banner reads it off the run's legs,
+  // the Agent Mode rail off the running block's params (TASK-213).
+  it('reads as a position in the route', () => {
+    expect(currentStopText({ index: 2, name: 'Workstation' })).toBe('at stop 2: Workstation');
+  });
+
+  it('leaves "no stop" to the caller to phrase', () => {
+    // The banner completes a sentence with "walking"; the rail's chip renders
+    // nothing at all. A shared word here would be wrong on one of the two.
+    expect(currentStopText(null)).toBeNull();
+    expect(currentStopText(undefined)).toBeNull();
+  });
+
+  it('degrades to the headline alone when the number is unknown', () => {
+    // An older robot-agent names the stop without its position in the route.
+    // The headline is the answer; the number only locates it.
+    expect(currentStopText({ index: null, name: 'Reception' })).toBe('Reception');
   });
 });
 

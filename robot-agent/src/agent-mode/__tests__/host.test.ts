@@ -162,6 +162,21 @@ describe('buildTourBlocks', () => {
     expect(blocks.at(-1)!.block.params.text).toBe('Danke für Ihren Besuch!');
   });
 
+  it('names the stop on every block of it, not only its id', () => {
+    // The Agent Mode rail watches the running BLOCK and holds no route, no run
+    // and no place graph — so "which stop is the robot at?" is answerable only
+    // if the block says so in words. Same reason patrol puts `checkpointName`
+    // on `capture`. The walk home is the one goto that carries no stop, and
+    // that is what tells the rail the visit is over.
+    const blocks = buildTourBlocks(ROUTE, { demoMode: 'narrate', disclosureSpoken: true });
+    const first = ROUTE.stops[0]!;
+    for (const kind of ['goto', 'present', 'demo', 'wait']) {
+      const block = blocks.find((b) => b.legIndex === 0 && b.block.kind === kind)!.block;
+      expect(block.params).toMatchObject({ stopId: first.id, stopIndex: 1, stopName: first.headline });
+    }
+    expect(blocks.filter((b) => b.home && b.block.kind === 'goto')[0]!.block.params.stopName).toBeUndefined();
+  });
+
   it('speaks the AI disclosure first when the greeting did not — whoever started the tour', () => {
     // An operator pressing "Start tour" has greeted nobody, and the visitor in
     // front of the robot is owed the sentence just the same (Art. 50).

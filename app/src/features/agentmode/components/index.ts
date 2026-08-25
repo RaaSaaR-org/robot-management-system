@@ -44,3 +44,6 @@ export { ConditionAnnouncer } from './ConditionAnnouncer';
 
 export { RobotDetailsDrawer } from './RobotDetailsDrawer';
 export type { RobotDetailsDrawerProps } from './RobotDetailsDrawer';
+
+export { TourStopChip } from './TourStopChip';
+export type { TourStopChipProps } from './TourStopChip';

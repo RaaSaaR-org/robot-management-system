@@ -19,6 +19,7 @@ import { EstopBanner } from '../components/EstopBanner';
 import { KnowledgePanel, type KnowledgeTab } from '../components/KnowledgePanel';
 import { PlaceChip } from '../components/PlaceChip';
 import { SelfHeader } from '../components/SelfHeader';
+import { TourStopChip } from '../components/TourStopChip';
 import { useAgentModeSocket } from '../hooks/useAgentModeSocket';
 import {
   useAgentModeStore,
@@ -234,6 +235,12 @@ export function AgentModePage() {
                 trigger — so the rail passes it the robot and nothing else. */}
             <SelfHeader robotId={robotId} className="min-w-0" />
             <PlaceChip />
+            {/* Host mode (TASK-213): which stop of a visit the robot is at.
+                Renders nothing at all outside a tour, so the resting rail is
+                unchanged — the chip belongs to the PAGE and not to
+                `BlockTimeline`, which is the generic rail every plan uses and
+                has no business knowing what a tour is. */}
+            <TourStopChip />
           </>
         }
       />

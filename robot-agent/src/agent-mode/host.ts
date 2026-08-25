@@ -650,8 +650,17 @@ export function buildTourBlocks(
     });
   }
   route.stops.forEach((stop, i) => {
+    // Every block of a stop carries WHICH stop it belongs to in words, not only
+    // as an id: `stopId` identifies the stop, `stopName`/`stopIndex` are what a
+    // console can render without holding the route. Patrol already does this
+    // (`routeName` on `patrol`, `checkpointName` on `capture`/`inspect`), and
+    // the Agent Mode rail is the reason — it watches the running BLOCK and has
+    // no run, no route and no place graph in hand. Without the name, the one
+    // question an operator asks while a visitor is being walked around —
+    // "which stop is it at?" — is answerable only from the block's prose.
+    const at = { stopId: stop.id, stopIndex: i + 1, stopName: stop.headline };
     out.push({
-      block: makeBlock('goto', { place: stop.placeId, stopId: stop.id }, `Stop ${i + 1}: walk to ${stop.headline}.`),
+      block: makeBlock('goto', { place: stop.placeId, ...at }, `Stop ${i + 1}: walk to ${stop.headline}.`),
       legIndex: i,
     });
     const chunks = chunkTalkTrack(stop.talkTrack);
@@ -659,7 +668,7 @@ export function buildTourBlocks(
       out.push({
         block: makeBlock(
           'present',
-          { stopId: stop.id, text, chunk: c + 1, of: chunks.length },
+          { ...at, text, chunk: c + 1, of: chunks.length },
           `Say part ${c + 1} of ${chunks.length} at ${stop.headline}.`,
         ),
         legIndex: i,
@@ -670,7 +679,7 @@ export function buildTourBlocks(
         block: makeBlock(
           'demo',
           {
-            stopId: stop.id,
+            ...at,
             skillId: stop.demo.skillId,
             skillName: stop.demo.skillName,
             mode: demoMode,
@@ -684,7 +693,7 @@ export function buildTourBlocks(
     }
     if (stop.dwellS > 0) {
       out.push({
-        block: makeBlock('wait', { seconds: Math.min(30, stop.dwellS), stopId: stop.id }, `Take questions at ${stop.headline}.`),
+        block: makeBlock('wait', { seconds: Math.min(30, stop.dwellS), ...at }, `Take questions at ${stop.headline}.`),
         legIndex: i,
       });
     }
