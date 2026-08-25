@@ -298,8 +298,13 @@ describe('agent-mode routes', () => {
     });
 
     it('does not fabricate a latch source the robot never sent', async () => {
-      // Absent means "this agent does not report which latch" — not `null`,
-      // which the console would read as an attributed-to-nothing latch.
+      // Absent and `null` read the same to the console — `applyLatchSource`
+      // normalizes with `agentState?.estopSource ?? null`. What matters is that
+      // the mirror does not INVENT one. A server-side `'agent'` backfill would
+      // take the attributed branch in that fold and overwrite a `'safety'`
+      // attribution the store already holds, blanking its `estopReason` with
+      // it — turning a protective stop into Agent Mode's own STOPP in the
+      // banner, and hiding that one reset has to clear both latches.
       mockAgentModeService.getState.mockReturnValue({ ...STATE, estopActive: true });
       mockAgentModeService.isHydrated.mockReturnValue(true);
 
