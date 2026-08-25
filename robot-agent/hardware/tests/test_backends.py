@@ -6,6 +6,8 @@ with VLARunner's backend parameter.
 @status test
 """
 
+import base64
+import importlib.util
 import json
 import threading
 import time
@@ -17,6 +19,16 @@ import pytest
 
 import sys
 import os
+
+# `SmolVLABackend.connect()` imports httpx, so anything that talks to the mock
+# server needs it. Not every interpreter this repo documents has it (the
+# sim_g1_dds venv does not; the curation venv does), and a self-skip is how that
+# stays visible — excluding these files from scripts/test-all.sh instead only hid
+# whether they pass.
+requires_httpx = pytest.mark.skipif(
+    importlib.util.find_spec("httpx") is None,
+    reason="SmolVLABackend.connect() needs httpx; this interpreter has none",
+)
 
 # Ensure hardware/ is on the path so `backends` and `vla_safety` resolve
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -140,6 +152,7 @@ class TestVLABackendABC:
 # Test 2: SmolVLABackend connect/disconnect lifecycle
 # ---------------------------------------------------------------------------
 
+@requires_httpx
 class TestSmolVLABackendLifecycle:
     def test_connect_and_disconnect(self, mock_server):
         """Backend connects via /health and disconnects cleanly."""
@@ -172,6 +185,7 @@ class TestSmolVLABackendLifecycle:
 # Test 3: SmolVLABackend predict
 # ---------------------------------------------------------------------------
 
+@requires_httpx
 class TestSmolVLABackendPredict:
     def test_predict_returns_actions(self, mock_server):
         """predict() sends images+state+prompt and returns action chunks."""
@@ -190,7 +204,15 @@ class TestSmolVLABackendPredict:
         backend.disconnect()
 
     def test_predict_with_numpy_images(self, mock_server):
-        """predict() handles numpy array images by converting to list."""
+        """predict() encodes a numpy frame as a base64 JPEG, not a nested list.
+
+        This asserted `isinstance(..., list)` until now, which stopped being
+        true at TASK-146: raw arrays went out as ~1 MB of nested JSON per
+        480x640 frame and blew the client's timeout, so the contract with
+        vla-server is `images: dict[str, str]`. The assertion was simply never
+        updated, and the stale failure sat behind an --ignore in
+        scripts/test-all.sh (TASK-190 review).
+        """
         backend = SmolVLABackend(timeout=5.0)
         backend.connect(mock_server.url)
 
@@ -199,8 +221,9 @@ class TestSmolVLABackendPredict:
         actions = backend.predict(images, state, "test")
 
         assert len(actions) == 3
-        # Verify numpy was serialized to list
-        assert isinstance(mock_server.last_request["images"]["front"], list)
+        sent = mock_server.last_request["images"]["front"]
+        assert isinstance(sent, str), "a numpy frame must not go out as nested JSON lists"
+        assert base64.b64decode(sent)[:3] == b"\xff\xd8\xff", "not a JPEG"
 
         backend.disconnect()
 
@@ -215,6 +238,7 @@ class TestSmolVLABackendPredict:
 # Test 4: SmolVLABackend predict_with_latency
 # ---------------------------------------------------------------------------
 
+@requires_httpx
 class TestSmolVLABackendLatency:
     def test_predict_with_latency_returns_tuple(self, mock_server):
         """predict_with_latency() returns (actions, latency_ms)."""
@@ -236,6 +260,7 @@ class TestSmolVLABackendLatency:
 # Test 5: SmolVLABackend camera_names from /config
 # ---------------------------------------------------------------------------
 
+@requires_httpx
 class TestSmolVLABackendConfig:
     def test_camera_names_from_config(self, mock_server):
         """Backend fetches camera names from /config on connect."""

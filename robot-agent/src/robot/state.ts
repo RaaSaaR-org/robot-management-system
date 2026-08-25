@@ -1142,9 +1142,15 @@ export class RobotStateManager {
     const spec = this.resolveDepthSensorSpec(sensorName);
 
     // Hardware seam — real Livox / RealSense via the sidecar when connected.
+    // The active scan session travels with the request: the sidecar locks the
+    // MID-360 frame convention once per session (TASK-190), so every frame of
+    // one walked sweep lands in the same frame even when a frame aimed at an
+    // open doorway carries no floor plane of its own.
     if (hardwareClient.isConnected()) {
       try {
-        const real = await hardwareClient.snapshotPointCloud(spec?.name ?? 'mid360_lidar');
+        const real = await hardwareClient.snapshotPointCloud(spec?.name ?? 'mid360_lidar', {
+          scanSessionId: this.activeScan?.sessionId,
+        });
         return { ...real, robotId: this.state.id, sequence, source: 'hardware', timestamp: new Date().toISOString() };
       } catch (err) {
         console.warn('[RobotStateManager] Hardware point cloud unavailable, using simulation:', err);

@@ -338,6 +338,28 @@ export function getSidecarUrl(): string {
   return _sidecarUrl;
 }
 
+/**
+ * Narrow a scan-session id to something that can safely be an HTTP header value.
+ *
+ * The id is caller-supplied — `POST /robots/:id/pointcloud/scan/start` accepts
+ * any string — and TASK-190 is what first put it on the wire. undici refuses a
+ * header value containing CR, LF or NUL by throwing from `fetch` BEFORE the
+ * request leaves, and that throw is caught by `getPointCloudFrame`, which then
+ * quietly falls through to the synthetic generator: one bad character would
+ * build a whole "lidar" scan out of fabricated points. So the id is reduced to
+ * the token characters a session id legitimately uses (cuids and the agent's
+ * own `sess_…` ids are already within it) and capped, and a value with nothing
+ * left is dropped rather than sent. Dropping only costs the sidecar its
+ * per-session scoping — it falls back to its single live-view convention, which
+ * is still ONE convention for the sweep — instead of costing the whole scan.
+ */
+const SCAN_SESSION_HEADER_MAX_LENGTH = 128;
+export function scanSessionHeaderValue(sessionId: string | undefined): string | undefined {
+  if (!sessionId) return undefined;
+  const safe = sessionId.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, SCAN_SESSION_HEADER_MAX_LENGTH);
+  return safe.length > 0 ? safe : undefined;
+}
+
 // Poll every 2s — avoids monopolizing /dev/ttyACM0 so other tools can use the arm.
 // Idle watchdog in the sidecar disconnects after 5s without requests, releasing the port.
 const POLL_INTERVAL_MS = 2000;
@@ -975,12 +997,26 @@ export class HardwareClient {
   /**
    * One-shot point-cloud snapshot from a real depth / LiDAR sensor.
    *
+   * `opts.scanSessionId` is forwarded as the `X-Scan-Session` header so the
+   * sidecar can hold ONE MID-360 frame convention for the whole scan session
+   * (TASK-190) instead of re-deciding it per frame — a frame with no floor
+   * return would otherwise be stitched into the twin mirrored. A header, not a
+   * query parameter, so a sidecar predating TASK-190 ignores it instead of
+   * 404-ing every frame. It goes through {@link scanSessionHeaderValue} first,
+   * because a header value `fetch` rejects would throw here and silently
+   * downgrade the scan to synthetic points.
+   *
    * @status hardware-pending — returns XYZ(+intensity) as flat arrays so it maps
    * 1:1 onto {@link PointCloudFrame}. The caller (RobotStateManager) fills in
    * robotId / sequence / timestamp.
    */
-  async snapshotPointCloud(name: string): Promise<PointCloudFrame> {
+  async snapshotPointCloud(
+    name: string,
+    opts: { scanSessionId?: string } = {},
+  ): Promise<PointCloudFrame> {
+    const session = scanSessionHeaderValue(opts.scanSessionId);
     const res = await fetch(`${getSidecarUrl()}/pointcloud/${encodeURIComponent(name)}/snapshot`, {
+      headers: session ? { 'X-Scan-Session': session } : {},
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) {
