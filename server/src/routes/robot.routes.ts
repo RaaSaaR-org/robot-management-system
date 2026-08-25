@@ -11,6 +11,8 @@ import { robotRepository } from '../repositories/index.js';
 import { prisma } from '../database/index.js';
 import http from 'node:http';
 import { agentServiceAuthHeaders } from '../services/agentServiceAuth.js';
+import { signCameraTicket, CAMERA_TICKET_TTL_MS } from '../security/cameraTicket.js';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const robotRoutes = Router();
 
@@ -250,6 +252,58 @@ robotRoutes.get('/:id/telemetry/history', async (req: Request, res: Response) =>
 // ============================================================================
 // VLA PROXY ROUTES (TASK-077) — forward to robot agent VLA endpoints
 // ============================================================================
+
+/**
+ * POST /:id/camera/:name/ticket — mint a ticket for ONE camera stream.
+ *
+ * The stream itself is rendered in an `<img>`, which cannot send an
+ * `Authorization` header, so something has to travel in the URL. This is that
+ * something: a signed assertion, good for this robot's `:name` camera for about
+ * two minutes and for nothing else (TASK-214). It replaces putting the caller's
+ * real access token in the query string, which is what shipped in PR #236 as
+ * the smallest change that made cameras work at all.
+ *
+ * The caller is authenticated normally — this route sits behind `authMiddleware`
+ * like every other robot route — and the ticket carries their identity forward,
+ * so the stream request lands in the same tenant scope the ticket request had.
+ */
+robotRoutes.post('/:id/camera/:name/ticket', async (req: Request, res: Response) => {
+  // try/catch, like every other async handler in this file: express 4 does not
+  // forward a rejected handler promise to the error middleware, and
+  // `getRegisteredRobot` reaches Prisma on a cache miss. Unhandled, a database
+  // blip here would hang the caller and take the process down with it — every
+  // open stream, socket and A2A connection included.
+  try {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) {
+      // Only reachable if this route is ever mounted without authMiddleware.
+      // Minting an unattributed ticket would be worse than refusing.
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // A ticket for a robot that does not exist would be a valid signature over
+    // nothing — and would tell the asker which robot ids are real.
+    const registered = await robotManager.getRegisteredRobot(req.params.id);
+    if (!registered) {
+      return res.status(404).json({ error: 'Robot not found' });
+    }
+
+    const ticket = signCameraTicket({
+      robotId: req.params.id,
+      cameraName: req.params.name,
+      userId: user.id,
+      tenantId: user.tenantId ?? null,
+      role: user.role,
+    });
+
+    res.json({ ticket, expiresIn: Math.floor(CAMERA_TICKET_TTL_MS / 1000) });
+  } catch (error) {
+    // Deliberately not echoing `error` into the body — the failure text comes
+    // from Prisma and this route should not narrate the database to a caller.
+    console.error('Error minting camera ticket:', error);
+    res.status(500).json({ error: 'Failed to mint camera ticket' });
+  }
+});
 
 /**
  * GET /:id/camera/:name — Proxy the robot's live MJPEG camera to the browser.

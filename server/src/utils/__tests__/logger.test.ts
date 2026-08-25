@@ -9,7 +9,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 
-import { logger, requestIdMiddleware, httpLogger } from '../logger.js';
+import {
+  logger,
+  requestIdMiddleware,
+  httpLogger,
+  REDACT_PATHS,
+  scrubCameraTicket,
+  ticketSafeReqSerializer,
+} from '../logger.js';
 
 // --------------------------------------------------------------------------
 // Helpers to build fake express objects
@@ -54,9 +61,10 @@ describe('logger module', () => {
     });
 
     it('redacts sensitive fields when output is captured (behavioral)', async () => {
-      // Build a sibling logger with the SAME redaction config but at info level
-      // and a capturing stream, so we can assert real redaction behaviour
-      // (the app logger is "silent" in tests and emits nothing).
+      // Build a sibling logger at info level with a capturing stream, because
+      // the app logger is "silent" in tests and emits nothing. It uses the
+      // REAL `REDACT_PATHS` — a hand-retyped list here would have tested its
+      // own copy and passed no matter what the server was configured with.
       const pino = (await import('pino')).default;
       const lines: string[] = [];
       const stream = { write: (s: string) => lines.push(s) };
@@ -64,7 +72,7 @@ describe('logger module', () => {
         {
           level: 'info',
           redact: {
-            paths: ['password', 'token', 'req.headers.authorization', 'body.refreshToken'],
+            paths: [...REDACT_PATHS],
             censor: '[REDACTED]',
           },
         },
@@ -176,6 +184,67 @@ describe('logger module', () => {
       // pino-http attaches the logger as a property on the middleware.
       expect(httpLogger.logger).toBeDefined();
       expect(typeof httpLogger.logger.info).toBe('function');
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // Camera stream ticket (TASK-214)
+  //
+  // The ticket rides in the query string because an `<img>` cannot send an
+  // Authorization header. It is scoped and short-lived, but replayable — and
+  // the whole reason it exists is that credentials in URLs end up in logs. So
+  // it must not end up in ours, in EITHER of the two places pino puts a URL.
+  // ------------------------------------------------------------------------
+  describe('camera ticket redaction', () => {
+    it('scrubs the ticket out of a URL, keeping the rest of the query', () => {
+      expect(scrubCameraTicket('/api/robots/g1-01/camera/head?ticket=eyJhbGciOi.sig')).toBe(
+        '/api/robots/g1-01/camera/head?ticket=[REDACTED]'
+      );
+      expect(scrubCameraTicket('/s?a=1&ticket=secret&b=2')).toBe('/s?a=1&ticket=[REDACTED]&b=2');
+    });
+
+    it('scrubs every copy, not just the first', () => {
+      expect(scrubCameraTicket('/s?ticket=one&ticket=two')).toBe(
+        '/s?ticket=[REDACTED]&ticket=[REDACTED]'
+      );
+    });
+
+    it('leaves a URL with no ticket alone', () => {
+      expect(scrubCameraTicket('/api/robots/g1-01/camera/head')).toBe(
+        '/api/robots/g1-01/camera/head'
+      );
+    });
+
+    it('the installed req serializer emits no ticket in req.url', () => {
+      // Runs the serializer the server actually installs, not a copy of it.
+      const serialized = ticketSafeReqSerializer({
+        method: 'GET',
+        url: '/api/robots/g1-01/camera/head?ticket=eyJhbGciOi.sig',
+        headers: { host: 'neodem.local' },
+        socket: { remoteAddress: '10.0.0.1', remotePort: 5555 },
+      } as unknown as Parameters<typeof ticketSafeReqSerializer>[0]);
+
+      expect(JSON.stringify(serialized)).not.toContain('eyJhbGciOi.sig');
+      expect(serialized.url).toContain('[REDACTED]');
+      // The parts that make the log line useful survive.
+      expect(serialized.method).toBe('GET');
+      expect(serialized.url).toContain('/api/robots/g1-01/camera/head');
+    });
+
+    it('the parsed query copy is redacted too', async () => {
+      // pino's std req serializer also copies `req.query`, which the string
+      // scrub above cannot reach — that copy is covered by REDACT_PATHS.
+      const pino = (await import('pino')).default;
+      const lines: string[] = [];
+      const captured = pino(
+        { level: 'info', redact: { paths: [...REDACT_PATHS], censor: '[REDACTED]' } },
+        { write: (s: string) => lines.push(s) }
+      );
+
+      captured.info({ req: { query: { ticket: 'eyJhbGciOi.sig' } } }, 'stream open');
+
+      expect(lines.join('')).not.toContain('eyJhbGciOi.sig');
+      expect(lines.join('')).toContain('[REDACTED]');
     });
   });
 });

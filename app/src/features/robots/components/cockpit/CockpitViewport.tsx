@@ -12,6 +12,7 @@ import { memo, useState } from 'react';
 import { Camera, Box, Radio } from 'lucide-react';
 import { apiClient } from '@/api/client';
 import { cn } from '@/shared/utils/cn';
+import { useCameraStreamUrl } from '../../hooks/useCameraStreamUrl';
 import { Robot3DViewer } from '../visualization/Robot3DViewer';
 import type { JointState, RobotType } from '../../types/robots.types';
 
@@ -51,13 +52,29 @@ export const CockpitViewport = memo(function CockpitViewport({
   const [source, setSource] = useState<Source>({ kind: 'model' });
   const [cameraErrored, setCameraErrored] = useState<Record<string, boolean>>({});
 
-  const showCamera = source.kind === 'camera' && !cameraErrored[source.name];
-  const baseUrl = apiClient.defaults.baseURL ?? '';
-  const streamUrl = source.kind === 'camera' ? `${baseUrl}/robots/${robotId}/camera/${source.name}` : '';
+  // A camera stream needs a ticket in its URL (TASK-214) — an `<img>` cannot
+  // send an Authorization header, and this view never sent anything at all, so
+  // with auth enabled it was a silent 401. Absolute base is fine here: unlike
+  // the VR panel there is no canvas readback, so nothing taints.
+  const cameraName = source.kind === 'camera' ? source.name : null;
+  const { url: streamUrl, denied: ticketDenied } = useCameraStreamUrl(
+    robotId,
+    cameraName,
+    apiClient.defaults.baseURL ?? '',
+  );
+  // Two states, not one. `cameraArmed` is "the operator asked for this camera
+  // and nothing has refused it"; `showCamera` adds "and its URL has arrived".
+  // Collapsing them would put the 3D viewer on screen for the ticket round trip
+  // of every camera switch — mounting and destroying a WebGL context and a GLTF
+  // load each time, for a view that is about to be an `<img>` again.
+  const cameraArmed =
+    source.kind === 'camera' && !cameraErrored[source.name] && !ticketDenied;
+  const showCamera = cameraArmed && Boolean(streamUrl);
+  const cameraPending = cameraArmed && !streamUrl;
 
   const sourceLabel = source.kind === 'camera' ? `CAM · ${source.name.toUpperCase()}` : 'MODEL · LIVE POSE';
   const liveLabel = source.kind === 'camera'
-    ? (showCamera ? 'STREAMING' : 'NO SIGNAL')
+    ? (showCamera ? 'STREAMING' : cameraPending ? 'ACQUIRING' : 'NO SIGNAL')
     : (telemetryConnected ? 'LIVE' : 'NO LINK');
   const isLive = source.kind === 'camera' ? showCamera : telemetryConnected;
 
@@ -73,7 +90,7 @@ export const CockpitViewport = memo(function CockpitViewport({
         {showCamera ? (
           <img
             key={streamUrl}
-            src={streamUrl}
+            src={streamUrl ?? undefined}
             alt={`${source.kind === 'camera' ? source.name : ''} camera feed`}
             className="h-full w-full object-contain"
             onError={() =>
@@ -81,6 +98,10 @@ export const CockpitViewport = memo(function CockpitViewport({
               setCameraErrored((m) => ({ ...m, [source.name]: true }))
             }
           />
+        ) : cameraPending ? (
+          <div className="flex h-full w-full items-center justify-center bg-[#06070A] font-mono text-[11px] tracking-wider text-theme-tertiary">
+            ACQUIRING STREAM…
+          </div>
         ) : (
           <Robot3DViewer
             robotType={robotType}

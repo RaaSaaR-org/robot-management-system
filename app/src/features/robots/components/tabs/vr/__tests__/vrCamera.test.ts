@@ -8,6 +8,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   frameLiveness,
+  isRealLoadFailure,
   pollLiveness,
   initialLiveness,
   CAMERA_STALE_AFTER_MS,
@@ -149,5 +150,27 @@ describe('pollLiveness', () => {
       staleForMs: 0,
     });
     expect(initialLiveness(Number.NaN).lastChangeAt).toBe(0);
+  });
+});
+
+describe('isRealLoadFailure', () => {
+  // REGRESSION (TASK-214). The panel clears `src` to drop the MJPEG connection,
+  // and an empty `src` fires `error` on its own. While arming was synchronous
+  // the reassignment in the same task hid that; once a ticket fetch moved in
+  // between, every re-arm and every robot switch raised `error` with no failure
+  // behind it. Treated as a load failure it sets `failed`, and `failed` also
+  // gates the re-arm — so the panel latched to CAMERA OFFLINE with no way back
+  // short of reopening the modal, which is exactly what the re-arm exists to
+  // avoid.
+  it('a cleared src is not a failure — it is this panel hanging up', () => {
+    expect(isRealLoadFailure('')).toBe(false);
+  });
+
+  it('an <img> that was never armed is not a failure either', () => {
+    expect(isRealLoadFailure(null)).toBe(false);
+  });
+
+  it('a src that is actually there and errored is a failure', () => {
+    expect(isRealLoadFailure('/api/robots/g1-01/camera/head?ticket=abc')).toBe(true);
   });
 });
