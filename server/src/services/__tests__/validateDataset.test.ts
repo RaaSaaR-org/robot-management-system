@@ -13,11 +13,12 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ParquetSchema, ParquetWriter, ParquetFieldBuilder } from '@dsnp/parquetjs';
 import { LocalDatasetTree } from '../lerobot/DatasetTree.js';
+import type { DatasetTree } from '../lerobot/DatasetTree.js';
 import { validateDatasetStructure } from '../lerobot/validateDataset.js';
 import type { ValidationContext } from '../lerobot/validateDataset.js';
 
@@ -64,6 +65,14 @@ interface FixtureOptions {
   /** Episode lengths, when the default three are not enough. */
   episodes?: number[];
   /**
+   * Rows per row group in the data parquet.
+   *
+   * pyarrow — which is what lerobot writes with — puts a whole 100 MB data file
+   * in ONE row group, so a reader that decodes "the first row group" decodes
+   * the file. Setting this large reproduces that shape at test size.
+   */
+  rowGroupSize?: number;
+  /**
    * One video camera AND one `dtype: 'image'` feature — an RGB stream recorded
    * as video next to a depth map stored as frames. `video_path` is non-null, so
    * this is the shape that isolates the dtype filter from it.
@@ -91,6 +100,7 @@ async function writeDataParquet(
     new ParquetSchema(fields as ConstructorParameters<typeof ParquetSchema>[0]),
     path,
   );
+  if (options.rowGroupSize) writer.setRowGroupSize(options.rowGroupSize);
   const asList = (v: number[]) => ({ list: v.map((element) => ({ element })) });
   let index = 0;
   for (let ep = 0; ep < perEpisode.length; ep++) {
@@ -285,6 +295,51 @@ async function fixture(name: string, options: FixtureOptions = {}): Promise<stri
 
 async function validate(dir: string, expected = {}, context: ValidationContext = {}) {
   return validateDatasetStructure(new LocalDatasetTree(dir), expected, context);
+}
+
+/** What the validator asked the store for, per method (TASK-219). */
+interface StoreCalls {
+  stat: string[];
+  list: string[];
+  read: string[];
+  readBytes: number;
+  range: { path: string; offset: number; length: number }[];
+}
+
+/**
+ * A tree that answers exactly like `LocalDatasetTree` and records the asking.
+ *
+ * The access pattern IS the behaviour under test here: "does it still find the
+ * missing file" cannot distinguish 1500 HEADs from one listing, and "does it
+ * still read the row count" cannot distinguish a footer read from pulling
+ * 100 MB through the process.
+ */
+function spyTree(dir: string): { tree: DatasetTree; calls: StoreCalls } {
+  const inner = new LocalDatasetTree(dir);
+  const calls: StoreCalls = { stat: [], list: [], read: [], readBytes: 0, range: [] };
+  const tree: DatasetTree = {
+    kind: inner.kind,
+    root: inner.root,
+    async stat(path) {
+      calls.stat.push(path);
+      return inner.stat(path);
+    },
+    async read(path) {
+      calls.read.push(path);
+      const buffer = await inner.read(path);
+      calls.readBytes += buffer.length;
+      return buffer;
+    },
+    async readRange(path, offset, length) {
+      calls.range.push({ path, offset, length });
+      return inner.readRange(path, offset, length);
+    },
+    async list(prefix) {
+      calls.list.push(prefix);
+      return inner.list(prefix);
+    },
+  };
+  return { tree, calls };
 }
 
 beforeAll(async () => {
@@ -628,5 +683,156 @@ describe('a metadata-only import forgives the videos and NOTHING else', () => {
     expect(codes(report.errors)).not.toContain('MISSING_VIDEO_FILE');
     expect(codes(report.warnings)).toContain('VIDEO_NOT_IMPORTED');
     expect(report.valid).toBe(true);
+  });
+});
+
+describe('what it costs to check (TASK-219)', () => {
+  // Both halves of this validator were correct and ruinous: the existence check
+  // was one HEAD per file the manifest named, and the shape check pulled whole
+  // parquets through the process. Neither shows up in a report — the only way
+  // to pin them is to watch what the tree is asked for.
+
+  const DATA_FILE = 'data/chunk-000/file-000.parquet';
+  /** Everything a footer read touches lives in the first 4 bytes or the last of these. */
+  const FOOTER_WINDOW = 64 * 1024;
+
+  it('finds the files with two listings rather than one stat per file', async () => {
+    const dir = await fixture('cost-v21-listing', { version: 'v2.1', episodes: [4, 4, 4, 4, 4] });
+    const { tree, calls } = spyTree(dir);
+    const report = await validateDatasetStructure(tree);
+
+    expect(report.errors).toEqual([]);
+    // Five episodes and one camera: ten files the manifest names, and not one
+    // of them is stat'ed. `data` and `videos` are listed once each instead.
+    expect(calls.stat.filter((p) => p.startsWith('data/') || p.startsWith('videos/'))).toEqual([]);
+    expect(calls.list.filter((p) => p === 'data')).toHaveLength(1);
+    expect(calls.list.filter((p) => p === 'videos')).toHaveLength(1);
+  });
+
+  it('reads a data parquet by its footer, not by its whole self', async () => {
+    // 5000 rows so the file is comfortably bigger than the footer window: with
+    // 33 rows every offset is "in the footer" and the assertion says nothing.
+    const dir = await fixture('cost-v3-footer', { episodes: [5000], declaredFrames: 5000 });
+    const size = (await stat(join(dir, DATA_FILE))).size;
+    expect(size).toBeGreaterThan(FOOTER_WINDOW);
+
+    const { tree, calls } = spyTree(dir);
+    const report = await validateDatasetStructure(tree);
+
+    expect(report.errors).toEqual([]);
+    // It still learned everything it used to: the row count out of the footer…
+    expect(report.totalFrames).toBe(5000);
+    // …and the vector widths, which is the read that used to cost a row group.
+    expect(report.observedStateWidth).toBe(STATE_DIM);
+    expect(report.observedActionWidth).toBe(STATE_DIM);
+
+    // Never pulled whole, and nothing outside the header and the footer was
+    // fetched at all.
+    expect(calls.read).not.toContain(DATA_FILE);
+    const ranges = calls.range.filter((r) => r.path === DATA_FILE);
+    expect(ranges.length).toBeGreaterThan(0);
+    for (const range of ranges) {
+      expect(range.offset === 0 || range.offset >= size - FOOTER_WINDOW).toBe(true);
+    }
+  });
+
+  it('does the same for a file whose first row group IS the whole file', async () => {
+    // The shape that made this worth fixing: pyarrow writes one row group per
+    // 100 MB data file, so "read the first row" read all of it.
+    const dir = await fixture('cost-single-rowgroup', {
+      episodes: [5000], declaredFrames: 5000, rowGroupSize: 100_000,
+    });
+    const size = (await stat(join(dir, DATA_FILE))).size;
+    const { tree, calls } = spyTree(dir);
+    const report = await validateDatasetStructure(tree);
+
+    expect(report.errors).toEqual([]);
+    expect(report.observedStateWidth).toBe(STATE_DIM);
+    expect(calls.read).not.toContain(DATA_FILE);
+    for (const range of calls.range.filter((r) => r.path === DATA_FILE)) {
+      expect(range.offset === 0 || range.offset >= size - FOOTER_WINDOW).toBe(true);
+    }
+  });
+
+  it('still catches a state vector of the wrong width', async () => {
+    // The check the footer read must not quietly stop performing: a width read
+    // from metadata that nothing compares is worth nothing.
+    const report = await validate(await fixture('cost-narrow', {
+      episodes: [200], declaredFrames: 200, stateWidth: STATE_DIM - 1,
+    }));
+    expect(report.observedStateWidth).toBe(STATE_DIM - 1);
+    expect(codes(report.errors)).toContain('STATE_WIDTH_MISMATCH');
+  });
+
+  it('still says which parquet will not open', async () => {
+    // A file that is not a parquet must fail the same way it did when it was
+    // read whole: UNREADABLE_PARQUET, not a store outage and not a pass.
+    const dir = await fixture('cost-not-a-parquet');
+    await writeFile(join(dir, DATA_FILE), 'PAR1 not really a parquet');
+    const report = await validate(dir);
+
+    expect(codes(report.errors)).toContain('UNREADABLE_PARQUET');
+    expect(report.valid).toBe(false);
+  });
+});
+
+describe('a file the manifest never named', () => {
+  // What the switch from HEADs to a listing makes newly possible. A HEAD can
+  // only answer about a path someone already thought of, so an extra file on
+  // the store was invisible. It is a warning, not an error — the dataset still
+  // loads — but a data file nothing points at is frames that will not be
+  // trained on while info.json reads as though they will.
+
+  it('is reported as UNEXPECTED_FILE, with its path', async () => {
+    const dir = await fixture('extra-file');
+    await writeFile(join(dir, 'data', 'chunk-000', 'file-001.parquet'), 'left over from a re-export');
+    const report = await validate(dir);
+
+    expect(codes(report.warnings)).toContain('UNEXPECTED_FILE');
+    expect(report.warnings.find((w) => w.code === 'UNEXPECTED_FILE')!.message)
+      .toContain('data/chunk-000/file-001.parquet');
+    // A warning: every file the manifest DOES name is there and readable.
+    expect(report.errors).toEqual([]);
+    expect(report.valid).toBe(true);
+  });
+
+  it('covers videos/ as well as data/', async () => {
+    const dir = await fixture('extra-video');
+    await writeFile(
+      join(dir, 'videos', 'observation.images.cam_high', 'chunk-000', 'file-009.mp4'),
+      'an orphan',
+    );
+    const report = await validate(dir);
+
+    expect(report.warnings.find((w) => w.code === 'UNEXPECTED_FILE')!.message)
+      .toContain('videos/observation.images.cam_high/chunk-000/file-009.mp4');
+    expect(report.valid).toBe(true);
+  });
+
+  it('says nothing about a sound dataset', async () => {
+    // The failure mode of the warning itself. `expectedFiles` and the listing
+    // have to agree exactly on a tree that IS complete, or every dataset in
+    // this database picks up a warning nobody can act on — including the v2.1
+    // trees whose mp4s are keyed the other way round.
+    const v3 = await validate(await fixture('extra-none-v3', { splitFiles: 3 }));
+    expect(codes(v3.warnings)).not.toContain('UNEXPECTED_FILE');
+
+    const v21 = await validate(await fixture('extra-none-v21', { version: 'v2.1' }));
+    expect(codes(v21.warnings)).not.toContain('UNEXPECTED_FILE');
+  });
+
+  it('counts them rather than listing thousands', async () => {
+    const dir = await fixture('extra-many');
+    for (let i = 1; i <= 14; i++) {
+      await writeFile(
+        join(dir, 'data', 'chunk-000', `file-${String(i).padStart(3, '0')}.parquet`),
+        'stray',
+      );
+    }
+    const report = await validate(dir);
+
+    expect(codes(report.warnings).filter((c) => c === 'UNEXPECTED_FILE')).toHaveLength(10);
+    expect(report.warnings.find((w) => w.code === 'UNEXPECTED_FILE_COUNT')!.message)
+      .toContain('14 files');
   });
 });

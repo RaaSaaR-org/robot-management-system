@@ -28,6 +28,24 @@ import { DatasetStoreError, openDatasetTree } from './lerobot/DatasetTree.js';
  * the store could not be reached, so the dataset was never looked at.
  */
 export type ValidationOutcome = 'ready' | 'failed' | 'unavailable';
+
+/**
+ * What {@link DatasetService.requestValidation} did with a request to validate.
+ *
+ * Deliberately not the validation's own verdict: as of TASK-219 the caller does
+ * not wait for one. `POST /:id/validate` used to run the whole pass inside the
+ * request — seconds to minutes of blocked event loop on a real dataset, during
+ * which the server answered nothing else, health checks included.
+ */
+export type ValidationRequestState =
+  /** Published to `jobs.dataset.validate`; the worker picks it up. */
+  | 'queued'
+  /** No NATS on this deployment — running in this process, off the request. */
+  | 'started'
+  /** One is already running for this dataset. Nothing new was started. */
+  | 'in-flight'
+  /** Nothing to open: neither backing store can be reached. Nothing started. */
+  | 'store-unavailable';
 import { ExtractError, extractDatasetArchive } from './lerobot/extractArchive.js';
 import { validateDatasetStructure } from './lerobot/validateDataset.js';
 import type {
@@ -76,6 +94,17 @@ import { QUALITY_THRESHOLDS } from '../types/dataset.types.js';
 const DATASET_VALIDATION_SUBJECT = 'jobs.dataset.validate';
 const DATASET_STATS_SUBJECT = 'jobs.dataset.compute-stats';
 const DATASET_PROGRESS_KV_PREFIX = 'dataset.progress.';
+
+/**
+ * How long a started validation is assumed to still be running.
+ *
+ * The marker is cleared when `validateAndUpdateDataset` returns, which covers
+ * every path this deployment runs — the in-process worker included. The lease
+ * is the backstop for the one it does not cover: a job consumed by a worker in
+ * another process, whose completion this process never sees. Without it a
+ * crashed worker would make a dataset permanently unvalidatable.
+ */
+const VALIDATION_LEASE_MS = 15 * 60 * 1000;
 
 /**
  * The object version an upload is presigned against, and the key it lands on.
@@ -130,6 +159,8 @@ export class DatasetService extends EventEmitter {
   private static instance: DatasetService;
   private initialized = false;
   private progressKV: KV | null = null;
+  /** Dataset id → when its validation started. See {@link VALIDATION_LEASE_MS}. */
+  private readonly validationsInFlight = new Map<string, number>();
 
   private constructor() {
     super();
@@ -642,6 +673,7 @@ export class DatasetService extends EventEmitter {
       msgID: `validate-${datasetId}`,
     });
 
+    this.markValidationStarted(datasetId);
     console.log(`[DatasetService] Queued validation job for dataset: ${datasetId}`);
 
     // Emit validation started event
@@ -650,6 +682,76 @@ export class DatasetService extends EventEmitter {
       datasetId,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  /**
+   * Start a validation for this dataset WITHOUT waiting for its verdict.
+   *
+   * The whole point of TASK-219. `POST /:id/validate` awaited
+   * `validateAndUpdateDataset`, which opens every file the manifest names — so
+   * one click held the request, and the event loop with it, for as long as that
+   * took. It now returns as soon as the work is accepted, and the answer is
+   * read from the row or from `GET /:id/progress`, the channel the upload flow
+   * already polls.
+   *
+   * Where the work runs depends on what this deployment has:
+   *
+   * - NATS connected → published to `jobs.dataset.validate`, run by
+   *   `dataset-validation.worker`, exactly as `completeUpload` has always done.
+   * - No NATS (every dev box, and NATS is optional by design) → run in THIS
+   *   process, detached from the request. That is a smaller promise than a
+   *   worker thread and it is stated plainly: the parquet decoding still
+   *   happens here, interleaved with other requests. What it no longer does is
+   *   hold a request open for it, and after the footer-read change the CPU it
+   *   costs is milliseconds per file rather than seconds.
+   *
+   * Re-entry is refused rather than queued behind the running pass: two clicks
+   * used to start two full passes over the same files, writing the same row.
+   */
+  async requestValidation(datasetId: string, storagePath: string): Promise<ValidationRequestState> {
+    if (this.isValidating(datasetId)) return 'in-flight';
+
+    // Cheap, and it keeps the 503 the route has always answered: a dataset
+    // whose store cannot be reached is not "queued", it is "nothing to open".
+    if (!openDatasetTree(storagePath)) return 'store-unavailable';
+
+    if (natsClient.isConnected()) {
+      await this.queueValidationJob(datasetId, storagePath);
+      return 'queued';
+    }
+
+    // Marked BEFORE anything is awaited, so a second request landing in the
+    // same tick is refused rather than starting a second pass.
+    this.markValidationStarted(datasetId);
+    this.emitEvent({
+      type: 'dataset:validation:started',
+      datasetId,
+      timestamp: new Date().toISOString(),
+    });
+    setImmediate(() => {
+      void this.validateAndUpdateDataset(datasetId, storagePath).catch((error: unknown) => {
+        // `validateAndUpdateDataset` records its own failures; this catch is
+        // for the ones it cannot, so a detached run can never take the process
+        // down with an unhandled rejection.
+        console.error(`[DatasetService] Detached validation for ${datasetId} threw:`, error);
+      });
+    });
+    return 'started';
+  }
+
+  /** Whether a validation for this dataset is running (or recently started). */
+  isValidating(datasetId: string): boolean {
+    const startedAt = this.validationsInFlight.get(datasetId);
+    if (startedAt === undefined) return false;
+    if (Date.now() - startedAt > VALIDATION_LEASE_MS) {
+      this.validationsInFlight.delete(datasetId);
+      return false;
+    }
+    return true;
+  }
+
+  private markValidationStarted(datasetId: string): void {
+    this.validationsInFlight.set(datasetId, Date.now());
   }
 
   /**
@@ -739,8 +841,13 @@ export class DatasetService extends EventEmitter {
 
   /**
    * Validate and update dataset (called by worker or synchronously)
+   *
+   * Marks the dataset as being validated for as long as this runs, whichever
+   * caller it came from — the worker, `completeUpload`, or a detached run — so
+   * `requestValidation` can refuse to start a second pass over the same files.
    */
   async validateAndUpdateDataset(datasetId: string, storagePath: string): Promise<ValidationOutcome> {
+    this.markValidationStarted(datasetId);
     try {
       // Update progress
       await this.updateValidationProgress(datasetId, {
@@ -884,6 +991,8 @@ export class DatasetService extends EventEmitter {
         timestamp: new Date().toISOString(),
       });
       return 'failed';
+    } finally {
+      this.validationsInFlight.delete(datasetId);
     }
   }
 

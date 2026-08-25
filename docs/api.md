@@ -125,7 +125,18 @@ Rate limited: 20 requests per 15 minutes.
 | POST | `/:id/compute-stats` | Trigger stats computation |
 | GET | `/:id/progress` | Validation progress |
 | GET | `/:id/quality` | Quality report |
+| POST | `/:id/validate` | Start structural validation → `202 {state}` |
 | POST | `/:id/validate-advanced` | Trigger advanced validation |
+
+`POST /:id/validate` does not wait for the verdict. It answers `202` with
+`{datasetId, accepted, state, progressUrl}` — `state: "queued"` when NATS is
+connected (a `jobs.dataset.validate` worker runs it) and `state: "started"` when
+it is not (this process runs it detached from the request; NATS is optional and
+a dev box has none). Poll `GET /:id/progress`, or read the row, for the answer.
+While a validation for that dataset is running the endpoint answers `409
+VALIDATION_IN_FLIGHT` rather than starting a second pass; when neither backing
+store can be reached it answers `503 STORE_UNAVAILABLE` and leaves the row
+untouched.
 
 ### Deployments (`/api/deployments`)
 

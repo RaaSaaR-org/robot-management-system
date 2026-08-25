@@ -97,10 +97,25 @@ vi.mock('../../storage/rustfs-client.js', () => ({
       }
       return { contentLength: 1024 };
     },
-    listAll: async function* (_bucket: string, prefix: string) {
+    listAll: async function* (bucket: string, prefix: string) {
       for (const key of await rustfsList(prefix)) {
-        yield { key, size: 1024, lastModified: new Date() };
+        // The REAL size, because as of TASK-219 the listing is what tells the
+        // parquet reader where the footer is — a fake 1024 would put the
+        // footer read in the middle of the file.
+        let size = 1024;
+        try {
+          size = (await rustfsDownload(bucket, key)).length;
+        } catch {
+          // Nothing to serve for that key: the fake store's own business.
+        }
+        yield { key, size, lastModified: new Date() };
       }
+    },
+    // A ranged GET. Validation reads parquet footers rather than whole files,
+    // so the fake store has to be able to answer for a window (TASK-219).
+    downloadRange: async (bucket: string, key: string, start: number, length: number) => {
+      const buffer = (await rustfsDownload(bucket, key)) as Buffer;
+      return buffer.subarray(start, start + length);
     },
   })),
 }));
@@ -820,9 +835,16 @@ async function mockCompleteDataset(options: {
     if (rel === episodeShard) return !omit.has(episodeShard);
     return present.has(rel);
   });
-  rustfsList.mockImplementation(async (prefix: string) =>
-    prefix.includes('meta/episodes') && !omit.has(episodeShard) ? [`ds1/${episodeShard}`] : [],
-  );
+  // The store answers PREFIX LISTINGS now, not one HEAD per file the manifest
+  // names (TASK-219). `present` is still the single source of truth for what is
+  // there; both the listing and the HEAD are views of it.
+  rustfsList.mockImplementation(async (prefix: string) => {
+    const rel = prefix.replace(/^ds1\//, '');
+    if (rel.startsWith('meta/episodes')) {
+      return omit.has(episodeShard) ? [] : [`ds1/${episodeShard}`];
+    }
+    return [...present].filter((path) => path.startsWith(rel)).map((path) => `ds1/${path}`);
+  });
   rustfsDownload.mockImplementation(async (_bucket: string, key: string) => {
     if (key.endsWith('info.json')) return Buffer.from(JSON.stringify(info));
     if (key.endsWith('stats.json')) return Buffer.from(JSON.stringify({ mean: [1, 2, 3] }));
@@ -1279,5 +1301,108 @@ describe('singleton & lifecycle', () => {
     vi.mocked(natsClient.isConnected).mockClear();
     await datasetService.initialize();
     expect(natsClient.isConnected).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// requestValidation — the manual re-validate, off the request thread (TASK-219)
+// ===========================================================================
+
+describe('requestValidation', () => {
+  /** A real directory, so `openDatasetTree` has something to open. */
+  let treeDir: string;
+
+  beforeAll(async () => {
+    treeDir = await mkdtemp(join(tmpdir(), 'dataset-revalidate-'));
+  });
+
+  afterAll(async () => {
+    await rm(treeDir, { recursive: true, force: true });
+  });
+
+  it('hands the work to the NATS queue instead of running it inline', async () => {
+    // `POST /:id/validate` used to await the whole pass. The queue path already
+    // existed — `completeUpload` has always used it — and this is the same one.
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+
+    const state = await datasetService.requestValidation('ds-queued', `${treeDir}/`);
+
+    expect(state).toBe('queued');
+    expect(jsPublish).toHaveBeenCalledWith(
+      'jobs.dataset.validate',
+      expect.any(Uint8Array),
+      expect.objectContaining({ msgID: 'validate-ds-queued' }),
+    );
+    // Nothing was validated on the caller's thread.
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second request while the first is still in flight', async () => {
+    // Two clicks used to start two full passes over the same files, each
+    // reading every parquet and both writing the same row.
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+
+    const first = await datasetService.requestValidation('ds-twice', `${treeDir}/`);
+    const second = await datasetService.requestValidation('ds-twice', `${treeDir}/`);
+
+    expect(first).toBe('queued');
+    expect(second).toBe('in-flight');
+    // Refused, not queued behind it: one job, not two.
+    expect(jsPublish).toHaveBeenCalledTimes(1);
+    expect(datasetService.isValidating('ds-twice')).toBe(true);
+  });
+
+  it('runs it detached when there is no NATS, and answers before it finishes', async () => {
+    // NATS is optional in this project and a dev box has none, so this is the
+    // path that actually runs in development. It must not hang and it must not
+    // validate inside the call.
+    vi.mocked(natsClient.isConnected).mockReturnValue(false);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    const state = await datasetService.requestValidation('ds-detached', `${treeDir}/`);
+
+    expect(state).toBe('started');
+    expect(jsPublish).not.toHaveBeenCalled();
+    // The answer came back BEFORE the pass ran: nothing has touched the row yet.
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+    expect(datasetService.isValidating('ds-detached')).toBe(true);
+
+    // And it really does run — an empty directory is a dataset with no
+    // meta/info.json, which is a failure the row records.
+    await vi.waitFor(() => {
+      expect(datasetRepository.update).toHaveBeenCalledWith(
+        'ds-detached',
+        expect.objectContaining({ status: 'failed' }),
+      );
+    });
+    expect(datasetService.isValidating('ds-detached')).toBe(false);
+  });
+
+  it('says the store is unreachable rather than queueing a job with nothing to open', async () => {
+    vi.mocked(natsClient.isConnected).mockReturnValue(true);
+    vi.mocked(isRustFSInitialized).mockReturnValue(false);
+
+    const state = await datasetService.requestValidation('ds-nostore', 'ds-nostore/');
+
+    expect(state).toBe('store-unavailable');
+    expect(jsPublish).not.toHaveBeenCalled();
+    expect(datasetRepository.update).not.toHaveBeenCalled();
+    expect(datasetService.isValidating('ds-nostore')).toBe(false);
+  });
+
+  it('lets the next request through once the pass has finished', async () => {
+    vi.mocked(natsClient.isConnected).mockReturnValue(false);
+    vi.mocked(datasetRepository.findById).mockResolvedValue(makeDataset());
+    vi.mocked(datasetRepository.update).mockResolvedValue(makeDataset() as never);
+    vi.mocked(robotTypeRepository.findById).mockResolvedValue(makeRobotType());
+
+    await datasetService.requestValidation('ds-again', `${treeDir}/`);
+    await vi.waitFor(() => expect(datasetService.isValidating('ds-again')).toBe(false));
+
+    expect(await datasetService.requestValidation('ds-again', `${treeDir}/`)).toBe('started');
+    await vi.waitFor(() => expect(datasetService.isValidating('ds-again')).toBe(false));
   });
 });

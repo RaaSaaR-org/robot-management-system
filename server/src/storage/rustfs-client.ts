@@ -184,6 +184,44 @@ export class RustFSClient {
   }
 
   /**
+   * Download `length` bytes starting at `start`.
+   *
+   * For the readers that need a slice rather than a file — the parquet footer
+   * validation reads to learn a file's row count and column names is a few
+   * kilobytes at the END of an object that is routinely 100 MB. Before this
+   * existed the only way to reach it was `download()`, which pulls the whole
+   * object into the API process.
+   *
+   * A store that does not implement `Range` answers with the whole object and
+   * no `Content-Range`; the window is cut out here rather than trusted, so a
+   * backend without range support stays correct (and merely slow).
+   */
+  async downloadRange(bucket: string, key: string, start: number, length: number): Promise<Buffer> {
+    if (length <= 0) return Buffer.alloc(0);
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Range: `bytes=${start}-${start + length - 1}`,
+      })
+    );
+
+    if (!response.Body) {
+      throw new Error(`Empty response body for ${bucket}/${key}`);
+    }
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+    if (!response.ContentRange && buffer.length > length) {
+      return buffer.subarray(start, start + length);
+    }
+    return buffer;
+  }
+
+  /**
    * Download a file as stream
    */
   async getStream(bucket: string, key: string): Promise<Readable> {
