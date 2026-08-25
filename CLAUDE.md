@@ -107,8 +107,10 @@ may have run none of them:
 - `HARDWARE_PYTHON` → `robot-agent/hardware/tests/` (the `g1_sidecar.py`
   point-cloud/frame-convention tests). Needs only numpy + pytest, and falls back
   to either venv above when neither env var is set, so it usually needs no
-  setup. `tests/test_backends.py` and `tests/test_vla_runner.py` are excluded
-  from the stage — they need `httpx`, which no documented interpreter has.
+  setup. The whole of `tests/` runs; the cases in `test_backends.py` and
+  `test_vla_runner.py` that drive `SmolVLABackend` skip themselves when the
+  interpreter has no `httpx` (the sim venv), and run when it does (the curation
+  venv), so pick the curation venv to cover them.
 
 ### Environment Setup
 

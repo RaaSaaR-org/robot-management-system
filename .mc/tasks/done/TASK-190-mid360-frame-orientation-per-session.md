@@ -33,19 +33,32 @@ status_note: 'Spun out of PR #198 review. Harmless for the stationary robot-day 
   (a header, not a query parameter, so a sidecar predating this change ignores it
   rather than 404-ing every frame) and Handler.do_GET hands it to get_point_cloud.
   Frames with no session share one live-view convention. VERIFIED ON THIS MACHINE
-  (no hardware involved): 13 new pytest cases in
+  (no hardware involved): 21 pytest cases in
   robot-agent/hardware/tests/test_g1_sidecar_pointcloud.py driving synthetic
-  inverted / upright / floorless frames through g1_sidecar directly and over a real
-  ThreadingHTTPServer with the header (48 passed for the whole hardware stage),
-  23 vitest cases across the robot-agent scan-session and hardware-seam files plus the
-  998-case agent-mode suite that consumes the same seam, `npm run typecheck` clean, and both directions proved by mutation (disabling
-  the locked-session floorless branch turned 6 tests red; disabling the re-lock turned
-  1 red; dropping the session id in state.ts turned 2 red). Those tests were previously
-  unreachable from the documented entry point — robot-agent/hardware/tests/ was never
-  run by scripts/test-all.sh — so a SKIP-safe `Hardware sidecar (pytest)` stage was
-  added (HARDWARE_PYTHON, auto-detecting either existing venv, documented in
-  CLAUDE.md; test_backends.py / test_vla_runner.py stay excluded, they need httpx).
-  NOT VERIFIED HERE: the integration half of the Test Strategy. There is no MID-360,
+  inverted / upright / floorless / truncated frames through g1_sidecar directly and
+  over a real ThreadingHTTPServer with the header, 29 vitest cases across the
+  robot-agent scan-session and hardware-seam files plus the 998-case agent-mode suite
+  that consumes the same seam, `npm run typecheck` clean, and both directions proved by
+  mutation (disabling the locked-session floorless branch turned 6 tests red; disabling
+  the re-lock turned 1 red; dropping the session id in state.ts turned 2 red). Those
+  tests were previously unreachable from the documented entry point —
+  robot-agent/hardware/tests/ was never run by scripts/test-all.sh — so a SKIP-safe
+  `Hardware sidecar (pytest)` stage was added (HARDWARE_PYTHON, auto-detecting either
+  existing venv, documented in CLAUDE.md). REVIEW FIXES (PR #250): a frame too SPARSE
+  to measure a plane from — a truncated DDS message — used to return above the session
+  logic entirely and so was stitched in raw mid-sweep, the very defect this task is
+  about reached by a second route; sparseness now gates the measurement only, and the
+  locked session places the frame on its remembered anchor. The caller-supplied session
+  id is narrowed by `scanSessionHeaderValue` before it becomes a header, because undici
+  throws on CR/LF/NUL and getPointCloudFrame swallowed that throw and rebuilt the whole
+  scan from synthetic points. The majority vote and the agreeing-median anchor were
+  untested (a surviving mutant) and now have three cases; the hardware-stage exclusion
+  of test_backends.py / test_vla_runner.py was justified by a false claim — the
+  documented curation venv does have httpx — so the exclusion is gone, those cases
+  self-skip per interpreter, and the stale TASK-146 assertion the exclusion was hiding
+  (numpy frames are base64 JPEGs now, not nested lists) is fixed. The stage runs the
+  whole of tests/: 78 passed / 17 skipped on the sim venv, 95 passed on the curation
+  venv. NOT VERIFIED HERE: the integration half of the Test Strategy. There is no MID-360,
   no Unitree G1, no lidar and no recorded walked scan on this machine, so no real or
   replayed walked scan was normalized and no accumulated twin was inspected for a
   mirrored slice. Nothing was run against hardware, a GPU, Isaac Sim or a VLA server.

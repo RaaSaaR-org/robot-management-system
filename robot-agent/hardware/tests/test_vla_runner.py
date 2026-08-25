@@ -7,6 +7,7 @@ They mock the HTTP server and verify the runner's logic.
 """
 
 import base64
+import importlib.util
 import io
 import json
 import threading
@@ -15,6 +16,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# The integration cases below drive the real SmolVLABackend, whose connect()
+# imports httpx. Not every interpreter this repo documents has it (the
+# sim_g1_dds venv does not; the curation venv does), so those cases skip
+# themselves rather than being excluded from scripts/test-all.sh, which only hid
+# whether they pass.
+requires_httpx = pytest.mark.skipif(
+    importlib.util.find_spec("httpx") is None,
+    reason="SmolVLABackend.connect() needs httpx; this interpreter has none",
+)
 
 # We need to mock hardware dependencies before importing VLARunner
 # since the control loop imports lerobot, picamera2, etc.
@@ -142,6 +153,7 @@ class TestVLARunnerUnit:
         assert not runner.is_running
 
 
+@requires_httpx
 class TestVLARunnerIntegration:
     """Integration tests with mock server — mocks robot/camera hardware."""
 

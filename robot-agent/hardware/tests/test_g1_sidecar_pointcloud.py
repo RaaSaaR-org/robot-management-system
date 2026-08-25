@@ -10,7 +10,8 @@ accumulated twin mirrored.
 
 These tests build synthetic MID-360 frames from a known world (floor at z=0,
 sensor 1.3 m above it) and assert every frame of one session comes back in the
-NeoDEM contract frame — floor at z≈0, +z up — including the floorless one.
+NeoDEM contract frame — floor at z≈0, +z up — including the floorless one and
+the truncated one that is simply too sparse to measure a plane from.
 
 Note on the shape of the fixtures: a real mount cannot be inverted for one
 frame and upright for the next, so "inverted-with-floor" and
@@ -39,6 +40,9 @@ BEACON_WORLD = (1.5, 2.0, 1.00)  # a distinctive cluster 1 m above the floor
 N_FLOOR = 900
 N_BEACON = 40
 N_WALL = 220
+# A truncated frame: under the 200 near-point bar `_mid360_floor_plane` needs.
+N_SPARSE_FLOOR = 110
+N_SPARSE_BEACON = 30
 
 # Plane detection quantises to the 0.1 m histogram bin, so ±0.05 m is inherent.
 TOL = 0.15
@@ -107,6 +111,43 @@ def _frame(mount: str, *, floorless: bool = False, seed: int = 7) -> list:
     )
 
     return _to_raw(np.vstack([floor, beacon, wall]), mount).reshape(-1).tolist()
+
+
+def _sparse_frame(mount: str, seed: int = 90) -> list:
+    """A frame with too few points to MEASURE a floor from.
+
+    A truncated DDS message, or a direction with almost no returns: the
+    geometry is perfectly clean floor, but there are fewer than the 200 near
+    points `_mid360_floor_plane` needs, so the frame carries no plane of its
+    own. Nothing sits inside the 0.3 m self-return radius, so the point order
+    survives normalization and the slices below stay valid.
+    """
+    rng = np.random.default_rng(seed)
+
+    theta = rng.uniform(0, 2 * np.pi, N_SPARSE_FLOOR)
+    radius = rng.uniform(2.0, 7.0, N_SPARSE_FLOOR)
+    floor = np.column_stack(
+        [radius * np.cos(theta), radius * np.sin(theta), rng.uniform(0.0, 0.02, N_SPARSE_FLOOR)]
+    )
+
+    beacon = np.tile(np.asarray(BEACON_WORLD, dtype=np.float64), (N_SPARSE_BEACON, 1))
+    beacon[:, :2] += rng.uniform(-0.05, 0.05, (N_SPARSE_BEACON, 2))
+
+    return _to_raw(np.vstack([floor, beacon]), mount).reshape(-1).tolist()
+
+
+def _assert_sparse_contract_frame(positions: list, where: str) -> None:
+    """`_assert_contract_frame` for the two-part sparse fixture."""
+    a = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+    assert len(a) == N_SPARSE_FLOOR + N_SPARSE_BEACON, "self-return filter dropped fixture points"
+    floor, beacon = a[:N_SPARSE_FLOOR], a[N_SPARSE_FLOOR:]
+    assert float(np.median(floor[:, 2])) == pytest.approx(0.0, abs=TOL), f"{where}: floor not at z=0"
+    assert float(np.median(beacon[:, 2])) == pytest.approx(
+        BEACON_WORLD[2], abs=TOL
+    ), f"{where}: beacon not 1 m above the floor (+z is not up)"
+    assert float(np.median(beacon[:, 1])) == pytest.approx(
+        BEACON_WORLD[1], abs=TOL
+    ), f"{where}: beacon mirrored in y"
 
 
 def _parts(positions: list) -> tuple[np.ndarray, np.ndarray]:
@@ -180,6 +221,99 @@ class TestSessionLockedConvention:
         assert float(np.median(_parts(a)[1][:, 2])) == pytest.approx(
             float(np.median(_parts(b)[1][:, 2])), abs=0.05
         )
+
+
+class TestSparseFrames:
+    """Sparseness gates the MEASUREMENT, never the PLACEMENT.
+
+    `_normalize_mid360_frame` used to bail out above the plane detection for
+    any frame under 200 points, so a truncated DDS message arriving mid-sweep
+    came back completely raw (+z down) inside a locked session — the mirrored
+    slice this whole task is about, just reached by a different route.
+    """
+
+    @pytest.mark.parametrize("mount", ["inverted", "upright"])
+    def test_a_sparse_frame_follows_the_locked_session(self, mount: str) -> None:
+        session = f"sess_sparse_{mount}"
+        _lock(session, mount)
+
+        out, _ = _normalize_mid360_frame(_sparse_frame(mount), [], session)
+
+        _assert_sparse_contract_frame(out, f"{mount}/sparse")
+
+    def test_a_sparse_frame_drops_its_self_returns_with_its_intensities(self) -> None:
+        """Placing a sparse frame must not desynchronize its per-point data."""
+        session = "sess_sparse_self"
+        _lock(session, "inverted")
+        raw = np.asarray(_sparse_frame("inverted", seed=97), dtype=np.float64).reshape(-1, 3)
+        housing = np.full((10, 3), 0.05)  # returns off the sensor's own body
+        mixed = np.vstack([housing, raw]).reshape(-1).tolist()
+        intensities = [999.0] * 10 + [float(i) for i in range(len(raw))]
+
+        out, out_intensities = _normalize_mid360_frame(mixed, intensities, session)
+
+        assert out_intensities == [float(i) for i in range(len(raw))]
+        _assert_sparse_contract_frame(out, "sparse with self-returns")
+
+    def test_a_sparse_frame_is_never_evidence_for_the_convention(self) -> None:
+        """It has no measurable plane, so it must not get a vote."""
+        for i in range(g1_sidecar._MID360_LOCK_AFTER + 2):
+            _normalize_mid360_frame(_sparse_frame("inverted", seed=91 + i), [], "sess_only_sparse")
+
+        assert "sess_only_sparse" in g1_sidecar._mid360_orientations, "the frames never got placed"
+        assert not g1_sidecar._mid360_orientations["sess_only_sparse"].locked
+
+    def test_a_sparse_frame_is_still_left_raw_before_anything_is_locked(self) -> None:
+        """Same documented fallback as a floorless frame — no convention yet."""
+        raw = _sparse_frame("inverted", seed=95)
+
+        out, _ = _normalize_mid360_frame(raw, [], "sess_sparse_cold")
+
+        assert out == pytest.approx(raw, abs=1e-4)
+
+
+class TestConventionVote:
+    """The lock is a MAJORITY of the first frames with a floor, not the first one.
+
+    A dominant plane gets read wrong now and then — a table top, a ramp, a
+    mirrored floor — and the entire session hangs off this one decision, so a
+    first-frame-wins lock would mirror a whole sweep into the twin.
+    """
+
+    def test_one_spurious_plane_cannot_set_the_convention(self) -> None:
+        orient = g1_sidecar._Mid360Orientation("sess_vote")
+
+        # A table top read as the dominant plane, then two real inverted floors.
+        for plane_z in (-0.70, 1.20, 1.30):
+            orient.plan(plane_z)
+
+        assert orient.locked
+        assert orient.inverted is True, "the odd frame out set the convention"
+
+    def test_the_anchor_ignores_the_frames_that_disagree(self) -> None:
+        orient = g1_sidecar._Mid360Orientation("sess_vote_anchor")
+
+        # The disagreeing frame arrives last, so nothing re-anchors afterwards.
+        for plane_z in (1.20, 1.30, -0.70):
+            orient.plan(plane_z)
+
+        # Median of the AGREEING samples (1.20, 1.30). The median of all three
+        # is 1.20 — 0.10 m out, which would shift every later frame of the sweep.
+        assert orient.anchor == pytest.approx(1.30)
+
+    def test_the_majority_survives_the_whole_pipeline(self) -> None:
+        """The same vote end to end, through `_normalize_mid360_frame`."""
+        session = "sess_table_first"
+        # Frame 1's dominant plane is a table top 1.5 m off the real floor, so
+        # on its own it reads `upright`; frames 2 and 3 are the real thing.
+        spurious = np.asarray(_frame("inverted", seed=70), dtype=np.float64).reshape(-1, 3)
+        spurious[:N_FLOOR, 2] -= 1.5
+        _normalize_mid360_frame(spurious.reshape(-1).tolist(), [], session)
+        _normalize_mid360_frame(_frame("inverted", seed=71), [], session)
+        locking, _ = _normalize_mid360_frame(_frame("inverted", seed=72), [], session)
+
+        assert g1_sidecar._mid360_orientations[session].inverted is True
+        _assert_contract_frame(locking, "locked against one spurious plane")
 
 
 class TestSessionScope:

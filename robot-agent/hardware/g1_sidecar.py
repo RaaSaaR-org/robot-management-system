@@ -1298,7 +1298,11 @@ def _normalize_mid360_frame(
          own housing, ~50 % of a raw frame); intensities are filtered in
          lockstep so per-point data stays aligned.
       2. Measure the dominant horizontal plane within 8 m — the floor, when
-         the frame contains one.
+         the frame contains one. A frame too sparse to measure anything (a
+         truncated DDS message, a direction with almost no returns) simply has
+         no plane; it is still PLACED by step 3 like any other floorless
+         frame, because returning it raw mid-sweep would stitch exactly the
+         mirrored slice TASK-190 is about into the twin.
       3. Ask the SESSION for the convention (TASK-190), not this frame:
          • session locked, inverted → the raw frame of the inverted head
            MID-360 (+z physically down): flip (y, z) — 180° about x, keeping
@@ -1317,8 +1321,8 @@ def _normalize_mid360_frame(
     frames without one share a single live-view convention.
     """
     n = len(positions) // 3
-    if n < 200:
-        return positions, intensities  # heartbeat / too sparse to detect anything
+    if n == 0:
+        return positions, intensities  # heartbeat — no points to place
     try:
         import numpy as np
     except ImportError:
@@ -1326,12 +1330,17 @@ def _normalize_mid360_frame(
     a = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
 
     keep = np.linalg.norm(a, axis=1) >= 0.3
-    if int(keep.sum()) < 200:
-        return positions, intensities
+    if not bool(keep.any()):
+        return positions, intensities  # entirely self-return — nothing to place
     a = a[keep]
     if len(intensities) == n:
         intensities = [v for v, k in zip(intensities, keep.tolist()) if k]
 
+    # Sparseness gates the MEASUREMENT, never the PLACEMENT: `_mid360_floor_plane`
+    # answers None for a frame with too few near points, and a locked session
+    # then anchors it on its remembered floor exactly like any other floorless
+    # frame. Bailing out early here instead — as this did before TASK-190 — is
+    # what let a truncated frame arrive raw (+z down) between two flipped ones.
     inverted, anchor = _mid360_plan(session, _mid360_floor_plane(a, np))
     if inverted is True:
         a[:, 1] = -a[:, 1]

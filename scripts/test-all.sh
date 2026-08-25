@@ -98,10 +98,12 @@ fi
 # no executed test at all. Same rule as the two stages above: a missing interpreter
 # is SKIPPED, never a pass.
 #
-# test_backends.py / test_vla_runner.py are deliberately NOT in this stage: they
-# need httpx, which no interpreter this repo documents provides, so including them
-# would turn the stage permanently red. Everything else in tests/ runs, and any new
-# file dropped in there is picked up automatically.
+# The whole of tests/ runs — no file is excluded from here, so nothing can be
+# masked by this script and any new file dropped in there is picked up
+# automatically. The httpx-dependent cases in test_backends.py / test_vla_runner.py
+# skip themselves on an interpreter without httpx (the sim venv), and run on one
+# that has it (the curation venv), which is the interpreter's business, not this
+# script's.
 HW_DIR="$REPO_ROOT/robot-agent/hardware"
 HW_PY="${HARDWARE_PYTHON:-}"
 if [ -z "$HW_PY" ] && [ -x "$HW_DIR/sim_g1_dds/.venv/bin/python" ]; then
@@ -112,8 +114,7 @@ if [ -z "$HW_PY" ] && [ -x "$REPO_ROOT/server/curation/.venv/bin/python" ]; then
 fi
 if [ -n "$HW_PY" ] && "$HW_PY" -c 'import numpy' >/dev/null 2>&1; then
   step "Hardware sidecar (pytest)"
-  (cd "$HW_DIR" && "$HW_PY" -m pytest tests -q \
-     --ignore=tests/test_backends.py --ignore=tests/test_vla_runner.py) \
+  (cd "$HW_DIR" && "$HW_PY" -m pytest tests -q) \
     || { echo "  hardware pytest FAILED"; FAILURES=$((FAILURES + 1)); }
 else
   step "Hardware sidecar (SKIPPED — set HARDWARE_PYTHON to a python with numpy+pytest)"
