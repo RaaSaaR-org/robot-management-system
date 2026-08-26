@@ -1290,6 +1290,10 @@ export class TourRunner {
         leg.status = 'running';
         leg.startedAt = this.stamp();
         this.persist(run);
+        // Say so at the START of the leg, not only when it settles: a snapshot
+        // taken between legs carries no `running` leg at all, and the live
+        // banner cannot name a stop the robot never said it was at (TASK-222).
+        this.deps.emit('agent:tour:leg', cloneRun(run));
 
         let legFailed = false;
         let said = 0;

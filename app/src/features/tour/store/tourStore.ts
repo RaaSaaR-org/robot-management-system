@@ -129,6 +129,18 @@ function settledLegCount(legs: TourLeg[] | undefined): number {
 }
 
 /**
+ * How many legs have been STARTED — the count that orders a leg-start snapshot
+ * against the settle immediately before it.
+ *
+ * `startedAt` is stamped once, when the leg begins, and never cleared, so this
+ * only ever grows within a run. A leg the runner skipped never starts and never
+ * stamps it, so a skipped leg does not inflate the count on either side.
+ */
+function startedLegCount(legs: TourLeg[] | undefined): number {
+  return (legs ?? []).filter((l) => l.startedAt).length;
+}
+
+/**
  * True when `incoming` is an OLDER snapshot of the run than the one we hold: it
  * would move a terminal run back to 'running', drop `finishedAt`, report fewer
  * settled legs, or SHORTEN the transcript. Same guard patrol needed (see
@@ -163,7 +175,15 @@ function isRunDowngrade(stored: TourRun | null | undefined, incoming: TourRun): 
 function isProgressDowngrade(stored: TourRun, incoming: TourRun): boolean {
   if (TERMINAL_RUN_STATUSES.has(stored.status) && !TERMINAL_RUN_STATUSES.has(incoming.status)) return true;
   if (stored.finishedAt && !incoming.finishedAt) return true;
-  return settledLegCount(incoming.legs) < settledLegCount(stored.legs);
+  if (settledLegCount(incoming.legs) < settledLegCount(stored.legs)) return true;
+  // Settled legs alone stopped being enough when TASK-222 added the leg-START
+  // event. `settle(leg i-1)` and `start(leg i)` are pushed a few lines apart and
+  // settle the same number of legs — [done, pending, …] vs [done, running, …] —
+  // so the clause above cannot order them. A reordered `settle(i-1)` landing
+  // second walked leg i back to `pending` and dropped its `startedAt`, which put
+  // the banner on `· walking` for the whole of leg i: the exact symptom
+  // TASK-222 exists to remove.
+  return startedLegCount(incoming.legs) < startedLegCount(stored.legs);
 }
 
 /**

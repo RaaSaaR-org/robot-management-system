@@ -288,6 +288,19 @@ function settledLegCount(legs: PatrolLeg[] | undefined): number {
 }
 
 /**
+ * How many legs have been STARTED — the count that orders a leg-start snapshot
+ * against the settle immediately before it.
+ *
+ * `startedAt` is stamped once, when the leg begins, and never cleared, so this
+ * only ever grows within a run. A checkpoint the runner skipped never starts and
+ * never stamps it, so a skipped leg does not inflate the count on either side of
+ * a comparison.
+ */
+function startedLegCount(legs: PatrolLeg[] | undefined): number {
+  return (legs ?? []).filter((l) => l.startedAt).length;
+}
+
+/**
  * The newest instant the run showed a sign of life: its start, or the last leg
  * stamp the robot pushed. A long route that is genuinely still walking keeps
  * moving this forward, so {@link PatrolService.reconcileStaleRuns} only looks
@@ -320,6 +333,18 @@ export function isRunDowngrade(stored: PatrolRun | null | undefined, incoming: P
   if (storedTerminal && !incomingTerminal) return true;
   if (stored.finishedAt && !incoming.finishedAt) return true;
   if (settledLegCount(incoming.legs) < settledLegCount(stored.legs)) return true;
+  // Settled legs alone stopped being enough when TASK-222 added the leg-START
+  // event: `settle(leg i-1)` and `start(leg i)` carry the SAME settled count, so
+  // the clause above cannot order them and a reordered `settle(i-1)` landing
+  // second walked leg i back to `pending`. See the twin in TourService.
+  if (startedLegCount(incoming.legs) < startedLegCount(stored.legs)) return true;
+  // Mirrors the findings clause in app/src/features/patrol/store/patrolStore.ts.
+  // A leg-start and a finding raised during that same leg both report the
+  // checkpoint `running` and share a settled count; findings only accumulate
+  // within a run, so fewer of them means an older snapshot. Without it the row
+  // this service writes back walks `findingCount` — and the leg's `findingIds` —
+  // down to zero until the leg settles and the runner re-reports them.
+  if (incoming.findingCount < stored.findingCount) return true;
   return false;
 }
 

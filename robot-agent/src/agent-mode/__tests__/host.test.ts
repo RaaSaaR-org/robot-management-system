@@ -445,14 +445,44 @@ describe('TourRunner.drive', () => {
     expect(run.legs.map((l) => l.status)).toEqual(['done', 'done']);
     expect(run.legs[0]!.spoken).toEqual({ said: 2, of: 2 });
     expect(run.disclosureSpoken).toBe(true);
+    // Two stops, four leg events: each one is announced when it starts and
+    // again when it settles (TASK-222).
     expect(events.map((e) => e.type)).toEqual([
       'agent:tour:started',
+      'agent:tour:leg',
+      'agent:tour:leg',
       'agent:tour:leg',
       'agent:tour:leg',
       'agent:tour:finished',
     ]);
     expect(said).toContain(tourPhrase('goOn', 'de'));
     expect(said).toContain(tourPhrase('continueYes', 'de'));
+  });
+
+  // The run used to report a stop only once it had SETTLED, so no snapshot on
+  // the wire ever held a `running` leg and `/tour`'s banner could not name the
+  // stop the robot was standing at. The assertion that matters is on the leg
+  // statuses INSIDE each payload: an assertion on event names alone is what let
+  // this ship in the first place.
+  it('announces each stop twice: running when it starts, done when it settles', async () => {
+    const { runner, events, hooks } = rig();
+    hooks.onSleep = () => runner.pushReply('yes');
+    runner.begin(ROUTE, 'visitor', { disclosureSpoken: true });
+    const { exec } = scriptedExec(() => ({ ok: true, message: 'ok' }));
+    await runner.drive('plan-1', exec);
+
+    const legs = events.filter((e) => e.type === 'agent:tour:leg');
+    expect(legs.map((e) => e.run.legs.map((l) => l.status).join(','))).toEqual([
+      'running,pending',
+      'done,pending',
+      'done,running',
+      'done,done',
+    ]);
+    // The start event is what makes "how long has it been at this stop"
+    // answerable live: it carries `startedAt` and not yet `finishedAt`.
+    expect(legs[0]!.run.legs[0]!.startedAt).toBeTruthy();
+    expect(legs[0]!.run.legs[0]!.finishedAt).toBeUndefined();
+    expect(legs[1]!.run.legs[0]!.finishedAt).toBeTruthy();
   });
 
   it('a stop it cannot reach is skipped and the tour goes on', async () => {
@@ -486,10 +516,17 @@ describe('TourRunner.drive', () => {
     expect(skipped.some((s) => s.startsWith('goto:STAGING'))).toBe(true);
     expect(ran).toContain('speak');
     expect(events.at(-1)!.type).toBe('agent:tour:finished');
+    // The abort lands on the leading `tour` block, before any leg starts, so the
+    // loop skips every leg and nothing is announced. NOTE this case cannot
+    // distinguish where the leg-start emit sits: with every leg skipped there
+    // are no leg events either way, with or without it. Skip-guard placement is
+    // pinned by the mixed run-then-skip cases — "the visitor saying no" below,
+    // and patrol.test.ts's "two consecutive failed legs abort the run".
+    expect(events.filter((e) => e.type === 'agent:tour:leg')).toEqual([]);
   });
 
   it('the visitor saying no to "shall we go on?" ends the tour without failing it', async () => {
-    const { runner, hooks } = rig();
+    const { runner, events, hooks } = rig();
     hooks.onSleep = () => runner.pushReply('no');
     runner.begin(ROUTE, 'visitor');
     const { exec } = scriptedExec(() => ({ ok: true, message: 'ok' }));
@@ -497,6 +534,12 @@ describe('TourRunner.drive', () => {
     expect(run.status).toBe('done');
     expect(run.reason).toMatch(/ended the tour after 1 of 2/);
     expect(run.legs[1]!.status).toBe('skipped');
+    // The stop that ran is announced twice; the stop the visitor cut short is
+    // never announced as running (TASK-222).
+    expect(events.filter((e) => e.type === 'agent:tour:leg').map((e) => e.run.legs.map((l) => l.status).join(','))).toEqual([
+      'running,pending',
+      'done,pending',
+    ]);
   });
 
   it('nobody answering "shall we go on?" ends the tour as abandoned, and it still goes home', async () => {

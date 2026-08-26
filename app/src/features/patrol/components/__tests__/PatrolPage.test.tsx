@@ -127,6 +127,46 @@ describe('PatrolPage', () => {
     await waitFor(() => expect(api.abortRoute).toHaveBeenCalledWith('route-1', 'g1'));
   });
 
+  it('a live leg-start names the checkpoint and highlights it in the stepper (TASK-222)', async () => {
+    // `PatrolRunner` only started emitting a snapshot at the START of a leg in
+    // TASK-222. Before it, the banner saw the between-legs snapshot for the whole
+    // round and neither named the checkpoint nor ringed its node.
+    const threeLegs = (...statuses: PatrolRun['legs'][number]['status'][]): PatrolRun => ({
+      ...run, runId: 'run-4', status: 'running', finishedAt: null,
+      startedAt: '2026-08-16T22:00:00.000Z', findingCount: 0,
+      legs: statuses.map((status, index) => ({
+        index, checkpointId: `cp-${index}`, placeId: `place-${index}`,
+        name: ['Hall', 'Kitchen', 'Dock'][index], status, findingIds: [],
+      })),
+    });
+    renderWithProviders(<PatrolPage />, { withAuth: false });
+    await screen.findByTestId('patrol-route-row');
+
+    // Between legs: no checkpoint named, no node marked as the current step.
+    act(() => {
+      usePatrolStore.getState().applyEvent({
+        type: 'agent:patrol:leg', robotId: 'g1', timestamp: 'x',
+        patrol: threeLegs('done', 'pending', 'pending'),
+      });
+    });
+    const banner = await screen.findByTestId('patrol-active-banner');
+    expect(banner).not.toHaveTextContent(/at leg/);
+    expect(within(banner).queryByRole('listitem', { current: 'step' })).toBeNull();
+
+    // The leg-start for checkpoint 2 lands — same settled count, so not a downgrade.
+    act(() => {
+      usePatrolStore.getState().applyEvent({
+        type: 'agent:patrol:leg', robotId: 'g1', timestamp: 'x',
+        patrol: threeLegs('done', 'running', 'pending'),
+      });
+    });
+    expect(banner).toHaveTextContent('at leg 2: Kitchen');
+    // …and `RoutePath` got a defined `activeIndex`: exactly one node is current.
+    const steps = within(banner).getAllByRole('listitem', { current: 'step' });
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toHaveTextContent('Leg 2 Kitchen, running');
+  });
+
   it('says the run history could not be read instead of "No runs yet"', async () => {
     // A 500 on GET /api/patrol/runs used to fall through to RunHistory's empty
     // state, which an operator reads as "the scheduled patrol never ran".

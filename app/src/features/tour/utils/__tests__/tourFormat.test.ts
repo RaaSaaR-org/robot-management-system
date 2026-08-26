@@ -15,6 +15,7 @@ import {
   TOUR_SPEECH_CHARS_PER_S,
   TOUR_STOP_SPEECH_CAP_S,
   chunkTalkTrack,
+  currentLeg,
   currentStopText,
   declinedTurns,
   estimateSpeechSeconds,
@@ -27,7 +28,7 @@ import {
   transcriptState,
 } from '../tourFormat';
 import { TOUR_TALK_TRACK_MAX } from '../../types/tour.types';
-import type { TourRun, TourStop, TourTurn } from '../../types/tour.types';
+import type { TourLeg, TourRun, TourStop, TourTurn } from '../../types/tour.types';
 
 /**
  * Sixteen 35-character sentences plus a 24-character closer, single spaces:
@@ -170,6 +171,52 @@ describe('run summaries', () => {
     expect(isRunActive(run({ status: 'running' }))).toBe(true);
     expect(isRunActive(run({ status: 'declined' }))).toBe(false);
     expect(isRunActive(null)).toBe(false);
+  });
+});
+
+describe('currentLeg', () => {
+  // Until TASK-222 the robot emitted a run snapshot only AFTER a leg had
+  // settled, so every snapshot read "0..i done, i+1..n pending" and this `find`
+  // had nothing to match: the banner fell back to "walking" for almost the whole
+  // visit. The function needed no change to start answering — only the event.
+  const withLegs = (...statuses: TourLeg['status'][]): TourRun => ({
+    runId: 'run-1',
+    routeId: 'route-1',
+    routeName: 'ZeMA visitor tour',
+    robotId: 'g1',
+    origin: 'visitor',
+    status: 'running',
+    startedAt: '2026-08-17T10:00:00.000Z',
+    legs: statuses.map((status, index) => ({
+      index,
+      stopId: `s${index}`,
+      placeId: `p${index}`,
+      name: `Stop ${index}`,
+      status,
+    })),
+    turns: [],
+    language: 'de',
+    disclosureSpoken: true,
+  });
+
+  it('names the stop the robot is standing at', () => {
+    const leg = currentLeg(withLegs('done', 'running', 'pending'));
+    expect(leg?.index).toBe(1);
+    expect(leg?.name).toBe('Stop 1');
+    // The banner turns that 0-based index into the operator's 1-based count.
+    expect(currentStopText(leg ? { index: leg.index + 1, name: leg.name } : null)).toBe('at stop 2: Stop 1');
+  });
+
+  it('answers null between legs, which is what "walking" is rendered from', () => {
+    expect(currentLeg(withLegs('done', 'pending', 'pending'))).toBeNull();
+    expect(currentLeg(withLegs('done', 'done', 'done'))).toBeNull();
+    expect(currentLeg(null)).toBeNull();
+    expect(currentLeg(undefined)).toBeNull();
+  });
+
+  it('a settled leg never counts as the current one', () => {
+    // `failed` and `skipped` are settled too: the robot has left the stop.
+    expect(currentLeg(withLegs('failed', 'skipped', 'pending'))).toBeNull();
   });
 });
 

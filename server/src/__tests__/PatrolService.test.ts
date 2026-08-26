@@ -5,7 +5,10 @@
  *              idempotent; severity by type × window; route validation; the
  *              start proxy (unreachable vs. a robot 4xx/5xx answer); stale-run
  *              reconciliation; VDA5050 export; finding actions; baseline
- *              lookup incl. expired photos.
+ *              lookup incl. expired photos. Plus (TASK-222) the leg-START
+ *              snapshot: it applies on top of the settle before it, is
+ *              rejected when it arrives after its own settle, and leaves
+ *              findings, alerts and the compliance trail alone.
  * @feature patrol
  */
 
@@ -22,7 +25,7 @@ import {
 } from '../services/PatrolService.js';
 import { HttpClientError } from '../services/HttpClient.js';
 import { FakePatrolRepository, fakeAlerts, fakeCompliance, fakePhotos, makeRun, makeFinding } from './patrol-test-fakes.js';
-import type { AgentModeEvent } from '../types/agent-mode.types.js';
+import type { AgentModeEvent, PatrolLeg, PatrolLegStatus } from '../types/agent-mode.types.js';
 
 function build(opts: { post?: ReturnType<typeof vi.fn>; get?: ReturnType<typeof vi.fn>; robot?: boolean; incidents?: any } = {}) {
   const repo = new FakePatrolRepository();
@@ -396,6 +399,184 @@ describe('PatrolService — ingest', () => {
     await expect(service.ingest(ev('agent:patrol:started', {}))).resolves.toBeUndefined();
     await expect(service.ingest(ev('agent:finding:detected', { finding: { nope: true } as any }))).resolves.toBeUndefined();
     await expect(service.ingest(ev('agent:plan:updated', {}))).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The three-checkpoint fixture the TASK-222 tests walk, stamped the way
+ * `PatrolRunner` stamps a leg: `startedAt` the moment it goes `running`, the
+ * rest of the leg (photo, inspection) only once it settles.
+ */
+const PATROL_LEG_NAMES: ReadonlyArray<readonly [string, string, string]> = [
+  ['cp-1', 'hallway', 'Hallway'],
+  ['cp-2', 'kitchen', 'Kitchen'],
+  ['cp-3', 'dock', 'Loading dock'],
+];
+
+function leg(i: number, status: PatrolLegStatus): PatrolLeg {
+  const [checkpointId, placeId, name] = PATROL_LEG_NAMES[i];
+  const l: PatrolLeg = { index: i, checkpointId, placeId, name, status, findingIds: [] };
+  if (status !== 'pending') l.startedAt = `2026-08-16T01:0${i * 2}:00.000Z`;
+  if (status === 'done') {
+    l.finishedAt = `2026-08-16T01:0${i * 2 + 1}:00.000Z`;
+    l.photoKey = `run-1/${checkpointId}.jpg`;
+    l.inspection = 'same';
+  }
+  return l;
+}
+
+/**
+ * The whole `legs` array as the robot's own snapshot has it at one moment of
+ * the round: every leg before `at` settled `done`, leg `at` in `status`, every
+ * leg after it still `pending`.
+ */
+function legsAt(at: number, status: PatrolLegStatus): PatrolLeg[] {
+  return PATROL_LEG_NAMES.map((_, i) => leg(i, i < at ? 'done' : i > at ? 'pending' : status));
+}
+
+describe('PatrolService — a leg reported at its start (TASK-222)', () => {
+  let ctx: ReturnType<typeof build>;
+  beforeEach(() => {
+    ctx = build();
+    ctx.repo.seedRoute({ id: 'route-1' });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('applies a leg-start snapshot on top of the settle before it', async () => {
+    const { service, repo } = ctx;
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(0, 'done') }) }));
+    // Same settled-leg count as the settle before it (1), still `running`,
+    // still no `finishedAt` — patrol's `isRunDowngrade` has no turns clause to
+    // separate them either, and all three of its clauses fall through, so the
+    // snapshot is applied.
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(1, 'running') }) }));
+
+    const stored = repo.runs.get('run-1');
+    expect(stored?.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(stored?.legs[1].startedAt).toBe('2026-08-16T01:02:00.000Z');
+    expect(stored?.legs[1].finishedAt).toBeUndefined();
+  });
+
+  it('rejects a leg-start snapshot that arrives after the settle it precedes', async () => {
+    const { service, repo } = ctx;
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(1, 'done') }) }));
+    // One settled leg fewer than stored: dropped, so the checkpoint keeps its
+    // photo, its inspection verdict and its `finishedAt`.
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(1, 'running') }) }));
+
+    const stored = repo.runs.get('run-1');
+    expect(stored?.legs.map((l) => l.status)).toEqual(['done', 'done', 'pending']);
+    expect(stored?.legs[1].finishedAt).toBe('2026-08-16T01:03:00.000Z');
+    expect(stored?.legs[1].photoKey).toBe('run-1/cp-2.jpg');
+  });
+
+  it('writes no compliance record and raises no alert for any leg event of a run it already knows', async () => {
+    const { service, compliance, alerts } = ctx;
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    for (let i = 0; i < PATROL_LEG_NAMES.length; i++) {
+      await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(i, 'running') }) }));
+      await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(i, 'done') }) }));
+    }
+    // `patrol.run.started` once, from `started` itself, and nothing from the
+    // six leg events that follow it.
+    expect(compliance.logSystemEvent.mock.calls.map((c: any[]) => c[0].payload.eventName)).toEqual(['patrol.run.started']);
+    expect(alerts.createRobotAlert).not.toHaveBeenCalled();
+
+    await service.ingest(
+      ev('agent:patrol:finished', {
+        patrol: makeRun({ legs: legsAt(2, 'done'), status: 'skipped', reason: 'battery too low', finishedAt: '2026-08-16T01:10:00.000Z' }),
+      }),
+    );
+    expect(compliance.logSystemEvent.mock.calls.map((c: any[]) => c[0].payload.eventName)).toEqual([
+      'patrol.run.started',
+      'patrol.run.finished',
+    ]);
+    expect(alerts.createRobotAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves findings alone: a leg event neither creates, re-alerts nor re-audits one', async () => {
+    const { service, repo, alerts, compliance } = ctx;
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    await service.ingest(
+      ev('agent:finding:detected', {
+        patrol: makeRun({ legs: legsAt(0, 'running'), findingCount: 1 }),
+        finding: makeFinding({ type: 'person' }),
+      }),
+    );
+    const alertsAfterFinding = alerts.createRobotAlert.mock.calls.length;
+    const auditsAfterFinding = compliance.logSystemEvent.mock.calls.length;
+
+    // The leg-start of the NEXT checkpoint carries the run — findings are keyed
+    // off `agent:finding:*` alone, so it can only move the run row.
+    const withFinding = legsAt(1, 'running');
+    withFinding[0].findingIds = ['finding-1'];
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: withFinding, findingCount: 1 }) }));
+
+    expect(repo.findings.size).toBe(1);
+    const finding = repo.findings.get('finding-1')!;
+    expect(finding.severity).toBe('high'); // server-derived at first sight, untouched since
+    expect(finding.status).toBe('open');
+    expect(finding.alertId).toBe('alert-1');
+    expect(alerts.createRobotAlert.mock.calls).toHaveLength(alertsAfterFinding);
+    expect(compliance.logSystemEvent.mock.calls).toHaveLength(auditsAfterFinding);
+    expect(repo.runs.get('run-1')?.legs[1].status).toBe('running');
+  });
+
+  /**
+   * The tour twin of this carries the full reasoning. `settle(i-1)` and
+   * `start(i)` leave the runner a few lines apart on separate fire-and-forget
+   * connections, and every ORIGINAL clause of `isRunDowngrade` read them as
+   * equals (same settled-leg count, both `running`, both without
+   * `finishedAt`), while `ingestChains` orders by ARRIVAL. Patrol was the worse
+   * off of the two: it has no turns clause to break the tie at all.
+   * `startedLegCount` breaks it for both.
+   */
+  it('rejects a settle that overtakes the next leg-start, so the leg keeps its start', async () => {
+    const { service, repo } = ctx;
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(1, 'running') }) })); // emitted second
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(0, 'done') }) })); // emitted first
+
+    expect(repo.runs.get('run-1')?.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(repo.runs.get('run-1')?.legs[1].startedAt).toBeDefined();
+  });
+
+  /**
+   * The compliance-trail half of the same reordering window, which is patrol's
+   * alone — tour has no equivalent arm.
+   *
+   * `ingestRun` writes `patrol.run.started` on `event.type ===
+   * 'agent:patrol:started' || (!before && run.status === 'running')`, and
+   * `audit()` does not dedupe. The second arm fires for ANY run-carrying event
+   * that is the first the server has seen for that run, a leg event included.
+   * Until TASK-222 the first leg event was a settle emitted a checkpoint later
+   * and could not race `started`; the leg-START event can.
+   *
+   * `startedLegCount` closes it, because the two events do NOT carry the same
+   * legs: `agent:patrol:started` is emitted at the top of `drive()`, before the
+   * leg loop, so every leg in its snapshot is still `pending` (zero legs
+   * started), while `start(leg 0)` has begun one. Arriving second, `started` is
+   * refused as the older snapshot and never reaches the audit.
+   *
+   * The residual: were the two payloads ever byte-identical, no content-based
+   * guard could order them and the record would still be written twice. That is
+   * accepted rather than closed by special-casing the audit — every dedupe key
+   * available here ("the row already exists") is also true when a finding event
+   * created the row without auditing, so keying on it would DROP the record in
+   * that case. A duplicated compliance record is recoverable; a missing one is
+   * not.
+   */
+  it('writes patrol.run.started once when a leg-start overtakes `started`', async () => {
+    const { service, compliance } = ctx;
+    // Emitted second, delivered first — and the first event the server sees.
+    await service.ingest(ev('agent:patrol:leg', { patrol: makeRun({ legs: legsAt(0, 'running') }) }));
+    expect(compliance.logSystemEvent.mock.calls.map((c: any[]) => c[0].payload.eventName)).toEqual(['patrol.run.started']);
+
+    // The real `started` payload: emitted before the leg loop, so nothing has begun.
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    expect(compliance.logSystemEvent.mock.calls.map((c: any[]) => c[0].payload.eventName)).toEqual(['patrol.run.started']);
   });
 });
 

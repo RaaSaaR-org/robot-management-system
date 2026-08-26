@@ -226,7 +226,8 @@ describe('patrol plumbing — startPatrol', () => {
     expect(h.said).toEqual(['Starting the baseline walk; I take reference photos.']);
     const types = h.events.map((e) => e.type);
     expect(types[0]).toBe('agent:plan:started');
-    expect(types.filter((t) => t === 'agent:patrol:leg')).toHaveLength(3);
+    // Three checkpoints, six leg events: start and settle each (TASK-222).
+    expect(types.filter((t) => t === 'agent:patrol:leg')).toHaveLength(6);
     expect(types.indexOf('agent:patrol:started')).toBeLessThan(types.indexOf('agent:patrol:leg'));
     expect(types.indexOf('agent:patrol:finished')).toBeLessThan(types.indexOf('agent:plan:finished'));
     const last = h.controller.patrolStatus().lastRun!;

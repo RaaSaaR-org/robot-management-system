@@ -180,6 +180,119 @@ describe('TourPage', () => {
     await waitFor(() => expect(api.abortRoute).toHaveBeenCalledWith('route-1', 'g1'));
   });
 
+  it('a live leg-start names the stop and highlights it in the stepper (TASK-222)', async () => {
+    // The event the robot only started sending in TASK-222: a `leg` snapshot
+    // taken as the leg BEGINS. Before it, every snapshot the banner saw was the
+    // one between legs, so this rendered "· walking" with no node ringed for
+    // almost the whole visit.
+    const threeStops = (...statuses: TourRun['legs'][number]['status'][]): TourRun => ({
+      ...run,
+      runId: 'run-4',
+      status: 'running',
+      finishedAt: null,
+      startedAt: '2026-08-17T13:00:00.000Z',
+      turns: [],
+      legs: statuses.map((status, index) => ({
+        index,
+        stopId: `stop-${index}`,
+        placeId: `PLACE-${index}`,
+        name: ['Reception', 'Workstation', 'Lab'][index],
+        status,
+      })),
+    });
+    renderWithProviders(<TourPage />, { withAuth: false });
+    await screen.findByTestId('tour-route-row');
+
+    // Between legs: the generic fallback, and no stop marked as the current step.
+    act(() => {
+      useTourStore.getState().applyEvent({
+        type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x',
+        tour: threeStops('done', 'pending', 'pending'),
+      });
+    });
+    const banner = await screen.findByTestId('tour-active-banner');
+    expect(within(banner).getByTestId('tour-banner-stop')).toHaveTextContent('· walking');
+    expect(within(banner).queryByRole('listitem', { current: 'step' })).toBeNull();
+
+    // The leg-start for stop 2 lands: same settled count, so it is not a
+    // downgrade, and the banner names the stop instead of the fallback.
+    act(() => {
+      useTourStore.getState().applyEvent({
+        type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x',
+        tour: threeStops('done', 'running', 'pending'),
+      });
+    });
+    const stop = within(banner).getByTestId('tour-banner-stop');
+    expect(stop).toHaveTextContent('at stop 2: Workstation');
+    expect(stop).not.toHaveTextContent('walking');
+    // …and `RoutePath` got a defined `activeIndex`: exactly one node is the
+    // current step, and it is stop 2's.
+    const steps = within(banner).getAllByRole('listitem', { current: 'step' });
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toHaveTextContent('Leg 2 Workstation, running');
+  });
+
+  it('leg events re-render the banner in place without restarting its 1 s clock', async () => {
+    // TASK-222 doubles the leg events on the wire, and `selectActiveRuns`
+    // re-memoises on every one of them (a leg status is one character of its
+    // signature). That is deliberate — it is how the stop clause updates — but it
+    // must cost a RE-RENDER, not a REMOUNT: `useClock` opens its interval in a
+    // mount-only effect, so a remount would restart the elapsed timer mid-visit.
+    // `ActiveRunRail` only unmounts when the run count reaches zero, which a leg
+    // status change never does.
+    const setSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
+    const legs = (...statuses: TourRun['legs'][number]['status'][]): TourRun => ({
+      ...run,
+      runId: 'run-5',
+      status: 'running',
+      finishedAt: null,
+      startedAt: '2026-08-17T13:00:00.000Z',
+      turns: [],
+      legs: statuses.map((status, index) => ({
+        index,
+        stopId: `stop-${index}`,
+        placeId: `PLACE-${index}`,
+        name: `Stop ${index}`,
+        status,
+      })),
+    });
+    try {
+      renderWithProviders(<TourPage />, { withAuth: false });
+      await screen.findByTestId('tour-route-row');
+      act(() => {
+        useTourStore.getState().applyEvent({ type: 'agent:tour:started', robotId: 'g1', timestamp: 'x', tour: legs('pending', 'pending', 'pending') });
+      });
+      const banner = await screen.findByTestId('tour-active-banner');
+      // Baseline taken once the clock is running; other timers on the page make
+      // the absolute count meaningless, so the contract is that it does not GROW.
+      const intervalsAtMount = setSpy.mock.calls.length;
+      const clearsAtMount = clearSpy.mock.calls.length;
+
+      // A whole visit's worth of leg traffic: start, settle, start, settle…
+      for (const statuses of [
+        ['running', 'pending', 'pending'],
+        ['done', 'pending', 'pending'],
+        ['done', 'running', 'pending'],
+        ['done', 'done', 'pending'],
+        ['done', 'done', 'running'],
+      ] as TourRun['legs'][number]['status'][][]) {
+        act(() => {
+          useTourStore.getState().applyEvent({ type: 'agent:tour:leg', robotId: 'g1', timestamp: 'x', tour: legs(...statuses) });
+        });
+      }
+
+      // The banner followed every one of them…
+      expect(within(banner).getByTestId('tour-banner-stop')).toHaveTextContent('at stop 3: Stop 2');
+      // …and not one of them opened or tore down a timer.
+      expect(setSpy.mock.calls.length).toBe(intervalsAtMount);
+      expect(clearSpy.mock.calls.length).toBe(clearsAtMount);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
   it('says the history could not be read instead of "No tours yet"', async () => {
     api.listRuns.mockRejectedValue(new Error('Network Error'));
     renderWithProviders(<TourPage />, { withAuth: false });

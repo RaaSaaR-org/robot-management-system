@@ -377,6 +377,174 @@ describe('selectActiveRuns', () => {
   });
 });
 
+describe('patrolStore leg-start events (TASK-222)', () => {
+  // `PatrolRunner` now emits `agent:patrol:leg` when a leg STARTS as well as
+  // when it settles. Before that the only snapshots holding a `running` leg were
+  // the ones embedded in finding events, so the banner named a checkpoint only
+  // on the rounds where something was found.
+
+  /** A three-checkpoint route as one status per checkpoint, under its own run id. */
+  const at = (runId: string, ...statuses: PatrolLeg['status'][]): PatrolRun =>
+    run({
+      runId,
+      legs: statuses.map((status, index) => ({
+        index,
+        checkpointId: `cp-${index}`,
+        placeId: `place-${index}`,
+        name: `Place ${index}`,
+        status,
+        findingIds: [],
+      })),
+    });
+
+  it('a leg-start event puts a running leg into the active run', () => {
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', at('pls-1', 'pending', 'pending', 'pending')));
+    expect(selectActiveRuns(usePatrolStore.getState())[0].legs.some((l) => l.status === 'running')).toBe(false);
+
+    store.applyEvent(event('agent:patrol:leg', at('pls-1', 'running', 'pending', 'pending')));
+    const active = selectActiveRuns(usePatrolStore.getState())[0];
+    expect(active.legs[0].status).toBe('running');
+    expect(active.legs.find((l) => l.status === 'running')?.index).toBe(0);
+  });
+
+  it('the start of the NEXT checkpoint is accepted even though it settles nothing new', () => {
+    // The guard rejects a snapshot reporting FEWER settled legs; a leg-start
+    // carries exactly as many as the settle before it. Equal is not fewer.
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', at('pls-2', 'pending', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', at('pls-2', 'running', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', at('pls-2', 'done', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', at('pls-2', 'done', 'running', 'pending')));
+
+    const stored = usePatrolStore.getState().runsById['pls-2'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+  });
+
+  it('a late leg-start never walks the run back to a checkpoint the robot has left', () => {
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', at('pls-3', 'pending', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', at('pls-3', 'done', 'running', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', at('pls-3', 'done', 'done', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', at('pls-3', 'done', 'running', 'pending')));
+
+    const stored = usePatrolStore.getState().runsById['pls-3'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'done', 'pending']);
+  });
+
+  it('a leg-start arriving after the run finished does not resurrect it', () => {
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', at('pls-4', 'pending', 'pending', 'pending')));
+    store.applyEvent(
+      event('agent:patrol:finished', {
+        ...at('pls-4', 'done', 'done', 'done'),
+        status: 'done',
+        finishedAt: '2026-08-16T01:30:00.000Z',
+      })
+    );
+    store.applyEvent(event('agent:patrol:leg', at('pls-4', 'done', 'done', 'running')));
+
+    const s = usePatrolStore.getState();
+    expect(s.runsById['pls-4'].status).toBe('done');
+    expect(s.runsById['pls-4'].legs[2].status).toBe('done');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+  });
+
+  it('a leg-start that predates a finding on the same checkpoint does not erase it', () => {
+    // The one window the extra emit opens that tour does not have. Both
+    // snapshots show checkpoint 2 as `running`, so they report the SAME settled
+    // count and the settled-leg clause cannot separate them — but the leg-start
+    // was taken before the finding existed, so applying it late drops the amber
+    // badge off the node and walks `findingCount` back to zero.
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', at('pls-5', 'pending', 'pending', 'pending')));
+
+    const walking = at('pls-5', 'done', 'running', 'pending');
+    const found: PatrolRun = {
+      ...walking,
+      findingCount: 1,
+      legs: walking.legs.map((l) => (l.index === 1 ? { ...l, findingIds: ['f-1'] } : l)),
+    };
+    store.applyEvent(event('agent:finding:detected', found, finding({ legIndex: 1 })));
+    // …and only now does that checkpoint's own start event land.
+    store.applyEvent(event('agent:patrol:leg', walking));
+
+    const stored = usePatrolStore.getState().runsById['pls-5'];
+    expect(stored.legs[1].status).toBe('running');
+    expect(stored.findingCount).toBe(1);
+    expect(stored.legs[1].findingIds).toEqual(['f-1']);
+  });
+
+  /**
+   * The same three-checkpoint snapshot as `at`, stamped the way `PatrolRunner`
+   * stamps a leg: `startedAt` the moment it goes `running`, `finishedAt` when it
+   * settles. `at` leaves both off, which is enough for the clauses that only
+   * count statuses — but the clause the pair of tests below pins reads the STAMP,
+   * so they need legs shaped the way the wire really carries them.
+   */
+  const stamped = (runId: string, ...statuses: PatrolLeg['status'][]): PatrolRun => {
+    const base = at(runId, ...statuses);
+    return {
+      ...base,
+      legs: base.legs.map((l) => {
+        if (l.status === 'pending') return l;
+        const started: PatrolLeg = { ...l, startedAt: `2026-08-16T01:0${l.index * 2}:00.000Z` };
+        if (l.status === 'running') return started;
+        return { ...started, finishedAt: `2026-08-16T01:0${l.index * 2 + 1}:00.000Z` };
+      }),
+    };
+  };
+
+  /**
+   * The reordering window the extra event opens, and the clause that closes it.
+   *
+   * `settle(leg i-1)` and `start(leg i)` leave the runner a few lines apart and
+   * are pushed fire-and-forget over separate connections, and every ORIGINAL
+   * clause of `isRunDowngrade` reads them as equals: the same SETTLED leg count
+   * (`running` is not settled), the same finding count, the same status, neither
+   * carrying `finishedAt`. Delivered the wrong way round the stale settle
+   * therefore landed on top of the start, reverting checkpoint i to `pending`
+   * and dropping its `startedAt` — leaving the rail with nothing to pulse and
+   * the banner with nothing to name for the whole of that leg, which is the
+   * defect TASK-222 exists to remove. Before this task the pair could not occur
+   * at all: consecutive settles are minutes apart.
+   *
+   * `startedLegCount` is what separates them. `startedAt` is stamped once and
+   * never cleared, so it only grows within a run: the start snapshot has begun
+   * two legs, the settle before it only one, and the older one is refused.
+   */
+  it('a settle that overtakes the next leg-start is refused, so the leg keeps its start', () => {
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', stamped('pls-6', 'pending', 'pending', 'pending')));
+    // Emitted second, delivered first: checkpoint 1 has begun.
+    store.applyEvent(event('agent:patrol:leg', stamped('pls-6', 'done', 'running', 'pending')));
+    // Emitted first, delivered second: the settle of checkpoint 0, now the older snapshot.
+    store.applyEvent(event('agent:patrol:leg', stamped('pls-6', 'done', 'pending', 'pending')));
+
+    const stored = usePatrolStore.getState().runsById['pls-6'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(stored.legs[1].startedAt).toBe('2026-08-16T01:02:00.000Z');
+    expect(selectActiveRuns(usePatrolStore.getState())[0].legs.find((l) => l.status === 'running')?.index).toBe(1);
+  });
+
+  it('in-order delivery of that same pair still applies both snapshots', () => {
+    // The other half of the clause, and the one a blunt guard would break: a
+    // settle arriving BEFORE the next start is the newer snapshot of the two and
+    // must go in. Both have begun one leg, and equal is not fewer.
+    const store = usePatrolStore.getState();
+    store.applyEvent(event('agent:patrol:started', stamped('pls-7', 'pending', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', stamped('pls-7', 'running', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', stamped('pls-7', 'done', 'pending', 'pending')));
+    store.applyEvent(event('agent:patrol:leg', stamped('pls-7', 'done', 'running', 'pending')));
+
+    const stored = usePatrolStore.getState().runsById['pls-7'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(stored.legs[0].finishedAt).toBe('2026-08-16T01:01:00.000Z');
+    expect(stored.legs[1].startedAt).toBe('2026-08-16T01:02:00.000Z');
+    expect(selectActiveRuns(usePatrolStore.getState())[0].legs.find((l) => l.status === 'running')?.index).toBe(1);
+  });
+});
+
 describe('patrolStore fetch ordering', () => {
   it('a fetchRuns already in flight does not delete the run the operator just started', async () => {
     // The page polls every 30 s. Pressing "Patrol now" in the gap between a poll
