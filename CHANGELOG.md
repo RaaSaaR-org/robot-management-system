@@ -3,6 +3,48 @@
 All notable changes to NeoDEM are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning uses [CalVer](https://calver.org/) (`YYYY.MM.DD`) for daily releases.
 
+## [v2026.08.27] - 2026-08-27
+
+### Added
+
+- overlap inference with execution so the arm stops pausing at chunk boundaries (TASK-183) (#257)
+- give the planner call a deadline, and say how long it has been planning (TASK-202) (#248)
+- a camera stream opens on a scoped ticket, not the user's access token (TASK-214) (#249)
+- put obstacles in the Isaac warehouse the lidar can actually see (#245)
+- import a Hub dataset, mix it with another, and export the run (TASK-220) (#244)
+- one LeRobot format, and a validation that actually opens the files (TASK-217) (#242)
+- the operator's hand and the robot's now go to the same place (TASK-216) (#241)
+- a VR session in simulation now comes out as a LeRobot dataset with video (TASK-215) (#240)
+- host mode — the robot greets a visitor, guides them through the site and answers from facts an operator wrote (TASK-213) (#234)
+
+### Fixed
+
+- a run never said a leg was running, so the banner could not name the stop (TASK-222) (#256)
+- the robot could report arriving somewhere it never walked to (TASK-221) (#258)
+- the read-only state bridge raced cyclonedds into a half-built IDL type (TASK-169) (#255)
+- the flaky test was reading tailscaled's answer, not its own (TASK-218) (#254)
+- re-validating a dataset no longer freezes the server (TASK-219) (#253)
+- say when the keepout geofence has stopped enforcing (TASK-201) (#251)
+- a walked lidar scan no longer stitches a mirrored slice into the twin (TASK-190) (#250)
+- the arm never received a pose, and a damped base never said so (#243)
+- VR teleop — the arm follows the hand, the camera works, and the stop button stops (#236)
+
+### Maintenance
+
+- close TASK-194 and TASK-213 — and ship the one host-mode deliverable that was missing (#252)
+- cover the one hop that never asserted which latch is set (TASK-205) (#247)
+- CLAUDE.md promised three tools that are not installed (#246)
+- TASK-220 is done — merged as #244
+- name the second interpreter test-all.sh needs, and that both stages skip silently
+- TASK-217 done — the format split is merged in #242
+- TASK-216 done — the rig is merged in #241
+- TASK-215 done — the recorder is merged in #240
+- TASK-215..217 — teleoperation and training data from MuJoCo (#239)
+- one more absolute Windows path in a scene header (#238)
+- take the lab's machine names and personal paths out of the tree (#237)
+- TASK-214 — replace the camera stream's URL token with a scoped ticket
+
+
 ## [v2026.08.21] - 2026-08-21
 
 ### Added
