@@ -61,7 +61,6 @@ interface Harness {
   commanded: Record<string, number>;
   measured: Record<string, number>;
   flags: { estop: boolean; teleop: boolean };
-  snapshotDelayMs: number;
   snapshotError: string | null;
   /** Fail every second snapshot, to halve the rate without stopping it. */
   failEveryOther: boolean;
@@ -81,7 +80,6 @@ function harness(overrides: Partial<Harness> = {}): Harness {
     commanded: fullPose(0.1),
     measured: fullPose(0.2),
     flags: { estop: false, teleop: true },
-    snapshotDelayMs: 0,
     snapshotError: null,
     failEveryOther: false,
     snapshotCalls: [],
@@ -93,9 +91,10 @@ function harness(overrides: Partial<Harness> = {}): Harness {
     getCommanded: () => h.commanded,
     isTeleopActive: () => h.flags.teleop,
     isEStopTriggered: () => h.flags.estop,
-    // The first thing a capturing tick awaits, and the only hook `start()` also
-    // calls — which it does before any `advance()` samples the counter, so the
-    // deltas `advance()` compares are unaffected by it.
+    // The first thing a capturing tick awaits. `start()` calls it too — along
+    // with `describeSidecar()`, and `listCameras()` when the caller named no
+    // cameras — but all of that happens before any `advance()` samples the
+    // counter, so the deltas `advance()` compares are unaffected by it.
     getMeasured: async () => {
       h.captureStarts += 1;
       return h.measured;
@@ -106,7 +105,6 @@ function harness(overrides: Partial<Harness> = {}): Harness {
         throw new Error('camera busy');
       }
       if (h.snapshotError) throw new Error(h.snapshotError);
-      if (h.snapshotDelayMs > 0) await new Promise((r) => setTimeout(r, h.snapshotDelayMs));
       return JPEG;
     },
     listCameras: async () => ['head_camera', 'house_iso'],
@@ -125,6 +123,34 @@ function settledTicks(rec: EpisodeRecorder): number {
   const status = rec.status();
   return status.totalFrames + status.totalDropped;
 }
+
+/**
+ * Event-loop turns `advance()` will spend waiting for one tick before it calls
+ * the tick stuck and says so.
+ *
+ * A bound rather than a bare `while`, because the loop below moves no clock: a
+ * tick that awaits a FAKED timer — `setTimeout` inside a hook, say — can never
+ * be reached by it and would spin until CI's own timeout killed the job with a
+ * message that named nothing.
+ *
+ * Measured rather than guessed, by logging the turns each drain actually took
+ * across the whole `src/recording` suite. Idle: 49. Under deliberate abuse
+ * (48 CPU spinners on 24 cores plus four concurrent `dd`+`sync` loops, the load
+ * that reproduced the original flake): 8950, and every run still green. The
+ * count is a poll, so it tracks how long the write took — those 8950 turns were
+ * 40 ms — which is why the bound has to clear the loaded figure and not the
+ * idle one.
+ *
+ * 250_000 is ~28x the worst measured under that abuse and ~5000x the idle case,
+ * so a slow disk cannot reach it. A stalled loop spins at ~1100 turns/ms, so
+ * when it does fire it fires in ~0.2 s — verified by putting a faked
+ * `setTimeout` on the snapshot hook, which fails the test in under two seconds
+ * with the counts named, rather than hanging until CI gives up.
+ */
+const DRAIN_TURN_LIMIT = 250_000;
+
+/** Captured before any `vi.useFakeTimers()`, so it still reads the real clock. */
+const REAL_NOW = Date.now;
 
 /**
  * Advance the fake timers and the harness clock together by one step, then hand
@@ -156,7 +182,17 @@ async function advance(h: Harness, rec: EpisodeRecorder, ms: number): Promise<vo
   await vi.advanceTimersByTimeAsync(ms);
   // Zero fires no timer and moves no clock — it only yields a real macrotask —
   // so this drains the write without ticking the recorder underneath it.
-  while (settledTicks(rec) - settledBefore < h.captureStarts - startsBefore) {
+  const startedAt = REAL_NOW();
+  for (let turns = 0; settledTicks(rec) - settledBefore < h.captureStarts - startsBefore; turns++) {
+    if (turns >= DRAIN_TURN_LIMIT) {
+      throw new Error(
+        `a capturing tick never settled: ${h.captureStarts - startsBefore} tick(s) began ` +
+          `capturing and ${settledTicks(rec) - settledBefore} finished after ` +
+          `${DRAIN_TURN_LIMIT} event-loop turns (${REAL_NOW() - startedAt} ms of real time). ` +
+          'This loop yields turns but moves no clock, so a tick awaiting a FAKED timer can ' +
+          'never finish here — look for a setTimeout on the path a hook takes.',
+      );
+    }
     await vi.advanceTimersByTimeAsync(0);
   }
 }

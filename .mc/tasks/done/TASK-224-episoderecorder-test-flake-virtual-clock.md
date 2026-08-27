@@ -27,7 +27,7 @@ status_note: 'Sibling of TASK-218 — same family (a test measuring wall clock i
 ## Description
 
 `robot-agent/src/recording/__tests__/EpisodeRecorder.test.ts` failed intermittently under load —
-33/33 alone, but up to 5 failures per run on a busy machine. Typical error:
+33/33 alone, but up to 4 failures per run on a busy machine. Typical error:
 `recorder never reached 4 frame(s) in 10000 ms: frames=0 dropped=499 last=behind: the previous
 frame had not finished`.
 
@@ -40,8 +40,14 @@ The retry budgets were denominated in **virtual** milliseconds, which cost almos
 `run()`, `runUntilFrames()` and `quiesce()` advanced the fake clock in 10 ms steps without ever
 waiting for the recorder's tick to finish. A tick with a camera attached does a real `writeFile` of
 a real JPEG (`EpisodeRecorder.ts:721`). `vi.advanceTimersByTimeAsync(ms)` yields only about one real
-macrotask turn, while a 64 KB write needs **~11 real turns on an idle box** and is unbounded when
-the disk is busy.
+macrotask turn, while the tick that writes that JPEG needs **up to 49 turns on an idle box** —
+measured by counting them — and far more when the disk is busy: up to 8950 under the forced load
+below.
+
+Size is not what makes it slow. The fixture is `testsrc` at 64x48, which encodes to **~2 KB**, so
+the cost is the file-system round trip itself — the `writeFile` is dispatched to the thread pool and
+its completion lands a turn of the real loop later, whatever the byte count. Reducing the picture
+would not have helped; only waiting for the write does.
 
 So the write outlived the advance, `tickInFlight` stayed set, and the next tick was dropped by the
 recorder's own backpressure as `"behind: the previous frame had not finished"`
@@ -60,6 +66,15 @@ one.
 Consequences: no test-driven tick overlap, so backpressure drops can no longer occur;
 `runUntilFrames`'s budget counts attempts the recorder actually got rather than wall clock the disk
 ate; and `quiesce`'s polling loop and its 50 ms real sleep became unnecessary and are gone.
+
+The drain is bounded, at 250_000 turns. The loop yields turns but moves no clock, so a tick that
+awaited a **faked** timer could never be reached by it and would spin forever — a hang, which is
+worse than a flake, because CI burns its whole timeout and reports nothing. On exceeding the bound
+`advance()` throws naming the counts that did not converge. The number is measured, not guessed:
+49 turns idle, 8950 under the forced load below, ~1100 turns/ms when the loop is stalled — so the
+bound is ~28x the worst real case, and firing it costs ~0.2 s, verified by putting a faked
+`setTimeout` on the snapshot hook: the test fails in under two seconds with the counts named. The
+harness's unused `snapshotDelayMs` knob was exactly such a faked wait, set by no test, and is gone.
 
 No assertion weakened, no retry added, no timeout raised, no production code touched.
 
