@@ -806,7 +806,13 @@ export class AgentModeController {
       // (`agent → teleop` mid-plan) is caught by the same condition anyway.
       if (change.next === 'teleop' || change.next === 'vla') {
         this.scene.clear();
-        this.emit('agent:scene:updated', { scene: this.scene.snapshot() ?? undefined });
+        // `snapshot()` is null here by construction — `clear()` nulls
+        // `updatedAt`. Sent as `null` and not `undefined`, because the whole
+        // point of this emit is to make the wipe visible: every consumer skips
+        // an absent `scene`, so `?? undefined` sent the operator nothing and
+        // left the Scene panel showing the distances this branch exists to
+        // retire, still labelled as measured.
+        this.emit('agent:scene:updated', { scene: this.scene.snapshot() });
       }
     });
   }
@@ -2114,11 +2120,22 @@ export class AgentModeController {
   private plannerSceneTargets(): { sceneTargets?: readonly PlannerSceneTarget[] } {
     this.syncPlace();
     const yawDeg = this.scene.getYawDeg();
-    const sceneTargets: PlannerSceneTarget[] = this.scene.listEntities().map((e) => ({
-      label: e.label,
-      relativeBearingDeg: normalizeDeg(e.bearingDeg - yawDeg),
-      distanceM: e.distanceEstM,
-    }));
+    const sceneTargets: PlannerSceneTarget[] = this.scene
+      .listEntities()
+      // Fleet rows are excluded, and not as tidiness. `listEntities()` merges
+      // the peers the SERVER reported in with what this robot looked at, but
+      // `expireOnTranslation` walks `entities` only — so a fleet distance never
+      // expires, no matter how far either robot drives. Left in, a peer could
+      // satisfy the fold and turn "turn 96°, walk 4.4 m" into
+      // `goto "robot alice"`: a measured-looking approach to a colleague who
+      // has since moved, from a distance nothing can retire. Nobody's camera
+      // saw it, so it is not a target this fold may reason about.
+      .filter((e) => e.distanceSource !== 'fleet')
+      .map((e) => ({
+        label: e.label,
+        relativeBearingDeg: normalizeDeg(e.bearingDeg - yawDeg),
+        distanceM: e.distanceEstM,
+      }));
     return sceneTargets.length > 0 ? { sceneTargets } : {};
   }
 

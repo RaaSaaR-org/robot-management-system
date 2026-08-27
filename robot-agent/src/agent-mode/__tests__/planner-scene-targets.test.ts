@@ -129,6 +129,35 @@ describe('planner scene targets — the controller hands the rows over as number
     expect(inputs[0]!.sceneSummary).toMatch(/door: bearing 96°/);
   });
 
+  it('never offers a fleet-reported peer as a fold target', async () => {
+    // `listEntities()` merges what this robot LOOKED at with the peers the
+    // server reported. Only the first group is something a camera saw, and only
+    // the first group is expired by `expireOnTranslation` — it walks `entities`
+    // and never `fleetEntities`, so a peer's distance survives any amount of
+    // driving by either robot.
+    //
+    // Offered to the fold, that turns "turn 96°, walk 4.4 m" into
+    // `goto "robot alice"`: an approach presented as measured, to a colleague
+    // who has since walked off, from a distance nothing can retire.
+    const inputs: PlannerInput[] = [];
+    const h = rig({
+      plan: async (input: PlannerInput) => {
+        inputs.push(input);
+        return { blocks: [{ kind: 'speak', params: { text: 'ok' } }], fallback: false, attempts: 1 };
+      },
+    });
+    h.scene.setFleetEntities([
+      { label: 'robot alice', bearingDeg: 96, distanceEstM: 4.4, distanceSource: 'fleet', confidence: 1 },
+    ] as never);
+
+    await h.controller.submitCommand({ text: 'geh zur Tuer' });
+    await h.controller.whenIdle();
+
+    expect(inputs).toHaveLength(1);
+    const targets = (inputs[0]!.sceneTargets ?? []) as PlannerSceneTarget[];
+    expect(targets.map((t) => t.label)).toEqual(['door']);
+  });
+
   it('omits them entirely when nothing has been seen', async () => {
     const inputs: PlannerInput[] = [];
     const controller = new AgentModeController({

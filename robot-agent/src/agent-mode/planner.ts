@@ -412,6 +412,18 @@ export function mergeAdjacentWaveIntoGreet(blocks: PlannedBlock[]): {
  */
 const TURN_MATCH_DEG = 12;
 const WALK_MATCH_M = 0.5;
+/**
+ * Kinds after which the plan-time scene targets no longer describe the robot,
+ * because the base has moved or turned under them. Deliberately over-broad:
+ * missing one silently un-sounds {@link foldTurnWalkIntoGoto}, while an extra
+ * one only costs a fold that would have been a dash anyway. `scan_room`
+ * expands into turns, and `patrol`/`tour` into legs; the runner-owned kinds
+ * cannot reach the planner's output today but are listed so that adding one
+ * later does not quietly re-open the hole.
+ */
+const MOVES_BASE: ReadonlySet<string> = new Set([
+  'walk', 'turn', 'goto', 'scan_room', 'patrol', 'tour', 'demo',
+]);
 
 /** One `turn` + `walk` pair rewritten as a `goto`, so the caller can say so. */
 export interface TurnWalkFold {
@@ -468,6 +480,20 @@ export function foldTurnWalkIntoGoto(
 
   const out: PlannedBlock[] = [];
   const folds: TurnWalkFold[] = [];
+  // `relativeBearingDeg` was computed ONCE, against the yaw the robot had when
+  // the plan was made (`plannerSceneTargets`). It describes the robot standing
+  // where it stands now — so the moment a block moves the base, every bearing
+  // and every distance in `targets` stops describing anything, and a match
+  // against them is a coincidence rather than evidence.
+  //
+  // Matching relative instead of world was the fix for exactly this class of
+  // error; keeping the fold at the plan-time pose is the other half of it.
+  // Without this, `[turn(-50), turn(96), walk(4.4)]` folds its SECOND pair
+  // against a door stored at relative +96° — but after the -50° turn the door
+  // is at +146°, so the operator's own second turn was aimed 50° away from it
+  // and the robot is walked to a destination nobody asked for. That is the
+  // failure this function's docstring promises not to produce.
+  let atPlanTimePose = true;
   for (let i = 0; i < blocks.length; i++) {
     const cur = blocks[i]!;
     const next = blocks[i + 1];
@@ -476,7 +502,8 @@ export function foldTurnWalkIntoGoto(
       next !== undefined && next.kind === 'walk' && next.params.direction === 'forward'
         ? Number(next.params.distanceM)
         : Number.NaN;
-    if (!Number.isFinite(turnDeg) || !Number.isFinite(walkM)) {
+    if (!atPlanTimePose || !Number.isFinite(turnDeg) || !Number.isFinite(walkM)) {
+      if (MOVES_BASE.has(cur.kind)) atPlanTimePose = false;
       out.push(cur);
       continue;
     }
@@ -488,6 +515,8 @@ export function foldTurnWalkIntoGoto(
         Math.abs(normalizeDeg(turnDeg - t.relativeBearingDeg)) <= TURN_MATCH_DEG
     );
     if (matches.length !== 1) {
+      // A `turn` that did not fold still turns the robot.
+      if (MOVES_BASE.has(cur.kind)) atPlanTimePose = false;
       out.push(cur);
       continue;
     }
@@ -507,6 +536,8 @@ export function foldTurnWalkIntoGoto(
     };
     out.push(folded);
     folds.push({ label: target.label, turnDeg, walkM });
+    // The goto leaves the robot at the target, not at the plan-time pose.
+    atPlanTimePose = false;
     i++; // the walk is consumed by the goto
   }
 

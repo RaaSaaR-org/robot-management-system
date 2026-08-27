@@ -748,6 +748,53 @@ describe('foldTurnWalkIntoGoto (TASK-221)', () => {
     expect(blocks.map((b) => b.kind)).toEqual(['look', 'turn', 'look', 'walk']);
   });
 
+  it('does NOT fold a pair the robot has already turned away from', () => {
+    // The whole soundness argument for the fold is that `relativeBearingDeg`
+    // describes the robot AS IT STANDS WHEN THE PLAN IS MADE. A block that
+    // turns the base spends that frame.
+    //
+    // "dreh dich 50 Grad nach rechts, dann dreh dich 96 Grad nach links und geh
+    // 4,4 Meter": after the -50 turn the door is at relative +146, so the
+    // operator's second turn aims 50 degrees away from it. Folding the second
+    // pair would walk the robot to the door anyway — the exact "wrong fold
+    // walks the robot somewhere nobody asked for" this function forbids.
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(-50), turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('does NOT fold a pair that follows a walk', () => {
+    // Same reason on the distance axis: after walking 2 m the door is no longer
+    // 4.4 m away, so the row cannot testify about this pair either.
+    const { blocks, folds } = foldTurnWalkIntoGoto([walk(2), turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['walk', 'turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('folds at most once — the goto itself spends the plan-time pose', () => {
+    // Two identical approaches: the first is evidence, the second is a pair
+    // measured from wherever the goto left the robot, which is not here.
+    const { blocks, folds } = foldTurnWalkIntoGoto(
+      [turn(96), walk(4.4), turn(96), walk(4.4)],
+      [DOOR],
+    );
+
+    expect(blocks.map((b) => b.kind)).toEqual(['goto', 'turn', 'walk']);
+    expect(folds).toHaveLength(1);
+  });
+
+  it('a non-moving block between plan start and the pair does not spend the pose', () => {
+    // `look`, `speak`, `wait` and friends leave the base where it is, so the
+    // guard must not be so blunt that it kills every fold after block 0.
+    const speak: PlannedBlock = { kind: 'speak', params: { text: 'ok' } };
+    const { blocks, folds } = foldTurnWalkIntoGoto([speak, turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['speak', 'goto']);
+    expect(folds).toHaveLength(1);
+  });
+
   it('matches the relative bearing when the robot is not facing +x', () => {
     // The store keeps WORLD bearings and a `turn` is relative, so a robot
     // already turned 40° needs a 56° turn to face a door at world 96°.

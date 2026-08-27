@@ -18,6 +18,7 @@ import type { Planner } from '../planner.js';
 import type { ServerMirror } from '../server-mirror.js';
 import type { VisionClient, VisionObservation } from '../vision.js';
 import type { RobotStateManager } from '../../robot/state.js';
+import type { AgentModeEvent } from '../types.js';
 
 const EMPTY_VIEW: VisionObservation = {
   currentView: 'ein leerer Raum',
@@ -61,6 +62,7 @@ interface PoseCache {
 function rig(lock: ControlOwnerLock, belief?: Belief) {
   const scene = new SceneMemoryStore('robot-1');
   const pose: PoseCache = { value: null };
+  const events: AgentModeEvent[] = [];
   const controller = new AgentModeController({
     robotId: 'robot-1',
     enabled: true,
@@ -73,7 +75,11 @@ function rig(lock: ControlOwnerLock, belief?: Belief) {
     identity: null,
     getPose: () => pose.value,
     planner: { plan: async () => ({ blocks: [], fallback: false, attempts: 1 }) } as unknown as Planner,
-    mirror: { emit: () => {}, push: async () => {}, logBlock: async () => {} } as unknown as ServerMirror,
+    mirror: {
+      emit: (e: AgentModeEvent) => events.push(e),
+      push: async () => {},
+      logBlock: async () => {},
+    } as unknown as ServerMirror,
     vision: { observe: async () => EMPTY_VIEW } as unknown as VisionClient,
     range: new RangeSensor({ enabled: false }),
     sleep: async () => {},
@@ -94,7 +100,7 @@ function rig(lock: ControlOwnerLock, belief?: Belief) {
   const at = (x: number, y: number): void => {
     pose.value = { x, y, yawDeg: 0, source: 'state', atMs: 1e12 };
   };
-  return { controller, scene, pose, at };
+  return { controller, scene, pose, at, events };
 }
 
 /** One table, measured, straight ahead — the thing a stale `goto` walks off. */
@@ -307,6 +313,28 @@ describe('the scene the agent kept, when control changes hands (TASK-221)', () =
     expect(scene.get('table')).toBeUndefined();
     expect(scene.snapshot()).toBeNull();
     expect(scene.getForwardClearanceM()).toBeNull();
+  });
+
+  it('tells the operator about the wipe — the event carries null, not undefined', () => {
+    // The wipe is only worth doing if it REACHES somebody. `clear()` nulls
+    // `updatedAt`, so `snapshot()` answers null; emitting that as `undefined`
+    // made the wipe unrepresentable, and every consumer skips an absent
+    // `scene` (`agentmodeStore` did `if (!event.scene) break`, the server does
+    // `if (event.scene !== undefined)`). The panel then kept rendering
+    // "table … 0.55 m (lidar-measured)" for the rest of the session — a
+    // measured claim about a pose the robot had been driven away from, which
+    // is the exact defect TASK-221 exists to remove.
+    const lock = new ControlOwnerLock();
+    const { scene, events } = rig(lock);
+    seeTable(scene);
+    events.length = 0;
+
+    lock.claim('teleop');
+
+    const wipes = events.filter((e) => e.type === 'agent:scene:updated');
+    expect(wipes).toHaveLength(1);
+    expect(wipes[0]).toHaveProperty('scene');
+    expect(wipes[0].scene).toBeNull();
   });
 
   it('wipes it when teleop preempts a running plan', () => {
