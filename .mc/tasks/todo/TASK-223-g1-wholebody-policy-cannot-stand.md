@@ -79,23 +79,61 @@ observation. This is not a walking failure. It cannot stand.
   `actions [1, 12]` (legs only). A second `assets/model/policy1.onnx` has an identical signature and
   has **not** been tried.
 
-### Where to look next, in order
+### Hypotheses already TESTED AND REFUTED (2026-08-27)
 
-1. **Try `--model_path assets/model/policy1.onnx`.** Two policies ship with identical signatures and
-   nothing documents which belongs to this task. Cheapest possible discriminator, untried.
-2. **Check joint ordering between the observation and the policy's training order.** `all_obs_indices`
-   is `action_to_indices + arm_to_all_indices`, i.e. whatever order the *scene* reports, which need
-   not be the order the policy was trained on. A permuted `joint_pos` block yields exactly this
-   symptom: structured, rhythmic, confidently wrong output. Compare against the joint order in
-   `robot-agent/src/robot/joint-configs/g1.config.ts` (legs 0-11, verified: knee limit 2.8798,
-   ankle-pitch 0.5236 — both match the observed pinning values exactly).
-3. **Check `obs_scales`.** Every entry is `1.0`. Unitree's locomotion policies are normally trained
-   with `ang_vel` ~0.25 and `joint_vel` ~0.05. If this policy expects scaled inputs, unscaled ones
-   would saturate it — consistent with joints driven to limits.
-4. **Check the `action_scale = 0.25` and the default-position offset** in the action path, and the
-   `DelayBuffer(5, ...)` — a 5-step action delay at 61 Hz is 82 ms of latency inside the loop.
-5. **Confirm the robot starts upright.** The probe attached after the sim was already running, so it
-   never observed the post-reset state. Sample `rt/lowstate` from the first frame.
+Do not re-run these. Each cost a sim boot (~4 min); the negative results are the point.
+
+1. **Control rate — REFUTED.** Fixed in TASK-204 and retested at 52 Hz and 61 Hz. Falls at both. The
+   61 Hz run was marginally *worse* (more time pinned).
+2. **`height` command out of range — REFUTED, and the opposite of what it looked like.** The provider
+   defaults the 4th command element to `0.8` while upstream's own `send_commands_keyboard.py` clamps
+   `height` to `(-0.5, 0.0)`, which looked like an obvious out-of-distribution input. Tested
+   `height=0.0`: it falls **faster** (1.4 s vs ~5 s). `0.8` is almost certainly the correct
+   *absolute* standing height — the G1 stands ~0.79 m — and the keyboard range is a delta applied
+   elsewhere. The provider default is fine.
+3. **Wrong `policy.onnx` — REFUTED as a fix.** `policy.onnx` and `policy1.onnx` are genuinely
+   different files (same size, different md5) with identical signatures. `policy1.onnx` also falls.
+   It did survive ~4-5 s versus ~1.4 s, so if anything it is the better of the two, but neither
+   stands.
+4. **Joint ordering between observation and policy — REFUTED by reading.** `action_to_indices` and
+   `arm_to_all_indices` are built by **name** lookup against a hardcoded name list, not by scene
+   order, so the observation column order is stable across Isaac Lab versions. Good upstream design;
+   this cannot drift.
+5. **Actuator gains — REFUTED.** The wholebody config's leg gains are the standard Unitree
+   locomotion values (hip 150-200, knee 200, ankle 20 stiffness; damping 5/2).
+6. **Leg default pose — REFUTED.** `get_leg_joints()` returns all zeros, but the wholebody preset
+   sets `update_default_joint_pos=False` and uses `G129_CFG_WITH_DEX3_WHOLEBODY`'s own init pose,
+   which is the correct crouch: hip_pitch -0.20, knee 0.42, ankle_pitch -0.23.
+
+### The strongest remaining lead: the arms are commanded to zero
+
+`get_action` calls `full_action.zero_()`, then fills **only** the legs (policy) and the waist
+(defaults). The 14 arm joints and 14 hand joints are filled **only if a DDS command arrives** —
+`self.robot_dds.get_robot_command()` from `rt/lowcmd`. With nothing publishing, they stay `0.0` and
+that zero is sent as a joint **position target** every step.
+
+That is not the default pose. `G129_CFG_WITH_DEX3_WHOLEBODY` defines
+`elbow 0.87`, `shoulder_pitch 0.35`, `shoulder_roll +/-0.18`. So with no teleop client the arms are
+driven from a bent pose to fully extended — shifting the CoM — **and** the observation carries a
+large constant `joint_pos - default` bias on the arm block that the policy never saw in training.
+Upstream always runs an arm/teleop publisher, so they would never hit this.
+
+**Status: INCONCLUSIVE, not refuted.** An attempt to hold the arms by publishing `LowCmd_` on
+`rt/lowcmd` did not take effect — the elbows still read ~0.0 in `rt/lowstate` throughout — so the
+condition was never actually changed and the test proved nothing. Before retrying, work out why the
+provider ignored that `LowCmd_`: check `mode`/`mode_machine`, whether a CRC is required, and whether
+`get_robot_command()` needs >= 29 `motor_cmd` entries (the publisher used
+`unitree_hg_msg_dds__LowCmd_()` defaults and set `q`, `kp`, `kd`, `mode` on the first 29).
+
+### Also worth checking
+
+* **The robot never holds its init crouch.** The first `rt/lowstate` frame already shows knee ~0.08-0.13
+  against a configured 0.42, so the policy is in control and has already moved the legs before the
+  first frame is published. Whether it is upright at physics step 0 is still unobserved from outside;
+  logging from inside the sim would settle it.
+* **`obs_scales` are all `1.0`** — but this is **upstream's own code**, not a NeoDEM change, so
+  upstream presumably ran it this way successfully. Lower prior than it first appears.
+* **`DelayBuffer(5, ...)`** — a 5-step action delay is 82 ms of latency at 61 Hz.
 
 ### Reproducing
 
