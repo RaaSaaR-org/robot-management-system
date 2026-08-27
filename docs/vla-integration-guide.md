@@ -194,6 +194,7 @@ produced before the feature existed.
 | `VLA_RTC_ENABLED` | `false` | RTC on for this agent. Exactly `true`; anything else is off. |
 | `VLA_RTC_OVERLAP` | `0.25` | Fraction of a chunk still queued that fires the prefetch. Must be in (0, 1] — out-of-range values are rejected at boot with a warning and the default is used, never clamped. |
 | `VLA_RTC_BLEND_STEPS` | `5` | Upper bound on the boundary crossfade, in steps. `0` means prefetch with a hard splice, which is the A/B control that separates the prefetch's win from the blend's. |
+| `VLA_LOOP_PERIOD_MS` | `200` | Rollout control-loop period in ms — how long the loop sleeps between action sends. 200 ms is 5 Hz and is the historical behaviour; 67 ms is the ~15 Hz GR00T-N1.7 closed-loop control on the G1 wants. Must be in (0, 5000]; out-of-range values are rejected at boot with a warning and the default is used, never clamped. Not RTC-specific — it paces the loop with RTC on or off — but every RTC figure below is a function of it. A `loopPeriodMs` on the run options overrides it for a single run. |
 
 `VLA_RTC_CHUNK_OVERLAP` is **not** this knob. It counts whole steps and is read
 only by `robot-agent/hardware/vla_runner.py`, which carries its own RTC
@@ -228,10 +229,17 @@ so that every number is an exact, reproducible integer rather than a stopwatch
 reading. **They are sim numbers against a mock. Nothing here was measured on a
 robot, and nothing here was measured against a real GR00T or SmolVLA backend.**
 
-They are also all at 5 Hz. `LOOP_PERIOD_MS = 200` in `skill-executor.ts` is a
-module constant with no env var or run option behind it, so this loop cannot
-currently be run at any other rate, and none of the tuning below has been
-checked at one.
+They are also all at 200 ms (5 Hz) — but that is now the default, not a limit.
+The period is `config.vla.loopPeriodMs` (`VLA_LOOP_PERIOD_MS`, range-checked to
+(0, 5000]) with a per-run `loopPeriodMs` override on the run options, so the
+loop can be driven at any rate: a ~15 Hz rollout is `VLA_LOOP_PERIOD_MS=67`.
+What has *not* changed is that none of the tuning below has been checked at any
+other rate. The crossfade's reach, the prefetch break-even and
+`RTC_PAYOFF_MARGIN` are all functions of the period, so re-read every number in
+this section before running at one. The suite asserts only that the pacing
+follows the knob — an A/B of 200 ms against 67 ms over the same 8 steps, whose
+wall clocks come out in exactly the ratio of the two periods — and deliberately
+re-tunes nothing.
 
 **RTC declines when it would lose.** A merged chunk is shorter than the one the
 backend answered with, because the actions covering the timesteps that elapsed
@@ -250,17 +258,31 @@ server is too slow for it to help.
 
 **The crossfade is narrower than it looks.** A prefetched chunk is merged as
 soon as it lands, and `blendChunks` can only fade against actions still in the
-queue. So the fade reaches `chunk_size × VLA_RTC_OVERLAP × 200 ms` of latency
-and no further — 400 ms at the shipped defaults. Over 16 steps that is exactly
-4 blended steps at 100 ms of latency and **0 at 600 ms**; at `VLA_RTC_OVERLAP`
-0.5 it is 6 at 600 ms. All three are asserted exactly. Past the reach the
-boundary is still free but it is a hard splice, so TASK-183's "no discontinuity
-larger than the `clipAction` bound" is **not met at the shipped default** — and
-note that the second half of that criterion is not tested at all: no assertion
-anywhere compares a boundary discontinuity against `MAX_DELTA_DEGREES`. Raising
-`VLA_RTC_OVERLAP` to 0.5, or shortening the loop period, would buy the reach
-back at the cost of more `/predict` calls per step; neither has been done here.
-`VLA_RTC_BLEND_STEPS` is an upper bound on the fade, not a promise of one.
+queue. So the fade reaches `chunk_size × VLA_RTC_OVERLAP × loopPeriodMs` of
+latency and no further — 400 ms at the shipped defaults (8 × 0.25 × 200 ms).
+Over 16 steps that is exactly 4 blended steps at 100 ms of latency and **0 at
+600 ms**; at `VLA_RTC_OVERLAP` 0.5 it is 6 at 600 ms. All three are asserted
+exactly. Past the reach the boundary is still free, but it is a hard splice, so
+past 400 ms **the blend is not what holds the boundary inside the `clipAction`
+bound — the clip is.**
+
+That half is now asserted rather than reasoned about. Four tests drive a
+scripted server whose chunk boundary jumps 60°, twelve times
+`MAX_DELTA_DEGREES`, and require what actually reaches the sidecar to stay
+inside the bound at a serial boundary, at a hard-spliced RTC boundary and at a
+crossfaded one — plus a sim-mode counterfactual with `clipAction` skipped that
+does jump the full 60°, so the first three measure the clip and not the
+scripted data. The arm walks toward the new chunk *at* the bound (5°, then
+10°): the clip rate-limits a discontinuity, it does not reject it.
+
+Raising `VLA_RTC_OVERLAP` to 0.5, or shortening the period with
+`VLA_LOOP_PERIOD_MS`, buys the fade's reach back at the cost of more `/predict`
+calls per step; neither is the shipped default, and neither has been measured.
+Note while doing either that `MAX_DELTA_DEGREES` is a per-**step** bound, not a
+per-second one, so a shorter period raises the slew rate it permits in the same
+proportion — 25°/s at 200 ms, 75°/s at 67 ms. That is a real-arm safety
+property, not a test detail. `VLA_RTC_BLEND_STEPS` is an upper bound on the
+fade, not a promise of one.
 
 ### RTC and the sidecar
 
@@ -277,8 +299,8 @@ are captured on the loop's own thread, before its sleep, so the executor issues
 or off. The capture is subtracted from that step's sleep rather than added to
 it, so the `/action` cadence is unchanged **as long as the capture fits inside
 the loop period**. The subtraction clamps at zero: a sidecar capture slower than
-`LOOP_PERIOD_MS` stretches that one step by the overrun, and the executor logs a
-warning naming the excess. This has not been measured on a robot.
+the loop period (`VLA_LOOP_PERIOD_MS`, 200 ms by default) stretches that one
+step by the overrun, and the executor logs a warning naming the excess. This has not been measured on a robot.
 
 This is not decoration:
 
