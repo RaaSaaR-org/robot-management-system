@@ -74,14 +74,15 @@ function countParam(value: unknown): number | null {
  * Read the tour out of a running plan: which route, and which stop the robot is
  * at right now (TASK-213).
  *
- * The plan is the LIVE answer on this page, and deliberately not the tour run:
- * a run snapshot only reaches the console when a leg SETTLES
- * (`agent:tour:leg` is emitted after a stop is finished, `host.ts` `drive`), so
- * for most of a visit its legs read pending-then-done and no leg is `running`.
- * The blocks, by contrast, are reported one at a time as they start and finish
- * — and since every block of a stop carries `stopName`, the plan can name the
- * stop the robot is standing at the whole time it is standing there. It also
- * survives a page reload, because the plan is part of `AgentModeState`.
+ * The plan is the LIVE answer on this page, and deliberately not the tour run.
+ * Until TASK-222 the run could not answer at all: a snapshot reached the console
+ * only when a leg SETTLED, so its legs read pending-then-done and no leg was
+ * ever `running`. `host.ts` `drive` now reports a leg at its start as well, so
+ * the run CAN name the stop — but the plan remains the better source here. The
+ * blocks are reported one at a time as they start and finish, and since every
+ * block of a stop carries `stopName`, the plan resolves position WITHIN a stop
+ * rather than only at its boundaries. It also survives a page reload, because
+ * the plan is part of `AgentModeState`.
  *
  * The scan keeps the LAST stop a started block named, rather than only looking
  * at the block in flight: a `goto` stays `running` while the navigator's

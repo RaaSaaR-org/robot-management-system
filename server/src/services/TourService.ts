@@ -153,9 +153,22 @@ function settledLegCount(legs: TourLeg[] | undefined): number {
 }
 
 /**
+ * How many legs have been STARTED — the count that orders a leg-start snapshot
+ * against the settle immediately before it.
+ *
+ * `startedAt` is stamped once, when the leg begins, and never cleared, so this
+ * only ever grows within a run. A leg the runner skipped never starts and never
+ * stamps it, so a skipped leg does not inflate the count on either side of a
+ * comparison.
+ */
+function startedLegCount(legs: TourLeg[] | undefined): number {
+  return (legs ?? []).filter((l) => l.startedAt).length;
+}
+
+/**
  * True when `incoming` is an OLDER snapshot of the run than `stored`: it would
  * move a terminal run back to 'running', drop `finishedAt`, report fewer
- * settled legs, or lose turns already recorded. Every `agent:tour:*` event
+ * started or settled legs, or lose turns already recorded. Every `agent:tour:*` event
  * carries the whole run and the robot pushes them fire-and-forget over
  * separate connections, so a `leg` or a `turn` can land after the `finished`
  * it preceded — such a snapshot must never replace the newer row.
@@ -171,6 +184,14 @@ export function isRunDowngrade(stored: TourRun | null | undefined, incoming: Tou
   if (storedTerminal && !incomingTerminal) return true;
   if (stored.finishedAt && !incoming.finishedAt) return true;
   if (settledLegCount(incoming.legs) < settledLegCount(stored.legs)) return true;
+  // Settled legs alone stopped being enough when TASK-222 added the leg-START
+  // event. `settle(leg i-1)` and `start(leg i)` leave the runner a few lines
+  // apart and carry the SAME settled count — [done, pending, …] and
+  // [done, running, …] both settle exactly one leg — so the clause above cannot
+  // order them, and a reordered `settle(i-1)` landing second walked leg i back
+  // to `pending` and dropped its `startedAt`. That put the banner on its generic
+  // fallback for the whole of leg i: the very thing TASK-222 exists to remove.
+  if (startedLegCount(incoming.legs) < startedLegCount(stored.legs)) return true;
   if ((incoming.turns ?? []).length < (stored.turns ?? []).length) return true;
   return false;
 }

@@ -245,9 +245,11 @@ export interface CurrentStop {
  * is "not at a stop".
  *
  * ONE renderer, because two screens answer this question from two different
- * sources: the /tour banner reads the RUN's legs (mirrored through the server,
- * settled per leg) and the Agent Mode rail reads the RUNNING BLOCK's params
- * (live, per block). An operator with both open must not be told the same robot
+ * sources: the /tour banner reads the RUN's legs (mirrored through the server
+ * at each leg's START and again at its settle, since TASK-222 — before that
+ * only at the settle, which is why this could not name the stop the robot was
+ * actually at) and the Agent Mode rail reads the RUNNING BLOCK's params (live,
+ * per block). An operator with both open must not be told the same robot
  * is in two places in two different phrasings.
  *
  * Each caller phrases the null case itself: "walking" completes the banner's

@@ -5,7 +5,10 @@
  *              a late/out-of-order snapshot, one compliance record per finished
  *              run carrying `disclosureSpoken`, one alert per skipped/failed
  *              run, the start proxy, tenant scoping and a run that survives
- *              deleting its route.
+ *              deleting its route. Plus (TASK-222) the leg-START snapshot: it
+ *              applies on top of the settle before it, is rejected when it
+ *              arrives after its own settle, and writes neither record nor
+ *              alert.
  * @feature tour
  */
 
@@ -15,7 +18,7 @@ import path from 'path';
 import { TourService, isRunDowngrade, normaliseFacts, normaliseStops, normaliseLanguage, TOUR_DEFAULT_DWELL_S } from '../services/TourService.js';
 import { HttpClientError } from '../services/HttpClient.js';
 import { FakeTourRepository, fakeAlerts, fakeCompliance, makeRun, makeTurn } from './tour-test-fakes.js';
-import { TOUR_FACT_MAX, TOUR_TALK_TRACK_MAX, type AgentModeEvent } from '../types/agent-mode.types.js';
+import { TOUR_FACT_MAX, TOUR_TALK_TRACK_MAX, type AgentModeEvent, type TourLeg, type TourLegStatus } from '../types/agent-mode.types.js';
 import { ZEMA_TOUR_ROUTE } from '../database/seeds/tour-zema.seed.js';
 
 function build(opts: { post?: ReturnType<typeof vi.fn>; robot?: boolean } = {}) {
@@ -287,6 +290,140 @@ describe('TourService — ingest', () => {
     const { service, repo } = build();
     await service.ingest(ev('agent:tour:started', { tour: makeRun({ robotId: '' }) }));
     expect(repo.runs.get('run-1')?.robotId).toBe('robot-001');
+  });
+});
+
+/**
+ * The three-stop fixture this file's TASK-222 tests walk, stamped the way
+ * `TourRunner.drive` stamps a leg: `startedAt` the moment it goes `running`,
+ * `finishedAt` when it settles.
+ */
+const TOUR_LEG_NAMES: ReadonlyArray<readonly [string, string, string]> = [
+  ['stop-1-staging', 'STAGING', 'Startplatz'],
+  ['stop-2-aisle-1', 'AISLE-1', 'Arbeitsstation'],
+  ['stop-3-dock-1', 'DOCK-1', 'Warenannahme'],
+];
+
+function leg(i: number, status: TourLegStatus): TourLeg {
+  const [stopId, placeId, name] = TOUR_LEG_NAMES[i];
+  const l: TourLeg = { index: i, stopId, placeId, name, status };
+  if (status !== 'pending') l.startedAt = `2026-08-17T10:0${i * 2}:00.000Z`;
+  if (status === 'done') {
+    l.finishedAt = `2026-08-17T10:0${i * 2 + 1}:00.000Z`;
+    l.spoken = { said: 3, of: 3 };
+  }
+  return l;
+}
+
+/**
+ * The whole `legs` array as the robot's own snapshot has it at one moment of
+ * the walk: every leg before `at` settled `done`, leg `at` in `status`, every
+ * leg after it still `pending`. `legsAt(i, 'running')` is the snapshot this
+ * task adds to the wire; `legsAt(i, 'done')` is the settle that used to be the
+ * only one.
+ */
+function legsAt(at: number, status: TourLegStatus): TourLeg[] {
+  return TOUR_LEG_NAMES.map((_, i) => leg(i, i < at ? 'done' : i > at ? 'pending' : status));
+}
+
+describe('TourService — a leg reported at its start (TASK-222)', () => {
+  // Wire cost, MEASURED rather than assumed — `JSON.stringify` of the event
+  // `ServerMirror.push` POSTs, which is byte-for-byte what the WS fan-out
+  // re-broadcasts. A four-stop run with no questions is 1 687 B; the same run
+  // after twelve questions is 5 458 B; an eight-stop run with a thirty-turn
+  // transcript is 12 231 B. Almost all of the growth is the transcript, which
+  // every `agent:tour:turn` event already carried. What this task adds is one
+  // more LEG event per stop — about 6 KB over a whole four-stop visit, next to
+  // nothing beside the block and heartbeat traffic already on the wire.
+
+  it('applies a leg-start snapshot on top of the settle before it', async () => {
+    const { service, repo } = build();
+    await service.ingest(ev('agent:tour:started', { tour: makeRun({ legs: legsAt(0, 'pending') }) }));
+    await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(0, 'done') }) }));
+    // Leg 1 says it has begun. Against the settle before it that snapshot has
+    // the SAME settled-leg count (1), the same turn count (0), status still
+    // `running` and still no `finishedAt` — every clause of `isRunDowngrade`
+    // falls through, so it is applied. This is the whole point of TASK-222:
+    // without it no snapshot the UI ever folds in holds a `running` leg.
+    await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(1, 'running') }) }));
+
+    const stored = repo.runs.get('run-1');
+    expect(stored?.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    // The stamp is now known while the robot is standing at the stop, not only
+    // once it has left — "how long has it been here" becomes answerable live.
+    expect(stored?.legs[1].startedAt).toBe('2026-08-17T10:02:00.000Z');
+    expect(stored?.legs[1].finishedAt).toBeUndefined();
+    expect(isRunDowngrade(makeRun({ legs: legsAt(0, 'done') }), makeRun({ legs: legsAt(1, 'running') }))).toBe(false);
+  });
+
+  it('rejects a leg-start snapshot that arrives after the settle it precedes', async () => {
+    const { service, repo } = build();
+    await service.ingest(ev('agent:tour:started', { tour: makeRun({ legs: legsAt(0, 'pending') }) }));
+    await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(1, 'done') }) }));
+    // The start of leg 1, pushed on its own connection, lands after the settle
+    // of that same leg: exactly one settled leg fewer than stored, so it is
+    // dropped instead of walking the stop back to `running` and deleting the
+    // `finishedAt` already recorded.
+    await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(1, 'running') }) }));
+
+    const stored = repo.runs.get('run-1');
+    expect(stored?.legs.map((l) => l.status)).toEqual(['done', 'done', 'pending']);
+    expect(stored?.legs[1].finishedAt).toBe('2026-08-17T10:03:00.000Z');
+    expect(isRunDowngrade(makeRun({ legs: legsAt(1, 'done') }), makeRun({ legs: legsAt(1, 'running') }))).toBe(true);
+  });
+
+  it('writes no compliance record and raises no alert for any leg event, start or settle', async () => {
+    const { service, alerts, compliance } = build();
+    await service.ingest(ev('agent:tour:started', { tour: makeRun({ legs: legsAt(0, 'pending') }) }));
+    for (let i = 0; i < TOUR_LEG_NAMES.length; i++) {
+      await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(i, 'running') }) }));
+      await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(i, 'done') }) }));
+    }
+    // Doubling the leg events cannot touch the Art. 50 record or the operator's
+    // alert list: `ingestRun` reaches either only through the `finished` branch.
+    expect(compliance.logSystemEvent).not.toHaveBeenCalled();
+    expect(alerts.createRobotAlert).not.toHaveBeenCalled();
+
+    await service.ingest(
+      ev('agent:tour:finished', {
+        tour: makeRun({ legs: legsAt(2, 'done'), status: 'failed', reason: 'goto failed', finishedAt: '2026-08-17T10:08:00.000Z' }),
+      }),
+    );
+    expect(compliance.logSystemEvent).toHaveBeenCalledTimes(1);
+    expect(alerts.createRobotAlert).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The reordering window the extra event opens, and the clause that closes it.
+   *
+   * `settle(i-1)` and `start(i)` leave the runner a few lines apart on separate
+   * fire-and-forget connections, and every ORIGINAL clause of `isRunDowngrade`
+   * reads them as equals: same settled-leg count, same turn count, both
+   * `running`, both without `finishedAt`. `ingestChains` serialises by ARRIVAL,
+   * not by emission, so delivered the wrong way round the settle landed on top
+   * of the start and leg `i` reverted to `pending` — losing the `startedAt`
+   * this task exists to deliver, for the whole of that leg. Before the change
+   * the pair did not exist at all: consecutive settles are minutes apart.
+   *
+   * `startedLegCount` is what separates them. `startedAt` is stamped once and
+   * never cleared, so it only grows within a run: the start snapshot has begun
+   * two legs, the settle before it only one, and the older one is refused.
+   */
+  it('rejects a settle that overtakes the next leg-start, so the leg keeps its start', async () => {
+    const { service, repo } = build();
+    await service.ingest(ev('agent:tour:started', { tour: makeRun({ legs: legsAt(0, 'pending') }) }));
+    // Emitted second, delivered first.
+    await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(1, 'running') }) }));
+    // Emitted first, delivered second — and now correctly seen as a downgrade.
+    await service.ingest(ev('agent:tour:leg', { tour: makeRun({ legs: legsAt(0, 'done') }) }));
+
+    expect(isRunDowngrade(makeRun({ legs: legsAt(1, 'running') }), makeRun({ legs: legsAt(0, 'done') }))).toBe(true);
+    // Leg 1 is still `running` and still holds the stamp the banner reads.
+    expect(repo.runs.get('run-1')?.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(repo.runs.get('run-1')?.legs[1].startedAt).toBe('2026-08-17T10:02:00.000Z');
+    // In-order delivery is unaffected: the settle still applies when it is the
+    // newer snapshot, which is the case that must NOT regress.
+    expect(isRunDowngrade(makeRun({ legs: legsAt(0, 'done') }), makeRun({ legs: legsAt(1, 'running') }))).toBe(false);
   });
 });
 

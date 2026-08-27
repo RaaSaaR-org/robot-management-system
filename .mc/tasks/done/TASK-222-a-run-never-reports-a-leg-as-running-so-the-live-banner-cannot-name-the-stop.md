@@ -4,7 +4,7 @@ aliases:
 - TASK-222
 title: A run never reports a leg as running, so the live banner on /tour (and /patrol) cannot name the stop the robot is at
 slug: a-run-never-reports-a-leg-as-running-so-the-live-banner-cannot-name-the-stop
-status: todo
+status: done
 priority: 3
 owner: ''
 projects: []
@@ -214,3 +214,64 @@ it that the sim does not show.
   when that leg settles. After the fix it learns it at the start, which makes
   "how long has the robot been at this stop" answerable live — a small thing the
   run detail page could use later.
+
+## Outcome (2026-08-27)
+
+Done. The two-line emit landed as described — `host.ts` `TourRunner.drive` and
+`patrol.ts` `PatrolRunner.drive` now report a leg at its start as well as at its
+settle, below the skip guard in both, so a skipped leg still announces nothing.
+`n` legs started produce `2n` leg events instead of `n`.
+
+**The task's "No change is expected" for the server and the frontend turned out
+to be wrong, and that is the substance of this change.**
+
+Doubling the leg events created a pair that had not existed before:
+`settle(leg i-1)` and `start(leg i)` leave the runner a few lines apart, on
+separate fire-and-forget connections, and every clause `isRunDowngrade` had read
+them as equal — same settled-leg count, same status, neither carrying
+`finishedAt`. Ingest orders by ARRIVAL, not emission. Delivered the wrong way
+round, the stale settle applied on top of the start, reverting leg `i` to
+`pending` and dropping the `startedAt` this task exists to deliver — putting the
+banner back on its generic fallback for the whole of that leg. Consecutive
+settles are minutes apart, so the window did not exist before.
+
+Closed by ranking snapshots on STARTED legs as well as settled ones.
+`startedAt` is stamped once when a leg begins and never cleared, so the count
+only grows within a run: the start snapshot has begun two legs, the settle
+before it one, and the older one is refused. Applied to all four guards, which
+had drifted apart and are now genuine mirrors again:
+
+- `server/src/services/TourService.ts` — `startedLegCount` + clause
+- `server/src/services/PatrolService.ts` — `startedLegCount` + clause, plus the
+  `findingCount` clause the app store had grown and the server lacked
+- `app/src/features/tour/store/tourStore.ts` — in `isProgressDowngrade`
+- `app/src/features/patrol/store/patrolStore.ts` — in `isRunDowngrade`
+
+The same clause closes a second defect: a reordered leg-start could write the
+`patrol.run.started` compliance record twice, because `ingestRun`'s second arm
+fires for any run-carrying event that is the first the server has seen and
+`audit()` does not dedupe. `agent:patrol:started` is emitted at the top of
+`drive()`, before the leg loop, so its snapshot has zero legs started — arriving
+late it is now refused before it reaches the audit. The audit condition itself
+was deliberately NOT special-cased: every dedupe key available there ("the row
+already exists") is also true when a finding event created the row without
+auditing, so keying on it would DROP the record in that case, and a duplicated
+compliance record is recoverable where a missing one is not.
+
+**Verified:** removing the `startedLegCount` clause fails the three server tests
+that cover it, and removing the two `emit` lines fails eight robot-agent tests.
+Server 215 files / 5624 passed (+10 on baseline), app 113 / 2010 (+17),
+robot-agent agent-mode 47 / 1010 (+2). Typecheck clean in all three.
+
+**NOT verified — the acceptance step that needs a running robot.** The Test
+Strategy's live checks (walk a tour in the sim, watch `/tour` and `/agent`
+agree, confirm no flicker back to the generic string) were NOT run: no sim or
+robot was available. The event-count table above is derived by inspection and
+from unit tests, not from a warehouse run. That check is the one thing still
+owed on this task.
+
+**Doc drift fixed:** `app/src/features/agentmode/utils/planQuery.ts` justified
+reading the plan rather than the run with "a run snapshot only reaches the
+console when a leg SETTLES", which this change makes untrue. The code is right
+to keep using the plan — it resolves position WITHIN a stop, and survives a page
+reload — so the comment was corrected rather than the behaviour.

@@ -150,20 +150,48 @@ function settledLegCount(legs: PatrolLeg[] | undefined): number {
 }
 
 /**
+ * How many legs have been STARTED — the count that orders a leg-start snapshot
+ * against the settle immediately before it.
+ *
+ * `startedAt` is stamped once, when the leg begins, and never cleared, so this
+ * only ever grows within a run. A checkpoint the runner skipped never starts and never
+ * stamps it, so a skipped leg does not inflate the count on either side.
+ */
+function startedLegCount(legs: PatrolLeg[] | undefined): number {
+  return (legs ?? []).filter((l) => l.startedAt).length;
+}
+
+/**
  * True when `incoming` is an OLDER snapshot of the run than the one we hold: it
- * would move a terminal run back to 'running', drop `finishedAt`, or report fewer
- * settled legs. Mirrors `isRunDowngrade` in server/src/services/PatrolService.ts —
- * every `agent:patrol:*` event carries the whole run and the robot pushes them
- * fire-and-forget over separate connections, so a `leg` (or a finding's embedded
- * run) can land after the `finished` it preceded. The server guards its own rows
- * but broadcasts the RAW event, so without this the map overlay — which has no
- * polling to heal it — keeps claiming a parked robot is still patrolling.
+ * would move a terminal run back to 'running', drop `finishedAt`, report fewer
+ * settled legs, or report fewer FINDINGS. Mirrors `isRunDowngrade` in
+ * server/src/services/PatrolService.ts — every `agent:patrol:*` event carries the
+ * whole run and the robot pushes them fire-and-forget over separate connections,
+ * so a `leg` (or a finding's embedded run) can land after the `finished` it
+ * preceded. The server guards its own rows but broadcasts the RAW event, so
+ * without this the map overlay — which has no polling to heal it — keeps claiming
+ * a parked robot is still patrolling.
+ *
+ * The findings clause is what the leg-START event needed (TASK-222). A leg-start
+ * and a finding raised during that same leg both report the checkpoint as
+ * `running`, so they carry the same settled-leg count and the clause below cannot
+ * order them — yet the leg-start is the older of the two, and applying it late
+ * walked `findingCount` back to zero and took the node's amber badge with it.
+ * Findings only accumulate within a run (the retention sweep deletes photos, not
+ * findings), so fewer of them means an older snapshot — exactly as fewer turns
+ * does in tourStore.
  */
 function isRunDowngrade(stored: PatrolRun | null | undefined, incoming: PatrolRun): boolean {
   if (!stored) return false;
   if (TERMINAL_RUN_STATUSES.has(stored.status) && !TERMINAL_RUN_STATUSES.has(incoming.status)) return true;
   if (stored.finishedAt && !incoming.finishedAt) return true;
-  return settledLegCount(incoming.legs) < settledLegCount(stored.legs);
+  if (incoming.findingCount < stored.findingCount) return true;
+  if (settledLegCount(incoming.legs) < settledLegCount(stored.legs)) return true;
+  // Settled legs alone stopped being enough when TASK-222 added the leg-START
+  // event: `settle(leg i-1)` and `start(leg i)` settle the same number of legs,
+  // so the clause above cannot order them and a reordered `settle(i-1)` walked
+  // leg i back to `pending`. See the twin in tourStore.
+  return startedLegCount(incoming.legs) < startedLegCount(stored.legs);
 }
 
 /**

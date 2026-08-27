@@ -9,8 +9,9 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useTourStore, selectActiveRuns, selectRunById } from '../tourStore';
+import { currentLeg } from '../../utils/tourFormat';
 import { tourApi } from '../../api/tourApi';
-import type { AgentModeEvent, TourRun, TourTurn } from '../../types/tour.types';
+import type { AgentModeEvent, TourLeg, TourRun, TourTurn } from '../../types/tour.types';
 
 vi.mock('../../api/tourApi', () => ({
   tourApi: {
@@ -159,6 +160,192 @@ describe('tourStore.applyEvent', () => {
   it('ignores events that are not about a tour', () => {
     useTourStore.getState().applyEvent({ type: 'agent:scene:updated', robotId: 'g1', timestamp: 'now' });
     expect(useTourStore.getState().runs).toHaveLength(0);
+  });
+});
+
+describe('tourStore leg-start events (TASK-222)', () => {
+  // The robot now emits `agent:tour:leg` when a leg STARTS as well as when it
+  // settles (`TourRunner.drive` in robot-agent/src/agent-mode/host.ts). Before
+  // that every snapshot the store folded in read "0..i done, i+1..n pending" —
+  // no leg was ever `running`, so the banner could not name the stop and the
+  // stepper never highlighted it. These pin the guard's arithmetic against the
+  // new event: the extra emit must land, and its late twin must not.
+
+  /** A three-stop route as one status per stop, under a run id of its own. */
+  const at = (runId: string, ...statuses: TourLeg['status'][]): TourRun =>
+    run({
+      runId,
+      legs: statuses.map((status, index) => ({
+        index,
+        stopId: `stop-${index}`,
+        placeId: `PLACE-${index}`,
+        name: `Stop ${index}`,
+        status,
+      })),
+    });
+
+  it('a leg-start event puts a running leg into the active run', () => {
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', at('ls-1', 'pending', 'pending', 'pending')));
+    // Between legs there is no stop to name — this is the fallback state.
+    expect(currentLeg(selectActiveRuns(useTourStore.getState())[0])).toBeNull();
+
+    store.applyEvent(event('agent:tour:leg', at('ls-1', 'running', 'pending', 'pending')));
+    const active = selectActiveRuns(useTourStore.getState())[0];
+    expect(active.legs[0].status).toBe('running');
+    expect(currentLeg(active)?.index).toBe(0);
+  });
+
+  it('the start of the NEXT stop is accepted even though it settles nothing new', () => {
+    // The whole fix rests on this: the guard rejects a snapshot reporting FEWER
+    // settled legs, and a leg-start carries exactly as many as the settle just
+    // before it (`running` is not settled). Equal is not fewer.
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', at('ls-2', 'pending', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', at('ls-2', 'running', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', at('ls-2', 'done', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', at('ls-2', 'done', 'running', 'pending')));
+
+    const stored = useTourStore.getState().runsById['ls-2'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(currentLeg(stored)?.index).toBe(1);
+  });
+
+  it('a late leg-start never walks the run back to a stop the robot has left', () => {
+    // The reverse ordering, and the one that matters: stop 2's start arriving
+    // after stop 2 settled reports one settled leg fewer, so it is a downgrade.
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', at('ls-3', 'pending', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', at('ls-3', 'done', 'running', 'pending')));
+    store.applyEvent(event('agent:tour:leg', at('ls-3', 'done', 'done', 'pending')));
+    store.applyEvent(event('agent:tour:leg', at('ls-3', 'done', 'running', 'pending')));
+
+    const stored = useTourStore.getState().runsById['ls-3'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'done', 'pending']);
+    expect(currentLeg(stored)).toBeNull();
+  });
+
+  it('a leg-start that predates a question does not delete the question', () => {
+    // Tour's own clause: the transcript only grows, so a snapshot with fewer
+    // turns is older. A visitor asking mid-leg is exactly when that leg's start
+    // event is still in flight — and the turn's own snapshot already carries the
+    // running leg, so rejecting the leg-start costs the banner nothing.
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', at('ls-4', 'pending', 'pending', 'pending')));
+    const midLeg = { ...at('ls-4', 'running', 'pending', 'pending'), turns: [turn()] };
+    store.applyEvent(event('agent:tour:turn', midLeg, turn()));
+    store.applyEvent(event('agent:tour:leg', at('ls-4', 'running', 'pending', 'pending')));
+
+    const stored = useTourStore.getState().runsById['ls-4'];
+    expect(stored.turns).toHaveLength(1);
+    expect(stored.legs[0].status).toBe('running');
+  });
+
+  it('a leg-start arriving after the tour finished does not resurrect it', () => {
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', at('ls-5', 'pending', 'pending', 'pending')));
+    store.applyEvent(
+      event('agent:tour:finished', {
+        ...at('ls-5', 'done', 'done', 'done'),
+        status: 'done',
+        finishedAt: '2026-08-17T10:08:00.000Z',
+      })
+    );
+    store.applyEvent(event('agent:tour:leg', at('ls-5', 'done', 'done', 'running')));
+
+    const s = useTourStore.getState();
+    expect(s.runsById['ls-5'].status).toBe('done');
+    expect(s.runsById['ls-5'].legs[2].status).toBe('done');
+    expect(s.activeRunByRobot.g1).toBeUndefined();
+  });
+
+  it('the banner’s selector sees pending → running, not only running → done', () => {
+    // `selectActiveRuns` memoises on one character per leg status. `p` and `r`
+    // differ, so the leg-start invalidates the cache and the banner re-renders
+    // with the stop named; a read that changes nothing still returns the cache.
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', at('ls-6', 'pending', 'pending', 'pending')));
+    const before = selectActiveRuns(useTourStore.getState());
+    expect(before).toBe(selectActiveRuns(useTourStore.getState()));
+
+    store.applyEvent(event('agent:tour:leg', at('ls-6', 'running', 'pending', 'pending')));
+    const after = selectActiveRuns(useTourStore.getState());
+    expect(after).not.toBe(before);
+    expect(after[0].legs[0].status).toBe('running');
+    expect(selectActiveRuns(useTourStore.getState())).toBe(after);
+  });
+
+  /**
+   * The same three-stop snapshot as `at`, stamped the way `TourRunner.drive`
+   * stamps a leg: `startedAt` the moment it goes `running`, `finishedAt` when it
+   * settles. `at` leaves both off, which is enough for the clauses that only
+   * count statuses — but the clause the pair of tests below pins reads the STAMP,
+   * so they need legs shaped the way the wire really carries them.
+   */
+  const stamped = (runId: string, ...statuses: TourLeg['status'][]): TourRun => {
+    const base = at(runId, ...statuses);
+    return {
+      ...base,
+      legs: base.legs.map((l) => {
+        if (l.status === 'pending') return l;
+        const started: TourLeg = { ...l, startedAt: `2026-08-17T10:0${l.index * 2}:00.000Z` };
+        if (l.status === 'running') return started;
+        return { ...started, finishedAt: `2026-08-17T10:0${l.index * 2 + 1}:00.000Z` };
+      }),
+    };
+  };
+
+  /**
+   * The reordering window the extra event opens, and the clause that closes it.
+   *
+   * `settle(leg i-1)` and `start(leg i)` leave the runner a few lines apart and
+   * are pushed fire-and-forget over separate connections, and every ORIGINAL
+   * clause of `isProgressDowngrade` reads them as equals: the same SETTLED leg
+   * count (`running` is not settled), the same status, neither carrying
+   * `finishedAt`. Delivered the wrong way round the stale settle therefore
+   * landed on top of the start, reverting leg i to `pending` and dropping its
+   * `startedAt` — which put the banner back on its generic `· walking` fallback
+   * for the whole of leg i, the exact defect TASK-222 exists to remove. Before
+   * this task the pair could not occur at all: consecutive settles are minutes
+   * apart.
+   *
+   * `startedLegCount` is what separates them. `startedAt` is stamped once and
+   * never cleared, so it only grows within a run: the start snapshot has begun
+   * two legs, the settle before it only one, and the older one is refused.
+   */
+  it('a settle that overtakes the next leg-start is refused, so the leg keeps its start', () => {
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', stamped('ls-7', 'pending', 'pending', 'pending')));
+    // Emitted second, delivered first: stop 1 has begun.
+    store.applyEvent(event('agent:tour:leg', stamped('ls-7', 'done', 'running', 'pending')));
+    // Emitted first, delivered second: the settle of stop 0, now the older snapshot.
+    store.applyEvent(event('agent:tour:leg', stamped('ls-7', 'done', 'pending', 'pending')));
+
+    const stored = useTourStore.getState().runsById['ls-7'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(stored.legs[1].startedAt).toBe('2026-08-17T10:02:00.000Z');
+    // …and the consequence the visitor's escort actually sees: the banner can
+    // still name the stop the robot is standing at, rather than falling back.
+    const active = selectActiveRuns(useTourStore.getState())[0];
+    expect(currentLeg(active)?.index).toBe(1);
+    expect(currentLeg(active)?.name).toBe('Stop 1');
+  });
+
+  it('in-order delivery of that same pair still applies both snapshots', () => {
+    // The other half of the clause, and the one a blunt guard would break: a
+    // settle arriving BEFORE the next start is the newer snapshot of the two and
+    // must go in. Both have begun one leg, and equal is not fewer.
+    const store = useTourStore.getState();
+    store.applyEvent(event('agent:tour:started', stamped('ls-8', 'pending', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', stamped('ls-8', 'running', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', stamped('ls-8', 'done', 'pending', 'pending')));
+    store.applyEvent(event('agent:tour:leg', stamped('ls-8', 'done', 'running', 'pending')));
+
+    const stored = useTourStore.getState().runsById['ls-8'];
+    expect(stored.legs.map((l) => l.status)).toEqual(['done', 'running', 'pending']);
+    expect(stored.legs[0].finishedAt).toBe('2026-08-17T10:01:00.000Z');
+    expect(stored.legs[1].startedAt).toBe('2026-08-17T10:02:00.000Z');
+    expect(currentLeg(selectActiveRuns(useTourStore.getState())[0])?.index).toBe(1);
   });
 });
 

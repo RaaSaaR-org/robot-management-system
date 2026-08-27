@@ -872,6 +872,9 @@ export class PatrolRunner {
         leg.status = 'running';
         leg.startedAt = this.stamp();
         this.persist(run, s.findings);
+        // Leg start, emitted as well as the settle below: without it no live
+        // snapshot ever holds a `running` leg (TASK-222).
+        this.deps.emit('agent:patrol:leg', cloneRun(run));
         let legFailed = false;
         let captureFailed = false;
         for (const pb of legBlocks) {

@@ -358,8 +358,13 @@ describe('PatrolRunner — leg semantics', () => {
     expect(done.legs.map((l) => l.inspection)).toEqual(['recorded', 'recorded', 'recorded']);
     expect(done.legs[0]!.photoKey).toBe(`${run.runId}/cp-hall.jpg`);
     expect(s.ran).toEqual(['speak', 'goto:HALLWAY', 'capture:cp-hall', 'goto:KITCHEN', 'capture:cp-kitchen', 'wait', 'goto:LIVING-ROOM', 'capture:cp-living', 'scan_room', 'goto:HALLWAY']);
+    // Three checkpoints, six leg events: each is announced when it starts and
+    // again when it settles (TASK-222).
     expect(h.events.map((e) => e.type)).toEqual([
       'agent:patrol:started',
+      'agent:patrol:leg',
+      'agent:patrol:leg',
+      'agent:patrol:leg',
       'agent:patrol:leg',
       'agent:patrol:leg',
       'agent:patrol:leg',
@@ -375,6 +380,32 @@ describe('PatrolRunner — leg semantics', () => {
     expect(h.runner.active()).toBeNull();
     expect(h.runner.lastRun()?.runId).toBe(run.runId);
     expect(h.runner.runs!.listRuns(5)[0]!.runId).toBe(run.runId);
+  });
+
+  // The run used to report a checkpoint only once it had SETTLED, so no
+  // snapshot on the wire ever held a `running` leg and `/patrol`'s banner could
+  // not name the checkpoint the robot was standing at. The assertion that
+  // matters is on the leg statuses INSIDE each payload — names alone would pass
+  // either way, which is exactly how this survived a release.
+  it('announces each checkpoint twice: running when it starts, done when it settles', async () => {
+    h.runner.begin(ROUTE, 'patrol', 'scheduled', 'night');
+    const s = scriptedExec(() => ({ ok: true, message: 'ok' }));
+    await h.runner.drive('plan-running', s.exec);
+
+    const legs = h.events.filter((e) => e.type === 'agent:patrol:leg');
+    expect(legs.map((e) => e.run.legs.map((l) => l.status).join(','))).toEqual([
+      'running,pending,pending',
+      'done,pending,pending',
+      'done,running,pending',
+      'done,done,pending',
+      'done,done,running',
+      'done,done,done',
+    ]);
+    // The start event is what makes "how long has it been at this checkpoint"
+    // answerable live: it carries `startedAt` and not yet `finishedAt`.
+    expect(legs[0]!.run.legs[0]!.startedAt).toBeTruthy();
+    expect(legs[0]!.run.legs[0]!.finishedAt).toBeUndefined();
+    expect(legs[1]!.run.legs[0]!.finishedAt).toBeTruthy();
   });
 
   it('promoteRun makes a patrol run the baseline AND re-uploads its photos as kind baseline (skipping person legs)', async () => {
@@ -503,7 +534,7 @@ describe('PatrolRunner — leg semantics', () => {
     expect(s.skipped).toEqual(['capture:cp-kitchen: leg failed', 'inspect:cp-kitchen: leg failed', 'wait: leg failed']);
     expect(s.ran).toContain('goto:LIVING-ROOM');
     expect(s.ran.at(-1)).toBe('goto:HALLWAY');
-    expect(h.events.filter((e) => e.type === 'agent:patrol:leg')).toHaveLength(3);
+    expect(h.events.filter((e) => e.type === 'agent:patrol:leg')).toHaveLength(6);
   });
 
   it('two consecutive failed legs abort the run, skip the rest, and STILL go home', async () => {
@@ -523,6 +554,9 @@ describe('PatrolRunner — leg semantics', () => {
     expect(s2.skipped).toEqual(expect.arrayContaining(['goto:LIVING-ROOM: two consecutive legs failed', 'capture:cp-living: two consecutive legs failed']));
     expect(h.events.at(-1)!.type).toBe('agent:patrol:finished');
     expect(h.events.at(-1)!.run.status).toBe('aborted');
+    // Two legs ran, so four leg events; the skipped third says nothing — the
+    // start emit sits below the skip guard (TASK-222).
+    expect(h.events.filter((e) => e.type === 'agent:patrol:leg')).toHaveLength(4);
   });
 
   it('an external abort (E-Stop) stops after the block in flight, skips the rest and does NOT go home', async () => {
