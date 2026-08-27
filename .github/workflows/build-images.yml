@@ -31,6 +31,13 @@ jobs:
   build-app:
     name: Build App Image
     runs-on: ubuntu-latest
+    # Bounded because these builds emulate linux/arm64 through QEMU, and a QEMU
+    # crash does not fail the build -- it hangs it. On the v2026.08.21 release
+    # this job logged `qemu: uncaught target signal 4 (Illegal instruction) -
+    # core dumped` inside the arm64 `npm ci` and then sat idle until GitHub
+    # killed it at the 6-hour ceiling. A bounded failure is diagnosable; a
+    # 6-hour one just burns the runner.
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -77,6 +84,13 @@ jobs:
   build-server:
     name: Build Server Image
     runs-on: ubuntu-latest
+    # Bounded because these builds emulate linux/arm64 through QEMU, and a QEMU
+    # crash does not fail the build -- it hangs it. On the v2026.08.21 release
+    # this job logged `qemu: uncaught target signal 4 (Illegal instruction) -
+    # core dumped` inside the arm64 `npm ci` and then sat idle until GitHub
+    # killed it at the 6-hour ceiling. A bounded failure is diagnosable; a
+    # 6-hour one just burns the runner.
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -119,6 +133,13 @@ jobs:
   build-robot-agent:
     name: Build Robot Agent Image
     runs-on: ubuntu-latest
+    # Bounded because these builds emulate linux/arm64 through QEMU, and a QEMU
+    # crash does not fail the build -- it hangs it. On the v2026.08.21 release
+    # this job logged `qemu: uncaught target signal 4 (Illegal instruction) -
+    # core dumped` inside the arm64 `npm ci` and then sat idle until GitHub
+    # killed it at the 6-hour ceiling. A bounded failure is diagnosable; a
+    # 6-hour one just burns the runner.
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

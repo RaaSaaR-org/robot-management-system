@@ -113,7 +113,10 @@ install, no API key and no account. This is the path CI exercises.
 
 ### Prerequisites
 
-- **Node.js 22** (CI runs server and robot-agent on 22, the app on 20)
+- **Node.js 24** for the robot agent, 22 for the server and app. The robot agent's
+  lockfile is written by npm 11, and `npm ci` fails under npm 10 (Node 20/22)
+  with `Missing: @xterm/xterm@6.0.0 from lock file` — CI pins that job to 24 for
+  this reason, and so does `robot-agent/Dockerfile`.
 - **Python 3.11+** — only if you want the robot-agent hardware sidecars or the `sim_g1_dds`
   MuJoCo/cyclonedds simulator. Not needed for the steps below.
 - No Docker, no PostgreSQL. The committed Prisma schema targets SQLite
@@ -259,7 +262,7 @@ cd ../training-worker && <see that repo's README>   # polls this server for jobs
 |-----------|-------|------|-------|
 | **App** | React 19, TypeScript 5.8, Vite 7, Tauri | 1420 | Web and desktop from one codebase |
 | **Server** | Node.js 22, Express 4, Prisma 6 | 3001 | REST + WebSocket at `/api/a2a/ws` |
-| **Robot Agent** | Node.js 22, Genkit, A2A SDK | 41243 | Code default; **profile-dependent** — `dev:g1` uses 41244, `dev:g1-edu` 41245, the Agent Mode profile 41246 |
+| **Robot Agent** | Node.js 24, Genkit, A2A SDK | 41243 | Code default; **profile-dependent** — `dev:g1` uses 41244, `dev:g1-edu` 41245, the Agent Mode profile 41246 |
 | **Hardware sidecar** | Python 3.11+, cyclonedds | 8765 (SO-101) | `g1_sidecar.py` bridges DDS ↔ HTTP and adds `/loco/*` for Agent Mode |
 | **VLA Server** | Python, FastAPI | 8000 | **Separate repo** `../vla-server` |
 
