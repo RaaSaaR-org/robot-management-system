@@ -42,16 +42,27 @@ status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes it
 | `task185_serve_n17.sh` | **GONE** |
 | `eval_g1_sim_groot_success.py` (the closed-loop harness) | **GONE** |
 | `start_sim_pickplace_dex3.bat` | **GONE** (and `.bat` is moot here anyway) |
-| Raw `unitreerobotics/G1_Dex3_*` datasets | **present** — `~/wam-t041/raw/` + HF cache |
+| Raw `unitreerobotics/G1_Dex3_*` datasets | **present but UNUSABLE** — 26 GB of `videos/` + `meta/` only; **zero** `data/*.parquet`, so no state/action. HF cache entries are empty stubs (156 KB). Must be re-fetched. |
 | Merged 182-episode `unitree_g1_train` | **not present**; nearest is `~/wam-t041/datasets/arm-A` (402 eps / 171,625 frames), a different set |
-| `Isaac-GR00T`, incl. `gr00t/eval/run_gr00t_server.py` | **present** |
+| `Isaac-GR00T`, incl. `gr00t/eval/run_gr00t_server.py` | **present** (`~/Isaac-GR00T`) |
+| `~/develop/vla-training` — committed GR00T prepare/finetune/serve scripts + Isaac closed-loop eval | **present** |
+| **`vla-training/groot/g1_dex3_2cam_modality_config.py`** | **present** — lever 1 below says to *build* this; it already exists |
+| TASK-189's eval harness (`grid.py`, `eval_rollouts.py`, `guards.py`, `stats.py`, `analyze.py`) | **GONE** — and [[TASK-189]] is filed `done`, so the dependency graph wrongly reads as satisfied |
 | GPU | **present** — RTX 5090, 32 GB |
 
-So the blocker is no longer "the harness lives on another machine". **The harness
-no longer exists anywhere.** The data and the GPU do. Before any of the three
-levers below can be attempted, the training and closed-loop-eval harness has to
-be rebuilt on Linux, and the training set rebuilt or re-merged — TASK-180, in
-`done/`, documents the merge that produced it.
+⚠ **Corrected 2026-08-28, after review — an earlier version of this banner said
+"the harness no longer exists anywhere" and "the data and the GPU are here".
+Both were wrong, in opposite directions.**
+
+Most of the *tooling* survived: `~/develop/vla-training` is a committed repo
+carrying the GR00T prepare/finetune/serve scripts, an Isaac closed-loop eval,
+and — note — the 2-camera modality config that **lever 1 below asks someone to
+build**. What it needs is path porting, not a rewrite.
+
+What is genuinely missing is the *data*: all 13 raw dataset directories hold
+`videos/` and `meta/` only, with **no `data/` split and zero per-frame
+state/action parquet**, so no finetune can run against them at all. And
+TASK-189's closed-loop harness — the one that superseded task185's — is gone.
 
 **That rebuild is [[TASK-225]]**, which now blocks this task and [[TASK-187]] and
 is listed in `depends_on` above. Do not start any lever below until it lands.
