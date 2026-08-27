@@ -165,11 +165,15 @@ Two things Isaac needs to start at all here:
    not evidence of walking.
 
    The original diagnosis — the sim stepping at 5–13 Hz against a policy trained for 100 Hz — was
-   real but was **only half the cause**. TASK-204 fixed the rate (14.1 → 52.2 Hz, measured) and the
-   robot still does not walk: it does not even stand, with no velocity command sent at all. The
-   remaining fault is [[TASK-223]], which is now this step's actual blocker. Six candidate causes
-   have been tested and five refuted; the negative results are recorded there so they are not
-   re-run.
+   **not a cause at all**, and this is worth understanding before picking the step up. `decimation 4`
+   × `sim.dt 0.005` pins the policy at 50 Hz of *simulated* time whatever the host does; the slow
+   number was real-time factor (0.28), which starves a wall-clock caller such as
+   `isaac_loco_bridge.py` but tells the policy nothing. TASK-204 fixed that (RTF 0.28 → 1.04, and
+   worth having for exactly this step, since Agent Mode drives the bridge on wall clock) and the
+   robot still does not walk: it does not even stand, with no velocity command sent. The actual
+   blocker is [[TASK-223]]. Candidate causes tested there are recorded with their negative results
+   so they are not re-run — and note that the two "different control rate" retests were dynamically
+   the same experiment, so they are not among the useful negatives.
 3. ~~The `sport` RPC facade answers `SetVelocity`~~ — **done 2026-08-08.** `isaac_loco_check.py`
    passes 7/7 (six velocity cases including lateral and yaw, plus command expiry) driving an
    unmodified `LocoClient` with no bridge code imported. Run `isaac_loco_bridge.py --domain 1`

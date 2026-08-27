@@ -3,8 +3,8 @@
 @file isaac_gait_probe.py
 @description Does the G1 actually walk in the Isaac wholebody sim? Subscribes
     rt/lowstate, drives rt/run_command/cmd through an idle -> forward -> idle
-    profile, and reports the three acceptance criteria: knees and ankles off
-    their limits, feet alternating (make/break contact), base upright.
+    profile, and reports three proxies for the acceptance criteria: knees and
+    ankles off their limits, left/right knee antiphase, base upright.
 @feature hardware
 
 Read-only apart from the velocity command it publishes. Written for TASK-204
@@ -14,10 +14,21 @@ Run from the `unitree_sim_env6` env with CYCLONEDDS_HOME set, against a sim
 started per isaac_sim_patches/README.md:
 
     python isaac_gait_probe.py [--domain 1] [--vx 0.5] [--secs 20]
+    python isaac_gait_probe.py --no-command          # publish nothing at all
 
 `imu_state.rpy` is all zeros in this sim -- attitude is derived from
 `imu_state.quaternion` (w, x, y, z), whose norm is checked so a genuine fall
 can be told apart from bad data.
+
+Two things this probe does NOT measure, so that its output is not over-read:
+
+* **Foot contact.** `unitree_hg`'s `LowState_` has no `foot_force` field (that
+  is the `go` IDL), so nothing here observes make/break contact. The antiphase
+  line is a left/right *knee-deviation correlation* -- a robot lying on its
+  side thrashing its knees in antiphase scores the same as one that is walking.
+  Read it only together with the upright line. Real contact needs the sim's own
+  contact sensor (`scene.contact_forces`), from inside the sim.
+* **Anything in simulated time.** Every rate printed here is wall clock.
 """
 import argparse
 import math, sys, time, threading
@@ -54,22 +65,41 @@ def main():
     ap.add_argument("--vx", type=float, default=0.5, help="forward velocity command, m/s")
     ap.add_argument("--secs", type=float, default=20.0, help="seconds to hold the command")
     ap.add_argument("--height", type=float, default=0.8, help="height command")
+    ap.add_argument("--no-command", action="store_true",
+                    help="publish nothing on rt/run_command/cmd -- observe the sim's "
+                         "own default behaviour (TASK-223 test 1). --vx is ignored.")
     a = ap.parse_args()
     ChannelFactoryInitialize(a.domain)
     sub = ChannelSubscriber("rt/lowstate", LowState_); sub.Init(on_state, 10)
     pub = ChannelPublisher("rt/run_command/cmd", String_); pub.Init()
 
     def drive(name, cmd, secs):
+        """Hold `cmd` for `secs`. `cmd is None` publishes nothing at all.
+
+        Publishing [0,0,0,height] is NOT the same experiment as publishing
+        nothing: the provider self-defaults to [0,0,0,0.8] only when no command
+        has ever arrived, so a zero command still exercises the command path.
+        TASK-223's test 1 is written as "with no velocity command", which needs
+        --no-command.
+        """
         phase["name"] = name
-        print(f"[probe] {name}: cmd={cmd} for {secs}s", flush=True)
+        print(f"[probe] {name}: cmd={cmd if cmd is not None else 'NONE (publishing nothing)'} "
+              f"for {secs}s", flush=True)
         t0 = time.time()
         while time.time() - t0 < secs:
-            pub.Write(String_(data=str(cmd)))
+            if cmd is not None:
+                pub.Write(String_(data=str(cmd)))
             time.sleep(0.05)
 
-    drive("settle",  [0.0,  0.0, 0.0, a.height], 8)
-    drive("forward", [a.vx, 0.0, 0.0, a.height], a.secs)
-    drive("stop",    [0.0,  0.0, 0.0, a.height], 5)
+    if a.no_command:
+        # One long observation window; there is no command to step through.
+        drive("settle",  None, 8)
+        drive("forward", None, a.secs)
+        drive("stop",    None, 5)
+    else:
+        drive("settle",  [0.0,  0.0, 0.0, a.height], 8)
+        drive("forward", [a.vx, 0.0, 0.0, a.height], a.secs)
+        drive("stop",    [0.0,  0.0, 0.0, a.height], 5)
 
     with lock:
         data = list(samples)
@@ -98,10 +128,28 @@ def main():
     # gait rhythm: zero-crossings of each knee about its own mean, and whether
     # left and right are in antiphase (alternating stance = feet swapping contact)
     print("\n--- gait rhythm ---")
-    def crossings(vs):
-        m = sum(vs)/len(vs); c = 0
-        for a, b in zip(vs, vs[1:]):
-            if (a-m) * (b-m) < 0: c += 1
+    def crossings(vs, band_frac=0.10):
+        """Count mean-crossings with a deadband, Schmitt-trigger style.
+
+        A bare sign test about the mean counts every sample-to-sample wobble,
+        so sensor jitter inflates the cadence without bound and small noise can
+        be read as a "rhythm". A crossing only counts here once the signal has
+        travelled `band_frac` of its own peak-to-peak range past the mean, so
+        the reported cadence is a floor rather than an artefact.
+        """
+        m = sum(vs)/len(vs)
+        band = (max(vs) - min(vs)) * band_frac
+        if band <= 0:
+            return 0, m
+        c = 0
+        side = 0                       # -1 below the band, +1 above, 0 inside
+        for v in vs:
+            if v > m + band and side <= 0:
+                if side == -1: c += 1
+                side = 1
+            elif v < m - band and side >= 0:
+                if side == 1: c += 1
+                side = -1
         return c, m
     dur = fwd[-1][0] - fwd[0][0]
     lk = [s[2][3] for s in fwd]; rk = [s[2][9] for s in fwd]
@@ -141,8 +189,12 @@ def main():
     print("\n=== VERDICT ===")
     ok_limits = not any(pinned)
     print(f"knees/ankles off their limits : {'PASS' if ok_limits else 'FAIL'}")
-    print(f"feet alternating (antiphase)  : {'PASS' if corr < -0.3 else 'FAIL'}")
+    print(f"L/R knee antiphase (proxy)    : {'PASS' if corr < -0.3 else 'FAIL'}"
+          f"   [knee correlation, NOT foot contact -- see module docstring]")
     print(f"base upright (|rp| < 0.5 rad) : {'PASS' if upright else 'FAIL'}")
+    if corr < -0.3 and not upright:
+        print("NOTE: antiphase knees with a fallen base is thrashing, not a gait.")
     return 0 if (ok_limits and corr < -0.3 and upright) else 1
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

@@ -17,7 +17,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-08-28
 status_note: 'Found while verifying TASK-204. The rate fix worked (14 -> 52-61 Hz) and
   the gait still does not appear: the robot tumbles continuously even with NO velocity
   command. Second, independent fault. This, not the rate, is now the blocker on TASK-203.'
@@ -28,10 +28,16 @@ status_note: 'Found while verifying TASK-204. The rate fix worked (14 -> 52-61 H
 
 ## Description
 
-`Isaac-Move-Cylinder-G129-Dex3-Wholebody` never produces a gait, and TASK-204 assumed the cause was
-the ~14 Hz control rate starving a policy designed for ~100 Hz. TASK-204 fixed the rate — 52 Hz at
-`--camera_write_interval 10`, 61 Hz at 100 — and **the robot still tumbles**. The remaining fault is
-not rate-related.
+`Isaac-Move-Cylinder-G129-Dex3-Wholebody` never produces a gait. TASK-204 assumed the cause was a
+~14 Hz control rate starving a policy designed for ~100 Hz, fixed it, and **the robot still
+tumbles**.
+
+⚠ **The control rate was never a candidate cause, and the two "retests" that appeared to rule it out
+were the same experiment run twice.** `decimation = 4` × `sim.dt = 0.005` pins the policy at **50 Hz
+of simulated time** regardless of how fast the host loop turns; what TASK-204 changed was real-time
+factor, 0.28 → 1.04. Rate is excluded here on first principles, not by two null results — which
+means the null results carry no information and must not be cited as evidence about anything else.
+See TASK-204's corrected Description.
 
 The decisive observation: with **no velocity command sent at all** (the provider self-defaults to
 `[0, 0, 0, 0.8]`, i.e. stand in place), the base tumbles continuously for the full 20 s of
@@ -39,7 +45,7 @@ observation. This is not a walking failure. It cannot stand.
 
 ## Details
 
-### Evidence (2026-08-27, at 61 Hz, `--device cpu`)
+### Evidence (2026-08-27, at RTF 1.22, `--device cpu`)
 
 `rt/lowstate` on DDS domain 1, sampled at 92.8 Hz, 1853 samples over 20 s, no command published:
 
@@ -59,14 +65,24 @@ observation. This is not a walking failure. It cannot stand.
   | R_ank_roll | -0.262 | 0.262 | 47.2 % |
   | L_knee | -0.087 | 2.880 | 1.9 % (but full-range swings) |
 
-* Knee cadence is ~3.4 Hz with L/R correlation **-0.381** (antiphase). The legs *are* alternating —
-  so the policy is producing structured, rhythmic output, not noise. It is thrashing in a plausible
-  gait rhythm while the body is on the ground.
+* L/R knee correlation is **-0.381** (antiphase) over 1853 samples. **This is the load-bearing
+  number, and it does establish structure:** two independent noise signals of that length give
+  |corr| ≤ 0.09 across 2000 simulated trials (median 0.016), so -0.381 is nowhere near what
+  uncorrelated thrashing produces. The policy is emitting output whose two legs are coupled.
+* Knee cadence "~3.4 Hz" **does not add to that**, and was measured with a tool that overstates it.
+  The original `crossings()` counted every sign change about the mean with no deadband, and pure
+  Gaussian noise scores 24.8 Hz on that statistic — a high cadence is not evidence of rhythm. The
+  probe now uses a 10 %-of-range deadband (clean and jittered 2 Hz sines both read 1.95 Hz; noise
+  still reads high but is no longer confusable with a real gait). **Re-measure the cadence with the
+  fixed probe before quoting it.**
+* Net: "structured, rhythmic, confidently-wrong output rather than noise" survives — on the
+  correlation, not the cadence.
 
 ### What has already been ruled out
 
-* **Control rate** — fixed in TASK-204, retested at both 52 Hz and 61 Hz. No improvement; the 61 Hz
-  run was, if anything, worse (more time pinned).
+* **Control rate** — excluded structurally, not experimentally. The policy sees a fixed 50 Hz of
+  simulated time (`decimation 4 × sim.dt 0.005`) at every wall-clock speed, so it was never a free
+  variable. The "52 Hz vs 61 Hz" retests were dynamically the same run twice.
 * **Stale observation buffers** — `compute_current_observations` re-reads `root_ang_vel_b`,
   `projected_gravity_b`, `joint_pos` and `joint_vel` from the scene on every call. The copies cached
   in `__init__` are shadowed, not used.
@@ -83,8 +99,11 @@ observation. This is not a walking failure. It cannot stand.
 
 Do not re-run these. Each cost a sim boot (~4 min); the negative results are the point.
 
-1. **Control rate — REFUTED.** Fixed in TASK-204 and retested at 52 Hz and 61 Hz. Falls at both. The
-   61 Hz run was marginally *worse* (more time pinned).
+1. **Control rate — EXCLUDED ON FIRST PRINCIPLES (stronger than refuted).** The policy advances
+   0.02 s of simulated time per step at any host speed, so no wall-clock change can alter the
+   dynamics. Do not spend another sim boot varying `--camera_write_interval` and reading the gait;
+   the answer is knowable without running it. (The two runs that were done fell at both, as they
+   had to.)
 2. **`height` command out of range — REFUTED, and the opposite of what it looked like.** The provider
    defaults the 4th command element to `0.8` while upstream's own `send_commands_keyboard.py` clamps
    `height` to `(-0.5, 0.0)`, which looked like an obvious out-of-distribution input. Tested
@@ -105,7 +124,7 @@ Do not re-run these. Each cost a sim boot (~4 min); the negative results are the
    sets `update_default_joint_pos=False` and uses `G129_CFG_WITH_DEX3_WHOLEBODY`'s own init pose,
    which is the correct crouch: hip_pitch -0.20, knee 0.42, ankle_pitch -0.23.
 
-### The strongest remaining lead: the arms are commanded to zero
+### The strongest mechanism, but blocked: the arms are commanded to zero
 
 `get_action` calls `full_action.zero_()`, then fills **only** the legs (policy) and the waist
 (defaults). The 14 arm joints and 14 hand joints are filled **only if a DDS command arrives** —
@@ -125,15 +144,28 @@ provider ignored that `LowCmd_`: check `mode`/`mode_machine`, whether a CRC is r
 `get_robot_command()` needs >= 29 `motor_cmd` entries (the publisher used
 `unitree_hg_msg_dds__LowCmd_()` defaults and set `q`, `kp`, `kd`, `mode` on the first 29).
 
-### Also worth checking
+### Remaining leads, in the order worth spending a sim boot on
 
-* **The robot never holds its init crouch.** The first `rt/lowstate` frame already shows knee ~0.08-0.13
-  against a configured 0.42, so the policy is in control and has already moved the legs before the
-  first frame is published. Whether it is upright at physics step 0 is still unobserved from outside;
-  logging from inside the sim would settle it.
-* **`obs_scales` are all `1.0`** — but this is **upstream's own code**, not a NeoDEM change, so
-  upstream presumably ran it this way successfully. Lower prior than it first appears.
-* **`DelayBuffer(5, ...)`** — a 5-step action delay is 82 ms of latency at 61 Hz.
+Reordered 2026-08-28. Rate is now excluded structurally rather than by experiment, so the leads that
+were ranked below it move up, and the one that was ranked on a fabricated number moves to last.
+
+1. **`obs_scales` are all `1.0`.** Unitree locomotion policies normally train with `ang_vel ≈ 0.25`
+   and `joint_vel ≈ 0.05`; feeding raw values in place of scaled ones is precisely the shape of
+   fault that yields structured, confidently-wrong output — the policy is reading a correctly
+   ordered observation in the wrong units. Counter-argument, and it is a real one: this is
+   **upstream's own code**, so upstream presumably ran it this way successfully. Worth one boot
+   because it is a one-line change and the failure signature fits.
+2. **The arms are commanded to zero** (below) — still the single strongest mechanism, but blocked
+   on a bench question, so it cannot be the *next* boot.
+3. **The robot never holds its init crouch.** The first `rt/lowstate` frame already shows knee
+   ~0.08-0.13 against a configured 0.42, so the policy is in control and has already moved the legs
+   before the first frame is published. Whether it is upright at physics step 0 is still unobserved
+   from outside; logging from inside the sim would settle it — and it is free, no extra boot.
+4. **`DelayBuffer(5, ...)`** — 5 control steps of action delay. ⚠ An earlier version of this file
+   said "82 ms of latency at 61 Hz". **That quantity does not exist**: the delay is 5 × 0.02 s =
+   **100 ms of simulated time, invariant to wall clock**, and cannot be tuned by making the host
+   loop faster. Lowest priority — it is upstream's own value and a policy trained with the same
+   buffer would expect it.
 
 ### Reproducing
 
@@ -150,7 +182,13 @@ a 3-line log and no error — it looks like a startup failure, not GPU contentio
 Same probe as above. The bar is the one TASK-204 step 3 set and could not reach:
 
 1. With no velocity command, the base stays upright — `|roll|` and `|pitch|` derived from the IMU
-   quaternion both stay under 0.5 rad for 30 s.
-2. Under `vx = 0.5`, feet make and break contact, the base translates, and no leg joint spends more
-   than ~5 % of the run within 0.02 rad of a limit.
+   quaternion both stay under 0.5 rad for 30 s. Use `isaac_gait_probe.py --no-command`, which
+   publishes nothing at all. ⚠ `--vx 0` is **not** this test: it still publishes
+   `[0, 0, 0, height]`, exercising the command path. The 2026-08-27 run used `--vx 0` and so tested
+   a zero command, not the absence of one.
+2. Under `vx = 0.5`, the base translates and no leg joint spends more than ~5 % of the run within
+   0.02 rad of a limit. **Foot contact cannot be checked with this probe** — `unitree_hg`'s
+   `LowState_` has no `foot_force` field, so the "antiphase" line is a knee-deviation correlation
+   and a robot thrashing on its side scores the same as one walking. Read it only alongside the
+   upright line, or instrument `scene.contact_forces` from inside the sim.
 3. Then re-run `isaac_loco_check.py --domain 1` (TASK-204 step 4) and close TASK-203 step 2.

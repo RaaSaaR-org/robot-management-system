@@ -54,22 +54,32 @@ cheap half. The patch takes the early-out **before** the copies.
 Behaviour-identical: on a non-capture frame nothing below the early-out is
 consumed, and the return value is the same placeholder object.
 
-**Symptom without it:** the wholebody task holds ~14 Hz against a policy that
-wants ~100 Hz, and the gait degenerates.
+**Symptom without it:** the sim advances ~14 control steps per second of wall
+clock — real-time factor **0.28** — so any caller on wall clock (Agent Mode,
+`isaac_loco_bridge.py`, teleop, episode recording) has its commands consumed
+3.6× slower than it issues them, and falls further behind the longer it runs.
+
+⚠ **This does not change the policy's control rate, and cannot.** `decimation = 4`
+× `sim.dt = 0.005` fixes that at **50 Hz of simulated time** in every
+configuration below. The patch buys real-time factor, which is what an external
+closed-loop consumer needs; it buys the *policy* nothing. If you are chasing a
+robot that will not walk, this knob is not the variable — see TASK-223.
 
 ## Measured effect of hunk 3
 
 Per `get_action`, CUDA-synchronised, ~2000 samples per configuration, task
 `Isaac-Move-Cylinder-G129-Dex3-Wholebody`, `num_envs=1`:
 
-| Configuration | obs | loop | rate |
-|---|---|---|---|
-| Stock, `--device cuda` | 24.5 ms | 67.3 ms | 14.1 Hz |
-| Stock, `--device cpu` | 39.0 ms | 55.4 ms | 17.5 Hz |
-| Patched, `--camera_write_interval 2` | 21.6 ms | 34.4 ms | 29.9 Hz |
-| Patched, `--camera_write_interval 6` | 9.9 ms | 21.2 ms | 46.0 Hz |
-| **Patched, `--camera_write_interval 10`** | **7.8 ms** | **19.0 ms** | **52.2 Hz** |
-| Cameras disabled entirely (upper bound) | 0.3 ms | 11.2 ms | 93 Hz |
+All rates are **wall clock**; simulated-time control rate is 50 Hz in every row.
+
+| Configuration | obs | loop | wall-clock rate | RTF |
+|---|---|---|---|---|
+| Stock, `--device cuda` | 24.5 ms | 67.3 ms | 14.1 Hz | 0.28 |
+| Stock, `--device cpu` | 39.0 ms | 55.4 ms | 17.5 Hz | 0.35 |
+| Patched, `--camera_write_interval 2` | 21.6 ms | 34.4 ms | 29.9 Hz | 0.60 |
+| Patched, `--camera_write_interval 6` | 9.9 ms | 21.2 ms | 46.0 Hz | 0.92 |
+| **Patched, `--camera_write_interval 10`** | **7.8 ms** | **19.0 ms** | **52.2 Hz** | **1.04** |
+| Cameras disabled entirely (upper bound) | 0.3 ms | 11.2 ms | 93 Hz | 1.86 |
 
 Two things this measurement overturned, recorded so nobody re-derives them:
 
@@ -124,6 +134,46 @@ Three traps, each of which presents as something unrelated:
 baseline before relaunching.** A hard kill leaves ~23 GB held for tens of seconds, and a
 sim started into that hangs at 0 % CPU with a 3-line log and no error — it presents as a
 startup failure, not as GPU contention.
+
+## What is NOT covered by any test
+
+Nothing automated exercises anything in this directory — here or upstream.
+Stating it plainly so the green CI badge on the PR that added it is not read as
+coverage:
+
+- The repo's four CI checks (app / server / robot-agent typecheck+build, Prisma)
+  do not touch `.patch` files or any Python under `robot-agent/hardware/`.
+- Nothing runs `git apply --check` against `e30c25b`, so **upstream moving will
+  break this patch silently.** Re-verify by hand after any bump:
+  `cd <checkout> && git apply --check robot-agent/hardware/isaac_sim_patches/0001-*.patch`
+- Per `CLAUDE.md`, the `SIM_PYTHON` / `HARDWARE_PYTHON` pytest stages report
+  **SKIPPED rather than failed** when their interpreter is missing, so a run
+  that says "all tests passed" may have run none of them.
+
+Verification to date is by inspection plus the hand-run measurements above.
+
+## Open hazard this patch makes more likely (pre-existing, not introduced)
+
+`camera_state.py:116-135` takes the **zero-copy** `.numpy()` path when the
+tensor is already on CPU — and the invocation above recommends `--device cpu`.
+Those arrays alias Isaac's reused camera output buffer and are handed to a
+daemon writer thread. This repo already documents the same hazard elsewhere:
+`isaac_capture.py:1118`, *"`.clone()` is load-bearing: the camera's output
+buffer is reused next frame."*
+
+The patch does not create this, but by shortening the loop 3.7× it shortens the
+window between the copy and the buffer's reuse by the same factor — so a tear
+that was rare becomes likelier. It matters most on the VR-teleop record path,
+which runs `--device cpu --enable_cameras` straight into a LeRobot episode.
+
+**Unresolved — two lines on a box with Isaac up would settle it:**
+
+```python
+t = cam.data.output["rgb"][0]; print(t.data_ptr())   # across two steps
+```
+
+Same pointer on consecutive steps ⇒ the buffer is reused and the consumer needs
+`.clone()`. Not yet run; do not assume either answer.
 
 ⚠ Only ever run **one** `sim_main.py` at a time. Its exit handler
 (`sim_main.py:608-668`) pgreps for `sim_main.py` and SIGTERM/SIGKILLs every
