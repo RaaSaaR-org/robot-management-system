@@ -393,9 +393,21 @@ def main() -> None:
     # Populating every type once here, single-threaded, makes each later
     # per-thread Topic creation a no-op lookup. Purely local: builds no channel,
     # opens no socket and emits no DDS traffic, so the read-only contract holds.
+    # populate() itself is what fails on a type the pinned SDK cannot build
+    # ("Failed to encode union ... TypeObject"), so it must not be able to take
+    # the bridge down from here: an optional type that will not populate
+    # disables its own feed, exactly as a missing import does. lowstate is not
+    # optional -- swallowing its failure here only improves the diagnosis, since
+    # its ChannelSubscriber below then raises on its own.
+    populate_failed = set()
     for _idl_type in (hg_LowState, hg_HandState, hg_BmsState, go_SportModeState):
-        if _idl_type is not None:
+        if _idl_type is None:
+            continue
+        try:
             _idl_type.__idl__.populate()
+        except Exception as e:  # noqa: BLE001
+            print(f"[ReadOnlyBridge] {_idl_type.__name__}: populate failed ({e})", flush=True)
+            populate_failed.add(_idl_type)
 
     # Optional feeds first (daemon threads); lowstate runs in the main thread.
     optional_feeds = [
@@ -415,6 +427,9 @@ def main() -> None:
     for topic, idl_type, to_dict, max_hz, idl_name in optional_feeds:
         if idl_type is None:
             print(f"[ReadOnlyBridge] {topic}: IDL {idl_name} unavailable — feed disabled", flush=True)
+            continue
+        if idl_type in populate_failed:
+            print(f"[ReadOnlyBridge] {topic}: IDL {idl_name} did not populate — feed disabled", flush=True)
             continue
         try:
             sub = ChannelSubscriber(topic, idl_type)
