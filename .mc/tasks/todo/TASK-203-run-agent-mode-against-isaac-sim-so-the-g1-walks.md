@@ -160,9 +160,16 @@ Two things Isaac needs to start at all here:
    jobs when capturing.
 2. `unitree_sim_isaaclab` runs the Dex3 wholebody task and the robot walks under keyboard velocity
    commands (`send_commands_keyboard.py`), feet making and breaking contact.
-   **BLOCKED — see TASK-204.** Commands reach the policy and drive all 12 leg joints, but into their
-   limits rather than into a gait: the sim steps at 5–13 Hz against a policy trained for 100 Hz. Joint
-   motion here is not evidence of walking.
+   **BLOCKED — see [[TASK-223]]** (was TASK-204; re-pointed 2026-08-28). Commands reach the policy
+   and drive all 12 leg joints, but into their limits rather than into a gait. Joint motion here is
+   not evidence of walking.
+
+   The original diagnosis — the sim stepping at 5–13 Hz against a policy trained for 100 Hz — was
+   real but was **only half the cause**. TASK-204 fixed the rate (14.1 → 52.2 Hz, measured) and the
+   robot still does not walk: it does not even stand, with no velocity command sent at all. The
+   remaining fault is [[TASK-223]], which is now this step's actual blocker. Six candidate causes
+   have been tested and five refuted; the negative results are recorded there so they are not
+   re-run.
 3. ~~The `sport` RPC facade answers `SetVelocity`~~ — **done 2026-08-08.** `isaac_loco_check.py`
    passes 7/7 (six velocity cases including lateral and yaw, plus command expiry) driving an
    unmodified `LocoClient` with no bridge code imported. Run `isaac_loco_bridge.py --domain 1`
