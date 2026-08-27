@@ -1,0 +1,564 @@
+diff --git a/sim_main.py b/sim_main.py
+--- a/sim_main.py
++++ b/sim_main.py
+@@ -75,6 +75,30 @@
+ parser.add_argument("--camera_exclude", type=str, default="world_camera", help="comma-separated camera names to disable")
+ 
+ parser.add_argument("--env_reward_interval", type=int, default=5, help="environment reward compute interval (steps)")
++# NeoDEM (TASK-186): push/slide success reward. --reward_mode pickplace keeps the
++# stock behaviour bit-for-bit; --reward_mode push selects
++# tasks/common_rewards/base_reward_push_cylindercfg.py on the same rt/rewards_state
++# channel. All --push_* flags below are ignored unless --reward_mode push.
++parser.add_argument("--reward_mode", type=str, default="pickplace", choices=["pickplace", "push"],
++                    help="which success reward to publish on rt/rewards_state")
++parser.add_argument("--push_direction", type=str, default="left",
++                    help="commanded push direction: left|right|forward|backward (robot frame, "
++                         "frozen at episode start) or +x|-x|+y|-y (world frame)")
++parser.add_argument("--push_min_travel", type=float, default=0.15,
++                    help="credited on-axis travel required for success (m)")
++parser.add_argument("--push_max_offaxis_ratio", type=float, default=0.4,
++                    help="off-axis error allowed, as a fraction of on-axis travel")
++parser.add_argument("--push_max_lift", type=float, default=0.03,
++                    help="rise above start height that disqualifies the episode (m)")
++parser.add_argument("--push_max_tilt_deg", type=float, default=20.0,
++                    help="object tilt from upright that disqualifies the episode (deg)")
++parser.add_argument("--push_contact_radius", type=float, default=0.12,
++                    help="hand-to-object-surface distance within which motion is credited (m)")
++parser.add_argument("--push_max_free_travel", type=float, default=0.05,
++                    help="uncredited object path length that disqualifies the episode (m)")
++parser.add_argument("--push_cfg_file", type=str, default="",
++                    help="optional JSON file re-read at runtime to change the commanded "
++                         "direction between rollouts without restarting the sim")
+ parser.add_argument("--seed", type=int, default=42, help="environment seed")
+ # add AppLauncher parameters
+ AppLauncher.add_app_launcher_args(parser)
+@@ -201,6 +225,23 @@
+             print(f"[env] reward compute interval set to {env._reward_interval} steps")
+         except Exception as e:
+             print(f"[env] failed to set reward interval: {e}")
++        # NeoDEM (TASK-186): hand the push reward its configuration. Set
++        # unconditionally so a mis-typed --reward_mode fails loudly at argparse
++        # rather than by publishing pick-place numbers under a push label.
++        env._reward_mode = args_cli.reward_mode
++        env._push_reward_cfg = {
++            "direction": args_cli.push_direction,
++            "min_travel_m": args_cli.push_min_travel,
++            "max_offaxis_ratio": args_cli.push_max_offaxis_ratio,
++            "max_lift_m": args_cli.push_max_lift,
++            "max_tilt_deg": args_cli.push_max_tilt_deg,
++            "contact_radius_m": args_cli.push_contact_radius,
++            "max_free_travel_m": args_cli.push_max_free_travel,
++            "cfg_file": args_cli.push_cfg_file,
++        }
++        env._push_reward_reset = True
++        print(f"[env] reward mode: {env._reward_mode}"
++              + (f" (push_direction={args_cli.push_direction})" if env._reward_mode == "push" else ""))
+         if args_cli.physics_dt is not None:
+             try:
+                 env.sim.set_substep_time(args_cli.physics_dt)
+@@ -495,10 +536,16 @@
+                             if (args_cli.enable_wholebody_dds and (reset_category == '1' or reset_category == '2')) or (not args_cli.enable_wholebody_dds and reset_category == '1'):
+                                 print("reset object")
+                                 env_cfg.event_manager.trigger("reset_object_self", env)
++                                # NeoDEM (TASK-186): this teleports the object without
++                                # calling env.reset(), so episode_length_buf does not move
++                                # and the push reward cannot see the episode boundary on
++                                # its own. Tell it explicitly.
++                                env._push_reward_reset = True
+                                 reset_pose_dds.write_reset_pose_command(-1)
+                             elif reset_category == '2' and not args_cli.enable_wholebody_dds:
+                                 print("reset all")
+                                 env_cfg.event_manager.trigger("reset_all_self", env)
++                                env._push_reward_reset = True
+                                 reset_pose_dds.write_reset_pose_command(-1)
+                         except Exception as e:
+                             print(f"Failed to write reset pose command: {e}")
+diff --git a/tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py b/tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py
+--- a/tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py
++++ b/tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py
+@@ -1,4 +1,20 @@
+-from tasks.common_rewards.base_reward_pickplace_cylindercfg import compute_reward
++from tasks.common_rewards.base_reward_pickplace_cylindercfg import compute_reward as _compute_reward_pickplace
++from tasks.common_rewards.base_reward_push_cylindercfg import compute_reward as _compute_reward_push
++
++
++def compute_reward(env):
++    """Dispatch to the reward the run was launched for.
++
++    NeoDEM (TASK-186). `sim_main.py` sets `env._reward_mode` from
++    `--reward_mode`; anything other than "push" keeps the stock pick-place
++    behaviour, so a run that does not pass the flag is bit-identical to
++    upstream. The RewardTermCfg passes no params, so both callees see their
++    own defaults.
++    """
++    if getattr(env, "_reward_mode", "pickplace") == "push":
++        return _compute_reward_push(env)
++    return _compute_reward_pickplace(env)
++
+ 
+ __all__ = [
+ "compute_reward"
+diff --git a/tasks/common_rewards/base_reward_push_cylindercfg.py b/tasks/common_rewards/base_reward_push_cylindercfg.py
+new file mode 100644
+--- /dev/null
++++ b/tasks/common_rewards/base_reward_push_cylindercfg.py
+@@ -0,0 +1,459 @@
++# Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
++# License: Apache License, Version 2.0
++#
++# NeoDEM addition (TASK-186): push/slide success reward.
++#
++# Why this file exists
++# --------------------
++# `base_reward_pickplace_cylindercfg.py` scores "the object ended up inside an
++# absolute world-frame box". That answers "was it placed", not "was it pushed",
++# and it cannot be reused for a push instruction:
++#
++#   * it is position-absolute, so it says nothing about *how* the object got
++#     there, and
++#   * a derived proxy over the same signal (lateral travel >= 8 cm with lift
++#     <= 6 cm, read from rt/sim_state) was measured on TASK-185's rollouts and
++#     was satisfied MORE often by *place*-instructed runs (7-8/10) than by
++#     *push*-instructed runs (6/10). It scored flailing, not pushing.
++#
++# The proxy failed because every quantity it looked at is a property of the
++# object's trajectory alone. Lifting an object and putting it down 20 cm away
++# produces a large lateral displacement; so does knocking it off the table; so
++# does an arm sweeping through it. This reward is built so that trajectory
++# alone can never be sufficient:
++#
++#   1. DIRECTION   - only displacement projected onto the *commanded* axis
++#                    counts, and off-axis error is capped as a fraction of it.
++#                    The axis is frozen at episode start, so the robot cannot
++#                    turn to make an arbitrary displacement "correct".
++#   2. NEVER LIFTED- a sticky veto on the object's rise above its start height.
++#   3. STILL UPRIGHT-a sticky veto on the object's tilt. A tip/knock is a
++#                    different instruction and must never read as a push.
++#   4. CONTACT-DRIVEN - displacement is only *credited* while a hand is within
++#                    `contact_radius` of the object. Displacement that accrues
++#                    with no hand near it is accumulated separately as
++#                    `free_travel` and, past a small cap, vetoes the episode.
++#
++# Gate 4 is the one that kills the old failure mode outright. A place is an
++# up-and-over transport: for most of it the object is held (near a hand) but
++# rising, so gate 2 vetoes before the credit matters. A knock/launch is the
++# opposite: the object travels *after* the hand has left, so that travel lands
++# in `free_travel`, never in the credited push, and past the cap it vetoes.
++# There is no trajectory that satisfies all four without the hand having stayed
++# with the object, on the table, along the instructed axis.
++#
++# Published value on `rt/rewards_state` (same channel and shape as the
++# pick-place reward, so existing consumers need no change):
++#
++#    1.0  success  - all four gates satisfied; latched for the episode
++#    0.0  in progress
++#   -1.0  disqualified - a sticky veto fired (lifted / tipped / launched);
++#                    latched for the episode
++#   -2.0  the reward itself failed to evaluate; see the printed traceback.
++#         It is deliberately NOT 0.0: a scoring term that silently reports
++#         "nothing happened" when it is broken is how the previous proxy went
++#         unnoticed for a whole ablation.
++#
++# Episode boundaries: this task is reset externally by `reset_object_self`
++# (sim_main.py), which teleports the object without calling `env.reset()`, so
++# `episode_length_buf` does not move. Accumulators are therefore re-baselined
++# on any of: `env._push_reward_reset` being set (sim_main sets it next to the
++# reset trigger), the object teleporting more than `reset_jump_m` in one
++# sample, or the control file's mtime changing.
++
++from __future__ import annotations
++
++import json
++import math
++import os
++import sys
++import time
++import traceback
++from typing import TYPE_CHECKING
++
++import torch
++
++from isaaclab.assets import RigidObject
++from isaaclab.managers import SceneEntityCfg
++
++if TYPE_CHECKING:
++    from isaaclab.envs import ManagerBasedRLEnv
++
++# global variable to cache the DDS instance (same pattern as the pick-place reward)
++_rewards_dds = None
++_dds_initialized = False
++_dds_last_warn = 0.0
++
++
++def _get_rewards_dds_instance():
++    """get the DDS instance, delay initialization
++
++    The retry-until-it-works shape is copied from the pick-place reward and is
++    load-bearing, not sloppiness: `env.reset()` (sim_main.py:360) runs before
++    `create_dds_objects()` (sim_main.py:384) registers the "rewards" object, so
++    the first lookups can legitimately fail. Only the *log line* is throttled -
++    printing it every control step is what buries real errors.
++    """
++    global _rewards_dds, _dds_initialized, _dds_last_warn
++
++    if not _dds_initialized or _rewards_dds is None:
++        try:
++            sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dds'))
++            from dds.dds_master import dds_manager
++
++            _rewards_dds = dds_manager.get_object("rewards")
++            print("[Observations Rewards Push] DDS communication instance obtained")
++
++            import atexit
++
++            def cleanup_dds():
++                try:
++                    if _rewards_dds:
++                        dds_manager.unregister_object("rewards")
++                        print("[rewards_dds] DDS communication closed correctly")
++                except Exception as e:
++                    print(f"[rewards_dds] Error closing DDS: {e}")
++
++            atexit.register(cleanup_dds)
++
++        except Exception as e:
++            now = time.time()
++            if now - _dds_last_warn > 5.0:
++                _dds_last_warn = now
++                print(f"[Observations Rewards Push] Failed to get DDS instances: {e}")
++            _rewards_dds = None
++
++        _dds_initialized = True
++
++    return _rewards_dds
++
++
++# --------------------------------------------------------------------------
++# configuration
++# --------------------------------------------------------------------------
++
++# Defaults are for the cylinder in
++# tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py (radius
++# 0.018 m, height 0.35 m, mass 0.4 kg, static friction 1.5). See the WARNING in
++# robot-agent/hardware/isaac_sim_patches/README.md about that object's aspect
++# ratio before reading a persistent 0.0 as a bug in this file.
++_DEFAULTS = {
++    "direction": "left",          # left|right|forward|backward (robot frame)
++                                  # or +x|-x|+y|-y (world frame)
++    "min_travel_m": 0.15,         # credited on-axis displacement required
++    "max_offaxis_ratio": 0.4,     # |perpendicular| <= ratio * on-axis
++    "max_lift_m": 0.03,           # sticky veto on rise above start height
++    "max_tilt_deg": 20.0,         # sticky veto on object tilt from upright
++    "contact_radius_m": 0.12,     # hand-surface distance that credits motion
++    "max_free_travel_m": 0.05,    # sticky veto on uncredited path length
++    "object_radius_m": 0.018,
++    "object_half_height_m": 0.175,
++    "hand_body_patterns": [".*hand.*", ".*wrist.*", ".*palm.*"],
++    "reset_jump_m": 0.25,         # single-sample jump treated as a teleport
++    "verbose": True,
++}
++
++_CFG_FILE_POLL_S = 0.25
++
++
++def _read_cfg(env) -> dict:
++    """Merge, in increasing priority: module defaults, `env._push_reward_cfg`
++    (set by sim_main from the CLI), and an optional JSON control file.
++
++    The control file exists so a closed-loop evaluation harness can change the
++    *commanded direction* between rollouts without restarting Isaac (a restart
++    costs ~2 minutes and re-randomises nothing useful). Its path comes from
++    `env._push_reward_cfg['cfg_file']` or `$UNITREE_SIM_PUSH_CFG`. A change to
++    its mtime also re-baselines the episode, because a new instruction is a new
++    rollout.
++    """
++    cfg = dict(_DEFAULTS)
++    cfg.update(getattr(env, "_push_reward_cfg", None) or {})
++
++    path = cfg.get("cfg_file") or os.environ.get("UNITREE_SIM_PUSH_CFG", "")
++    if not path:
++        return cfg
++
++    now = time.time()
++    cache = getattr(env, "_push_reward_file_cache", None)
++    if cache is None:
++        cache = {"checked_at": 0.0, "mtime": None, "data": {}, "changed": False}
++        env._push_reward_file_cache = cache
++
++    cache["changed"] = False
++    if now - cache["checked_at"] >= _CFG_FILE_POLL_S:
++        cache["checked_at"] = now
++        try:
++            mtime = os.path.getmtime(path)
++        except OSError:
++            mtime = None
++        if mtime != cache["mtime"]:
++            cache["mtime"] = mtime
++            cache["changed"] = True
++            try:
++                with open(path, "r") as fh:
++                    cache["data"] = json.load(fh) or {}
++                print(f"[push_reward] control file reloaded: {path} -> {cache['data']}")
++            except Exception as e:
++                cache["data"] = {}
++                print(f"[push_reward] control file {path} unreadable ({e}); using CLI/defaults")
++
++    cfg.update(cache["data"])
++    return cfg
++
++
++_ROBOT_FRAME_DIRS = {
++    "forward": (1.0, 0.0),
++    "backward": (-1.0, 0.0),
++    "back": (-1.0, 0.0),
++    "toward_robot": (-1.0, 0.0),
++    "left": (0.0, 1.0),
++    "right": (0.0, -1.0),
++}
++
++_WORLD_FRAME_DIRS = {
++    "+x": (1.0, 0.0),
++    "-x": (-1.0, 0.0),
++    "+y": (0.0, 1.0),
++    "-y": (0.0, -1.0),
++}
++
++
++def _yaw_from_quat(quat: torch.Tensor) -> torch.Tensor:
++    """quat is (N, 4) in Isaac Lab's (w, x, y, z) order."""
++    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
++    return torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
++
++
++def _command_dir(env, robot, cfg) -> torch.Tensor:
++    """Unit (N, 2) world-frame direction the object is instructed to travel.
++
++    Frozen at the episode baseline by the caller. Robot-frame names are rotated
++    by the robot's yaw *at that instant*; world-frame names are used as-is.
++    """
++    name = str(cfg["direction"]).strip().lower()
++    if name in _WORLD_FRAME_DIRS:
++        dx, dy = _WORLD_FRAME_DIRS[name]
++        d = torch.tensor([dx, dy], device=env.device, dtype=torch.float)
++        return d.unsqueeze(0).expand(env.num_envs, 2).contiguous()
++
++    if name not in _ROBOT_FRAME_DIRS:
++        raise ValueError(
++            f"[push_reward] unknown direction {name!r}; expected one of "
++            f"{sorted(set(_ROBOT_FRAME_DIRS) | set(_WORLD_FRAME_DIRS))}"
++        )
++    dx, dy = _ROBOT_FRAME_DIRS[name]
++    yaw = _yaw_from_quat(_quat_w(robot))
++    c, s = torch.cos(yaw), torch.sin(yaw)
++    return torch.stack([c * dx - s * dy, s * dx + c * dy], dim=1)
++
++
++def _pos_w(asset) -> torch.Tensor:
++    data = asset.data
++    if hasattr(data, "root_pos_w"):
++        return data.root_pos_w
++    return data.root_link_pos_w
++
++
++def _quat_w(asset) -> torch.Tensor:
++    data = asset.data
++    if hasattr(data, "root_quat_w"):
++        return data.root_quat_w
++    return data.root_link_quat_w
++
++
++def _body_pos_w(robot) -> torch.Tensor:
++    data = robot.data
++    if hasattr(data, "body_pos_w"):
++        return data.body_pos_w
++    return data.body_link_pos_w
++
++
++def _hand_body_ids(env, robot, cfg):
++    """Resolve, once, the body indices that count as "a hand".
++
++    The exact link names come from the USD
++    (assets/robots/g1-29dof_wholebody_dex3/g1_29dof_with_dex3_rev_1_0.usd) and
++    are NOT declared in any Python config, so they are matched by regex rather
++    than hard-coded. The resolved names are printed once: if that list is empty
++    or wrong, fix `hand_body_patterns` - do not widen `contact_radius_m`.
++    """
++    cached = getattr(env, "_push_reward_hand_ids", None)
++    if cached is not None:
++        return cached
++
++    patterns = list(cfg["hand_body_patterns"])
++    ids, names = robot.find_bodies(patterns, preserve_order=False)
++    if not ids:
++        raise RuntimeError(
++            "[push_reward] no robot body matched hand_body_patterns="
++            f"{patterns}. Available bodies: {list(robot.data.body_names)}"
++        )
++    print(f"[push_reward] hand bodies ({len(ids)}): {names}")
++    env._push_reward_hand_ids = (ids, names)
++    return env._push_reward_hand_ids
++
++
++def _hand_surface_distance(hand_pos: torch.Tensor, obj_pos: torch.Tensor, cfg) -> torch.Tensor:
++    """Min over hand bodies of the distance to the cylinder's *surface*.
++
++    hand_pos: (N, B, 3), obj_pos: (N, 3). The object is a standing cylinder, so
++    the nearest point is found by clamping along its axis before measuring in
++    the plane - measuring to the centroid of a 0.35 m tall rod would say "far"
++    for a hand touching its top.
++    """
++    d_xy = torch.linalg.norm(hand_pos[:, :, :2] - obj_pos[:, None, :2], dim=-1)
++    d_z = torch.clamp(
++        (hand_pos[:, :, 2] - obj_pos[:, None, 2]).abs() - float(cfg["object_half_height_m"]),
++        min=0.0,
++    )
++    dist = torch.sqrt(d_xy * d_xy + d_z * d_z) - float(cfg["object_radius_m"])
++    return dist.min(dim=1).values
++
++
++def _new_state(env, obj_xy, obj_z, cmd_dir):
++    n, dev = env.num_envs, env.device
++    return {
++        "origin_xy": obj_xy.clone(),
++        "origin_z": obj_z.clone(),
++        "cmd_dir": cmd_dir.clone(),
++        "pushed_xy": torch.zeros(n, 2, device=dev, dtype=torch.float),
++        "free_travel": torch.zeros(n, device=dev, dtype=torch.float),
++        "last_xy": obj_xy.clone(),
++        "last_near": torch.zeros(n, device=dev, dtype=torch.bool),
++        "violated": torch.zeros(n, device=dev, dtype=torch.bool),
++        "success": torch.zeros(n, device=dev, dtype=torch.bool),
++        "reason": ["" for _ in range(n)],
++    }
++
++
++def compute_reward(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """Push/slide success reward. See the module docstring for the four gates."""
++    # Same interval gate as the pick-place reward: sim_main sets
++    # env._reward_interval from --env_reward_interval (default 5), so this is
++    # evaluated at 1/interval of the 50 Hz control rate. All accumulators below
++    # are integrals over *samples*, so a coarser interval loses resolution on
++    # fast motion but does not bias the result - except that `reset_jump_m`
++    # must stay above the largest genuine per-sample displacement.
++    interval = getattr(env, "_reward_interval", 1) or 1
++    counter = getattr(env, "_reward_counter", 0)
++    last = getattr(env, "_reward_last", None)
++    if interval > 1 and last is not None and counter % interval != 0:
++        env._reward_counter = counter + 1
++        return last
++
++    try:
++        reward = _compute_push_reward(env)
++    except Exception:
++        traceback.print_exc()
++        print("[push_reward] FAILED to evaluate - publishing -2.0 (not 0.0) so this is visible")
++        reward = torch.full((env.num_envs,), -2.0, device=env.device, dtype=torch.float)
++
++    rewards_dds = _get_rewards_dds_instance()
++    if rewards_dds:
++        rewards_dds.write_rewards_data(reward)
++    env._reward_last = reward
++    env._reward_counter = counter + 1
++    return reward
++
++
++def _compute_push_reward(env: ManagerBasedRLEnv) -> torch.Tensor:
++    cfg = _read_cfg(env)
++    obj: RigidObject = env.scene[SceneEntityCfg("object").name]
++    robot = env.scene["robot"]
++
++    obj_pos = _pos_w(obj)
++    obj_xy, obj_z = obj_pos[:, :2], obj_pos[:, 2]
++
++    # ---- episode baseline -------------------------------------------------
++    state = getattr(env, "_push_reward_state", None)
++    forced = bool(getattr(env, "_push_reward_reset", False))
++    env._push_reward_reset = False
++    file_changed = bool((getattr(env, "_push_reward_file_cache", None) or {}).get("changed"))
++
++    teleported = False
++    if state is not None:
++        jump = torch.linalg.norm(obj_xy - state["last_xy"], dim=1)
++        teleported = bool((jump > float(cfg["reset_jump_m"])).any())
++
++    if state is None or forced or file_changed or teleported:
++        cmd_dir = _command_dir(env, robot, cfg)
++        state = _new_state(env, obj_xy, obj_z, cmd_dir)
++        env._push_reward_state = state
++        if cfg.get("verbose"):
++            if forced:
++                why = "sim_main reset"
++            elif file_changed:
++                why = "new instruction"
++            elif teleported:
++                why = "teleport"
++            else:
++                why = "first-call"
++            print(
++                f"[push_reward] baseline ({why}): direction={cfg['direction']} "
++                f"world_dir={state['cmd_dir'][0].tolist()} origin={obj_pos[0].tolist()}"
++            )
++        return torch.zeros(env.num_envs, device=env.device, dtype=torch.float)
++
++    # ---- gate 3: still upright -------------------------------------------
++    # For a quaternion (w, x, y, z) the object's local +z axis in world is the
++    # third column of R, whose z component is 1 - 2*(x^2 + y^2). That is
++    # exactly cos(tilt) from world +z.
++    q = _quat_w(obj)
++    cos_tilt = torch.clamp(1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2), -1.0, 1.0)
++    tilt_ok = cos_tilt >= math.cos(math.radians(float(cfg["max_tilt_deg"])))
++
++    # ---- gate 2: never lifted --------------------------------------------
++    lift_ok = (obj_z - state["origin_z"]) <= float(cfg["max_lift_m"])
++
++    # ---- gate 4: contact-driven attribution ------------------------------
++    hand_ids, _ = _hand_body_ids(env, robot, cfg)
++    hand_pos = _body_pos_w(robot)[:, hand_ids, :]
++    near = _hand_surface_distance(hand_pos, obj_pos, cfg) <= float(cfg["contact_radius_m"])
++
++    delta = obj_xy - state["last_xy"]
++    credited = near | state["last_near"]          # one-sample hysteresis
++    state["pushed_xy"] += delta * credited.unsqueeze(1).float()
++    state["free_travel"] += torch.linalg.norm(delta, dim=1) * (~credited).float()
++    free_ok = state["free_travel"] <= float(cfg["max_free_travel_m"])
++
++    # ---- gate 1: direction ------------------------------------------------
++    cmd = state["cmd_dir"]
++    along = (state["pushed_xy"] * cmd).sum(dim=1)
++    perp = (state["pushed_xy"][:, 0] * cmd[:, 1] - state["pushed_xy"][:, 1] * cmd[:, 0]).abs()
++    dir_ok = (along >= float(cfg["min_travel_m"])) & (
++        perp <= float(cfg["max_offaxis_ratio"]) * along
++    )
++
++    # ---- combine: vetoes are sticky, and beat success on the same sample --
++    newly_violated = (~tilt_ok) | (~lift_ok) | (~free_ok)
++    was_violated = state["violated"].clone()
++    state["violated"] |= newly_violated
++    state["success"] |= dir_ok & (~state["violated"])
++
++    if cfg.get("verbose"):
++        for i in range(env.num_envs):
++            if state["violated"][i] and not was_violated[i]:
++                why = []
++                if not tilt_ok[i]:
++                    why.append(f"tipped({math.degrees(math.acos(float(cos_tilt[i]))):.0f}deg)")
++                if not lift_ok[i]:
++                    why.append(f"lifted({float(obj_z[i] - state['origin_z'][i]):.3f}m)")
++                if not free_ok[i]:
++                    why.append(f"free_travel({float(state['free_travel'][i]):.3f}m)")
++                state["reason"][i] = "+".join(why)
++                print(f"[push_reward] env{i} DISQUALIFIED: {state['reason'][i]}")
++            elif state["success"][i] and not state["violated"][i] and state["reason"][i] != "success":
++                state["reason"][i] = "success"
++                print(
++                    f"[push_reward] env{i} SUCCESS: along={float(along[i]):.3f}m "
++                    f"perp={float(perp[i]):.3f}m free={float(state['free_travel'][i]):.3f}m"
++                )
++
++    state["last_xy"] = obj_xy.clone()
++    state["last_near"] = near.clone()
++
++    reward = torch.zeros(env.num_envs, device=env.device, dtype=torch.float)
++    reward[state["violated"] & ~state["success"]] = -1.0
++    reward[state["success"]] = 1.0
++    return reward
