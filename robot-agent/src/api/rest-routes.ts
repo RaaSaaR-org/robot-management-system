@@ -463,8 +463,23 @@ export function createRestRoutes(
       skillExecutorRegistry.unregister(body.skillId);
     }
 
+    // The chunk-boundary summary (TASK-183) goes on the log line and in the
+    // response because this route is the only place a real sim run surfaces it
+    // — nothing in production passes an `emitter`, so the skill:step stream
+    // that also carries it reaches no one.
+    //
+    // `result.rtc` is present ONLY when RTC ran, and every use of it below is
+    // conditional on that, so a run with RTC off logs and answers the exact
+    // bytes it did before TASK-183. That is why the field is spread in rather
+    // than assigned: `{ rtc: undefined }` happens to serialise the same, but it
+    // makes the identity a property of JSON.stringify instead of of this code.
+    const rtc = result.rtc;
     console.log(
-      `[Skill] ${body.skillName ?? body.skillId}: ${result.status} after ${result.steps} steps in ${result.durationMs}ms`
+      `[Skill] ${body.skillName ?? body.skillId}: ${result.status} after ${result.steps} steps in ${result.durationMs}ms` +
+        (rtc
+          ? ` | rtc=on boundaries=${rtc.stalledTransitions}/${rtc.chunkTransitions} ` +
+            `stall=${rtc.totalStallMs}ms (max ${rtc.maxStallMs}ms)`
+          : '')
     );
 
     if (result.status === 'failed' || result.status === 'timeout') {
@@ -472,7 +487,12 @@ export function createRestRoutes(
         status: 'failed',
         error: result.error ?? result.message ?? result.status,
         // rollout metadata matters most on failure (highlight → incidentId).
-        output: { steps: result.steps, durationMs: result.durationMs, rollout: result.rollout },
+        output: {
+          steps: result.steps,
+          durationMs: result.durationMs,
+          rollout: result.rollout,
+          ...(rtc ? { rtc } : {}),
+        },
       });
       return;
     }
@@ -488,6 +508,7 @@ export function createRestRoutes(
         lastAction: result.lastAction,
         message: result.message,
         rollout: result.rollout,
+        ...(rtc ? { rtc } : {}),
       },
     });
   });
@@ -614,7 +635,17 @@ export function createRestRoutes(
             durationMs: result.durationMs,
             success: result.status === 'completed',
             errorType: result.status === 'completed' ? null : (result.error ?? result.status),
-            metadata: { steps: result.steps, episodeIndex: i, skillId: body.skillId },
+            metadata: {
+              steps: result.steps,
+              episodeIndex: i,
+              skillId: body.skillId,
+              // Boundary stalls per episode — the A/B evidence for TASK-183 —
+              // and ONLY when RTC ran. This payload crosses a service boundary
+              // and is stored on the platform against every evaluation episode
+              // ever run, so an agent with RTC off has to keep POSTing exactly
+              // the three fields it always did.
+              ...(result.rtc ? { rtc: result.rtc } : {}),
+            },
           }),
           signal: AbortSignal.timeout(5000),
         });

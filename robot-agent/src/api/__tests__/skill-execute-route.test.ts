@@ -4,6 +4,8 @@
  * skill-execute route: body field → SkillExecutor.run(opts), validation of
  * unknown strategies, and rollout metadata in the response. The SkillExecutor
  * module is mocked; the route is driven over real HTTP on an ephemeral port.
+ * TASK-183's wire-shape requirements are in skill-rtc-payload.test.ts, which
+ * needs the real executor.
  * @feature vla
  * @status test
  */

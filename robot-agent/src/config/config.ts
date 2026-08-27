@@ -58,6 +58,31 @@ export interface Config {
     restFallbackUrl: string | undefined;
     /** Whether VLA inference is enabled */
     enabled: boolean;
+    /**
+     * Real-Time Chunking (TASK-183): prefetch the next action chunk while the
+     * current one is still executing and crossfade the two across the
+     * boundary, so a chunk boundary no longer costs a full `/predict` of dead
+     * air. Off by default — with `enabled: false` the rollout loop keeps the
+     * serial pop-then-refill behaviour it has always had.
+     */
+    rtc: {
+      /** RTC on for this agent (`VLA_RTC_ENABLED`). */
+      enabled: boolean;
+      /**
+       * Fraction of a chunk still queued that triggers the prefetch
+       * (`VLA_RTC_OVERLAP`) — 0.25 fires the next `/predict` once three
+       * quarters of the current chunk has been consumed. Must be in (0, 1]:
+       * 0 never fires (RTC silently off) and >1 asks to prefetch before the
+       * chunk has arrived, so both are refused at parse time.
+       */
+      overlap: number;
+      /**
+       * Length of the boundary crossfade in steps (`VLA_RTC_BLEND_STEPS`).
+       * 0 is legal and means "prefetch, then hard-splice" — that is the A/B
+       * control that separates the prefetch's win from the blend's.
+       */
+      blendSteps: number;
+    };
   };
   /** Telemetry push cadence (TASK-191 fast/slow channel split) */
   telemetry: {
@@ -470,6 +495,44 @@ function envFloat(raw: string | undefined, fallback: number): number {
 }
 
 /**
+ * A number from the environment that must also satisfy `accepts`, or the
+ * fallback — with the reason on stderr the moment it is parsed.
+ *
+ * `envFloat` above is enough wherever every finite number is meaningful. It is
+ * not enough for a value with a legal *range*. `VLA_RTC_OVERLAP=25` parses as a
+ * perfectly finite 25, and a prefetch threshold of `chunkSize * 25` sits above
+ * the queue length from the first step on, so RTC would fire a `/predict` every
+ * single step — a flood of the inference server wearing the costume of a typo.
+ * `VLA_RTC_OVERLAP=0` is the mirror image: the threshold is never crossed, so
+ * the banner says RTC is enabled while the loop behaves exactly like the serial
+ * one, and the boundary stalls it was turned on to remove are still there.
+ *
+ * Out-of-range values are REJECTED — replaced by the documented default — not
+ * clamped. Clamping invents a number the operator never wrote and then behaves
+ * as if they had meant it, which is how a typo becomes a tuning result nobody
+ * can reproduce. The default is at least written down in `.env.example` and
+ * printed in the boot banner, so a run is explicable from what an operator can
+ * read. Rejecting outright (throwing) was the third option and is wrong here
+ * for the same reason `envFloat` exists: RTC is an opt-in optimisation, and a
+ * mistyped optimisation must not be the thing that stops a robot from booting.
+ */
+function envNumberChecked(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  accepts: (n: number) => boolean,
+  expected: string
+): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = parseFloat(raw);
+  if (Number.isFinite(n) && accepts(n)) return n;
+  console.warn(
+    `[Config] WARNING ${name}=${raw} is not ${expected} — ignoring it and using ${fallback}.`
+  );
+  return fallback;
+}
+
+/**
  * `AGENT_NAV_PLANNER`: `grid` | `staged`. Unset follows the map — a planner
  * without a map has nothing to plan on and would fall back to `staged` on
  * every navigation anyway, so it is not worth pretending otherwise at boot.
@@ -522,6 +585,28 @@ export const config: Config = {
     timeoutMs: parseInt(process.env.VLA_TIMEOUT_MS || '5000', 10),
     restFallbackUrl: process.env.VLA_REST_FALLBACK_URL || undefined,
     enabled: process.env.VLA_ENABLED === 'true',
+    rtc: {
+      // `=== 'true'` like every other opt-in flag here. hardware/vla_runner.py
+      // reads the same VLA_RTC_ENABLED but accepts 'true'/'1'/'yes', so a `=1`
+      // that switched RTC on for the orphaned Python runner leaves it off here.
+      enabled: process.env.VLA_RTC_ENABLED === 'true',
+      // Range-checked rather than a bare envFloat: an overlap of 0 or 25 is a
+      // finite number and a broken rollout loop. See envNumberChecked.
+      overlap: envNumberChecked(
+        'VLA_RTC_OVERLAP',
+        process.env.VLA_RTC_OVERLAP,
+        0.25,
+        (n) => n > 0 && n <= 1,
+        'a fraction in (0, 1]'
+      ),
+      blendSteps: envNumberChecked(
+        'VLA_RTC_BLEND_STEPS',
+        process.env.VLA_RTC_BLEND_STEPS,
+        5,
+        (n) => Number.isInteger(n) && n >= 0,
+        'a whole number of steps >= 0'
+      ),
+    },
   },
   telemetry: {
     fastIntervalMs: parseInt(process.env.TELEMETRY_FAST_INTERVAL_MS || '100', 10),
@@ -690,6 +775,33 @@ export function validateConfig(): void {
     console.log(`    - Host: ${config.vla.host}:${config.vla.port}`);
     console.log(`    - Pool Size: ${config.vla.poolSize}`);
     console.log(`    - Health Check Interval: ${config.vla.healthCheckIntervalMs}ms`);
+  }
+  // Outside the `vla.enabled` guard on purpose: the skill executor's rollout
+  // loop — the only thing RTC touches — runs whether or not VLA_ENABLED is set,
+  // so hiding this line behind that flag would hide it from every profile that
+  // actually uses it.
+  console.log(
+    `    - Real-Time Chunking: ${
+      config.vla.rtc.enabled
+        ? `ENABLED (prefetch with ${config.vla.rtc.overlap} of a chunk left, ` +
+          `${
+            config.vla.rtc.blendSteps > 0
+              ? `${config.vla.rtc.blendSteps}-step crossfade`
+              : 'hard splice — no crossfade'
+          })`
+        : 'off — every chunk boundary stalls for a full /predict'
+    }`
+  );
+  // The RTC knobs shipped in .env.so101.example long before anything in
+  // TypeScript read them, under a different name and different units (whole
+  // steps, not a fraction). Anyone carrying that file forward gets the default
+  // overlap silently; say so instead.
+  if (config.vla.rtc.enabled && process.env.VLA_RTC_CHUNK_OVERLAP !== undefined) {
+    console.warn(
+      `[Config] WARNING VLA_RTC_CHUNK_OVERLAP=${process.env.VLA_RTC_CHUNK_OVERLAP} is set, but nothing in the ` +
+        'agent reads it — it belongs to the orphaned hardware/vla_runner.py, where it counts whole steps. ' +
+        `The agent's knob is VLA_RTC_OVERLAP, a fraction of a chunk (in effect: ${config.vla.rtc.overlap}).`
+    );
   }
   console.log(`  - Agent Mode: ${config.agentMode.enabled ? 'ENABLED' : 'disabled'}`);
   console.log(

@@ -18,6 +18,30 @@
  * architecturally redundant — everything VLARunner did is now a small
  * set of sidecar HTTP endpoints driven by TS.
  *
+ * TASK-183 adds Real-Time Chunking on top of that: with `VLA_RTC_ENABLED` the
+ * loop asks for chunk N+1 while chunk N is still executing and crossfades the
+ * two across the boundary, so a boundary no longer costs a full `/predict` of
+ * dead air. Off by default, and off means the loop below runs the same
+ * statements it ran before — every RTC branch is gated on a `rtc` that is
+ * `null` when disabled — and says the same things: the boundary counters ride
+ * on the run result only when RTC actually ran. See {@link RtcMetrics}.
+ *
+ * Prefetching is not unconditional. A merged chunk is shorter than the one the
+ * backend answered with — the actions covering the timesteps that elapsed
+ * during inference are dropped — so every merge brings the next boundary
+ * forward, and once the round trip outgrows the lead the queue can buy, those
+ * extra boundaries cost more than the one they replaced. RTC therefore weighs
+ * each prefetch against the serial refill at the measured latency and declines
+ * when it would lose ({@link rtcPrefetchPaysOff}), and gives each boundary
+ * exactly one attempt whether it succeeds or fails.
+ *
+ * What RTC overlaps is the `/predict` — vla-server, another process on another
+ * machine. It does NOT overlap anything at the robot's own sidecar: the
+ * prefetch's observation is captured on the loop's thread, so this executor
+ * issues at most one sidecar request at a time with RTC on or off. See
+ * {@link SkillExecutor.maybePrefetch} for why that matters more than it
+ * sounds.
+ *
  * TASK-179 adds LeRobot-0.6.0-style rollout strategies on top of the same
  * loop (see {@link RolloutStrategy}): `sentry` (sidecar dataset recording),
  * `highlight` (frame ring buffer → incident + clip on failure/abort), and
@@ -51,6 +75,24 @@ const PREDICT_TIMEOUT_MS = 3_000;
 
 /** Max consecutive /predict failures before we bail with 'vla-server unreachable'. */
 const MAX_PREDICT_FAILURES = 3;
+
+/**
+ * How much better than the serial boundary a prefetch has to be before RTC
+ * issues it (TASK-183). See {@link rtcPrefetchPaysOff} for why a margin rather
+ * than a straight comparison, and what 1.5 was chosen against.
+ */
+const RTC_PAYOFF_MARGIN = 1.5;
+
+/**
+ * Weight of the previous estimate when the latest `/predict` was faster than
+ * it. The estimate rises to a new peak immediately and comes back down at 20%
+ * of the remaining gap per round trip — three of them cover about half the
+ * gap, seven about four fifths — so a single slow predict makes RTC cautious
+ * at once while a single fast one cannot talk it back into prefetching
+ * (TASK-183). Those are the arithmetic of 0.8^n, not a measurement: no test
+ * drives a falling latency, so the decay's shape is unexercised.
+ */
+const RTC_LATENCY_DECAY = 0.8;
 
 // 32×32 gray JPEG (Pillow-generated, quality=70). Used only when a camera
 // source isn't available (pure sim). The real hardware path replaces this
@@ -134,6 +176,72 @@ export interface RolloutMetadata {
   notes?: string[];
 }
 
+/**
+ * Per-run Real-Time Chunking counters (TASK-183).
+ *
+ * Counted on every run, but attached to the result ONLY when RTC was on. The
+ * counters are two `Date.now()`s and keep the loop a single path; *reporting*
+ * them is not so cheap — `result.rtc` reaches the `[Skill]` log line, both
+ * response bodies of `/skills/execute`, and the per-episode `metadata` this
+ * agent POSTs to the platform's `/api/evaluation/episodes`. TASK-183 asks for
+ * a strictly opt-in optimisation, so a run with RTC off has to produce the
+ * same bytes on all four as it did before this task existed, which it cannot
+ * do while carrying a block of counters nobody asked for.
+ *
+ * That does cost the A/B its self-reported baseline. It was never the honest
+ * one anyway: with RTC off the boundary stall IS the `/predict` round trip by
+ * construction, so the baseline is the run's own wall clock against the same
+ * skill with RTC on — which is what the A/B test in the suite measures.
+ *
+ * Nothing here changes what the loop does — see {@link RtcState} for the parts
+ * that do, all of which are gated on RTC being enabled.
+ */
+export interface RtcMetrics {
+  /** Chunks that entered the action queue after the initial fill. */
+  chunkTransitions: number;
+  /**
+   * Transitions the robot had to sit through with an empty queue. This is the
+   * number RTC is meant to drive to zero; `chunkTransitions` is its
+   * denominator.
+   */
+  stalledTransitions: number;
+  /** Total milliseconds the queue was empty mid-run, across all transitions. */
+  totalStallMs: number;
+  /** Worst single stall, in milliseconds. */
+  maxStallMs: number;
+  /**
+   * Prefetch `/predict` calls actually SENT to vla-server — so this number can
+   * be reconciled against the server's own request count. An attempt whose
+   * speculative capture threw never reaches `/predict` and is counted in
+   * {@link prefetchFailed} only.
+   */
+  prefetchIssued: number;
+  /** Prefetched chunks spliced into a still-executing queue — stalls avoided. */
+  prefetchMerged: number;
+  /** Prefetches that failed or returned nothing; the boundary fell back to serial. */
+  prefetchFailed: number;
+  /** Prefetches whose whole chunk had been overtaken by the time they landed. */
+  prefetchStale: number;
+  /**
+   * Boundaries where RTC declined to prefetch because, at the measured
+   * `/predict` latency, prefetching would have cost the robot MORE dead time
+   * than simply refilling on the serial path — see {@link rtcPrefetchPaysOff}.
+   * A run with a high `prefetchSkipped` is not RTC failing; it is RTC
+   * declining to make things worse, and its boundaries cost what they cost
+   * with the feature off.
+   */
+  prefetchSkipped: number;
+  /**
+   * Steps whose applied action really was a crossfade of the outgoing and
+   * incoming chunks. Counted where the action is popped, not where the blend
+   * is scheduled: a crossfade at the head of the queue can still be replaced
+   * by the next merge, dropped by a dagger teleop pre-emption, or left unplayed
+   * when the run ends, and counting those would make the number a statement
+   * about the queue rather than about the robot.
+   */
+  blendedSteps: number;
+}
+
 export interface SkillExecutionResult {
   status: SkillExecutionStatus;
   mode: SkillExecutionMode;
@@ -144,6 +252,12 @@ export interface SkillExecutionResult {
   lastAction?: number[];
   /** Present only when a non-default rollout strategy was requested. */
   rollout?: RolloutMetadata;
+  /**
+   * Chunk-boundary timing for this run (TASK-183). Present ONLY when RTC was
+   * enabled — an RTC-off run answers exactly what it answered before the
+   * feature existed. See {@link RtcMetrics}.
+   */
+  rtc?: RtcMetrics;
 }
 
 export interface SkillExecutorOptions {
@@ -159,6 +273,13 @@ export interface SkillExecutorOptions {
   robotId?: string;
   /** NeoDEM server base URL override (tests). Defaults to NEODEM_SERVER_URL / SERVER_URL. */
   serverBaseUrl?: string;
+  /**
+   * Real-Time Chunking overrides for this run (TASK-183). Each key falls back
+   * to `config.vla.rtc`, which is read once at import — same escape hatch as
+   * `serverBaseUrl`, and the only way a test can toggle RTC without
+   * `vi.resetModules()`.
+   */
+  rtc?: Partial<{ enabled: boolean; overlap: number; blendSteps: number }>;
 }
 
 /** Mutable per-run state shared between the loop and the strategy hooks. */
@@ -178,12 +299,249 @@ interface RolloutContext {
   interventionSteps: InterventionStep[];
   /** dagger: count of human-sourced steps. */
   humanSteps: number;
+  /** Chunk-boundary counters. Reported only on an RTC run — see RtcMetrics. */
+  rtcMetrics: RtcMetrics;
+  /** Prefetch/blend state, or null when RTC is disabled for this run. */
+  rtc: RtcState | null;
 }
 
 interface VlaConfig {
   cameras: string[];
   stateDim: number;
   chunkSize: number;
+}
+
+/**
+ * Live Real-Time Chunking state for one run. Exists only when RTC is enabled;
+ * every RTC branch in `runLoop` is gated on `rtc !== null`, so a disabled run
+ * executes the same statements it did before TASK-183.
+ */
+interface RtcState {
+  /** Fraction of a chunk still queued that triggers the prefetch. */
+  overlap: number;
+  /** Length of the boundary crossfade, in steps. */
+  blendSteps: number;
+  /**
+   * Length of a chunk as the BACKEND answers it. Seeded from `/config`'s
+   * `chunk_size` and then updated from what the server actually returns — the
+   * reply length is authoritative, `chunk_size` is only advertised.
+   *
+   * Deliberately NOT the length of the queue currently executing (TASK-183).
+   * A merged chunk is only `backendChunkLen - consumed` long, so anchoring the
+   * threshold to the live queue let it shrink at every merge, which brought the
+   * next boundary forward, which shrank it again. That ratchet is one half of
+   * why RTC used to end up slower than the serial loop at high latency.
+   */
+  backendChunkLen: number;
+  /** The single in-flight prefetch, or null. Resolves; never rejects. */
+  inflight: Promise<void> | null;
+  /** Cancels the in-flight prefetch's HTTP request. */
+  cancel: AbortController | null;
+  /**
+   * Generation of the in-flight prefetch. A cancelled or superseded prefetch
+   * that resolves late finds a bumped generation and writes nothing — that is
+   * what keeps an orphaned promise out of a dead (or human-driven) run.
+   */
+  gen: number;
+  /**
+   * Step the in-flight prefetch's OBSERVATION was taken at, for re-aligning
+   * its chunk. The chunk's t=0 is the observation, so this has to be the step
+   * the capture happened on and not the step the prefetch was decided on —
+   * an over-large `consumed` drops actions that are still in the robot's
+   * future and the arm skips forward by the capture latency (TASK-183).
+   *
+   * The two are now the same step by construction: `maybePrefetch` captures
+   * inline, so no step can be applied between the decision and the
+   * observation. That is a consequence of the serialisation described there,
+   * not an independent choice, and the regression test for it stays.
+   */
+  issuedAtStep: number;
+  /** A resolved chunk waiting to be merged at the top of the next iteration. */
+  pending: number[][] | null;
+  /** How many actions at the head of the queue are crossfades. */
+  blendedAhead: number;
+  /**
+   * Whether this boundary has already had its one prefetch attempt.
+   *
+   * Cleared whenever a new chunk becomes the queue (serial refill or merge) and
+   * when a prefetch is abandoned, so it tracks "the chunk now executing", not
+   * the run. Without it a prefetch that fails FAST — 503, connection refused —
+   * cleared `inflight` inside the same sleep and the next step fired another,
+   * and the next, until the queue hit 0 — one per step at or below the
+   * threshold, so 2 at the shipped default and 4 at overlap 0.5, each one a
+   * full getCameras + snapshot + getStateNow burst at the sidecar on hardware.
+   * (That is the threshold's own arithmetic; what the suite asserts is the
+   * post-latch result, `prefetchIssued === 1` in both parameterisations.) A
+   * speculative fetch gets one try; the boundary itself still has the serial
+   * refill and its existing retry budget behind it.
+   */
+  attempted: boolean;
+  /**
+   * Observed cost of one refill in milliseconds — the capture AND the
+   * `/predict` — or 0 before the first one has come back. That is the quantity
+   * a prefetch spends its lead on, and on hardware the capture is a real
+   * sidecar leg, so timing only the HTTP call would flatter it. Fed by every
+   * successful refill, serial or prefetched, and read by
+   * {@link rtcPrefetchPaysOff}.
+   */
+  latencyMs: number;
+}
+
+/**
+ * Actions still queued at or below which the next `/predict` is issued.
+ *
+ * Clamped into `[1, backendChunkLen - 1]`. At 0 the serial refill always gets
+ * there first, so RTC would be on and do nothing; at `backendChunkLen` the
+ * threshold is met by a *full* queue, so every step would fire a `/predict`.
+ * The config parser already refuses an overlap outside (0, 1] — this clamp
+ * covers the remaining case, a server that returns a chunk far shorter than it
+ * advertised.
+ *
+ * The threshold is deliberately NOT adapted to the observed latency (TASK-183).
+ * Firing earlier does buy more lead, but it does not buy a longer chunk: a
+ * prefetch that lands without stalling is merged at the next loop top whatever
+ * the queue depth, so `consumed` — and with it the `backendChunkLen - consumed`
+ * the merge leaves behind — is set by the round trip, not by when we asked.
+ * NOT MEASURED: the suite exercises the shipped threshold only (chunk 8 /
+ * overlap 0.25 → 2), so the argument above is the mechanism, not a comparison
+ * against a run at a wider overlap. What the suite does establish is the other
+ * half — that the lead is bought back by {@link rtcPrefetchPaysOff} declining
+ * instead; see the sweep and the payoff-policy unit tests.
+ */
+function rtcThreshold(rtc: RtcState): number {
+  const ceiling = Math.max(rtc.backendChunkLen - 1, 1);
+  return Math.max(1, Math.min(ceiling, Math.round(rtc.backendChunkLen * rtc.overlap)));
+}
+
+/**
+ * How much dead time a prefetch issued right now would leave, per step of the
+ * chunk it would leave behind, against the same figure for not issuing it.
+ * A prefetch is worth making only when it wins by {@link RTC_PAYOFF_MARGIN}.
+ *
+ * RTC is not free. A merged chunk is `backendChunkLen - consumed` long, because
+ * the actions describing timesteps the robot lived through during inference are
+ * dropped; so every merge brings the NEXT boundary forward. While the prefetch
+ * covers the whole round trip that is a pure win — the boundaries it creates
+ * cost nothing. Once the round trip outruns the lead the queue can buy, each of
+ * those extra boundaries costs the residual wait, and past some latency the
+ * arithmetic turns: unconditional prefetching would then leave the robot with
+ * MORE dead air than the serial loop it replaced, and every latency that does
+ * it sits inside `PREDICT_TIMEOUT_MS`, so nothing else would bound it.
+ *
+ * How far past is what this function decides, and it is decided from the
+ * numbers below rather than from a rollout: at the shipped chunk 8 / overlap
+ * 0.25 the cut-off falls at 1.2 s. That figure is asserted directly, on this
+ * function, in `rtcPrefetchPaysOff — the prefetch policy, in isolation`. The
+ * degradation the policy exists to prevent is NOT measured on this branch —
+ * the code that would exhibit it (prefetching without this check) no longer
+ * exists, so nothing in the tree can reproduce it.
+ *
+ * The comparison is therefore made in the only unit that is fair across two
+ * different boundary rates: milliseconds of stall per step executed.
+ *
+ * - Serial pays the whole round trip once per `backendChunkLen` steps.
+ * - A prefetch pays `latencyMs - lead` once per `backendChunkLen - consumed`
+ *   steps, where `lead` is the wall time the queue can still cover: the loop
+ *   sleeps one period after issuing and one before each remaining pop, so a
+ *   queue of `queueLen` is worth `(queueLen + 1)` periods.
+ *
+ * The margin is what makes this safe on SHORT runs as well as in the limit. The
+ * rates above are steady-state; a 16-step sim rollout has room for one serial
+ * boundary and two RTC ones, so a prefetch that wins narrowly per step can
+ * still lose over the run. At 1.5 the cut-off lands on 1.2 s for the shipped
+ * chunk 8 / overlap 0.25. The suite's sweep runs the 16-step rollout, and only
+ * that one — nothing on this branch has been run on hardware, or at any other
+ * run length.
+ *
+ * Returns true before the first round trip has been observed (`latencyMs` 0):
+ * with nothing measured there is nothing to weigh, and the first boundary is
+ * the one RTC most reliably wins.
+ */
+export function rtcPrefetchPaysOff(o: {
+  /** Observed capture + `/predict` round trip, ms. 0 = not measured yet. */
+  latencyMs: number;
+  /** Actions still queued at the moment of the decision. */
+  queueLen: number;
+  /** Chunk length as the backend answers it — NOT the merged queue length. */
+  backendChunkLen: number;
+}): boolean {
+  if (o.latencyMs <= 0) return true;
+  const leadMs = (o.queueLen + 1) * LOOP_PERIOD_MS;
+  const stallMs = Math.max(0, o.latencyMs - leadMs);
+  // The prefetch covers the whole round trip: this boundary costs nothing at
+  // all, so there is no rate to compare.
+  if (stallMs === 0) return true;
+  // Steps the robot gets through before the chunk lands, and so the actions the
+  // merge will drop. Bounded by the queue: once it is empty the robot is frozen
+  // and stops consuming the chunk's future.
+  const consumed = Math.min(o.queueLen, Math.ceil(o.latencyMs / LOOP_PERIOD_MS));
+  const rtcStallPerStep = stallMs / Math.max(1, o.backendChunkLen - consumed);
+  const serialStallPerStep = o.latencyMs / Math.max(1, o.backendChunkLen);
+  return rtcStallPerStep * RTC_PAYOFF_MARGIN < serialStallPerStep;
+}
+
+/**
+ * Splice a freshly predicted chunk onto the one still executing, crossfading
+ * the overlap (Real-Time Chunking, arXiv:2506.07339).
+ *
+ * `incoming` was predicted from an observation taken `consumed` steps ago, so
+ * its first `consumed` actions describe timesteps the robot has already lived
+ * through; they are dropped. What remains is time-aligned with `queue[0]`, and
+ * the two disagree by exactly as much as the world moved during inference — a
+ * hard splice there is the discontinuity RTC exists to remove. The first
+ * `blendSteps` of the aligned pair are therefore averaged on a linear ramp
+ * (`wNew = (i + 1) / (n + 1)`, never fully 0 or 1), after which the new chunk
+ * stands alone: the stale tail of the old one is *discarded*, not appended,
+ * which is the whole point of having predicted again.
+ *
+ * Note this is a different alignment from `hardware/vla_runner.py`'s
+ * `RTCActionQueue.merge`, which appends the new chunk after the old queue and
+ * fades only its last few steps — that treats the new chunk as the *future* of
+ * the old one, so the queue grows on every merge and the freshest predictions
+ * are always played last. Same ramp, deliberately different splice point.
+ *
+ * Vectors of unequal length are taken verbatim from whichever side has the
+ * joint. A server that changes action dim mid-run is a bug, but not one worth
+ * NaN-ing a moving arm over.
+ */
+export function blendChunks(
+  queue: readonly number[][],
+  incoming: readonly number[][],
+  consumed: number,
+  blendSteps: number,
+): { queue: number[][]; blended: number } {
+  const drop = Math.min(Math.max(consumed, 0), incoming.length);
+  const aligned = incoming.slice(drop);
+  // Overtaken entirely: nothing in this chunk is still in the future.
+  if (aligned.length === 0) return { queue: queue.map((a) => a.slice()), blended: 0 };
+  // Nothing to fade against — this is the serial refill, by another route.
+  if (queue.length === 0) return { queue: aligned.map((a) => a.slice()), blended: 0 };
+
+  // Floor first: `blendSteps` is typed `number`, and a fractional one survives
+  // both `Math.max` and `Math.min` to become a fractional loop bound below,
+  // where `aligned[i]` is `undefined` and `.slice()` throws out of the rollout.
+  // `envNumberChecked` rejects non-integers, so this guards the exported
+  // function and the `SkillExecutorOptions.rtc` path, not the env path.
+  const n = Math.min(Math.max(Math.floor(blendSteps) || 0, 0), queue.length, aligned.length);
+  const out: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const wNew = (i + 1) / (n + 1);
+    const wOld = 1 - wNew;
+    const old = queue[i];
+    const fresh = aligned[i];
+    const dim = Math.max(old.length, fresh.length);
+    const merged = new Array<number>(dim);
+    for (let j = 0; j < dim; j++) {
+      const o = old[j];
+      const f = fresh[j];
+      if (o === undefined) merged[j] = f;
+      else if (f === undefined) merged[j] = o;
+      else merged[j] = wOld * o + wNew * f;
+    }
+    out.push(merged);
+  }
+  for (let i = n; i < aligned.length; i++) out.push(aligned[i].slice());
+  return { queue: out, blended: n };
 }
 
 /**
@@ -222,6 +580,19 @@ export class SkillExecutor {
       simStepLog: [],
       interventionSteps: [],
       humanSteps: 0,
+      rtcMetrics: {
+        chunkTransitions: 0,
+        stalledTransitions: 0,
+        totalStallMs: 0,
+        maxStallMs: 0,
+        prefetchIssued: 0,
+        prefetchMerged: 0,
+        prefetchFailed: 0,
+        prefetchStale: 0,
+        prefetchSkipped: 0,
+        blendedSteps: 0,
+      },
+      rtc: null,
     };
 
     // Hardware dagger (leader-arm pre-emption during a real rollout) is OUT OF
@@ -241,9 +612,20 @@ export class SkillExecutor {
     } finally {
       // Finally-safe: stop the sidecar recorder even if the loop threw, so a
       // crashed rollout never leaves lerobot-record holding the cameras/port.
+      //
+      // Same reasoning for the prefetch: runLoop leaves by eleven different
+      // returns plus the sim chunk-cap break, and none of them is a natural
+      // place to hang a cancel. Abandoning it here is the one path they all
+      // share, so no /predict outlives the run it was issued for.
+      if (ctx.rtc) this.cancelPrefetch(ctx.rtc);
       await this.stopSentryRecording(ctx);
     }
     await this.finalizeRollout(ctx, opts, result);
+    // Only an RTC run reports boundary timing. `ctx.rtc` is null exactly when
+    // RTC is off, and that is the whole gate: attaching the counters would put
+    // an `rtc` block on the log line, both response bodies and the evaluation
+    // episode POSTed to the platform, on a path where nobody enabled RTC.
+    if (ctx.rtc) result.rtc = ctx.rtcMetrics;
     return result;
   }
 
@@ -308,12 +690,47 @@ export class SkillExecutor {
     let lastApplied: number[] | undefined;
     let step = 0;
     let predictFailures = 0;
+    // Real-Time Chunking (TASK-183). `null` when disabled, and every RTC
+    // branch below is gated on it, so the off path is the pre-TASK-183 loop.
+    const rtc = this.resolveRtc(opts, vlaConfig, ctx);
+    // Wall clock at which the queue ran dry mid-run, or 0 while it has actions.
+    // Held across the retry `continue` below so a stall that spans several
+    // failed /predicts is counted once, in full.
+    let stallStartedAt = 0;
+    // Stall that ended just before the step about to be applied, for the event.
+    let stepStallMs = 0;
 
     console.log(
-      `[SkillExecutor] Running skill=${opts.skillId} mode=${mode} maxSteps=${opts.maxSteps} timeoutMs=${opts.timeoutMs}`,
+      `[SkillExecutor] Running skill=${opts.skillId} mode=${mode} maxSteps=${opts.maxSteps} timeoutMs=${opts.timeoutMs}` +
+        (rtc
+          ? ` rtc=on(overlap=${rtc.overlap} blendSteps=${rtc.blendSteps})`
+          : ''),
     );
 
     while (step < opts.maxSteps) {
+      if (rtc) {
+        // A dry queue is not yet a stall. `rtcDrain` below waits only when a
+        // prefetch is still in the air with nothing delivered — every other dry
+        // queue is either a chunk already sitting in `rtc.pending`, merged in
+        // microseconds, or a boundary the serial refill owns, which starts its
+        // own clock. Timing the first case as a stall recorded a ~0 ms wait AND
+        // incremented the counter, so a run that removed every stall reported
+        // `stalls=2/2 total=0 max=0` — the one number TASK-183 asks for,
+        // contradicting itself. Only the wait is counted here.
+        if (
+          actionsQueue.length === 0 &&
+          step > 0 &&
+          stallStartedAt === 0 &&
+          rtc.pending === null &&
+          rtc.inflight !== null
+        ) {
+          stallStartedAt = Date.now();
+        }
+        // Adopt a resolved prefetch before deciding whether we have to stall —
+        // and if the queue ran dry with one still in flight, wait for THAT
+        // rather than issuing a second /predict for the same boundary.
+        actionsQueue = await this.rtcDrain(rtc, ctx, actionsQueue, step);
+      }
       if (this.aborted) {
         return this.abortedResult(mode, step, startedAt, lastApplied);
       }
@@ -330,26 +747,18 @@ export class SkillExecutor {
 
       // ── Refill action queue if empty ─────────────────────────────
       if (actionsQueue.length === 0) {
+        // Two Date.now()s and a counter — the loop still does exactly what it
+        // did, it now just says how long it spent doing nothing.
+        if (step > 0 && stallStartedAt === 0) stallStartedAt = Date.now();
+        // Start of the round trip RTC's payoff policy weighs against the lead
+        // the queue can buy: capture AND predict, because a prefetch spends its
+        // lead on both. On hardware the capture is a real sidecar leg.
+        const roundTripStartedAt = Date.now();
         let images: Record<string, string>;
         let state: number[];
 
         try {
-          if (mode === 'hardware') {
-            [images, state] = await this.captureHardware(vlaConfig);
-            // highlight: buffer the first camera's frame (one camera only, to
-            // bound memory). Frames arrive at chunk-refill rate; the ring
-            // caps at HIGHLIGHT_MAX_FRAMES regardless.
-            if (ctx.strategy === 'highlight') {
-              const cam = vlaConfig.cameras[0];
-              const jpeg = cam ? images[cam] : undefined;
-              if (cam && jpeg) {
-                ctx.highlight.push({ t: Date.now(), camera: cam, jpegB64: jpeg });
-              }
-            }
-          } else {
-            images = this.buildSyntheticFrames(vlaConfig.cameras);
-            state = this.buildSimState(vlaConfig.stateDim);
-          }
+          ({ images, state } = await this.captureObservation(ctx, mode, vlaConfig));
         } catch (err) {
           return {
             status: 'failed',
@@ -398,10 +807,36 @@ export class SkillExecutor {
             error: 'vla-server returned empty action chunk',
           };
         }
+        if (rtc) {
+          // The serial round trip is the same measurement a prefetch makes, and
+          // on a boundary RTC declined it is the ONLY one it gets — without it
+          // a run that skipped once would never learn that inference had got
+          // fast again.
+          this.noteLatency(rtc, Date.now() - roundTripStartedAt);
+          rtc.backendChunkLen = actionsQueue.length;
+          // A fresh chunk is a fresh boundary: it gets its own attempt.
+          rtc.attempted = false;
+        }
+        if (step > 0) ctx.rtcMetrics.chunkTransitions += 1;
+      }
+
+      // The queue is non-empty from here on, by either route. If it had run
+      // dry, this is where the robot stopped waiting.
+      if (stallStartedAt > 0) {
+        stepStallMs = Date.now() - stallStartedAt;
+        stallStartedAt = 0;
+        ctx.rtcMetrics.stalledTransitions += 1;
+        ctx.rtcMetrics.totalStallMs += stepStallMs;
+        ctx.rtcMetrics.maxStallMs = Math.max(ctx.rtcMetrics.maxStallMs, stepStallMs);
       }
 
       // ── Pop next action, clip, apply ─────────────────────────────
       const raw = actionsQueue.shift()!;
+      // Whether the action just popped is a crossfade. Consumed here because
+      // the pop consumes it; whether it is what the robot ends up doing is
+      // decided below, by the dagger branch.
+      const poppedBlend = rtc !== null && rtc.blendedAhead > 0;
+      if (rtc && rtc.blendedAhead > 0) rtc.blendedAhead -= 1;
 
       // dagger: while the sim teleop override is active, the human joint
       // targets pre-empt the VLA action for this step (tagged 'human').
@@ -411,7 +846,17 @@ export class SkillExecutor {
       if (ctx.strategy === 'dagger' && mode === 'sim' && this.robotStateManager.isTeleopActive()) {
         chosen = this.teleopActionVector(raw.length);
         source = 'human';
+        // RTC: the human has the arm. A chunk predicted before they took it —
+        // or one being predicted right now, from an observation they are
+        // actively invalidating — would land as policy actions spliced in
+        // behind their back. Drop both; the next prefetch fires once they let
+        // go, from an observation that includes what they did.
+        if (rtc) this.cancelPrefetch(rtc);
       }
+      // A pre-empted step carries the human's vector verbatim, so it is not a
+      // crossfade however the queue was built (TASK-183).
+      const blended = poppedBlend && source === 'policy';
+      if (blended) ctx.rtcMetrics.blendedSteps += 1;
 
       const safe =
         mode === 'hardware'
@@ -463,7 +908,11 @@ export class SkillExecutor {
         ts: Date.now(),
         ...(ctx.strategy !== 'default' ? { strategy: ctx.strategy } : {}),
         ...(ctx.strategy === 'dagger' ? { source } : {}),
+        // Appended last, and only with RTC on, so the disabled payload keeps
+        // the exact keys and order it had — same discipline as `strategy`.
+        ...(rtc ? { stallMs: stepStallMs, blended } : {}),
       });
+      stepStallMs = 0;
 
       // In sim mode we cap at 2 chunks to keep dev runs bounded; hardware
       // mode runs the full maxSteps so real-arm executions aren't cut short.
@@ -471,7 +920,42 @@ export class SkillExecutor {
         break;
       }
 
-      await sleep(LOOP_PERIOD_MS);
+      // Issued here rather than before the send so the `/predict` flies during
+      // the sleep below — the idle window RTC exists to spend.
+      //
+      // Awaited, and it returns the milliseconds it spent doing so: the
+      // prefetch's OBSERVATION is captured here, on the loop's own thread,
+      // rather than inside the background promise (TASK-183). See
+      // `maybePrefetch` for why the sidecar is not allowed a second caller.
+      let prefetchCaptureMs = 0;
+      if (rtc) {
+        prefetchCaptureMs = await this.maybePrefetch(
+          rtc, ctx, opts, mode, vlaConfig, baseUrl, actionsQueue.length, step,
+        );
+      }
+
+      // The capture is paid OUT OF this step's sleep rather than on top of it,
+      // so the next `/action` is not pushed late — the one thing g1_sidecar.py's
+      // ramp asks of this loop is a steady ~G1_CONTROL_HZ cadence. In sim
+      // `prefetchCaptureMs` is 0 and this is the old `sleep`.
+      //
+      // That holds only WHILE THE CAPTURE FITS IN THE PERIOD. The subtraction
+      // clamps at zero, so a sidecar capture slower than LOOP_PERIOD_MS has
+      // nothing left to be paid out of and stretches this one step by the
+      // overrun — the jitter is moved out of the DDS lock and into the cadence,
+      // not removed. It is a real regime: `getCameras` + one `snapshot` +
+      // `getStateNow` at 100 ms each already exceeds a 200 ms period. Nothing
+      // here can buy the time back, so the breach is logged rather than hidden;
+      // `rtcPrefetchPaysOff` weighs round trip against queue, not capture
+      // against period, so it will not decline on this ground.
+      if (prefetchCaptureMs > LOOP_PERIOD_MS) {
+        console.warn(
+          `[SkillExecutor] RTC prefetch capture ${prefetchCaptureMs}ms exceeded the ` +
+            `${LOOP_PERIOD_MS}ms loop period — this step's /action cadence stretched by ` +
+            `${prefetchCaptureMs - LOOP_PERIOD_MS}ms`,
+        );
+      }
+      await sleep(Math.max(0, LOOP_PERIOD_MS - prefetchCaptureMs));
     }
 
     return {
@@ -729,6 +1213,342 @@ export class SkillExecutor {
     return out;
   }
 
+  // ── Real-Time Chunking (TASK-183) ─────────────────────────────
+
+  /**
+   * Build the per-run RTC state, or `null` when RTC is off.
+   *
+   * `null` is load-bearing: every RTC branch in `runLoop` is `if (rtc)`, so a
+   * disabled run executes the same statements, in the same order, issuing the
+   * same HTTP calls, as it did before TASK-183.
+   */
+  private resolveRtc(
+    opts: SkillExecutorOptions,
+    vlaConfig: VlaConfig,
+    ctx: RolloutContext,
+  ): RtcState | null {
+    const cfg = { ...config.vla.rtc, ...(opts.rtc ?? {}) };
+    if (!cfg.enabled) return null;
+    const rtc: RtcState = {
+      overlap: cfg.overlap,
+      blendSteps: cfg.blendSteps,
+      backendChunkLen: vlaConfig.chunkSize,
+      inflight: null,
+      cancel: null,
+      gen: 0,
+      issuedAtStep: 0,
+      pending: null,
+      blendedAhead: 0,
+      attempted: false,
+      latencyMs: 0,
+    };
+    ctx.rtc = rtc;
+    return rtc;
+  }
+
+  /**
+   * Fold one observed refill round trip into the estimate RTC decides on.
+   *
+   * Only successful refills are sampled. A 503 that comes back in 20 ms is not
+   * evidence that inference is fast, and a `PREDICT_TIMEOUT_MS` abort is not
+   * evidence that it takes exactly three seconds; feeding either in would move
+   * the prefetch decision on the strength of a number that measured the wrong
+   * thing.
+   */
+  private noteLatency(rtc: RtcState, ms: number): void {
+    rtc.latencyMs =
+      rtc.latencyMs === 0
+        ? ms
+        : Math.max(ms, rtc.latencyMs * RTC_LATENCY_DECAY + ms * (1 - RTC_LATENCY_DECAY));
+  }
+
+  /**
+   * Take delivery of a prefetched chunk, at the one point in the iteration
+   * where the queue is not half-consumed: the top, before the refill check.
+   *
+   * The resolve handler only parks its chunk in `rtc.pending`; the splice
+   * happens here, synchronously with the loop, so a chunk can never land
+   * between the pop and the send.
+   *
+   * If the queue has run dry while a prefetch is still in flight, this waits
+   * for it instead of letting the serial path fire a second `/predict` for the
+   * same boundary. That wait is a real stall — RTC bought a head start, not
+   * necessarily enough of one — and it is the ONLY wait this method can do, so
+   * it is exactly the case `runLoop` starts `stallStartedAt` for. A dry queue
+   * whose chunk is already in `rtc.pending` returns from here in microseconds
+   * and is not a stall at all.
+   */
+  private async rtcDrain(
+    rtc: RtcState,
+    ctx: RolloutContext,
+    queue: number[][],
+    step: number,
+  ): Promise<number[][]> {
+    if (queue.length === 0 && rtc.inflight) {
+      await rtc.inflight;
+    }
+    const incoming = rtc.pending;
+    if (!incoming) return queue;
+    rtc.pending = null;
+
+    const consumed = step - rtc.issuedAtStep;
+    if (consumed >= incoming.length) {
+      // Every action in it described a timestep already lived through. Keep
+      // what we have and let the boundary fall to the serial refill.
+      ctx.rtcMetrics.prefetchStale += 1;
+      console.warn(
+        `[SkillExecutor] RTC prefetch landed ${consumed} steps late — whole ${incoming.length}-action chunk stale, discarded`,
+      );
+      return queue;
+    }
+    const merged = blendChunks(queue, incoming, consumed, rtc.blendSteps);
+
+    ctx.rtcMetrics.prefetchMerged += 1;
+    ctx.rtcMetrics.chunkTransitions += 1;
+    // `blendedSteps` is NOT incremented here: `merged.blended` is how many
+    // crossfades were scheduled, and the run loop counts them as it plays them.
+    rtc.blendedAhead = merged.blended;
+    // What the backend answers with, NOT the shortened merge — see
+    // `backendChunkLen`. A fresh chunk is a fresh boundary, so it also gets its
+    // own prefetch attempt.
+    rtc.backendChunkLen = incoming.length;
+    rtc.attempted = false;
+    return merged.queue;
+  }
+
+  /**
+   * Fire the next `/predict` without awaiting it, if the queue has drained to
+   * the overlap threshold, nothing is already in flight, this boundary has not
+   * had its attempt yet, and the round trip is short enough for the attempt to
+   * be worth making.
+   *
+   * Exactly one prefetch exists at a time: a second would double the load on
+   * the inference server to buy a lead the loop has no way to spend, and its
+   * chunk would be aligned against a queue the first one had already replaced.
+   *
+   * And exactly one per boundary, in flight or not — `rtc.attempted` is what
+   * stops a prefetch that fails fast from being retried on the next step, and
+   * the next, for as long as the queue lasts (TASK-183).
+   *
+   * ## Why the observation is captured HERE, inline, and awaited
+   *
+   * RTC is the rollout loop's first concurrent caller of anything. The
+   * `/predict` it overlaps with execution belongs to vla-server, a separate
+   * process on (usually) a separate machine, and overlapping it is the whole
+   * point. The OBSERVATION is a different animal: on hardware
+   * `captureHardware` is getCameras, one snapshot per camera and getStateNow —
+   * three calls to the robot's own sidecar with a single camera, N + 2 with N —
+   * and the loop's `sendActionVector` is one more, to the same process. Running
+   * the capture inside the background promise put the capture and the send in
+   * flight together. The shipped test for this is "serialises the prefetch
+   * capture against the loop action send", which requires the recorded overlap
+   * list to stay empty; reproducing the overlap needs the capture moved back
+   * inside the background promise by hand.
+   *
+   * That is not a benign overlap:
+   *
+   * - `g1_sidecar.py` serialises every DDS touch on a single `robot_lock`, and
+   *   its `/action` ramp is only physically correct "when the caller drives
+   *   /action at ~G1_CONTROL_HZ" (its own words). A state read that takes the
+   *   lock in between jitters exactly that cadence.
+   * - On SO-101 with the `sentry` strategy it is worse: lerobot-record owns
+   *   the cameras and the follower serial port, and the sidecar re-opens them
+   *   on demand — see `startSentryRecording`.
+   * - TASK-169 landed one commit before this one, on this same read path,
+   *   because a concurrent read raced cyclonedds into a half-built IDL type.
+   *
+   * So the capture is taken on the loop's thread, between the send and the
+   * sleep, and only the `/predict` is left in the air. The executor therefore
+   * issues at most ONE sidecar request at a time, in the loop's own order,
+   * with RTC on or off. (The agent's 2 s telemetry poll in `HardwareClient` is
+   * a separate, pre-existing caller and is untouched by this.)
+   *
+   * This costs the prefetch nothing it was there to buy. The lead RTC spends
+   * is the inference round trip, which is the part that stays concurrent; the
+   * capture was never overlapped with anything but the loop's own sleep, and
+   * the returned duration is subtracted from that sleep by the caller, so the
+   * step it happens on keeps its period.
+   *
+   * @returns milliseconds spent blocking the loop on the capture — 0 when no
+   * prefetch was issued, and 0 in sim, where the "capture" is a constant.
+   */
+  private async maybePrefetch(
+    rtc: RtcState,
+    ctx: RolloutContext,
+    opts: SkillExecutorOptions,
+    mode: SkillExecutionMode,
+    vlaConfig: VlaConfig,
+    baseUrl: string,
+    queueLen: number,
+    step: number,
+  ): Promise<number> {
+    if (rtc.inflight || rtc.pending || rtc.attempted || this.aborted) return 0;
+    // At 0 the serial refill owns the boundary and starting a prefetch here
+    // would only race it. Above the threshold there is still enough queued
+    // that a prefetch would be predicted from an older observation than it
+    // needs to be, and its chunk more stale on arrival.
+    if (queueLen === 0 || queueLen > rtcThreshold(rtc)) return 0;
+    // dagger: don't start one while a human is driving — see the cancel in the
+    // pop path for why the policy's opinion is worthless right now. NOT an
+    // attempt: the boundary is still owed one for when they let go.
+    if (
+      ctx.strategy === 'dagger' &&
+      mode === 'sim' &&
+      this.robotStateManager.isTeleopActive()
+    ) {
+      return 0;
+    }
+    // Inference has got slow enough that prefetching would cost the robot more
+    // dead time than the serial refill. Decline, and burn the boundary's one
+    // attempt doing so: the queue only shrinks from here, so the same answer is
+    // waiting at every remaining step of it.
+    if (!rtcPrefetchPaysOff({ latencyMs: rtc.latencyMs, queueLen, backendChunkLen: rtc.backendChunkLen })) {
+      rtc.attempted = true;
+      ctx.rtcMetrics.prefetchSkipped += 1;
+      console.warn(
+        `[SkillExecutor] RTC skipping prefetch at step ${step}: /predict is running ~${Math.round(rtc.latencyMs)}ms ` +
+          `against ${(queueLen + 1) * LOOP_PERIOD_MS}ms of queued lead — the serial refill is the cheaper boundary here`,
+      );
+      return 0;
+    }
+
+    const ctrl = new AbortController();
+    rtc.cancel = ctrl;
+    rtc.gen += 1;
+    const gen = rtc.gen;
+    rtc.attempted = true;
+
+    // The lead this prefetch spends runs from here until its chunk is usable —
+    // capture included, so that `latencyMs` measures the same quantity the
+    // serial refill measures and the two are comparable in
+    // `rtcPrefetchPaysOff`. That now makes the policy slightly CONSERVATIVE:
+    // the capture is paid before the lead starts running down, so the residual
+    // the policy weighs is larger than the one the loop will actually see. It
+    // errs toward the serial boundary, which is the safe direction, and it
+    // errs by the capture latency, which is the small term.
+    const roundTripStartedAt = Date.now();
+    let obs: { images: Record<string, string>; state: number[] };
+    try {
+      obs = await this.captureObservation(ctx, mode, vlaConfig);
+    } catch (err) {
+      // A speculative observation that could not be taken is not a failed run:
+      // the boundary drops back to the serial refill, which will try the same
+      // sidecar again and report properly if it is really down.
+      if (rtc.gen === gen) {
+        rtc.cancel = null;
+        ctx.rtcMetrics.prefetchFailed += 1;
+        console.warn(
+          `[SkillExecutor] RTC prefetch capture failed, falling back to serial refill: ${this.errMsg(err)}`,
+        );
+      }
+      return Date.now() - roundTripStartedAt;
+    }
+    const captureMs = Date.now() - roundTripStartedAt;
+    // Nothing can have superseded this while the loop was blocked on the
+    // capture above — `cancelPrefetch` is only ever called from the loop — but
+    // `abort()` is not the loop and can land here.
+    if (rtc.gen !== gen || ctrl.signal.aborted || this.aborted) {
+      if (rtc.gen === gen) rtc.cancel = null;
+      return captureMs;
+    }
+    // The chunk's t=0 is the observation just taken, and the loop has not
+    // moved since. See `RtcState.issuedAtStep`.
+    rtc.issuedAtStep = step;
+    // Counted HERE, not at the top of the attempt: a capture that throws, or a
+    // generation bumped while the loop was blocked on it, returns above without
+    // a `/predict` ever reaching vla-server. Counting those made
+    // `prefetchIssued` disagree with the request count an operator can see on
+    // the server, and read as "a prefetch landed and was discarded".
+    ctx.rtcMetrics.prefetchIssued += 1;
+    rtc.inflight = this.runPrefetch(rtc, ctx, opts, baseUrl, ctrl, gen, obs, roundTripStartedAt);
+    return captureMs;
+  }
+
+  /**
+   * The concurrent half of one prefetch: the `/predict`, and parking its chunk
+   * for the loop to merge. The observation was captured by `maybePrefetch` on
+   * the loop's thread — see there for why this holds no sidecar call.
+   *
+   * Resolves, never rejects, so `rtcDrain` can await it at a dry queue and
+   * `maybePrefetch` can leave it unhandled without risking an unhandled
+   * rejection. Nothing in here fails a run: a prefetch is speculative, so a
+   * failure just leaves `pending` null and drops the boundary back onto the
+   * serial refill with its existing retry counting.
+   *
+   * Deliberately does NOT touch `predictFailures`. That counter gates
+   * "vla-server is unreachable, stop the run", and it is counted against the
+   * predicts that actually block the robot. If the server really is down the
+   * following serial refill hits the same failure and counts it there; making
+   * a boundary burn two slots would bail the run after three failures that
+   * were really one and a half boundaries' worth.
+   */
+  private async runPrefetch(
+    rtc: RtcState,
+    ctx: RolloutContext,
+    opts: SkillExecutorOptions,
+    baseUrl: string,
+    ctrl: AbortController,
+    gen: number,
+    obs: { images: Record<string, string>; state: number[] },
+    roundTripStartedAt: number,
+  ): Promise<void> {
+    try {
+      const result = await this.predict(baseUrl, obs.images, obs.state, opts.taskPrompt, ctrl.signal);
+      // Superseded, cancelled, or the run ended while this was in the air.
+      if (rtc.gen !== gen || ctrl.signal.aborted) return;
+      if (!result.ok || result.actions.length === 0) {
+        ctx.rtcMetrics.prefetchFailed += 1;
+        console.warn(
+          `[SkillExecutor] RTC prefetch failed, falling back to serial refill: ${
+            result.ok ? 'empty action chunk' : result.error
+          }`,
+        );
+        return;
+      }
+      this.noteLatency(rtc, Date.now() - roundTripStartedAt);
+      rtc.pending = result.actions;
+    } catch (err) {
+      // predict() swallows its own errors; this is belt and braces, because an
+      // unexpected throw here would reach the loop through `rtcDrain`'s await.
+      if (rtc.gen !== gen) return;
+      ctx.rtcMetrics.prefetchFailed += 1;
+      console.warn(
+        `[SkillExecutor] RTC prefetch failed, falling back to serial refill: ${this.errMsg(err)}`,
+      );
+    } finally {
+      // Only if we are still the current prefetch: a cancel bumps the
+      // generation and may have started a replacement already, and clearing
+      // its slots from here would let a third one fire alongside it.
+      if (rtc.gen === gen) {
+        rtc.inflight = null;
+        rtc.cancel = null;
+      }
+    }
+  }
+
+  /**
+   * Abandon the in-flight prefetch and any chunk it already delivered.
+   *
+   * Aborts the HTTP request so a dead run isn't still holding a socket, and
+   * bumps the generation so the promise — which may already be past its abort
+   * check — writes nothing when it lands.
+   *
+   * Clears `attempted` too: the boundary still has a chunk executing and still
+   * wants prefetching, it just cannot be prefetched from an observation the
+   * human is in the middle of invalidating. The teleop gate in `maybePrefetch`
+   * holds it off until they let go; leaving it marked attempted would keep it
+   * off for the rest of the chunk, silently.
+   */
+  private cancelPrefetch(rtc: RtcState): void {
+    rtc.cancel?.abort();
+    rtc.cancel = null;
+    rtc.inflight = null;
+    rtc.pending = null;
+    rtc.blendedAhead = 0;
+    rtc.attempted = false;
+    rtc.gen += 1;
+  }
+
   // ── Helpers ────────────────────────────────────────────────────
 
   private async fetchVlaConfig(baseUrl: string): Promise<VlaConfig> {
@@ -746,6 +1566,43 @@ export class SkillExecutor {
       stateDim: data.state_dim ?? 6,
       chunkSize: data.chunk_size ?? 50,
     };
+  }
+
+  /**
+   * One observation for `/predict`, from wherever this run's frames and joint
+   * state come from. The serial refill and the RTC prefetch share it so there
+   * is exactly one description of what an observation is — including the
+   * highlight ring push, which with RTC on is where nearly every buffered
+   * frame comes from (TASK-183); a prefetch that skipped it would quietly
+   * empty the ring on the strategy that exists to fill it.
+   *
+   * Throws on a hardware capture failure. Both callers catch, and they do
+   * different things with it: the serial refill ends the run, the prefetch
+   * shrugs and lets the serial refill have the boundary.
+   */
+  private async captureObservation(
+    ctx: RolloutContext,
+    mode: SkillExecutionMode,
+    vlaConfig: VlaConfig,
+  ): Promise<{ images: Record<string, string>; state: number[] }> {
+    if (mode !== 'hardware') {
+      return {
+        images: this.buildSyntheticFrames(vlaConfig.cameras),
+        state: this.buildSimState(vlaConfig.stateDim),
+      };
+    }
+    const [images, state] = await this.captureHardware(vlaConfig);
+    // highlight: buffer the first camera's frame (one camera only, to bound
+    // memory). Frames arrive at capture rate; the ring caps at
+    // HIGHLIGHT_MAX_FRAMES regardless.
+    if (ctx.strategy === 'highlight') {
+      const cam = vlaConfig.cameras[0];
+      const jpeg = cam ? images[cam] : undefined;
+      if (cam && jpeg) {
+        ctx.highlight.push({ t: Date.now(), camera: cam, jpegB64: jpeg });
+      }
+    }
+    return { images, state };
   }
 
   /**
@@ -810,17 +1667,28 @@ export class SkillExecutor {
     return joints.slice(0, stateDim);
   }
 
+  /**
+   * `external` (TASK-183) lets an RTC prefetch cancel its own request when the
+   * run ends or a human pre-empts it. Omitted everywhere else, and when it is
+   * omitted this behaves exactly as it did before.
+   */
   private async predict(
     baseUrl: string,
     images: Record<string, string>,
     state: number[],
     task: string,
+    external?: AbortSignal,
   ): Promise<
     | { ok: true; actions: number[][] }
     | { ok: false; error: string; retryable: boolean }
   > {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), PREDICT_TIMEOUT_MS);
+    const onExternalAbort = () => ctrl.abort();
+    if (external) {
+      if (external.aborted) ctrl.abort();
+      else external.addEventListener('abort', onExternalAbort, { once: true });
+    }
     try {
       const resp = await this.fetchImpl(`${baseUrl}/predict`, {
         method: 'POST',
@@ -852,6 +1720,7 @@ export class SkillExecutor {
       };
     } finally {
       clearTimeout(t);
+      external?.removeEventListener('abort', onExternalAbort);
     }
   }
 
