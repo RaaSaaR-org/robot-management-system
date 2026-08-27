@@ -632,6 +632,13 @@ export class BlockExecutor {
     // what is known here — see SceneMemoryStore.noteTranslationM for why the
     // commanded number is the right one to hand over. A pure turn contributes
     // zero, which is correct: rotation is the yaw rule's business.
+    //
+    // Still needed now that `refreshYaw` feeds measured odometry in as well,
+    // and not redundant with it: `walk` never calls `refreshYaw`, so between
+    // two looks the commanded number is the only thing the store hears, and it
+    // is the larger of the two whenever the base falls short of what it was
+    // told. The store takes the larger and never the sum, so this cannot be
+    // counted twice — see SceneMemoryStore.noteOdometryM.
     this.deps.scene.noteTranslationM(Math.hypot(cmd.vx, cmd.vy) * cmd.durationS);
     if (!result.ok) return result;
     const remainingMs = cmd.durationS * 1000 - (this.now() - startedAt);
@@ -742,9 +749,22 @@ export class BlockExecutor {
     // ahead), because that is the frame the cloud is in: `base_link`, x forward.
     // The world conversion happens afterwards, in `scene.merge`. Adding the yaw
     // here would rotate every cone away from the thing it is aimed at.
-    const measurement = await this.range.measure(observation.entities.map((e) => e.bearingDeg));
-    const entities: ObservedEntity[] = observation.entities.map((entity, index) => {
-      const reading = measurement.readings[index] ?? null;
+    //
+    // An entity the VLM could not place is NOT ranged. There is no cone to aim:
+    // a missing bearing is not 0, and ranging it as 0 measures whatever the
+    // robot happens to be facing and hands that metre back stamped 'lidar' —
+    // the strongest provenance this system has, attached to a number about
+    // something else entirely.
+    const placedBearingsDeg = observation.entities
+      .map((e) => e.bearingDeg)
+      .filter((bearingDeg): bearingDeg is number => bearingDeg !== undefined);
+    const measurement = await this.range.measure(placedBearingsDeg);
+    // `readings` carries one entry per REQUESTED bearing, so the cursor walks
+    // the placed entities only and the unplaced ones consume nothing.
+    let placedIndex = 0;
+    const entities: ObservedEntity[] = observation.entities.map((entity) => {
+      const reading =
+        entity.bearingDeg === undefined ? null : (measurement.readings[placedIndex++] ?? null);
       if (reading) {
         // The measurement REPLACES the model's guess. What it claims is exactly
         // "the nearest surface inside a ±cone around that bearing" — LiDAR
@@ -902,12 +922,38 @@ export class BlockExecutor {
 
   /**
    * Replace the dead-reckoned heading with the sidecar's measured yaw when it
-   * has one. Absent odometry is left as dead reckoning and labelled as such —
-   * never presented as a measurement.
+   * has one, and hand the same fix's POSITION to scene memory. Absent odometry
+   * is left as dead reckoning and labelled as such — never presented as a
+   * measurement.
+   *
+   * The position half is TASK-221. `/loco/odom` has always answered
+   * `{ x, y, yaw, source }` here and only the yaw was kept, which left scene
+   * memory believing what Agent Mode had COMMANDED and nothing else: a Quest
+   * teleop drive, a direct POST to the sidecar or a VLA rollout moved the robot
+   * without a `walk` block, `hasMovedSinceObservation()` answered false, and a
+   * `goto` could report "Arrived at table after 0 stages" from four metres away.
+   *
+   * It cannot double-count against `driveFor`'s commanded metres: the store
+   * keeps the two as separate accounts of the same window and takes the larger
+   * (see `SceneMemoryStore.noteOdometryM`), so a stage that was commanded AND
+   * measured is one stage, not two.
+   *
+   * This alone does not close the hole, because it only fires while Agent Mode
+   * is acting — a teleop drive with no block after it is still invisible here.
+   * The other two halves are `AgentModeController.notePolledOdometry`, which
+   * feeds the 2 s pose poll in while somebody else holds the lock, and the lock
+   * hook that clears the scene outright when they take it.
+   *
+   * When `/loco/odom` answers nothing this hands over nothing, which is right —
+   * a null is not a pose — but it leaves the merge that follows with no anchor
+   * behind it. `SceneMemoryStore.noteOdometryM` picks that case up on the next
+   * fix and calls the gap unmeasured rather than zero.
    */
   private async refreshYaw(): Promise<void> {
     const odom = await this.loco.odometry();
-    if (odom) this.deps.scene.setYawDeg(odom.yaw * RAD_TO_DEG, 'odometry');
+    if (!odom) return;
+    this.deps.scene.setYawDeg(odom.yaw * RAD_TO_DEG, 'odometry');
+    this.deps.scene.noteOdometryM(odom.x, odom.y);
   }
 
   // ── expression ────────────────────────────────────────────────────────────

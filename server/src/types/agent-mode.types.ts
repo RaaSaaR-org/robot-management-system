@@ -593,7 +593,13 @@ export interface AgentModeEvent {
   robotId: string;
   plan?: AgentPlan;
   block?: AgentBlock;
-  scene?: SceneMemory;
+  /**
+   * `null` is a WIPE, and is distinct from absent. `clear()` nulls `updatedAt`,
+   * so `snapshot()` answers null — sending that as `undefined` made the wipe
+   * unrepresentable and every consumer dropped it, leaving the operator looking
+   * at pre-teleop rows still labelled lidar-measured (TASK-221 review).
+   */
+  scene?: SceneMemory | null;
   state?: AgentModeState;
   /** Set on `agent:memory:updated` only. */
   memory?: AgentMemoryDigest;

@@ -1,0 +1,22 @@
+{
+  // The one-off tools in `scripts/` import the real `Planner`, `SceneMemoryStore`
+  // and friends but sit outside `tsconfig.json` ("include": ["src/**/*"]), so
+  // they used to drift against those modules with nothing to catch it. This
+  // config exists only to typecheck them:
+  //
+  //   npx tsc -p tsconfig.scripts.json
+  //
+  // `noEmit` because nothing here is built — `npm run build` still compiles
+  // `src/` alone, and `rootDir` is widened to the package root only so the
+  // `src/` files pulled in through the imports are not reported as outside it.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["node"]
+  },
+  "include": ["scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

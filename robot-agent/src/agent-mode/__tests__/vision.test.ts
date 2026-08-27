@@ -172,7 +172,15 @@ describe('parseVisionAnswer', () => {
       HFOV
     );
 
-    expect(observation.entities[0].bearingDeg).toBe(0);
+    // No bearing AT ALL, and specifically not 0 (TASK-221). 0 is not the
+    // neutral answer here, it is the most expensive one to fabricate: it is the
+    // only direction that needs no correction turn, so `goto` walks it on the
+    // spot, and the range sensor measures whatever the robot already faces.
+    expect(observation.entities[0]).not.toHaveProperty('bearingDeg');
+    expect(observation.entities[0].bearingDeg).toBeUndefined();
+    // The sighting itself survives — what is unknown is where it is, not that
+    // it was seen.
+    expect(observation.entities[0].label).toBe('table');
     expect(observation.entities[0].imageX).toBeUndefined();
   });
 
@@ -189,9 +197,10 @@ describe('parseVisionAnswer', () => {
     );
 
     // Both are out of contract, so neither gets a position — what must NOT
-    // happen is the two landing on the same clamped bearing as if they were
-    // measured.
-    expect(observation.entities[0].bearingDeg).toBe(0);
+    // happen is the two landing on the same fabricated bearing as if they were
+    // measured. Neither carries one at all (TASK-221).
+    expect(observation.entities[0]).not.toHaveProperty('bearingDeg');
+    expect(observation.entities[1]).not.toHaveProperty('bearingDeg');
     expect(observation.entities[0].imageX).toBeUndefined();
     expect(observation.entities[1].imageX).toBeUndefined();
   });
@@ -202,6 +211,32 @@ describe('parseVisionAnswer', () => {
     );
 
     expect(observation.personVisible).toBe(true);
+  });
+
+  it('counts an UNPLACED sighting towards personVisible and currentView', () => {
+    // The other half of TASK-221 item 2, and the half that decides how far the
+    // drop reaches. `SceneMemoryStore.merge` refuses to store a row with no
+    // bearing, so an unplaced entity steers nothing — but it must not become
+    // invisible: that the robot SAW a person is real whether or not it can say
+    // which way, and the idle watcher greets on `personVisible` alone. Nothing
+    // asserted this while `VisionEntity.bearingDeg`'s doc claimed it, so the
+    // drop could have been widened to "skip the entity entirely" — which would
+    // walk a visitor past an unplaced greeting — with the suite still green.
+    const observation = parseVisionAnswer(
+      JSON.stringify({ entities: [{ label: 'person', x: null }, { label: 'table', x: 640 }] }),
+      HFOV
+    );
+
+    // Both unplaced, by the two different routes into it (`x: null` and an `x`
+    // answered in pixels)…
+    expect(observation.entities).toHaveLength(2);
+    expect(observation.entities[0]).not.toHaveProperty('bearingDeg');
+    expect(observation.entities[1]).not.toHaveProperty('bearingDeg');
+    // …and both still seen. `personVisible` is inferred off the label, and the
+    // `currentView` fallback is built from the entity labels when the model
+    // omits the field, so an unplaced sighting reaches both.
+    expect(observation.personVisible).toBe(true);
+    expect(observation.currentView).toBe('person, table');
   });
 
   it('drops unlabeled entities and caps the list at 8', () => {

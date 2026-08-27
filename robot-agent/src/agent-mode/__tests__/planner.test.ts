@@ -12,11 +12,12 @@ import {
   Planner,
   coerceParams,
   enforceTurnDirection,
+  foldTurnWalkIntoGoto,
   mergeAdjacentWaveIntoGreet,
   mergeSplitReasoningBlocks,
   plannerFallback,
 } from '../planner.js';
-import type { PlannedBlock } from '../planner.js';
+import type { PlannedBlock, PlannerSceneTarget } from '../planner.js';
 import type { GenerateRequest, GenerateResponse } from '../llm.js';
 
 const MODEL_REF = 'test-ollama/gemma3:4b';
@@ -651,5 +652,250 @@ describe('enforceTurnDirection', () => {
       { from: -90, to: 90, direction: 'left' },
       { from: 90, to: -90, direction: 'left' },
     ]);
+  });
+});
+
+describe('foldTurnWalkIntoGoto (TASK-221)', () => {
+  const turn = (angleDeg: number): PlannedBlock => ({ kind: 'turn', params: { angleDeg } });
+  const walk = (distanceM: number, direction = 'forward'): PlannedBlock => ({
+    kind: 'walk',
+    params: { distanceM, direction },
+  });
+
+  /** The bench's `goto-door` scene: the robot faces +x, the door is off to its left. */
+  const DOOR: PlannerSceneTarget = {
+    label: 'door',
+    relativeBearingDeg: 96,
+    distanceM: 4.4,
+  };
+
+  it('folds the open-loop approach the bench sees — turn 96° + walk 4.4 m', () => {
+    // gemma4:e2b answers `goto-door` this way 3 of 3 times: it reads the door's
+    // bearing and distance off the scene summary and drives them open-loop. The
+    // turn is what retires the measured clearance, so the walk that follows is
+    // not clamped by anything the lidar saw down the heading it walks.
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].kind).toBe('goto');
+    expect(blocks[0].params).toEqual({ entity: 'door' });
+    expect(blocks[0].reasoning).toMatch(/open-loop approach to "door"/);
+    expect(folds).toEqual([{ label: 'door', turnDeg: 96, walkM: 4.4 }]);
+  });
+
+  it('folds a plan whose numbers were rounded off the summary — turn 90° + walk 4 m', () => {
+    // The summary prints `bearing 96°` and `~4.4 m`; a 4B model rounds both. The
+    // bench's own dash counter misses this shape (it matches within 0.06 m of a
+    // known scene distance), which is exactly why the fold cannot be that tight.
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(90), walk(4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['goto']);
+    expect(folds).toHaveLength(1);
+  });
+
+  it('does NOT fold a genuine "turn left and walk 3 m" — no row answers to both numbers', () => {
+    // The negative case is the point: one number landing near a row is nothing.
+    // The turn is aimed at the door, the distance is not the door's, so this
+    // stays two blocks and runs as the operator asked.
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(90), walk(3)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('does not fold on the distance alone when the turn points somewhere else', () => {
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(-45), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('does nothing without scene targets — a caller with no store gets its plan back', () => {
+    const original = [turn(96), walk(4.4)];
+    const { blocks, folds } = foldTurnWalkIntoGoto(original, undefined);
+
+    expect(blocks).toBe(original);
+    expect(folds).toEqual([]);
+  });
+
+  it('refuses an ambiguous match rather than picking by array order', () => {
+    // Two rows answering to the same pair is not a stronger signal, and folding
+    // into either would choose the robot's destination by iteration order.
+    const twin: PlannerSceneTarget = { ...DOOR, label: 'doorway' };
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(96), walk(4.4)], [DOOR, twin]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('leaves a backward walk alone — a retreat is not an approach', () => {
+    const { blocks } = foldTurnWalkIntoGoto([turn(96), walk(4.4, 'backward')], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+  });
+
+  it('leaves a row with no distance alone — one matching number is not a pair', () => {
+    const unmeasured: PlannerSceneTarget = { ...DOOR, distanceM: null };
+    const { blocks } = foldTurnWalkIntoGoto([turn(96), walk(4.4)], [unmeasured]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+  });
+
+  it('only folds an adjacent pair, and keeps the rest of the plan in order', () => {
+    const look: PlannedBlock = { kind: 'look', params: {} };
+    const { blocks } = foldTurnWalkIntoGoto([look, turn(96), look, walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['look', 'turn', 'look', 'walk']);
+  });
+
+  it('does NOT fold a pair the robot has already turned away from', () => {
+    // The whole soundness argument for the fold is that `relativeBearingDeg`
+    // describes the robot AS IT STANDS WHEN THE PLAN IS MADE. A block that
+    // turns the base spends that frame.
+    //
+    // "dreh dich 50 Grad nach rechts, dann dreh dich 96 Grad nach links und geh
+    // 4,4 Meter": after the -50 turn the door is at relative +146, so the
+    // operator's second turn aims 50 degrees away from it. Folding the second
+    // pair would walk the robot to the door anyway — the exact "wrong fold
+    // walks the robot somewhere nobody asked for" this function forbids.
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(-50), turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('does NOT fold a pair that follows a walk', () => {
+    // Same reason on the distance axis: after walking 2 m the door is no longer
+    // 4.4 m away, so the row cannot testify about this pair either.
+    const { blocks, folds } = foldTurnWalkIntoGoto([walk(2), turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['walk', 'turn', 'walk']);
+    expect(folds).toEqual([]);
+  });
+
+  it('folds at most once — the goto itself spends the plan-time pose', () => {
+    // Two identical approaches: the first is evidence, the second is a pair
+    // measured from wherever the goto left the robot, which is not here.
+    const { blocks, folds } = foldTurnWalkIntoGoto(
+      [turn(96), walk(4.4), turn(96), walk(4.4)],
+      [DOOR],
+    );
+
+    expect(blocks.map((b) => b.kind)).toEqual(['goto', 'turn', 'walk']);
+    expect(folds).toHaveLength(1);
+  });
+
+  it('a non-moving block between plan start and the pair does not spend the pose', () => {
+    // `look`, `speak`, `wait` and friends leave the base where it is, so the
+    // guard must not be so blunt that it kills every fold after block 0.
+    const speak: PlannedBlock = { kind: 'speak', params: { text: 'ok' } };
+    const { blocks, folds } = foldTurnWalkIntoGoto([speak, turn(96), walk(4.4)], [DOOR]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['speak', 'goto']);
+    expect(folds).toHaveLength(1);
+  });
+
+  it('matches the relative bearing when the robot is not facing +x', () => {
+    // The store keeps WORLD bearings and a `turn` is relative, so a robot
+    // already turned 40° needs a 56° turn to face a door at world 96°.
+    const turned: PlannerSceneTarget = { ...DOOR, relativeBearingDeg: 56 };
+    const { blocks } = foldTurnWalkIntoGoto([turn(56), walk(4.4)], [turned]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['goto']);
+  });
+
+  it('does NOT fold a turn that only matches the row\'s STALE world bearing', () => {
+    // The regression an earlier world-bearing match arm shipped. The robot has
+    // looked at yaw 0 and stored the door at world 96°, then turned 50° right
+    // (yaw -50), which puts the door at RELATIVE 146°. The operator then names
+    // an angle outright — "dreh dich 96 Grad nach links und geh 4,4 Meter" — and
+    // the model faithfully emits it.
+    //
+    // 96° is the door's world bearing to the degree, and 4.4 m is its distance,
+    // so both numbers "belong to the row" in the frame the SUMMARY prints. They
+    // do not belong to it in the frame the robot turns in: 96° aims 50° short of
+    // the door. Folding here would throw away an angle the operator said out
+    // loud and turn 146° instead — which is why the fold matches relative only.
+    const stale: PlannerSceneTarget = { label: 'door', relativeBearingDeg: 146, distanceM: 4.4 };
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(96), walk(4.4)], [stale]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+    expect(blocks[0].params).toEqual({ angleDeg: 96 });
+    expect(blocks[1].params).toEqual({ distanceM: 4.4, direction: 'forward' });
+    expect(folds).toEqual([]);
+  });
+
+  it('folds a genuine "turn left and walk 3 m" when a row does answer to both — bounded on purpose', () => {
+    // The honest reading of TURN_MATCH_DEG / WALK_MATCH_M: they are not tight
+    // enough to make this impossible, and no honest pair of numbers would be. A
+    // whiteboard at 88° / 3.3 m answers to "turn 90, walk 3", so the fold fires
+    // on a command the operator meant literally.
+    //
+    // Pinned rather than fixed, because matching in the RELATIVE frame is what
+    // makes it affordable: the goto ends within 12° of the heading and 0.5 m of
+    // the range that were asked for, and gets there measured. Tighten the
+    // windows and this test is the one that says what was given up.
+    const board: PlannerSceneTarget = {
+      label: 'whiteboard',
+      relativeBearingDeg: 88,
+      distanceM: 3.3,
+    };
+    const { blocks, folds } = foldTurnWalkIntoGoto([turn(90), walk(3)], [board]);
+
+    expect(blocks.map((b) => b.kind)).toEqual(['goto']);
+    expect(folds).toEqual([{ label: 'whiteboard', turnDeg: 90, walkM: 3 }]);
+  });
+});
+
+describe('Planner — the turn+walk fold end to end', () => {
+  const DOOR: PlannerSceneTarget = {
+    label: 'door',
+    relativeBearingDeg: 96,
+    distanceM: 4.4,
+  };
+
+  it('rewrites the model\'s turn+walk answer into one goto when the scene backs both numbers', async () => {
+    const { planner } = makePlanner([
+      {
+        text: JSON.stringify({
+          blocks: [
+            { kind: 'turn', angleDeg: 96, reasoning: 'Face the door.' },
+            { kind: 'walk', distanceM: 4.4, direction: 'forward' },
+          ],
+        }),
+      },
+    ]);
+
+    const result = await planner.plan({
+      command: 'geh zur Tuer',
+      sceneSummary: '- door: bearing 96°, ~4.4 m (lidar-measured), confidence 0.90',
+      sceneTargets: [DOOR],
+    });
+
+    expect(result.fallback).toBe(false);
+    expect(result.blocks.map((b) => b.kind)).toEqual(['goto']);
+    expect(result.blocks[0].params).toEqual({ entity: 'door' });
+  });
+
+  it('leaves the same answer alone when no scene row backs it', async () => {
+    const { planner } = makePlanner([
+      {
+        text: JSON.stringify({
+          blocks: [
+            { kind: 'turn', angleDeg: 90 },
+            { kind: 'walk', distanceM: 3, direction: 'forward' },
+          ],
+        }),
+      },
+    ]);
+
+    const result = await planner.plan({
+      command: 'dreh dich nach links und geh 3 Meter',
+      sceneSummary: '- door: bearing 96°, ~4.4 m (lidar-measured), confidence 0.90',
+      sceneTargets: [DOOR],
+    });
+
+    expect(result.blocks.map((b) => b.kind)).toEqual(['turn', 'walk']);
+    expect(result.blocks[1].params).toEqual({ distanceM: 3, direction: 'forward' });
   });
 });

@@ -64,9 +64,19 @@ export function dedupeByLabel<T extends VisionEntity>(
 
 /** True when `a` is the better referent for a shared label than `b`. */
 function moreCentral(a: VisionEntity, b: VisionEntity): boolean {
-  const da = Math.abs(a.bearingDeg);
-  const db = Math.abs(b.bearingDeg);
-  if (da !== db) return da < db;
+  // A placed instance beats an unplaced one whatever else the two carry. An
+  // entity the model could not place has no centrality to compare at all, and
+  // reading its absent bearing as 0 made it the MOST central of the pair — so
+  // the one instance of a label that nobody knew the direction of won the label
+  // outright, and the frame's real, well-placed door was thrown away for it.
+  const aPlaced = a.bearingDeg !== undefined;
+  const bPlaced = b.bearingDeg !== undefined;
+  if (aPlaced !== bPlaced) return aPlaced;
+  if (a.bearingDeg !== undefined && b.bearingDeg !== undefined) {
+    const da = Math.abs(a.bearingDeg);
+    const db = Math.abs(b.bearingDeg);
+    if (da !== db) return da < db;
+  }
   // A known distance beats an unknown one: it is the instance the navigator can
   // actually judge progress against.
   if ((a.distanceEstM === null) !== (b.distanceEstM === null)) return b.distanceEstM === null;
@@ -207,12 +217,79 @@ export class SceneMemoryStore {
    */
   private clearanceExpiredByTurn = false;
   /**
-   * Distance the robot has travelled since the last observation, in metres,
-   * accumulated from commanded base motion (see
-   * {@link SceneMemoryStore.noteTranslationM}). Reset by every merge, because a
-   * merge is the robot looking again from where it now stands.
+   * Distance Agent Mode has COMMANDED the base to travel since the last
+   * observation, in metres (see {@link SceneMemoryStore.noteTranslationM}).
+   * Reset by every merge, because a merge is the robot looking again from where
+   * it now stands.
    */
-  private translationSinceObservationM = 0;
+  private commandedSinceObservationM = 0;
+  /**
+   * The odometry position the current accounting window opened at — where the
+   * robot stood when it last looked — or null before the first fix. Reset by
+   * every merge to the freshest fix the store has been handed.
+   */
+  private odomAnchorM: { x: number; y: number } | null = null;
+  /**
+   * HIGH-WATER MARK of the measured distance from {@link odomAnchorM}, in
+   * metres (see {@link SceneMemoryStore.noteOdometryM}).
+   *
+   * A high-water mark and not a running sum, for two reasons that both bite.
+   * Summing per-sample deltas walks a STANDING robot away from its own memory,
+   * because odometry jitter is all one sign once you take its magnitude. And
+   * the fixes do not arrive as one ordered stream — a fresh read inside
+   * `BlockExecutor.refreshYaw` and the 2 s pose poll's cache both feed this —
+   * so a sample that is merely OLD would otherwise read as more motion. The
+   * largest displacement from the anchor is order-independent, and it is the
+   * honest answer to "how far from the looking pose has this robot been".
+   */
+  private odomFromAnchorM = 0;
+  /**
+   * The most recent odometry fix handed in, whichever feed supplied it.
+   *
+   * NEVER nulled once set: it is the freshest fix this store has, not a
+   * statement that the feed is alive. {@link odomFixSeq} is what says whether
+   * it is fresh enough to anchor a window with.
+   */
+  private lastOdomM: { x: number; y: number } | null = null;
+  /**
+   * How many odometry fixes this store has ACCEPTED, ever.
+   *
+   * A monotonic SEQUENCE and deliberately not a clock: the question a merge
+   * asks is "has odometry spoken at all since the last time I opened a
+   * window", which is an ordering question with an exact answer. A timestamp
+   * would answer it with a threshold — one more constant to tune, one more
+   * thing to get wrong on a slow feed, and a dependence on a clock this store
+   * does not otherwise have.
+   */
+  private odomFixSeq = 0;
+  /**
+   * The value {@link odomFixSeq} held when {@link reopenOdomWindow} last ran.
+   * `odomFixSeq > odomAnchorSeq` is exactly "a fix arrived since the last
+   * merge or clear", which is the whole staleness rule.
+   */
+  private odomAnchorSeq = 0;
+  /**
+   * True when odometry has told this store where the robot IS without ever
+   * having told it where the robot LOOKED FROM (TASK-221 review).
+   *
+   * That window is UNMEASURED, and unmeasured is not zero — see
+   * {@link noteOdometryM} for how it opens. The only honest answer to "how far
+   * has the robot come since it looked" is then "far enough that it should look
+   * again", so {@link hasMovedSinceObservation} reports moved until the next
+   * {@link merge} re-opens the window at a pose this store does know. One look
+   * clears it.
+   *
+   * It can be set MANY times in a store's life, and that is the point. An
+   * anchorless window opens whenever a merge finds no fix behind it SINCE THE
+   * PREVIOUS merge — `/loco/odom` timing out across a single look is enough
+   * (2 s timeout, null on any hiccup, so `BlockExecutor.refreshYaw` hands over
+   * nothing) — so this is reachable again after every recovery. It was the
+   * opposite reading, that {@link lastOdomM} never goes back to null so no
+   * later window can open anchorless, that let a look taken during an outage
+   * anchor itself at the PREVIOUS look's pose and call the blackout measured
+   * (TASK-221 N1). See {@link reopenOdomWindow}.
+   */
+  private odomGapUnmeasured = false;
   /**
    * Metric position in the place graph's frame, or null when it is not known.
    *
@@ -335,18 +412,97 @@ export class SceneMemoryStore {
   }
 
   /**
-   * Tell the store the robot has moved `distanceM` metres.
+   * Tell the store Agent Mode has COMMANDED the robot to move `distanceM`
+   * metres.
    *
    * Called from the ONE funnel every base motion in Agent Mode passes through
-   * (`BlockExecutor.driveFor`), with the COMMANDED displacement rather than the
+   * (`BlockExecutor.driveFor`), with the commanded displacement rather than the
    * measured one. Commanded over-states what a slowed or blocked base actually
    * achieved, and over-stating is the safe direction: expiring a still-valid
    * measurement costs one blind stage, keeping an invalid one steers the robot.
+   *
+   * It is no longer the only producer, and it never covered the whole problem:
+   * a command is evidence about motion Agent Mode ASKED FOR, and Quest teleop,
+   * a direct POST to the sidecar and a VLA rollout all move the robot without
+   * asking it (TASK-221). {@link noteOdometryM} is the measured half.
    */
   noteTranslationM(distanceM: number): void {
     if (!Number.isFinite(distanceM)) return;
-    this.translationSinceObservationM += Math.abs(distanceM);
+    this.commandedSinceObservationM += Math.abs(distanceM);
     this.expireOnTranslation();
+  }
+
+  /**
+   * Tell the store where the ODOMETRY says the robot is.
+   *
+   * This is what makes the staleness rule answer for motion Agent Mode did not
+   * command. A teleop drive issues no `walk` block, so nothing calls
+   * {@link noteTranslationM}, and before this the store believed the robot was
+   * still standing where it had looked — a `goto` then declared arrival at a
+   * table four metres away without moving.
+   *
+   * **The two feeds cannot double-count.** They are not added together: the
+   * commanded metres and the measured displacement from the anchor are two
+   * accounts of the SAME window, and {@link movedSinceObservationM} takes the
+   * LARGER. A 1 m stage that odometry confirms as 1 m counts once. A 1 m stage
+   * the base only half achieved still counts as the commanded 1 m, which keeps
+   * the existing over-stating bias. And metres nobody commanded — the whole
+   * point — show up as measured displacement with no command to cover them.
+   *
+   * A window this store could not measure at all is a third answer, neither
+   * feed's: see the first-fix branch below and {@link odomGapUnmeasured}.
+   */
+  noteOdometryM(x: number, y: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    this.lastOdomM = { x, y };
+    // Bumped only for a fix that was ACCEPTED, so a NaN cannot make a stale
+    // `lastOdomM` look fresh to the next merge.
+    this.odomFixSeq++;
+    if (this.odomAnchorM === null) {
+      // The first fix of an ANCHORLESS window — the store's very first fix, or
+      // the first one after a merge that had no odometry behind it. It is a
+      // reference point and not a displacement: there is nothing to measure it
+      // against, and treating it as motion would make the robot's own
+      // coordinates (9 m from an arbitrary origin) read as 9 m of walking.
+      this.odomAnchorM = { x, y };
+      // But if the robot has already LOOKED, that look was taken from a pose
+      // this store never learned, and this fix says only where the robot is
+      // NOW. Anchoring here and stopping would call the gap between the two
+      // zero — which is precisely the re-anchoring the TASK-221 review caught:
+      // seed a `look` while `/loco/odom` is timing out (routine on this stack —
+      // 2 s timeout, null on any hiccup, so `refreshYaw` hands over nothing),
+      // let odometry recover, push the base four metres with nobody holding the
+      // lock, and the first fix to land becomes the anchor and expires nothing.
+      // `goto` then answered `Arrived at "table" after 0 stages` from 4.55 m
+      // away.
+      //
+      // So the FIRST fix after an anchorless observation EXPIRES rather than
+      // anchors. Unknown is treated as moved, the same over-stating direction
+      // {@link noteTranslationM} already takes and for the same reason: it
+      // costs one look, and believing the alternative steers the robot.
+      //
+      // This is reached whenever a window opened anchorless, not just before
+      // the store's first fix — see {@link reopenOdomWindow} for why a merge
+      // can now open one at any point in a store's life.
+      if (this.updatedAt !== null) {
+        this.odomGapUnmeasured = true;
+        this.expireOnTranslation();
+      }
+      return;
+    }
+    const fromAnchorM = Math.hypot(x - this.odomAnchorM.x, y - this.odomAnchorM.y);
+    if (fromAnchorM <= this.odomFromAnchorM) return;
+    this.odomFromAnchorM = fromAnchorM;
+    this.expireOnTranslation();
+  }
+
+  /**
+   * How far the robot has been from the pose it last looked from, in metres —
+   * the larger of what Agent Mode commanded and what odometry measured. See
+   * {@link noteOdometryM} for why it is the larger and not the sum.
+   */
+  private movedSinceObservationM(): number {
+    return Math.max(this.commandedSinceObservationM, this.odomFromAnchorM);
   }
 
   /**
@@ -357,7 +513,53 @@ export class SceneMemoryStore {
    * far is the table" is then "look again", not a number from two metres back.
    */
   hasMovedSinceObservation(): boolean {
-    return this.translationSinceObservationM > TRANSLATION_TOLERANCE_M;
+    // An unmeasured window outranks the arithmetic: no number the two feeds can
+    // produce describes a gap neither of them watched (see
+    // {@link odomGapUnmeasured}).
+    if (this.odomGapUnmeasured) return true;
+    return this.movedSinceObservationM() > TRANSLATION_TOLERANCE_M;
+  }
+
+  /**
+   * Re-open the odometry accounting window at the pose the robot is looking
+   * from — or at NO pose, when this store cannot tell where that is.
+   *
+   * The rule is the sequence counter and nothing else: {@link lastOdomM} may
+   * anchor a window only when a fix has arrived since the last time this ran.
+   * {@link lastOdomM} is never nulled, so "there is a last fix" says nothing
+   * about whether it describes THIS look; `BlockExecutor.refreshYaw` returns
+   * early whenever `/loco/odom` answers null, which is routine rather than
+   * exceptional, and a look taken through such an outage was being anchored at
+   * the pose of the PREVIOUS look. The store then measured the blackout as
+   * zero and `goto` answered `Arrived at "table" after 0 stages` with the
+   * table 4.55 m away (TASK-221 N1). The {@link odomFromAnchorM} high-water
+   * mark absorbs most orderings of that, but not the one where the robot comes
+   * back near the stale anchor.
+   *
+   * **Why the unmeasured verdict is NOT pronounced here.** Opening a window
+   * anchorless is not the same as knowing the robot moved unwatched, and this
+   * is the one place that could confuse the two. A robot whose sidecar has no
+   * `/loco/odom` at all opens EVERY window anchorless; declaring each one
+   * unmeasured would make {@link hasMovedSinceObservation} permanently true on
+   * that robot, which taxes every `goto` a pre-flight look — and worse, leaves
+   * {@link expireOnTranslation} nulling the distances of the look that just
+   * happened, so no measurement would ever survive a single commanded
+   * centimetre. That reasoning survives the sequence counter unchanged: the
+   * counter makes anchorless windows reachable at any point in a store's life,
+   * but it does not make them evidence of motion. The verdict therefore still
+   * waits for {@link noteOdometryM} to hand over a fix, which is the moment
+   * the store learns both that odometry is alive AND that it said nothing
+   * across the window — the case that is actually dangerous. A feed that never
+   * comes back degrades to the commanded metres alone, exactly as it did
+   * before odometry fed this store at all. The test
+   * `does not invent a gap for a robot whose odometry never answers at all`
+   * is the guard on that.
+   */
+  private reopenOdomWindow(): void {
+    const fixSinceLastWindow = this.odomFixSeq > this.odomAnchorSeq;
+    this.odomAnchorSeq = this.odomFixSeq;
+    this.odomAnchorM = fixSinceLastWindow && this.lastOdomM ? { ...this.lastOdomM } : null;
+    this.odomFromAnchorM = 0;
   }
 
   /**
@@ -401,11 +603,18 @@ export class SceneMemoryStore {
    * "+ = to the robot's left / CCW" (see prompts.ts). The stored bearing is
    * WORLD: `normalizeDeg(yawDeg + relativeBearingDeg)`. Entities are keyed by
    * their lower-cased label, so re-seeing "table" updates the existing row
-   * rather than appending a duplicate.
+   * rather than appending a duplicate. An entity the VLM could not place
+   * (`bearingDeg` absent) is not stored at all — see below.
    *
    * @param yawDegOverride Yaw to use for this observation; defaults to the
-   *        store's current yaw. Passed explicitly by `scan_room`, which reads a
-   *        fresh yaw per step.
+   *        store's current yaw. NO production caller passes it: the only one
+   *        that exists — `BlockExecutor.observeAndMerge`, the funnel behind
+   *        both `look` and every `scan_room` step — passes `undefined` and
+   *        lets the default stand, because its `refreshYaw` has just written
+   *        the measured odometry yaw into the store. `scan_room` does read a
+   *        fresh yaw per step, but through that call, not through this
+   *        parameter. It stays for a caller holding an observation the store's
+   *        current yaw does not describe; today only the tests are one.
    * @param extras Per-observation facts that are not per-entity — currently the
    *        measured forward clearance.
    */
@@ -414,6 +623,17 @@ export class SceneMemoryStore {
     const now = new Date().toISOString();
 
     for (const { seen, rawLabel, inView } of dedupeByLabel(observation.entities)) {
+      // An entity the VLM could not place cannot become a row here. Every
+      // consumer of this store reads `bearingDeg` as a direction to steer in or
+      // to range a cone down, and this observation supplies none; the only way
+      // to write one would be to invent it.
+      //
+      // Skipping — rather than storing it bearingless — also leaves the LAST
+      // look that COULD place this label standing: a real bearing, correctly
+      // unconfirmed, because `observedSeq` does not move for a sighting that
+      // located nothing. Overwriting it with a fabricated 0 did the opposite on
+      // both counts.
+      if (seen.bearingDeg === undefined) continue;
       const key = rawLabel.toLowerCase();
       const previous = this.entities.get(key);
       const entity: SceneEntity = {
@@ -456,14 +676,36 @@ export class SceneMemoryStore {
         ? null
         : extras.forwardClearanceM;
     // The heading it describes, so a later turn can retire it (see
-    // expireClearanceOnTurn). `yaw` and not `this.yawDeg`: `scan_room` merges
-    // each step against the yaw that step was observed at.
+    // expireClearanceOnTurn). `yaw` and not `this.yawDeg` so that an
+    // observation merged under `yawDegOverride` pins its clearance to the
+    // heading it was measured at rather than to whatever the store holds by
+    // then; with no override — which is every production merge — the two are
+    // the same number.
     this.forwardClearanceYawDeg = this.forwardClearanceM === null ? null : yaw;
     // A fresh observation is a fresh answer about THIS heading, whatever it is.
     this.clearanceExpiredByTurn = false;
     // Everything above was just measured from where the robot now stands, so
     // the distance it walked to get here is spent (see expireOnTranslation).
-    this.translationSinceObservationM = 0;
+    // Both accounts of it: the commanded metres, and the odometry window, which
+    // re-opens at the pose the robot is looking from WHEN odometry has said
+    // where that is since the last window opened. `BlockExecutor.observeAndMerge`
+    // refreshes the position (through `refreshYaw`) on its way into every merge,
+    // so in the ordinary case `lastOdomM` is that pose — but `refreshYaw` hands
+    // over nothing whenever `/loco/odom` answers null, and `lastOdomM` keeps the
+    // fix from before the outage. `reopenOdomWindow` is where that is told
+    // apart; it carries the reasoning.
+    //
+    // A merge with no fix behind it leaves the anchor unset and falls back to
+    // the commanded number alone, which is exactly what this store does on a
+    // robot whose odometry never answers — until a fix finally arrives, at
+    // which point the gap nothing watched is declared unmeasured rather than
+    // zero (see `noteOdometryM`).
+    this.commandedSinceObservationM = 0;
+    this.reopenOdomWindow();
+    // Cleared HERE and nowhere else that keeps an observation: a look is the
+    // robot re-establishing what its distances are measured from, which is the
+    // one thing that answers an unmeasured window.
+    this.odomGapUnmeasured = false;
     this.updatedAt = now;
     this.prune(Date.parse(now));
     // Non-null by construction: `updatedAt` was just set.
@@ -584,6 +826,15 @@ export class SceneMemoryStore {
     };
   }
 
+  /**
+   * Forget everything the robot has SEEN.
+   *
+   * Called when the observations stop being observations of anything the robot
+   * can account for: the controller wipes the scene the moment the control lock
+   * goes to a non-agent owner (TASK-221), because what the camera saw while a
+   * human was teleoperating the base is not something this robot looked at, and
+   * the distances in it were measured from a pose nobody here chose to leave.
+   */
   clear(): void {
     this.entities.clear();
     this.currentView = '';
@@ -591,7 +842,13 @@ export class SceneMemoryStore {
     this.forwardClearanceM = null;
     this.forwardClearanceYawDeg = null;
     this.clearanceExpiredByTurn = false;
-    this.translationSinceObservationM = 0;
+    this.commandedSinceObservationM = 0;
+    // Same rule as `merge`: a wipe re-opens the window, and only a fix that
+    // arrived since the last one may anchor it.
+    this.reopenOdomWindow();
+    // No observation is left for a fix to fall outside of: `noteOdometryM`
+    // gates its unmeasured-gap verdict on `updatedAt`, nulled just below.
+    this.odomGapUnmeasured = false;
     this.updatedAt = null;
     // Pose and place deliberately SURVIVE `clear()`. This wipes what the robot
     // has SEEN — it is called when the observations are no longer trustworthy —

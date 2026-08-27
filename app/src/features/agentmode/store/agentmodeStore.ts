@@ -789,7 +789,11 @@ export const useAgentModeStore = createStore<AgentModeStore>(
           }
 
           case 'agent:scene:updated': {
-            if (!event.scene) break;
+            // `null` is a wipe and must be applied; only an ABSENT scene is a
+            // no-op. The robot clears scene memory when someone else takes the
+            // control lock, and dropping that left stale "lidar-measured" rows
+            // on screen for the rest of the session (TASK-221 review).
+            if (event.scene === undefined) break;
             state.scene = event.scene;
             break;
           }

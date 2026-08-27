@@ -53,6 +53,14 @@ Third of three: TASK-206 (map) → TASK-207 (peers + UI) → **TASK-208 (plan on
 - `block-executor.ts:344-371` clamps **every** forward walk to `forwardClearanceM − 0.45`; refuses
   inside the margin. Clearance expires on >10° turn (`scene-memory.ts`), so "turn then walk"
   currently escapes the clamp (documented gap, TASK-194 :872-915).
+  > **No longer true — this survey line is kept as written for the record.** Two things closed it
+  > after this task shipped. TASK-208 itself added the turn-expiry cap (`block-executor.ts`, the
+  > third clamp in `walk()`): a clearance the robot has turned away from now means UNKNOWN AHEAD and
+  > caps the walk at `UNKNOWN_DISTANCE_STAGE_M = 1.0 m`, so the escape was a blind 1 m dash rather
+  > than an unclamped run. TASK-221 item 3 then removed the plan shape itself — when a `turn`
+  > matches a scene row's bearing **and** the following `walk` matches that same row's distance,
+  > `foldTurnWalkIntoGoto` (`planner.ts`) rewrites the pair as one `goto`, which stages and measures
+  > its own approach. Anything citing this line should cite those two instead.
 - Keepouts: `geofence.ts` (`evaluateGeofence`, margin 0.5, release hysteresis 0.25) → reactive
   `SafetyMonitor.updateGeofence()` protective stop. `grep keepout planner.ts block-executor.ts` →
   **nothing**: no pre-check, no avoidance. `tools/navigation.ts:187 validateDestinationZone()` checks

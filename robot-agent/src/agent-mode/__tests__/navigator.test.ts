@@ -790,6 +790,114 @@ describe('Navigator — measured range', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  it('does not arrive on a distance a teleop drive walked the robot away from', async () => {
+    // TASK-221. Nothing here is commanded: an operator takes the teleop lock,
+    // drives four metres and hands it back. No `walk` block ran, so
+    // `noteTranslationM` is never called and the commanded tally stays at zero —
+    // the ONLY witness to those four metres is the odometry the pose feed reads.
+    // Before that fed the store, `hasMovedSinceObservation()` answered false and
+    // this goto returned "Arrived at table after 0 stages" without moving.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    scene.noteOdometryM(0, 0);
+    const world = makeWorld(scene, { worldBearingDeg: 0, distanceM: 0.55 });
+    world.look();
+
+    // Driven straight through the pose source, which is what teleop looks like
+    // from in here: no block, no command, just a robot that is somewhere else.
+    world.state.distance = 4.55;
+    scene.noteOdometryM(4, 0);
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.message).not.toMatch(/after 0 stages/);
+    expect(world.ran[0]?.kind).toBe('look');
+    expect(world.ran.filter((b) => b.kind === 'walk').length).toBeGreaterThan(2);
+    expect(outcome.ok).toBe(true);
+    expect(world.state.distance).toBeLessThanOrEqual(0.6 + 1e-6);
+  });
+
+  it('does not arrive on a distance measured while the odometry was down', async () => {
+    // TASK-221 review, and the same user-visible string as the test above from
+    // a different direction. `/loco/odom` has a 2 s timeout and returns null on
+    // any hiccup — routine, not a fault — so `refreshYaw` hands the store
+    // nothing and this look is merged with no anchor behind it. Odometry then
+    // recovers and an operator pushes the base four metres without ever
+    // claiming the lock. The first fix to land says where the robot IS; it says
+    // nothing about where it looked from, and adopting it as the anchor called
+    // that gap zero: `goto` returned "Arrived at table after 0 stages" with the
+    // table 4.55 m away.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 0, distanceM: 0.55 });
+    world.look(); // no `noteOdometryM` first: that is what "the odom was down" is
+
+    world.state.distance = 4.55;
+    scene.noteOdometryM(4, 0); // odometry is back, and the robot is elsewhere
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.message).not.toMatch(/after 0 stages/);
+    expect(world.ran[0]?.kind).toBe('look');
+    expect(world.ran.filter((b) => b.kind === 'walk').length).toBeGreaterThan(2);
+    expect(outcome.ok).toBe(true);
+    expect(world.state.distance).toBeLessThanOrEqual(0.6 + 1e-6);
+  });
+
+  it('does not arrive on a distance measured while the odometry was down MID-RUN', async () => {
+    // TASK-221 N1 — the same user-visible string as the test above, reached by
+    // a route it does not cover. The store's anchor was re-taken from the last
+    // fix it had ever been handed, and that fix is never cleared, so once a run
+    // had ONE fix behind it every later look counted as measured whether or not
+    // `/loco/odom` had spoken across it.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.setYawDeg(0, 'odometry');
+    const world = makeWorld(scene, { worldBearingDeg: 0, distanceM: 4.55 });
+    scene.noteOdometryM(0, 0); // a fix, then a look: the ordinary order
+    world.look();
+
+    // `/loco/odom` starts timing out, so `refreshYaw` hands the store nothing.
+    // The base is shoved to (4, 0) with nobody claiming the lock and looks from
+    // there: 0.55 m, measured at a pose the store never learned.
+    world.state.distance = 0.55;
+    world.look();
+
+    // Shoved back, and odometry recovers reporting where it left off. Against
+    // the pre-outage anchor that is zero displacement, and `goto` answered
+    // "Arrived at table after 0 stages" with the table 4.55 m away.
+    world.state.distance = 4.55;
+    scene.noteOdometryM(0, 0);
+
+    const navigator = new Navigator({
+      scene,
+      isAborted: () => false,
+      runGeneratedBlock: world.runGeneratedBlock,
+      maxStages: 12,
+    });
+
+    const outcome = await navigator.navigate('table');
+
+    expect(outcome.message).not.toMatch(/after 0 stages/);
+    expect(world.ran[0]?.kind).toBe('look');
+    expect(world.ran.filter((b) => b.kind === 'walk').length).toBeGreaterThan(2);
+    expect(outcome.ok).toBe(true);
+    expect(world.state.distance).toBeLessThanOrEqual(0.6 + 1e-6);
+  });
+
   it('spends no look when nothing has moved since the last one', async () => {
     // The pre-flight look is not a free tax on every goto: a target seen from
     // where the robot still stands is walked to straight away.

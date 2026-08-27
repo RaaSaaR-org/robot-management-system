@@ -8,9 +8,14 @@
  * @feature agentmode
  * @status tool
  *
- *   npx tsx scripts/planner-bench.ts                        # every model below
- *   npx tsx scripts/planner-bench.ts gemma4:e2b gpt-oss:20b # a subset
- *   REPEATS=5 npx tsx scripts/planner-bench.ts
+ *   npm run bench:planner                                   # every model below
+ *   npm run bench:planner -- gemma4:e2b gpt-oss:20b         # a subset
+ *   REPEATS=5 npm run bench:planner
+ *
+ * Typechecked by `npx tsc -p tsconfig.scripts.json` — the package
+ * `tsconfig.json` includes `src/` and nothing else, so this file went years
+ * without a compiler looking at it and carried a stale `AgentBlock[]` signature
+ * the whole time (TASK-221). `npm run typecheck` runs both.
  *
  * Models are benched one at a time on purpose: they are 6–13 GB each and
  * running them concurrently on one GPU measures the swapping, not the model.
@@ -21,10 +26,16 @@
  * not move. Each case says what it wants in `want`, so a disagreement about the
  * grading is a disagreement you can read.
  */
+import { pathToFileURL } from 'node:url';
 import { Planner } from '../src/agent-mode/planner.js';
 import { agentModelRef } from '../src/agent-mode/llm.js';
 import { SceneMemoryStore } from '../src/agent-mode/scene-memory.js';
-import type { AgentBlock } from '../src/agent-mode/types.js';
+import { normalizeDeg } from '../src/agent-mode/types.js';
+import { config } from '../src/config/config.js';
+// `Planner.plan` answers `PlannedBlock[]` — kind + params, no `id`/`status`
+// yet, because nothing has executed them. The bench graded `AgentBlock[]`,
+// which only ever worked because it reads `kind` and `params` and nothing else.
+import type { PlannedBlock, PlannerSceneTarget } from '../src/agent-mode/planner.js';
 
 const DEFAULT_MODELS = ['gemma4:e2b', 'gemma4:latest', 'qwen2.5vl:7b', 'gpt-oss:20b'];
 const REPEATS = Number(process.env.REPEATS ?? 3);
@@ -34,7 +45,7 @@ const REPEATS = Number(process.env.REPEATS ?? 3);
  * byte-for-byte what `plannerSceneSummary()` produces at runtime. Taken from the
  * room scene the 07 recording used, after a `scan_room`.
  */
-function sceneSummary(): string {
+function benchScene(): SceneMemoryStore {
   const scene = new SceneMemoryStore('g1-edu-01');
   scene.setYawDeg(0, 'odometry');
   scene.merge(
@@ -53,21 +64,41 @@ function sceneSummary(): string {
     undefined,
     { forwardClearanceM: 2.95 }
   );
-  return scene.summary();
+  return scene;
 }
 
-interface Case {
+/**
+ * The same rows as numbers, exactly as `AgentModeController.plannerSceneTargets`
+ * builds them. Without these the bench would measure a planner missing the
+ * turn+walk fold (TASK-221) — i.e. not the one that runs on the robot.
+ */
+function sceneTargets(scene: SceneMemoryStore): PlannerSceneTarget[] {
+  const yawDeg = scene.getYawDeg();
+  return scene.listEntities().map((e) => ({
+    label: e.label,
+    relativeBearingDeg: normalizeDeg(e.bearingDeg - yawDeg),
+    distanceM: e.distanceEstM,
+  }));
+}
+
+export interface Case {
   id: string;
   command: string;
   /** What a correct plan must do, in words — printed next to every failure. */
   want: string;
-  check: (blocks: AgentBlock[]) => boolean;
+  /**
+   * The command asks the robot to APPROACH something, so `goto` is the only
+   * correct answer and any forward `walk` is an open-loop dash — see
+   * {@link openLoopDashes}, which is the only thing that reads this.
+   */
+  approach?: true;
+  check: (blocks: PlannedBlock[]) => boolean;
 }
 
-const kinds = (blocks: AgentBlock[]): string[] => blocks.map((b) => b.kind);
-const first = (blocks: AgentBlock[], kind: string): AgentBlock | undefined =>
+const kinds = (blocks: PlannedBlock[]): string[] => blocks.map((b) => b.kind);
+const first = (blocks: PlannedBlock[], kind: string): PlannedBlock | undefined =>
   blocks.find((b) => b.kind === kind);
-const num = (b: AgentBlock | undefined, key: string): number =>
+const num = (b: PlannedBlock | undefined, key: string): number =>
   b === undefined ? Number.NaN : Number(b.params[key]);
 
 const CASES: Case[] = [
@@ -107,6 +138,7 @@ const CASES: Case[] = [
     // goto throws away the whole measured-range loop, which is the failure the
     // 07 recording hit on its first take.
     want: 'a goto block (not raw turn+walk), entity naming the table',
+    approach: true,
     check: (b) => {
       const g = first(b, 'goto');
       return g !== undefined && /tisch|table/i.test(String(g.params.entity ?? ''));
@@ -116,6 +148,7 @@ const CASES: Case[] = [
     id: 'goto-door',
     command: 'lauf zur Tür',
     want: 'goto with entity ≈ door/Tür',
+    approach: true,
     check: (b) => {
       const g = first(b, 'goto');
       return g !== undefined && /tür|tuer|door/i.test(String(g.params.entity ?? ''));
@@ -129,6 +162,7 @@ const CASES: Case[] = [
     id: 'goto-chair',
     command: 'geh zum Stuhl',
     want: 'goto with entity ≈ chair (target is at -48°, so a walk with no turn is doubly wrong)',
+    approach: true,
     check: (b) => {
       const g = first(b, 'goto');
       return g !== undefined && /stuhl|chair/i.test(String(g.params.entity ?? ''));
@@ -138,6 +172,7 @@ const CASES: Case[] = [
     id: 'goto-ladder-en',
     command: 'go to the ladder',
     want: 'goto with entity ≈ ladder (lowest-confidence entity, behind the robot)',
+    approach: true,
     check: (b) => {
       const g = first(b, 'goto');
       return g !== undefined && /ladder|leiter/i.test(String(g.params.entity ?? ''));
@@ -147,6 +182,7 @@ const CASES: Case[] = [
     id: 'goto-table-en',
     command: 'walk over to the table and stop in front of it',
     want: 'goto with entity ≈ table — "walk over to" must not become a raw walk',
+    approach: true,
     check: (b) => {
       const g = first(b, 'goto');
       return g !== undefined && /tisch|table/i.test(String(g.params.entity ?? ''));
@@ -212,12 +248,14 @@ const CASES: Case[] = [
     // Nothing called a fridge is in the scene. Either honest speech or a goto
     // that will fail loudly are acceptable; silently walking somewhere is not.
     want: 'speak/look/goto — never a bare walk into the room',
+    approach: true,
     check: (b) => !kinds(b).includes('walk'),
   },
   {
     id: 'english',
     command: 'walk to the chair and wave',
     want: 'goto chair → wave (the operator may switch language mid-session)',
+    approach: true,
     check: (b) => {
       const g = first(b, 'goto');
       return (
@@ -229,12 +267,10 @@ const CASES: Case[] = [
   },
 ];
 
-/**
- * Every distance the scene summary hands the planner. A `walk` whose length is
- * one of these is the planner having read a remembered range off the scene and
- * turned it into one open-loop dash — see `openLoopDashes` below.
- */
-const SCENE_DISTANCES_M = [3.02, 2.41, 4.4, 3.6, 2.95];
+/** The ids of the cases that ask the robot to approach something. */
+export const APPROACH_CASE_IDS: readonly string[] = CASES.filter((c) => c.approach).map(
+  (c) => c.id
+);
 
 /**
  * Count the walks that are really a `goto` in disguise.
@@ -246,13 +282,51 @@ const SCENE_DISTANCES_M = [3.02, 2.41, 4.4, 3.6, 2.95];
  * quietly opted out of every safety rule the range sensor bought us, and it
  * only became tempting once scene memory started carrying MEASURED distances
  * worth copying.
+ *
+ * The rule used to be "a walk within 0.06 m of a distance the scene summary
+ * printed", which measured the wrong thing (TASK-221): a model that answers
+ * "lauf zur Tür" with `walk 4 m` at a door 4.4 m away has done exactly the
+ * thing this counts, and 0.4 m of rounding hid it. Nothing about the failure
+ * depends on the number being copied accurately — it depends on the COMMAND
+ * having asked for an approach, which the case knows and the distance does not.
+ * So the count is now per case: in an `approach` case every forward `walk` is a
+ * dash, whatever its length. A backward walk is not: retreating is not an
+ * approach, and `goto` would not have produced it either.
+ *
+ * Consequence for an A/B: dash counts either side of this change are NOT
+ * comparable, which is why the header prints the rule with the number.
  */
-function openLoopDashes(blocks: AgentBlock[]): number {
+export function openLoopDashes(testCase: Case, blocks: PlannedBlock[]): number {
+  if (!testCase.approach) return 0;
   return blocks.filter(
-    (b) =>
-      b.kind === 'walk' &&
-      SCENE_DISTANCES_M.some((d) => Math.abs(Number(b.params.distanceM) - d) < 0.06)
+    (b) => b.kind === 'walk' && (b.params.direction ?? 'forward') === 'forward'
   ).length;
+}
+
+/**
+ * The lines printed before the first model runs.
+ *
+ * Everything that changes what the numbers below mean belongs here: which
+ * models were asked, whether the planner was allowed to think, and how a dash
+ * was counted. A bench result pasted into a task without them is two numbers
+ * nobody can reproduce.
+ */
+export function benchHeaderLines(models: readonly string[], sceneSummary: string): string[] {
+  return [
+    `Planner bench — ${CASES.length} cases × ${REPEATS} repeats, real prompt and schema.`,
+    `Models: ${models.join(', ')}`,
+    // Read back off `config`, not off `process.env`: `config` is what
+    // `Planner.plan` hands the model, and `AGENT_PLANNER_THINKING` is only true
+    // for the exact string "true". The setting is worth ~500 tokens of thinking
+    // per call, so a pair of runs recorded without it is not a pair.
+    `AGENT_PLANNER_THINKING=${process.env.AGENT_PLANNER_THINKING ?? '(unset)'} → planner thinking is ` +
+      `${config.agentMode.plannerThinking ? 'ON' : 'off'}`,
+    `Open-loop dashes counted as: every forward \`walk\` in the ${APPROACH_CASE_IDS.length} cases that ` +
+      `asked for an approach (${APPROACH_CASE_IDS.join(', ')}).`,
+    '',
+    `Scene handed to the planner:\n${sceneSummary}`,
+    '',
+  ];
 }
 
 interface Row {
@@ -272,7 +346,11 @@ function median(xs: number[]): number {
   return s[Math.floor(s.length / 2)];
 }
 
-async function benchModel(model: string, summary: string): Promise<Row> {
+async function benchModel(
+  model: string,
+  summary: string,
+  targets: PlannerSceneTarget[]
+): Promise<Row> {
   const modelRef = await agentModelRef(model);
   const planner = new Planner({ modelRef });
   const row: Row = {
@@ -292,7 +370,11 @@ async function benchModel(model: string, summary: string): Promise<Row> {
       const startedAt = Date.now();
       let result;
       try {
-        result = await planner.plan({ command: testCase.command, sceneSummary: summary });
+        result = await planner.plan({
+          command: testCase.command,
+          sceneSummary: summary,
+          sceneTargets: targets,
+        });
       } catch (err) {
         // A transport failure is a failed case, not a crashed bench.
         result = { blocks: [], fallback: true, attempts: 1, error: String(err) };
@@ -301,7 +383,7 @@ async function benchModel(model: string, summary: string): Promise<Row> {
       row.total++;
       if (result.fallback) row.fallbacks++;
       if (result.attempts > 1) row.repairs++;
-      row.dashes += openLoopDashes(result.blocks);
+      row.dashes += openLoopDashes(testCase, result.blocks);
       const ok = !result.fallback && testCase.check(result.blocks);
       if (ok) row.pass++;
       else {
@@ -323,14 +405,15 @@ async function benchModel(model: string, summary: string): Promise<Row> {
 
 async function main(): Promise<void> {
   const models = process.argv.slice(2).length > 0 ? process.argv.slice(2) : DEFAULT_MODELS;
-  const summary = sceneSummary();
-  console.log(`Planner bench — ${CASES.length} cases × ${REPEATS} repeats, real prompt and schema.`);
-  console.log(`Scene handed to the planner:\n${summary}\n`);
+  const scene = benchScene();
+  const summary = scene.summary();
+  const targets = sceneTargets(scene);
+  for (const line of benchHeaderLines(models, summary)) console.log(line);
 
   const rows: Row[] = [];
   for (const model of models) {
     process.stdout.write(`${model} … `);
-    const row = await benchModel(model, summary);
+    const row = await benchModel(model, summary, targets);
     rows.push(row);
     console.log(`${row.pass}/${row.total}`);
   }
@@ -355,7 +438,15 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Guarded so the module can be imported — `scripts/planner-bench.test.ts` grades
+// the grader, and an unguarded `main()` would have every such import try to
+// reach Ollama.
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -22,6 +22,7 @@ import {
 import { buildPlannerPrompt } from './prompts.js';
 import { REMEMBER_MAX_CHARS } from './workspace.js';
 import {
+  normalizeDeg,
   PlannerBlockKinds,
   type AgentBlock,
   type AgentBlockKind,
@@ -72,9 +73,41 @@ export interface PlannedBlock {
   reasoning?: string;
 }
 
+/**
+ * One row of the scene memory as NUMBERS, alongside the prose `sceneSummary`
+ * that was rendered from it (TASK-221).
+ *
+ * The planner still reasons only over the text — nothing here reaches the
+ * prompt. It exists so the deterministic repairs that run over the model's
+ * answer can check a block's arithmetic against the same row the model read,
+ * which prose cannot support: see {@link foldTurnWalkIntoGoto}.
+ */
+export interface PlannerSceneTarget {
+  /** The scene-memory key, i.e. what `goto.entity` has to be given. */
+  label: string;
+  /**
+   * Bearing relative to the robot's CURRENT heading, CCW positive — the frame
+   * and sign `turn.angleDeg` is in, so the two compare directly.
+   *
+   * The relative bearing and NOT the world bearing `sceneSummary` prints, even
+   * though the printed one is what the model read. A `turn` is executed in this
+   * frame, so this is the only bearing a `turn` can be checked against; see
+   * {@link foldTurnWalkIntoGoto} for what matching the printed one did instead.
+   */
+  relativeBearingDeg: number;
+  /** Distance in metres, or null when the row carries none. */
+  distanceM: number | null;
+}
+
 export interface PlannerInput {
   command: string;
   sceneSummary: string;
+  /**
+   * The rows `sceneSummary` was rendered from. Optional: a caller that has no
+   * scene store (tests, the bench) simply omits them, and every repair that
+   * reads them is then a no-op rather than a guess.
+   */
+  sceneTargets?: readonly PlannerSceneTarget[];
   /** Not-yet-started blocks of a running plan, when re-planning. */
   remainingPlan?: AgentBlock[];
   /**
@@ -344,6 +377,173 @@ export function mergeAdjacentWaveIntoGreet(blocks: PlannedBlock[]): {
   return { blocks: out, merged };
 }
 
+/**
+ * How far a `turn` may sit from an entity's bearing, and a `walk` from that same
+ * entity's distance, and still count as a copy of that scene row.
+ *
+ * Both are sized off what the SUMMARY hands the model, because a fold only ever
+ * claims the two numbers came off one row. Bearings are printed whole
+ * (`bearing 96°`) and a 4B planner rounds them to the nearest ten about as often
+ * as it copies them, so 12° covers a round-to-ten in either direction while
+ * staying well under the 45°/90° granularity a free-standing "turn left" is
+ * written at. Distances are printed to one decimal (`~4.4 m`) and get rounded to
+ * whole metres, which is at most 0.5 m off — the gemma4:e2b `goto-door` failure
+ * this repair exists for emits `walk 4 m` against the 4.4 m row.
+ *
+ * Neither margin is evidence on its own, and that is the whole design: one
+ * number landing inside a window is nothing, two independent numbers off the
+ * SAME row is the signal.
+ *
+ * These are NOT tight enough to make a genuine "turn left and walk 3 m"
+ * impossible to fold, and no honest pair of numbers would be: it takes a row
+ * sitting at roughly 90° and roughly 3 m, and one will exist in some room. (The
+ * reference scene in `scripts/planner-bench.ts` happens to have none — that is
+ * a fact about that scene, not about the shape of the plan.) They are left
+ * loose anyway, because matching on the RELATIVE bearing bounds what a wrong
+ * fold can cost: the `goto` it produces ends within TURN_MATCH_DEG of the
+ * heading the operator asked for, and — since a `goto` deliberately stops
+ * `ARRIVAL_M` (0.6 m) SHORT of the entity it aimed at — within
+ * WALK_MATCH_M + ARRIVAL_M, about 1.1 m, of the range they asked for rather
+ * than within WALK_MATCH_M of it. The windows still bound their own worst
+ * case, just one arrival gap wider than the walk window alone, and the robot
+ * gets there staged and re-bearing rather than blind. Tightening them buys a slightly smaller version of that
+ * bounded error and pays for it in missed folds, which is the failure the
+ * repair exists to remove: an open-loop dash that measures nothing on the way.
+ */
+const TURN_MATCH_DEG = 12;
+const WALK_MATCH_M = 0.5;
+/**
+ * Kinds after which the plan-time scene targets no longer describe the robot,
+ * because the base has moved or turned under them. Deliberately over-broad:
+ * missing one silently un-sounds {@link foldTurnWalkIntoGoto}, while an extra
+ * one only costs a fold that would have been a dash anyway. `scan_room`
+ * expands into turns, and `patrol`/`tour` into legs; the runner-owned kinds
+ * cannot reach the planner's output today but are listed so that adding one
+ * later does not quietly re-open the hole.
+ */
+const MOVES_BASE: ReadonlySet<string> = new Set([
+  'walk', 'turn', 'goto', 'scan_room', 'patrol', 'tour', 'demo',
+]);
+
+/** One `turn` + `walk` pair rewritten as a `goto`, so the caller can say so. */
+export interface TurnWalkFold {
+  label: string;
+  turnDeg: number;
+  walkM: number;
+}
+
+/**
+ * Fold a `turn` immediately followed by a forward `walk` into a single `goto`
+ * when both numbers belong to one scene row (TASK-221).
+ *
+ * The failure it removes: `goto-door` is answered as `turn 96°, walk 4.4 m` —
+ * the model reading the door's bearing and distance straight out of the scene
+ * summary and open-loop driving them. That plan is not clamped by what the
+ * lidar measured, because the turn is what retires the clearance
+ * (`expireClearanceOnTurn`): by the time the walk runs, the measured corridor
+ * belongs to a heading the robot has left, so the walk falls back to the blind
+ * cap and dashes at a door 4.4 m away one metre at a time, re-bearing nothing.
+ * `goto` is the same intent driven properly — staged, re-bearing and re-looking
+ * after every stage, each stage clamped by a clearance measured down the
+ * heading it is walking.
+ *
+ * A prompt rule aimed at this was benched and reverted as noise (51/54 → 51/54),
+ * which is why the repair is deterministic and lives here with
+ * {@link enforceTurnDirection} rather than in the prompt.
+ *
+ * Deliberately narrow. Only an ADJACENT pair folds, only a FORWARD walk, only
+ * against a row that actually carries a distance, and only when exactly ONE row
+ * answers to both numbers — two matching rows is an ambiguous signal, not a
+ * stronger one, and picking either would choose the robot's destination by array
+ * order.
+ *
+ * And only against the row's RELATIVE bearing. The scene summary prints world
+ * bearings next to a separate heading line, so a small planner does sometimes
+ * copy the printed number straight into `turn` — but a `turn` is executed
+ * relative to where the robot is pointing now, so such a turn does not aim at
+ * the row, and matching it against the world bearing would fire this fold on a
+ * frame the robot has already left. The two frames coincide only at yaw 0,
+ * which is why an earlier world-bearing arm here looked harmless and was in
+ * fact unsound: with the robot turned 50° off, "dreh dich 96 Grad nach links
+ * und geh 4,4 Meter" — an angle the operator named outright — matched a door
+ * stored at world 96° and was silently rewritten into a 146° turn (TASK-221).
+ * Matching relative keeps the fold destination-preserving: it only ever fires
+ * on a pair that was already heading for that row, and replaces the blind drive
+ * there with a measured one. A missed fold costs a dash; a wrong fold walks the
+ * robot somewhere nobody asked for.
+ */
+export function foldTurnWalkIntoGoto(
+  blocks: PlannedBlock[],
+  targets: readonly PlannerSceneTarget[] | undefined
+): { blocks: PlannedBlock[]; folds: TurnWalkFold[] } {
+  if (!targets || targets.length === 0) return { blocks, folds: [] };
+
+  const out: PlannedBlock[] = [];
+  const folds: TurnWalkFold[] = [];
+  // `relativeBearingDeg` was computed ONCE, against the yaw the robot had when
+  // the plan was made (`plannerSceneTargets`). It describes the robot standing
+  // where it stands now — so the moment a block moves the base, every bearing
+  // and every distance in `targets` stops describing anything, and a match
+  // against them is a coincidence rather than evidence.
+  //
+  // Matching relative instead of world was the fix for exactly this class of
+  // error; keeping the fold at the plan-time pose is the other half of it.
+  // Without this, `[turn(-50), turn(96), walk(4.4)]` folds its SECOND pair
+  // against a door stored at relative +96° — but after the -50° turn the door
+  // is at +146°, so the operator's own second turn was aimed 50° away from it
+  // and the robot is walked to a destination nobody asked for. That is the
+  // failure this function's docstring promises not to produce.
+  let atPlanTimePose = true;
+  for (let i = 0; i < blocks.length; i++) {
+    const cur = blocks[i]!;
+    const next = blocks[i + 1];
+    const turnDeg = cur.kind === 'turn' ? Number(cur.params.angleDeg) : Number.NaN;
+    const walkM =
+      next !== undefined && next.kind === 'walk' && next.params.direction === 'forward'
+        ? Number(next.params.distanceM)
+        : Number.NaN;
+    if (!atPlanTimePose || !Number.isFinite(turnDeg) || !Number.isFinite(walkM)) {
+      if (MOVES_BASE.has(cur.kind)) atPlanTimePose = false;
+      out.push(cur);
+      continue;
+    }
+
+    const matches = targets.filter(
+      (t) =>
+        t.distanceM !== null &&
+        Math.abs(walkM - t.distanceM) <= WALK_MATCH_M &&
+        Math.abs(normalizeDeg(turnDeg - t.relativeBearingDeg)) <= TURN_MATCH_DEG
+    );
+    if (matches.length !== 1) {
+      // A `turn` that did not fold still turns the robot.
+      if (MOVES_BASE.has(cur.kind)) atPlanTimePose = false;
+      out.push(cur);
+      continue;
+    }
+
+    const target = matches[0]!;
+    // Keep whatever the model said about the pair — it explained the intent
+    // correctly, it only chose the wrong two blocks to express it with — and
+    // append what was done to it, because the operator sees this line.
+    const said = cur.reasoning ?? next!.reasoning;
+    const folded: PlannedBlock = {
+      kind: 'goto',
+      params: { entity: target.label },
+      reasoning:
+        `${said ? `${said} ` : ''}(Turning ${Math.round(turnDeg)}° and walking ` +
+        `${walkM.toFixed(2)} m is an open-loop approach to "${target.label}", which the scene ` +
+        `memory has at that bearing and that distance — walking there measured instead.)`,
+    };
+    out.push(folded);
+    folds.push({ label: target.label, turnDeg, walkM });
+    // The goto leaves the robot at the target, not at the plan-time pose.
+    atPlanTimePose = false;
+    i++; // the walk is consumed by the goto
+  }
+
+  return { blocks: out, folds };
+}
+
 /** True when a block cannot be executed as written (missing required params). */
 function isUnexecutable(raw: PlannedBlockRaw): boolean {
   try {
@@ -611,7 +811,17 @@ export class Planner {
               `"${c.direction}" but the model emitted ${c.from}° — using ${c.to}°.`
           );
         }
-        return { blocks, fallback: false, attempts };
+        // Deterministic repair, after the sign correction so it reads the turns
+        // the robot will actually make — see foldTurnWalkIntoGoto.
+        const { blocks: folded, folds } = foldTurnWalkIntoGoto(blocks, input.sceneTargets);
+        for (const f of folds) {
+          console.warn(
+            `[AgentMode/Planner] folded turn ${Math.round(f.turnDeg)}° + walk ` +
+              `${f.walkM.toFixed(2)} m into goto "${f.label}" — both numbers are that scene ` +
+              `row's, so the pair was an open-loop approach to it.`
+          );
+        }
+        return { blocks: folded, fallback: false, attempts };
       } catch (err) {
         lastError =
           err instanceof PlanValidationError
