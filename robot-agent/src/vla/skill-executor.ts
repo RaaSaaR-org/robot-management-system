@@ -61,14 +61,16 @@ import type { RolloutStrategy } from './types.js';
 const VLA_SERVER_URL_DEFAULT = 'http://localhost:8000';
 
 /**
- * Per-joint delta clip for real-arm safety. At 5 Hz this is a 25°/s max
- * slew rate — matches VLARunner's `max_delta = 5` default and prevents
- * servo stall from a sudden VLA action spike.
+ * Per-joint delta clip for real-arm safety. At the default 5 Hz this is a
+ * 25°/s max slew rate — matches VLARunner's `max_delta = 5` default and
+ * prevents servo stall from a sudden VLA action spike. It is a per-STEP bound,
+ * not a per-second one, so a shorter `loopPeriodMs` raises the slew rate it
+ * permits in the same proportion.
+ *
+ * Exported so a test can assert the property rather than the number: nothing
+ * outside `clipAction` should be reading it at runtime.
  */
-const MAX_DELTA_DEGREES = 5;
-
-/** Control loop frequency — 5 Hz matches VLARunner/teleop conventions. */
-const LOOP_PERIOD_MS = 200;
+export const MAX_DELTA_DEGREES = 5;
 
 /** Per-step vla-server /predict timeout. */
 const PREDICT_TIMEOUT_MS = 3_000;
@@ -274,6 +276,17 @@ export interface SkillExecutorOptions {
   /** NeoDEM server base URL override (tests). Defaults to NEODEM_SERVER_URL / SERVER_URL. */
   serverBaseUrl?: string;
   /**
+   * Control-loop period for this run, ms — the sleep between action sends.
+   * Defaults to `config.vla.loopPeriodMs` (`VLA_LOOP_PERIOD_MS`, 200 ms / 5 Hz),
+   * so an omitted value is the historical pacing exactly. Same escape hatch as
+   * `rtc` below: it is what lets one process A/B two rates without
+   * `vi.resetModules()`, which is what an RTC figure at 15 Hz needs.
+   *
+   * NOT range-checked here — the env var is (see `envNumberChecked`). A caller
+   * passing 0 gets an unthrottled loop.
+   */
+  loopPeriodMs?: number;
+  /**
    * Real-Time Chunking overrides for this run (TASK-183). Each key falls back
    * to `config.vla.rtc`, which is read once at import — same escape hatch as
    * `serverBaseUrl`, and the only way a test can toggle RTC without
@@ -288,6 +301,8 @@ interface RolloutContext {
   mode: SkillExecutionMode;
   /** ISO timestamp taken before the loop starts (intervention episode start). */
   startedAtIso: string;
+  /** Resolved control-loop period for this run, ms. See SkillExecutorOptions. */
+  loopPeriodMs: number;
   notes: string[];
   /** sentry */
   recording: RolloutRecordingMeta | null;
@@ -464,9 +479,17 @@ export function rtcPrefetchPaysOff(o: {
   queueLen: number;
   /** Chunk length as the backend answers it — NOT the merged queue length. */
   backendChunkLen: number;
+  /**
+   * Loop period the run is pacing at, ms. Omitted means the configured one
+   * (`VLA_LOOP_PERIOD_MS`, 200 ms by default) — every cut-off quoted above is
+   * a figure at that 5 Hz, and halving the period halves the lead a queue of a
+   * given depth is worth.
+   */
+  loopPeriodMs?: number;
 }): boolean {
   if (o.latencyMs <= 0) return true;
-  const leadMs = (o.queueLen + 1) * LOOP_PERIOD_MS;
+  const loopPeriodMs = o.loopPeriodMs ?? config.vla.loopPeriodMs;
+  const leadMs = (o.queueLen + 1) * loopPeriodMs;
   const stallMs = Math.max(0, o.latencyMs - leadMs);
   // The prefetch covers the whole round trip: this boundary costs nothing at
   // all, so there is no rate to compare.
@@ -474,7 +497,7 @@ export function rtcPrefetchPaysOff(o: {
   // Steps the robot gets through before the chunk lands, and so the actions the
   // merge will drop. Bounded by the queue: once it is empty the robot is frozen
   // and stops consuming the chunk's future.
-  const consumed = Math.min(o.queueLen, Math.ceil(o.latencyMs / LOOP_PERIOD_MS));
+  const consumed = Math.min(o.queueLen, Math.ceil(o.latencyMs / loopPeriodMs));
   const rtcStallPerStep = stallMs / Math.max(1, o.backendChunkLen - consumed);
   const serialStallPerStep = o.latencyMs / Math.max(1, o.backendChunkLen);
   return rtcStallPerStep * RTC_PAYOFF_MARGIN < serialStallPerStep;
@@ -574,6 +597,7 @@ export class SkillExecutor {
       strategy,
       mode,
       startedAtIso: new Date().toISOString(),
+      loopPeriodMs: opts.loopPeriodMs ?? config.vla.loopPeriodMs,
       notes: [],
       recording: null,
       highlight: new HighlightRing(),
@@ -642,6 +666,9 @@ export class SkillExecutor {
     const startedAt = Date.now();
     const deadline = startedAt + opts.timeoutMs;
     const baseUrl = process.env.VLA_SERVER_URL ?? VLA_SERVER_URL_DEFAULT;
+    // Resolved once per run in `run()`; read here so the rate a rollout paced
+    // at is a property of the run, not of module load order.
+    const loopPeriodMs = ctx.loopPeriodMs;
 
     // ── Discover vla-server capabilities (cameras + dims) ───────────
     let vlaConfig: VlaConfig;
@@ -793,7 +820,7 @@ export class SkillExecutor {
               error: `vla-server /predict failed ${predictFailures}x: ${predictResult.error}`,
             };
           }
-          await sleep(LOOP_PERIOD_MS);
+          await sleep(loopPeriodMs);
           continue;
         }
         predictFailures = 0;
@@ -940,7 +967,7 @@ export class SkillExecutor {
       // `prefetchCaptureMs` is 0 and this is the old `sleep`.
       //
       // That holds only WHILE THE CAPTURE FITS IN THE PERIOD. The subtraction
-      // clamps at zero, so a sidecar capture slower than LOOP_PERIOD_MS has
+      // clamps at zero, so a sidecar capture slower than the loop period has
       // nothing left to be paid out of and stretches this one step by the
       // overrun — the jitter is moved out of the DDS lock and into the cadence,
       // not removed. It is a real regime: `getCameras` + one `snapshot` +
@@ -948,14 +975,14 @@ export class SkillExecutor {
       // here can buy the time back, so the breach is logged rather than hidden;
       // `rtcPrefetchPaysOff` weighs round trip against queue, not capture
       // against period, so it will not decline on this ground.
-      if (prefetchCaptureMs > LOOP_PERIOD_MS) {
+      if (prefetchCaptureMs > loopPeriodMs) {
         console.warn(
           `[SkillExecutor] RTC prefetch capture ${prefetchCaptureMs}ms exceeded the ` +
-            `${LOOP_PERIOD_MS}ms loop period — this step's /action cadence stretched by ` +
-            `${prefetchCaptureMs - LOOP_PERIOD_MS}ms`,
+            `${loopPeriodMs}ms loop period — this step's /action cadence stretched by ` +
+            `${prefetchCaptureMs - loopPeriodMs}ms`,
         );
       }
-      await sleep(Math.max(0, LOOP_PERIOD_MS - prefetchCaptureMs));
+      await sleep(Math.max(0, loopPeriodMs - prefetchCaptureMs));
     }
 
     return {
@@ -1129,7 +1156,7 @@ export class SkillExecutor {
     const frames = ctx.highlight.frames;
     const payload = {
       format: 'jpeg-frames' as const,
-      fps: this.estimateClipFps(frames),
+      fps: this.estimateClipFps(frames, ctx.loopPeriodMs),
       capturedAt: new Date(frames[0].t).toISOString(),
       frames: frames.map((f) => f.jpegB64),
     };
@@ -1157,13 +1184,16 @@ export class SkillExecutor {
     }
   }
 
-  /** Effective capture rate of the buffered frames; nominal 5 Hz fallback. */
-  private estimateClipFps(frames: readonly HighlightFrame[]): number {
+  /**
+   * Effective capture rate of the buffered frames; the run's nominal loop rate
+   * (5 Hz at the default period) when there is no span to measure one from.
+   */
+  private estimateClipFps(frames: readonly HighlightFrame[], loopPeriodMs: number): number {
     if (frames.length >= 2) {
       const spanS = (frames[frames.length - 1].t - frames[0].t) / 1000;
       if (spanS > 0) return Math.round(((frames.length - 1) / spanS) * 100) / 100;
     }
-    return 1000 / LOOP_PERIOD_MS;
+    return 1000 / loopPeriodMs;
   }
 
   /** dagger: POST the human/policy step trace as an InterventionEpisode (contract §7). */
@@ -1402,12 +1432,19 @@ export class SkillExecutor {
     // dead time than the serial refill. Decline, and burn the boundary's one
     // attempt doing so: the queue only shrinks from here, so the same answer is
     // waiting at every remaining step of it.
-    if (!rtcPrefetchPaysOff({ latencyMs: rtc.latencyMs, queueLen, backendChunkLen: rtc.backendChunkLen })) {
+    if (
+      !rtcPrefetchPaysOff({
+        latencyMs: rtc.latencyMs,
+        queueLen,
+        backendChunkLen: rtc.backendChunkLen,
+        loopPeriodMs: ctx.loopPeriodMs,
+      })
+    ) {
       rtc.attempted = true;
       ctx.rtcMetrics.prefetchSkipped += 1;
       console.warn(
         `[SkillExecutor] RTC skipping prefetch at step ${step}: /predict is running ~${Math.round(rtc.latencyMs)}ms ` +
-          `against ${(queueLen + 1) * LOOP_PERIOD_MS}ms of queued lead — the serial refill is the cheaper boundary here`,
+          `against ${(queueLen + 1) * ctx.loopPeriodMs}ms of queued lead — the serial refill is the cheaper boundary here`,
       );
       return 0;
     }

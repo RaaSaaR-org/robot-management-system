@@ -299,6 +299,26 @@ Isaac-GR00T PolicyServer over ZMQ that is not up here. Client-side prefetch
 alone removes the stall, which the task called sufficient; whether a
 lerobot-native RTC path beats the client blend remains unmeasured.
 
+## Status — the two code gaps are closed, the measurement is not (2026-08-28)
+
+**Done:**
+* `LOOP_PERIOD_MS` was a bare module constant, so the 15 Hz acceptance criterion was not even
+  expressible. It is now `config.vla.loopPeriodMs` (`VLA_LOOP_PERIOD_MS`, default 200 ms — unchanged
+  when unset) plus a `SkillExecutorOptions.loopPeriodMs` per-run override, following the same pattern
+  as `VLA_RTC_OVERLAP`. The override is what lets one process A/B two rates without
+  `vi.resetModules()`.
+* `MAX_DELTA_DEGREES` was referenced in **zero** assertions anywhere in `robot-agent/src`. It now has
+  four, driven by a scripted server with a 60° chunk-boundary discontinuity (12× the bound): serial
+  boundary, hard-spliced RTC boundary, crossfaded RTC boundary, and a counterfactual in sim mode
+  (no `clipAction`) that jumps the full 60° — so the first three measure the clip and not the data.
+
+**Still open — do not treat this task as finished:**
+* The 15 Hz A/B is **writable now, not measured.** The crossfade reach, the prefetch break-even and
+  `RTC_PAYOFF_MARGIN` are still tuned only at 200 ms against a mocked vla-server.
+* Note while re-tuning: `MAX_DELTA_DEGREES` is a per-**step** bound, not per-second, so shortening
+  the loop period raises the slew rate it permits in the same proportion. At 15 Hz the same constant
+  is 75°/s rather than 25°/s. That is a real-arm safety property, not a test detail.
+
 ## Test Strategy
 
 Unit-test the queue/prefetch/blend logic with a mocked vla-server (delayed

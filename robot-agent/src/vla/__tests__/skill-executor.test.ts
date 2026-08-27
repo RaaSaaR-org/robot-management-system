@@ -7,12 +7,15 @@
  * in-flight prefetch, the payoff policy (one attempt per boundary, and never a
  * prefetch that would cost the robot more than the serial refill), the latency
  * sweep that holds RTC to "never worse than serial", the measured reach of the
- * crossfade, and proof that the disabled path is the old one.
+ * crossfade, the MAX_DELTA_DEGREES bound a boundary is allowed to command, the
+ * loop period being a per-run knob, and proof that the disabled path is the
+ * old one.
  *
  * The RTC timing tests drive a scripted vla-server whose round trip is the
  * independent variable, because the thing under test IS the relationship
- * between that round trip and the 200 ms loop period. The three that assert on
- * elapsed time — the A/B baseline, the latency sweep and the crossfade reach —
+ * between that round trip and the 200 ms loop period. The four that assert on
+ * elapsed time — the A/B baseline, the latency sweep, the crossfade reach and
+ * the loop-period A/B —
  * run on Vitest's virtual clock (see runOnVirtualClock), so their figures are
  * exact and reproducible rather than measurements of this host. Every other
  * test here uses real timers; none of them asserts a duration.
@@ -22,7 +25,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { SkillExecutor, blendChunks, rtcPrefetchPaysOff } from '../skill-executor.js';
+import { SkillExecutor, blendChunks, rtcPrefetchPaysOff, MAX_DELTA_DEGREES } from '../skill-executor.js';
 import { config } from '../../config/config.js';
 import { hardwareClient } from '../../hardware/HardwareClient.js';
 
@@ -1670,4 +1673,244 @@ describe('SkillExecutor — RTC never gives the sidecar a second caller', () => 
     expect(sidecar.calls.filter((c) => c === 'getCameras')).toHaveLength(4);
     expect(sidecar.independentOverlaps()).toEqual([]);
   }, 60_000);
+});
+
+// ─── The delta clip across a chunk boundary (TASK-183) ──────────────────
+
+/**
+ * Largest per-joint change between consecutive commanded vectors, counting the
+ * pose the arm was seeded from as the step before the first one.
+ *
+ * This is the quantity `MAX_DELTA_DEGREES` bounds, and the quantity a chunk
+ * boundary threatens: the incoming chunk was predicted from a different
+ * observation, so its first row need not be anywhere near the last row of the
+ * chunk it replaces.
+ */
+function maxJointStepDelta(sends: readonly number[][], seed: readonly number[]): number {
+  let max = 0;
+  let prev: readonly number[] = seed;
+  for (const s of sends) {
+    for (let j = 0; j < s.length; j += 1) {
+      max = Math.max(max, Math.abs(s[j] - (prev[j] ?? 0)));
+    }
+    prev = s;
+  }
+  return max;
+}
+
+/**
+ * A vla-server that answers the first `/predict` with a chunk of all-zeros and
+ * every one after it with all-60. The boundary between chunk 1 and chunk 2 is
+ * therefore a 60° discontinuity on every joint — twelve times the clip bound,
+ * and far past anything a crossfade could smooth away on its own.
+ */
+function makeBoundaryJumpServer(o: { delayMs?: number; steps?: () => number }) {
+  return makeVlaServer({
+    chunkSize: 4,
+    delayMs: o.delayMs ?? 0,
+    steps: o.steps,
+    chunkFor: (call) => chunkOf(call === 1 ? 0 : 60, 4),
+  });
+}
+
+/**
+ * The second acceptance criterion of TASK-183 is a BOUND — "no discontinuity
+ * larger than the hardware `clipAction` bound at chunk boundaries" — and until
+ * these tests `MAX_DELTA_DEGREES` appeared in no assertion anywhere in
+ * `robot-agent/src`. Its value was pinned incidentally by the hardware test
+ * near the top of this file (a 60° prediction arriving as 5 then 10), but that
+ * test predates TASK-183 and nothing related a BOUNDARY discontinuity to it.
+ *
+ * What is asserted here is the property, not the number: whatever the two
+ * chunks disagree by, and whether the boundary is a serial refill, a hard
+ * splice or a crossfade, no single step commands a joint further than
+ * `MAX_DELTA_DEGREES`. The blend narrows the discontinuity; the clip is what
+ * bounds it, and the last test says so by taking the clip away.
+ */
+describe('SkillExecutor — a chunk boundary never commands more than MAX_DELTA_DEGREES', () => {
+  const SEED = [0, 0, 0, 0, 0, 0];
+
+  beforeEach(() => {
+    process.env.VLA_SERVER_URL = 'http://localhost:8000';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('holds across a serial boundary (RTC off)', async () => {
+    const sidecar = makeSidecarRecorder({});
+    const rec = makeStepRecorder();
+    const server = makeBoundaryJumpServer({ steps: rec.steps });
+
+    const result = await new SkillExecutor(makeStateManager(), server.fetch).run({
+      skillId: 'clip-serial-boundary',
+      taskPrompt: 'pick up the green cube',
+      maxSteps: 8,
+      timeoutMs: 30_000,
+      emitter: rec.emitter,
+      rtc: { enabled: false },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.mode).toBe('hardware');
+    expect(sidecar.sends).toHaveLength(8);
+    // The boundary really is at step 5 and the raw chunk really does jump 60°
+    // there — without that the bound below would be vacuous.
+    expect(server.rec.predictAtStep).toEqual([0, 4]);
+    expect(sidecar.sends[3]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(maxJointStepDelta(sidecar.sends, SEED)).toBeLessThanOrEqual(MAX_DELTA_DEGREES);
+    // …and the arm walks toward the new chunk AT the bound rather than
+    // stopping short of it: 5° on the first step past the boundary, 10° on the
+    // next. The clip rate-limits the discontinuity, it does not reject it.
+    expect(sidecar.sends[4]).toEqual(Array(6).fill(MAX_DELTA_DEGREES));
+    expect(sidecar.sends[5]).toEqual(Array(6).fill(2 * MAX_DELTA_DEGREES));
+  }, 30_000);
+
+  it('holds across a hard-spliced RTC boundary (blendSteps 0)', async () => {
+    const sidecar = makeSidecarRecorder({});
+    const rec = makeStepRecorder();
+    // 20 ms of inference: the prefetch lands with lead to spare, so the
+    // boundary is carried by a splice rather than by a serial refill — and
+    // with blendSteps 0 there is nothing fading it.
+    const server = makeBoundaryJumpServer({ delayMs: 20, steps: rec.steps });
+
+    const result = await new SkillExecutor(makeStateManager(), server.fetch).run({
+      skillId: 'clip-spliced-boundary',
+      taskPrompt: 'pick up the green cube',
+      maxSteps: 8,
+      timeoutMs: 30_000,
+      emitter: rec.emitter,
+      rtc: { enabled: true, overlap: 0.25, blendSteps: 0 },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(sidecar.sends).toHaveLength(8);
+    // The boundary under test was a prefetch, spliced with no crossfade at all.
+    expect(result.rtc?.prefetchMerged).toBeGreaterThan(0);
+    expect(result.rtc?.blendedSteps).toBe(0);
+    expect(maxJointStepDelta(sidecar.sends, SEED)).toBeLessThanOrEqual(MAX_DELTA_DEGREES);
+  }, 30_000);
+
+  it('holds across a crossfaded RTC boundary too', async () => {
+    const sidecar = makeSidecarRecorder({});
+    const rec = makeStepRecorder();
+    const server = makeBoundaryJumpServer({ delayMs: 20, steps: rec.steps });
+
+    const result = await new SkillExecutor(makeStateManager(), server.fetch).run({
+      skillId: 'clip-blended-boundary',
+      taskPrompt: 'pick up the green cube',
+      maxSteps: 8,
+      timeoutMs: 30_000,
+      emitter: rec.emitter,
+      rtc: { enabled: true, overlap: 0.5, blendSteps: 2 },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(sidecar.sends).toHaveLength(8);
+    // A crossfade really did happen…
+    expect(result.rtc?.blendedSteps).toBeGreaterThan(0);
+    // …and it is still the clip that decides what the arm is allowed to do.
+    expect(maxJointStepDelta(sidecar.sends, SEED)).toBeLessThanOrEqual(MAX_DELTA_DEGREES);
+  }, 30_000);
+
+  it('is the clip that enforces it — the same chunks in sim jump the full 60°', async () => {
+    // The counterfactual. Sim mode runs the identical loop with `clipAction`
+    // skipped, so the same scripted chunks produce the raw discontinuity. If
+    // this arm ever stopped exceeding the bound, the three tests above would be
+    // measuring the scripted data rather than the clip.
+    vi.spyOn(hardwareClient, 'isAvailable').mockReturnValue(false);
+    const rec = makeStepRecorder();
+    const server = makeBoundaryJumpServer({ steps: rec.steps });
+
+    const result = await new SkillExecutor(makeStateManager(), server.fetch).run({
+      skillId: 'clip-sim-counterfactual',
+      taskPrompt: 'pick up the green cube',
+      maxSteps: 8,
+      timeoutMs: 30_000,
+      emitter: rec.emitter,
+      rtc: { enabled: false },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.mode).toBe('sim');
+    const actions = rec.events.map((e) => e.action);
+    expect(actions).toHaveLength(8);
+    expect(maxJointStepDelta(actions, SEED)).toBe(60);
+    expect(maxJointStepDelta(actions, SEED)).toBeGreaterThan(MAX_DELTA_DEGREES);
+  }, 30_000);
+});
+
+// ─── The loop period is a knob, not a constant (TASK-183) ───────────────
+
+/**
+ * `LOOP_PERIOD_MS` used to be a bare module constant, which made TASK-183's
+ * fifth acceptance criterion — validate at 15 Hz — not merely unmet but
+ * inexpressible: no configuration of the executor produced any rate but 5 Hz,
+ * and every RTC figure in that task is a 5 Hz figure because of it.
+ *
+ * These two tests are what says the rate is now a property of the run. They do
+ * NOT re-tune anything at 15 Hz: the crossfade reach, the prefetch break-even
+ * and `RTC_PAYOFF_MARGIN` are all functions of the period and remain measured
+ * only at 200 ms. What has changed is that an A/B between two rates can now be
+ * written at all.
+ */
+describe('SkillExecutor — the rollout loop period', () => {
+  beforeEach(() => {
+    process.env.VLA_SERVER_URL = 'http://localhost:8000';
+    vi.spyOn(hardwareClient, 'isAvailable').mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('still ships the historical 5 Hz when VLA_LOOP_PERIOD_MS is unset', () => {
+    expect(config.vla.loopPeriodMs).toBe(200);
+  });
+
+  it('paces the run at the requested rate — 5 Hz against ~15 Hz, same steps', async () => {
+    // Both arms run the same 8 steps against the same instant server, so the
+    // only thing that can separate their wall clocks is the sleep between
+    // steps. The clock is the virtual one, so the ratio below is arithmetic.
+    vi.useFakeTimers();
+    const opts = {
+      taskPrompt: 'wave',
+      maxSteps: 8,
+      timeoutMs: 60_000,
+      rtc: { enabled: false },
+    };
+
+    const slow = await runOnVirtualClock(
+      new SkillExecutor(makeStateManager(), makeVlaServer({ chunkSize: 4 }).fetch).run({
+        ...opts,
+        skillId: 'period-5hz',
+        loopPeriodMs: 200,
+      }),
+    );
+    // 1000/15 is not a whole number of milliseconds; 67 ms is the closest a
+    // setTimeout-paced loop gets to the 15 Hz the criterion names.
+    const fast = await runOnVirtualClock(
+      new SkillExecutor(makeStateManager(), makeVlaServer({ chunkSize: 4 }).fetch).run({
+        ...opts,
+        skillId: 'period-15hz',
+        loopPeriodMs: 67,
+      }),
+    );
+
+    expect(slow.steps).toBe(8);
+    expect(fast.steps).toBe(8);
+    // Same number of sleeps, different length: the durations are in exactly
+    // the ratio of the two periods, and neither is zero.
+    expect(slow.durationMs).toBeGreaterThan(0);
+    expect(slow.durationMs % 200).toBe(0);
+    expect(fast.durationMs % 67).toBe(0);
+    expect(slow.durationMs / 200).toBe(fast.durationMs / 67);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[loop period A/B, mocked vla-server @0ms, 8 steps] 200ms: ${slow.durationMs}ms wall | ` +
+        `67ms: ${fast.durationMs}ms wall`,
+    );
+  }, 30_000);
 });

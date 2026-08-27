@@ -59,6 +59,24 @@ export interface Config {
     /** Whether VLA inference is enabled */
     enabled: boolean;
     /**
+     * Rollout control-loop period in milliseconds (`VLA_LOOP_PERIOD_MS`), i.e.
+     * how long the skill executor sleeps between action sends. 200 ms (5 Hz)
+     * is the historical default and matches the VLARunner/teleop conventions;
+     * GR00T-N1.7 closed-loop control on the G1 wants 15 Hz, which is ~67 ms.
+     *
+     * It is a knob rather than a constant because everything RTC is tuned
+     * against is a function of it (TASK-183): the crossfade's reach is
+     * `chunkSize x overlap x loopPeriodMs`, and the prefetch payoff weighs the
+     * observed round trip against `(queueLen + 1) x loopPeriodMs` of queued
+     * lead. Changing the rate moves both, so an A/B at two rates has to be
+     * expressible before either can be checked at anything but 5 Hz.
+     *
+     * Must be in (0, 5000]: 0 or a negative period turns the loop into a spin
+     * that floods the sidecar with `/action`, and a period longer than the
+     * `/predict` timeout is a rollout nobody asked for.
+     */
+    loopPeriodMs: number;
+    /**
      * Real-Time Chunking (TASK-183): prefetch the next action chunk while the
      * current one is still executing and crossfade the two across the
      * boundary, so a chunk boundary no longer costs a full `/predict` of dead
@@ -585,6 +603,15 @@ export const config: Config = {
     timeoutMs: parseInt(process.env.VLA_TIMEOUT_MS || '5000', 10),
     restFallbackUrl: process.env.VLA_REST_FALLBACK_URL || undefined,
     enabled: process.env.VLA_ENABLED === 'true',
+    // Range-checked for the same reason the RTC knobs are: 0 is a finite
+    // number and an unthrottled rollout loop. See envNumberChecked.
+    loopPeriodMs: envNumberChecked(
+      'VLA_LOOP_PERIOD_MS',
+      process.env.VLA_LOOP_PERIOD_MS,
+      200,
+      (n) => n > 0 && n <= 5_000,
+      'a period in ms in (0, 5000]'
+    ),
     rtc: {
       // `=== 'true'` like every other opt-in flag here. hardware/vla_runner.py
       // reads the same VLA_RTC_ENABLED but accepts 'true'/'1'/'yes', so a `=1`
@@ -779,7 +806,13 @@ export function validateConfig(): void {
   // Outside the `vla.enabled` guard on purpose: the skill executor's rollout
   // loop — the only thing RTC touches — runs whether or not VLA_ENABLED is set,
   // so hiding this line behind that flag would hide it from every profile that
-  // actually uses it.
+  // actually uses it. Same for the loop period below, which every RTC figure
+  // is a function of: a run is not explicable without the rate it ran at.
+  console.log(
+    `    - Rollout Loop Period: ${config.vla.loopPeriodMs}ms (${
+      Math.round((1000 / config.vla.loopPeriodMs) * 10) / 10
+    } Hz)`
+  );
   console.log(
     `    - Real-Time Chunking: ${
       config.vla.rtc.enabled
