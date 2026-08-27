@@ -106,7 +106,11 @@ This is the setup used on the NeoDEM reference platform (Raspberry Pi 5, Debian 
 ### Prerequisites
 
 - Raspberry Pi 5 (4GB+ RAM recommended)
-- Node.js 22+ (`nvm install 22`)
+- Node.js **24+** for the robot agent (`nvm install 24`); 22 is enough for the
+  server and the app. 24 is not a preference: `robot-agent`'s lockfile is written
+  by npm 11 and `npm ci` fails under npm 10 (Node 20/22) with
+  `Missing: @xterm/xterm@6.0.0 from lock file` — see the comment in
+  `robot-agent/Dockerfile`.
 - Python 3.12+ (for VLA server / hardware sidecar)
 - Git, build-essential
 
