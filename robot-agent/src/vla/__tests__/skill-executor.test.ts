@@ -1182,7 +1182,13 @@ describe('SkillExecutor — RTC is never worse than serial', () => {
     expect(paysOffAtThreshold(2500)).toBe(false);
 
     // ── 2. The loop, end to end ────────────────────────────────────
-    const latencies = [600, 1200, 1800, 2500];
+    // 800 and 1000 are the point of this sweep, not padding: they are the only
+    // rows where the prefetch is BOTH issued and unable to cover the whole
+    // round trip, which is the one regime `rtcPrefetchPaysOff` exists to
+    // police. Below them the prefetch is free; above them it declines and the
+    // arm is serial by construction. Without them `onMs <= offMs` is asserted
+    // only where it cannot fail.
+    const latencies = [600, 800, 1000, 1200, 1800, 2500];
     const rows: Array<Record<string, number>> = [];
 
     for (const latencyMs of latencies) {
@@ -1236,8 +1242,16 @@ describe('SkillExecutor — RTC is never worse than serial', () => {
     //    is one full `/predict` shorter than serial (3600 vs 4200 ms). It costs
     //    one extra `/predict` — 3 against serial's 2 — because each merge
     //    shortens the chunk and so brings the next boundary forward.
-    //  - Past it RTC declines outright: zero prefetches issued, and the arm is
-    //    the serial arm down to the millisecond.
+    //  - 800 and 1000 ms are the regime the payoff heuristic exists for, and
+    //    the only rows where it is really under test: the prefetch is issued
+    //    and still cannot cover the whole round trip, so the queue does empty
+    //    (400 ms over two boundaries, then 800 ms) — and RTC is STILL ahead of
+    //    serial, by exactly the lead the prefetch bought (4200 vs 4600, 4800 vs
+    //    5000). A partial win is a win; `RTC_PAYOFF_MARGIN` would be mistuned
+    //    if either of these rows had `onMs > offMs`, and that is what these two
+    //    rows are here to catch.
+    //  - Past 1200 ms RTC declines outright: zero prefetches issued, and the
+    //    arm is the serial arm down to the millisecond.
     //
     // `blended: 0` in EVERY row is not a rounding artefact — it is the finding
     // of the crossfade-reach test below. At chunk 8 / overlap 0.25 the fade can
@@ -1248,6 +1262,10 @@ describe('SkillExecutor — RTC is never worse than serial', () => {
       // latency  off    on   off/on predicts   issued merged skipped blended  stall  stalls
       { latencyMs: 600, offMs: 4200, onMs: 3600, offPredicts: 2, onPredicts: 3,
         issued: 2, merged: 2, skipped: 0, blended: 0, stallMs: 0, stalls: 0 },
+      { latencyMs: 800, offMs: 4600, onMs: 4200, offPredicts: 2, onPredicts: 3,
+        issued: 2, merged: 2, skipped: 0, blended: 0, stallMs: 400, stalls: 2 },
+      { latencyMs: 1000, offMs: 5000, onMs: 4800, offPredicts: 2, onPredicts: 3,
+        issued: 2, merged: 2, skipped: 0, blended: 0, stallMs: 800, stalls: 2 },
       { latencyMs: 1200, offMs: 5400, onMs: 5400, offPredicts: 2, onPredicts: 2,
         issued: 0, merged: 0, skipped: 2, blended: 0, stallMs: 1200, stalls: 1 },
       { latencyMs: 1800, offMs: 6600, onMs: 6600, offPredicts: 2, onPredicts: 2,
@@ -1631,7 +1649,11 @@ describe('SkillExecutor — RTC never gives the sidecar a second caller', () => 
     expect(result.status).toBe('completed');
     expect(result.steps).toBe(8);
     expect(sidecar.sends).toHaveLength(8);
-    expect(result.rtc?.prefetchIssued).toBe(2);
+    // ONE prefetch reached vla-server -- the second boundary's. The first
+    // boundary's attempt died at the capture, so it is `prefetchFailed` and not
+    // `prefetchIssued`: the counter is reconcilable against `predictAtStep`
+    // below, and against the request count vla-server itself would report.
+    expect(result.rtc?.prefetchIssued).toBe(1);
     expect(result.rtc?.prefetchFailed).toBe(1);
 
     // The failed prefetch never reached vla-server at all, and the boundary it

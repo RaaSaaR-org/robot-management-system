@@ -209,7 +209,12 @@ export interface RtcMetrics {
   totalStallMs: number;
   /** Worst single stall, in milliseconds. */
   maxStallMs: number;
-  /** Prefetch `/predict` calls issued. */
+  /**
+   * Prefetch `/predict` calls actually SENT to vla-server — so this number can
+   * be reconciled against the server's own request count. An attempt whose
+   * speculative capture threw never reaches `/predict` and is counted in
+   * {@link prefetchFailed} only.
+   */
   prefetchIssued: number;
   /** Prefetched chunks spliced into a still-executing queue — stalls avoided. */
   prefetchMerged: number;
@@ -512,7 +517,12 @@ export function blendChunks(
   // Nothing to fade against — this is the serial refill, by another route.
   if (queue.length === 0) return { queue: aligned.map((a) => a.slice()), blended: 0 };
 
-  const n = Math.min(Math.max(blendSteps, 0), queue.length, aligned.length);
+  // Floor first: `blendSteps` is typed `number`, and a fractional one survives
+  // both `Math.max` and `Math.min` to become a fractional loop bound below,
+  // where `aligned[i]` is `undefined` and `.slice()` throws out of the rollout.
+  // `envNumberChecked` rejects non-integers, so this guards the exported
+  // function and the `SkillExecutorOptions.rtc` path, not the env path.
+  const n = Math.min(Math.max(Math.floor(blendSteps) || 0, 0), queue.length, aligned.length);
   const out: number[][] = [];
   for (let i = 0; i < n; i++) {
     const wNew = (i + 1) / (n + 1);
@@ -924,10 +934,27 @@ export class SkillExecutor {
         );
       }
 
-      // The capture is paid OUT OF the period, not on top of it, so a hardware
-      // capture does not push the next `/action` late — the one thing
-      // g1_sidecar.py's ramp asks of this loop is a steady ~G1_CONTROL_HZ
-      // cadence. In sim `prefetchCaptureMs` is 0 and this is the old `sleep`.
+      // The capture is paid OUT OF this step's sleep rather than on top of it,
+      // so the next `/action` is not pushed late — the one thing g1_sidecar.py's
+      // ramp asks of this loop is a steady ~G1_CONTROL_HZ cadence. In sim
+      // `prefetchCaptureMs` is 0 and this is the old `sleep`.
+      //
+      // That holds only WHILE THE CAPTURE FITS IN THE PERIOD. The subtraction
+      // clamps at zero, so a sidecar capture slower than LOOP_PERIOD_MS has
+      // nothing left to be paid out of and stretches this one step by the
+      // overrun — the jitter is moved out of the DDS lock and into the cadence,
+      // not removed. It is a real regime: `getCameras` + one `snapshot` +
+      // `getStateNow` at 100 ms each already exceeds a 200 ms period. Nothing
+      // here can buy the time back, so the breach is logged rather than hidden;
+      // `rtcPrefetchPaysOff` weighs round trip against queue, not capture
+      // against period, so it will not decline on this ground.
+      if (prefetchCaptureMs > LOOP_PERIOD_MS) {
+        console.warn(
+          `[SkillExecutor] RTC prefetch capture ${prefetchCaptureMs}ms exceeded the ` +
+            `${LOOP_PERIOD_MS}ms loop period — this step's /action cadence stretched by ` +
+            `${prefetchCaptureMs - LOOP_PERIOD_MS}ms`,
+        );
+      }
       await sleep(Math.max(0, LOOP_PERIOD_MS - prefetchCaptureMs));
     }
 
@@ -1390,7 +1417,6 @@ export class SkillExecutor {
     rtc.gen += 1;
     const gen = rtc.gen;
     rtc.attempted = true;
-    ctx.rtcMetrics.prefetchIssued += 1;
 
     // The lead this prefetch spends runs from here until its chunk is usable —
     // capture included, so that `latencyMs` measures the same quantity the
@@ -1428,6 +1454,12 @@ export class SkillExecutor {
     // The chunk's t=0 is the observation just taken, and the loop has not
     // moved since. See `RtcState.issuedAtStep`.
     rtc.issuedAtStep = step;
+    // Counted HERE, not at the top of the attempt: a capture that throws, or a
+    // generation bumped while the loop was blocked on it, returns above without
+    // a `/predict` ever reaching vla-server. Counting those made
+    // `prefetchIssued` disagree with the request count an operator can see on
+    // the server, and read as "a prefetch landed and was discarded".
+    ctx.rtcMetrics.prefetchIssued += 1;
     rtc.inflight = this.runPrefetch(rtc, ctx, opts, baseUrl, ctrl, gen, obs, roundTripStartedAt);
     return captureMs;
   }

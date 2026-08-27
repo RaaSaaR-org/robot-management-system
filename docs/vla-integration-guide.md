@@ -10,11 +10,17 @@ The VLA pipeline has three components:
 2. **Skill Executor** (`robot-agent/src/vla/skill-executor.ts`) — the live closed loop, in TypeScript. Captures frames and joint state through the sidecar, calls `/predict`, delta-clips and applies the actions. One loop for sim and hardware; optionally overlapping inference with execution (see [Real-Time Chunking](#real-time-chunking-rtc)).
 3. **Safety Layer** (`robot-agent/hardware/vla_safety.py`) — rate limiter, joint validator, watchdog
 
-> `robot-agent/hardware/vla_runner.py` is the **previous** Python control loop.
-> It has been orphaned since TASK-146, when the loop moved into TypeScript and
-> the runner's camera stack became a set of sidecar HTTP endpoints. It still
-> reads its own env vars (notably `VLA_RTC_CHUNK_OVERLAP`), which the agent
-> does not; nothing in the running system drives it.
+>  `robot-agent/hardware/vla_runner.py` is the **previous** Python control loop.
+> TASK-146 moved the agent's closed loop into TypeScript and TASK-184 removed
+> the agent's last calls to the sidecar `/vla/*` surface — but the runner is
+> **not orphaned**. `so101_sidecar.py` imports it at module level to serve
+> `/vla/start|stop|status`, and `sim_evaluator/evaluate_vla.py` uses its
+> backends; it is `@status support` and must not be deleted while those stand.
+> It carries its own RTC implementation and reads its own env vars, notably
+> `VLA_RTC_CHUNK_OVERLAP`, which the agent does not. Note that
+> **`VLA_RTC_ENABLED` is read by both**, with different parsers — the agent
+> accepts only `true`, the runner also `1`/`yes` — so on an SO-101 host
+> exporting it turns RTC on in the runner as well as in the agent.
 
 ```
 ┌──────────────┐    POST /predict     ┌──────────────┐
@@ -190,8 +196,10 @@ produced before the feature existed.
 | `VLA_RTC_BLEND_STEPS` | `5` | Upper bound on the boundary crossfade, in steps. `0` means prefetch with a hard splice, which is the A/B control that separates the prefetch's win from the blend's. |
 
 `VLA_RTC_CHUNK_OVERLAP` is **not** this knob. It counts whole steps and is read
-only by `robot-agent/hardware/vla_runner.py`, orphaned since TASK-146. The
-agent warns at boot when the old name is set and RTC is on.
+only by `robot-agent/hardware/vla_runner.py`, which carries its own RTC
+implementation and is still live as `@status support` (see above). The agent
+warns at boot when the old name is set and RTC is on. `VLA_RTC_ENABLED`,
+by contrast, is read by **both**.
 
 ### What it reports
 
@@ -267,7 +275,10 @@ one more. Those
 are captured on the loop's own thread, before its sleep, so the executor issues
 **at most one sidecar request at a time**, in the loop's own order, with RTC on
 or off. The capture is subtracted from that step's sleep rather than added to
-it, so the `/action` cadence is unchanged.
+it, so the `/action` cadence is unchanged **as long as the capture fits inside
+the loop period**. The subtraction clamps at zero: a sidecar capture slower than
+`LOOP_PERIOD_MS` stretches that one step by the overrun, and the executor logs a
+warning naming the excess. This has not been measured on a robot.
 
 This is not decoration:
 
