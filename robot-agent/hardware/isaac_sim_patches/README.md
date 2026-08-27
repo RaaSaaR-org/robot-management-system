@@ -24,6 +24,46 @@ git apply /path/to/robot-management-system/robot-agent/hardware/isaac_sim_patche
 `git apply` against a different upstream commit may reject. The three hunks are
 independent and small enough to re-apply by hand from the symptoms below.
 
+## ⚠ The checkout carries an uncommitted Isaac Lab 3.0 port that is NOT in these patches
+
+As of 2026-08-28, `git -C "$UNITREE_ROOT/unitree_sim_isaaclab" status --porcelain` reports
+**30 modified files**, not the two this file lists. The other ~27 are an Isaac Sim 6.0.1 /
+Isaac Lab 3.0 migration (`sim.physx` -> `sim.physics`, `ProxyArray.torch` on the
+`common_observations/*_state.py` reads, the `InitialStateCfg.rot` quaternion reorder in
+`tasks/common_config/robot_configs.py`), written up in
+`/home/humanoid/Dokumente/Unitree/g1_quest_teleop/docs/STATUS.md` under R19.
+
+**A fresh checkout brought to `e30c25b` + `0001` will therefore NOT run**, and any result
+reproduced from TASK-204 / TASK-223 was obtained against the working tree, not against this
+patch set. Capturing that port here is unfinished work.
+
+## `0002-task223-obs-scales-and-step0-probe.patch` (TASK-223)
+
+Applies on top of `0001` and of the port above; dry-run-verified against both the current
+working tree and pristine `e30c25b`. Three hunks, all in service of one sim boot:
+
+1. `action_provider_wh_dds.py` — `obs_scales`. Upstream ships all `1.0` (line 276-277) and
+   `assets/model/policy.onnx` has no normalisation layer of its own (7 nodes: `Gemm`/`Elu` x3 +
+   `Gemm`, no metadata), so those six numbers are the only normalisation the policy ever sees.
+   Defaults to Unitree's locomotion values (`ang_vel` 0.25, `joint_vel` 0.05);
+   `NEODEM_OBS_SCALES=upstream` restores the shipped behaviour without a re-patch, so both arms
+   of the experiment run from one build.
+2. `action_provider_wh_dds.py` — `_task223_log`. Prints, from inside the sim,
+   `projected_gravity_b` (a convention-free uprightness test), root height, true roll/pitch from
+   `root_quat_w` read as `(x,y,z,w)`, leg angles vs defaults, and — once, at step 0, before the
+   first action is applied — the full articulation joint-name order.
+3. `tasks/common_observations/g1_29dof_state.py:370` —
+   `ensure_quat_w_first(quat, assume_w_first=True)` -> `False`. **Symptom without it:** a
+   perfectly upright, motionless base publishes `|roll| = pi` on `rt/lowstate`, so every
+   "is it standing?" check fails unconditionally; the accelerometer and gyroscope on the same
+   topic are rotated by a garbage matrix as well. Upstream's `True` was correct on Isaac Lab
+   2.x, where the quaternion was `(w,x,y,z)`; Isaac Lab 3.0 returns `(x,y,z,w)`.
+
+⚠ Even with hunk 3, this sim puts `imu_state.quaternion` on the wire as **(x, y, z, w)**
+(`dds/g1_robot_dds.py:101`, the vendor's own `#[x,y,z,w]` comment), which is not the real
+robot's order. `isaac_gait_probe.py --quat-order` selects the reading; there is no way to detect
+it from the data, because every permutation of a unit quaternion is still a unit quaternion.
+
 ## What each hunk fixes, and how it fails without it
 
 ### 1. `action_provider_wh_dds.py` — warp `Device` is not a `torch.device`

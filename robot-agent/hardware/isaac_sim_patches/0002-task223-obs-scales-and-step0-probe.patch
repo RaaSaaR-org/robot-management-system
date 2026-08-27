@@ -1,0 +1,147 @@
+NeoDEM TASK-223 -- one sim boot, three answers.
+
+Applies on top of 0001-neodem-g1-wholebody-sim.patch and the Isaac Lab 3.0 port
+already present in the checkout working tree. Three hunks:
+
+  1. action_provider_wh_dds.py: obs_scales. Upstream ships all 1.0; the ONNX
+     policy carries no normalisation of its own, so the scales here are the only
+     normalisation the policy ever sees. Defaults to Unitree's locomotion values
+     (ang_vel 0.25, joint_vel 0.05); set NEODEM_OBS_SCALES=upstream to get the
+     shipped all-1.0 behaviour back without re-patching.
+  2. action_provider_wh_dds.py: _task223_log -- lead 3, from inside the sim, free.
+     Prints projected_gravity_b (a convention-free uprightness test that no
+     quaternion-order bug can reach), the root height, the true roll/pitch from
+     root_quat_w read as (x,y,z,w), the leg joint angles against their defaults,
+     and -- once, at step 0, before the first action is applied -- the full
+     articulation joint-name order.
+  3. g1_29dof_state.py: the IMU quaternion published to rt/lowstate. Upstream's
+     assume_w_first=True was right on Isaac Lab 2.x and is wrong on 3.0, where
+     the quaternion is (x,y,z,w). Combined with dds/g1_robot_dds.py:101 it made a
+     perfectly upright base publish as |roll| = pi, so isaac_gait_probe.py's
+     "base upright" check could never pass, on any hypothesis.
+
+--- a/action_provider/action_provider_wh_dds.py
++++ b/action_provider/action_provider_wh_dds.py
+@@ -273,8 +273,25 @@
+             else:
+                 raise ValueError(f"action joint '{old_action_joint}' not in all joint list")
+         self.arm_action = []
+-        self.obs_scales = {"ang_vel":1.0, "projected_gravity":1.0, "commands":1.0, 
+-                           "joint_pos":1.0, "joint_vel":1.0, "actions":1.0}
++        # NeoDEM TASK-223 lead 1. Upstream ships all-1.0 scales, but assets/model/policy.onnx
++        # carries no normalisation of its own (7 nodes: Gemm/Elu x3 + Gemm, no Sub/Div, and
++        # zero metadata_props), so whatever normalisation it was trained with has to be applied
++        # here. Unitree locomotion policies train with ang_vel 0.25 / joint_vel 0.05. Read from
++        # the environment so both arms of the experiment can be run without re-patching:
++        #   NEODEM_OBS_SCALES=upstream  -> all 1.0 (the shipped behaviour)
++        #   unset / anything else       -> the Unitree locomotion scales below
++        _upstream = os.environ.get("NEODEM_OBS_SCALES", "").lower() == "upstream"
++        def _s(name, unitree_value):
++            if _upstream:
++                return 1.0
++            return float(os.environ.get("NEODEM_OBS_SCALE_" + name.upper(), unitree_value))
++        self.obs_scales = {"ang_vel": _s("ang_vel", 0.25),
++                           "projected_gravity": _s("projected_gravity", 1.0),
++                           "commands": _s("commands", 1.0),
++                           "joint_pos": _s("joint_pos", 1.0),
++                           "joint_vel": _s("joint_vel", 0.05),
++                           "actions": _s("actions", 1.0)}
++        print(f"[TASK-223] obs_scales = {self.obs_scales}", flush=True)
+         self.ang_vel = self.env.scene["robot"].data.root_ang_vel_b                      
+         self.projected_gravity = self.env.scene["robot"].data.projected_gravity_b       
+         self.joint_pos = self.env.scene["robot"].data.joint_pos
+@@ -373,12 +390,74 @@
+         current_actor_obs = self.compute_observations()
+         action = self.policy(current_actor_obs)
+         return action
++    def _task223_log(self, action_data=None):
++        """NeoDEM TASK-223 lead 3: report the truth from inside the sim, for free.
++
++        Everything the external `isaac_gait_probe.py` cannot see, and everything it
++        currently sees through a scrambled quaternion:
++
++        * `projected_gravity_b` is the convention-free uprightness test. Isaac Lab
++          computes it internally, so no quaternion-order bug can reach it: it reads
++          (0, 0, -1) when the base is upright and its z component is cos(tilt).
++        * step 0 is printed *before* the first action is ever applied, which is the
++          observation lead 3 asks for: is the robot upright and in its init crouch at
++          physics step 0, or has it already left the pose before the first `rt/lowstate`
++          frame is published?
++        * the joint-name list settles, once, whether `all_joint_names[:29]` equals
++          `old_action_joints_names`. `get_action` indexes the 29-wide `delayed_actions`
++          with `self.action_to_indices`, which are indices into the 43-joint
++          articulation -- correct only if those two orders coincide.
++
++        Wrapped in its own try/except so a logging failure can never be mistaken for
++        the caller's "Get DDS action failed".
++        """
++        try:
++            n = self.sim_step_counter
++            if n % 25 != 0 and n > 5:
++                return
++            d = self.env.scene["robot"].data
++            pg = d.projected_gravity_b.torch[0] if hasattr(d.projected_gravity_b, "torch") \
++                else d.projected_gravity_b[0]
++            q = d.root_quat_w.torch[0] if hasattr(d.root_quat_w, "torch") else d.root_quat_w[0]
++            pos = d.root_pos_w.torch[0] if hasattr(d.root_pos_w, "torch") else d.root_pos_w[0]
++            # Isaac Lab 3.0 quaternions are (x, y, z, w) -- wp.quatf. See
++            # isaaclab/utils/warp/proxy_array.py:130-134 and base_rigid_object_data.py:413.
++            qx, qy, qz, qw = (float(v) for v in q[:4])
++            import math as _m
++            roll = _m.atan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy))
++            pitch = _m.asin(max(-1.0, min(1.0, 2 * (qw * qy - qz * qx))))
++            jp = d.joint_pos.torch if hasattr(d.joint_pos, "torch") else d.joint_pos
++            jv = d.joint_vel.torch if hasattr(d.joint_vel, "torch") else d.joint_vel
++            dj = self.default_action_positions
++            dj = dj.torch if hasattr(dj, "torch") else dj
++            legs = self.action_to_indices
++            if n == 0:
++                print(f"[TASK-223] all_joint_names ({len(self.all_joint_names)}) = "
++                      f"{list(self.all_joint_names)}", flush=True)
++                print(f"[TASK-223] action_to_indices  = {self.action_to_indices}", flush=True)
++                print(f"[TASK-223] old_action_indices = {self.old_action_indices}", flush=True)
++                print("[TASK-223] indexing is sound iff old_action_indices == list(range(29)) "
++                      "and every action_to_indices entry is < 29", flush=True)
++                print(f"[TASK-223] leg defaults = "
++                      f"{[round(float(dj[0, i]), 4) for i in legs]}", flush=True)
++            print(f"[TASK-223] step={n:5d} z={float(pos[2]):+.4f} "
++                  f"proj_grav=({float(pg[0]):+.3f},{float(pg[1]):+.3f},{float(pg[2]):+.3f}) "
++                  f"roll={roll:+.4f} pitch={pitch:+.4f} "
++                  f"leg_q={[round(float(jp[0, i]), 3) for i in legs]} "
++                  f"leg_dq_absmax={max(abs(float(jv[0, i])) for i in legs):.3f} "
++                  f"a_absmax={(float(action_data.abs().max()) if action_data is not None else float('nan')):.3f}",
++                  flush=True)
++        except Exception as e:                                   # never mask the caller
++            print(f"[TASK-223] log failed: {type(e).__name__}: {e}", flush=True)
++
+     def get_action(self, env) -> Optional[torch.Tensor]:
+         """Get action from DDS"""
+         try:
+             full_action = self._full_action_buf
+             full_action.zero_()
+             action_data = self.run_policy()
++            self._task223_log(action_data)
++            self.sim_step_counter += 1
+ 
+             # RL 输出与腰部默认位姿
+             full_action[self.action_to_indices] = action_data
+--- a/tasks/common_observations/g1_29dof_state.py
++++ b/tasks/common_observations/g1_29dof_state.py
+@@ -367,7 +367,16 @@
+     a_world_corrected = a_world - g_world  # [B,3]
+ 
+     # prepare quaternion in (w,x,y,z)
+-    quat_wxyz = ensure_quat_w_first(quat, assume_w_first=True)
++    # NeoDEM TASK-223. Isaac Lab 3.0 returns body/root quaternions as (x, y, z, w) -- the
++    # underlying warp dtype is wp.quatf (base_rigid_object_data.py:413) and
++    # isaaclab/utils/warp/proxy_array.py:130-134 documents the 2.x (w,x,y,z) -> 3.x (x,y,z,w)
++    # flip explicitly. Upstream's assume_w_first=True was correct on Isaac Lab 2.x and is
++    # wrong on this stack: it relabels (x,y,z,w) as (w,x,y,z), which then (a) feeds
++    # quat_to_rot_matrix a permuted quaternion, corrupting the accelerometer and gyroscope
++    # written to rt/lowstate, and (b) combines with dds/g1_robot_dds.py:101's [4,5,6,3]
++    # reorder so that a perfectly upright base is published as |roll| = pi. That is why
++    # isaac_gait_probe.py's "base upright" line could never pass -- see TASK-223.
++    quat_wxyz = ensure_quat_w_first(quat, assume_w_first=False)
+ 
+     # build rotation matrices R_body->world ; to convert world->body use R^T
+     R_body_to_world = quat_to_rot_matrix(quat_wxyz)  # [B,3,3]
