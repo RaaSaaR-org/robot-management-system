@@ -321,10 +321,18 @@ export function lastRunSignalMs(run: PatrolRun): number {
 /**
  * True when `incoming` is an OLDER snapshot of the run than `stored`: it would
  * move a terminal run back to 'running', drop `finishedAt`, or report fewer
- * settled legs than already persisted. Every `agent:patrol:*` event carries
- * the whole run and the robot pushes them fire-and-forget over separate
- * connections, so a `leg` (or a finding's embedded run) can land after the
- * `finished` it preceded — such a snapshot must never replace the newer row.
+ * settled legs, STARTED legs or findings than already persisted. Every
+ * `agent:patrol:*` event carries the whole run and the robot pushes them
+ * fire-and-forget over separate connections, so a `leg` (or a finding's
+ * embedded run) can land after the `finished` it preceded — such a snapshot
+ * must never replace the newer row.
+ *
+ * Kept a genuine mirror of `isRunDowngrade` in
+ * app/src/features/patrol/store/patrolStore.ts. Clause ORDER differs between
+ * the two and is inert: every clause is a side-effect-free `if (x) return true`
+ * over a `return false` tail, so the guard is a pure disjunction. That stops
+ * being true the moment a clause gains a side effect or an early `return false`
+ * — add one to both, in the same place.
  */
 export function isRunDowngrade(stored: PatrolRun | null | undefined, incoming: PatrolRun): boolean {
   if (!stored) return false;
@@ -1153,13 +1161,29 @@ export class PatrolService {
       return before;
     }
     const stored = await this.repo.upsertRun(run);
-    if (quiet) return stored;
 
+    // ABOVE the quiet return, and that is the whole point (TASK-222 review).
+    // The first-sighting arm has to belong to whichever run-carrying event
+    // actually creates the row — a finding's embedded run included.
+    //
+    // Left below it, a `finding:detected` that arrived first created the row
+    // silently, and the real `started` behind it then carried a snapshot with
+    // zero legs started and findingCount 0 against a stored row with one of
+    // each. Both new clauses refuse it, so it returned at the downgrade check
+    // and `patrol.run.started` was never written at all. That inverts the
+    // trade this guard was chosen for: a duplicated compliance record is
+    // recoverable, a missing one is not.
+    //
+    // Moving it cannot duplicate. When `started` arrives first it audits on the
+    // first arm and every later event finds `before` set; when anything else
+    // arrives first it audits here, and the late `started` is refused above.
     if (event.type === 'agent:patrol:started' || (!before && run.status === 'running')) {
       await this.audit(run.robotId, run.runId, 'patrol.run.started', `Patrol "${run.routeName}" started (${run.mode}, ${run.origin})`, {
         routeId: run.routeId, mode: run.mode, origin: run.origin, window: run.window, legs: run.legs.length,
       });
     }
+    if (quiet) return stored;
+
     if (event.type === 'agent:patrol:finished') {
       await this.audit(run.robotId, run.runId, 'patrol.run.finished', `Patrol "${run.routeName}" ${run.status}${run.reason ? `: ${run.reason}` : ''}`, {
         routeId: run.routeId, mode: run.mode, origin: run.origin, status: run.status, reason: run.reason ?? null,

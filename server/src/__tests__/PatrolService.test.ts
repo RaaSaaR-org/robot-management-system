@@ -562,12 +562,39 @@ describe('PatrolService — a leg reported at its start (TASK-222)', () => {
    *
    * The residual: were the two payloads ever byte-identical, no content-based
    * guard could order them and the record would still be written twice. That is
-   * accepted rather than closed by special-casing the audit — every dedupe key
-   * available here ("the row already exists") is also true when a finding event
-   * created the row without auditing, so keying on it would DROP the record in
-   * that case. A duplicated compliance record is recoverable; a missing one is
-   * not.
+   * accepted rather than closed by special-casing the audit — a duplicated
+   * compliance record is recoverable; a missing one is not.
+   *
+   * The dedupe key that was rejected here ("the row already exists") was
+   * rejected because it is ALSO true when a finding event created the row
+   * without auditing. That hole is now closed at its source rather than worked
+   * around: the first-sighting audit sits above `ingestRun`'s quiet return, so
+   * the finding that creates the row writes the record itself. See the test
+   * below.
    */
+  it('still writes patrol.run.started when a FINDING is the first event for the run', async () => {
+    // The mirror image of the test below, and the case the started-leg and
+    // finding clauses opened. A finding's embedded run is ingested `quiet`, so
+    // before this fix it created the row and wrote nothing; the real `started`
+    // then arrived carrying zero legs started and findingCount 0 against a row
+    // with one of each, was refused by BOTH new clauses, and returned at the
+    // downgrade check. The run existed with no `patrol.run.started` record at
+    // all — the missing record the guard was explicitly chosen to avoid.
+    const { service, compliance } = ctx;
+    await service.ingest(
+      ev('agent:finding:detected', {
+        patrol: makeRun({ legs: legsAt(0, 'running'), findingCount: 1 }),
+        finding: makeFinding(),
+      }),
+    );
+    const names = () => compliance.logSystemEvent.mock.calls.map((c: any[]) => c[0].payload.eventName);
+    expect(names()).toContain('patrol.run.started');
+
+    // And the late `started`, refused as the older snapshot, does not add a second.
+    await service.ingest(ev('agent:patrol:started', { patrol: makeRun({ legs: legsAt(0, 'pending') }) }));
+    expect(names().filter((n: string) => n === 'patrol.run.started')).toHaveLength(1);
+  });
+
   it('writes patrol.run.started once when a leg-start overtakes `started`', async () => {
     const { service, compliance } = ctx;
     // Emitted second, delivered first — and the first event the server sees.
