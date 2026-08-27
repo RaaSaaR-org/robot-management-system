@@ -2932,6 +2932,19 @@ export class AgentModeController {
       timeoutMs: input.timeoutMs ?? 60_000,
       robotId: this.robotId,
     });
+    // TASK-183: the `message` below is narration — a visitor watching the demo
+    // hears it — so chunk-boundary counters have no business in it. They do
+    // belong somewhere: a `demo` block is a real rollout, on the G1, in front
+    // of people, and it is the run most likely to expose a boundary stall as
+    // something visible. The log line is that somewhere. Present only when RTC
+    // ran, so an RTC-off demo prints nothing new.
+    if (result.rtc) {
+      console.log(
+        `[AgentMode/VLA] "${input.skillName}": ${result.status} after ${result.steps} steps | ` +
+          `rtc=on boundaries=${result.rtc.stalledTransitions}/${result.rtc.chunkTransitions} ` +
+          `stall=${result.rtc.totalStallMs}ms (max ${result.rtc.maxStallMs}ms)`,
+      );
+    }
     const ok = result.status === 'completed';
     return {
       ok,

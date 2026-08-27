@@ -2066,7 +2066,16 @@ export class RobotStateManager {
       .then((result) => {
         console.log(
           `[RobotStateManager/VLA] Loop finished: ${result.status} after ${result.steps} steps` +
-            (result.error ? ` (${result.error})` : ''),
+            (result.error ? ` (${result.error})` : '') +
+            // TASK-183: this entry point has no response body and no emitter,
+            // so the log line is the ONLY place its chunk-boundary timing can
+            // surface — and this is the path a real G1 rollout takes, started
+            // from `/vla/start` rather than `/skills/execute`. Present only
+            // when RTC ran, so an RTC-off loop logs the line it always did.
+            (result.rtc
+              ? ` | rtc=on boundaries=${result.rtc.stalledTransitions}/${result.rtc.chunkTransitions} ` +
+                `stall=${result.rtc.totalStallMs}ms (max ${result.rtc.maxStallMs}ms)`
+              : ''),
         );
       })
       .catch((err) => {

@@ -7,13 +7,19 @@ This guide covers the Vision-Language-Action inference pipeline: how the SO-101 
 The VLA pipeline has three components:
 
 1. **VLA Server** (separate repo, see `../vla-server/`) — FastAPI inference server, runs on a machine with GPU/MPS
-2. **VLA Runner** (`robot-agent/hardware/vla_runner.py`) — Python control loop on the Pi, captures cameras, sends to VLA server, applies actions
+2. **Skill Executor** (`robot-agent/src/vla/skill-executor.ts`) — the live closed loop, in TypeScript. Captures frames and joint state through the sidecar, calls `/predict`, delta-clips and applies the actions. One loop for sim and hardware; optionally overlapping inference with execution (see [Real-Time Chunking](#real-time-chunking-rtc)).
 3. **Safety Layer** (`robot-agent/hardware/vla_safety.py`) — rate limiter, joint validator, watchdog
+
+> `robot-agent/hardware/vla_runner.py` is the **previous** Python control loop.
+> It has been orphaned since TASK-146, when the loop moved into TypeScript and
+> the runner's camera stack became a set of sidecar HTTP endpoints. It still
+> reads its own env vars (notably `VLA_RTC_CHUNK_OVERLAP`), which the agent
+> does not; nothing in the running system drives it.
 
 ```
 ┌──────────────┐    POST /predict     ┌──────────────┐
-│  VLA Runner  │────────────────────►│  VLA Server  │
-│  (Pi, 5 Hz)  │◄────────────────────│ (Mac, :8000) │
+│Skill Executor│────────────────────►│  VLA Server  │
+│  (agent,5 Hz)│◄────────────────────│ (Mac, :8000) │
 │              │    action chunks     │              │
 │  cameras     │                      │  SmolVLA /   │
 │  SO-101 arm  │                      │  GR00T N1    │
@@ -158,6 +164,134 @@ curl -X POST http://localhost:8765/safety/config \
   -H "Content-Type: application/json" \
   -d '{"max_delta_degrees": 5.0, "watchdog_timeout_ms": 50000}'
 ```
+
+## Real-Time Chunking (RTC)
+
+**Status: off by default. Sim-validated only — never run on a real robot.**
+
+The rollout loop in `robot-agent/src/vla/skill-executor.ts` is serial by
+default: it pops actions from the current chunk, and when the queue empties it
+blocks on `/predict` and refills. The robot holds still for that whole round
+trip, once every `chunk_size` steps. On GR00T-class chunk sizes that is a
+visible pause at every boundary.
+
+RTC (`VLA_RTC_ENABLED=true`, TASK-183) asks for chunk N+1 while chunk N is
+still executing, and crossfades the two where they meet. Turning it on changes
+nothing else: every RTC branch in the loop is gated, and with it off the loop
+runs the statements, issues the HTTP calls, and produces the response bodies it
+produced before the feature existed.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `VLA_RTC_ENABLED` | `false` | RTC on for this agent. Exactly `true`; anything else is off. |
+| `VLA_RTC_OVERLAP` | `0.25` | Fraction of a chunk still queued that fires the prefetch. Must be in (0, 1] — out-of-range values are rejected at boot with a warning and the default is used, never clamped. |
+| `VLA_RTC_BLEND_STEPS` | `5` | Upper bound on the boundary crossfade, in steps. `0` means prefetch with a hard splice, which is the A/B control that separates the prefetch's win from the blend's. |
+
+`VLA_RTC_CHUNK_OVERLAP` is **not** this knob. It counts whole steps and is read
+only by `robot-agent/hardware/vla_runner.py`, orphaned since TASK-146. The
+agent warns at boot when the old name is set and RTC is on.
+
+### What it reports
+
+A run with RTC on carries an `rtc` block on the `/skills/execute` response and
+in the per-episode metadata POSTed to `/api/evaluation/episodes`; a run with
+RTC off carries neither. Both of those are asserted, in
+`robot-agent/src/api/__tests__/skill-rtc-payload.test.ts`.
+
+The same counters are also appended to three log lines — `[Skill]` in the
+executor, `[RobotStateManager/VLA] Loop finished` (the `/vla/start` entry
+point, which has no response body and no emitter) and `[AgentMode/VLA]` for a
+`demo` block. Those three are gated on the same `result.rtc`, but **no test
+covers them**: nothing in `robot-agent/src/robot/__tests__/` or
+`robot-agent/src/agent-mode/__tests__/` exercises an RTC run.
+
+`chunkTransitions` counts chunks that entered the queue after the first;
+`stalledTransitions` is how many of those the robot had to sit through with an
+empty queue, and is the number RTC exists to drive to zero. `prefetchSkipped`
+counts boundaries where RTC measured the round trip and declined — see below.
+
+### Two limits, and where the numbers come from
+
+Both figures below come from the test suite (`skill-executor.test.ts`) against
+a scripted vla-server, run on Vitest's virtual clock at the 200 ms loop period
+so that every number is an exact, reproducible integer rather than a stopwatch
+reading. **They are sim numbers against a mock. Nothing here was measured on a
+robot, and nothing here was measured against a real GR00T or SmolVLA backend.**
+
+They are also all at 5 Hz. `LOOP_PERIOD_MS = 200` in `skill-executor.ts` is a
+module constant with no env var or run option behind it, so this loop cannot
+currently be run at any other rate, and none of the tuning below has been
+checked at one.
+
+**RTC declines when it would lose.** A merged chunk is shorter than the one the
+backend answered with, because the actions covering the timesteps that elapsed
+during inference are dropped. So every merge brings the next boundary forward:
+prefetching buys shorter waits at the price of more of them. At chunk 8 /
+overlap 0.25 / 16 steps, RTC wins at 600 ms of `/predict` — 3600 ms against the
+serial 4200 ms, zero stall, exactly one round trip saved — and the trade turns
+negative at 1.2 s. That cut-off is not a rollout measurement: it is a property
+of `rtcPrefetchPaysOff` and `RTC_PAYOFF_MARGIN` at the shipped chunk and
+overlap, and it is asserted on the function directly. The loop therefore
+measures the round trip and refuses the prefetch past that point, taking the
+plain serial boundary instead — at 1200/1800/2500 ms the sweep shows RTC
+matching serial to the millisecond, with the declined boundaries counted in
+`prefetchSkipped`. A run that is all skips is RTC telling you the inference
+server is too slow for it to help.
+
+**The crossfade is narrower than it looks.** A prefetched chunk is merged as
+soon as it lands, and `blendChunks` can only fade against actions still in the
+queue. So the fade reaches `chunk_size × VLA_RTC_OVERLAP × 200 ms` of latency
+and no further — 400 ms at the shipped defaults. Over 16 steps that is exactly
+4 blended steps at 100 ms of latency and **0 at 600 ms**; at `VLA_RTC_OVERLAP`
+0.5 it is 6 at 600 ms. All three are asserted exactly. Past the reach the
+boundary is still free but it is a hard splice, so TASK-183's "no discontinuity
+larger than the `clipAction` bound" is **not met at the shipped default** — and
+note that the second half of that criterion is not tested at all: no assertion
+anywhere compares a boundary discontinuity against `MAX_DELTA_DEGREES`. Raising
+`VLA_RTC_OVERLAP` to 0.5, or shortening the loop period, would buy the reach
+back at the cost of more `/predict` calls per step; neither has been done here.
+`VLA_RTC_BLEND_STEPS` is an upper bound on the fade, not a promise of one.
+
+### RTC and the sidecar
+
+RTC is the rollout loop's first attempt at doing two things at once, so it is
+worth being explicit about what it overlaps and what it does not.
+
+The `/predict` it overlaps with execution belongs to vla-server — a different
+process, usually a different machine. **The observation does not.** On hardware
+an observation is `/cameras`, a `/snapshot` per camera and `/state/fast` —
+three calls with a single camera, N + 2 with N — and the loop's action send is
+one more. Those
+are captured on the loop's own thread, before its sleep, so the executor issues
+**at most one sidecar request at a time**, in the loop's own order, with RTC on
+or off. The capture is subtracted from that step's sleep rather than added to
+it, so the `/action` cadence is unchanged.
+
+This is not decoration:
+
+- `g1_sidecar.py` serialises every DDS touch on a single `robot_lock`, and its
+  `/action` ramp is only physically correct "when the caller drives `/action`
+  at ~`G1_CONTROL_HZ`" — a state read contending for that lock jitters exactly
+  that cadence.
+- Under the `sentry` rollout strategy on SO-101, `lerobot-record` owns the
+  cameras and the follower serial port, and the sidecar re-opens them on demand
+  for the loop's snapshot/state/action calls.
+- TASK-169 landed on this same read path immediately before this work, because
+  a concurrent read raced cyclonedds into a half-built IDL type.
+
+Covered by `skill-executor.test.ts` → "RTC never gives the sidecar a second
+caller": a prefetch overlapping an action send, an abort mid-prefetch, and a
+prefetch whose capture fails. All three run against a **mocked** sidecar, and
+assert call ordering and concurrency rather than elapsed time.
+
+Two honest caveats. First, `captureHardware` still fans its snapshots and
+`/state/fast` out through one `Promise.all` — that pair has overlapped since
+TASK-146, predates RTC, and is untouched here. Second, `HardwareClient`'s own
+2-second telemetry poll is a separate, pre-existing caller of the sidecar and
+is likewise untouched. The claim is about the rollout loop, not about the
+process as a whole.
 
 ## Fine-Tuning
 
