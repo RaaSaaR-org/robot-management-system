@@ -34,6 +34,21 @@ status_note: 'THE FINAL STEP, not the next one — it is blocked on all three fi
 
 ## Description
 
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-187:** this task already says "do not start early",
+depending on [[TASK-186]] and [[TASK-188]]. It now also depends on the harness
+rebuild described in [[TASK-188]] — `task185_finetune.py`, `task185_serve_n17.sh`
+and `eval_g1_sim_groot_success.py` went with the Windows box and exist in no repo.
+The WSL2 localhost-forwarding trick this task relies on to reach the policy server
+is moot: sim and policy server now run on the same Linux box, so a plain
+`127.0.0.1` port works with nothing forwarding it.
+
+
 Re-run the real-only vs real+dreams GR00T-N1.7 ablation and the closed-loop Isaac eval **once the
 three things that made [[TASK-185]] unanswerable are fixed** — a push/slide reward ([[TASK-186]]),
 a base policy that is off the floor ([[TASK-188]]), and a harness with enough statistical power

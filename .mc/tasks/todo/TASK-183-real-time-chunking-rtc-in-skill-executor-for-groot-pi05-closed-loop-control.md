@@ -24,6 +24,21 @@ status_note: ''
 
 ## Description
 
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-183:** the note below saying the GR00T backend is not
+runnable from this box is **partly stale**. Verified 2026-08-28:
+`~/Isaac-GR00T/gr00t/eval/run_gr00t_server.py` (the ZMQ PolicyServer) is present,
+and Linux-path configs exist — `vla-server/configs/g1_apple_pnp_pi05.local.yaml`
+and `g1_apple_pnp_pi05_v2.local.yaml`. Only the *GR00T* configs still carry
+`C:\Unitree\...` paths and would need a `.local.yaml` sibling. The 15 Hz A/B
+this task wants is therefore plausibly reachable here.
+
+
 Remove the inference stall at action-chunk boundaries in the live VLA rollout
 loop: prefetch the next chunk *while* the current one executes and blend
 predictions across the boundary (Real-Time Chunking). Salvaged from retired

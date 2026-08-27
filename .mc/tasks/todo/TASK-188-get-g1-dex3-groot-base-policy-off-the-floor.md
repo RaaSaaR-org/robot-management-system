@@ -26,6 +26,38 @@ status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes it
 
 ## Description
 
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-188 — checked on the box 2026-08-28:**
+
+| | |
+|---|---|
+| `task185_finetune.py` | **GONE** — not on this box, and in no git repo |
+| `task185_run_ablation_n17.sh` | **GONE** |
+| `task185_serve_n17.sh` | **GONE** |
+| `eval_g1_sim_groot_success.py` (the closed-loop harness) | **GONE** |
+| `start_sim_pickplace_dex3.bat` | **GONE** (and `.bat` is moot here anyway) |
+| Raw `unitreerobotics/G1_Dex3_*` datasets | **present** — `~/wam-t041/raw/` + HF cache |
+| Merged 182-episode `unitree_g1_train` | **not present**; nearest is `~/wam-t041/datasets/arm-A` (402 eps / 171,625 frames), a different set |
+| `Isaac-GR00T`, incl. `gr00t/eval/run_gr00t_server.py` | **present** |
+| GPU | **present** — RTX 5090, 32 GB |
+
+So the blocker is no longer "the harness lives on another machine". **The harness
+no longer exists anywhere.** The data and the GPU do. Before any of the three
+levers below can be attempted, the training and closed-loop-eval harness has to
+be rebuilt on Linux, and the training set rebuilt or re-merged — TASK-180, in
+`done/`, documents the merge that produced it.
+
+That rebuild is real work, is not currently written down as a task, and blocks
+both this task and [[TASK-187]]. Note it is *also* what makes the
+`n188_2cam_14k/checkpoint-8000` result above unrecoverable unless those weights
+are backed up somewhere off this box.
+
+
 Train a GR00T-N1.7 policy on the **real** `G1_Dex3` pick-place data that can actually do its own
 task — target **≥ 6/10 closed-loop** on `Isaac-PickPlace-Cylinder-G129-Dex3-Joint`, up from
 today's **2/10**. This is the prerequisite for every downstream experiment: while both arms of an

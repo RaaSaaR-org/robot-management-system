@@ -23,6 +23,20 @@ updated: 2026-08-08
 
 # Run Agent Mode against Isaac Sim so the G1 walks instead of glides
 
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-203:** where the text says "Isaac Sim 6.0.1 on GPU_BOX
+renders correctly", read: it renders correctly *here* — but only inside a
+container running as root. Isaac's RTX renderer is Vulkan, Vulkan needs
+`/dev/dri/renderD*`, and systemd-logind grants that ACL only to whoever holds
+seat0, which an SSH session does not. CUDA working is not evidence Vulkan will.
+The working invocation is in `robot-agent/hardware/isaac_sim_patches/README.md`.
+
+
 ## Description
 
 Agent Mode today drives `sim_g1_dds`, whose base is **kinematic**: `loco_state.py:241` integrates
