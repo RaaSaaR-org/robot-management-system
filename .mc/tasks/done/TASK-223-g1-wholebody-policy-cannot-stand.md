@@ -4,7 +4,7 @@ aliases:
 - TASK-223
 title: The G1 wholebody policy cannot stand, independently of the control rate
 slug: g1-wholebody-policy-cannot-stand
-status: todo
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -18,18 +18,99 @@ depends_on: []
 due_date: ''
 created: 2026-08-27
 updated: 2026-08-28
-status_note: '2026-08-28: the attitude evidence was measured through a scrambled IMU
-  quaternion -- two composed convention flips under which a perfectly upright base reads
-  |roll| = pi, so the "base upright" check could never pass for any robot. Both halves are
-  now fixed (isaac_sim_patches/0002 + isaac_gait_probe.py --quat-order) at no boot cost.
-  "It tumbles" is downgraded to unverified; the pinned leg joints remain real. Lead 4
-  (DelayBuffer) closed by reading -- the applied lag is zero, not 5 steps. The obs_scales
-  lead survives with new checkpoint evidence and is the next boot, with leads 2 and 3
-  folded into the same boot. Still the blocker on TASK-203.'
+status_note: 'CLOSED 2026-08-28. The G1 was never failing to balance -- it was free-falling.
+  The wholebody scene had a "# Ground plane" heading with nothing under it, so there was no
+  collidable floor under the z=0.8 spawn: z reaches -0.75 m by step 25 and -39 km by step
+  4475, with dz growing by exactly g*dt^2 and projected_gravity holding (0,0,-1) -- perfectly
+  upright -- the whole way down. Every hypothesis in the file was tested on a robot with
+  nothing to balance on. The warehouse USD does carry a collidable floor, but it is spawned
+  inside /World/envs/env_.*/Room while the task sets replicate_physics=True; the ground now
+  goes at /World/GroundPlane, outside the cloned env, as upstream does in its non-wholebody
+  scene. With the fix the robot stands: z in a 9 mm band, no joint within 0.02 rad of a limit,
+  and the probe reports "base upright PASS / knees off limits PASS, never tilted" over 43 s
+  with nothing published. The quaternion fix is validated end to end (probe roll 0.007 rad
+  matches the sim log). Lead 1 (obs_scales) is REFUTED and inverted -- Unitree''s 0.25/0.05
+  scales COLLAPSE the robot, upstream all-1.0 is correct; leads 2/3 (joint indexing) closed at
+  step 0; lead 4 (DelayBuffer) closed by reading. NOT done: it stands but does not walk -- a
+  vx=0.5 command gives a forward lean and no stepping, and isaac_loco_check.py was not run.
+  That is a locomotion question against a robot that holds itself up, handed to TASK-203.
+  This task no longer blocks TASK-203; it unblocks it.'
 ---
 
 
 # The G1 wholebody policy cannot stand, independently of the control rate
+
+## ✅ RESOLVED 2026-08-28 — there was no floor
+
+**Everything below this section is superseded.** It is kept because the reasoning is sound and
+the refutations are load-bearing for TASK-203, but the premise it all rests on was wrong.
+
+The G1 was never failing to balance. It was **free-falling**. The wholebody scene
+(`tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py`) shipped a `# Ground plane`
+heading with nothing under it, so nothing was under the robot's `z = 0.8` spawn:
+
+| step | `z` | `projected_gravity` | |
+|---|---|---|---|
+| 0 | +0.7865 | (−0.000, +0.000, −1.000) | upright |
+| 25 | −0.7542 | (−0.031, +0.044, −0.999) | still upright, already below the floor |
+| 550 | −599.31 | | |
+| 4475 | −39338.16 | | |
+
+Δ`z` grows by 0.0037 m/step — exactly `g·dt²` at this task's 50 Hz of simulated time. Textbook
+free fall, from step 0, for as long as the sim runs. `projected_gravity` stays (0, 0, −1) for the
+first ~100 steps: the robot is *perfectly upright* the whole way down, and only tumbles later as
+flailing limbs impart angular momentum with nothing to push against.
+
+Every hypothesis in this file — obs_scales, the DelayBuffer, joint indexing, the zero-commanded
+arms, the control rate before it — was being tested on a robot with nothing to balance on. The
+"it tumbles" evidence was a robot 600 m below the world, and the `|roll| = pi` readings that
+made it *look* like tumbling came from the separate quaternion bug (also fixed here).
+
+**Why the warehouse floor did not catch it.** The room USD does carry a collidable floor —
+`/Lab/Structure/floor`, a 4-point quad at world `z = 0`, `physics:approximation="none"`,
+`collisionEnabled=True`, whose xy extent covers the spawn at (−3.9, −2.818). But it is spawned
+at `/World/envs/env_.*/Room`, **inside** the cloned env, while this task sets
+`replicate_physics=True`. Upstream's own (commented-out) ground in the *non*-wholebody scene sits
+at `/World/GroundPlane` — outside `/World/envs` — which is the placement that survives cloning.
+The fix puts it back there.
+
+### Result, measured over three sim boots
+
+* **It stands.** `z` holds in [0.7825, 0.7919] — a 9 mm band — for the whole run,
+  `projected_gravity` (0, 0, −1), no joint within 0.02 rad of a limit, leg velocities decaying
+  to 0.24 rad/s.
+* **Test Strategy item 1 PASSES.** `isaac_gait_probe.py --domain 1 --no-command --secs 30`,
+  43 s publishing nothing at all: `base upright PASS`, `knees/ankles off their limits PASS`,
+  roll 0.007 rad, pitch 0.044 rad, *"first tilt beyond 0.5 rad: never — stayed upright"*, every
+  leg joint static to three decimals. The pinned-legs finding (38–47 %) is gone.
+* **The quaternion fix is validated end to end.** The probe reads roll 0.007 rad over DDS,
+  matching the sim's own internal `projected_gravity` log — two independent paths agreeing.
+* **Lead 1 (obs_scales) is REFUTED, and inverted.** With a floor, both arms ran: upstream's
+  all-`1.0` stands rock solid, while Unitree's locomotion scales (`ang_vel` 0.25 /
+  `joint_vel` 0.05) **collapse** the robot — `z` → ~0.07, `projected_gravity` → (−1, 0, 0), i.e.
+  face down, ankles pinned 28–50 % of the run, knees thrashing in antiphase at 3.6 Hz. Upstream
+  is correct for this checkpoint; the patch now defaults to it, with `NEODEM_OBS_SCALES=unitree`
+  kept only to reproduce the refuted arm.
+* **Leads 2 and 3 (joint indexing) are closed.** At step 0,
+  `old_action_indices == list(range(29))` and every `action_to_indices` entry is ≤ 18 < 29.
+* **Lead 4 (DelayBuffer) was already closed by reading** — the applied lag is zero, not 5 steps.
+
+### What is NOT done, and where it goes
+
+⚠ **It stands; it does not walk.** Test Strategy item 2 is only half met: no leg joint is pinned
+under `vx = 0.5`, but *the base does not translate*. The command produces a small forward lean
+(pitch 0.08 vs 0.045 at rest) and no stepping. Item 3 (`isaac_loco_check.py`, TASK-204 step 4)
+was not run.
+
+That is no longer a measurement artefact or a "cannot stand" problem — it is a well-posed
+locomotion question against a robot that demonstrably holds itself up, which is exactly
+**TASK-203**'s subject. Closing here rather than holding this task open behind a different
+question, so the dependency graph shows one owner. TASK-223 no longer blocks TASK-203; it
+unblocks it.
+
+**The fix ships as** `robot-agent/hardware/isaac_sim_patches/0002-task223-missing-ground-plane.patch`
+(4 hunks; the committed patch reverse-applies cleanly against the checkout that produced these
+measurements, so the file is what actually ran).
 
 ## Description
 
@@ -102,7 +183,7 @@ joints pinned at their limits, and the L/R knee correlation of -0.381. Something
 wrong. But **"it cannot stand" is not yet an observation** — no run so far has measured attitude.
 
 Both halves are now fixed, and neither costs a boot:
-* `robot-agent/hardware/isaac_sim_patches/0002-task223-obs-scales-and-step0-probe.patch`
+* `robot-agent/hardware/isaac_sim_patches/0002-task223-missing-ground-plane.patch`
   hunk 3 sets `assume_w_first=False`, restoring the vendor's own contract.
 * `isaac_gait_probe.py` gained `--quat-order {xyzw,wxyz,scrambled}`, default `xyzw`.
   `--quat-order scrambled` recovers the true roll/pitch from an **unpatched** sim, so the
@@ -351,8 +432,8 @@ Apply the patch first — it costs nothing and it is what makes the boot worth s
 
 ```bash
 cd "$UNITREE_ROOT/unitree_sim_isaaclab"
-git apply --check <repo>/robot-agent/hardware/isaac_sim_patches/0002-task223-obs-scales-and-step0-probe.patch
-git apply         <repo>/robot-agent/hardware/isaac_sim_patches/0002-task223-obs-scales-and-step0-probe.patch
+git apply --check <repo>/robot-agent/hardware/isaac_sim_patches/0002-task223-missing-ground-plane.patch
+git apply         <repo>/robot-agent/hardware/isaac_sim_patches/0002-task223-missing-ground-plane.patch
 ```
 
 Verified by dry-run to apply cleanly both to the current working tree and to pristine `e30c25b`.
