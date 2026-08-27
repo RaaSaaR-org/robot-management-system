@@ -332,8 +332,10 @@ export function buildVisitorAnswerPrompt(input: VisitorAnswerPromptInput): strin
  * between navigation working and not.
  *
  * `bearingDeg` is still accepted on the way in — see `parseVisionAnswer` — so a
- * model that ignores the schema and answers in degrees degrades instead of
- * landing everything at bearing 0.
+ * model that ignores the schema and answers in degrees degrades to a worse
+ * bearing rather than to none. An entity that can be placed NEITHER way is left
+ * unplaced and never stored: bearing 0 is not the neutral fallback it looks
+ * like, it is "dead ahead", the one direction `goto` acts on without turning.
  */
 export const VISION_PROMPT = `
 You are the eyes of a Unitree G1 humanoid robot. Describe ONLY what is actually

@@ -362,9 +362,12 @@ describe('SceneMemoryStore — reporting', () => {
     expect(scene.getForwardClearanceM()).toBeNull();
   });
 
-  it('keeps a clearance measured at the scan step yaw, not the store yaw', () => {
-    // `scan_room` merges each step against an explicit yaw; the clearance must
-    // be pinned to THAT heading or it expires the moment the store catches up.
+  it('keeps a clearance measured at an overridden yaw, not the store yaw', () => {
+    // When a caller merges under `yawDegOverride`, the clearance must be pinned
+    // to THAT heading or it expires the moment the store catches up. No
+    // production caller overrides today — `BlockExecutor.observeAndMerge`
+    // refreshes the store's yaw instead and passes `undefined` — so this
+    // exercises the parameter's contract, not a path `scan_room` takes.
     const scene = new SceneMemoryStore('robot-1');
     scene.setYawDeg(90, 'odometry');
     scene.merge(observation([{ label: 'table' }]), 90, { forwardClearanceM: 3.3 });
@@ -440,6 +443,288 @@ describe('SceneMemoryStore — reporting', () => {
     scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
 
     scene.noteTranslationM(Number.NaN);
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
+  it('retires the distances for motion NOBODY commanded (TASK-221)', () => {
+    // Teleop, a direct POST to the sidecar, a VLA rollout: the robot is two
+    // metres from where it looked and no `walk` block ever ran, so the
+    // commanded tally is still zero. Odometry is the only witness.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table', distanceEstM: 0.67 }]), undefined, {
+      forwardClearanceM: 0.67,
+    });
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+
+    scene.noteOdometryM(-2, 0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+    expect(scene.getForwardClearanceM()).toBeNull();
+    expect(scene.get('table')?.distanceEstM).toBeNull();
+    expect(scene.get('table')?.distanceSource).toBeNull();
+  });
+
+  it('never counts the same metres twice, commanded AND measured', () => {
+    // One 0.1 m stage, seen by both feeds. Added together it is 0.2 m and trips
+    // the 0.15 m tolerance; it is one stage of 0.1 m and must not.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteTranslationM(0.1); // what `driveFor` commanded
+    scene.noteOdometryM(0.1, 0); // what `refreshYaw` then measured
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
+  it('takes the LARGER of the two accounts, so a base that fell short still counts', () => {
+    // Commanded 1.0 m, achieved 0.30 m: the store must not quietly believe the
+    // measurement and keep a metre that was measured before the stage.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteTranslationM(1.0);
+    scene.noteOdometryM(0.3, 0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+  });
+
+  it('does not walk a STANDING robot away from its own memory on odometry jitter', () => {
+    // The reason the odometry side is a high-water mark and not a running sum:
+    // |delta| is unsigned, so fifty centimetre-scale wobbles would add up to
+    // half a metre of imaginary travel and null every distance the robot holds.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    for (let i = 0; i < 50; i++) scene.noteOdometryM(i % 2 === 0 ? 0.01 : -0.01, 0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
+  it('reads a fix that is merely OLD as no further motion', () => {
+    // Two feeds, one unordered stream: `refreshYaw` reads `/loco/odom` fresh
+    // while the controller's pose poll hands over a 2 s cache. The cached one
+    // arriving second is the robot being where it already was, not the robot
+    // walking back — summed it would be 0.2 m and would trip the tolerance.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteOdometryM(0.1, 0); // fresh
+    scene.noteOdometryM(0, 0); // the poll's cache, one read behind
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
+  it('re-opens the odometry window where the robot looked from', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteOdometryM(2, 0);
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+
+    // Looked again from where it now stands, so the two metres are spent…
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 4.1 });
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+
+    // …and the very next fix, from that same spot, must not re-spend them.
+    scene.noteOdometryM(2, 0);
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(4.1);
+  });
+
+  it('treats the FIRST fix as a reference point, not as a journey', () => {
+    // Odometry coordinates are metres from an arbitrary origin. A robot that
+    // happens to stand at (9, 0) has not walked nine metres — and the ordinary
+    // order of events puts that first fix BEFORE the first look, because
+    // `observeAndMerge` refreshes the yaw (and with it the position) on its way
+    // into every merge.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(9, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteOdometryM(9.05, 0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
+  it('calls a window that opened with NO fix behind it unmeasured, not zero', () => {
+    // TASK-221 review. `/loco/odom` has a 2 s timeout and returns null on any
+    // hiccup, which is routine and not a fault: `refreshYaw` then hands the
+    // store nothing and the look is merged with no anchor. Odometry comes back,
+    // the base is pushed four metres with nobody holding the lock, and the
+    // first fix to land describes where the robot IS — it says nothing about
+    // where it LOOKED FROM. Adopting it as the anchor called that gap zero and
+    // expired nothing, and `goto` answered "Arrived at table after 0 stages".
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table', distanceEstM: 0.55 }]), undefined, {
+      forwardClearanceM: 0.55,
+    });
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+
+    scene.noteOdometryM(4, 0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+    expect(scene.get('table')?.distanceEstM).toBeNull();
+    expect(scene.get('table')?.distanceSource).toBeNull();
+    expect(scene.getForwardClearanceM()).toBeNull();
+  });
+
+  it('keeps saying so until the robot looks again from a pose it knows', () => {
+    // The gap stays unmeasured however many fixes follow: the store still never
+    // learned the looking pose. Only a fresh look re-opens the window, and one
+    // look is all it takes.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table', distanceEstM: 0.55 }]), undefined, {
+      forwardClearanceM: 0.55,
+    });
+
+    scene.noteOdometryM(4, 0);
+    scene.noteOdometryM(4, 0);
+    scene.noteOdometryM(4.01, 0);
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+
+    scene.merge(observation([{ label: 'table', distanceEstM: 4.4 }]), undefined, {
+      forwardClearanceM: 4.4,
+    });
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(4.4);
+  });
+
+  it('does not anchor a look on a fix from BEFORE the odometry outage', () => {
+    // TASK-221 N1, and the same user-visible failure as the two tests above by
+    // a route they do not cover. `lastOdomM` is never nulled once set, so
+    // `merge()` re-anchoring on it unconditionally made every window after the
+    // store's FIRST fix look measured — including one that `/loco/odom` said
+    // nothing across. The `odomFromAnchorM` high-water mark absorbs most
+    // orderings of that; it does not absorb the robot coming back near the
+    // stale anchor, which is exactly what a shove out and back does.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    // Look A, correctly anchored at (0, 0).
+    scene.merge(observation([{ label: 'table', distanceEstM: 4.55 }]), undefined, {
+      forwardClearanceM: 4.55,
+    });
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+
+    // `/loco/odom` starts timing out, so no fix reaches the store from here.
+    // The base is shoved to (4, 0) with nobody holding the control lock and
+    // look B is merged there: its anchor must not silently stay (0, 0).
+    scene.merge(observation([{ label: 'table', distanceEstM: 0.55 }]), undefined, {
+      forwardClearanceM: 0.55,
+    });
+
+    // Shoved back, and odometry recovers reporting where it left off. Measured
+    // from the stale anchor that is zero displacement, and `goto` answered
+    // `Arrived at "table" after 0 stages` with the table 4.55 m away.
+    scene.noteOdometryM(0, 0);
+
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+    expect(scene.get('table')?.distanceEstM).toBeNull();
+    expect(scene.get('table')?.distanceSource).toBeNull();
+    expect(scene.getForwardClearanceM()).toBeNull();
+  });
+
+  it('re-anchors a look that DID have a fresh fix behind it, mid-run', () => {
+    // The other side of the same rule: the outage rule must not cost a look its
+    // anchor whenever one happens to have been anchorless earlier. A fix
+    // arrived since the last window opened, so this look anchors where the
+    // robot stands and the metres before it are spent.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 6.0 });
+
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 4.0 }); // no fix: anchorless
+    scene.noteOdometryM(2, 0); // odometry is back — that window was unmeasured
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+    // And the window really is open at (2, 0), not merely un-flagged.
+    scene.noteOdometryM(2.05, 0);
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    scene.noteOdometryM(4, 0);
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+  });
+
+  it('does not invent a gap for a robot whose odometry never answers at all', () => {
+    // The other half of the same rule, and the reason the verdict waits for a
+    // fix instead of being pronounced at the merge. A sidecar with no
+    // `/loco/odom` feeds this store nothing, ever; it must behave exactly as it
+    // did before odometry existed — commanded metres and nothing else — rather
+    // than declaring every window unmeasured and taxing every `goto` a look.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.merge(observation([{ label: 'table', distanceEstM: 0.55 }]), undefined, {
+      forwardClearanceM: 0.55,
+    });
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    scene.noteTranslationM(0.05);
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(0.55);
+  });
+
+  it('does not pronounce a mid-run window unmeasured at the merge itself', () => {
+    // The deliberate half of the design, and it now has to hold at any point in
+    // a store's life rather than only before the first fix: opening a window
+    // with no fix behind it is not the same as knowing the robot moved
+    // unwatched. Declaring it at the merge would make a robot whose
+    // `/loco/odom` has gone away for good permanently "moved" — a look before
+    // every `goto`, and every distance nulled by the first commanded
+    // centimetre. The verdict waits for a fix, because that fix is what proves
+    // odometry was alive and still said nothing across the window.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    // Odometry goes away and never comes back. This look is anchorless.
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    scene.noteTranslationM(0.05);
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+
+    // …and the commanded account still works on its own, exactly as it did
+    // before odometry fed this store at all.
+    scene.noteTranslationM(1.0);
+    expect(scene.hasMovedSinceObservation()).toBe(true);
+  });
+
+  it('does not call the gap unmeasured when there is nothing observed to measure', () => {
+    // A fix arriving before the robot has ever looked — at boot, or after
+    // `clear()` — has no window to fall outside of. Nothing to expire, and no
+    // reason to send the navigator looking.
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(9, 0);
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    expect(scene.hasMovedSinceObservation()).toBe(false);
+    expect(scene.getForwardClearanceM()).toBe(2.0);
+  });
+
+  it('ignores a non-finite fix instead of poisoning the anchor', () => {
+    const scene = new SceneMemoryStore('robot-1');
+    scene.noteOdometryM(0, 0);
+    scene.merge(observation([{ label: 'table' }]), undefined, { forwardClearanceM: 2.0 });
+
+    scene.noteOdometryM(Number.NaN, 0);
+    scene.noteOdometryM(0.05, 0);
 
     expect(scene.hasMovedSinceObservation()).toBe(false);
     expect(scene.getForwardClearanceM()).toBe(2.0);

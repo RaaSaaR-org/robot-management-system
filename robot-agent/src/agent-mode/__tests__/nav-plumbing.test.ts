@@ -132,6 +132,12 @@ describe('nav plumbing — the goto block says how it is driven', () => {
   it('marks a goto walked by sight (no map) and mirrors nav into the state while it runs', async () => {
     const h = rig([{ kind: 'goto', params: { entity: 'table' } }], true);
     // Seed the scene so the navigator has a target with a measured distance.
+    // The odometry fix goes in FIRST, which is the order production works in:
+    // `observeAndMerge` refreshes the pose on its way into every merge, and the
+    // controller's pose feed has usually run before that. Merging with no fix
+    // behind it leaves the store unable to say where the look happened, and the
+    // first fix to arrive then correctly expires this distance (TASK-221).
+    h.scene.noteOdometryM(0, 0);
     h.scene.merge(
       { ...VIEW, entities: [{ label: 'table', bearingDeg: 0, distanceEstM: 2.5, distanceSource: 'lidar', confidence: 0.9 }] },
       undefined,

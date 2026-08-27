@@ -13,8 +13,14 @@
  *              and clamped by the measured clearance straight ahead; without a
  *              measurement it is the old blind stage plus arrival-by-contact.
  *              Looks once before the first stage when the robot has moved since
- *              it last looked, so no navigation starts on a distance measured
- *              from a pose the robot has left. Gives up after
+ *              it last looked — commanded metres OR measured odometry (TASK-221)
+ *              — so no navigation starts on a distance measured from a pose the
+ *              robot has left. A drive under someone else's control lock is
+ *              covered separately, by the controller wiping the scene when the
+ *              lock goes to teleop or VLA; what is still uncovered is an
+ *              uncommanded drive that takes no lock and reaches a `goto` before
+ *              any odometry fix does — see the pre-flight look for the bound on
+ *              that window. Gives up after
  *              AGENT_MAX_NAV_STAGES stages in total (progress resets the
  *              no-progress tally that the give-up message reports, but does not
  *              refund the stage budget), or sooner when MAX_UNSEEN_LOOKS looks
@@ -26,7 +32,7 @@
 import { config } from '../config/config.js';
 import type { PlannedPath, PlanResult } from './path-planner.js';
 import { distanceToBoundaryM, pointInPolygon, type Place } from './place-resolver.js';
-import type { ObservedEntity, SceneMemoryStore } from './scene-memory.js';
+import type { SceneMemoryStore } from './scene-memory.js';
 import {
   DEG_TO_RAD,
   normalizeDeg,
@@ -34,6 +40,7 @@ import {
   type AgentBlockKind,
   type AgentNavPlan,
   type BlockOutcome,
+  type SceneEntity,
 } from './types.js';
 
 /** Below this bearing error a correction turn is not worth a stage. */
@@ -281,7 +288,11 @@ export class Navigator {
    * `vlm-estimate` is 0.94 m MAE and does not make a pose; null then.
    */
   private projectGoal(
-    entity: ObservedEntity,
+    // A STORED entity, not an observed one: a stored row always carries a world
+    // bearing, where an observation may carry none at all (TASK-221). Only
+    // `scene.get` ever feeds this, so the narrower type costs nothing and stops
+    // an unplaced sighting from being projected into a goal pose.
+    entity: SceneEntity,
     pose: { x: number; y: number; yawDeg: number },
   ): { x: number; y: number } | null {
     const measured =
@@ -646,13 +657,56 @@ export class Navigator {
     // The 07 recording is the case: retreat 2 m, "geh zum Tisch", arrival
     // declared on the spot from the clearance measured before the retreat.
     //
-    // NOT covered, and it must not be read as if it were: motion that never
-    // passed through Agent Mode. Quest teleop and a direct POST to the sidecar
-    // both move the robot without touching `noteTranslationM`, so
-    // `hasMovedSinceObservation()` answers false, this look is skipped, and a
-    // distance measured before a four-metre teleop drive can still end a
-    // navigation at stage 0. Closing it means feeding measured odometry deltas
-    // in here, or clearing scene memory when the control lock leaves the agent.
+    // Motion that never passed through Agent Mode — Quest teleop, a direct POST
+    // to the sidecar, a VLA rollout, a shove on the base — used to be the
+    // documented hole here: none of it touches `noteTranslationM`, so this look
+    // was skipped and a distance measured before a four-metre teleop drive could
+    // end a navigation at stage 0. TASK-221 closed it along the two routes that
+    // motion actually takes, and the two are covered by different mechanisms:
+    //
+    //   - Somebody TAKES THE CONTROL LOCK. `AgentModeController` wipes scene
+    //     memory outright the moment the lock goes to `'teleop'` or `'vla'`, so
+    //     there is no remembered distance left for their driving to invalidate:
+    //     the next `goto` finds nothing stored and looks before it does anything
+    //     else. That — not the staleness rule below — is what covers a Quest
+    //     session between two commands.
+    //   - Somebody does NOT: a shove, the G1's handheld remote, a direct sidecar
+    //     POST. `SceneMemoryStore.noteOdometryM` now takes measured fixes from
+    //     two feeds — `BlockExecutor.refreshYaw`, which runs while Agent Mode
+    //     itself acts, and `AgentModeController.notePolledOdometry`, which runs
+    //     only while it does not — and reports the largest displacement from the
+    //     pose the robot looked from. The second reads the hardware client's
+    //     cached pose rather than the place belief, so it answers on an UNMAPPED
+    //     robot too; keying it on a belief left exactly the fleet nobody has
+    //     surveyed uncovered (TASK-221 review).
+    //
+    // What is left is NOT a sampling window and must not be read as one — it is
+    // a LATENCY on that second route, and this look can still lose the race
+    // against it. `notePolledOdometry` is not a poll of its own: it rides
+    // `syncPlace()`, which every state / scene / planner pull calls, and with
+    // nothing pulling, the only thing driving it is the 15 s mirror re-push
+    // (`MIRROR_REPUSH_INTERVAL_MS`), on a cached pose that is itself up to 2 s
+    // old. Worse, Agent Mode claims the control lock BEFORE it plans, and that
+    // feed is muted for whoever holds the lock — so a `goto` cannot make up the
+    // ground on its own way in. An uncommanded drive that takes no lock and is
+    // followed by a command before any pull has happened is therefore still
+    // invisible here, and still ends at stage 0. Closing that means subscribing
+    // to `HardwareClient.onPoseSample` instead of sampling it on pull.
+    //
+    // A gap the store could not measure at all is not read as zero either. A
+    // look with NO odometry fix behind it since the previous look — `/loco/odom`
+    // timing out across it, which is the routine failure and not a fault —
+    // leaves the store's window anchorless, and the next fix to land declares
+    // that window unmeasured rather than zero: the store calls it moved and
+    // this look runs (TASK-221 N1, `SceneMemoryStore.reopenOdomWindow`).
+    //
+    // The residue is the same LATENCY as above and not a second hole. A fix
+    // that landed early in the window and then stopped — the 2 s pose cache
+    // getting one read in before the outage — still anchors the look at the
+    // pose it reported, so a blackout that starts mid-window is measured from
+    // up to one fix back; and a feed that never speaks again leaves the store
+    // on the commanded metres alone, exactly where a robot with no `/loco/odom`
+    // has always been.
     if (!lookedAlready && this.deps.scene.hasMovedSinceObservation()) {
       const look = await this.deps.runGeneratedBlock(
         'look',

@@ -16,8 +16,24 @@ import { VISION_PROMPT } from './prompts.js';
 /** One thing the VLM claims to see, with an image-relative bearing. */
 export interface VisionEntity {
   label: string;
-  /** Degrees from the image centre; POSITIVE = to the robot's left (CCW). */
-  bearingDeg: number;
+  /**
+   * Degrees from the image centre; POSITIVE = to the robot's left (CCW).
+   *
+   * ABSENT when the model answered no usable position at all — neither an `x`
+   * nor a `bearingDeg`. There is no in-band number that can carry "I do not
+   * know which way": every finite value is a direction, and 0 is the most
+   * expensive one to invent, because it is the only direction that needs no
+   * correction turn. A fabricated 0 was ranged straight ahead, came back as the
+   * distance to whatever the robot happened to be facing, and was stored
+   * wearing `distanceSource: 'lidar'` — a navigation could end nose-to-wall
+   * with every provenance field claiming the metre was measured.
+   *
+   * The entity itself is kept: that the robot SAW a table is real, and it still
+   * counts towards `personVisible` and `currentView`. Only its position is
+   * missing, and it is missing rather than guessed. `SceneMemoryStore.merge`
+   * refuses to store a row without one, so nothing downstream ever steers on it.
+   */
+  bearingDeg?: number;
   distanceEstM: number | null;
   confidence: number;
   /**
@@ -133,11 +149,14 @@ export function parseVisionAnswer(
         ? xNum
         : Number.NaN;
     const bearingRaw = Number(e.bearingDeg);
+    // And when NEITHER survives, the entity is UNPLACED and stays that way. The
+    // old `: 0` fallback was the worst available answer, not the neutral one:
+    // see VisionEntity.bearingDeg. `null` here becomes an absent field below.
     const bearingDeg = Number.isFinite(xRaw)
       ? bearingFromImageX(xRaw, hfovDeg)
       : Number.isFinite(bearingRaw)
         ? clamp(bearingRaw, -MAX_RELATIVE_BEARING_DEG, MAX_RELATIVE_BEARING_DEG)
-        : 0;
+        : null;
 
     const distRaw = Number(e.distanceEstM);
     const distanceEstM =
@@ -148,10 +167,10 @@ export function parseVisionAnswer(
 
     const entity: VisionEntity = {
       label,
-      bearingDeg: Math.round(bearingDeg * 10) / 10,
       distanceEstM,
       confidence,
     };
+    if (bearingDeg !== null) entity.bearingDeg = Math.round(bearingDeg * 10) / 10;
     // Only when the model really answered an `x` — a fabricated 0.5 would read
     // as "dead centre" instead of "the model never said".
     if (Number.isFinite(xRaw)) entity.imageX = clamp(xRaw, 0, 1);

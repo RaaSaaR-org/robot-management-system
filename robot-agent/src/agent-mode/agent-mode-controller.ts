@@ -50,7 +50,7 @@ import { Journal, setJournalBootId, type JournalRetention } from './journal.js';
 import { ARRIVAL_M, Navigator, type NavPlannerDeps } from './navigator.js';
 import { checkStraightSegment, planPath, type PlannerWorld, type SegmentCheck } from './path-planner.js';
 import { FOOTPRINT_RADIUS_M } from '../robot/types.js';
-import { Planner, type PlannedBlock } from './planner.js';
+import { Planner, type PlannedBlock, type PlannerSceneTarget } from './planner.js';
 import { buildVisitorAnswerPrompt, formatPlaceNotesSection } from './prompts.js';
 import { agentModelRef, extractJsonObject, genkitGenerate, type GenerateFn } from './llm.js';
 import { resolvePlaceByName, type Place } from './place-resolver.js';
@@ -118,6 +118,7 @@ import type {
   SceneMemory,
   SpokenLanguage,
 } from './types.js';
+import { normalizeDeg } from './types.js';
 
 /** `POST /robots/:id/agent-mode/patrol` body, after validation by the route. */
 /** `POST /robots/:id/agent-mode/tour` body, after validation by the route. */
@@ -791,6 +792,22 @@ export class AgentModeController {
       if (change.preempted && change.previous === 'agent' && change.next === 'teleop') {
         this.abortPlan('Human teleoperation took over control.');
       }
+      // Somebody else is driving, so what the robot remembers seeing is no
+      // longer about where it will be standing (TASK-221). Wipe it rather than
+      // let a `goto` walk off a distance measured before a four-metre teleop
+      // drive: what the camera saw while a human held the sticks is not
+      // something this robot looked at.
+      //
+      // Keyed on who is TAKING the lock, not on `previous === 'agent'`, and
+      // that distinction is the whole point. Agent Mode releases the lock in
+      // `runPlan`'s finally, so the ordinary sequence around an operator taking
+      // over between two commands is `agent → idle → teleop → idle` and a hook
+      // on leaving `'agent'` would never once fire on it. The preemption case
+      // (`agent → teleop` mid-plan) is caught by the same condition anyway.
+      if (change.next === 'teleop' || change.next === 'vla') {
+        this.scene.clear();
+        this.emit('agent:scene:updated', { scene: this.scene.snapshot() ?? undefined });
+      }
     });
   }
 
@@ -1298,6 +1315,9 @@ export class AgentModeController {
   }
 
   private syncPlace(): void {
+    // Runs FIRST and independently of the belief below, because it must survive
+    // that belief being null — see {@link notePolledOdometry}.
+    this.notePolledOdometry();
     // Optional call: test doubles for RobotStateManager may be partial.
     const belief = this.robotStateManager?.getPlaceBelief?.() ?? null;
     if (!belief || belief.poseM === null || belief.poseSource === null) {
@@ -1307,6 +1327,77 @@ export class AgentModeController {
     }
     this.scene.setPlace(belief?.place ?? null, belief?.driftSinceAnchorM ?? null);
     this.syncPeers();
+  }
+
+  /**
+   * Hand the hardware client's latest pose fix to scene memory as MEASURED
+   * motion (TASK-221).
+   *
+   * This is the half that sees motion NOBODY here commanded: a teleop drive, a
+   * shove on the base, the G1's handheld remote, a direct POST to the sidecar,
+   * a VLA rollout. None of them issues a block, so neither `driveFor` nor
+   * `refreshYaw` runs and the commanded tally stays at zero; fed in as a
+   * displacement, this is what expires the distances the robot was walked away
+   * from before a `goto` can end a navigation on one.
+   *
+   * **This is not a poll of its own, and the 2 s belongs to somebody else.** It
+   * runs from {@link syncPlace}, which is PULL-driven: `getState`, `getScene`,
+   * `sceneMarkdown`, `selfState`, `memoryDigest`, `plannerSceneSummary` and
+   * `plannerSceneTargets` all call it, and every one of those is somebody asking
+   * this controller a question. The only self-driving caller in the process is
+   * {@link remirrorState} — via `livenessState()` → `getState()` — which rides
+   * the idle watcher's `alwaysChecks` and re-pushes at most every
+   * {@link MIRROR_REPUSH_INTERVAL_MS}, 15 s. The 2 s is `HardwareClient`'s
+   * `/state` cadence, which bounds how OLD a fix can be, not how often this
+   * store hears one. So with nothing pulling, the invalidation latency is up to
+   * 15 s of mirror interval on top of up to 2 s of cache age — and the
+   * navigator's pre-flight look carries the note about what still slips through
+   * that window. Subscribing to `HardwareClient.onPoseSample` is what would
+   * shrink it to the sample rate.
+   *
+   * It reads {@link getPose} — the hardware client's cached base pose — and
+   * NOT the place belief `syncPlace` renders above, and that is the whole
+   * difference between this working and being inert (TASK-221 review).
+   * `RobotStateManager.getPlaceBelief()` answers null outright when no place
+   * graph is loaded, and `onPoseSample` returns on the same condition, so on an
+   * unmapped robot the belief is never populated at all. That is not a window,
+   * it is the steady state of every robot nobody has handed a survey to —
+   * uncommanded motion would have been invisible on all of them.
+   *
+   * The pose needs no graph. `HardwareClient` refreshes it on the same 2 s
+   * `/state` poll whether or not anything is mapped, and publishes it to
+   * listeners that the place tracker merely happens to be one of; what the
+   * store does with it is subtract two fixes, and a displacement is the same
+   * number in the graph's frame and in the odometry frame it arrives in.
+   *
+   * Reading the pose instead of the belief also retires a guard that used to
+   * stand here — `poseSource === 'declared'` — and it is worth saying why,
+   * because the reason it was safe was never the reason it was written down.
+   * The guard was meant to keep an operator's re-anchor out of the arithmetic,
+   * and it could not have done that: `RobotStateManager.declarePlace()`
+   * deliberately leaves `poseSource` at whatever odometry last said, because a
+   * human declares a PLACE and not a position, so a re-anchor never presented
+   * itself as `'declared'` to be screened out. What actually made it harmless
+   * is that the same method carries `poseM` through UNTOUCHED — the belief moves
+   * to a new place, the metres do not, and the displacement computed from them
+   * is zero either way. Off the cached pose the question does not arise at all:
+   * a `CachedBasePose` comes off `/state` or `/loco/odom` and knows nothing
+   * about declarations.
+   *
+   * The lock guard stays, and is the reason this is not simply a pose-feed
+   * subscription: the cached pose is up to 2 s old, so mid-navigation it can be
+   * a whole walk stage behind the fresh fix `BlockExecutor.refreshYaw` has just
+   * taken and would re-expire a look the robot has already redone. While Agent
+   * Mode is the one driving, the commanded metres already say everything this
+   * could. The cost is stated where it is felt: Agent Mode claims the lock
+   * before it plans, so this feed is muted from the claim onwards and a `goto`
+   * cannot make up a fix it missed before the command arrived.
+   */
+  private notePolledOdometry(): void {
+    if (this.lock.isOwnedBy('agent')) return;
+    const pose = this.getPose();
+    if (!pose) return;
+    this.scene.noteOdometryM(pose.x, pose.y);
   }
 
   /**
@@ -1815,6 +1906,7 @@ export class AgentModeController {
         const planned = await this.planner.plan({
           command: plan.command,
           sceneSummary: this.plannerSceneSummary(),
+          ...this.plannerSceneTargets(),
           ...(plan.language ? { language: plan.language } : {}),
           ...this.plannerVisitorFacts(),
         });
@@ -2003,6 +2095,34 @@ export class AgentModeController {
   }
 
   /**
+   * The same scene rows as NUMBERS, handed alongside the prose (TASK-221).
+   *
+   * Nothing here reaches the prompt — the planner still reads only
+   * `sceneSummary`. They are what lets the planner check the arithmetic of the
+   * answer it gets back against the rows the model was looking at, which is how
+   * `turn 96°, walk 4.4 m` is recognised as an open-loop approach to the door
+   * and folded into a `goto` (see `foldTurnWalkIntoGoto`).
+   *
+   * `syncPlace()` first, exactly as the summary does, so the fleet-reported
+   * peers and the pose are the same ones the summary was rendered from rather
+   * than depending on which of the two the caller evaluated first. The bearing
+   * is converted on the way out rather than handed over as stored, because the
+   * two live in different frames: the store keeps WORLD bearings, a `turn` is
+   * relative to where the robot is pointing NOW, and only the relative one can
+   * be compared to a `turn` (see `foldTurnWalkIntoGoto`).
+   */
+  private plannerSceneTargets(): { sceneTargets?: readonly PlannerSceneTarget[] } {
+    this.syncPlace();
+    const yawDeg = this.scene.getYawDeg();
+    const sceneTargets: PlannerSceneTarget[] = this.scene.listEntities().map((e) => ({
+      label: e.label,
+      relativeBearingDeg: normalizeDeg(e.bearingDeg - yawDeg),
+      distanceM: e.distanceEstM,
+    }));
+    return sceneTargets.length > 0 ? { sceneTargets } : {};
+  }
+
+  /**
    * What the robot durably knows about the place it is standing in, capped for
    * the prompt. Empty string when the place is unknown, there is no workspace,
    * or nothing has been written about it — in all three cases the section is
@@ -2069,6 +2189,7 @@ export class AgentModeController {
     const replanned = await this.planner.plan({
       command: pending.text,
       sceneSummary: this.plannerSceneSummary(),
+      ...this.plannerSceneTargets(),
       remainingPlan: remaining,
       ...(plan.language ? { language: plan.language } : {}),
       ...this.plannerVisitorFacts(),
