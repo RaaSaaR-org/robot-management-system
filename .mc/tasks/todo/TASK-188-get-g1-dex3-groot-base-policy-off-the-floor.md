@@ -22,10 +22,12 @@ updated: 2026-08-28
 status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
   trained task only 2/10, so every ablation runs into a floor effect and can detect
   nothing. Fix absolute policy quality before testing any data-augmentation idea
-  (dreams, Cosmos 3, …). ⚠ STALE PREMISE as of 2026-08-28: levers 1 and 2 were
-  already executed on 2026-07-23 (vla-server 57202ad) and produced a checkpoint,
-  n188_2cam_14k/checkpoint-8000. Its closed-loop score was never recorded. Reconcile
-  before spending another ~5 GPU-hours re-running them.'
+  (dreams, Cosmos 3, …). ⚠ PARTLY PRE-EMPTED as of 2026-08-28: lever 1 (both cameras)
+  was run on 2026-07-23 (vla-server 57202ad). Lever 2 was attempted in the same run and
+  did NOT finish — the run is named n188_2cam_14k but its last usable checkpoint is
+  checkpoint-8000. Neither lever was ever scored closed-loop, the weights lived on the
+  now-retired Windows box, and re-deriving a score needs the harness rebuild in
+  TASK-225. Treat levers 1 and 2 as UNMEASURED; do not gate this task on finding them.'
 ---
 
 ## Description
@@ -95,25 +97,38 @@ No synthetic data is involved here. This is purely "can we get a competent polic
 - Dataset `unitree_g1_train`: **182 episodes / 157,151 frames / 30 fps**, and **two cameras**:
   `observation.images.cam_left_high` + `observation.images.cam_right_high` (480×640, head stereo).
 
-### ⚠ Levers 1 and 2 have already been run — reconcile before re-running (added 2026-08-28)
+### ⚠ Lever 1 was run; lever 2 was attempted and did not finish (added 2026-08-28)
 
 This task was written 2026-07-17. Six days later, `vla-server` commit **`57202ad`** (2026-07-23,
-"feat(groot): g1_dex3 support - multi-camera, …") shipped `configs/g1_dex3_2cam.yaml`, and its
-README names a checkpoint **`n188_2cam_14k/checkpoint-8000`** — i.e. a 2-camera run trained to
-14k steps. That is levers 1 and 2 of the three below, already executed, against this very task's
-number.
+"feat(groot): g1_dex3 support - multi-camera, …") shipped `configs/g1_dex3_2cam.yaml`, which
+forwards both `cam_left_high` and `cam_right_high` at native 480×640. **Lever 1 of the three
+below has therefore been run** — a working 2-camera config demonstrably exists.
 
-**What is not recorded anywhere:** whether that checkpoint cleared the ≥6/10 closed-loop bar. The
-weights are **not on this box** (nothing matching `n188*` under `/home/humanoid`), so the result
-lives only on the GPU_BOX, if at all.
+**Lever 2 has not.** The run that config points at is named `n188_2cam_14k`, but the "14k" is the
+step count that was *intended*, baked into the run's name — not one that was reached. Its last
+usable checkpoint is **`checkpoint-8000`**, and the only later one on disk is `checkpoint-10000`,
+which is truncated; a run that had reached 14,000 steps would have left `checkpoint-12000` and
+`checkpoint-14000` behind it. **So lever 2 got roughly 10k steps in and died, and 8,000 steps is
+what survived — a checkpoint at 8k is not evidence of a 14k-step run.** Contrast the 1-cam entry
+in the same README, `n187_real_only_14k`, which is addressed as a bare run directory because that
+one did finish.
 
-**Do this first, before any training:** find `n188_2cam_14k/checkpoint-8000`, evaluate it against
-the test strategy below, and write the number into this task. If it already clears 6/10, this task
-is done and only lever 3 (execution horizon) remains open. Re-running a 2.5 h finetune that has
-already been run is the expensive failure mode here.
-
-⚠ Also from that config, and easy to lose: the serve script's `sort -V | tail -1` auto-pick selects
+⚠ Easy to lose, from that same config: the serve script's `sort -V | tail -1` auto-pick selects
 `checkpoint-10000`, which is **truncated**. Pass `checkpoint-8000` explicitly.
+
+**Neither lever was ever scored closed-loop, and that number is not cheaply recoverable.** The
+weights lived on the Windows GPU box, which is now retired, and nothing matching `n188*` exists
+under `/home/humanoid`. Re-deriving the score needs the training and closed-loop-eval harness —
+that rebuild is [[TASK-225]], which blocks this task either way. Re-running the levers is no
+easier today: the 13 raw `~/wam-t041/raw/G1_Dex3_*_Dataset` directories hold only `meta/` and
+`videos/`, with no `data/` directory and so zero per-frame state/action parquet across all 26 GB
+of mp4, and the HF cache entries are empty stubs (156 KB in total). Rebuilding that training set
+is part of TASK-225 too.
+
+**So give the weights a few minutes, no more.** If they do not turn up, note that here, treat
+levers 1 and 2 as **UNMEASURED**, and move on to TASK-225 — do not gate this task on recovering
+them. Keep the archaeology above regardless: it records that a 2-camera run was attempted, when,
+and with which config, so the next person does not think they are first.
 
 **Three concrete levers, in order of expected payoff:**
 
