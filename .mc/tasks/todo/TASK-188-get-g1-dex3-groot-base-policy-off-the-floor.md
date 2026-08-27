@@ -22,7 +22,12 @@ updated: 2026-08-28
 status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
   trained task only 2/10, so every ablation runs into a floor effect and can detect
   nothing. Fix absolute policy quality before testing any data-augmentation idea
-  (dreams, Cosmos 3, …).'
+  (dreams, Cosmos 3, …). ⚠ PARTLY PRE-EMPTED as of 2026-08-28: lever 1 (both cameras)
+  was run on 2026-07-23 (vla-server 57202ad). Lever 2 was attempted in the same run and
+  did NOT finish — the run is named n188_2cam_14k but its last usable checkpoint is
+  checkpoint-8000. Neither lever was ever scored closed-loop, the weights lived on the
+  now-retired Windows box, and re-deriving a score needs the harness rebuild in
+  TASK-225. Treat levers 1 and 2 as UNMEASURED; do not gate this task on finding them.'
 ---
 
 ## Description
@@ -92,13 +97,48 @@ No synthetic data is involved here. This is purely "can we get a competent polic
 - Dataset `unitree_g1_train`: **182 episodes / 157,151 frames / 30 fps**, and **two cameras**:
   `observation.images.cam_left_high` + `observation.images.cam_right_high` (480×640, head stereo).
 
+### ⚠ Lever 1 was run; lever 2 was attempted and did not finish (added 2026-08-28)
+
+This task was written 2026-07-17. Six days later, `vla-server` commit **`57202ad`** (2026-07-23,
+"feat(groot): g1_dex3 support - multi-camera, …") shipped `configs/g1_dex3_2cam.yaml`, which
+forwards both `cam_left_high` and `cam_right_high` at native 480×640. **Lever 1 of the three
+below has therefore been run** — a working 2-camera config demonstrably exists.
+
+**Lever 2 has not.** The run that config points at is named `n188_2cam_14k`, but the "14k" is the
+step count that was *intended*, baked into the run's name — not one that was reached. Its last
+usable checkpoint is **`checkpoint-8000`**, and the only later one on disk is `checkpoint-10000`,
+which is truncated; a run that had reached 14,000 steps would have left `checkpoint-12000` and
+`checkpoint-14000` behind it. **So lever 2 got roughly 10k steps in and died, and 8,000 steps is
+what survived — a checkpoint at 8k is not evidence of a 14k-step run.** Contrast the 1-cam entry
+in the same README, `n187_real_only_14k`, which is addressed as a bare run directory because that
+one did finish.
+
+⚠ Easy to lose, from that same config: the serve script's `sort -V | tail -1` auto-pick selects
+`checkpoint-10000`, which is **truncated**. Pass `checkpoint-8000` explicitly.
+
+**Neither lever was ever scored closed-loop, and that number is not cheaply recoverable.** The
+weights lived on the Windows GPU box, which is now retired, and nothing matching `n188*` exists
+under `/home/humanoid`. Re-deriving the score needs the training and closed-loop-eval harness —
+that rebuild is [[TASK-225]], which blocks this task either way. Re-running the levers is no
+easier today, for the reason the banner above gives: the raw datasets carry no state/action
+parquet, so there is nothing to train against until TASK-225 re-fetches them.
+
+**So give the weights a few minutes, no more.** If they do not turn up, note that here, treat
+levers 1 and 2 as **UNMEASURED**, and move on to TASK-225 — do not gate this task on recovering
+them. Keep the archaeology above regardless: it records that a 2-camera run was attempted, when,
+and with which config, so the next person does not think they are first.
+
 **Three concrete levers, in order of expected payoff:**
 
 1. **Use both cameras (we are currently throwing one away).** TASK-185 trained single-camera on
    purpose — the dreams are single-view and both ablation arms had to match — which handicapped
-   the real policy too. TASK-180's working 2-cam setup is the reference. Needs a **2-cam modality
-   config built the same way as the 1-cam one**: copy `g1_dex3_1cam_modality_config.py` and add
-   `cam_left_high`. ⚠ Do **not** reuse `vla-training/groot/g1_dex3_modality_config.py` as-is — it
+   the real policy too. TASK-180's working 2-cam setup is the reference. ⚠ **This lever is
+   already built — do not write it again.** `vla-training/groot/g1_dex3_2cam_modality_config.py`
+   exists on this box, and `vla-server` `57202ad` ships `configs/g1_dex3_2cam.yaml` alongside it.
+   What is missing is not the config but a *score*: neither was ever run closed-loop. Read this
+   lever as "verify the existing 2-cam path, then measure it", not as "build a 2-cam config".
+   The construction note below is kept only as the reference for what a correct one looks like.
+   ⚠ Do **not** reuse `vla-training/groot/g1_dex3_modality_config.py` as-is — it
    uses **dotted** modality keys (`"state.arms"`, `"video.cam_left_high"`) which raise
    `KeyError: 'state.arms'` in `get_dataset_statistics` and mis-map video keys by position (see
    `_ft_out/g1_dex3_modality_config_fixed.py`). N1.7 wants short keys (`arms`, `cam_right_high`).
@@ -112,7 +152,9 @@ No synthetic data is involved here. This is purely "can we get a competent polic
    hz ∈ {15, 30}; the real data is 30 fps, so 15 Hz may be halving the intended speed.
    [[TASK-183]] (real-time chunking) is the principled version of this knob.
 
-**Key files:**
+**Key files** — ⚠ every `$UNITREE_ROOT/task185/...` path below lived on the retired Windows box
+and is **GONE** (see the table at the top). They are kept as a record of what each piece did, so
+[[TASK-225]] can rebuild the equivalents; none of them can be run today.
 - `vla-training/groot/g1_dex3_1cam_modality_config.py` + `modality_g1_dex3_1cam.json` — the working
   pattern to copy for 2-cam (short keys, `arms` 0–14 / `hands` 14–28).
 - `$UNITREE_ROOT/task185/task185_finetune.py` (the WSL eval distro) — finetune runner; env levers
@@ -135,8 +177,11 @@ Verify no `eval_g1_sim_groot_success` process survives between runs.
 ## Test Strategy
 
 Closed-loop success from the sim's `rt/rewards_state` (reward 1.0 = cylinder in the target post
-area), **≥ 20 reset-isolated rollouts** on "Put the bottle into the plate." — n=10 is too few to
-tell 2/10 from 5/10 (see [[TASK-189]]). Baseline to beat: **2/10**. Report the hold-state offline
+area), **≥ 40 reset-isolated rollouts** on "Put the bottle into the plate." — n=10 is too few to
+tell 2/10 from 5/10. **Raised from 20 to 40 on 2026-08-28**, because [[TASK-189]] ran exactly this
+comparison: its own n=10 estimate of 2/10 became **3/40** at n=40, so the small-n number was
+optimistic, and n≥40 is the bar its title records. [[TASK-225]] carries that result forward, since
+TASK-189's harness is gone. Baseline to beat: **2/10** — and note it is the optimistic estimate. Report the hold-state offline
 baseline (0.081 rad) alongside any MAE so the metric's degeneracy stays visible.
 Ablate the three levers one at a time (2-cam @3k vs 1-cam @3k; then 14k; then the horizon sweep)
 so we learn which one actually buys the competence — not just that the bundle helped.
