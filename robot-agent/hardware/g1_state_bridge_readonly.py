@@ -312,20 +312,16 @@ class _LockedSender:
 
 def _pump(
     topic: str,
-    idl_type: Any,
+    sub: Any,
     to_dict: Callable[[Any], dict],
     sender: _LockedSender,
     max_hz: Optional[float] = None,
 ) -> None:
-    """One READ-ONLY subscription loop. ChannelSubscriber.Read() blocks, so
-    every topic gets its own thread. A dead/silent topic just means this loop
-    never sends — the other feeds are unaffected."""
-    try:
-        sub = ChannelSubscriber(topic, idl_type)
-        sub.Init()
-    except Exception as e:  # noqa: BLE001
-        print(f"[ReadOnlyBridge] {topic}: subscribe failed ({e}) — feed disabled", flush=True)
-        return
+    """One READ-ONLY subscription loop over an ALREADY-CONSTRUCTED subscriber.
+    ChannelSubscriber.Read() blocks, so every topic gets its own thread — but the
+    subscriber itself is built by the caller on the main thread, because DDS
+    topic/sertype registration is not thread-safe (see main()). A dead/silent
+    topic just means this loop never sends — the other feeds are unaffected."""
     period = (1.0 / max_hz) if max_hz else 0.0
     last_sent = 0.0
     warned = False
@@ -385,6 +381,34 @@ def main() -> None:
     pub_sock.bind(f"tcp://0.0.0.0:{args.port}")
     sender = _LockedSender(pub_sock)
 
+    # cyclonedds populates an IDL type's machinery lazily, on first Topic
+    # creation, and that population is NOT thread-safe: _main.py sets
+    # `_populated = True` BEFORE it builds the machines, so a second thread
+    # sails past the guard and uses a half-built type. The optional feeds below
+    # each build their subscriber inside their own thread while the main thread
+    # builds the lowstate one, so they race on the shared nested types. Symptoms
+    # are a "Failed to encode union ... TypeObject" on a hand feed and/or
+    # `AttributeError: 'NoneType' object has no attribute 'SupportsBasic'` out of
+    # key_scan() on rt/lowstate — i.e. the bridge dies on the ONE feed that matters.
+    # Populating every type once here, single-threaded, makes each later
+    # per-thread Topic creation a no-op lookup. Purely local: builds no channel,
+    # opens no socket and emits no DDS traffic, so the read-only contract holds.
+    # populate() itself is what fails on a type the pinned SDK cannot build
+    # ("Failed to encode union ... TypeObject"), so it must not be able to take
+    # the bridge down from here: an optional type that will not populate
+    # disables its own feed, exactly as a missing import does. lowstate is not
+    # optional -- swallowing its failure here only improves the diagnosis, since
+    # its ChannelSubscriber below then raises on its own.
+    populate_failed = set()
+    for _idl_type in (hg_LowState, hg_HandState, hg_BmsState, go_SportModeState):
+        if _idl_type is None:
+            continue
+        try:
+            _idl_type.__idl__.populate()
+        except Exception as e:  # noqa: BLE001
+            print(f"[ReadOnlyBridge] {_idl_type.__name__}: populate failed ({e})", flush=True)
+            populate_failed.add(_idl_type)
+
     # Optional feeds first (daemon threads); lowstate runs in the main thread.
     optional_feeds = [
         (kTopicLeftHand, hg_HandState, handstate_to_dict, HAND_MAX_HZ, "unitree_hg HandState_"),
@@ -392,12 +416,35 @@ def main() -> None:
         (args.bms_topic, hg_BmsState, bms_to_dict, None, "unitree_hg BmsState_"),
         (args.odom_topic, go_SportModeState, odom_to_dict, None, "unitree_go SportModeState_"),
     ]
+    # Build EVERY subscriber here, on the main thread, before any reader thread
+    # starts. Constructing a Topic registers a native sertype with the domain
+    # participant, and doing that concurrently from several threads corrupts the
+    # registration ("local sertype with invalid top-level type", then
+    # DDS_RETCODE_BAD_PARAMETER on whichever Topic loses the race). Serialising
+    # construction is the fix; the threads below only Read(), which is safe.
+    # A feed whose construction fails is skipped, exactly as before.
+    built_feeds = []
     for topic, idl_type, to_dict, max_hz, idl_name in optional_feeds:
         if idl_type is None:
             print(f"[ReadOnlyBridge] {topic}: IDL {idl_name} unavailable — feed disabled", flush=True)
             continue
+        if idl_type in populate_failed:
+            print(f"[ReadOnlyBridge] {topic}: IDL {idl_name} did not populate — feed disabled", flush=True)
+            continue
+        try:
+            sub = ChannelSubscriber(topic, idl_type)
+            sub.Init()
+        except Exception as e:  # noqa: BLE001
+            print(f"[ReadOnlyBridge] {topic}: subscribe failed ({e}) — feed disabled", flush=True)
+            continue
+        built_feeds.append((topic, sub, to_dict, max_hz, idl_name))
+
+    lowstate_sub = ChannelSubscriber(kTopicLowState, hg_LowState)
+    lowstate_sub.Init()
+
+    for topic, sub, to_dict, max_hz, idl_name in built_feeds:
         threading.Thread(
-            target=_pump, args=(topic, idl_type, to_dict, sender, max_hz), daemon=True
+            target=_pump, args=(topic, sub, to_dict, sender, max_hz), daemon=True
         ).start()
         cap = f"<={max_hz:g} Hz" if max_hz else "pass-through"
         print(f"[ReadOnlyBridge] {topic} ({idl_name}) -> zmq PUB :{args.port} ({cap})", flush=True)
@@ -409,8 +456,6 @@ def main() -> None:
         flush=True,
     )
 
-    lowstate_sub = ChannelSubscriber(kTopicLowState, hg_LowState)
-    lowstate_sub.Init()
     state_period = 1.0 / args.rate
     last_sent = 0.0
     last_report = 0
