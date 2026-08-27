@@ -120,6 +120,11 @@ Three traps, each of which presents as something unrelated:
   `AttributeError: module 'omni.usd' has no attribute 'get_context'` — 50
   library load failures upstream of it, none of which name `libgomp`.
 
+⚠ After killing an Isaac container, **wait for `nvidia-smi` to return to its ~111 MiB
+baseline before relaunching.** A hard kill leaves ~23 GB held for tens of seconds, and a
+sim started into that hangs at 0 % CPU with a 3-line log and no error — it presents as a
+startup failure, not as GPU contention.
+
 ⚠ Only ever run **one** `sim_main.py` at a time. Its exit handler
 (`sim_main.py:608-668`) pgreps for `sim_main.py` and SIGTERM/SIGKILLs every
 match except itself. DDS domains: **0** = real robot, **1** = sim, **9** = mock.

@@ -21,8 +21,9 @@ updated: 2026-08-27
 status_note: 'Test steps 1 and 2 are done: cause found by measurement (camera copies,
   NOT render) and the rate is 52.2 Hz sustained, clearing the >=50 Hz bar. The fix and
   the previously-undurable patch are now in robot-agent/hardware/isaac_sim_patches/.
-  Steps 3 (gait under velocity commands) and 4 (isaac_loco_check re-run) are still open;
-  step 3 is what actually unblocks TASK-203.'
+  Step 3 was run and FAILED for an unrelated reason: the policy cannot stand even with no
+  velocity command. Spun out as TASK-223, which is now the real blocker on TASK-203 --
+  this task no longer is.'
 ---
 
 
@@ -140,8 +141,14 @@ env's own python. Full invocation and the three traps are in `isaac_sim_patches/
    being tested turned out to be false, which is why step 1 existed.
 2. ~~The sim logs a step period consistent with **≥50 Hz** sustained.~~ **Done** — 52.15 Hz,
    19.18 ms average loop, cameras still live.
-3. **Open.** Under velocity commands, feet make and break contact and the base translates — knees and
-   ankles stay off their limits. Baseline symptom to beat: knee travels 0.314 → 2.880 rad and both
-   ankles pin at exactly ±0.524 rad. This is TASK-203 step 2 and unblocks it.
-4. **Open.** Re-run `isaac_loco_check.py --domain 1` to confirm the rate work did not disturb the
-   DDS path.
+3. **Run, and it FAILED — for a reason outside this task. Spun out as [[TASK-223]].** At both 52 Hz
+   and 61 Hz the robot still tumbles, and it does so **with no velocity command at all**: it cannot
+   stand, let alone walk. Ankles sit at their limits 39-47 % of the run, and the IMU quaternion
+   (norm exactly 1.0000, so the data is sound) never comes near identity. The legs *do* alternate —
+   knee cadence ~3.4 Hz, L/R correlation -0.381 — so the policy emits structured rhythmic output
+   while the body is on the ground. **The rate was necessary but not sufficient.** Probe:
+   `robot-agent/hardware/isaac_gait_probe.py`.
+4. **Open, and now pointless until [[TASK-223]] lands** — the DDS path demonstrably still carries
+   state (92.8 Hz of `rt/lowstate`) and commands (the policy responds to them), so there is no
+   evidence the rate work disturbed it. Re-run `isaac_loco_check.py --domain 1` for the record when
+   the robot can stand.
