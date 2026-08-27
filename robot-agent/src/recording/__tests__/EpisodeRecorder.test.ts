@@ -66,6 +66,12 @@ interface Harness {
   /** Fail every second snapshot, to halve the rate without stopping it. */
   failEveryOther: boolean;
   snapshotCalls: { camera: string; shadows: boolean; quality: number }[];
+  /**
+   * Ticks that have begun capturing, counted at the first hook the tick awaits.
+   * `advance()` uses it to tell "a tick is still writing" from "the tick is
+   * done"; see the comment there.
+   */
+  captureStarts: number;
 }
 
 function harness(overrides: Partial<Harness> = {}): Harness {
@@ -79,6 +85,7 @@ function harness(overrides: Partial<Harness> = {}): Harness {
     snapshotError: null,
     failEveryOther: false,
     snapshotCalls: [],
+    captureStarts: 0,
     hooks: undefined as unknown as RecorderHooks,
     ...overrides,
   };
@@ -86,7 +93,13 @@ function harness(overrides: Partial<Harness> = {}): Harness {
     getCommanded: () => h.commanded,
     isTeleopActive: () => h.flags.teleop,
     isEStopTriggered: () => h.flags.estop,
-    getMeasured: async () => h.measured,
+    // The first thing a capturing tick awaits, and the only hook `start()` also
+    // calls — which it does before any `advance()` samples the counter, so the
+    // deltas `advance()` compares are unaffected by it.
+    getMeasured: async () => {
+      h.captureStarts += 1;
+      return h.measured;
+    },
     snapshot: async (camera, opts) => {
       h.snapshotCalls.push({ camera, ...opts });
       if (h.failEveryOther && h.snapshotCalls.length % 2 === 0) {
@@ -107,19 +120,51 @@ function harness(overrides: Partial<Harness> = {}): Harness {
   return h;
 }
 
+/** Ticks that have finished: each one ends by accepting or dropping exactly one. */
+function settledTicks(rec: EpisodeRecorder): number {
+  const status = rec.status();
+  return status.totalFrames + status.totalDropped;
+}
+
 /**
- * Advance the fake timers and the harness clock together, in small steps, so the
- * rate the recorder measures matches the rate its ticks actually ran at.
+ * Advance the fake timers and the harness clock together by one step, then hand
+ * the REAL event loop back until the tick that step fired has finished.
+ *
+ * The waiting is the whole point, and it is why nothing in this file sleeps. A
+ * tick with a camera on it writes a real JPEG, and `advanceTimersByTimeAsync`
+ * yields only a turn or two of the real loop — an order of magnitude fewer than
+ * a write needs even on an idle box. Advancing again while that write is still
+ * in the air is what made this file load-dependent: the next tick lands on
+ * `tickInFlight` and is dropped as "behind", and a budget counted in VIRTUAL
+ * milliseconds buys no real time to recover in — ten seconds of fake clock go
+ * by in a fraction of a second of wall clock, so on a busy box the first write
+ * had not landed when the budget ran out. Waiting on the tick rather than on a
+ * duration makes the count the same however busy the disk is.
+ *
+ * Step no further than one tick period, so at most one tick fires per call and
+ * the two counters below cannot be describing different ticks.
  *
  * Fake timers must already be installed when `start()` creates its interval —
  * installing them afterwards leaves a real interval that never fires, and every
  * assertion about frames then reads zero for a reason that has nothing to do
  * with the recorder.
  */
-async function run(h: Harness, ms: number, step = 10): Promise<void> {
+async function advance(h: Harness, rec: EpisodeRecorder, ms: number): Promise<void> {
+  const startsBefore = h.captureStarts;
+  const settledBefore = settledTicks(rec);
+  h.clock.ms += ms;
+  await vi.advanceTimersByTimeAsync(ms);
+  // Zero fires no timer and moves no clock — it only yields a real macrotask —
+  // so this drains the write without ticking the recorder underneath it.
+  while (settledTicks(rec) - settledBefore < h.captureStarts - startsBefore) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+}
+
+/** Advance `ms` of fake clock, letting every tick it fires finish. */
+async function run(h: Harness, rec: EpisodeRecorder, ms: number, step = 10): Promise<void> {
   for (let t = 0; t < ms; t += step) {
-    h.clock.ms += step;
-    await vi.advanceTimersByTimeAsync(step);
+    await advance(h, rec, step);
   }
 }
 
@@ -129,11 +174,10 @@ async function run(h: Harness, ms: number, step = 10): Promise<void> {
  *
  * A tick with a camera on it writes a real JPEG, and a tick that fires while
  * the previous one is still writing is dropped on purpose — "the previous frame
- * had not finished" is the recorder's whole backpressure design. So how many of
- * the four ticks in 200 ms at 20 fps actually produce a frame depends on how
- * busy this disk is right now, and in a full suite run with a worker per core it
- * can be none of them (TASK-218). A test that needs a frame to exist has to wait
- * for one rather than assume a tick count produced it.
+ * had not finished" is the recorder's whole backpressure design. `advance()`
+ * never fires a tick into a write that is still running, so the budget below
+ * counts ticks the recorder actually got to attempt rather than wall clock the
+ * disk may have eaten.
  */
 async function runUntilFrames(
   h: Harness,
@@ -142,8 +186,7 @@ async function runUntilFrames(
   budgetMs = 10_000,
 ): Promise<void> {
   for (let t = 0; t < budgetMs && rec.status().frames < frames; t += 10) {
-    h.clock.ms += 10;
-    await vi.advanceTimersByTimeAsync(10);
+    await advance(h, rec, 10);
   }
   const status = rec.status();
   if (status.frames < frames) {
@@ -161,18 +204,14 @@ async function runUntilFrames(
  * Without this a frame can be accepted DURING the call under test: a discard
  * that correctly drops one episode's frames then reads back the same total,
  * because a straggler landed in the other episode meanwhile (TASK-218).
+ *
+ * The pause is what does the work now — `advance()` already returns with no
+ * write in the air, so there is no straggler left to poll for, and the step
+ * below only lets the parked interval fire once against the pause.
  */
-async function quiesce(h: Harness, rec: EpisodeRecorder, budgetMs = 10_000): Promise<void> {
+async function quiesce(h: Harness, rec: EpisodeRecorder): Promise<void> {
   rec.pause();
-  let last = rec.status().totalFrames;
-  let unchangedSteps = 0;
-  for (let t = 0; t < budgetMs && unchangedSteps < 20; t += 10) {
-    h.clock.ms += 10;
-    await vi.advanceTimersByTimeAsync(10);
-    const total = rec.status().totalFrames;
-    unchangedSteps = total === last ? unchangedSteps + 1 : 0;
-    last = total;
-  }
+  await advance(h, rec, 10);
 }
 
 describe('jpegSize', () => {
@@ -219,12 +258,12 @@ describe('EpisodeRecorder', () => {
     h.flags.teleop = false;
     const status = await rec.start({ sessionId: 's1', cameras: [] });
     expect(status.recording).toBe(true);
-    await run(h, 100);
+    await run(h, rec, 100);
     expect(rec.status().frames).toBe(0);
     expect(rec.status().dropped).toBeGreaterThan(0);
 
     h.flags.teleop = true;
-    await run(h, 100);
+    await run(h, rec, 100);
     // Exact, not "> 0": 100 ms at the default 30 fps is a 33 ms period, so
     // three ticks land. A recorder that quietly ticked at the wrong rate would
     // pass a `toBeGreaterThan(0)` and fail this.
@@ -269,7 +308,7 @@ describe('EpisodeRecorder', () => {
     // this test only checked info.json's shape and would have passed with
     // `action: state`, which is exactly the bug the recorder exists to fix.
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     expect(rec.status().frames).toBe(4);
     const stop = await rec.stop();
     expect(stop.ok).toBe(true);
@@ -294,7 +333,7 @@ describe('EpisodeRecorder', () => {
   it('drops a tick while an emergency stop is latched, and says so', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
     h.flags.estop = true;
-    await run(h, 200);
+    await run(h, rec, 200);
     const status = rec.status();
     expect(status.frames).toBe(0);
     expect(status.dropped).toBeGreaterThan(0);
@@ -304,14 +343,14 @@ describe('EpisodeRecorder', () => {
   it('drops a tick while teleop is disengaged rather than recording a stale pose', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
     h.flags.teleop = false;
-    await run(h, 200);
+    await run(h, rec, 200);
     expect(rec.status().lastDropReason).toMatch(/teleop is not engaged/);
   });
 
   it.skipIf(!HAVE_FFMPEG)('drops a tick whose camera failed instead of writing a frame with no picture', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
     h.snapshotError = 'sidecar snapshot head_camera failed: HTTP 503';
-    await run(h, 200);
+    await run(h, rec, 200);
     const status = rec.status();
     expect(status.frames).toBe(0);
     expect(status.dropped).toBeGreaterThan(0);
@@ -320,21 +359,21 @@ describe('EpisodeRecorder', () => {
 
   it.skipIf(!HAVE_FFMPEG)('calls the sidecar with shadows off by default and 90 quality', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
-    await run(h, 120);
+    await run(h, rec, 120);
     expect(h.snapshotCalls.length).toBeGreaterThan(0);
     expect(h.snapshotCalls[0]).toEqual({ camera: 'head_camera', shadows: false, quality: 90 });
   });
 
   it.skipIf(!HAVE_FFMPEG)('keeps shadows when asked for them', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'], shadows: true });
-    await run(h, 120);
+    await run(h, rec, 120);
     expect(h.snapshotCalls[0]?.shadows).toBe(true);
   });
 
   it('reports itself degraded after a run of drops', async () => {
     await rec.start({ sessionId: 's1', fps: 50, cameras: [] });
     h.flags.estop = true;
-    await run(h, 1000);
+    await run(h, rec, 1000);
     expect(rec.status().degraded).toBe(true);
   });
 
@@ -342,11 +381,11 @@ describe('EpisodeRecorder', () => {
 
   it('draws episode boundaries where nextEpisode was called', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     const firstCount = rec.status().frames;
     expect(await rec.nextEpisode()).toBe(1);
     expect(rec.status().frames).toBe(0);
-    await run(h, 200);
+    await run(h, rec, 200);
 
     const status = rec.status();
     expect(status.episodeIndex).toBe(1);
@@ -382,7 +421,7 @@ describe('EpisodeRecorder', () => {
   it('says nothing was recorded rather than writing an empty dataset', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
     h.flags.estop = true;
-    await run(h, 200);
+    await run(h, rec, 200);
     vi.useRealTimers();
     const result = await rec.stop();
     expect(result.ok).toBe(false);
@@ -393,7 +432,7 @@ describe('EpisodeRecorder', () => {
 
   it('leaves no scratch behind', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     vi.useRealTimers();
     await rec.stop();
     expect(existsSync(join(dir, 'scratch', 's1'))).toBe(false);
@@ -447,12 +486,11 @@ describe('EpisodeRecorder', () => {
   it.skipIf(!HAVE_FFMPEG)('leaves no image behind when a later camera fails to write', async () => {
     // One orphan JPEG makes that camera's video one frame longer than the
     // parquet, and every frame after it a frame out of step with the joints.
-    // 5 fps so the ticks are far apart, but that is not enough on its own: a
-    // failed tick's cleanup is real I/O, and when the box is busy it can still
-    // be running when the next tick fires, which then drops with "the previous
-    // frame had not finished" and overwrites the reason under test. So collect
-    // the reasons as they appear rather than reading the last one at the end
-    // (TASK-218).
+    // A failed tick's cleanup is real I/O, and a tick that fired while it was
+    // still running used to drop with "the previous frame had not finished" and
+    // overwrite the reason under test. `advance()` no longer fires into a tick
+    // that has not finished, but the reasons are still collected as they appear
+    // rather than read once at the end — the last one is not the point (TASK-218).
     await rec.start({ sessionId: 's1', fps: 5, cameras: ['head_camera', 'house_iso'] });
     await rm(join(dir, 'scratch', 's1', 'ep_000', 'cam_third_person'), {
       recursive: true,
@@ -463,8 +501,7 @@ describe('EpisodeRecorder', () => {
     const sawWriteFailure = (): boolean =>
       [...reasons].some((reason) => /could not write frame/.test(reason));
     for (let t = 0; t < 5000 && !sawWriteFailure(); t += 10) {
-      h.clock.ms += 10;
-      await vi.advanceTimersByTimeAsync(10);
+      await advance(h, rec, 10);
       const reason = rec.status().lastDropReason;
       if (reason) reasons.add(reason);
     }
@@ -481,7 +518,7 @@ describe('EpisodeRecorder', () => {
     rec.pause();
     const camDir = join(dir, 'scratch', 's1', 'ep_000', 'cam_right_high');
     for (let i = 0; i < 50 && (await readdir(camDir)).length > 0; i++) {
-      await run(h, 20);
+      await run(h, rec, 20);
     }
     expect(await readdir(camDir)).toEqual([]);
   });
@@ -491,10 +528,10 @@ describe('EpisodeRecorder', () => {
     // a minute — but a rate measured from the session's first frame to its last
     // says exactly that, and every timestamp and the mp4's framerate inherit it.
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     await rec.nextEpisode();
     h.clock.ms += 600_000; // the operator walks back to the start
-    await run(h, 200);
+    await run(h, rec, 200);
 
     expect(rec.status().fpsActual).toBeGreaterThan(15);
     expect(rec.status().fpsActual).toBeLessThan(25);
@@ -504,7 +541,7 @@ describe('EpisodeRecorder', () => {
     // The encode can take tens of seconds, and the old stop's cleanup would
     // delete the new session's scratch tree and null out its id.
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     vi.useRealTimers();
     const stopping = rec.stop();
     await expect(rec.start({ sessionId: 's2', cameras: [] })).rejects.toThrow(
@@ -515,16 +552,16 @@ describe('EpisodeRecorder', () => {
 
   it('pauses without counting the parked ticks as dropped frames', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     const droppedBefore = rec.status().dropped;
     rec.pause();
-    await run(h, 400);
+    await run(h, rec, 400);
     expect(rec.status().frames).toBe(4);
     expect(rec.status().dropped).toBe(droppedBefore);
     expect(rec.isPaused()).toBe(true);
 
     rec.resume();
-    await run(h, 200);
+    await run(h, rec, 200);
     expect(rec.status().frames).toBe(8);
     // …and the pause did not halve the rate it reports.
     expect(rec.status().fpsActual).toBeGreaterThan(15);
@@ -535,11 +572,11 @@ describe('EpisodeRecorder', () => {
     // three leaves 0 and 2 in the recorder and 0 and 1 in the file. Handing the
     // platform its own numbering would give it episode ids that address nothing.
     await rec.start({ sessionId: 's1', fps: 20, cameras: [] });
-    await run(h, 200);
+    await run(h, rec, 200);
     await rec.nextEpisode();
-    await run(h, 200);
+    await run(h, rec, 200);
     await rec.nextEpisode();
-    await run(h, 200);
+    await run(h, rec, 200);
     vi.useRealTimers();
     await rec.discardEpisode(1);
 
@@ -556,7 +593,7 @@ describe('EpisodeRecorder', () => {
 
   it('records the scene, the sim boot and the drop count as provenance', async () => {
     await rec.start({ sessionId: 's1', fps: 20, cameras: [], inputMode: 'vr_controller' });
-    await run(h, 200);
+    await run(h, rec, 200);
     vi.useRealTimers();
     const result = await rec.stop();
     const info = JSON.parse(await readFile(join(result.datasetPath!, 'meta/info.json'), 'utf-8'));
@@ -637,13 +674,12 @@ describe.skipIf(!HAVE_FFMPEG)('EpisodeRecorder with cameras', () => {
       datasetRoot: join(dir, 'datasets'),
     });
     await rec.start({ sessionId: 's1', fps: 20, cameras: ['head_camera'] });
-    await run(h, 200);
+    // No sleep before the count. A tick writes its JPEGs and pushes its row in
+    // the same continuation, so observing between the two sees one more file
+    // than frame — but `run` waits for the tick rather than for a fixed 50 ms
+    // that a busy disk can outlast, so there is nothing mid-flight left to race.
+    await run(h, rec, 200);
     vi.useRealTimers();
-    // Let any tick that was mid-flight when the timers were handed back finish.
-    // Without this the count races: a tick writes its JPEGs and pushes its row
-    // in the same continuation, so observing between the two sees one more file
-    // than frame.
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const files = await readdir(join(dir, 'scratch', 's1', 'ep_000', 'cam_right_high'));
     expect(files.length).toBe(rec.status().frames);
@@ -688,7 +724,7 @@ describe('per-episode retargeting labels (TASK-216)', () => {
     markTeleopMode('manual');
     await rec.start({ sessionId: 's', fps: 20, cameras: [] });
     markTeleopMode('ik');
-    await run(h, 300);
+    await run(h, rec, 300);
     vi.useRealTimers();
     const stopped = await rec.stop();
     expect(stopped.ok).toBe(true);
@@ -698,10 +734,10 @@ describe('per-episode retargeting labels (TASK-216)', () => {
   it('labels each take with what drove THAT take', async () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [] });
     markTeleopMode('ik');
-    await run(h, 300);
+    await run(h, rec, 300);
     await rec.nextEpisode();
     markTeleopMode('orientation');
-    await run(h, 300);
+    await run(h, rec, 300);
     vi.useRealTimers();
     const stopped = await rec.stop();
     expect(stopped.ok).toBe(true);
@@ -717,7 +753,7 @@ describe('per-episode retargeting labels (TASK-216)', () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [] });
     markTeleopMode('ik');
     markTeleopMode('hand-tracking');
-    await run(h, 300);
+    await run(h, rec, 300);
     vi.useRealTimers();
     const stopped = await rec.stop();
     expect(stopped.ok).toBe(true);
@@ -728,7 +764,7 @@ describe('per-episode retargeting labels (TASK-216)', () => {
     markTeleopMode('ik');
     await rec.start({ sessionId: 's', fps: 20, cameras: [] });
     markTeleopMode('hand-tracking');
-    await run(h, 300);
+    await run(h, rec, 300);
     vi.useRealTimers();
     const stopped = await rec.stop();
     expect(stopped.ok).toBe(true);
@@ -750,7 +786,7 @@ describe('per-episode retargeting labels (TASK-216)', () => {
   it('joins several modes with + in the parquet, and drops them with the take', async () => {
     await rec.start({ sessionId: 's', fps: 20, cameras: [] });
     markTeleopMode('orientation');
-    await run(h, 300);
+    await run(h, rec, 300);
     // Discard the LIVE take and re-record it driven purely by IK. Before this
     // was fixed the mode set survived the discard — the `LiveEpisode` object is
     // reused for the re-recorded frames — and the dataset claimed
@@ -758,11 +794,11 @@ describe('per-episode retargeting labels (TASK-216)', () => {
     // provenance is the exact claim this column exists to prevent.
     await rec.discardEpisode(0);
     markTeleopMode('ik');
-    await run(h, 300);
+    await run(h, rec, 300);
     await rec.nextEpisode();
     markTeleopMode('ik');
     markTeleopMode('hand-tracking');
-    await run(h, 300);
+    await run(h, rec, 300);
     vi.useRealTimers();
     const stopped = await rec.stop();
     expect(stopped.ok).toBe(true);
