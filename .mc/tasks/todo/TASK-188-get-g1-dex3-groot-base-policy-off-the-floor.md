@@ -22,7 +22,10 @@ updated: 2026-08-28
 status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
   trained task only 2/10, so every ablation runs into a floor effect and can detect
   nothing. Fix absolute policy quality before testing any data-augmentation idea
-  (dreams, Cosmos 3, …).'
+  (dreams, Cosmos 3, …). ⚠ STALE PREMISE as of 2026-08-28: levers 1 and 2 were
+  already executed on 2026-07-23 (vla-server 57202ad) and produced a checkpoint,
+  n188_2cam_14k/checkpoint-8000. Its closed-loop score was never recorded. Reconcile
+  before spending another ~5 GPU-hours re-running them.'
 ---
 
 ## Description
@@ -91,6 +94,26 @@ No synthetic data is involved here. This is purely "can we get a competent polic
   headline metric; always report the hold-state baseline beside it.
 - Dataset `unitree_g1_train`: **182 episodes / 157,151 frames / 30 fps**, and **two cameras**:
   `observation.images.cam_left_high` + `observation.images.cam_right_high` (480×640, head stereo).
+
+### ⚠ Levers 1 and 2 have already been run — reconcile before re-running (added 2026-08-28)
+
+This task was written 2026-07-17. Six days later, `vla-server` commit **`57202ad`** (2026-07-23,
+"feat(groot): g1_dex3 support - multi-camera, …") shipped `configs/g1_dex3_2cam.yaml`, and its
+README names a checkpoint **`n188_2cam_14k/checkpoint-8000`** — i.e. a 2-camera run trained to
+14k steps. That is levers 1 and 2 of the three below, already executed, against this very task's
+number.
+
+**What is not recorded anywhere:** whether that checkpoint cleared the ≥6/10 closed-loop bar. The
+weights are **not on this box** (nothing matching `n188*` under `/home/humanoid`), so the result
+lives only on the GPU_BOX, if at all.
+
+**Do this first, before any training:** find `n188_2cam_14k/checkpoint-8000`, evaluate it against
+the test strategy below, and write the number into this task. If it already clears 6/10, this task
+is done and only lever 3 (execution horizon) remains open. Re-running a 2.5 h finetune that has
+already been run is the expensive failure mode here.
+
+⚠ Also from that config, and easy to lose: the serve script's `sort -V | tail -1` auto-pick selects
+`checkpoint-10000`, which is **truncated**. Pass `checkpoint-8000` explicitly.
 
 **Three concrete levers, in order of expected payoff:**
 
