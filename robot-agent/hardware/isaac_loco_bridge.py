@@ -48,7 +48,10 @@ after 3 wall seconds, which is LESS than 3 seconds of robot motion. Prefer short
 refreshed often (which is what Agent Mode's block executor already does) over one long one.
 
 @status new — the RPC path is proven end to end by isaac_loco_check.py (7/7), but Agent Mode has
-not yet driven it and the Isaac sim it fronts still runs too slowly to walk. See TASK-203/TASK-204.
+not yet driven it and the G1 in the sim it fronts cannot stand up. The duration/wall-clock caveat
+above was acute at real-time factor 0.28; TASK-204 took the sim to RTF ~1.04, so the two clocks now
+agree closely. That did NOT make the robot walk — the standing failure is unrelated to speed.
+See TASK-203/TASK-223.
 """
 from __future__ import annotations
 

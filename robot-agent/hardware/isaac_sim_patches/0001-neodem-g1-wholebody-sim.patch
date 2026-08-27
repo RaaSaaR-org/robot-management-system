@@ -1,0 +1,52 @@
+diff --git a/action_provider/action_provider_wh_dds.py b/action_provider/action_provider_wh_dds.py
+index 5fa68ee..796db6d 100644
+--- a/action_provider/action_provider_wh_dds.py
++++ b/action_provider/action_provider_wh_dds.py
+@@ -36,7 +36,8 @@ class DDSRLActionProvider(ActionProvider):
+         self.policy = self.load_policy(self.policy_path)
+         
+         # 预计算索引张量与复用缓冲
+-        device = self.env.device
++        # Isaac Lab 3.0 returns a warp Device here; torch.tensor(device=...) only accepts torch.device.
++        device = torch.device(str(self.env.device))
+         if hasattr(self, "arm_joint_mapping") and self.arm_joint_mapping:
+             self._arm_target_indices = [self.joint_to_index[name] for name in self.arm_joint_mapping.keys()]
+             self._arm_source_indices = [idx + 15 for idx in self.arm_joint_mapping.values()]
+@@ -435,8 +436,13 @@ class DDSRLActionProvider(ActionProvider):
+                             special_vals = self._inspire_buf.index_select(0, self._inspire_special_source_idx_t) * self._inspire_special_scales_t
+                             full_action.index_copy_(0, self._inspire_special_target_idx_t, special_vals)
+             # 同步仿真多步
++            # NeoDEM patch: `_full_action_buf` is 1-D (43,), but Isaac Lab 6.1.14 requires a
++            # leading env dimension and raises "Shape mismatch: torch.Size([43]) != (1, 43)",
++            # which this method swallows -- so every step silently produced no action and the
++            # robot never moved. Older Isaac Lab accepted the unbatched form.
+             for _ in range(4):
+-                self.env.scene["robot"].set_joint_position_target(full_action) 
++                self.env.scene["robot"].set_joint_position_target(
++                    full_action.unsqueeze(0) if full_action.dim() == 1 else full_action)
+                 self.env.scene.write_data_to_sim()                           
+                 self.env.sim.step(render=False)                              
+                 self.env.scene.update(dt=self.env.physics_dt)                    
+diff --git a/tasks/common_observations/camera_state.py b/tasks/common_observations/camera_state.py
+index 28be26a..9f496d1 100644
+--- a/tasks/common_observations/camera_state.py
++++ b/tasks/common_observations/camera_state.py
+@@ -91,6 +91,18 @@ def get_camera_image(
+         _camera_cache['last_scene_id'] = scene_id
+ 
+ 
++    # NeoDEM patch (TASK-204): bail out on a non-capture frame BEFORE the copies.
++    # Everything below is dead work when frame_step != 0 -- the images are consumed
++    # only inside the `frame_step == 0` enqueue at the end of this function, and the
++    # return value is the same constant placeholder either way. Without this the
++    # GPU->host `.cpu().numpy()` copies for all three cameras ran on EVERY control
++    # step and were then discarded: measured 39 ms of a 55 ms control step, i.e. 70%
++    # of the loop, holding the sim at ~17 Hz against a policy that wants ~100 Hz.
++    # `write_interval_steps` was always meant to gate this; it only ever gated the
++    # shared-memory write, which is the cheap half.
++    if _camera_cache['frame_step'] != 0:
++        return _return_placeholder
++
+     if _camera_cache['frame_step'] == 0:
+         try:
+             dt = getattr(env, 'physics_dt', 0.02)
