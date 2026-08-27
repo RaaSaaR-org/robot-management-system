@@ -61,11 +61,17 @@ import type { RolloutStrategy } from './types.js';
 const VLA_SERVER_URL_DEFAULT = 'http://localhost:8000';
 
 /**
- * Per-joint delta clip for real-arm safety. At the default 5 Hz this is a
- * 25°/s max slew rate — matches VLARunner's `max_delta = 5` default and
- * prevents servo stall from a sudden VLA action spike. It is a per-STEP bound,
- * not a per-second one, so a shorter `loopPeriodMs` raises the slew rate it
- * permits in the same proportion.
+ * Per-joint delta clip for real-arm safety — prevents servo stall from a sudden
+ * VLA action spike. At the default 200 ms period this is a 25°/s max slew rate.
+ * It is a per-STEP bound, not a per-second one, so a shorter `loopPeriodMs`
+ * raises the slew rate it permits in the same proportion (67 ms → 75°/s).
+ *
+ * This is deliberately **stricter than the Python path**, which is the one to
+ * check against when changing it: the orphaned VLARunner clips at 10°
+ * (`hardware/vla_runner.py` passes `max_delta=cfg.get("max_delta_degrees",
+ * 10.0)` into `MovementRateLimiter`, whose own default in
+ * `hardware/vla_safety.py` is also 10.0). This loop halves that. The two are
+ * not kept in sync and 5 is the shipped behaviour of this executor.
  *
  * Exported so a test can assert the property rather than the number: nothing
  * outside `clipAction` should be reading it at runtime.

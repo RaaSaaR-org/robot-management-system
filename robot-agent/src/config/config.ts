@@ -71,9 +71,13 @@ export interface Config {
      * lead. Changing the rate moves both, so an A/B at two rates has to be
      * expressible before either can be checked at anything but 5 Hz.
      *
-     * Must be in (0, 5000]: 0 or a negative period turns the loop into a spin
-     * that floods the sidecar with `/action`, and a period longer than the
-     * `/predict` timeout is a rollout nobody asked for.
+     * Must be in (0, 5000]. Only the lower bound is derived: 0 or a negative
+     * period turns the loop into a spin that floods the sidecar with
+     * `/action`. The 5000 is a sanity ceiling, not a number computed from
+     * anything — note it deliberately still admits periods longer than
+     * `PREDICT_TIMEOUT_MS` (3000 ms in `skill-executor.ts`), because a slow
+     * loop is a legitimate, if odd, way to run a rollout; it is only there to
+     * catch a fat-fingered `VLA_LOOP_PERIOD_MS=200000`.
      */
     loopPeriodMs: number;
     /**
@@ -604,7 +608,9 @@ export const config: Config = {
     restFallbackUrl: process.env.VLA_REST_FALLBACK_URL || undefined,
     enabled: process.env.VLA_ENABLED === 'true',
     // Range-checked for the same reason the RTC knobs are: 0 is a finite
-    // number and an unthrottled rollout loop. See envNumberChecked.
+    // number and an unthrottled rollout loop. The upper bound is a sanity
+    // ceiling rather than a derived one — see the doc comment on
+    // `loopPeriodMs` above. See envNumberChecked.
     loopPeriodMs: envNumberChecked(
       'VLA_LOOP_PERIOD_MS',
       process.env.VLA_LOOP_PERIOD_MS,

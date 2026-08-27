@@ -18,7 +18,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-12
-updated: 2026-08-27
+updated: 2026-08-28
 status_note: ''
 ---
 
@@ -104,13 +104,16 @@ chunk boundary today costs a full `/predict` round-trip of dead air.
 Status below is what the code on `feat/vla-realtime-chunking` actually does,
 checked against the suite in `robot-agent/src/vla/__tests__/skill-executor.test.ts`.
 
-**Read every number below as a 5 Hz number.** `LOOP_PERIOD_MS = 200` in
-`skill-executor.ts` is a module constant with no env var and no run option
+**Read every number below as a 200 ms (5 Hz) number.** ~~`LOOP_PERIOD_MS = 200`
+in `skill-executor.ts` is a module constant with no env var and no run option
 behind it — every use is internal — so this executor cannot be run at any other
-rate, and nothing on this branch has been. The crossfade's reach, the
-prefetch break-even and the choice of `RTC_PAYOFF_MARGIN` are all functions of
-`LOOP_PERIOD_MS`; none of that tuning has been checked at the 15 Hz the fifth
-criterion names.
+rate~~ — **RESOLVED 2026-08-28:** the period is now `config.vla.loopPeriodMs`
+(`VLA_LOOP_PERIOD_MS`, default 200 ms) with a per-run `loopPeriodMs` override,
+so the executor *can* be run at any rate; see the Status section below. What
+still stands is the rest of the sentence: **nothing has been run at any other
+rate.** The crossfade's reach, the prefetch break-even and the choice of
+`RTC_PAYOFF_MARGIN` are all functions of the period; none of that tuning has
+been checked at the 15 Hz the fifth criterion names.
 
 The timing figures come from `skill-executor.test.ts` run on Vitest's virtual
 clock, so they are exact integers reproducible run to run, not stopwatch
@@ -135,7 +138,7 @@ backend or a robot.
       *One: past 400 ms of latency there is no crossfade at all.* A prefetched
       chunk is merged as soon as it lands, and `blendChunks` can only weigh
       against actions still queued at that moment, so the fade reaches
-      `chunk_size x overlap x LOOP_PERIOD_MS` and no further — 400 ms at the
+      `chunk_size x overlap x loopPeriodMs` and no further — 400 ms at the
       shipped chunk 8 / overlap 0.25. Asserted exactly, over 16 steps: 4
       blended steps at 100 ms of latency, **0 at 600 ms**, and 6 at 600 ms once
       overlap is raised to 0.5 (`RTC crossfade reach`). All four arms of the
@@ -151,25 +154,37 @@ backend or a robot.
       the crossfade does nothing, and nothing here establishes which side of
       400 ms the deployed policy falls on.
 
-      *Two: the criterion's actual test does not exist.* The criterion is worded
-      as a bound — "no discontinuity larger than the hardware `clipAction`
-      bound". `MAX_DELTA_DEGREES = 5` (`skill-executor.ts`) is named in **no
-      assertion anywhere** in `robot-agent/src`. Its *value* is pinned
-      incidentally by a pre-existing hardware test ("fetches real frames +
-      state, applies delta-clipped actions": a 60 degree prediction is required
-      to arrive as `[5,5,5,5,5,5]` then `[10,...]`), but that test predates
-      TASK-183 and has nothing to do with a chunk boundary. **No assertion
-      anywhere relates a boundary discontinuity to the clip bound**, blended or
-      spliced, so even below 400 ms this criterion has never been checked, only
-      reasoned about.
+      *Two: ~~the criterion's actual test does not exist.~~* — **RESOLVED
+      2026-08-28.** It was true when written: `MAX_DELTA_DEGREES = 5`
+      (`skill-executor.ts`) was named in **no assertion anywhere** in
+      `robot-agent/src`; its *value* was pinned only incidentally by a
+      pre-existing hardware test ("fetches real frames + state, applies
+      delta-clipped actions") that predates TASK-183 and has nothing to do with
+      a chunk boundary. It now has four assertions of its own, in
+      `skill-executor.test.ts` → "a chunk boundary never commands more than
+      MAX_DELTA_DEGREES": a scripted server jumps 60° at the boundary (12x the
+      bound) and what reaches the sidecar is required to stay inside it at a
+      serial boundary, at a hard-spliced RTC boundary and at a crossfaded one,
+      with a sim-mode counterfactual (no `clipAction`) that does jump the full
+      60° so the first three measure the clip rather than the scripted data.
+      **So the bound half of this criterion is now checked, below 400 ms and
+      above it.** Reason One is why the box is still unticked: what holds the
+      boundary past the reach is the clip, not the blend, and the criterion
+      asks for the blend.
 
       Two candidate remedies, neither taken here: raise the default `overlap`
       (buys reach directly, costs more `/predict` calls per step and so more
-      inference load), or shorten `LOOP_PERIOD_MS` (buys reach and moves the
+      inference load), or shorten the loop period (buys reach and moves the
       criterion toward the 15 Hz it names, but re-opens every timing constant
-      above). Both are tuning decisions with their own latency cost and neither
-      was asked for; they belong in a follow-up task, together with a test that
-      actually measures a discontinuity against `MAX_DELTA_DEGREES`.
+      above). Both are tuning decisions with their own latency cost, neither
+      was asked for, and neither has been measured, so they belong in a
+      follow-up task ~~together with a test that actually measures a
+      discontinuity against `MAX_DELTA_DEGREES`~~ — **that test now exists**
+      (see Reason Two), and shortening the period no longer needs a code
+      change, only `VLA_LOOP_PERIOD_MS`, so what a follow-up owes is the
+      tuning and the measurement, not the machinery. Note when taking the
+      second remedy that `MAX_DELTA_DEGREES` is a per-**step** bound, so a
+      shorter period raises the slew rate it permits in the same proportion.
 - [x] Default off; disabled path byte-identical to current serial behavior;
       failed prefetch degrades gracefully to serial + existing retry logic
       — met for the wire shapes, which are the part that leaves the process.
@@ -187,17 +202,25 @@ backend or a robot.
       the hardware-mode sidecar concurrency tests added for fix group C.
 - [ ] Validated in a sim skill run with the GR00T backend (15 Hz, 8-step
       chunks) — smoother trajectory confirmed via the step event stream
-      — **NOT met, and as written it cannot be met by this executor.** Three
-      separate reasons; an earlier draft of this file gave a fourth that was
-      simply false ("there is no `../vla-server` checkout") and it is retracted.
+      — **NOT met.** ~~and as written it cannot be met by this executor~~ —
+      that part is retracted as of 2026-08-28: the structural blocker below is
+      gone, so the criterion is now reachable, just unreached. Three separate
+      reasons were given; the first is resolved and the other two stand. (An
+      earlier draft gave a fourth that was simply false — "there is no
+      `../vla-server` checkout" — and it too is retracted.)
 
-      *Structural, and the one that matters most: the criterion names 15 Hz and
-      this loop runs at 5.* `LOOP_PERIOD_MS = 200` is a module constant with no
-      env or option override, so there is no configuration of this branch that
-      produces a 15 Hz rollout. Every figure in this task is a 5 Hz figure, and
-      the crossfade reach, the prefetch break-even and `RTC_PAYOFF_MARGIN` are
-      all functions of the loop period, so none of the tuning transfers to
-      15 Hz unchecked. Reaching this criterion needs a loop-period knob first.
+      *~~Structural, and the one that matters most: the criterion names 15 Hz
+      and this loop runs at 5.~~* — **RESOLVED 2026-08-28: the loop-period knob
+      exists.** `LOOP_PERIOD_MS = 200` was a module constant with no env or
+      option override, so no configuration of this branch produced a 15 Hz
+      rollout; it is now `VLA_LOOP_PERIOD_MS` / `loopPeriodMs` and
+      `VLA_LOOP_PERIOD_MS=67` is a ~15 Hz rollout. The suite asserts the pacing
+      follows the knob (a 200 ms vs 67 ms A/B over the same 8 steps on the
+      virtual clock). This unblocks the criterion; it does not meet it. Every
+      figure in this task is still a 200 ms figure, and the crossfade reach,
+      the prefetch break-even and `RTC_PAYOFF_MARGIN` are all functions of the
+      period, so none of the tuning transfers to 15 Hz unchecked. The two
+      reasons below are untouched by it.
 
       *The GR00T backend is not runnable from this box.* The checkout at
       `/home/humanoid/develop/vla-server` is real and complete — `server.py`,
@@ -327,12 +350,18 @@ on, compare per-boundary stall ms and max inter-step action delta. Hardware
 validation rides on the existing G1 bring-up tasks (TASK-169) — not a blocker
 here.
 
-Done, except for one half: the A/B compares stall ms and wall clock, but
-**nothing compares max inter-step action delta**. That is the missing measurement
-behind the second acceptance criterion, and it is the first thing a follow-up
-task should add. The timing arms run on Vitest's virtual clock so their figures
-are exact and reproducible; every other RTC test uses real timers and asserts
-call ordering, counters and payload shapes rather than durations.
+Done. ~~except for one half: the A/B compares stall ms and wall clock, but
+**nothing compares max inter-step action delta**~~ — **RESOLVED 2026-08-28:**
+the max inter-step delta is now measured too, by the four
+`MAX_DELTA_DEGREES` boundary tests (serial, spliced, crossfaded, plus the
+sim-mode counterfactual that jumps the full 60°). The timing arms run on
+Vitest's virtual clock so their figures are exact and reproducible; every other
+RTC test uses real timers and asserts call ordering, counters, payload shapes
+and per-step deltas rather than durations.
+
+What is still missing is not a test but a **measurement**: every number here is
+against a scripted mock at 200 ms, and the 15 Hz A/B the fifth criterion names
+is now writable but has not been run.
 
 ## References
 

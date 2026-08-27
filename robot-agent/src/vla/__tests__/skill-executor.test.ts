@@ -364,9 +364,12 @@ function chunkOf(value: number, n = 4): number[][] {
 /**
  * A scripted vla-server. `chunkFor` decides what the k-th `/predict` (1-based)
  * answers with; `delayMs` is how long it takes, which is the knob that creates
- * boundary pressure: a delay under the 200 ms loop period lets a prefetch land
- * in time and one over it does not. Most tests here drive it on real timers;
- * the three that assert elapsed time drive it through runOnVirtualClock.
+ * boundary pressure: a delay under the run's `loopPeriodMs` lets a prefetch
+ * land in time and one over it does not. Most callers leave the period at its
+ * `config.vla.loopPeriodMs` default of 200 ms, so a `delayMs` is read against
+ * that unless the test passes its own `loopPeriodMs`. Most tests here drive it
+ * on real timers; the four that assert elapsed time drive it through
+ * runOnVirtualClock.
  *
  * It also records what the loop asked for and when, which is most of what the
  * RTC tests assert on: the step at which each `/predict` was issued (the
@@ -1866,8 +1869,24 @@ describe('SkillExecutor — the rollout loop period', () => {
     vi.restoreAllMocks();
   });
 
-  it('still ships the historical 5 Hz when VLA_LOOP_PERIOD_MS is unset', () => {
-    expect(config.vla.loopPeriodMs).toBe(200);
+  it('still ships the historical 5 Hz when VLA_LOOP_PERIOD_MS is unset', async () => {
+    // `config` is a module-level object literal, so the copy this file imported
+    // statically froze whatever the environment held at first import. Asserting
+    // on that copy could not fail for the reason this test names. Re-read the
+    // module with the variable genuinely removed instead — the same trick
+    // `config/__tests__/config-rtc.test.ts` uses, and the only thing that makes
+    // the "when unset" in the title true.
+    const saved = process.env.VLA_LOOP_PERIOD_MS;
+    delete process.env.VLA_LOOP_PERIOD_MS;
+    try {
+      vi.resetModules();
+      const fresh = await import('../../config/config.js');
+      expect(fresh.config.vla.loopPeriodMs).toBe(200);
+    } finally {
+      if (saved === undefined) delete process.env.VLA_LOOP_PERIOD_MS;
+      else process.env.VLA_LOOP_PERIOD_MS = saved;
+      vi.resetModules();
+    }
   });
 
   it('paces the run at the requested rate — 5 Hz against ~15 Hz, same steps', async () => {
