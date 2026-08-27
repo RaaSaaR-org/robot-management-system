@@ -23,6 +23,19 @@ status_note: 'PARTIAL ON REAL ROBOT (2026-07-17) — SPEAKER LEG VALIDATED, MIC 
 
 ## Description
 
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-181:** the "current state" below is described on
+GPU_BOX and has to be re-established here, including a NIC on the robot LAN
+`192.168.123.0/24`. One thing gets *easier*: the task was also gated on a Windows
+**admin** shell for an inbound-UDP firewall rule, which no longer applies. The
+real blocker is unchanged — the physical robot's mic array and speaker.
+
+
 Validate the (PC-validated) voice interaction service against the real G1 EDU:
 robot 4-mic array in, robot speaker out, full spoken conversation with the
 robot-agent LLM (local Ollama). All software exists and is tested robot-less;

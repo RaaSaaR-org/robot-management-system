@@ -24,6 +24,19 @@ status_note: 'BLOCKED ON HARDWARE ACCESS for all remaining gates. Software prere
 
 # Lab bring-up — NeoDEM on a computer connected to a real Unitree G1 EDU
 
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-169:** the PC-side prep recorded below was done on the
+Windows box and does **not** carry over — the npm-script env-syntax note, the
+PowerShell firewall scripts and the "native conda envs on GPU_BOX" note are all
+historical. The PC side has to be re-established on this Linux box. This does not
+change the task's real blocker, which is still access to the physical G1 EDU.
+
+
 ## Description
 
 Staged, safety-first checklist for running NeoDEM on a lab computer wired to a

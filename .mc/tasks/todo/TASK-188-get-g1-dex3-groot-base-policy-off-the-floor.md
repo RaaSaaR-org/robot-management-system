@@ -15,9 +15,10 @@ tags:
 sprint: ''
 depends_on:
 - '[[TASK-185]]'
+- '[[TASK-225]]'
 due_date: ''
 created: 2026-07-17
-updated: 2026-07-17
+updated: 2026-08-28
 status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
   trained task only 2/10, so every ablation runs into a floor effect and can detect
   nothing. Fix absolute policy quality before testing any data-augmentation idea
@@ -25,6 +26,53 @@ status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes it
 ---
 
 ## Description
+
+> ⚠ **The Windows GPU box is retired (2026-08-28).** This file was written when a
+> separate Windows/WSL machine ("GPU_BOX") existed. It does not any more — the only
+> machine is the Linux dev box with the RTX 5090. Read every mention of GPU_BOX,
+> WSL, `.bat` or `C:\...` below as *historical context*, not as where the work
+> happens.
+
+**What this means for TASK-188 — checked on the box 2026-08-28:**
+
+| | |
+|---|---|
+| `task185_finetune.py` | **GONE** — not on this box, and in no git repo |
+| `task185_run_ablation_n17.sh` | **GONE** |
+| `task185_serve_n17.sh` | **GONE** |
+| `eval_g1_sim_groot_success.py` (the closed-loop harness) | **GONE** |
+| `start_sim_pickplace_dex3.bat` | **GONE** (and `.bat` is moot here anyway) |
+| Raw `unitreerobotics/G1_Dex3_*` datasets | **present but UNUSABLE** — 26 GB of `videos/` + `meta/` only; **zero** `data/*.parquet`, so no state/action. HF cache entries are empty stubs (156 KB). Must be re-fetched. |
+| Merged 182-episode `unitree_g1_train` | **not present**; nearest is `~/wam-t041/datasets/arm-A` (402 eps / 171,625 frames), a different set |
+| `Isaac-GR00T`, incl. `gr00t/eval/run_gr00t_server.py` | **present** (`~/Isaac-GR00T`) |
+| `~/develop/vla-training` — committed GR00T prepare/finetune/serve scripts + Isaac closed-loop eval | **present** |
+| **`vla-training/groot/g1_dex3_2cam_modality_config.py`** | **present** — lever 1 below says to *build* this; it already exists |
+| TASK-189's eval harness (`grid.py`, `eval_rollouts.py`, `guards.py`, `stats.py`, `analyze.py`) | **GONE** — and [[TASK-189]] is filed `done`, so the dependency graph wrongly reads as satisfied |
+| GPU | **present** — RTX 5090, 32 GB |
+
+⚠ **Corrected 2026-08-28, after review — an earlier version of this banner said
+"the harness no longer exists anywhere" and "the data and the GPU are here".
+Both were wrong, in opposite directions.**
+
+Most of the *tooling* survived: `~/develop/vla-training` is a committed repo
+carrying the GR00T prepare/finetune/serve scripts, an Isaac closed-loop eval,
+and — note — the 2-camera modality config that **lever 1 below asks someone to
+build**. What it needs is path porting, not a rewrite.
+
+What is genuinely missing is the *data*: all 13 raw dataset directories hold
+`videos/` and `meta/` only, with **no `data/` split and zero per-frame
+state/action parquet**, so no finetune can run against them at all. And
+TASK-189's closed-loop harness — the one that superseded task185's — is gone.
+
+**That rebuild is [[TASK-225]]**, which now blocks this task and [[TASK-187]] and
+is listed in `depends_on` above. Do not start any lever below until it lands.
+
+It also settles the reconciliation question in this file's `status_note`: the
+`n188_2cam_14k/checkpoint-8000` weights lived on the retired box, so unless they
+were backed up elsewhere **there is no score to go and look up**, and no way to
+re-derive one without the harness. Treat levers 1 and 2 as unmeasured rather than
+as already-run, and do not spend time hunting for that number first.
+
 
 Train a GR00T-N1.7 policy on the **real** `G1_Dex3` pick-place data that can actually do its own
 task — target **≥ 6/10 closed-loop** on `Isaac-PickPlace-Cylinder-G129-Dex3-Joint`, up from
