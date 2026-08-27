@@ -15,9 +15,10 @@ tags:
 sprint: ''
 depends_on:
 - '[[TASK-185]]'
+- '[[TASK-225]]'
 due_date: ''
 created: 2026-07-17
-updated: 2026-07-17
+updated: 2026-08-28
 status_note: 'Spun out of TASK-185. THE bottleneck: our best policy completes its own
   trained task only 2/10, so every ablation runs into a floor effect and can detect
   nothing. Fix absolute policy quality before testing any data-augmentation idea
@@ -52,10 +53,14 @@ levers below can be attempted, the training and closed-loop-eval harness has to
 be rebuilt on Linux, and the training set rebuilt or re-merged — TASK-180, in
 `done/`, documents the merge that produced it.
 
-That rebuild is real work, is not currently written down as a task, and blocks
-both this task and [[TASK-187]]. Note it is *also* what makes the
-`n188_2cam_14k/checkpoint-8000` result above unrecoverable unless those weights
-are backed up somewhere off this box.
+**That rebuild is [[TASK-225]]**, which now blocks this task and [[TASK-187]] and
+is listed in `depends_on` above. Do not start any lever below until it lands.
+
+It also settles the reconciliation question in this file's `status_note`: the
+`n188_2cam_14k/checkpoint-8000` weights lived on the retired box, so unless they
+were backed up elsewhere **there is no score to go and look up**, and no way to
+re-derive one without the harness. Treat levers 1 and 2 as unmeasured rather than
+as already-run, and do not spend time hunting for that number first.
 
 
 Train a GR00T-N1.7 policy on the **real** `G1_Dex3` pick-place data that can actually do its own

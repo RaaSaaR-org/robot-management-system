@@ -20,9 +20,10 @@ depends_on:
 - '[[TASK-186]]'
 - '[[TASK-188]]'
 - '[[TASK-189]]'
+- '[[TASK-225]]'
 due_date: ''
 created: 2026-07-17
-updated: 2026-07-17
+updated: 2026-08-28
 status_note: 'THE FINAL STEP, not the next one — it is blocked on all three fixes and
   must not be run before them. TASK-185 failed for three independent reasons: the sim
   cannot score a push (TASK-186), both arms sat at 0-2/10 so the ablation hit a floor
@@ -41,9 +42,11 @@ status_note: 'THE FINAL STEP, not the next one — it is blocked on all three fi
 > happens.
 
 **What this means for TASK-187:** this task already says "do not start early",
-depending on [[TASK-186]] and [[TASK-188]]. It now also depends on the harness
-rebuild described in [[TASK-188]] — `task185_finetune.py`, `task185_serve_n17.sh`
-and `eval_g1_sim_groot_success.py` went with the Windows box and exist in no repo.
+depending on [[TASK-186]] and [[TASK-188]]. It now also depends on **[[TASK-225]]**,
+the harness rebuild — `task185_finetune.py`, `task185_serve_n17.sh` and
+`eval_g1_sim_groot_success.py` went with the Windows box and exist in no repo.
+That makes TASK-225 a *fourth* blocker, and the first one in the chain: TASK-188
+cannot start without it either.
 The WSL2 localhost-forwarding trick this task relies on to reach the policy server
 is moot: sim and policy server now run on the same Linux box, so a plain
 `127.0.0.1` port works with nothing forwarding it.
