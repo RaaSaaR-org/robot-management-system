@@ -67,7 +67,7 @@ can start today. This task is what stands between them and a first run.
 | └ `eval/` (137 files), incl. `isaac_dds_bridge.py`, `run_apple_eval_isaac.py`, `replay_gate_isaac.py` | present — a working closed-loop Isaac eval, but written for the **apple** task |
 | `~/Isaac-GR00T`, incl. `gr00t/eval/run_gr00t_server.py` | **present** (ZMQ PolicyServer) |
 | `vla-server` with `configs/g1_dex3_1cam.yaml`, `g1_dex3_2cam.yaml` | **present** |
-| `unitree_sim_isaaclab` | **present** and runs — `robot-agent/hardware/isaac_sim_patches/README.md`. ⚠ the row above used to imply the location was obvious; it is not. It is at `/home/humanoid/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/unitree_sim_isaaclab`, pinned at **`e30c25b`** ("update readme"), which **no `$UNITREE_ROOT` reference in any task file points at** — verified `git rev-parse HEAD` = `e30c25b1dffdf92ada1d6c8c1fe9a47bdde0fecc` |
+| `unitree_sim_isaaclab` | **present** and runs — `robot-agent/hardware/isaac_sim_patches/README.md`. ⚠ the row above used to imply the location was obvious; it is not. It is at `$UNITREE_ROOT/g1_quest_teleop/third_party/checkouts/unitree_sim_isaaclab`, pinned at **`e30c25b`** ("update readme"), which **no `$UNITREE_ROOT` reference in any task file points at** — verified `git rev-parse HEAD` = `e30c25b1dffdf92ada1d6c8c1fe9a47bdde0fecc` |
 | GPU | **present** — RTX 5090, 32 GB |
 
 **Tooling — genuinely gone:**
@@ -343,7 +343,7 @@ Verified without executing either script (both launch GPU work):
 ```
 $ bash -n scripts/40_groot_prepare_dataset.sh && bash -n scripts/41_groot_finetune.sh   # both clean
 $ bash -c 'GROOT="${ISAAC_GROOT_DIR:-$HOME/Isaac-GR00T}"; VT="${VLA_TRAINING_DIR:-$HOME/develop/vla-training}"; echo $GROOT $VT'
-/home/humanoid/Isaac-GR00T /home/humanoid/develop/vla-training      # both exist
+$HOME/Isaac-GR00T $HOME/develop/vla-training      # both exist
 $ ISAAC_GROOT_DIR=/opt/groot VLA_TRAINING_DIR=/opt/vt bash -c '...'
 /opt/groot /opt/vt                                                  # overrides win
 ```
