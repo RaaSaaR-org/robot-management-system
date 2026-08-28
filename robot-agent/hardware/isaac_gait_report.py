@@ -28,13 +28,19 @@ Usage:
 ⚠ **Run the sim with `NEODEM_LOG_EVERY=5`.** The default 25-step interval is
 2 Hz of simulated time, and the G1 steps at about 1.76 Hz -- so the default
 *aliases the gait* and reports meaningless foot make/break cadences. This script
-refuses to report a cadence when the sampling interval cannot resolve one.
+still prints the cadence when the sampling interval cannot resolve one -- the
+duty-factor percentages beside it stay valid -- but flags it ALIASED so the
+number is not read as a measurement.
 """
 import argparse, math, re, sys
 
 # The policy runs at 50 Hz of simulated time: decimation 4 x sim.dt 0.005.
 # Every rate here is simulated time, never wall clock.
 POLICY_HZ = 50.0
+# 0004 logs every step while `n <= 5` regardless of NEODEM_LOG_EVERY, to catch a
+# fall before the first action lands. Those samples are a different sampling rate
+# from the rest of the run and must not be mixed into the interval estimate.
+BOOT_TRANSIENT_STEPS = 5
 # `yaw=` and `cmd=` are optional so this still reads logs from the first
 # revision of the instrumentation, which had neither.
 LINE = re.compile(
@@ -99,8 +105,17 @@ def main():
     ap.add_argument("log", help="sim stdout log containing [TASK-203] lines")
     ap.add_argument("--from", dest="lo", type=int, default=None)
     ap.add_argument("--to", dest="hi", type=int, default=None)
-    ap.add_argument("--vx", type=float, default=0.5, help="the commanded vx, for comparison")
+    # Default None, NOT 0.5: the command the policy saw is in the log (that is what
+    # the `cmd=` field of patch 0004 is for), so read it rather than assume it. An
+    # assumed 0.5 silently mislabels every run driven at any other velocity --
+    # including a turn-in-place run, where the honest --vx 0 used to divide by zero.
+    ap.add_argument("--vx", type=float, default=None,
+                    help="the commanded vx, for comparison. Default: read from the "
+                         "log's cmd= field, falling back to 0.5 for logs without one.")
     a = ap.parse_args()
+
+    if (a.lo is None) != (a.hi is None):
+        ap.error("--from and --to must be given together (or neither, to auto-detect)")
 
     rows = parse(a.log)
     if not rows:
@@ -114,15 +129,31 @@ def main():
     # a 1-step interval for any run and would silently disable the aliasing
     # guard below -- the one check that stops a 2 Hz sampler from reporting a
     # confident, wrong cadence for a 1.7 Hz gait.
-    deltas = [b["step"] - a_["step"] for a_, b in zip(rows, rows[1:]) if b["step"] > a_["step"]]
-    interval = max(set(deltas), key=deltas.count) if deltas else 1
+    #
+    # Those boot-transient samples are dropped before taking the mode rather than
+    # relied on being outvoted. 0004 logs every step while `n <= 5` and then every
+    # NEODEM_LOG_EVERY steps, so a short run carries five 1-step deltas against only
+    # a handful of real ones and the mode comes out 1 -- reinstating, for exactly the
+    # runs most likely to be a quick check, the silent guard-disabling this comment
+    # says the mode prevents. Ties break high for the same reason: claiming a faster
+    # sampler than the log actually has is the failure that matters here.
+    body = [r for r in rows if r["step"] > BOOT_TRANSIENT_STEPS] or rows
+    deltas = [b["step"] - a_["step"] for a_, b in zip(body, body[1:]) if b["step"] > a_["step"]]
+    interval = max(set(deltas), key=lambda d: (deltas.count(d), d)) if deltas else 1
     sample_hz = POLICY_HZ / interval
     print(f"log interval {interval} steps = {sample_hz:.0f} Hz of simulated time")
 
     if a.lo is None or a.hi is None:
         win = moving_window(rows)
         if win is None:
-            print("\nthe base never moved faster than 0.05 m/s -- no walk to report")
+            # Not necessarily a failure: a turn-in-place phase is commanded at
+            # vx = 0 and is SUPPOSED to stay put, so point at the override rather
+            # than just declining. The foot-contact block is the whole report for
+            # such a run, and it needs an explicit window to reach.
+            print("\nthe base never moved faster than 0.05 m/s -- no travelling "
+                  "window to auto-detect.")
+            print("  If this was a turn in place, pass the phase explicitly: "
+                  f"--from {rows[0]['step']} --to {rows[-1]['step']}")
             return 1
         lo, hi = win
         print(f"auto-detected moving window: steps {lo}..{hi} "
@@ -134,21 +165,78 @@ def main():
         print("too few samples in the window"); return 2
     dur = (w[-1]["step"] - w[0]["step"]) / POLICY_HZ
 
+    # What the policy actually saw in this window, straight from the log. This is
+    # the whole point of 0004 logging `cmd=`: attributing a window to a commanded
+    # phase by counting steps from when a test script started drifts with real-time
+    # factor, and got the sign of the yaw result backwards once already.
+    cmds = [(r["cvx"], r["cvy"], r["cwz"]) for r in w if r["cvx"] is not None]
+    cmd_vx = max(set(c[0] for c in cmds), key=[c[0] for c in cmds].count) if cmds else None
+    cmd_wz = max(set(c[2] for c in cmds), key=[c[2] for c in cmds].count) if cmds else None
+    vx = a.vx if a.vx is not None else (cmd_vx if cmd_vx is not None else 0.5)
+    if cmds:
+        distinct = sorted(set(cmds))
+        print(f"commanded in window : vx={cmd_vx:+.2f} wz={cmd_wz:+.2f}"
+              + (f"  ({len(distinct)} distinct commands -- the window spans more than "
+                 f"one phase, narrow it with --from/--to)" if len(distinct) > 1 else ""))
+        if a.vx is not None and cmd_vx is not None and abs(a.vx - cmd_vx) > 1e-6:
+            print(f"  ⚠ --vx {a.vx:g} disagrees with the logged command {cmd_vx:+.2f}; "
+                  f"using {a.vx:g} as you asked")
+
     arc = sum(math.hypot(b["x"] - a_["x"], b["y"] - a_["y"]) for a_, b in zip(w, w[1:]))
     disp = math.hypot(w[-1]["x"] - w[0]["x"], w[-1]["y"] - w[0]["y"])
     print(f"\n--- BASE TRANSLATION ({dur:.1f} s of simulated time) ---")
     print(f"  path length        : {arc:6.2f} m")
     print(f"  straight-line       : {disp:6.2f} m")
-    print(f"  mean ground speed  : {arc/dur:6.3f} m/s   (commanded {a.vx:.3f}, "
-          f"{100*(arc/dur - a.vx)/a.vx:+.0f}%)")
+    # Guarded: a turn-in-place phase is commanded at vx = 0, and "percent of zero"
+    # is not a number. It used to raise ZeroDivisionError here, after printing the
+    # two lines above and before the foot-contact block -- i.e. it took out exactly
+    # the half of the report a turn run is read for.
+    rel = f"{100 * (arc / dur - vx) / vx:+.0f}%" if abs(vx) > 1e-9 else "n/a"
+    print(f"  mean ground speed  : {arc/dur:6.3f} m/s   (commanded {vx:.3f}, {rel})")
 
-    # Course over ground. A pure vx command with yaw_vel = 0 should hold a heading;
-    # curvature here is yaw drift, and it is what makes a `goto` block miss.
-    h0 = math.atan2(w[1]["y"] - w[0]["y"], w[1]["x"] - w[0]["x"])
-    h1 = math.atan2(w[-1]["y"] - w[-2]["y"], w[-1]["x"] - w[-2]["x"])
-    turn = (h1 - h0 + math.pi) % (2 * math.pi) - math.pi
-    print(f"  course over ground : {math.degrees(h0):+.1f} deg -> {math.degrees(h1):+.1f} deg "
-          f"= {math.degrees(turn):+.1f} deg ({math.degrees(turn)/dur:+.2f} deg/s drift)")
+    # BASE HEADING, from the `yaw=` field 0004 logs. This is the primary heading
+    # measurement and the only one that means anything for a turn: course over
+    # ground is undefined when the robot turns in place (there is no ground track
+    # to take a bearing along), which is precisely the case under test.
+    #
+    # Accumulated per-sample and unwrapped, not differenced end to end: yaw is an
+    # atan2 output on (-pi, pi], so a run that turns through the wrap -- anything
+    # past a half turn, which -45 deg/s reaches in four seconds -- reads back as a
+    # small rotation the other way if you subtract the endpoints.
+    yaws = [r["yaw"] for r in w if r["yaw"] is not None]
+    if len(yaws) == len(w) and len(yaws) >= 2:
+        dyaw = 0.0
+        for p_, c_ in zip(yaws, yaws[1:]):
+            dyaw += (c_ - p_ + math.pi) % (2 * math.pi) - math.pi
+        rate = math.degrees(dyaw) / dur
+        cmd_note = ""
+        if cmd_wz is not None:
+            # send_commands_keyboard.py publishes -yaw_vel, so a positive wz on the
+            # wire is a LEFT turn and should raise yaw.
+            cmd_note = (f", commanded {cmd_wz:+.2f} -> {math.degrees(cmd_wz):+.1f} deg/s"
+                        f", ratio {rate / math.degrees(cmd_wz):+.2f}"
+                        if abs(cmd_wz) > 1e-9 else ", commanded 0.00 (should hold heading)")
+        print(f"  base heading       : {math.degrees(dyaw):+.1f} deg over the window "
+              f"= {rate:+.2f} deg/s{cmd_note}")
+    else:
+        print("  base heading       : n/a (log has no yaw= field -- pre-0004 "
+              "instrumentation, or an older revision of it)")
+
+    # Course over ground, for a translating run only: it is the bearing of the
+    # ground track, so it says how far a straight `walk` bends, which is what makes
+    # a `goto` block miss. Estimated over a whole stride at each end rather than
+    # from one sample pair -- the pelvis sways laterally within every stride, and a
+    # single-sample bearing on a swaying base is dominated by that sway.
+    if disp > 0.05:
+        span = max(1, min(len(w) // 3, int(round(POLICY_HZ / interval))))
+        h0 = math.atan2(w[span]["y"] - w[0]["y"], w[span]["x"] - w[0]["x"])
+        h1 = math.atan2(w[-1]["y"] - w[-1 - span]["y"], w[-1]["x"] - w[-1 - span]["x"])
+        turn = (h1 - h0 + math.pi) % (2 * math.pi) - math.pi
+        print(f"  course over ground : {math.degrees(h0):+.1f} deg -> {math.degrees(h1):+.1f} deg "
+              f"= {math.degrees(turn):+.1f} deg ({math.degrees(turn)/dur:+.2f} deg/s drift)")
+    else:
+        print(f"  course over ground : n/a (base moved {disp:.2f} m -- no ground "
+              f"track to take a bearing along)")
 
     n = len(w)
     lair = sum(1 for r in w if r["lair"] > 0)
@@ -196,7 +284,20 @@ def main():
         print(f"    (The duty-factor percentages above are NOT aliased and stay valid: "
               f"they are per-sample occupancies, not rates.)")
 
-    walked = arc / dur > 0.5 * a.vx and one > 0 and both == 0
+    # A turn-in-place phase is commanded at vx = 0 and is not being asked to travel,
+    # so the translation half of the verdict does not apply to it. Judging it as a
+    # failed walk would call the one measurement the open left/right-turn defect
+    # needs a "DOES NOT WALK" and exit non-zero on a run that did exactly what it
+    # was told.
+    stepping = one > 0 and both == 0
+    if abs(vx) < 1e-9:
+        print(f"\n=== {'STEPS IN PLACE' if stepping else 'DOES NOT STEP'} ===   "
+              f"(vx = 0: no travel commanded, so this is a stance verdict, not a walk one)")
+        return 0 if stepping else 1
+    # `arc` is a path length and carries no sign, so comparing it against a signed
+    # command is only meaningful for a forward walk; abs() keeps a backwards command
+    # from making the speed test vacuously true.
+    walked = arc / dur > 0.5 * abs(vx) and stepping
     print(f"\n=== {'WALKS' if walked else 'DOES NOT WALK'} ===")
     return 0 if walked else 1
 

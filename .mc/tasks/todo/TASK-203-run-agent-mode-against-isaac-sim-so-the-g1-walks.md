@@ -207,11 +207,13 @@ Two things Isaac needs to start at all here:
    | 20 Hz (old) | 0.079 rad | — | lean, no steps |
    | 100 Hz (fixed) | **0.941 rad** | 1.73 Hz | **walks** |
 
-   Reproduce: apply `isaac_sim_patches/0004-task203-gait-instrumentation.patch`, start the sim per
-   `isaac_sim_patches/README.md` with `NEODEM_LOG_EVERY=5`, run
-   `isaac_gait_probe.py --domain 1 --vx 0.5`, then `isaac_gait_report.py <sim-log>`.
+   Reproduce: apply `isaac_sim_patches/0004-task203-gait-instrumentation.patch`, start the sim
+   per `isaac_sim_patches/README.md` — that launch is a `docker run`, so the setting has to go in
+   as **`-e NEODEM_LOG_EVERY=5`**, not as a shell variable in front of it — then run
+   `isaac_gait_probe.py --domain 1 --vx 0.5 --secs 25` and `isaac_gait_report.py <sim-log>`.
    ⚠ `NEODEM_LOG_EVERY=5` matters: the default 25 is 2 Hz of simulated time and **aliases** the
-   ~1.7 Hz gait, reporting a 0.27 Hz foot cadence for the very same walk.
+   ~1.7 Hz gait, reporting a 0.27 Hz foot cadence for the very same walk. `--secs` matters too:
+   it defaults to 20, and the 24.3 s window above needs 25.
 
    ### ⚠ Two defects this exposed — both open, both land on step 4
 
@@ -219,7 +221,8 @@ Two things Isaac needs to start at all here:
    turns −3.1 to −3.4 °/s, about −82 ° over a 24 s walk, bending a straight command into an arc
    (13.84 m of path for 12.75 m of displacement).
 
-   **(b) Left turns do nothing; right turns work.** Eight yaw phases over three runs, `vx = 0`:
+   **(b) Left turns do nothing; right turns work.** Twelve yaw phases over three runs, all at
+   `vx = 0` except the last row:
 
    | commanded `wz` | achieved | ratio | feet airborne |
    |---|---|---|---|
@@ -251,9 +254,12 @@ Two things Isaac needs to start at all here:
    × `sim.dt 0.005` pins the policy at 50 Hz of *simulated* time whatever the host does; the slow
    number was real-time factor (0.28), which starves a wall-clock caller such as
    `isaac_loco_bridge.py` but tells the policy nothing. TASK-204 fixed that (RTF 0.28 → 1.04, and
-   worth having for exactly this step, since Agent Mode drives the bridge on wall clock) and the
-   robot still does not walk: it does not even stand, with no velocity command sent. The actual
-   blocker is [[TASK-223]]. Candidate causes tested there are recorded with their negative results
+   worth having for exactly this step, since Agent Mode drives the bridge on wall clock).
+   ~~and the robot still does not walk: it does not even stand, with no velocity command sent.
+   The actual blocker is [[TASK-223]].~~ **Both halves of that are now retired**: [[TASK-223]]
+   found the standing failure was a missing ground plane — the robot was falling through the
+   floor — and this step found the walking failure was the 20 Hz publish rate above.
+   Candidate causes tested there are recorded with their negative results
    so they are not re-run — and note that the two "different control rate" retests were dynamically
    the same experiment, so they are not among the useful negatives.
 3. ~~The `sport` RPC facade answers `SetVelocity`~~ — **done 2026-08-08.** `isaac_loco_check.py`
@@ -285,8 +291,9 @@ Two things Isaac needs to start at all here:
    forward-and-turn arc. Whether that is acceptable is a product decision, not a sim one.
    ⚠ Whatever drives this must publish velocity commands at **>= 50 Hz, and 100 Hz to match the
    vendor** — see the self-clearing command slot under step 2. `isaac_loco_bridge.py` republishes
-   onto `rt/run_command/cmd` and needs checking against this; it was written before the
-   self-clearing behaviour was understood.
+   onto `rt/run_command/cmd`; it was written before the self-clearing behaviour was understood,
+   and was checked and raised to 100 Hz under step 3 above. Anything else that publishes a
+   velocity command still needs the same check.
 5. Head-camera frames show gait-induced bob absent from the kinematic base — the observable
    difference that motivates this task. **Unblocked 2026-08-28** — there is now a real gait at
    1.7 Hz to see bob from, and the base height drops from 0.789 standing to ~0.75 while walking.

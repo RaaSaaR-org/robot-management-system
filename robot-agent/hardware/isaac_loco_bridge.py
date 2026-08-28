@@ -47,11 +47,17 @@ slower than real time -- a heavy scene, a busy GPU -- a `SetVelocity(duration=3)
 after 3 wall seconds, which is LESS than 3 seconds of robot motion. Prefer short durations
 refreshed often (which is what Agent Mode's block executor already does) over one long one.
 
-@status new — the RPC path is proven end to end by isaac_loco_check.py (7/7), but Agent Mode has
-not yet driven it and the G1 in the sim it fronts cannot stand up. The duration/wall-clock caveat
-above was acute at real-time factor 0.28; TASK-204 took the sim to RTF ~1.04, so the two clocks now
-agree closely. That did NOT make the robot walk — the standing failure is unrelated to speed.
-See TASK-203/TASK-223.
+@status working — the RPC path is proven end to end by isaac_loco_check.py (7/7), and as of
+2026-08-28 (TASK-203 step 3) an unmodified LocoClient holding SetVelocity(0.5, 0, 0) through this
+bridge walked the G1 16.36 m at 0.613 m/s, with alternating foot contact. The whole path from
+LocoClient to the floor is proven, not just the wire. The duration/wall-clock caveat above was
+acute at real-time factor 0.28; TASK-204 took the sim to RTF ~1.04, so the two clocks now agree
+closely.
+
+Two things this does NOT yet do, both open on TASK-203 step 4: the heading drifts right by about
+-2.2 deg/s on this path even with yaw_vel commanded at 0, and the policy does not respond to a
+left-turn command at all — so a `goto` that needs a left turn cannot be satisfied. See
+TASK-203/TASK-223.
 """
 from __future__ import annotations
 
@@ -146,8 +152,14 @@ class IsaacLocoBridge:
             # lives on the SDK's own queue thread and keeps answering SetVelocity with
             # RPC_OK after we die -- the same "code 0 while the robot stands still" the
             # module docstring warns about for two services on one domain, now reachable in
-            # one process. Isaac's action provider also latches the LAST command it saw, so
-            # dying mid-walk leaves the robot walking on a velocity nobody can revoke.
+            # one process.
+            #
+            # Against ISAAC specifically the robot does not keep walking when this thread
+            # dies: the sim's command slot is self-clearing (see --rate below), so it decays
+            # to zero within one policy step on its own. The explicit zeros are still the
+            # right thing to write, because this bridge fronts the same LocoClient API as a
+            # REAL G1, where nothing clears the slot and the last command does latch -- and
+            # because a deliberate zero is distinguishable from a starved one at the far end.
             # Stopping it is the last useful thing this thread can do; main() then reports
             # the error and exits non-zero rather than idling as a service that lies.
             self.error = exc
@@ -243,6 +255,15 @@ def main() -> int:
     # argument mistake and not a robot that has stopped receiving commands.
     if args.rate <= 0:
         ap.error("--rate must be > 0")
+    if args.rate < 50.0:
+        # Not a hard error: driving a real G1, or a mock, has no self-clearing slot and a
+        # lower rate is legitimate there. Against Isaac it silently reproduces the bug this
+        # default exists to avoid, and that failure looks like a locomotion problem rather
+        # than a transport one -- it cost TASK-223 and TASK-203 a wrong conclusion each.
+        print(f"[bridge] WARNING: --rate {args.rate:g} Hz is below the sim's 50 Hz policy "
+              f"rate. Isaac clears its command slot on every read, so the policy will see "
+              f"a chopped command where it was trained on a held one, and the robot will "
+              f"lean instead of walking. Use >= 50, ideally 100.", flush=True)
 
     bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet, iface=args.iface)
 

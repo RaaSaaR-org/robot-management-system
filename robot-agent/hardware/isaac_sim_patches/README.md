@@ -40,7 +40,7 @@ sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 | Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only), `0004-task203-gait-instrumentation.patch` (optional, observation-only) |
 | Files touched by 0001 + 0002 | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
 | Files touched by 0003 | `sim_main.py`, `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py`, new `tasks/common_rewards/base_reward_push_cylindercfg.py` |
-| Files touched by 0004 | `action_provider/action_provider_wh_dds.py` (3 hunks) |
+| Files touched by 0004 | `action_provider/action_provider_wh_dds.py` (4 hunks) |
 
 `git apply` against a different upstream commit may reject. The seven hunks in
 `0001` + `0002` are independent of one another, and each is documented below by
@@ -428,6 +428,7 @@ them in order; each is a fresh episode.
 ```bash
 docker run --rm --user 0 --runtime=nvidia --gpus all \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e NEODEM_LOG_EVERY=5 \
   -e HOME=/home/humanoid -e PYTHONPATH= -e CYCLONEDDS_HOME=$UNITREE_ROOT/cyclonedds/install \
   --device /dev/dri --ipc=host --network host \
   -v /home/humanoid:/home/humanoid -w $UNITREE_ROOT/unitree_sim_isaaclab \
@@ -519,8 +520,9 @@ The patch adds, to `action_provider/action_provider_wh_dds.py`:
    hard-coded value). **Set it to 5 when measuring a gait.** 25 steps is 2 Hz of
    simulated time and the G1 steps at ~1.7 Hz, so the default *aliases the gait*:
    the same walk measured at 2 Hz reports a 0.27 Hz foot cadence and at 10 Hz
-   reports 1.72 Hz. Duty-factor percentages are unaffected — they are per-sample
-   occupancies, not rates.
+   reports 1.72 Hz. `isaac_gait_report.py` still prints the cadence in that case
+   but marks it `⚠ ALIASED`; the duty-factor percentages beside it are unaffected
+   and stay valid, being per-sample occupancies rather than rates.
 2. **A `[TASK-203]` line** carrying base `x`/`y`, base `yaw`, the velocity
    command the policy actually saw that step, and per-foot vertical contact
    force, air time and contact time.
@@ -538,7 +540,14 @@ Read the output with `robot-agent/hardware/isaac_gait_report.py`.
 ### Measured with it, 2026-08-28 — the G1 walks
 
 Sim per "Running it" below plus `NEODEM_LOG_EVERY=5`, driven by
-`isaac_gait_probe.py --domain 1 --vx 0.5`:
+`isaac_gait_probe.py --domain 1 --vx 0.5 --secs 25`:
+
+⚠ The launch below is a `docker run` with an explicit `-e` list, so the variable
+has to be passed **as `-e NEODEM_LOG_EVERY=5` among those flags**. Setting it as
+a shell variable in front of `docker run` sets it on the host and it never
+reaches the sim, which then samples at the default 2 Hz — the aliased case this
+whole section warns about. `--secs` likewise defaults to 20; the 24.3 s window
+below needs 25.
 
 | | measured | commanded |
 |---|---|---|
@@ -561,8 +570,9 @@ textbook walking duty factor.
 0, the base turns −3.1 to −3.4 °/s — about −82 ° over a 24 s walk, bending a
 straight-line command into an arc (13.84 m of path for 12.75 m of displacement).
 
-**2. Left turns do nothing; right turns work.** Measured over eight yaw phases
-across three runs, all from a standing start, all with `vx = 0`:
+**2. Left turns do nothing; right turns work.** Measured over twelve yaw phases
+across three runs, all from a standing start, all with `vx = 0` except the last
+row:
 
 | commanded `wz` | achieved | ratio | feet airborne |
 |---|---|---|---|
@@ -600,6 +610,7 @@ CUDA working is not evidence that Vulkan will (CUDA uses the world-readable
 ```bash
 docker run --rm --user 0 --runtime=nvidia --gpus all \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e NEODEM_LOG_EVERY=5 \
   -e HOME=/home/humanoid -e PYTHONPATH= -e CYCLONEDDS_HOME=$UNITREE_ROOT/cyclonedds/install \
   --device /dev/dri --ipc=host --network host \
   -v /home/humanoid:/home/humanoid -w $UNITREE_ROOT/unitree_sim_isaaclab \
