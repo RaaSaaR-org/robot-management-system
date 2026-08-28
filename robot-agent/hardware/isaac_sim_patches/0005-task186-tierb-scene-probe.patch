@@ -1,0 +1,620 @@
+--- a/sim_main.py
++++ b/sim_main.py
+@@ -242,6 +242,19 @@
+         env._push_reward_reset = True
+         print(f"[env] reward mode: {env._reward_mode}"
+               + (f" (push_direction={args_cli.push_direction})" if env._reward_mode == "push" else ""))
++
++        # NeoDEM (TASK-186): optional scene probe. Inert unless NEODEM_PUSH_PROBE
++        # is set -- it changes no dynamics, observation or action when off. It
++        # answers "can this rod be pushed at all", which is a precondition for
++        # tier-B control (a) and is confounded by any scripted-arm attempt.
++        env._neodem_push_probe = None
++        if os.environ.get("NEODEM_PUSH_PROBE", "").strip():
++            try:
++                from neodem_push_probe import PushProbe
++                env._neodem_push_probe = PushProbe(env)
++            except Exception as e:
++                print(f"[push_probe] FAILED to arm: {type(e).__name__}: {e}")
++                raise
+         if args_cli.physics_dt is not None:
+             try:
+                 env.sim.set_substep_time(args_cli.physics_dt)
+@@ -515,6 +528,13 @@
+             while simulation_app.is_running() and controller.is_running:
+                 current_time = time.time()
+                 loop_count += 1
++                # NeoDEM (TASK-186): step the scene probe, if armed.
++                if getattr(env, "_neodem_push_probe", None) is not None:
++                    try:
++                        env._neodem_push_probe.step()
++                    except Exception as e:
++                        print(f"[push_probe] step failed: {type(e).__name__}: {e}")
++                        env._neodem_push_probe = None
+                 if not args_cli.replay_data:
+                     try:
+                         env_state = env.scene.get_state()
+--- /dev/null
++++ b/neodem_push_probe.py
+@@ -0,0 +1,581 @@
++# NeoDEM (TASK-186) — tier-B in-sim harness for the push/slide reward.
++#
++# The task asks for four controls. Three of them assert that the reward must
++# NOT fire, and all three ride on vetoes that are independent of the robot:
++#
++#   (b) lift-and-place -> gate 2, max_lift_m   -- hand-independent
++#   (c) knock over     -> gate 3, max_tilt_deg -- hand-independent
++#   (d) do nothing     -> no accumulator may drift at rest
++#
++# Only (a) -- slide 0.20 m and SCORE -- needs a hand, because gate 4 credits
++# displacement only while a hand body is within contact_radius_m. This module
++# therefore runs (b), (c) and (d) end to end against the live reward, and does
++# not pretend to run (a). See the README for why (a) needs teleop or a policy:
++# `create_action_provider` implements dds/dds_wholebody/replay only, so there is
++# no scripted arm in this checkout to drive it with.
++#
++# It also settles the README's standing analytic claim -- "the scene's object
++# probably cannot be pushed at all":
++#
++#     a horizontal force at height h slides the rod rather than tipping it
++#     only while  mu*m*g*h < m*g*r,  i.e.  h < r/mu = 0.018/1.5 ~= 0.012 m
++#
++# That bound does not depend on how hard you push, which is what makes it worth
++# measuring: if it holds, no hand trajectory whatsoever can produce a scoring
++# push and (a) is unrunnable for reasons that have nothing to do with the
++# reward. Establishing that by driving the rigid body directly is cleaner than
++# doing it with an arm, where "the rod tipped" and "the scripted arm missed"
++# are the same observation.
++#
++# Inert unless NEODEM_PUSH_PROBE is set: no dynamics, observation or action
++# changes when off.
++#
++# Env vars:
++#   NEODEM_PUSH_PROBE          scenarios to run, comma-separated, in order.
++#                              one of/any of: sweep, knock, lift, idle, all
++#   NEODEM_PUSH_PROBE_DELAY    loop steps to hold before the first scenario,
++#                              so control (d) can be scored on the same boot
++#   NEODEM_PUSH_PROBE_FORCE    push force, N (default 8.0)
++#   NEODEM_PUSH_PROBE_HEIGHTS  sweep heights, metres, space/comma separated
++
++import math
++import os
++
++import torch
++
++
++# The rod, from tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py:56-77
++ROD_RADIUS_M = 0.018
++ROD_HEIGHT_M = 0.35
++ROD_MASS_KG = 0.4
++ROD_MU = 1.5           # static == dynamic, combine_mode "max" against the table
++G = 9.81
++
++# Contact heights to sweep, measured from the rod's base (the table surface).
++# Dense below 3 cm because that is where the predicted transition sits, then
++# coarse out to the heights a Dex3 palm could actually reach.
++DEFAULT_HEIGHTS_M = [0.004, 0.008, 0.010, 0.012, 0.014, 0.018, 0.025,
++                     0.05, 0.10, 0.175, 0.25, 0.30]
++
++# 8 N is ~1.36x the force needed to break static friction (mu*m*g = 5.89 N), so
++# a slide is physically available at every height in the sweep. Anything that
++# tips therefore tips because of geometry, not because the push was too weak.
++DEFAULT_FORCE_N = 8.0
++
++TILT_VETO_DEG = 20.0   # matches the reward's max_tilt_deg default
++LIFT_VETO_M = 0.02     # indicative only; the reward's own max_lift_m governs
++SLIDE_TARGET_M = 0.20  # matches control (a): "slide the cylinder 0.20 m"
++
++
++def _f(name, default):
++    try:
++        return float(os.environ.get(name, "") or default)
++    except ValueError:
++        return default
++
++
++def _tilt_both(q):
++    """Tilt from world +z under BOTH quaternion orderings, in degrees.
++
++    The reward computes cos(tilt) as 1 - 2*(q[1]^2 + q[2]^2), which is correct
++    only if the buffer is (w, x, y, z). Isaac Lab's asset data buffers are wxyz,
++    but the scene configs in this checkout write `rot=` as xyzw, and the two are
++    easy to conflate.
++
++    Reporting both makes the ordering self-evident from the rod AT REST: an
++    upright rod is (1,0,0,0) in wxyz, which the wxyz formula reads as 0 deg and
++    the xyzw formula reads as 180 deg -- and a rod standing on a table cannot be
++    at 180 deg. So the home-pose line alone says which is real, before anything
++    is pushed. If it says the reward is on the wrong one, gate 3 cannot veto a
++    tipped object and every verdict in the session is void.
++    """
++    q = q.tolist()
++    cos_wxyz = max(-1.0, min(1.0, 1.0 - 2.0 * (q[1] ** 2 + q[2] ** 2)))
++    cos_xyzw = max(-1.0, min(1.0, 1.0 - 2.0 * (q[0] ** 2 + q[1] ** 2)))
++    return math.degrees(math.acos(cos_wxyz)), math.degrees(math.acos(cos_xyzw))
++
++
++class _ObjectDriver:
++    """Everything that touches the object, shared by the scenarios."""
++
++    def __init__(self, env):
++        self.env = env
++        self.obj = env.scene["object"]
++        self.home = None
++        self._api = None
++
++    def capture_home(self):
++        p = self.obj.data.root_pos_w.clone()
++        q = self.obj.data.root_quat_w.clone()
++        self.home = torch.cat([p, q], dim=-1)
++        return p[0], q[0]
++
++    def pos(self):
++        return self.obj.data.root_pos_w[0]
++
++    def quat(self):
++        return self.obj.data.root_quat_w[0]
++
++    def reset(self):
++        self.clear()
++        if self.home is not None:
++            self.obj.write_root_pose_to_sim(self.home.clone())
++            self.obj.write_root_velocity_to_sim(
++                torch.zeros((self.env.num_envs, 6), device=self.env.device))
++
++    def teleport(self, offset_xyz):
++        """Move the rod to home + offset, upright, at rest.
++
++        Used for the lift-and-place control. Kinematic rather than forced on
++        purpose: a hand carrying an object imposes its motion on it, and the
++        veto under test (gate 2, max_lift_m) reads pose, not contact.
++        """
++        pose = self.home.clone()
++        pose[:, 0] += offset_xyz[0]
++        pose[:, 1] += offset_xyz[1]
++        pose[:, 2] += offset_xyz[2]
++        self.obj.write_root_pose_to_sim(pose)
++        self.obj.write_root_velocity_to_sim(
++            torch.zeros((self.env.num_envs, 6), device=self.env.device))
++
++    def clear(self):
++        n, dev = self.env.num_envs, self.env.device
++        z = torch.zeros((n, 1, 3), device=dev)
++        self.obj.set_external_force_and_torque(z, z)
++
++    def push(self, force_xy, height_m):
++        """Push horizontally at `height_m` above the rod's base.
++
++        Isaac Lab applies an external force at the body origin, so an off-origin
++        push has to carry its own moment: the CoM sits at mid-height, so the
++        lever arm is (height - H/2) and tau = r x F. Newer Isaac Lab takes a
++        `positions=` argument that does this internally -- use it when present
++        so the moment stays exact as the rod rotates, else apply the torque.
++        """
++        n, dev = self.env.num_envs, self.env.device
++        f = torch.zeros((n, 1, 3), device=dev)
++        f[:, 0, 0] = force_xy[0]
++        f[:, 0, 1] = force_xy[1]
++        t = torch.zeros((n, 1, 3), device=dev)
++        dz = height_m - 0.5 * ROD_HEIGHT_M
++
++        if self._api is None:
++            import inspect
++            try:
++                params = inspect.signature(
++                    self.obj.set_external_force_and_torque).parameters
++            except (TypeError, ValueError):
++                params = {}
++            self._api = {"positions": "positions" in params,
++                         "is_global": "is_global" in params}
++            print(f"[push_probe] wrench API: {self._api}", flush=True)
++
++        kw = {}
++        if self._api.get("is_global"):
++            kw["is_global"] = True
++        if self._api.get("positions"):
++            p = torch.zeros((n, 1, 3), device=dev)
++            p[:, 0, 2] = dz
++            kw["positions"] = p
++        else:
++            t[:, 0, 0] = -dz * force_xy[1]   # tau = r x F, r = (0, 0, dz)
++            t[:, 0, 1] = dz * force_xy[0]
++
++        self.obj.set_external_force_and_torque(f, t, **kw)
++
++
++class _Scenario:
++    """Base. `step()` returns True once the scenario is finished."""
++
++    name = "?"
++
++    def __init__(self, drv):
++        self.drv = drv
++        self.phase = "reset"
++        self.k = 0
++        self.peak_tilt = 0.0
++        self.peak_lift = 0.0
++        self.start_xy = None
++        self.base_z = None
++        self.result = None
++
++    def _track(self):
++        tw, _ = _tilt_both(self.drv.quat())
++        self.peak_tilt = max(self.peak_tilt, tw)
++        if self.base_z is not None:
++            z = float(self.drv.pos()[2]) - 0.5 * ROD_HEIGHT_M
++            self.peak_lift = max(self.peak_lift, z - self.base_z)
++
++    def _begin_measure(self):
++        self.start_xy = self.drv.pos()[:2].clone()
++        self.base_z = float(self.drv.pos()[2]) - 0.5 * ROD_HEIGHT_M
++
++    def _disp(self):
++        return float(torch.linalg.norm(self.drv.pos()[:2] - self.start_xy))
++
++    def _finish(self, **extra):
++        """Freeze this scenario's measurements at the moment it ends.
++
++        The scenarios share one _ObjectDriver, so `_disp()` read after the run
++        has moved on reports wherever the LAST scenario left the rod, not this
++        one's outcome. Snapshot here and report from `self.result`.
++        """
++        self.result = {"name": self.name, "disp": self._disp(),
++                       "peak_tilt": self.peak_tilt, "peak_lift": self.peak_lift}
++        self.result.update(extra)
++        return self.result
++
++
++class HeightSweep(_Scenario):
++    """Sweep contact height; classify each trial slide / tip / stuck.
++
++    This is the scene probe: it answers whether ANY contact height admits a
++    0.20 m slide inside the tilt veto, which is the precondition control (a)
++    depends on and cannot itself distinguish from a bad arm trajectory.
++    """
++
++    name = "sweep"
++
++    def __init__(self, drv, heights=None, force_n=None, settle=60, push=100, coast=120):
++        super().__init__(drv)
++        self.heights = list(heights or DEFAULT_HEIGHTS_M)
++        self.force_n = DEFAULT_FORCE_N if force_n is None else force_n
++        self.settle, self.push_n, self.coast_n = settle, push, coast
++        self.trial = 0
++        self.results = []
++        h_crit = ROD_RADIUS_M / ROD_MU
++        print(f"[push_probe] sweep: force={self.force_n:.2f} N "
++              f"(slide needs mu*m*g={ROD_MU*ROD_MASS_KG*G:.2f} N)", flush=True)
++        print(f"[push_probe] sweep PREDICTION: slides only while h < r/mu = "
++              f"{h_crit*1000:.1f} mm; at F={self.force_n:.1f} N the tipping moment wins "
++              f"above h = m*g*r/F = {ROD_MASS_KG*G*ROD_RADIUS_M/self.force_n*1000:.1f} mm",
++              flush=True)
++        print(f"[push_probe] sweep heights (mm): "
++              f"{[round(h*1000, 1) for h in self.heights]}", flush=True)
++
++    def step(self):
++        if self.phase == "reset":
++            self.drv.reset()
++            self.peak_tilt = self.peak_lift = 0.0
++            self.phase, self.k = "settle", 0
++            return False
++
++        if self.phase == "settle":
++            self.k += 1
++            if self.k >= self.settle:
++                self._begin_measure()
++                self.phase, self.k = "push", 0
++            return False
++
++        h = self.heights[self.trial]
++
++        if self.phase == "push":
++            # Push along world +y; for a round rod on a flat table the
++            # slide-vs-tip question is axis-independent.
++            self.drv.push((0.0, self.force_n), h)
++            self._track()
++            self.k += 1
++            if self.k >= self.push_n:
++                self.drv.clear()
++                self.phase, self.k = "coast", 0
++            return False
++
++        if self.phase == "coast":
++            self._track()
++            self.k += 1
++            if self.k >= self.coast_n:
++                self._record(h)
++                self.trial += 1
++                if self.trial >= len(self.heights):
++                    self._summary()
++                    return True
++                self.phase, self.k = "reset", 0
++            return False
++        return False
++
++    def _record(self, h):
++        disp = self._disp()
++        tw, tx = _tilt_both(self.drv.quat())
++        tipped = self.peak_tilt > TILT_VETO_DEG
++        verdict = "TIPPED" if tipped else ("SLID" if disp > 0.02 else "STUCK")
++        self.results.append({"h": h, "disp": disp, "peak_tilt": self.peak_tilt,
++                             "lift": self.peak_lift, "verdict": verdict})
++        print(f"[push_probe] sweep h={h*1000:6.1f}mm  disp={disp:6.3f}m  "
++              f"peak_tilt={self.peak_tilt:6.1f}deg  lift={self.peak_lift:+.3f}m  "
++              f"tilt(wxyz)={tw:6.1f} (xyzw)={tx:6.1f}  -> {verdict}", flush=True)
++
++    def _summary(self):
++        h_crit = ROD_RADIUS_M / ROD_MU
++        slid = [r for r in self.results if r["verdict"] == "SLID"]
++        scoring = [r for r in slid if r["disp"] >= SLIDE_TARGET_M]
++        print("", flush=True)
++        print("[push_probe] ===== HEIGHT SWEEP COMPLETE =====", flush=True)
++        print(f"[push_probe] predicted crossover: slides only below "
++              f"{h_crit*1000:.1f} mm", flush=True)
++        if slid:
++            print(f"[push_probe] MEASURED: slid without tipping at "
++                  f"{[round(r['h']*1000, 1) for r in slid]} mm "
++                  f"(highest {max(r['h'] for r in slid)*1000:.1f} mm)", flush=True)
++        else:
++            print("[push_probe] MEASURED: the rod NEVER slid without tipping, at any "
++                  "swept height.", flush=True)
++        if scoring:
++            print(f"[push_probe] a {SLIDE_TARGET_M} m scoring slide IS available, at "
++                  f"h <= {max(r['h'] for r in scoring)*1000:.1f} mm -- control (a) is "
++                  f"physically possible if a hand can reach that band.", flush=True)
++        else:
++            print(f"[push_probe] NO swept height produced a {SLIDE_TARGET_M} m slide "
++                  f"inside the {TILT_VETO_DEG:.0f} deg tilt veto -> control (a) is "
++                  f"unrunnable in THIS SCENE, independently of the reward.", flush=True)
++        print("[push_probe] =================================", flush=True)
++
++
++class Knock(_Scenario):
++    """Control (c): knock the rod over. The reward must publish -1.0 tipped."""
++
++    name = "knock"
++
++    def __init__(self, drv, force_n=None, height=0.25, settle=60, push=120, coast=150):
++        super().__init__(drv)
++        self.force_n = (DEFAULT_FORCE_N if force_n is None else force_n) * 2.0
++        self.height = height
++        self.settle, self.push_n, self.coast_n = settle, push, coast
++        print(f"[push_probe] knock: {self.force_n:.1f} N at h={height*1000:.0f} mm "
++              f"-- expect the reward to publish -1.0 with tipped(NNdeg)", flush=True)
++
++    def step(self):
++        if self.phase == "reset":
++            self.drv.reset()
++            self.peak_tilt = self.peak_lift = 0.0
++            self.phase, self.k = "settle", 0
++            return False
++        if self.phase == "settle":
++            self.k += 1
++            if self.k >= self.settle:
++                self._begin_measure()
++                self.phase, self.k = "push", 0
++            return False
++        if self.phase == "push":
++            self.drv.push((0.0, self.force_n), self.height)
++            self._track()
++            self.k += 1
++            if self.k >= self.push_n:
++                self.drv.clear()
++                self.phase, self.k = "coast", 0
++            return False
++        if self.phase == "coast":
++            self._track()
++            self.k += 1
++            if self.k >= self.coast_n:
++                r = self._finish()
++                print(f"[push_probe] CONTROL (c) knock: peak_tilt="
++                      f"{r['peak_tilt']:.1f}deg disp={r['disp']:.3f}m -- the reward "
++                      f"must have published -1.0; grep DISQUALIFIED above.", flush=True)
++                return True
++            return False
++        return False
++
++
++class LiftPlace(_Scenario):
++    """Control (b): lift, carry 0.20 m, set down. Must NEVER publish +1.0.
++
++    This is the TASK-185 regression in one scenario: the old proxy accepted a
++    lift-and-place as a push. Driven kinematically because a carried object
++    follows the hand, and the veto under test (gate 2, max_lift_m) reads pose.
++    """
++
++    name = "lift"
++
++    def __init__(self, drv, lift_m=0.10, carry_m=SLIDE_TARGET_M,
++                 settle=60, seg=80, coast=120):
++        super().__init__(drv)
++        self.lift_m, self.carry_m = lift_m, carry_m
++        self.settle, self.seg, self.coast_n = settle, seg, coast
++        self.max_seen_lift = 0.0
++        print(f"[push_probe] lift: +{lift_m*1000:.0f} mm, carry {carry_m*1000:.0f} mm, "
++              f"set down -- the reward must NEVER publish +1.0 here", flush=True)
++
++    def step(self):
++        if self.phase == "reset":
++            self.drv.reset()
++            self.peak_tilt = self.peak_lift = 0.0
++            self.phase, self.k = "settle", 0
++            return False
++        if self.phase == "settle":
++            self.k += 1
++            if self.k >= self.settle:
++                self._begin_measure()
++                self.phase, self.k = "up", 0
++            return False
++
++        if self.phase == "up":
++            self.k += 1
++            a = min(1.0, self.k / self.seg)
++            self.drv.teleport((0.0, 0.0, self.lift_m * a))
++            self._track()
++            if self.k >= self.seg:
++                self.phase, self.k = "carry", 0
++            return False
++
++        if self.phase == "carry":
++            self.k += 1
++            a = min(1.0, self.k / self.seg)
++            self.drv.teleport((0.0, self.carry_m * a, self.lift_m))
++            self._track()
++            if self.k >= self.seg:
++                self.phase, self.k = "down", 0
++            return False
++
++        if self.phase == "down":
++            self.k += 1
++            a = min(1.0, self.k / self.seg)
++            self.drv.teleport((0.0, self.carry_m, self.lift_m * (1.0 - a)))
++            self._track()
++            if self.k >= self.seg:
++                self.drv.clear()
++                self.phase, self.k = "coast", 0
++            return False
++
++        if self.phase == "coast":
++            self._track()
++            self.k += 1
++            if self.k >= self.coast_n:
++                r = self._finish()
++                print(f"[push_probe] CONTROL (b) lift-and-place: carried "
++                      f"{r['disp']:.3f}m with peak lift {r['peak_lift']:+.3f}m. "
++                      f"A +1.0 anywhere in this window is the TASK-185 regression "
++                      f"-- DO NOT SHIP.", flush=True)
++                return True
++            return False
++        return False
++
++
++class Idle(_Scenario):
++    """Control (d): touch nothing, for a full episode."""
++
++    name = "idle"
++
++    def __init__(self, drv, steps=1100):
++        super().__init__(drv)
++        self.steps = steps
++        print(f"[push_probe] idle: {steps} steps with NOTHING touching the object "
++              f"-- the reward must stay at 0.0 with no transition at all", flush=True)
++
++    def step(self):
++        if self.phase == "reset":
++            self.drv.reset()
++            self._begin_measure()
++            self.phase, self.k = "hold", 0
++            return False
++        self.k += 1
++        self._track()
++        if self.k % 250 == 0:
++            print(f"[push_probe] idle {self.k}/{self.steps}: drift="
++                  f"{self._disp():.4f}m tilt={self.peak_tilt:.2f}deg", flush=True)
++        if self.k >= self.steps:
++            r = self._finish()
++            print(f"[push_probe] CONTROL (d) idle: total drift {r['disp']:.4f}m, "
++                  f"peak tilt {r['peak_tilt']:.2f}deg over {self.steps} steps. Any "
++                  f"reward transition in this window means an accumulator drifts at "
++                  f"rest.", flush=True)
++            return True
++        return False
++
++
++_BUILDERS = {
++    "sweep": lambda drv: HeightSweep(
++        drv,
++        heights=[float(x) for x in (os.environ.get("NEODEM_PUSH_PROBE_HEIGHTS", "")
++                                    .replace(",", " ").split())] or None,
++        force_n=_f("NEODEM_PUSH_PROBE_FORCE", DEFAULT_FORCE_N),
++        settle=int(_f("NEODEM_PUSH_PROBE_SETTLE", 60)),
++        push=int(_f("NEODEM_PUSH_PROBE_PUSH", 100)),
++        coast=int(_f("NEODEM_PUSH_PROBE_COAST", 120))),
++    "knock": lambda drv: Knock(drv, force_n=_f("NEODEM_PUSH_PROBE_FORCE",
++                                               DEFAULT_FORCE_N),
++                               settle=int(_f("NEODEM_PUSH_PROBE_SETTLE", 60)),
++                               push=int(_f("NEODEM_PUSH_PROBE_PUSH", 120)),
++                               coast=int(_f("NEODEM_PUSH_PROBE_COAST", 150))),
++    "lift": lambda drv: LiftPlace(drv,
++                                  settle=int(_f("NEODEM_PUSH_PROBE_SETTLE", 60)),
++                                  seg=int(_f("NEODEM_PUSH_PROBE_SEG", 80)),
++                                  coast=int(_f("NEODEM_PUSH_PROBE_COAST", 120))),
++    "idle": lambda drv: Idle(drv, steps=int(_f("NEODEM_PUSH_PROBE_IDLE", 1100))),
++}
++
++# Order matters: idle must come first, because it is the only control that
++# requires the object to have been untouched all session.
++_ALL = ["idle", "lift", "knock", "sweep"]
++
++
++class PushProbe:
++    """Runs the requested scenarios in order, one step per sim loop iteration."""
++
++    def __init__(self, env, spec=""):
++        self.env = env
++        self.drv = _ObjectDriver(env)
++        self.delay_steps = int(_f("NEODEM_PUSH_PROBE_DELAY", 0))
++        self.phase = "delay" if self.delay_steps > 0 else "init"
++
++        raw = (spec or os.environ.get("NEODEM_PUSH_PROBE", "") or "").strip().lower()
++        if raw in ("", "1", "true", "yes", "all"):
++            names = list(_ALL)
++        else:
++            names = [n.strip() for n in raw.replace(",", " ").split() if n.strip()]
++        bad = [n for n in names if n not in _BUILDERS]
++        if bad:
++            raise ValueError(f"unknown NEODEM_PUSH_PROBE scenario(s) {bad}; "
++                             f"known: {sorted(_BUILDERS)} or 'all'")
++        self.names = names
++        self.scenarios = None
++        self.idx = 0
++
++        print("[push_probe] ARMED. Drives the object directly with an external wrench "
++              "or a kinematic carry; it exercises controls (b), (c) and (d) against the "
++              "live reward, and the SCENE for (a).", flush=True)
++        print(f"[push_probe] rod r={ROD_RADIUS_M} m h={ROD_HEIGHT_M} m "
++              f"m={ROD_MASS_KG} kg mu={ROD_MU}", flush=True)
++        print(f"[push_probe] scenarios: {self.names}", flush=True)
++
++    def step(self):
++        if self.phase == "delay":
++            self.delay_steps -= 1
++            if self.delay_steps <= 0:
++                self.phase = "init"
++            return
++
++        if self.phase == "init":
++            p, q = self.drv.capture_home()
++            print(f"[push_probe] home pose: pos={p.tolist()} quat={q.tolist()}",
++                  flush=True)
++            tw, tx = _tilt_both(q)
++            if tw < 5.0:
++                print(f"[push_probe] quat convention OK: an upright rod reads "
++                      f"wxyz={tw:.1f} deg (xyzw would say {tx:.1f}). The reward's tilt "
++                      f"gate reads the right components.", flush=True)
++            else:
++                print(f"[push_probe] *** QUAT CONVENTION WRONG: an upright rod reads "
++                      f"wxyz={tw:.1f} deg, xyzw={tx:.1f} deg. The reward computes "
++                      f"cos_tilt from the wxyz components, so gate 3 (max_tilt_deg) "
++                      f"cannot veto a tipped object. Fix "
++                      f"base_reward_push_cylindercfg.py before trusting any verdict "
++                      f"below.", flush=True)
++            self.scenarios = [_BUILDERS[n](self.drv) for n in self.names]
++            self.phase = "run"
++            return
++
++        if self.phase != "run":
++            return
++
++        if self.idx >= len(self.scenarios):
++            print("[push_probe] ALL SCENARIOS COMPLETE.", flush=True)
++            self.phase = "done"
++            return
++
++        sc = self.scenarios[self.idx]
++        if self.idx >= 0 and sc.k == 0 and sc.phase == "reset":
++            print(f"[push_probe] --- scenario {self.idx+1}/{len(self.scenarios)}: "
++                  f"{sc.name} ---", flush=True)
++        if sc.step():
++            self.drv.clear()
++            self.idx += 1
