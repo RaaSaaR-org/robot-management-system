@@ -1,0 +1,225 @@
+NeoDEM TASK-223 -- the G1 wholebody sim had no floor.
+
+Applies on top of 0001-neodem-g1-wholebody-sim.patch and the Isaac Lab 3.0 port already
+present in the checkout working tree. Verified by three sim boots on 2026-08-28.
+
+THE FINDING. The G1 was not failing to balance: it was free-falling. The wholebody scene
+shipped a "# Ground plane" heading with nothing under it, so there was no collidable floor
+under the robot's z=0.8 spawn. Measured, before this patch:
+
+    step     0  z=+0.7865  proj_grav=(-0.000,+0.000,-1.000)   <- upright
+    step    25  z=-0.7542  proj_grav=(-0.031,+0.044,-0.999)   <- still upright, below the floor
+    step   550  z=-599.31
+    step  4475  z=-39338.16
+
+Delta-z grows by 0.0037 m/step, which is exactly g*dt^2 at the task's 50 Hz of simulated
+time: textbook free fall, from step 0, for as long as the sim runs. projected_gravity stays
+(0,0,-1) for the first ~100 steps -- the robot is perfectly upright the whole way down, and
+only starts tumbling later as the flailing limbs impart angular momentum with nothing to
+push against. Every "why can't it balance" hypothesis was being tested on a robot that had
+nothing to balance on.
+
+The warehouse USD does carry a collidable floor -- /Lab/Structure/floor, a 4-point quad at
+world z=0 with physics:approximation="none", collisionEnabled=True, and an xy extent that
+covers the spawn at (-3.9, -2.818). But it is spawned at /World/envs/env_.*/Room, INSIDE the
+cloned env, while the task sets replicate_physics=True. Upstream's own (commented-out) ground
+in the non-wholebody scene sits at /World/GroundPlane -- outside /World/envs -- which is the
+placement that survives cloning. Hunk 4 puts it back there.
+
+AFTER: z holds in [0.7825, 0.7919] -- a 9 mm band -- for the entire run, projected_gravity
+(0,0,-1), no joint within 0.02 rad of a limit, leg velocities decaying to 0.24 rad/s. The G1
+stands. The external isaac_gait_probe.py agrees over DDS: "base upright PASS",
+"knees/ankles off their limits PASS", roll 0.007..0.019 rad.
+
+It does NOT yet walk: a vx=0.5 command produces a small forward lean (pitch 0.08 vs 0.045
+at rest) and no stepping. That is now a well-posed locomotion question rather than a
+measurement artefact, and it belongs to TASK-203.
+
+Four hunks:
+
+  1. action_provider_wh_dds.py: obs_scales, env-selectable. This was TASK-223's lead 1 and it
+     is REFUTED. Once there was a floor, both arms were run: upstream's all-1.0 stands rock
+     solid, while Unitree's locomotion scales (ang_vel 0.25 / joint_vel 0.05) COLLAPSE the
+     robot -- z falls to ~0.07, projected_gravity to (-1,0,0) (face down), ankles pinned
+     28-50 % of the time, knees thrashing in antiphase at 3.6 Hz. The default is therefore
+     upstream's all-1.0; NEODEM_OBS_SCALES=unitree reproduces the refuted arm.
+  2. action_provider_wh_dds.py: _task223_log. Prints projected_gravity_b (a convention-free
+     uprightness test no quaternion-order bug can reach), root height, true roll/pitch, the
+     leg joints against their defaults, and -- once, at step 0, before the first action is
+     applied -- the full articulation joint-name order. This is what found the free fall.
+     Confirmed at step 0: old_action_indices == list(range(29)) and every action_to_indices
+     entry is < 29, so the 29-vs-43 joint indexing is sound. That lead is closed too.
+  3. g1_29dof_state.py: the IMU quaternion published to rt/lowstate. Upstream's
+     assume_w_first=True was right on Isaac Lab 2.x and is wrong on 3.0, where the quaternion
+     is (x,y,z,w). Combined with dds/g1_robot_dds.py:101 it made a perfectly upright base
+     publish as |roll| = pi, so isaac_gait_probe.py's "base upright" check could never pass,
+     on any hypothesis. Now validated end to end: with the robot standing, the probe reads
+     roll 0.007..0.019 rad over DDS, matching the sim's own internal log.
+  4. base_scene_pickplace_cylindercfg_wholebody.py: the missing ground plane. THE fix.
+
+--- a/action_provider/action_provider_wh_dds.py
++++ b/action_provider/action_provider_wh_dds.py
+@@ -273,8 +273,38 @@
+             else:
+                 raise ValueError(f"action joint '{old_action_joint}' not in all joint list")
+         self.arm_action = []
+-        self.obs_scales = {"ang_vel":1.0, "projected_gravity":1.0, "commands":1.0, 
+-                           "joint_pos":1.0, "joint_vel":1.0, "actions":1.0}
++        # NeoDEM TASK-223 lead 1 -- MEASURED AND REFUTED, kept only as a switch.
++        #
++        # The hypothesis was that upstream's all-1.0 scales are wrong because
++        # assets/model/policy.onnx carries no normalisation of its own (7 nodes: Gemm/Elu x3
++        # + Gemm, no Sub/Div, zero metadata_props), so the scales here are the only
++        # normalisation the policy ever sees -- and Unitree locomotion policies train with
++        # ang_vel 0.25 / joint_vel 0.05.
++        #
++        # Both arms were run once the missing ground plane was fixed (see
++        # tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py). Result:
++        #   all-1.0 (upstream)     -> stands rock solid. z holds in [0.7825, 0.7919] over the
++        #                             whole run -- a 9 mm band -- projected_gravity (0,0,-1),
++        #                             no joint within 0.02 rad of a limit.
++        #   0.25 / 0.05 (Unitree)  -> COLLAPSES. z falls to ~0.07, projected_gravity goes to
++        #                             (-1, 0, 0) (face down), ankles pinned 28-50 % of the
++        #                             time, knees thrashing in antiphase at 3.6 Hz.
++        # So upstream's all-1.0 is correct for THIS checkpoint and the lead is closed. The
++        # knob stays so the measurement can be reproduced without re-patching:
++        #   NEODEM_OBS_SCALES=unitree -> the refuted 0.25/0.05 locomotion scales
++        #   unset / anything else     -> all 1.0, i.e. upstream's shipped behaviour
++        _unitree = os.environ.get("NEODEM_OBS_SCALES", "").lower() == "unitree"
++        def _s(name, unitree_value):
++            if not _unitree:
++                return float(os.environ.get("NEODEM_OBS_SCALE_" + name.upper(), 1.0))
++            return float(os.environ.get("NEODEM_OBS_SCALE_" + name.upper(), unitree_value))
++        self.obs_scales = {"ang_vel": _s("ang_vel", 0.25),
++                           "projected_gravity": _s("projected_gravity", 1.0),
++                           "commands": _s("commands", 1.0),
++                           "joint_pos": _s("joint_pos", 1.0),
++                           "joint_vel": _s("joint_vel", 0.05),
++                           "actions": _s("actions", 1.0)}
++        print(f"[TASK-223] obs_scales = {self.obs_scales}", flush=True)
+         self.ang_vel = self.env.scene["robot"].data.root_ang_vel_b                      
+         self.projected_gravity = self.env.scene["robot"].data.projected_gravity_b       
+         self.joint_pos = self.env.scene["robot"].data.joint_pos
+@@ -373,12 +403,74 @@
+         current_actor_obs = self.compute_observations()
+         action = self.policy(current_actor_obs)
+         return action
++    def _task223_log(self, action_data=None):
++        """NeoDEM TASK-223 lead 3: report the truth from inside the sim, for free.
++
++        Everything the external `isaac_gait_probe.py` cannot see, and everything it
++        currently sees through a scrambled quaternion:
++
++        * `projected_gravity_b` is the convention-free uprightness test. Isaac Lab
++          computes it internally, so no quaternion-order bug can reach it: it reads
++          (0, 0, -1) when the base is upright and its z component is cos(tilt).
++        * step 0 is printed *before* the first action is ever applied, which is the
++          observation lead 3 asks for: is the robot upright and in its init crouch at
++          physics step 0, or has it already left the pose before the first `rt/lowstate`
++          frame is published?
++        * the joint-name list settles, once, whether `all_joint_names[:29]` equals
++          `old_action_joints_names`. `get_action` indexes the 29-wide `delayed_actions`
++          with `self.action_to_indices`, which are indices into the 43-joint
++          articulation -- correct only if those two orders coincide.
++
++        Wrapped in its own try/except so a logging failure can never be mistaken for
++        the caller's "Get DDS action failed".
++        """
++        try:
++            n = self.sim_step_counter
++            if n % 25 != 0 and n > 5:
++                return
++            d = self.env.scene["robot"].data
++            pg = d.projected_gravity_b.torch[0] if hasattr(d.projected_gravity_b, "torch") \
++                else d.projected_gravity_b[0]
++            q = d.root_quat_w.torch[0] if hasattr(d.root_quat_w, "torch") else d.root_quat_w[0]
++            pos = d.root_pos_w.torch[0] if hasattr(d.root_pos_w, "torch") else d.root_pos_w[0]
++            # Isaac Lab 3.0 quaternions are (x, y, z, w) -- wp.quatf. See
++            # isaaclab/utils/warp/proxy_array.py:130-134 and base_rigid_object_data.py:413.
++            qx, qy, qz, qw = (float(v) for v in q[:4])
++            import math as _m
++            roll = _m.atan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy))
++            pitch = _m.asin(max(-1.0, min(1.0, 2 * (qw * qy - qz * qx))))
++            jp = d.joint_pos.torch if hasattr(d.joint_pos, "torch") else d.joint_pos
++            jv = d.joint_vel.torch if hasattr(d.joint_vel, "torch") else d.joint_vel
++            dj = self.default_action_positions
++            dj = dj.torch if hasattr(dj, "torch") else dj
++            legs = self.action_to_indices
++            if n == 0:
++                print(f"[TASK-223] all_joint_names ({len(self.all_joint_names)}) = "
++                      f"{list(self.all_joint_names)}", flush=True)
++                print(f"[TASK-223] action_to_indices  = {self.action_to_indices}", flush=True)
++                print(f"[TASK-223] old_action_indices = {self.old_action_indices}", flush=True)
++                print("[TASK-223] indexing is sound iff old_action_indices == list(range(29)) "
++                      "and every action_to_indices entry is < 29", flush=True)
++                print(f"[TASK-223] leg defaults = "
++                      f"{[round(float(dj[0, i]), 4) for i in legs]}", flush=True)
++            print(f"[TASK-223] step={n:5d} z={float(pos[2]):+.4f} "
++                  f"proj_grav=({float(pg[0]):+.3f},{float(pg[1]):+.3f},{float(pg[2]):+.3f}) "
++                  f"roll={roll:+.4f} pitch={pitch:+.4f} "
++                  f"leg_q={[round(float(jp[0, i]), 3) for i in legs]} "
++                  f"leg_dq_absmax={max(abs(float(jv[0, i])) for i in legs):.3f} "
++                  f"a_absmax={(float(action_data.abs().max()) if action_data is not None else float('nan')):.3f}",
++                  flush=True)
++        except Exception as e:                                   # never mask the caller
++            print(f"[TASK-223] log failed: {type(e).__name__}: {e}", flush=True)
++
+     def get_action(self, env) -> Optional[torch.Tensor]:
+         """Get action from DDS"""
+         try:
+             full_action = self._full_action_buf
+             full_action.zero_()
+             action_data = self.run_policy()
++            self._task223_log(action_data)
++            self.sim_step_counter += 1
+ 
+             # RL 输出与腰部默认位姿
+             full_action[self.action_to_indices] = action_data
+--- a/tasks/common_observations/g1_29dof_state.py
++++ b/tasks/common_observations/g1_29dof_state.py
+@@ -367,7 +367,16 @@
+     a_world_corrected = a_world - g_world  # [B,3]
+ 
+     # prepare quaternion in (w,x,y,z)
+-    quat_wxyz = ensure_quat_w_first(quat, assume_w_first=True)
++    # NeoDEM TASK-223. Isaac Lab 3.0 returns body/root quaternions as (x, y, z, w) -- the
++    # underlying warp dtype is wp.quatf (base_rigid_object_data.py:413) and
++    # isaaclab/utils/warp/proxy_array.py:130-134 documents the 2.x (w,x,y,z) -> 3.x (x,y,z,w)
++    # flip explicitly. Upstream's assume_w_first=True was correct on Isaac Lab 2.x and is
++    # wrong on this stack: it relabels (x,y,z,w) as (w,x,y,z), which then (a) feeds
++    # quat_to_rot_matrix a permuted quaternion, corrupting the accelerometer and gyroscope
++    # written to rt/lowstate, and (b) combines with dds/g1_robot_dds.py:101's [4,5,6,3]
++    # reorder so that a perfectly upright base is published as |roll| = pi. That is why
++    # isaac_gait_probe.py's "base upright" line could never pass -- see TASK-223.
++    quat_wxyz = ensure_quat_w_first(quat, assume_w_first=False)
+ 
+     # build rotation matrices R_body->world ; to convert world->body use R^T
+     R_body_to_world = quat_to_rot_matrix(quat_wxyz)  # [B,3,3]
+--- a/tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py
++++ b/tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py
+@@ -76,7 +76,24 @@
+         ),
+     )
+     # Ground plane
+-
++    # NeoDEM TASK-223. This scene shipped a "# Ground plane" heading with nothing under it,
++    # so there was no collidable floor and the G1 free-fell from its z=0.8 spawn forever --
++    # measured: z = -0.75 m by step 25, -600 m by step 550, -39 km by step 4475, with
++    # projected_gravity still (0,0,-1) (i.e. perfectly upright) for the first ~100 steps.
++    # The policy was being asked to balance in free fall, which is why every "the G1 cannot
++    # stand" hypothesis failed.
++    #
++    # The warehouse USD does carry a collidable floor (/Lab/Structure/floor: a 4-point quad
++    # at world z=0, physics:approximation="none", collisionEnabled=True, and its xy extent
++    # covers the robot spawn at (-3.9, -2.818)). But it is spawned at
++    # /World/envs/env_.*/Room -- inside the cloned env -- while this scene sets
++    # replicate_physics=True. Upstream's own (commented-out) ground in the non-wholebody
++    # scene sits at /World/GroundPlane, outside /World/envs: the placement that survives
++    # cloning. Put it back there.
++    ground = AssetBaseCfg(
++        prim_path="/World/GroundPlane",    # NOT under /World/envs -- see above
++        spawn=GroundPlaneCfg(),
++    )
+ 
+     # Lights
+     # 4. light configuration
