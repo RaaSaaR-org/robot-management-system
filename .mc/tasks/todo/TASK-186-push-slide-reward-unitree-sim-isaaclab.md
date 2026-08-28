@@ -145,7 +145,9 @@ write-up with line citations in `robot-agent/hardware/isaac_sim_patches/README.m
    `action_provider/`, `sim_main.py` and `tools/` returns nothing.
    Evidence it really did not run: the reward prints `[push_reward] hand bodies` and
    `[push_reward] baseline` unconditionally on first call, and neither appears in a 1137-line
-   session log — nor the `-2.0` throw path, nor any traceback.
+   session log — nor the `-2.0` throw path, nor any traceback. Independently,
+   `push_reward_controls.py watch` ran the full 900 s from the minute the sim booted and
+   reported `received 0 messages; final value None`.
    **This also supersedes finding 2 below**: the stock pick-place reward does not publish a
    constant −1.0 in this task, it publishes nothing at all.
 
@@ -201,8 +203,9 @@ In descending order of risk:
 3. **`contact_radius_m = 0.12` is a guess** about where the hand link origins sit relative to a
    real contact.
 4. **Whether the rod is physically pushable** (finding 1).
-5. **Whether DDS carries the new values end to end.** Still untested, and now known to be
-   untestable until defect 1 is fixed: nothing computes a value to publish.
+5. ~~**Whether DDS carries the new values end to end.**~~ **ANSWERED 2026-08-28: it does not.**
+   `rt/rewards_state` received 0 messages across a 900 s watch covering the whole session —
+   because nothing computes a value to publish (defect 1). Re-check once defect 1 is fixed.
 
 ## Test Strategy
 
