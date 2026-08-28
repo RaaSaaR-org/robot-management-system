@@ -4,7 +4,7 @@ aliases:
 - TASK-184
 title: 'Real data everywhere: RMS data-flow concept, mock-data audit & phased plan (all G1 sensors incl. Dex3 touch)'
 slug: rms-real-data-flow-concept
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -18,7 +18,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-12
-updated: 2026-07-12
+updated: 2026-08-29
 status_note: 'IMPLEMENTED 2026-07-13 (Phases 0-3): PR #195, toolkit companion
   commit 07aadd3. Robot-less E2E verified >12h (mock publisher DDS domain 9 ->
   bridge -> sidecar :8767 -> g1-edu agent -> server -> app; 366+ RobotTelemetry

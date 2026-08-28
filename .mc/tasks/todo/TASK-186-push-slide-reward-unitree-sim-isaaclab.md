@@ -4,7 +4,7 @@ aliases:
 - TASK-186
 title: Push/slide success reward for unitree_sim_isaaclab (unblocks unseen-behavior closed-loop ablations)
 slug: push-slide-reward-unitree-sim-isaaclab
-status: review
+status: in-progress
 priority: 2
 owner: ''
 projects: []
@@ -17,7 +17,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-07-17
-updated: 2026-08-28
+updated: 2026-08-29
 status_note: 'Reward written and carried as 0003-neodem-push-slide-reward.patch; gate logic
   verified offline (14/14) with verify_push_reward_gates.py. NOT yet run inside Isaac — the
   four in-sim controls are written down but unexecuted. Two findings that change the shape of
@@ -28,6 +28,26 @@ status_note: 'Reward written and carried as 0003-neodem-push-slide-reward.patch;
   constant -1.0. depends_on [[TASK-185]] dropped: it is done, and the consumer harness it
   named is gone (see [[TASK-225]]).'
 ---
+
+## Where this stands (2026-08-29)
+
+The reward is built and passes all 14 offline gate checks. **It has never once run**,
+so nothing it computes has been observed. The tier-B controls were driven for the
+first time on 2026-08-28 and **none of the four can be scored**, for three
+independent reasons — none of them in the scoring logic. Merged as #273.
+
+Fix them in this order; the order is not arbitrary:
+
+1. **The reward is dead code in `*Wholebody*` tasks.** `env.step()` is never called,
+   so `reward_manager.compute()` never runs. Until this is fixed, defect 2 is
+   unobservable and the hand-body regex stays unverified — which is why it goes first.
+2. **Two quaternion-ordering bugs** (Isaac Lab 3.0 is `(x, y, z, w)`): the tilt gate
+   and `_yaw_from_quat` -> `_command_dir`.
+3. **The object does not rest on the table** — it lay on its side all session.
+
+**The pushability question this task exists to answer is still unmeasured.** The
+sweep that was meant to settle it produced a void verdict. Risk 5 (does DDS carry the
+reward values) *is* answered: no — a 900 s watch on `rt/rewards_state` came back empty.
 
 ## Description
 

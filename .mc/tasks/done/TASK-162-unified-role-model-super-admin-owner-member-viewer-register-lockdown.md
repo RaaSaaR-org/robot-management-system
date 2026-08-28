@@ -4,7 +4,7 @@ aliases:
 - TASK-162
 title: Unified role model (super-admin/owner/member/viewer) + /register lockdown
 slug: unified-role-model-super-admin-owner-member-viewer-register-lockdown
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -15,7 +15,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-04-12
-updated: 2026-04-12
+updated: 2026-08-29
 ---
 
 
