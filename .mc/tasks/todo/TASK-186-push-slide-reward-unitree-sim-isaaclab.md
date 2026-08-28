@@ -4,7 +4,7 @@ aliases:
 - TASK-186
 title: Push/slide success reward for unitree_sim_isaaclab (unblocks unseen-behavior closed-loop ablations)
 slug: push-slide-reward-unitree-sim-isaaclab
-status: backlog
+status: review
 priority: 2
 owner: ''
 projects: []
@@ -14,60 +14,176 @@ tags:
 - synthetic-data
 - vla
 sprint: ''
-depends_on:
-- '[[TASK-185]]'
+depends_on: []
 due_date: ''
 created: 2026-07-17
-updated: 2026-07-17
-status_note: 'Spun out of TASK-185: without a push/slide reward the unseen-behavior
-  half of the dreams ablation cannot be scored at all — TASK-185 had to report it
-  as unanswerable.'
+updated: 2026-08-28
+status_note: 'Reward written and carried as 0003-neodem-push-slide-reward.patch; gate logic
+  verified offline (14/14) with verify_push_reward_gates.py. NOT yet run inside Isaac — the
+  four in-sim controls are written down but unexecuted. Two findings that change the shape of
+  the work: (1) the scene object is a 0.018 x 0.35 m rod, which analytically tips rather than
+  slides for any contact above ~1.2 cm, so the push may be physically unachievable in this
+  scene; (2) the stock pick-place reward is already dead in the wholebody task (absolute
+  world-box thresholds vs a warehouse-scene object 3 m outside them), so it publishes a
+  constant -1.0. depends_on [[TASK-185]] dropped: it is done, and the consumer harness it
+  named is gone (see [[TASK-225]]).'
 ---
 
 ## Description
 
 Add a **push/slide success reward** to `unitree_sim_isaaclab` so that language instructions like
 "Push the red cup to the left side of the table without lifting it" can be scored closed-loop.
-Today the sim only rewards pick-and-place, which makes the unseen-behavior half of the
-DreamGen ablation ([[TASK-185]] step 5b) impossible to measure.
+The sim only rewarded pick-and-place, which made the unseen-behavior half of the DreamGen
+ablation ([[TASK-187]], formerly [[TASK-185]] step 5b) impossible to measure.
 
-## Details
+## What was built (2026-08-28)
 
-**Current state:**
-- `unitree_sim_isaaclab/tasks/common_rewards/base_reward_pickplace_cylindercfg.py` publishes
-  `rt/rewards_state` = `{"rewards":[r], "timestamp":t}` where `r = 1.0` iff the cylinder is inside
-  the target post area (x 0.28–0.96, y 0.24–0.57, z 0.81–0.90), `0.0` in the valid area, `-1.0`
-  outside. Registered unconditionally in `dds/dds_create.py` (`RewardsDDS`).
-- There is **no** signal for a push/slide, so TASK-185 fell back to a derived proxy (lateral
-  object travel ≥ 0.08 m with lift ≤ 0.06 m, read from `rt/sim_state`).
-- **That proxy is provably invalid:** applied to TASK-185's rollouts, *place*-instructed runs
-  satisfied it **more** often (7–8/10) than *push*-instructed runs (6/10). It measures flailing.
-  Evidence: `$UNITREE_ROOT/_data/task185/RESULTS.md` §2.1.
+Everything lives in `robot-agent/hardware/isaac_sim_patches/`, following that directory's
+convention: NeoDEM's changes to the third-party sim are carried as patch files, **never** as
+edits to the checkout at
+`$UNITREE_ROOT/unitree_sim_isaaclab` (pinned at `e30c25b`).
 
-**What's needed — a reward that separates "pushed as instructed" from "knocked around":**
-1. **Direction:** displacement projected onto the *commanded* axis (left/right/forward/toward
-   robot) must dominate — e.g. `dot(disp_xy, cmd_dir) >= 0.15 m` AND lateral-off-axis error small.
-   The commanded direction has to come from the task/instruction, so the reward cfg needs to know
-   which push variant is active (mirror how the pickplace cfg learns its target area).
-2. **Never lifted:** `max(z) - z0 <= ~0.03 m` across the episode (TASK-185 used 0.06; tighten).
-3. **Still upright / not knocked:** cap the tilt of the object quaternion (a "tip/knock" must NOT
-   count as a push — note tip/knock are separate dream prompts).
-4. **Contact-driven:** reject displacement occurring with no hand near the object, so a swept arm
-   that launches the cylinder does not score.
+- **`0003-neodem-push-slide-reward.patch`** — a *second* patch rather than more hunks in
+  `0001`, because `0001` is mandatory (without it the wholebody task does not move) while
+  `0003` is evaluation-only and inert unless `--reward_mode push` is passed. They touch
+  disjoint files; both orders `git apply --check` clean against `e30c25b`. Three hunks:
+  - new `tasks/common_rewards/base_reward_push_cylindercfg.py`
+  - `sim_main.py` — `--reward_mode` + eight `--push_*` flags, config hand-off next to the
+    existing `_reward_interval` block, and `env._push_reward_reset = True` beside each
+    `event_manager.trigger("reset_*_self", env)`
+  - `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py` — dispatcher
+- **`verify_push_reward_gates.py`** — offline (no Isaac, no GPU) check of the scoring logic.
+- **`push_reward_controls.py`** — DDS harness: watch `rt/rewards_state`, reset the episode,
+  switch the commanded direction between rollouts.
+- **`README.md`** — the new hunks documented in the existing voice, plus the four in-sim
+  controls and both hazards below.
 
-**Key files:**
-- `unitree_sim_isaaclab/tasks/common_rewards/base_reward_pickplace_cylindercfg.py` — pattern to copy
-  (how it reads env state, thresholds, and calls `rewards_dds.write_rewards_data(reward)`).
-- `unitree_sim_isaaclab/tasks/common_rewards/` — new `base_reward_push_cylindercfg.py`.
-- `unitree_sim_isaaclab/dds/rewards_dds.py` — publisher (`rt/rewards_state`); no change expected.
-- `unitree_sim_isaaclab/dds/dds_create.py` — registration if a new task variant is added.
-- Consumer/reference harness: `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py`
-  (`--mode push` currently implements the invalid proxy — replace it with the DDS signal).
+### The four gates, and why the TASK-185 failure cannot recur
+
+| Gate | Rule | Default |
+|---|---|---|
+| 1 direction | credited displacement projected on the commanded axis ≥ `min_travel`, `abs(off-axis) ≤ ratio × on-axis`; the axis is frozen at the episode baseline | 0.15 m, 0.4 |
+| 2 never lifted | sticky veto once `z − z₀` exceeds `max_lift` | 0.03 m |
+| 3 still upright | sticky veto once tilt from world +z exceeds `max_tilt_deg` | 20° |
+| 4 contact-driven | displacement is credited only while a hand body is within `contact_radius` of the object's surface; motion with no hand near it accrues as `free_travel` and vetoes past `max_free_travel` | 0.12 m, 0.05 m |
+
+The invalidated proxy (lateral travel ≥ 0.08 m with lift ≤ 0.06 m) read **only the object's
+trajectory**, and every quantity in it is equally producible by lifting, knocking or sweeping.
+Gates 2 and 4 make trajectory alone insufficient by construction:
+
+- a *place* is up-and-over, so gate 2 latches a veto before any transport distance can become
+  success. The proxy measured lift **net** (start vs end), which for a place is ≈ 0 — that is
+  exactly why `place` runs outscored `push` runs. Gate 2 is a running maximum, not a net.
+- a *knock* or *swept launch* moves the object after the hand has left; that travel lands in
+  `free_travel`, a different accumulator from the credited push, and vetoes past 5 cm.
+- the commanded axis is frozen at the baseline, so the robot cannot turn to make an arbitrary
+  displacement read as "left".
+
+`verify_push_reward_gates.py` asserts this executably: the lift-and-place trajectory is
+disqualified **and** the old proxy is shown accepting the same trajectory. 14/14 checks pass.
+
+### Thresholds taken from this task's original proposal, and one that was changed
+
+Kept: on-axis ≥ 0.15 m; lift ≤ 0.03 m (tightened from the proxy's 0.06 as proposed); a tilt cap;
+a contact requirement. Changed: the proposal's "reject displacement occurring with no hand near
+the object" is implemented as **per-sample attribution**, not an end-of-episode check — the
+credited push and the object's total travel are separate accumulators. An end-of-episode
+"was a hand near it" test would pass for a launch, because a hand *is* near it at the moment of
+the swipe.
+
+The **contact sensor was deliberately not used** for gate 4. `contact_forces` is declared
+without `filter_prim_paths_expr`
+(`tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/move_cylinder_g1_29dof_dex3_hw_env_cfg.py:45`),
+so it reports a net force per robot body and cannot attribute a contact to the *object* rather
+than to the table or the floor. Proximity to the object's surface is the signal that actually
+means what gate 4 needs.
+
+## Two findings that were not in the original task
+
+### 1. The scene's object probably cannot be pushed at all
+
+`tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py:56-77` — the object is a
+cylinder of radius **0.018 m** and height **0.35 m**, mass 0.4 kg: a pencil-shaped rod standing
+on end, ~10:1 aspect. Static friction 1.5 with `friction_combine_mode="max"` against the env's
+1.0 (`…_wholebody.py:69-75`, `move_cylinder_g1_29dof_dex3_hw_env_cfg.py:156-159`), so µ ≈ 1.5.
+
+Quasi-statically, a horizontal force at height `h` slides such an object rather than tipping it
+only while `µ·m·g·h < m·g·r`, i.e. `h < r/µ = 0.018/1.5 ≈ 0.012 m`. Any contact more than ~1.2 cm
+above the table tips it; a Dex3 palm cannot reach that band without hitting the table.
+
+**This is an analytic bound, not a measurement.** Control (a) settles it. If it holds, the honest
+options are to lower the object's friction or to give the push task a low-aspect object (a puck)
+— and either changes the scene, so push results would no longer be comparable with the `place`
+control that shares it. Do **not** relax `max_tilt_deg` to make the number move: that re-admits
+"knocked over" as success, which is the failure this task exists to fix.
+
+### 2. The stock pick-place reward is already dead in the wholebody task
+
+`base_reward_pickplace_cylindercfg.py:51-54` gates on absolute world boxes `x ∈ (−0.42, 1.0)`,
+`y ∈ (0.2, 0.7)`, written for the fixed-base scene whose object starts at `(−0.35, 0.40, 0.84)`
+(`base_scene_pickplace_cylindercfg.py:95`). The wholebody scene starts the object at
+`(−2.585, −2.790, 0.84)` in a warehouse (`…_wholebody.py:58`) — outside that box in both axes. So
+in `Isaac-Move-Cylinder-G129-Dex3-Wholebody` the stock reward publishes a **constant −1.0** and
+can never publish `1.0`, whatever the robot does. Any `place` baseline read off `rt/rewards_state`
+in that task is a constant, not a measurement. The push reward is displacement-relative and
+immune to this class of bug. (Verified by reading the configs; not confirmed on a live capture.)
+
+## What remains unverified
+
+Nothing here has been inside Isaac. In descending order of risk:
+
+1. **The whole patch has never been loaded by a running sim.** Applies cleanly and compiles;
+   that is all.
+2. **`hand_body_patterns` may not match the real Dex3 USD.** The link names live in a
+   crate-compressed USD token table (`assets/robots/g1-29dof_wholebody_dex3/…usd`) and are not
+   readable without Isaac. The reward resolves them by regex, prints the resolved list once at
+   startup, and raises `HandBodyResolutionError` with the full `body_names` list if they do not
+   resolve — that exception is re-raised out of `compute_reward` rather than folded into the
+   `-2.0` path, so it reaches the log. **Check that line first.** If it is empty, fix the
+   patterns — do not widen `contact_radius_m`. Keep them a **single alternation**:
+   `robot.find_bodies` → `resolve_matching_names` demands a one-to-one pattern↔body mapping and
+   rejects `[".*hand.*", ".*wrist.*", ".*palm.*"]` outright, because `left_hand_palm_link`
+   matches two of them.
+3. **`contact_radius_m = 0.12` is a guess** about where the hand link origins sit relative to a
+   real contact.
+4. **Whether the rod is physically pushable** (finding 1).
+5. **Whether DDS carries the new values end to end.** The channel and payload shape are
+   unchanged from the pick-place reward, so this is expected to work, but it is untested.
 
 ## Test Strategy
 
-Scripted positive/negative controls, not a policy: drive the arm to (a) slide the cylinder 0.2 m
-left along the table → reward must fire; (b) lift and place it left → must NOT fire (lift gate);
-(c) knock it over → must NOT fire (tilt gate); (d) do nothing → must NOT fire. Then re-run
-TASK-185's ablation cell and confirm the *place*-instructed control no longer outscores the
-*push*-instructed run (the failure that invalidated the proxy).
+Two tiers. Tier A is done; tier B is not.
+
+**A — offline, already run (14/14 pass, ~1 s, no GPU):**
+
+```bash
+UNITREE_SIM_ROOT=$UNITREE_ROOT/unitree_sim_isaaclab \
+  /home/humanoid/anaconda3/envs/tv/bin/python \
+  robot-agent/hardware/isaac_sim_patches/verify_push_reward_gates.py
+```
+
+Covers slide / lift-and-place / knock / idle / launch / wrong-direction / off-axis, and asserts
+that the trajectory the TASK-185 proxy accepted is disqualified here. Its `find_bodies` stub
+reproduces `resolve_matching_names`' strict one-to-one rule, including both of its `ValueError`
+paths, so the hand-body scenario can actually fail — a permissive stub is what let a
+three-pattern default that Isaac Lab rejects pass an earlier run of this same check.
+
+**B — in sim, NOT yet run.** The four scripted controls (slide → fires; lift-and-place → must
+not fire; knock over → must not fire; do nothing → must not fire), with the exact launch,
+watch and reset commands and the expected output for each, are written verbatim in
+`robot-agent/hardware/isaac_sim_patches/README.md` under "In-sim controls — NOT YET RUN".
+
+The arm motion in the first three controls is the only unscripted part: the checkout has no
+scripted arm driver (`action_provider/create_action_provider.py:10-26` implements `dds`,
+`dds_wholebody` and `replay` only, and a Wholebody task is forced onto `dds_wholebody` at
+`sim_main.py:409-412`), so joints come from teleop or a policy. Writing such a driver is a
+separate task.
+
+**C — the ablation cell** (re-run TASK-185's cell and confirm the `place`-instructed control no
+longer outscores the `push`-instructed run) **cannot be run yet, and its original consumer is
+gone.** The task previously pointed at `$UNITREE_ROOT/_data/task185/eval_g1_sim_groot_success.py`
+(`--mode push`, the invalid proxy) on the retired Windows box. That harness no longer exists —
+see [[TASK-225]], which is porting the train + closed-loop-eval harness to Linux and re-fetching
+the data. Whatever replaces it should consume `rt/rewards_state` directly (values: `1.0` success,
+`0.0` in progress, `-1.0` disqualified, `-2.0` the reward term itself threw) and must **not**
+re-derive a proxy from `rt/sim_state`.

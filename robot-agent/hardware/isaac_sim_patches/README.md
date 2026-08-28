@@ -1,22 +1,27 @@
 # isaac_sim_patches — NeoDEM's changes to `unitree_sim_isaaclab`
 
 Unitree's Isaac Lab sim (`unitree_sim_isaaclab`) is a **third-party checkout**,
-not a submodule and not vendored here. Seven NeoDEM changes, in two patch
+not a submodule and not vendored here. Seven NeoDEM changes, in two required patch
 files, are needed before the G1 wholebody DDS task runs at a usable control
 rate with a robot that stays on the floor — and, before two of them, it does
 not move at all. They live here as patches so a fresh checkout can be brought
 to a working state without rediscovering them.
+
+A third, optional patch adds a push/slide success reward (TASK-186).
 
 ## Applying
 
 ```bash
 cd "$UNITREE_ROOT/unitree_sim_isaaclab"
 git checkout e30c25b                       # the pinned upstream commit
-git apply /path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches/0001-neodem-g1-wholebody-sim.patch
-git apply /path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches/0002-task223-missing-ground-plane.patch
+P=/path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches
+git apply $P/0001-neodem-g1-wholebody-sim.patch
+git apply $P/0002-task223-missing-ground-plane.patch
+git apply $P/0003-neodem-push-slide-reward.patch   # optional; only for scoring pushes
 ```
 
-**Both are required.** `0001` is what makes the task run at all; `0002` gives
+**`0001` and `0002` are both required** (`0003` is optional — see below).
+`0001` is what makes the task run at all; `0002` gives
 the robot a floor to stand on and fixes the IMU quaternion it publishes — and
 `isaac_gait_probe.py`'s default `--quat-order xyzw` is only the correct reading
 once `0002` is applied, so running the probe against a `0001`-only sim silently
@@ -28,17 +33,18 @@ sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 | Upstream | `https://github.com/unitreerobotics/unitree_sim_isaaclab` |
 | Pinned commit | `e30c25b` (detached HEAD) |
 | Isaac Sim / Lab | 6.0.1 / 6.1.14, conda env `unitree_sim_env6` |
-| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks) |
-| Files touched | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
+| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only) |
+| Files touched by 0001 + 0002 | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
+| Files touched by 0003 | `sim_main.py`, `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py`, new `tasks/common_rewards/base_reward_push_cylindercfg.py` |
 
-`git apply` against a different upstream commit may reject. The seven hunks are
-independent of one another, and each is documented below by the symptom it
-fixes, so a reject can be re-applied by hand.
+`git apply` against a different upstream commit may reject. The seven hunks in
+`0001` + `0002` are independent of one another, and each is documented below by
+the symptom it fixes, so a reject can be re-applied by hand.
 
 ## ⚠ The checkout carries an uncommitted Isaac Lab 3.0 port that is NOT in these patches
 
 As of 2026-08-28, `git -C "$UNITREE_ROOT/unitree_sim_isaaclab" status --porcelain` reports
-**30 modified files**, not the four this file lists. The rest are an Isaac Sim 6.0.1 /
+**30 modified files**, not the four `0001` + `0002` touch. The rest are an Isaac Sim 6.0.1 /
 Isaac Lab 3.0 migration (`sim.physx` -> `sim.physics`, `ProxyArray.torch` on the
 `common_observations/*_state.py` reads, the `InitialStateCfg.rot` quaternion reorder in
 `tasks/common_config/robot_configs.py`), written up in
@@ -131,6 +137,17 @@ rather than a measurement artefact, and it belongs to TASK-203.
 robot's order. `isaac_gait_probe.py --quat-order` selects the reading; there is no way to detect
 it from the data, because every permutation of a unit quaternion is still a unit quaternion.
 
+
+**Why 0003 is a separate file rather than more hunks in 0001.** They are not
+the same kind of change and do not have the same audience. 0001 is *mandatory*
+— without it the wholebody task does not move. 0003 is *evaluation-only*: it
+changes nothing unless you pass `--reward_mode push`, and a run that does not
+is bit-identical to upstream. Keeping them apart means a checkout that only
+needs to drive the robot never carries the scoring code, and a reject in one
+does not block the other. They touch disjoint files, so either order works —
+verified: 0001 then 0003, and 0003 then 0001, both `git apply --check` clean
+against `e30c25b`.
+
 ## What each hunk fixes, and how it fails without it
 
 ### 1. `action_provider_wh_dds.py` — warp `Device` is not a `torch.device`
@@ -203,6 +220,270 @@ for VR teleop. It is a CLI flag, so pick per use case rather than once.
 to DDS in this mode, so it cannot simply be skipped — which is why the camera
 term is throttled inside it rather than the whole observation pass.
 
+## 0003 — push/slide success reward (TASK-186)
+
+> Numbered 0003, not 0002: the 0002 slot is TASK-223's obs-scales/attitude
+> patch. The two are independent — 0003 touches only the reward path and
+> 0002 only the observation path — so they can be applied in either order,
+> and neither depends on the other.
+
+Three hunks, all inert unless `--reward_mode push` is passed.
+
+### 4. new `tasks/common_rewards/base_reward_push_cylindercfg.py`
+
+Publishes on the **same** `rt/rewards_state` channel and in the same shape as
+the pick-place reward (`{"rewards":[r],"timestamp":t}`), so no consumer needs
+changing. Values: `1.0` success (latched), `0.0` in progress, `-1.0`
+disqualified (latched), `-2.0` the reward itself threw — deliberately not
+`0.0`, because a scoring term that reports "nothing happened" when it is broken
+is precisely how the bad proxy below survived a whole ablation.
+
+One failure is excluded from `-2.0` and **crashes the run instead**: a
+`HandBodyResolutionError`, i.e. `hand_body_patterns` not resolving against this
+USD. Gate 4 cannot run without hand bodies, so the session could only publish
+noise; the exception carries the offending patterns and the robot's full
+`body_names`, which is what you need to write a working pattern. Note that
+`robot.find_bodies` enforces a strict one-to-one pattern↔body mapping — it
+raises both when two patterns match one body and when a pattern matches none —
+so keep `hand_body_patterns` a **single alternation**
+(`[".*(hand|wrist|palm).*"]`), never a list of independent patterns.
+
+Four gates, all of which must hold:
+
+| Gate | Rule | Default |
+|---|---|---|
+| 1 direction | credited displacement projected on the commanded axis ≥ `min_travel`, and `abs(off-axis) ≤ ratio × on-axis` | 0.15 m, 0.4 |
+| 2 never lifted | sticky veto once `z − z₀` exceeds `max_lift` | 0.03 m |
+| 3 still upright | sticky veto once object tilt from world +z exceeds `max_tilt_deg` | 20° |
+| 4 contact-driven | displacement is only **credited** while a hand body is within `contact_radius` of the object's surface; displacement accrued with no hand near it accumulates as `free_travel` and vetoes past `max_free_travel` | 0.12 m, 0.05 m |
+
+**How it fails without it:** there is no push signal at all, so the
+unseen-behaviour half of the DreamGen ablation cannot be scored — TASK-185 had
+to report it as unanswerable. What TASK-185 actually did was worse than nothing:
+it derived a proxy from `rt/sim_state` (lateral travel ≥ 0.08 m with lift
+≤ 0.06 m) and that proxy was **satisfied more often by `place`-instructed runs
+(7–8/10) than by `push`-instructed runs (6/10)**. It measured flailing.
+
+**Why that cannot recur here.** The proxy read only the object's trajectory.
+Every quantity in it — how far the object moved, how high it ended up — is
+equally producible by lifting it, by knocking it, or by sweeping an arm through
+it. Gates 2 and 4 make trajectory alone insufficient by construction:
+
+- A *place* is an up-and-over transport. The object rises well past 0.03 m
+  while it is being carried, so gate 2 latches a veto **before** any of the
+  transport distance can turn into success. The proxy's `lift` term was
+  measured net (start vs end), which for a place is ≈ 0 — that is exactly why
+  it passed. Gate 2 is a running maximum, not a net, so it cannot.
+- A *knock* or a *swept launch* moves the object after the hand has left. That
+  travel is attributed to `free_travel`, never to the credited push, and past
+  5 cm it latches a veto. The credited push and the object's total travel are
+  different accumulators; the proxy only had the latter.
+- The commanded axis is **frozen at the episode baseline**, so the robot cannot
+  turn to make an arbitrary displacement read as "left".
+
+There is no trajectory that clears all four without a hand having stayed with
+the object, on the table, along the instructed axis — which is the behaviour
+the instruction names.
+
+### 5. `sim_main.py` — CLI flags, config hand-off, and the reset hook
+
+Adds `--reward_mode {pickplace,push}` (default `pickplace`) and
+`--push_direction/--push_min_travel/--push_max_offaxis_ratio/--push_max_lift/`
+`--push_max_tilt_deg/--push_contact_radius/--push_max_free_travel/--push_cfg_file`,
+and writes them onto the env next to the existing `_reward_interval` block.
+
+It also sets `env._push_reward_reset = True` beside each
+`event_manager.trigger("reset_*_self", env)`.
+
+**How it fails without the reset hook:** those triggers teleport the object
+*without* calling `env.reset()`, so `episode_length_buf` never moves and the
+reward has no way to see an episode boundary. Its baseline (start height, start
+position, commanded axis) would stay pinned to the very first episode, and the
+teleport back to the start would be integrated as ~0.2 m of hand-free travel —
+so every episode after the first would come back `-1.0` for a reason that has
+nothing to do with the robot. The reward carries a teleport heuristic
+(`reset_jump_m`, 0.25 m in one sample) as a backstop, but that is a guess and
+this is not.
+
+### 6. `move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py` — dispatcher
+
+`compute_reward` now forwards to the push reward when `env._reward_mode ==
+"push"` and to the stock pick-place reward otherwise. Only the **Dex3**
+wholebody variant is patched — that is the G1 EDU platform this project
+targets. The dex1 and inspire variants keep upstream behaviour; the dispatcher
+is a six-line copy if they ever need it.
+
+### Running a scoring session
+
+Same invocation as below, plus the reward flags:
+
+```bash
+  ... sim_main.py --task Isaac-Move-Cylinder-G129-Dex3-Wholebody \
+    --enable_dex3_dds --enable_wholebody_dds --robot_type g129 \
+    --device cpu --headless --enable_cameras --camera_write_interval 10 \
+    --reward_mode push --push_direction left --env_reward_interval 1
+```
+
+`--push_direction` takes `left|right|forward|backward` (robot frame, resolved
+from the robot's yaw at the episode baseline) or `+x|-x|+y|-y` (world frame).
+
+To change the commanded direction *between* rollouts without restarting Isaac
+(a restart costs ~2 min), pass `--push_cfg_file /dev/shm/push.json` and have the
+harness write e.g. `{"direction": "right"}` before each rollout — the file's
+mtime is polled at 4 Hz and a change re-baselines the episode.
+
+⚠ Use `--env_reward_interval 1` for scoring runs. The default of 5
+(`sim_main.py:77`) samples the gates at 10 Hz rather than 50 Hz; the
+accumulators are integrals over samples so it does not bias the verdict, but it
+coarsens `free_travel` and can miss a brief tilt excursion.
+
+### ⚠ The scene's object probably cannot be pushed at all
+
+This is a property of the scene, not of the reward, and it is the first thing
+to check if the reward never fires.
+
+The object is a cylinder of **radius 0.018 m and height 0.35 m**, mass 0.4 kg
+(`tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py:56-77`) — a
+pencil-shaped rod standing on end, ~10:1 aspect. Its static friction is 1.5 and
+the combine mode is `max` against the env's 1.0
+(`…_wholebody.py:69-75`, `move_cylinder_g1_29dof_dex3_hw_env_cfg.py:156-159`),
+so µ ≈ 1.5.
+
+Quasi-statically, a horizontal force applied at height `h` slides such an object
+rather than tipping it only while `µ·m·g·h < m·g·r`, i.e. `h < r/µ =
+0.018/1.5 ≈ **0.012 m**`. Any contact more than ~1.2 cm above the table tips it.
+A Dex3 palm cannot reach that band without hitting the table.
+
+**Unverified — this is an analytic bound, not a measurement.** Settle it with
+control (a) below before concluding the reward is broken. If it holds, the
+honest options are to lower the object's friction, or to give the push task a
+low-aspect object (a puck) — and note that either changes the scene, so
+push results would no longer be comparable with the `place` control that shares
+it. Do **not** relax `max_tilt_deg` to make the number move: that re-admits
+"knocked over" as success, which is the exact failure this task exists to fix.
+
+### ⚠ The stock pick-place reward is already dead in this task
+
+Separate pre-existing finding, recorded because it silently corrupts any
+baseline read off `rt/rewards_state` in the wholebody task. The pick-place
+reward gates on **absolute world-frame boxes** — valid area `x ∈ (−0.42, 1.0)`,
+`y ∈ (0.2, 0.7)` (`base_reward_pickplace_cylindercfg.py:51-54`). Those were
+written for the fixed-base scene, whose object starts at `(−0.35, 0.40, 0.84)`
+(`base_scene_pickplace_cylindercfg.py:95`). The wholebody scene puts the object
+at `(−2.585, −2.790, 0.84)` in a warehouse
+(`base_scene_pickplace_cylindercfg_wholebody.py:58`) — outside that box in both
+axes. So in `Isaac-Move-Cylinder-G129-Dex3-Wholebody` the stock reward publishes
+a **constant −1.0** and can never publish `1.0`, regardless of what the robot
+does. The push reward is displacement-relative and therefore immune to this
+class of bug. (Verified by reading the configs; not yet confirmed on a live
+`rt/rewards_state` capture.)
+
+### Offline check of the gates
+
+`verify_push_reward_gates.py` here drives synthetic trajectories through the
+reward with `isaaclab` stubbed out — no Isaac, no GPU, ~1 s:
+
+```bash
+UNITREE_SIM_ROOT=$UNITREE_ROOT/unitree_sim_isaaclab \
+  /home/humanoid/anaconda3/envs/tv/bin/python \
+  robot-agent/hardware/isaac_sim_patches/verify_push_reward_gates.py
+```
+
+It covers slide/lift-and-place/knock/idle/launch/wrong-direction/off-axis and
+asserts that the lift-and-place trajectory — the one the TASK-185 proxy
+accepted — is disqualified. It pins the **scoring logic only**: it cannot tell
+you whether the hand-link regex matches the real USD, whether the rod is
+physically pushable, or whether DDS carries the value. Those need the in-sim
+controls below. 14/14 checks pass as of this commit.
+
+Its `find_bodies` stub is a behavioural port of Isaac Lab's
+`isaaclab.utils.string.resolve_matching_names`, **including both of its
+`ValueError`s** — one body matched by two patterns, and a pattern that matches
+nothing. That is deliberate: the stub's first version accepted pattern lists
+the real API rejects outright, which made the hand-body scenario unfailable and
+let a default of `[".*hand.*", ".*wrist.*", ".*palm.*"]` — which raises on any
+G1 with `left_hand_palm_link` — pass 13/13. Keep the stub strict; if it ever
+disagrees with Isaac Lab, the stub is what is wrong.
+
+### In-sim controls — NOT YET RUN
+
+These are the four controls TASK-186 asks for. **None of them has been run**:
+the GPU is serialised and the sim was not booted while this was written. Run
+them in order; each is a fresh episode.
+
+⚠ One `sim_main.py` at a time, and wait for `nvidia-smi` to return to its
+~111 MiB baseline between runs (see the warning further down).
+
+**Terminal 1 — the sim.** One launch serves all four controls.
+
+```bash
+docker run --rm --user 0 --runtime=nvidia --gpus all \
+  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e HOME=/home/humanoid -e PYTHONPATH= -e CYCLONEDDS_HOME=$UNITREE_ROOT/cyclonedds/install \
+  --device /dev/dri --ipc=host --network host \
+  -v /home/humanoid:/home/humanoid -w $UNITREE_ROOT/unitree_sim_isaaclab \
+  neodem-isaac-host:latest \
+  /home/humanoid/anaconda3/envs/unitree_sim_env6/bin/python -u sim_main.py \
+    --task Isaac-Move-Cylinder-G129-Dex3-Wholebody \
+    --enable_dex3_dds --enable_wholebody_dds --robot_type g129 \
+    --device cpu --headless --enable_cameras --camera_write_interval 10 \
+    --reward_mode push --push_direction left \
+    --env_reward_interval 1 --push_cfg_file /dev/shm/neodem_push.json
+```
+
+On startup it must print, before anything else is judged:
+
+```
+[env] reward mode: push (push_direction=left)
+[push_reward] hand bodies (N): [...]
+[push_reward] baseline (...): direction=left world_dir=[0.0, 1.0] origin=[-2.585..., -2.789..., 0.84...]
+```
+
+If the `hand bodies` line names something that is not a hand, stop: the regex
+needs fixing for this USD and every result below is meaningless. If it is
+missing entirely, look for a `HandBodyResolutionError` — the patterns did not
+resolve, the exception prints them next to the robot's full `body_names`, and
+the run stops there rather than publishing `-2.0` forever.
+
+**Terminal 2 — the reward, for the whole session.**
+
+```bash
+CYCLONEDDS_HOME=$UNITREE_ROOT/cyclonedds/install \
+  /home/humanoid/anaconda3/envs/unitree_sim_env6/bin/python \
+  robot-agent/hardware/isaac_sim_patches/push_reward_controls.py watch --seconds 900
+```
+
+**Terminal 3 — reset before each control.**
+
+```bash
+CYCLONEDDS_HOME=$UNITREE_ROOT/cyclonedds/install \
+  /home/humanoid/anaconda3/envs/unitree_sim_env6/bin/python \
+  robot-agent/hardware/isaac_sim_patches/push_reward_controls.py reset --category 1
+```
+
+| # | Control | Arm motion | Terminal 2 must show | A different result means |
+|---|---|---|---|---|
+| a | **slide** the cylinder 0.20 m to the robot's left, keeping the hand on it, without lifting | teleop / policy | `+1.0 SUCCESS`, latched | If it never fires, read the sim log for `DISQUALIFIED: tipped(...)` — that is the rod's 10:1 aspect ratio, not the reward. See the warning above. |
+| b | **lift** it, carry it 0.20 m left, set it down | teleop / policy | `-1.0 DISQUALIFIED`, and the sim log says `lifted(0.xxx m)`. **Never `+1.0`.** | A `+1.0` here is the TASK-185 regression reappearing — do not ship. |
+| c | **knock it over** with a swipe | teleop / policy | `-1.0 DISQUALIFIED`, sim log `tipped(NNdeg)` and/or `free_travel(0.xxx m)` | |
+| d | **do nothing** for a full 20 s episode | none | `0.0` only; no transition at all | Any transition means an accumulator drifts at rest — likely `free_travel` picking up physics jitter. |
+
+The arm motion in (a)–(c) is the **only** part that is not scripted. The
+checkout has no scripted arm driver: `create_action_provider` implements
+`dds`, `dds_wholebody` and `replay` only (`action_provider/create_action_provider.py:10-26`),
+and a Wholebody task is forced onto `dds_wholebody`
+(`sim_main.py:409-412`), so joints come from `rt/lowcmd` (`dds/g1_robot_dds.py:63`)
+and `rt/dex3/{left,right}/cmd` (`dds/dex3_dds.py:76-82`) — i.e. from teleop or a
+policy. Producing (a)–(c) from a canned joint trajectory would mean writing that
+driver, which is not part of this task.
+
+To switch the commanded direction between rollouts without restarting:
+
+```bash
+python robot-agent/hardware/isaac_sim_patches/push_reward_controls.py \
+  direction right --cfg-file /dev/shm/neodem_push.json
+```
+
 ## Running it
 
 Isaac's RTX renderer needs Vulkan, which needs `/dev/dri/renderD*`, whose ACL
@@ -258,6 +539,22 @@ coverage:
   that says "all tests passed" may have run none of them.
 
 Verification to date is by inspection plus the hand-run measurements above.
+
+`verify_push_reward_gates.py` is the one exception, and only a partial one: it
+runs anywhere a CPU torch exists and covers the push reward's scoring logic. It
+is **not** wired into `test-all.sh` — the `HARDWARE_PYTHON` stage guarantees only
+numpy + pytest, and this needs torch. Run it by hand after touching
+`base_reward_push_cylindercfg.py`.
+
+What still has **no** coverage of any kind, automated or manual, as of TASK-186:
+
+- that `0003` applies, imports and runs inside Isaac at all — it has never been
+  loaded by a live sim;
+- that `hand_body_patterns` matches the real Dex3 USD (the link names are in a
+  crate-compressed USD token table and are not readable without Isaac);
+- that `contact_radius_m = 0.12` corresponds to a real hand–object contact
+  rather than a near miss;
+- that DDS actually carries the new values end to end.
 
 ## Open hazard this patch makes more likely (pre-existing, not introduced)
 
