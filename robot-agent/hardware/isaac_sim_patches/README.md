@@ -7,8 +7,9 @@ rate with a robot that stays on the floor — and, before two of them, it does
 not move at all. They live here as patches so a fresh checkout can be brought
 to a working state without rediscovering them.
 
-Two further patches are optional and evaluation-only: `0003` adds a push/slide
-success reward (TASK-186), and `0004` adds the gait instrumentation that proved
+Three further patches are optional and evaluation-only: `0003` adds a push/slide
+success reward (TASK-186), `0005` adds the tier-B harness that drives that
+reward's controls (TASK-186), and `0004` adds the gait instrumentation that proved
 the G1 walks (TASK-203 step 2). Neither changes dynamics or anything the policy
 observes.
 
@@ -22,6 +23,7 @@ git apply $P/0001-neodem-g1-wholebody-sim.patch
 git apply $P/0002-task223-missing-ground-plane.patch
 git apply $P/0003-neodem-push-slide-reward.patch   # optional; only for scoring pushes
 git apply $P/0004-task203-gait-instrumentation.patch # optional; measuring the gait
+git apply $P/0005-task186-tierb-scene-probe.patch  # optional; driving 0003's controls
 ```
 
 **`0001` and `0002` are both required** (`0003` is optional — see below).
@@ -37,10 +39,11 @@ sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 | Upstream | `https://github.com/unitreerobotics/unitree_sim_isaaclab` |
 | Pinned commit | `e30c25b` (detached HEAD) |
 | Isaac Sim / Lab | 6.0.1 / 6.1.14, conda env `unitree_sim_env6` |
-| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only), `0004-task203-gait-instrumentation.patch` (optional, observation-only) |
+| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only), `0004-task203-gait-instrumentation.patch` (optional, observation-only), `0005-task186-tierb-scene-probe.patch` (optional, purely additive, inert unless armed) |
 | Files touched by 0001 + 0002 | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
 | Files touched by 0003 | `sim_main.py`, `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py`, new `tasks/common_rewards/base_reward_push_cylindercfg.py` |
 | Files touched by 0004 | `action_provider/action_provider_wh_dds.py` (3 hunks) |
+| Files touched by 0005 | `sim_main.py` (2 hunks, both additions), new `neodem_push_probe.py` |
 
 `git apply` against a different upstream commit may reject. The seven hunks in
 `0001` + `0002` are independent of one another, and each is documented below by
@@ -414,11 +417,149 @@ let a default of `[".*hand.*", ".*wrist.*", ".*palm.*"]` — which raises on any
 G1 with `left_hand_palm_link` — pass 13/13. Keep the stub strict; if it ever
 disagrees with Isaac Lab, the stub is what is wrong.
 
-### In-sim controls — NOT YET RUN
+### In-sim controls — RUN 2026-08-28, and they CANNOT be scored yet
 
-These are the four controls TASK-186 asks for. **None of them has been run**:
-the GPU is serialised and the sim was not booted while this was written. Run
-them in order; each is a fresh episode.
+⚠ **Read this before running anything below.** The sim was booted against this
+patch on 2026-08-28 and the four controls were driven. **Not one of them can be
+scored, for three independent reasons found in that run** — all three are
+defects, none of them is in the reward's scoring logic, and the first one alone
+makes the whole patch dead code in the only task that has the push scene.
+
+The four control recipes further down are still correct and are kept as-is; they
+become runnable once defects 1 and 3 are fixed.
+
+#### Defect 1 — the reward is never called in a Wholebody task
+
+**The reward function never executed.** It prints `[push_reward] hand bodies
+(N): [...]` and `[push_reward] baseline (...)` unconditionally on its first
+call; neither line appears anywhere in a 1137-line session log, and nor does
+the `-2.0` "the reward threw" path or any traceback. `rt/rewards_state`
+carried nothing to match. The reason is a code path, not a configuration:
+
+* `sim_main.py:476-479` — any task with `Wholebody` in its name (or
+  `--enable_wholebody_dds`) forces `action_source = "dds_wholebody"` **and**
+  `control_config.use_rl_action_mode = True`.
+* `layeredcontrol/robot_control_system.py:120-127` — `RobotController.step()`
+  is `if self.config.replay_mode or self.config.use_rl_action_mode: pass` …
+  `else: self.env.step(action)`. With the RL action mode on, **`env.step()` is
+  never called**, and `env.step()` is what runs the reward manager.
+* `action_provider_wh_dds.py:637-641` — the wholebody provider hand-rolls the
+  physics instead: `scene.write_data_to_sim()` / `sim.step(render=False)` /
+  `scene.update(dt=...)`, then `observation_manager.compute()`. There is no
+  `reward_manager.compute()` anywhere in it.
+* `sim_main.py:559-561` — the one place that could compute it by hand is
+  `if (loop_count % reward_interval) == 0: pass`, with
+  `# current_reward = get_step_reward_value(env)` **commented out**.
+
+`grep -rn 'env\.step('` over `action_provider/`, `sim_main.py` and `tools/`
+returns nothing at all. So `compute_reward` — this patch's and the stock
+pick-place one alike — is unreachable in every `*Wholebody*` task.
+
+This supersedes the claim in "⚠ The stock pick-place reward is already dead in
+this task" above: that section says the stock reward publishes a constant
+`-1.0`. It does not publish anything, because it is never invoked. The
+world-box analysis in that section is still correct about what the reward
+*would* return; it just never gets the chance.
+
+**Smallest fix:** call the reward manager from the sim_main loop when the
+wholebody provider is in charge — effectively reinstating line 561 as
+`env.reward_manager.compute(dt=env.step_dt)` behind the existing
+`reward_interval` gate. `tools/get_reward.py:get_current_rewards` already wraps
+exactly that call and is already imported at `sim_main.py:140`.
+
+#### Defect 2 — the reward reads the quaternion in the wrong order
+
+Isaac Lab 3.0 returns `root_quat_w` as **(x, y, z, w)**, not (w, x, y, z):
+
+    IsaacLab30/source/isaaclab/isaaclab/assets/rigid_object/base_rigid_object_data.py:409-413
+        @leapp_tensor_semantics(kind=..., element_names=QUAT_XYZW_ELEMENT_NAMES)
+        def root_link_quat_w(self):
+            """Root link orientation (x, y, z, w) in simulation world frame."""
+    …:658-661   root_quat_w is a shorthand for root_link_quat_w
+
+`base_reward_push_cylindercfg.py` assumes wxyz in two places, so both are wrong:
+
+| Where | Code | Consequence |
+|---|---|---|
+| gate 3, tilt | `cos_tilt = 1 - 2*(q[:,1]**2 + q[:,2]**2)` — treats `q[1], q[2]` as `x, y`; they are `y, z` | `max_tilt_deg` vetoes on a garbage angle |
+| `_yaw_from_quat`:234-237 | docstring literally says "(w, x, y, z) order"; unpacks `w,x,y,z = quat[:,0..3]` | `_command_dir` rotates robot-frame directions by a wrong yaw, so `--push_direction left` does not point left |
+
+Both were confirmed empirically as well as from the source. The rod spent the
+session lying on its side (see defect 3), i.e. at a true tilt of exactly 90°,
+and it slid without changing that — a cylinder on its side keeps its symmetry
+axis horizontal however much it rolls. Across all 12 sweep trials the xyzw
+reading was **90.0° every time** while the wxyz reading wandered between 27.8°
+and 103.2°. A formula that varies while the quantity it measures is constant is
+the wrong formula.
+
+Note `action_provider_wh_dds.py:449-457` (patch 0004, TASK-203) already unpacks
+`qx, qy, qz, qw` correctly and cites this same source line, so TASK-203's yaw
+and heading measurements are unaffected. The bug is confined to this reward.
+
+#### Defect 3 — the object does not rest on the table; it is on the floor
+
+Six seconds after boot, with the robot standing still and nothing having
+touched it, the object's pose was:
+
+    [push_probe] home pose: pos=[-2.4832, -2.9629, 0.0180]
+                            quat=[0.7071, -0.0014, -0.3599, -0.6087]
+
+`z = 0.0180` is **exactly the rod's radius** (0.018 m), which is where a
+cylinder's centre sits when it lies on its side on a plane at `z = 0` — the
+TASK-223 ground plane. The quaternion reads exactly 90° of tilt under the
+correct (xyzw) formula. So the rod is flat on the warehouse floor, not standing
+on a table.
+
+The spawn is the likely cause and is arithmetic, not physics:
+`base_scene_pickplace_cylindercfg_wholebody.py:58` puts the object at
+`z = 0.84`, but a `CylinderCfg` origin is the cylinder's **centre** and the rod
+is 0.35 m tall — so its base spawns at `0.84 − 0.175 = 0.665`, roughly 0.175 m
+*inside* a table whose top is at 0.84. PhysX resolves that interpenetration by
+ejecting it, and it lands on the floor.
+
+Until this is fixed, no push, place, or lift experiment in
+`Isaac-Move-Cylinder-G129-Dex3-Wholebody` means anything: they all act on a rod
+lying on open floor. **The pushability question is therefore still unmeasured.**
+The height sweep did run to completion, but its verdict ("no swept height
+produced a 0.20 m slide") is **void** — an 8 N push on a rod already lying down
+just launches it 15–50 m across the map, which is what every trial recorded.
+Do not quote those numbers.
+
+Fixing this means changing the scene, and the warning under "the scene's object
+probably cannot be pushed at all" applies: a `place` control that shares this
+scene is equally affected, so both baselines move together.
+
+#### What the run did establish
+
+* The patch loads, the sim boots with it, and `--reward_mode push` is accepted
+  and reaches `env._reward_mode` (`[env] reward mode: push (push_direction=left)`).
+* Risk 2 from the task — "`hand_body_patterns` may not match the real Dex3 USD"
+  — is **still open**. The regex never got the chance to resolve, because the
+  reward never ran. The offline check confirms only that the pattern is legal
+  under Isaac Lab's one-to-one rule, not that it matches this USD.
+* Controls (b), (c) and (d) are drivable without a robot after all: their
+  assertions ride on gate 2 (lift) and gate 3 (tilt), which read object pose and
+  do not require hand proximity. `neodem_push_probe.py` drives all three. Only
+  control (a) still needs teleop or a policy, because gate 4 credits
+  displacement only while a hand is within `contact_radius_m`.
+
+#### Reproducing
+
+`neodem_push_probe.py` (in the checkout, armed by `NEODEM_PUSH_PROBE`, inert
+otherwise) drives `idle` → `lift` → `knock` → `sweep` in one boot;
+`verify_push_probe_offline.py` here exercises its state machine on the CPU in
+~1 s, which is worth running first because a probe that dies mid-boot costs a
+GPU slot. The launch used was:
+
+```bash
+NEODEM_PUSH_PROBE=all NEODEM_PUSH_PROBE_DELAY=300 \
+  <the docker run below, plus --reward_mode push --env_reward_interval 1>
+```
+
+---
+
+The four control recipes below are unchanged and still correct. Run them in
+order once defects 1 and 3 are fixed; each is a fresh episode.
 
 ⚠ One `sim_main.py` at a time, and wait for `nvidia-smi` to return to its
 ~111 MiB baseline between runs (see the warning further down).
