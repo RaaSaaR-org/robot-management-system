@@ -1,10 +1,11 @@
 # isaac_sim_patches — NeoDEM's changes to `unitree_sim_isaaclab`
 
 Unitree's Isaac Lab sim (`unitree_sim_isaaclab`) is a **third-party checkout**,
-not a submodule and not vendored here. Three NeoDEM changes are needed before
-the G1 wholebody DDS task runs at a usable control rate — and, before two of
-them, it does not move at all. They live here as a patch so a fresh checkout
-can be brought to a working state without rediscovering them.
+not a submodule and not vendored here. Seven NeoDEM changes, in two patch
+files, are needed before the G1 wholebody DDS task runs at a usable control
+rate with a robot that stays on the floor — and, before two of them, it does
+not move at all. They live here as patches so a fresh checkout can be brought
+to a working state without rediscovering them.
 
 ## Applying
 
@@ -12,28 +13,38 @@ can be brought to a working state without rediscovering them.
 cd "$UNITREE_ROOT/unitree_sim_isaaclab"
 git checkout e30c25b                       # the pinned upstream commit
 git apply /path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches/0001-neodem-g1-wholebody-sim.patch
+git apply /path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches/0002-task223-missing-ground-plane.patch
 ```
+
+**Both are required.** `0001` is what makes the task run at all; `0002` gives
+the robot a floor to stand on and fixes the IMU quaternion it publishes — and
+`isaac_gait_probe.py`'s default `--quat-order xyzw` is only the correct reading
+once `0002` is applied, so running the probe against a `0001`-only sim silently
+reproduces TASK-223's false `base upright FAIL`. **Even both are not
+sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 
 | | |
 |---|---|
 | Upstream | `https://github.com/unitreerobotics/unitree_sim_isaaclab` |
 | Pinned commit | `e30c25b` (detached HEAD) |
 | Isaac Sim / Lab | 6.0.1 / 6.1.14, conda env `unitree_sim_env6` |
-| Files touched | `action_provider/action_provider_wh_dds.py`, `tasks/common_observations/camera_state.py` |
+| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks) |
+| Files touched | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
 
-`git apply` against a different upstream commit may reject. The three hunks are
-independent and small enough to re-apply by hand from the symptoms below.
+`git apply` against a different upstream commit may reject. The seven hunks are
+independent of one another, and each is documented below by the symptom it
+fixes, so a reject can be re-applied by hand.
 
 ## ⚠ The checkout carries an uncommitted Isaac Lab 3.0 port that is NOT in these patches
 
 As of 2026-08-28, `git -C "$UNITREE_ROOT/unitree_sim_isaaclab" status --porcelain` reports
-**30 modified files**, not the two this file lists. The other ~27 are an Isaac Sim 6.0.1 /
+**30 modified files**, not the four this file lists. The rest are an Isaac Sim 6.0.1 /
 Isaac Lab 3.0 migration (`sim.physx` -> `sim.physics`, `ProxyArray.torch` on the
 `common_observations/*_state.py` reads, the `InitialStateCfg.rot` quaternion reorder in
 `tasks/common_config/robot_configs.py`), written up in
 `/home/humanoid/Dokumente/Unitree/g1_quest_teleop/docs/STATUS.md` under R19.
 
-**A fresh checkout brought to `e30c25b` + `0001` will therefore NOT run**, and any result
+**A fresh checkout brought to `e30c25b` + `0001` + `0002` will therefore NOT run**, and any result
 reproduced from TASK-204 / TASK-223 was obtained against the working tree, not against this
 patch set. Capturing that port here is unfinished work.
 

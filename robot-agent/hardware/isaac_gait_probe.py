@@ -21,7 +21,8 @@ started per isaac_sim_patches/README.md:
 apart from bad data.
 
 ⚠ **The element order of that quaternion is not (w, x, y, z) in this sim, and
-reading it as if it were is what produced TASK-223's "it cannot stand".**
+reading it as if it were is what hid TASK-223's real fault -- a missing ground
+plane -- behind an uprightness check that could never pass.**
 `unitree_sim_isaaclab/dds/g1_robot_dds.py:101` writes the field as
 `imu_array[[4, 5, 6, 3]]`, with the comment `#[x,y,z,w]` -- deliberately
 **(x, y, z, w)**, not the real robot's (w, x, y, z). On top of that, the
@@ -31,8 +32,9 @@ Isaac Lab 3.0 port left `tasks/common_observations/g1_29dof_state.py:370` at
 (x, y, z, w). The two permutations compose into a scramble under which a
 *perfectly upright, motionless* base reads `|roll| = pi` -- so the "base
 upright" verdict below failed unconditionally, for any robot, on any
-hypothesis. `isaac_sim_patches/0002-task223-obs-scales-and-step0-probe.patch`
-fixes the sim side; `--quat-order` selects how this probe reads the wire:
+hypothesis. `isaac_sim_patches/0002-task223-missing-ground-plane.patch` fixes
+the sim side, in its hunk 3; `--quat-order` selects how this probe reads the
+wire:
 
     xyzw  (default)  the sim with 0002 applied, i.e. the vendor's own contract
     wxyz             a real G1
