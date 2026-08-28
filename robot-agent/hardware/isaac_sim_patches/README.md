@@ -433,8 +433,16 @@ become runnable once defects 1 and 3 are fixed.
 **The reward function never executed.** It prints `[push_reward] hand bodies
 (N): [...]` and `[push_reward] baseline (...)` unconditionally on its first
 call; neither line appears anywhere in a 1137-line session log, and nor does
-the `-2.0` "the reward threw" path or any traceback. `rt/rewards_state`
-carried nothing to match. The reason is a code path, not a configuration:
+the `-2.0` "the reward threw" path or any traceback.
+
+`rt/rewards_state` carried nothing to match: `push_reward_controls.py watch`
+ran for the full 900 s starting the same minute the sim booted and reported
+**`received 0 messages; final value None`**. Not a constant `-1.0`, not `-2.0`
+— nothing at all. That answers risk 5 from the task ("whether DDS carries the
+new values end to end"): it does not, because nothing computes a value to
+publish.
+
+The reason is a code path, not a configuration:
 
 * `sim_main.py:476-479` — any task with `Wholebody` in its name (or
   `--enable_wholebody_dds`) forces `action_source = "dds_wholebody"` **and**
