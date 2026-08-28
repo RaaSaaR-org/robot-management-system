@@ -97,7 +97,13 @@ The fix puts it back there.
 
 ### What is NOT done, and where it goes
 
-⚠ **It stands; it does not walk.** Test Strategy item 2 is only half met: no leg joint is pinned
+⚠ **Superseded 2026-08-28 by [[TASK-203]] — it does walk.** The reading below was an artefact
+of `isaac_gait_probe.py` publishing the velocity command at 20 Hz into a command slot the sim
+clears on every read, so the policy saw the command in about a third of steps. At the vendor's
+100 Hz the same sim, policy and checkpoint walk at 0.570 m/s with alternating foot contact. The
+original text follows.
+
+~~**It stands; it does not walk.**~~ Test Strategy item 2 is only half met: no leg joint is pinned
 under `vx = 0.5`, but *the base does not translate*. The command produces a small forward lean
 (pitch 0.08 vs 0.045 at rest) and no stepping. Item 3 (`isaac_loco_check.py`, TASK-204 step 4)
 was not run.

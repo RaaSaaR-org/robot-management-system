@@ -1,0 +1,88 @@
+--- a/action_provider/action_provider_wh_dds.py
++++ b/action_provider/action_provider_wh_dds.py
+@@ -369,6 +369,13 @@
+             self.run_command_dds.write_run_command([0.0,0,0,0.8])
+       
+         # command = [0.5,0.0,0.7,0.8]
++        # NeoDEM TASK-203: keep what the policy actually saw this step, so the
++        # [TASK-203] log line below is self-describing. Attributing a log window
++        # to a phase by counting steps from when a test script started is
++        # guesswork -- real-time factor is not exactly 1.0, so the mapping drifts,
++        # and a "the robot ignored yaw" reading can be an off-by-one-window
++        # artefact rather than a fact about the policy.
++        self._t203_cmd = list(command)
+         command = torch.tensor(command, device=self.env.device, dtype=torch.float32)
+         
+         if command.dim() == 1:
+@@ -426,7 +433,12 @@
+         """
+         try:
+             n = self.sim_step_counter
+-            if n % 25 != 0 and n > 5:
++            # Log interval. 25 steps = 2 Hz of simulated time (the policy runs at 50 Hz),
++            # which is fine for catching a fall but ALIASES a gait: the G1 steps at about
++            # 1.76 Hz, so a 2 Hz sampler reports nonsense cadences and foot make/break
++            # counts. Set NEODEM_LOG_EVERY=5 (10 Hz) or lower when measuring contact.
++            every = int(os.environ.get("NEODEM_LOG_EVERY", "25"))
++            if n % every != 0 and n > 5:
+                 return
+             d = self.env.scene["robot"].data
+             pg = d.projected_gravity_b.torch[0] if hasattr(d.projected_gravity_b, "torch") \
+@@ -439,6 +451,10 @@
+             import math as _m
+             roll = _m.atan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy))
+             pitch = _m.asin(max(-1.0, min(1.0, 2 * (qw * qy - qz * qx))))
++            # NeoDEM TASK-203: yaw completes the attitude. Without it a turn cannot
++            # be measured at all -- course-over-ground is undefined when the robot
++            # is asked to turn in place, which is exactly the case being tested.
++            yaw = _m.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+             jp = d.joint_pos.torch if hasattr(d.joint_pos, "torch") else d.joint_pos
+             jv = d.joint_vel.torch if hasattr(d.joint_vel, "torch") else d.joint_vel
+             dj = self.default_action_positions
+@@ -453,6 +469,46 @@
+                       "and every action_to_indices entry is < 29", flush=True)
+                 print(f"[TASK-223] leg defaults = "
+                       f"{[round(float(dj[0, i]), 4) for i in legs]}", flush=True)
++            # NeoDEM TASK-203 step 2. The two things neither the [TASK-223] line above
++            # nor the external isaac_gait_probe.py can observe, and without which
++            # "the robot walks" cannot be told apart from "the robot marches on the
++            # spot":
++            #
++            #  * base x/y. The line above prints only z, which is enough to catch a
++            #    fall (TASK-223) but says nothing about forward progress. Walking
++            #    means the base translates at roughly the commanded vx.
++            #  * foot contact. `unitree_hg`'s LowState_ has no foot_force field -- that
++            #    is the `go` IDL -- so nothing on the DDS wire observes make/break
++            #    contact, and the probe's left/right knee correlation is only a proxy
++            #    (a robot lying on its side thrashing its knees scores the same).
++            #    The scene already carries a ContactSensor with track_air_time=True
++            #    (move_cylinder_g1_29dof_dex3_hw_env_cfg.py:45), so the real signal is
++            #    free: air time > 0 on exactly one foot at a time is an alternating
++            #    stance, which is what a gait IS.
++            try:
++                cs = self.env.scene["contact_forces"]
++                if n == 0:
++                    feet = [b for b in cs.body_names if "ankle_roll" in b or "foot" in b]
++                    print(f"[TASK-203] contact sensor bodies matching feet = {feet}", flush=True)
++                    self._t203_feet = [cs.body_names.index(b) for b in feet]
++                idx = getattr(self, "_t203_feet", None)
++                if idx:
++                    cd = cs.data
++                    nf = cd.net_forces_w.torch if hasattr(cd.net_forces_w, "torch") else cd.net_forces_w
++                    at = cd.current_air_time.torch if hasattr(cd.current_air_time, "torch") else cd.current_air_time
++                    ct = cd.current_contact_time.torch if hasattr(cd.current_contact_time, "torch") else cd.current_contact_time
++                    fz = [round(float(nf[0, i, 2]), 1) for i in idx]
++                    air = [round(float(at[0, i]), 3) for i in idx]
++                    con = [round(float(ct[0, i]), 3) for i in idx]
++                    c = getattr(self, "_t203_cmd", [float("nan")] * 4)
++                    print(f"[TASK-203] step={n:5d} xy=({float(pos[0]):+.4f},{float(pos[1]):+.4f}) "
++                          f"yaw={yaw:+.4f} cmd=[{c[0]:+.2f},{c[1]:+.2f},{c[2]:+.2f},{c[3]:.2f}] "
++                          f"foot_fz={fz} air_t={air} contact_t={con}", flush=True)
++                else:
++                    print(f"[TASK-203] step={n:5d} xy=({float(pos[0]):+.4f},{float(pos[1]):+.4f}) "
++                          f"[no foot bodies matched]", flush=True)
++            except Exception as e:
++                print(f"[TASK-203] contact log failed: {type(e).__name__}: {e}", flush=True)
+             print(f"[TASK-223] step={n:5d} z={float(pos[2]):+.4f} "
+                   f"proj_grav=({float(pg[0]):+.3f},{float(pg[1]):+.3f},{float(pg[2]):+.3f}) "
+                   f"roll={roll:+.4f} pitch={pitch:+.4f} "

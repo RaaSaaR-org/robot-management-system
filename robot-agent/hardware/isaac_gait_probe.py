@@ -133,10 +133,31 @@ def main():
         print(f"[probe] {name}: cmd={cmd if cmd is not None else 'NONE (publishing nothing)'} "
               f"for {secs}s", flush=True)
         t0 = time.time()
+        n = 0
         while time.time() - t0 < secs:
             if cmd is not None:
                 pub.Write(String_(data=str(cmd)))
-            time.sleep(0.05)
+                n += 1
+            # 100 Hz, matching send_commands_keyboard.py's `time.sleep(0.01)`.
+            # This rate is NOT cosmetic and must not be lowered. The sim's command
+            # slot is SELF-CLEARING: action_provider_wh_dds.compute_current_observations
+            # reads it and then immediately calls
+            # `run_command_dds.write_run_command([0.0, 0, 0, 0.8])`, writing zeros back
+            # into the very shared-memory slot it just read (dds/commands_dds.py:71-98).
+            # So a published command survives exactly one policy step. The policy runs at
+            # 50 Hz of simulated time (decimation 4 x sim.dt 0.005), so only a publisher
+            # at >= that rate keeps a command continuously in the observation; the vendor's
+            # 100 Hz gives 2x margin.
+            #
+            # This probe published at 20 Hz until 2026-08-28 (TASK-203 step 2), which put
+            # the commanded vx in front of the policy in roughly a third of steps and zero
+            # in the rest -- a ~35 %-duty-cycle square wave where the policy was trained on
+            # a held constant. Any "does it walk" measurement taken at 20 Hz is confounded
+            # and must be re-run.
+            time.sleep(0.01)
+        if cmd is not None:
+            print(f"[probe] {name}: published {n} commands in {time.time()-t0:.1f}s "
+                  f"= {n/max(time.time()-t0, 1e-9):.0f} Hz", flush=True)
 
     if a.no_command:
         # One long observation window; there is no command to step through.
