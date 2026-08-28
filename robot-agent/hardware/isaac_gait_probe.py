@@ -17,8 +17,34 @@ started per isaac_sim_patches/README.md:
     python isaac_gait_probe.py --no-command          # publish nothing at all
 
 `imu_state.rpy` is all zeros in this sim -- attitude is derived from
-`imu_state.quaternion` (w, x, y, z), whose norm is checked so a genuine fall
-can be told apart from bad data.
+`imu_state.quaternion`, whose norm is checked so a genuine fall can be told
+apart from bad data.
+
+⚠ **The element order of that quaternion is not (w, x, y, z) in this sim, and
+reading it as if it were is what hid TASK-223's real fault -- a missing ground
+plane -- behind an uprightness check that could never pass.**
+`unitree_sim_isaaclab/dds/g1_robot_dds.py:101` writes the field as
+`imu_array[[4, 5, 6, 3]]`, with the comment `#[x,y,z,w]` -- deliberately
+**(x, y, z, w)**, not the real robot's (w, x, y, z). On top of that, the
+Isaac Lab 3.0 port left `tasks/common_observations/g1_29dof_state.py:370` at
+`ensure_quat_w_first(quat, assume_w_first=True)`, which was right on Isaac Lab
+2.x and is wrong on 3.0, where `body_link_pose_w[..., 3:7]` is already
+(x, y, z, w). The two permutations compose into a scramble under which a
+*perfectly upright, motionless* base reads `|roll| = pi` -- so the "base
+upright" verdict below failed unconditionally, for any robot, on any
+hypothesis. `isaac_sim_patches/0002-task223-missing-ground-plane.patch` fixes
+the sim side, in its hunk 3; `--quat-order` selects how this probe reads the
+wire:
+
+    xyzw  (default)  the sim with 0002 applied, i.e. the vendor's own contract
+    wxyz             a real G1
+    scrambled        the sim *without* 0002 -- reproduces the broken reading
+
+Nothing here can detect the order for you: every permutation of a unit
+quaternion is still a unit quaternion, which is exactly why the "norm is
+exactly 1.0000" observation gave false reassurance. The first raw sample is
+printed so the value can be checked by eye against the sim's own
+`[TASK-223] roll=... pitch=...` line, which 0002 logs from inside.
 
 Two things this probe does NOT measure, so that its output is not over-read:
 
@@ -47,16 +73,31 @@ LEG = [
     ("R_ank_pitch", -0.87267, 0.5236), ("R_ank_roll", -0.2618, 0.2618),
 ]
 EPS = 0.02          # "at the limit" tolerance, rad
-samples = []        # (t, [12 q], rpy)
+samples = []        # (t, phase, [12 q], roll, pitch)
 lock = threading.Lock()
 phase = {"name": "boot"}
+raw_quat = {"first": None}
+
+# How to read the four floats of `imu_state.quaternion` as (w, x, y, z).
+# See the module docstring: this sim does not use the real robot's order, and
+# the Isaac Lab 3.0 port adds a second permutation on top of the vendor's.
+QUAT_ORDERS = {
+    "wxyz":      (0, 1, 2, 3),   # a real G1
+    "xyzw":      (3, 0, 1, 2),   # this sim, with isaac_sim_patches/0002 applied
+    "scrambled": (2, 3, 0, 1),   # this sim WITHOUT 0002 -- the TASK-223 reading
+}
+quat_order = {"perm": QUAT_ORDERS["xyzw"]}
 
 def on_state(msg):
     q = [msg.motor_state[i].q for i in range(12)]
-    w, x, y, z = msg.imu_state.quaternion
+    f = list(msg.imu_state.quaternion)
+    iw, ix, iy, iz = quat_order["perm"]
+    w, x, y, z = f[iw], f[ix], f[iy], f[iz]
     roll  = math.atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y))
     pitch = math.asin(max(-1.0, min(1.0, 2*(w*y - z*x))))
     with lock:
+        if raw_quat["first"] is None:
+            raw_quat["first"] = f
         samples.append((time.time(), phase["name"], q, roll, pitch))
 
 def main():
@@ -68,7 +109,13 @@ def main():
     ap.add_argument("--no-command", action="store_true",
                     help="publish nothing on rt/run_command/cmd -- observe the sim's "
                          "own default behaviour (TASK-223 test 1). --vx is ignored.")
+    ap.add_argument("--quat-order", choices=sorted(QUAT_ORDERS), default="xyzw",
+                    help="how to read imu_state.quaternion; see the module docstring. "
+                         "xyzw = this sim with isaac_sim_patches/0002 applied (default), "
+                         "wxyz = a real G1, scrambled = this sim without 0002.")
     a = ap.parse_args()
+    quat_order["perm"] = QUAT_ORDERS[a.quat_order]
+    print(f"[probe] reading imu_state.quaternion as --quat-order={a.quat_order}", flush=True)
     ChannelFactoryInitialize(a.domain)
     sub = ChannelSubscriber("rt/lowstate", LowState_); sub.Init(on_state, 10)
     pub = ChannelPublisher("rt/run_command/cmd", String_); pub.Init()
@@ -181,6 +228,16 @@ def main():
     print(f"first tilt beyond 0.5 rad: {'t=%ds during %s' % fell_at if fell_at else 'never - stayed upright'}")
 
     print("\n--- base attitude ---")
+    fq = raw_quat["first"]
+    if fq:
+        n = math.sqrt(sum(v*v for v in fq))
+        iw, ix, iy, iz = quat_order["perm"]
+        print(f"first raw imu_state.quaternion (wire order) = "
+              f"[{fq[0]:+.4f}, {fq[1]:+.4f}, {fq[2]:+.4f}, {fq[3]:+.4f}]  norm={n:.4f}")
+        print(f"read as (w,x,y,z) = ({fq[iw]:+.4f}, {fq[ix]:+.4f}, {fq[iy]:+.4f}, {fq[iz]:+.4f})"
+              f"   [--quat-order={a.quat_order}]")
+        print("cross-check this against the sim's own '[TASK-223] roll=... pitch=...' line; "
+              "a unit norm proves nothing about element order.")
     rolls = [s[3] for s in fwd]; pitches = [s[4] for s in fwd]
     print(f"roll  {min(rolls):+.3f} .. {max(rolls):+.3f} rad")
     print(f"pitch {min(pitches):+.3f} .. {max(pitches):+.3f} rad")

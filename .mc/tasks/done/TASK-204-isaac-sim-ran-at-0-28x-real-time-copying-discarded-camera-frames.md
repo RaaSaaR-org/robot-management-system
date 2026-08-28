@@ -4,7 +4,7 @@ aliases:
 - TASK-204
 title: The Isaac sim ran at 0.28x real time because it copied camera frames it threw away
 slug: isaac-sim-ran-at-0-28x-real-time-copying-discarded-camera-frames
-status: in-progress
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -25,7 +25,12 @@ status_note: 'Test steps 1 and 2 are done: cause found by measurement (camera co
   previously-undurable patch are now in robot-agent/hardware/isaac_sim_patches/.
   Step 3 was run and FAILED for an unrelated reason: the policy cannot stand even with no
   velocity command. Spun out as TASK-223, which is now the real blocker on TASK-203 --
-  this task no longer is.'
+  this task no longer is.
+  CLOSED 2026-08-28. The deliverable -- the camera-copy early-out -- shipped in PR #260 and is
+  durable in robot-agent/hardware/isaac_sim_patches/. Steps 3 and 4 are NOT abandoned: both
+  need a robot that can stand, so they were handed to TASK-223, whose Test Strategy carries
+  step 4 verbatim as its own item 3. Closing here rather than holding this task open behind
+  another one, so the dependency graph shows a single owner for the standing problem.'
 ---
 
 

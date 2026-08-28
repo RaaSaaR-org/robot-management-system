@@ -1,12 +1,13 @@
 # isaac_sim_patches — NeoDEM's changes to `unitree_sim_isaaclab`
 
 Unitree's Isaac Lab sim (`unitree_sim_isaaclab`) is a **third-party checkout**,
-not a submodule and not vendored here. Three NeoDEM changes are needed before
-the G1 wholebody DDS task runs at a usable control rate — and, before two of
-them, it does not move at all. They live here as a patch so a fresh checkout
-can be brought to a working state without rediscovering them.
+not a submodule and not vendored here. Seven NeoDEM changes, in two required patch
+files, are needed before the G1 wholebody DDS task runs at a usable control
+rate with a robot that stays on the floor — and, before two of them, it does
+not move at all. They live here as patches so a fresh checkout can be brought
+to a working state without rediscovering them.
 
-A second, optional patch adds a push/slide success reward (TASK-186).
+A third, optional patch adds a push/slide success reward (TASK-186).
 
 ## Applying
 
@@ -15,19 +16,127 @@ cd "$UNITREE_ROOT/unitree_sim_isaaclab"
 git checkout e30c25b                       # the pinned upstream commit
 P=/path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches
 git apply $P/0001-neodem-g1-wholebody-sim.patch
+git apply $P/0002-task223-missing-ground-plane.patch
 git apply $P/0003-neodem-push-slide-reward.patch   # optional; only for scoring pushes
 ```
+
+**`0001` and `0002` are both required** (`0003` is optional — see below).
+`0001` is what makes the task run at all; `0002` gives
+the robot a floor to stand on and fixes the IMU quaternion it publishes — and
+`isaac_gait_probe.py`'s default `--quat-order xyzw` is only the correct reading
+once `0002` is applied, so running the probe against a `0001`-only sim silently
+reproduces TASK-223's false `base upright FAIL`. **Even both are not
+sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 
 | | |
 |---|---|
 | Upstream | `https://github.com/unitreerobotics/unitree_sim_isaaclab` |
 | Pinned commit | `e30c25b` (detached HEAD) |
 | Isaac Sim / Lab | 6.0.1 / 6.1.14, conda env `unitree_sim_env6` |
-| Files touched by 0001 | `action_provider/action_provider_wh_dds.py`, `tasks/common_observations/camera_state.py` |
+| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only) |
+| Files touched by 0001 + 0002 | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
 | Files touched by 0003 | `sim_main.py`, `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py`, new `tasks/common_rewards/base_reward_push_cylindercfg.py` |
 
-`git apply` against a different upstream commit may reject. The hunks are
-independent and small enough to re-apply by hand from the symptoms below.
+`git apply` against a different upstream commit may reject. The seven hunks in
+`0001` + `0002` are independent of one another, and each is documented below by
+the symptom it fixes, so a reject can be re-applied by hand.
+
+## ⚠ The checkout carries an uncommitted Isaac Lab 3.0 port that is NOT in these patches
+
+As of 2026-08-28, `git -C "$UNITREE_ROOT/unitree_sim_isaaclab" status --porcelain` reports
+**30 modified files**, not the four `0001` + `0002` touch. The rest are an Isaac Sim 6.0.1 /
+Isaac Lab 3.0 migration (`sim.physx` -> `sim.physics`, `ProxyArray.torch` on the
+`common_observations/*_state.py` reads, the `InitialStateCfg.rot` quaternion reorder in
+`tasks/common_config/robot_configs.py`), written up in
+`$UNITREE_ROOT/g1_quest_teleop/docs/STATUS.md` under R19.
+
+**A fresh checkout brought to `e30c25b` + `0001` + `0002` will therefore NOT run**, and any result
+reproduced from TASK-204 / TASK-223 was obtained against the working tree, not against this
+patch set. Capturing that port here is unfinished work.
+
+## `0002-task223-missing-ground-plane.patch` (TASK-223)
+
+Applies on top of `0001` and of the port above. **Verified by three sim boots on 2026-08-28**,
+and the committed patch reverse-applies cleanly against the checkout that produced the
+measurements (`git apply --check -R`), so what is written here is what actually ran.
+
+### The finding: there was no floor
+
+The G1 was not failing to balance. It was **free-falling**. The wholebody scene shipped a
+`# Ground plane` heading with nothing under it, so nothing was under the robot's `z = 0.8`
+spawn:
+
+| step | `z` | `projected_gravity` | |
+|---|---|---|---|
+| 0 | +0.7865 | (−0.000, +0.000, −1.000) | upright |
+| 25 | −0.7542 | (−0.031, +0.044, −0.999) | still upright, already below the floor |
+| 550 | −599.31 | | |
+| 4475 | −39338.16 | | |
+
+Δ`z` grows by 0.0037 m/step — exactly `g·dt²` at the task's 50 Hz of simulated time. Textbook
+free fall, from step 0, for as long as the sim runs. `projected_gravity` stays (0, 0, −1) for
+the first ~100 steps: the robot is *perfectly upright* the whole way down, and only tumbles
+later as flailing limbs impart angular momentum with nothing to push against. **Every
+"why can't it balance" hypothesis was being tested on a robot with nothing to balance on.**
+
+The warehouse USD *does* carry a collidable floor — `/Lab/Structure/floor`, a 4-point quad at
+world `z = 0`, `physics:approximation="none"`, `collisionEnabled=True`, whose xy extent covers
+the spawn at (−3.9, −2.818). But it is spawned at `/World/envs/env_.*/Room`, **inside** the
+cloned env, while the task sets `replicate_physics=True`. Upstream's own (commented-out) ground
+in the *non*-wholebody scene sits at `/World/GroundPlane` — outside `/World/envs` — which is the
+placement that survives cloning.
+
+**After the fix:** `z` holds in [0.7825, 0.7919] — a 9 mm band — for the entire run,
+`projected_gravity` (0, 0, −1), no joint within 0.02 rad of a limit, leg velocities decaying to
+0.24 rad/s. Over DDS, `isaac_gait_probe.py --no-command` run for 43 s reports
+`base upright PASS`, `knees/ankles off their limits PASS`, roll 0.007 rad, pitch 0.044 rad,
+*"never — stayed upright"*, with every leg joint static to three decimals.
+
+⚠ **It stands; it does not yet walk.** A `vx = 0.5` command produces a small forward lean
+(pitch 0.08 vs 0.045 at rest) and no stepping. That is now a well-posed locomotion question
+rather than a measurement artefact, and it belongs to TASK-203.
+
+### The hunks
+
+1. `action_provider_wh_dds.py` — `obs_scales`, env-selectable. This was TASK-223's lead 1 and
+   **it is refuted.** The hypothesis was sound on paper: upstream ships all `1.0` and
+   `assets/model/policy.onnx` has no normalisation layer of its own (7 nodes: `Gemm`/`Elu` ×3 +
+   `Gemm`, no metadata), so those six numbers are the only normalisation the policy ever sees —
+   and Unitree locomotion policies train with `ang_vel` 0.25 / `joint_vel` 0.05. Once there was
+   a floor, both arms were run:
+
+   | `obs_scales` | result |
+   |---|---|
+   | all `1.0` (upstream, **default**) | stands rock solid, `z` in a 9 mm band |
+   | 0.25 / 0.05 (Unitree) | **collapses** — `z` → ~0.07, `projected_gravity` → (−1, 0, 0) i.e. face down, ankles pinned 28–50 % of the run, knees thrashing in antiphase at 3.6 Hz |
+
+   So upstream's all-`1.0` is correct for this checkpoint. The knob stays only so the
+   measurement can be reproduced: `NEODEM_OBS_SCALES=unitree` selects the refuted arm.
+2. `action_provider_wh_dds.py` — `_task223_log`. Prints, from inside the sim,
+   `projected_gravity_b` (a convention-free uprightness test), root height, true roll/pitch from
+   `root_quat_w` read as `(x,y,z,w)`, leg angles vs defaults, and — once, at step 0, before the
+   first action is applied — the full articulation joint-name order. **This is what found the
+   free fall.** It also closed leads 2 and 3 in one line: at step 0,
+   `old_action_indices == list(range(29))` and every `action_to_indices` entry is ≤ 18 < 29, so
+   the 29-vs-43 joint indexing is sound.
+3. `tasks/common_observations/g1_29dof_state.py:370` —
+   `ensure_quat_w_first(quat, assume_w_first=True)` -> `False`. **Symptom without it:** a
+   perfectly upright, motionless base publishes `|roll| = pi` on `rt/lowstate`, so every
+   "is it standing?" check fails unconditionally; the accelerometer and gyroscope on the same
+   topic are rotated by a garbage matrix as well. Upstream's `True` was correct on Isaac Lab
+   2.x, where the quaternion was `(w,x,y,z)`; Isaac Lab 3.0 returns `(x,y,z,w)`. Now validated
+   end to end: with the robot standing, the probe reads roll 0.007 rad over DDS, matching the
+   sim's own internal log — the two independent paths agree.
+4. `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` — **the missing ground
+   plane.** `ground = AssetBaseCfg(prim_path="/World/GroundPlane", spawn=GroundPlaneCfg())`,
+   placed outside `/World/envs` for the cloning reason above. This is the fix; hunks 1–3 are
+   the instrumentation that found it and the measurement bug that hid it.
+
+⚠ Even with hunk 3, this sim puts `imu_state.quaternion` on the wire as **(x, y, z, w)**
+(`dds/g1_robot_dds.py:101`, the vendor's own `#[x,y,z,w]` comment), which is not the real
+robot's order. `isaac_gait_probe.py --quat-order` selects the reading; there is no way to detect
+it from the data, because every permutation of a unit quaternion is still a unit quaternion.
+
 
 **Why 0003 is a separate file rather than more hunks in 0001.** They are not
 the same kind of change and do not have the same audience. 0001 is *mandatory*
