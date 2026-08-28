@@ -22,6 +22,7 @@ git apply $P/0001-neodem-g1-wholebody-sim.patch
 git apply $P/0002-task223-missing-ground-plane.patch
 git apply $P/0003-neodem-push-slide-reward.patch   # optional; only for scoring pushes
 git apply $P/0004-task203-gait-instrumentation.patch # optional; measuring the gait
+git apply $P/0006-task203-steps45-instrumentation.patch # optional; head z + policy-side cmd
 ```
 
 **`0001` and `0002` are both required** (`0003` is optional — see below).
@@ -41,6 +42,7 @@ sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 | Files touched by 0001 + 0002 | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
 | Files touched by 0003 | `sim_main.py`, `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py`, new `tasks/common_rewards/base_reward_push_cylindercfg.py` |
 | Files touched by 0004 | `action_provider/action_provider_wh_dds.py` (4 hunks) |
+| Files touched by 0006 | `action_provider/action_provider_wh_dds.py` (3 hunks, all additions) |
 
 `git apply` against a different upstream commit may reject. The seven hunks in
 `0001` + `0002` are independent of one another, and each is documented below by
@@ -493,6 +495,50 @@ To switch the commanded direction between rollouts without restarting:
 python robot-agent/hardware/isaac_sim_patches/push_reward_controls.py \
   direction right --cfg-file /dev/shm/neodem_push.json
 ```
+
+## 0006 — head z and the policy-side command (TASK-203 steps 4 and 5)
+
+Optional and observation-only, like 0004: it changes no dynamics, no observation
+the policy sees and no action. Three purely additive hunks in
+`action_provider/action_provider_wh_dds.py`.
+
+(Numbered 0006, not 0005: `0005-task186-tierb-scene-probe.patch` is landing on
+its own branch and the numbers must not collide.)
+
+**`base_z=` and `head_z=` on the `[TASK-203]` line**, for step 5's bob
+measurement. `head_z` comes from the **`d435_link` rigid body**, not the camera.
+
+⚠ `front_camera.data.pos_w` was tried first and is **STATIC**. Over a whole run
+it reported exactly one distinct value (1.27387) while `base_z` moved through
+62 — a Camera's `pos_w` does not track its parent prim under this provider's
+hand-rolled `write_data_to_sim` / `sim.step` / `scene.update` loop. Using it
+would have reported "no bob" for the WALKING case too, i.e. a silent false
+negative on exactly the claim step 5 exists to test. The rigid body's pose comes
+from the same articulation buffer as `base_z` and demonstrably tracks (86
+distinct values over the same window). The resolved body name is printed once,
+with the full `body_names` list, so a USD change surfaces immediately.
+
+**`NEODEM_LOG_POLICY_CMD=1`** prints the velocity command as it sits in the
+tensor handed to `policy.onnx` — after scaling, history stacking and clipping —
+which is the one thing no DDS observer can see. The frame is 91 wide (`ang_vel`
+3, `projected_gravity` 3, `command` 4, `joint_pos` 26, `joint_vel` 26, `action`
+29), so `wz` is index 8; ten frames of history are flattened, and all ten slots
+`91*k + 8` are printed rather than one, because which slot is newest depends on
+`CircularBuffer`'s internal ordering.
+
+That log settled TASK-203's turn asymmetry. It shows
+
+    raw_cmd_wz=+1.0000 obs_wz(10 frames)=[1.0, 1.0, ... 1.0]
+    raw_cmd_wz=-1.0000 obs_wz(10 frames)=[-1.0, -1.0, ... -1.0]
+
+so the positive command reaches the policy **intact, in every history frame**,
+and the policy ignores it: the asymmetry is in the checkpoint, not the plumbing.
+It also shows the self-clearing command slot directly — an occasional frame
+reads `[-0.2, 0.0, -0.2, ...]` even at a 100 Hz publish rate, which is why that
+rate must not be lowered.
+
+The measurements, and the `isaac_yaw_sweep.py` / `isaac_bob_report.py` tools
+that produced them, are in `.mc/tasks/todo/TASK-203-*.md` under steps 4 and 5.
 
 ## 0004 — gait instrumentation (TASK-203 step 2)
 
