@@ -1138,8 +1138,19 @@ def main() -> int:
         # honest if the only thing on screen is a camera the robot does not have.
         iio.imwrite(f"{args.out}/head_{i:04d}.jpg",
                     head.data.output["rgb"].torch[0, ..., :3].cpu().numpy(), quality=90)
+        # NeoDEM TASK-203 step 5. head_z and base_z are logged so this run can serve
+        # as the KINEMATIC CONTROL for the gait-bob measurement. Note what they are:
+        # head_z is `HEAD_OFFSET_Z + (height - NEUTRAL_STAND_HEIGHT)` from a few lines
+        # up -- a closed-form function of the commanded height and nothing else. It
+        # carries no gait term because there is no gait here; the legs are frozen at
+        # `stand_pose` every frame and the base is integrated from a velocity. So a
+        # flat trace is not a surprising empirical finding, it is a property of this
+        # renderer provable by reading it. Logging it anyway makes the control an
+        # actual measurement rather than an assertion, and proves the bob detector is
+        # not manufacturing signal out of numerical noise.
         meta.append({"i": i, "t": now - t0, "wall": now, "x": wx, "y": wy, "yaw": wyaw,
                      "cmd_vx": vx, "cmd_vy": vy, "cmd_omega": omega, "height": height,
+                     "base_z": float(root_pose[0, 2]), "head_z": float(head_z),
                      "cmds_seen": feed.count})
         if i % 60 == 0:
             print(f"[capture] frame {i:4d}  t={now - t0:6.1f}s  pos=({wx:+.2f},{wy:+.2f}) "

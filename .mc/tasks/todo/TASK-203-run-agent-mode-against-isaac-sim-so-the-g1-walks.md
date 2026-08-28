@@ -284,16 +284,77 @@ Two things Isaac needs to start at all here:
    (see step 2) that leaves zero margin: any jitter drops a step's command to zero. The vendor
    publishes at 100 Hz for 2x margin and so do we now.
 4. Agent Mode `walk` / `turn` / `goto` blocks drive it end to end with no Agent Mode code changes.
-   **Unblocked 2026-08-28** — step 2 is done. But note defect (b) above: a `goto` or `turn` that
-   needs a *left* turn cannot be satisfied by this policy, and `walk` will arc right rather than
-   hold a heading. The arc case (`vx` and `wz` together) tracked best of all measurements at 0.98,
-   so a plausible mitigation is to never emit a pure in-place turn — resolve `turn` into a
-   forward-and-turn arc. Whether that is acceptable is a product decision, not a sim one.
+   **Defect (b) DIAGNOSED and MITIGATED 2026-08-28; the blocks themselves are still not driven.**
+
+   **(b) is trained asymmetry in `policy.onnx`, not a bug on our side of the wire.** The command
+   path was traced end to end and is symmetric everywhere — read from shared memory, float cast,
+   tensor, `* obs_scales["commands"]` (1.0), index 8 of a 91-wide frame, 10-deep history, a
+   symmetric ±100 clip, ONNX. No `abs()`, no one-sided clamp, no unsigned cast. And that is not
+   just a code reading: `NEODEM_LOG_POLICY_CMD=1` (patch 0006) prints the yaw command as it sits
+   in the tensor handed to `policy.onnx`, and it shows
+
+       raw_cmd_wz=+1.0000 obs_wz(10 frames)=[1.0, 1.0, ... 1.0]
+       raw_cmd_wz=-1.0000 obs_wz(10 frames)=[-1.0, -1.0, ... -1.0]
+
+   with near-equal exposure (132 vs 134 samples). **The positive command reaches the policy
+   intact, in all ten history frames, and the policy ignores it.** There is no fix available in
+   this repo; a symmetric turn needs a retrained or replaced checkpoint.
+
+   **The arc mitigation works, and that is what unblocks `goto`.** Measured on one boot, paired
+   and sign-alternating (`isaac_yaw_sweep.py`):
+
+   | commanded wz | in place (vx=0) | in an arc (vx=0.3) |
+   |---|---|---|
+   | +0.3 / +0.5 | ratio **0.01** | ratio **0.55** |
+   | +0.6 / +1.0 | ratio **0.01** | ratio **0.60** |
+   | −0.3 / −0.5 | ratio 0.26 | ratio 1.15 |
+   | −0.6 / −1.0 | ratio 0.53 | ratio 1.02 |
+
+   So a left turn is not impossible — it is dead only for *pure in-place rotation*, and recovers
+   to 55–60% of commanded as soon as any forward velocity is present. `goto` is therefore
+   satisfiable in both directions by resolving `turn` into a forward-and-turn arc. It remains a
+   product decision whether a left turn that needs forward clearance is acceptable, and whether
+   Agent Mode should refuse an in-place left turn rather than silently not perform one.
+
+   **Defect (a) is sharper than recorded: the rightward drift is coupled to forward motion.**
+   With `vx=0` and `wz=0` the heading drift is **−0.00 °/s over 787 samples**; with `vx=0.3` and
+   `wz=0` it is **−5.40 °/s over 862 samples**. It is not a static bias. Same sign as the weak
+   left turn, so (a) and (b) are plausibly one rightward bias in the checkpoint rather than two
+   defects.
+
+   ⚠ **Still to do for this step:** the above drives the sim over DDS, which is the layer Agent
+   Mode's blocks sit on top of, but the `walk` / `turn` / `goto` blocks themselves have not been
+   run end to end. That is what remains before step 4 can be ticked.
    ⚠ Whatever drives this must publish velocity commands at **>= 50 Hz, and 100 Hz to match the
    vendor** — see the self-clearing command slot under step 2. `isaac_loco_bridge.py` republishes
    onto `rt/run_command/cmd`; it was written before the self-clearing behaviour was understood,
    and was checked and raised to 100 Hz under step 3 above. Anything else that publishes a
    velocity command still needs the same check.
-5. Head-camera frames show gait-induced bob absent from the kinematic base — the observable
-   difference that motivates this task. **Unblocked 2026-08-28** — there is now a real gait at
-   1.7 Hz to see bob from, and the base height drops from 0.789 standing to ~0.75 while walking.
+5. ~~Head-camera frames show gait-induced bob absent from the kinematic base~~ — **DONE
+   2026-08-28.** Measured rather than eyeballed, because a few mm of bob is not something video
+   settles.
+
+   | run | head bob | at |
+   |---|---|---|
+   | walking, real policy (`vx=0.5`, 35.8 s @ 25 Hz) | **7.8 mm p-p** | **1.73 Hz** |
+   | standing, same robot + instrumentation | 1.3 mm p-p | 0.52 Hz (a settling transient) |
+   | kinematic glide, `isaac_capture.py` take_v10, 30 294 frames | **0.0 mm** | — |
+
+   The walking figure lands at **1.73 Hz**, which is the foot cadence measured independently from
+   the scene's ContactSensor in step 2 (1.69 / 1.73 Hz). Two unrelated signals — head height and
+   foot contact — agreeing on the step frequency is the actual result.
+
+   The glide control is exact, not approximate: across all 30 294 frames of a real capture the
+   head's z took **one distinct value** (1.271 m) while the base moved in xy, because
+   `isaac_capture.py:1105` computes `head_z = HEAD_OFFSET_Z + (height - NEUTRAL_STAND_HEIGHT)` —
+   a closed-form function of a constant, with no gait term to carry.
+
+   Tools: `isaac_bob_report.py` (with a 26-check `--selftest` needing no GPU) and the `head_z=` /
+   `base_z=` fields added by patch 0006.
+
+   ⚠ **The head camera's own pose is NOT usable for this.** `front_camera.data.pos_w` was tried
+   first and is STATIC under this provider's hand-rolled stepping: over a whole run it reported
+   exactly one distinct value while the base moved through 62. It would have reported "no bob"
+   for the walking case too — a silent false negative on the very claim this step tests. Patch
+   0006 reads the `d435_link` rigid body instead, whose pose comes from the same articulation
+   buffer as `base_z`.

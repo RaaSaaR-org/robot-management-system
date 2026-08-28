@@ -1,0 +1,105 @@
+--- a/action_provider/action_provider_wh_dds.py
++++ b/action_provider/action_provider_wh_dds.py
+@@ -408,8 +408,83 @@
+     
+     def run_policy(self):
+         current_actor_obs = self.compute_observations()
++        # NeoDEM TASK-203 step 4. The open defect is that this policy turns right
++        # but not left: wz = -0.5/-1.0 steer, wz = +0.5/+1.0 do nothing at all.
++        # Reading the code says the command path is symmetric end to end, so the
++        # positive command SHOULD arrive intact -- but "should" is what the 20 Hz
++        # publish bug also looked like. This prints the yaw command as it actually
++        # sits in the tensor handed to policy.onnx, after scaling, history
++        # stacking and clipping, which is the one thing no DDS observer can see.
++        #
++        # The frame is 91 wide (ang_vel 3, projected_gravity 3, command 4,
++        # joint_pos 26, joint_vel 26, action 29) and wz is index 2 of the command
++        # block, i.e. 6 + 2 = 8. Ten frames of history are flattened, so every
++        # slot 91*k + 8 is a wz. All ten are printed rather than one, because
++        # which slot is "newest" depends on CircularBuffer's internal ordering,
++        # and because the command slot self-clears -- a history that is mostly
++        # zeros is itself the answer to a different question.
++        if os.environ.get("NEODEM_LOG_POLICY_CMD", "").strip():
++            every = int(os.environ.get("NEODEM_LOG_EVERY", "25"))
++            if self.sim_step_counter % every == 0:
++                try:
++                    o = current_actor_obs[0]
++                    wz = [round(float(o[91 * k + 8]), 4) for k in range(10)]
++                    vx = [round(float(o[91 * k + 6]), 4) for k in range(10)]
++                    raw = getattr(self, "_t203_cmd", [float("nan")] * 4)
++                    print(f"[TASK-203-obs] step={self.sim_step_counter:5d} "
++                          f"raw_cmd_wz={raw[2]:+.4f} obs_wz(10 frames)={wz} "
++                          f"obs_vx(10 frames)={vx}", flush=True)
++                except Exception as e:
++                    print(f"[TASK-203-obs] failed: {type(e).__name__}: {e}", flush=True)
+         action = self.policy(current_actor_obs)
+         return action
++    def _t203_head_z(self):
++        """World z of the head, in metres. NaN if neither source resolves.
++
++        Resolved once and cached. Two sources, in order of directness:
++        `front_camera` is mounted on `d435_link` and its `data.pos_w` is the
++        camera origin in world frame; if the camera is absent (a run started
++        without --enable_cameras) fall back to the `imu_in_torso` body, which
++        is lower on the robot but carries the same gait oscillation.
++        """
++        src = getattr(self, "_t203_head_src", None)
++        if src is None:
++            # NOT front_camera.data.pos_w. That was tried first and MEASURED STATIC:
++            # over a whole run it reported exactly one distinct value (1.27387) while
++            # the base moved through 62. A Camera's pos_w does not track the prim it
++            # is parented to under this provider's hand-rolled stepping, so it would
++            # have reported "no bob" for the WALKING case too -- a silent false
++            # negative on the very claim step 5 exists to test. Use a rigid body,
++            # whose pose comes from the same articulation buffer as base_z.
++            src = ("none", None)
++            try:
++                rb = self.env.scene["robot"]
++                names = list(rb.data.body_names)
++                print(f"[TASK-203] body_names ({len(names)}) = {names}", flush=True)
++                pick = None
++                for want in ("d435_link", "head_link", "imu_in_torso", "torso_link"):
++                    if want in names:
++                        pick = want
++                        break
++                if pick is None:
++                    raise KeyError("no head/torso body among " + ", ".join(names[:8]))
++                src = ("body", names.index(pick))
++                print(f"[TASK-203] head z from body {pick!r} (index {src[1]})", flush=True)
++            except Exception as e:
++                print(f"[TASK-203] no head z source: {type(e).__name__}: {e}", flush=True)
++            self._t203_head_src = src
++        kind, ref = src
++        try:
++            if kind == "body":
++                rb = self.env.scene["robot"]
++                bp = rb.data.body_pos_w if hasattr(rb.data, "body_pos_w") \
++                    else rb.data.body_link_pos_w
++                bp = bp.torch if hasattr(bp, "torch") else bp
++                return float(bp[0, ref, 2])
++        except Exception:
++            pass
++        return float("nan")
++
+     def _task223_log(self, action_data=None):
+         """NeoDEM TASK-223 lead 3: report the truth from inside the sim, for free.
+ 
+@@ -545,8 +620,18 @@
+                     air = [round(float(at[0, i]), 3) for i in idx]
+                     con = [round(float(ct[0, i]), 3) for i in idx]
+                     c = getattr(self, "_t203_cmd", [float("nan")] * 4)
++                    # NeoDEM TASK-203 step 5: the head's vertical trace, which is the
++                    # whole point of that step -- a kinematic glide translates the base
++                    # along a straight line, so a HEAD that rises and falls at the step
++                    # frequency is the observable a glide cannot fake. Prefer the head
++                    # camera's own world pose (front_camera sits on d435_link, the head
++                    # RealSense mount) and fall back to the torso IMU body, which is the
++                    # one head-adjacent link this checkout names explicitly
++                    # (tasks/common_observations/g1_29dof_state.py:327-331).
++                    head_z = self._t203_head_z()
+                     print(f"[TASK-203] step={n:5d} xy=({float(pos[0]):+.4f},{float(pos[1]):+.4f}) "
+                           f"yaw={yaw:+.4f} cmd=[{c[0]:+.2f},{c[1]:+.2f},{c[2]:+.2f},{c[3]:.2f}] "
++                          f"base_z={float(pos[2]):+.5f} head_z={head_z:+.5f} "
+                           f"foot_fz={fz} air_t={air} contact_t={con}", flush=True)
+                 else:
+                     print(f"[TASK-203] step={n:5d} xy=({float(pos[0]):+.4f},{float(pos[1]):+.4f}) "
