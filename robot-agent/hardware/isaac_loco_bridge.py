@@ -210,8 +210,27 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--domain", type=int, default=1,
                     help="DDS domain; must match the Isaac sim (0=real robot, 1=sim, 9=mock)")
-    ap.add_argument("--rate", type=float, default=50.0,
-                    help="publish rate in Hz for rt/run_command/cmd")
+    # 100 Hz, matching the vendor's send_commands_keyboard.py (`time.sleep(0.01)`).
+    #
+    # This was 50 Hz until 2026-08-28 (TASK-203 step 2) and that is NOT a safe
+    # default: the sim's command slot is self-clearing. Isaac's
+    # action_provider_wh_dds.compute_current_observations reads it and then
+    # immediately writes [0, 0, 0, 0.8] back into the same shared-memory slot
+    # (dds/commands_dds.py:71-98), so a published command survives exactly one
+    # policy step. The policy consumes at 50 Hz of simulated time (decimation 4
+    # x sim.dt 0.005), so publishing at 50 Hz leaves ZERO margin -- every scheduling
+    # jitter, GC pause or real-time-factor wobble drops a step's command to zero,
+    # and the policy sees a chopped command where it was trained on a held one.
+    #
+    # Measured at 20 Hz on the same sim and policy, the G1 leaned forward and did
+    # not step at all (knee range 0.079 rad); at 100 Hz it walks at 0.570 m/s
+    # (knee range 0.941 rad). The failure is silent and looks like a locomotion
+    # problem, not a transport one -- it cost TASK-223 and this task a wrong
+    # conclusion each. Do not lower this below 50.
+    ap.add_argument("--rate", type=float, default=100.0,
+                    help="publish rate in Hz for rt/run_command/cmd. Must be >= the "
+                         "sim's 50 Hz policy rate -- the sim clears the command slot "
+                         "on every read, so a slower publisher starves the policy.")
     ap.add_argument("--probe", action="store_true",
                     help="walk a short square directly, without Agent Mode, to check signs")
     ap.add_argument("--iface", default=None,

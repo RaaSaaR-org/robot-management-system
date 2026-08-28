@@ -7,7 +7,10 @@ rate with a robot that stays on the floor — and, before two of them, it does
 not move at all. They live here as patches so a fresh checkout can be brought
 to a working state without rediscovering them.
 
-A third, optional patch adds a push/slide success reward (TASK-186).
+Two further patches are optional and evaluation-only: `0003` adds a push/slide
+success reward (TASK-186), and `0004` adds the gait instrumentation that proved
+the G1 walks (TASK-203 step 2). Neither changes dynamics or anything the policy
+observes.
 
 ## Applying
 
@@ -18,6 +21,7 @@ P=/path/to/robot-management-system/robot-agent/hardware/isaac_sim_patches
 git apply $P/0001-neodem-g1-wholebody-sim.patch
 git apply $P/0002-task223-missing-ground-plane.patch
 git apply $P/0003-neodem-push-slide-reward.patch   # optional; only for scoring pushes
+git apply $P/0004-task203-gait-instrumentation.patch # optional; measuring the gait
 ```
 
 **`0001` and `0002` are both required** (`0003` is optional — see below).
@@ -33,9 +37,10 @@ sufficient** — see the Isaac Lab 3.0 port warning immediately below.
 | Upstream | `https://github.com/unitreerobotics/unitree_sim_isaaclab` |
 | Pinned commit | `e30c25b` (detached HEAD) |
 | Isaac Sim / Lab | 6.0.1 / 6.1.14, conda env `unitree_sim_env6` |
-| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only) |
+| Patches | `0001-neodem-g1-wholebody-sim.patch` (3 hunks), `0002-task223-missing-ground-plane.patch` (4 hunks), `0003-neodem-push-slide-reward.patch` (optional, evaluation-only), `0004-task203-gait-instrumentation.patch` (optional, observation-only) |
 | Files touched by 0001 + 0002 | `action_provider/action_provider_wh_dds.py` (4 hunks), `tasks/common_observations/camera_state.py`, `tasks/common_observations/g1_29dof_state.py`, `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py` |
 | Files touched by 0003 | `sim_main.py`, `tasks/g1_tasks/move_cylinder_g1_29dof_dex3_wholebody/mdp/rewards.py`, new `tasks/common_rewards/base_reward_push_cylindercfg.py` |
+| Files touched by 0004 | `action_provider/action_provider_wh_dds.py` (3 hunks) |
 
 `git apply` against a different upstream commit may reject. The seven hunks in
 `0001` + `0002` are independent of one another, and each is documented below by
@@ -92,9 +97,13 @@ placement that survives cloning.
 `base upright PASS`, `knees/ankles off their limits PASS`, roll 0.007 rad, pitch 0.044 rad,
 *"never — stayed upright"*, with every leg joint static to three decimals.
 
-⚠ **It stands; it does not yet walk.** A `vx = 0.5` command produces a small forward lean
-(pitch 0.08 vs 0.045 at rest) and no stepping. That is now a well-posed locomotion question
-rather than a measurement artefact, and it belongs to TASK-203.
+⚠ **Superseded 2026-08-28 — it does walk.** This section used to end "it stands; it does not
+yet walk", on the evidence that a `vx = 0.5` command produced a forward lean (pitch 0.08 vs
+0.045 at rest) and no stepping. **That was a defect in `isaac_gait_probe.py`, not in the sim.**
+The probe published the velocity command at 20 Hz while the policy consumes — and *clears* —
+it at 50 Hz, so the commanded `vx` was in front of the policy for only about a third of steps
+and zero for the rest. Publishing at 100 Hz, as the vendor's own `send_commands_keyboard.py`
+always did, the same sim walks at 0.570 m/s. See "0004 — gait instrumentation" below.
 
 ### The hunks
 
@@ -484,6 +493,103 @@ python robot-agent/hardware/isaac_sim_patches/push_reward_controls.py \
   direction right --cfg-file /dev/shm/neodem_push.json
 ```
 
+## 0004 — gait instrumentation (TASK-203 step 2)
+
+Optional, and observation-only: it changes no dynamics, no observation the
+policy sees and no action. It exists because TASK-203 step 2 asks whether "the
+robot walks ... feet making and breaking contact", and **neither the existing
+`[TASK-223]` log line nor the external `isaac_gait_probe.py` can answer either
+half of that**:
+
+* The `[TASK-223]` line prints `z` but not `x`/`y`. That is enough to catch a
+  fall, which is what it was written for, but a robot marching on the spot and a
+  robot crossing the room produce identical output.
+* `unitree_hg`'s `LowState_` has no `foot_force` field — that is the `go` IDL —
+  so **nothing on the DDS wire observes foot contact at all.** The probe's
+  left/right knee correlation is a proxy that a robot lying on its side
+  thrashing its knees would also pass.
+
+The contact signal was already there for free: the wholebody scene carries a
+`ContactSensor` with `track_air_time=True`
+(`move_cylinder_g1_29dof_dex3_hw_env_cfg.py:45`). This patch just reads it.
+
+The patch adds, to `action_provider/action_provider_wh_dds.py`:
+
+1. **`NEODEM_LOG_EVERY`** — the log interval, default 25 (the previous
+   hard-coded value). **Set it to 5 when measuring a gait.** 25 steps is 2 Hz of
+   simulated time and the G1 steps at ~1.7 Hz, so the default *aliases the gait*:
+   the same walk measured at 2 Hz reports a 0.27 Hz foot cadence and at 10 Hz
+   reports 1.72 Hz. Duty-factor percentages are unaffected — they are per-sample
+   occupancies, not rates.
+2. **A `[TASK-203]` line** carrying base `x`/`y`, base `yaw`, the velocity
+   command the policy actually saw that step, and per-foot vertical contact
+   force, air time and contact time.
+
+Yaw is needed because course-over-ground is undefined when the robot is asked to
+turn in place — which is exactly the case being tested. The **command** is
+logged because attributing a log window to a phase by counting steps from when a
+test script started is guesswork: real-time factor is not exactly 1.0, so the
+mapping drifts. That is not hypothetical — the first yaw reading taken this way
+said "positive yaw works, negative is dead", and the self-describing log showed
+the truth is the exact opposite.
+
+Read the output with `robot-agent/hardware/isaac_gait_report.py`.
+
+### Measured with it, 2026-08-28 — the G1 walks
+
+Sim per "Running it" below plus `NEODEM_LOG_EVERY=5`, driven by
+`isaac_gait_probe.py --domain 1 --vx 0.5`:
+
+| | measured | commanded |
+|---|---|---|
+| ground speed | **0.570 m/s** | 0.500 (+14 %) |
+| path travelled | 13.84 m in 24.3 s | — |
+| exactly one foot airborne | **74.6 %** | — |
+| double support | 25.4 % | — |
+| both feet airborne | **0.0 %** | — (a walk, not a run) |
+| foot make/break cadence | 1.69 / 1.73 Hz | — |
+
+The foot cadence is an *independent* confirmation of the gait: the DDS probe,
+which never sees the contact sensor, measured 1.73 / 1.75 Hz from knee joint
+positions on the same walk. Two unrelated signals agreeing to ~1 % is what
+distinguishes a gait from noise. Zero flight phase with 25 % double support is a
+textbook walking duty factor.
+
+### ⚠ Two defects this exposed, both open
+
+**1. Heading drifts right while walking.** With `yaw_vel` commanded at exactly
+0, the base turns −3.1 to −3.4 °/s — about −82 ° over a 24 s walk, bending a
+straight-line command into an arc (13.84 m of path for 12.75 m of displacement).
+
+**2. Left turns do nothing; right turns work.** Measured over eight yaw phases
+across three runs, all from a standing start, all with `vx = 0`:
+
+| commanded `wz` | achieved | ratio | feet airborne |
+|---|---|---|---|
+| +0.5 (×4 attempts) | +0.01 … +0.67 °/s | **0.00–0.02** | **0.0 %** |
+| +1.0 | +0.40 °/s | **0.01** | **0.0 %** |
+| −0.2 | −0.02 °/s | 0.00 | 0.0 % |
+| −0.5 (×3) | −20.3 / −21.2 / −21.9 °/s | 0.71–0.76 | 52–58 % |
+| −1.0 (×2) | −43.3 / −45.5 °/s | 0.76–0.79 | 58–60 % |
+| −0.3 with `vx` 0.3 | −16.9 °/s | **0.98** | 72.6 % |
+
+Per `send_commands_keyboard.py`, which publishes `-yaw_vel`, a **positive** `wz`
+on the wire is a **left** turn. So the G1 turns right on command, reproducibly
+and with a consistent 0.71–0.79 gain, and does not respond to a left-turn
+command at all — it does not even step. There is also a deadband: `−0.2` alone
+did nothing, while `−0.3` combined with forward motion tracked at 0.98.
+
+Neither defect is diagnosed. Both belong to TASK-203 step 4 (`walk` / `turn` /
+`goto` end to end), and the second one blocks it: a `goto` that needs a left
+turn cannot be satisfied by this policy. Note the arc case tracked best of all,
+so the fix may be as simple as never commanding a pure in-place turn.
+
+**Not investigated:** whether this is a property of the shipped `policy.onnx`, a
+sign error on the yaw element of the command vector, or an artefact of the
+command being rebuilt every step. The obvious next probe is to feed the policy a
+constant left-yaw observation directly, bypassing DDS, and see whether the
+action vector changes at all.
+
 ## Running it
 
 Isaac's RTX renderer needs Vulkan, which needs `/dev/dri/renderD*`, whose ACL
@@ -545,6 +651,22 @@ runs anywhere a CPU torch exists and covers the push reward's scoring logic. It
 is **not** wired into `test-all.sh` — the `HARDWARE_PYTHON` stage guarantees only
 numpy + pytest, and this needs torch. Run it by hand after touching
 `base_reward_push_cylindercfg.py`.
+
+`0004` and `isaac_gait_report.py` (TASK-203) are likewise unwired: nothing in
+CI parses a sim log, and `isaac_gait_report.py` needs a log from a live sim to
+do anything. Its two analysis bugs were both found by hand and both silently
+produced a *confident wrong answer* rather than an error, which is the failure
+mode to expect here:
+
+* the moving-window detector anchored on the first sample above the speed
+  threshold, which is a boot transient at step 1, so it averaged the settle
+  phase into the walk and reported 0.159 m/s for a 0.5 m/s command;
+* the aliasing guard compared the sample rate against the cadence it had just
+  measured — circular, since aliasing is what drags that cadence down — so a
+  2 Hz sampler reporting a 0.27 Hz cadence for a 1.7 Hz gait raised no warning.
+
+Both are fixed and both directions are now exercised by hand against a real log,
+but only by hand.
 
 What still has **no** coverage of any kind, automated or manual, as of TASK-186:
 

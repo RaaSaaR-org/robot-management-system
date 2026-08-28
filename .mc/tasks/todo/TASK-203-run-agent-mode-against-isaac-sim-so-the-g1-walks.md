@@ -17,7 +17,7 @@ tags:
 depends_on: []
 due_date: ''
 created: 2026-08-08
-updated: 2026-08-08
+updated: 2026-08-28
 ---
 
 
@@ -172,11 +172,79 @@ Two things Isaac needs to start at all here:
 
 1. ~~Isaac renders at all~~ — **done 2026-08-08**, see above. Keep the GPU free of other Isaac/PPO
    jobs when capturing.
-2. `unitree_sim_isaaclab` runs the Dex3 wholebody task and the robot walks under keyboard velocity
-   commands (`send_commands_keyboard.py`), feet making and breaking contact.
-   **BLOCKED — see [[TASK-223]]** (was TASK-204; re-pointed 2026-08-28). Commands reach the policy
-   and drive all 12 leg joints, but into their limits rather than into a gait. Joint motion here is
-   not evidence of walking.
+2. ~~`unitree_sim_isaaclab` runs the Dex3 wholebody task and the robot walks under keyboard
+   velocity commands, feet making and breaking contact~~ — **done 2026-08-28. The G1 walks.**
+
+   | | measured | commanded |
+   |---|---|---|
+   | ground speed | **0.570 m/s** | 0.500 (+14 %) |
+   | path travelled | 13.84 m in 24.3 s of simulated time | — |
+   | exactly one foot airborne | **74.6 %** | — |
+   | double support | 25.4 % | — |
+   | both feet airborne | **0.0 %** | — (a walk, not a run) |
+   | foot make/break cadence | 1.69 / 1.73 Hz | — |
+
+   Foot contact is measured from the scene's own `ContactSensor` (`track_air_time=True`), not
+   inferred: `unitree_hg`'s `LowState_` has no `foot_force` field, so **nothing on the DDS wire
+   can see contact at all**. Independently, `isaac_gait_probe.py` measured a 1.73 / 1.75 Hz knee
+   cadence on the same walk from joint positions alone — two unrelated signals agreeing to ~1 %.
+   Zero flight phase with 25 % double support is a textbook walking duty factor.
+
+   **What was actually wrong was our probe, not the sim.** The earlier "commands drive the legs
+   into their limits rather than into a gait" reading, and TASK-223's closing "it stands; it does
+   not yet walk", were both artefacts of `isaac_gait_probe.py` publishing the velocity command at
+   20 Hz. The sim's command slot is **self-clearing** — `action_provider_wh_dds.py`
+   `compute_current_observations` reads it and immediately writes `[0,0,0,0.8]` back into the same
+   shared-memory slot (`dds/commands_dds.py:71-98`) — so a command survives exactly one policy
+   step. At 50 Hz policy vs 20 Hz publishing the policy saw the commanded `vx` in about a third of
+   steps and zero in the rest: a ~35 %-duty-cycle square wave where it was trained on a held
+   constant. The vendor's `send_commands_keyboard.py` has always published at 100 Hz
+   (`time.sleep(0.01)`), which is why it never hit this. Same sim, same policy, same checkpoint,
+   only the publish rate changed:
+
+   | probe publish rate | knee range | knee cadence | result |
+   |---|---|---|---|
+   | 20 Hz (old) | 0.079 rad | — | lean, no steps |
+   | 100 Hz (fixed) | **0.941 rad** | 1.73 Hz | **walks** |
+
+   Reproduce: apply `isaac_sim_patches/0004-task203-gait-instrumentation.patch`, start the sim per
+   `isaac_sim_patches/README.md` with `NEODEM_LOG_EVERY=5`, run
+   `isaac_gait_probe.py --domain 1 --vx 0.5`, then `isaac_gait_report.py <sim-log>`.
+   ⚠ `NEODEM_LOG_EVERY=5` matters: the default 25 is 2 Hz of simulated time and **aliases** the
+   ~1.7 Hz gait, reporting a 0.27 Hz foot cadence for the very same walk.
+
+   ### ⚠ Two defects this exposed — both open, both land on step 4
+
+   **(a) Heading drifts right while walking.** With `yaw_vel` commanded at exactly 0 the base
+   turns −3.1 to −3.4 °/s, about −82 ° over a 24 s walk, bending a straight command into an arc
+   (13.84 m of path for 12.75 m of displacement).
+
+   **(b) Left turns do nothing; right turns work.** Eight yaw phases over three runs, `vx = 0`:
+
+   | commanded `wz` | achieved | ratio | feet airborne |
+   |---|---|---|---|
+   | +0.5 (×4) | +0.01 … +0.67 °/s | **0.00–0.02** | **0.0 %** |
+   | +1.0 | +0.40 °/s | **0.01** | **0.0 %** |
+   | −0.2 | −0.02 °/s | 0.00 | 0.0 % |
+   | −0.5 (×3) | −20.3 / −21.2 / −21.9 °/s | 0.71–0.76 | 52–58 % |
+   | −1.0 (×2) | −43.3 / −45.5 °/s | 0.76–0.79 | 58–60 % |
+   | −0.3 with `vx` 0.3 | −16.9 °/s | **0.98** | 72.6 % |
+
+   `send_commands_keyboard.py` publishes `-yaw_vel`, so a **positive** `wz` on the wire is a
+   **left** turn. The G1 turns right reproducibly at a consistent 0.71–0.79 gain and does not
+   respond to a left-turn command at all — it does not even step. There is also a deadband:
+   `−0.2` alone did nothing while `−0.3` *combined with* forward motion tracked at 0.98.
+
+   Undiagnosed. Candidates not yet tested: a property of the shipped `policy.onnx`; a sign error
+   on the yaw element of the command vector; an artefact of the command being rebuilt each step.
+   The obvious next probe is to feed the policy a constant left-yaw observation directly,
+   bypassing DDS, and check whether the action vector moves at all.
+
+   ⚠ **Do not read the earlier yaw numbers in this file's history as evidence.** The first yaw
+   measurement attributed log windows to phases by counting steps from when the test script
+   started, and concluded the exact opposite (positive works, negative dead). Real-time factor is
+   not exactly 1.0, so that mapping drifts. `0004` now logs the command the policy actually saw on
+   every line, which is what settled it.
 
    The original diagnosis — the sim stepping at 5–13 Hz against a policy trained for 100 Hz — was
    **not a cause at all**, and this is worth understanding before picking the step up. `decimation 4`
@@ -191,9 +259,34 @@ Two things Isaac needs to start at all here:
 3. ~~The `sport` RPC facade answers `SetVelocity`~~ — **done 2026-08-08.** `isaac_loco_check.py`
    passes 7/7 (six velocity cases including lateral and yaw, plus command expiry) driving an
    unmodified `LocoClient` with no bridge code imported. Run `isaac_loco_bridge.py --domain 1`
-   first, then `isaac_loco_check.py --domain 1`. Note this proves the **wire**, not the gait —
-   the second half of the original step ("and the robot walks in response") is gated on step 2.
+   first, then `isaac_loco_check.py --domain 1`. ~~Note this proves the **wire**, not the gait —
+   the second half of the original step ("and the robot walks in response") is gated on step 2.~~
+
+   **Second half closed 2026-08-28, once step 2 landed.** An unmodified `LocoClient` — the same
+   API Agent Mode drives — held `SetVelocity(0.5, 0, 0)` for 25 s through the bridge and the G1
+   **walked 16.36 m at 0.613 m/s**: 67.5 % single support, 32.5 % double support, 0 % flight
+   phase, foot cadence 2.00 / 1.99 Hz. The whole path from `LocoClient` to the floor is proven
+   now, not just to the wire. The 7/7 wire check was re-run after the rate change below and
+   still passes.
+
+   Two differences from the raw-DDS measurement, both expected: the bridge commands height 0.75
+   rather than 0.8, giving a lower stance, a faster cadence (2.00 vs 1.73 Hz) and a higher speed
+   (0.613 vs 0.570 m/s). The rightward heading drift is present on this path too (−2.2 °/s).
+
+   ⚠ **`isaac_loco_bridge.py --rate` default raised 50 -> 100 Hz** as part of this. 50 Hz is
+   exactly the sim's policy rate, and because the sim clears its command slot on every read
+   (see step 2) that leaves zero margin: any jitter drops a step's command to zero. The vendor
+   publishes at 100 Hz for 2x margin and so do we now.
 4. Agent Mode `walk` / `turn` / `goto` blocks drive it end to end with no Agent Mode code changes.
-   Gated on step 2.
+   **Unblocked 2026-08-28** — step 2 is done. But note defect (b) above: a `goto` or `turn` that
+   needs a *left* turn cannot be satisfied by this policy, and `walk` will arc right rather than
+   hold a heading. The arc case (`vx` and `wz` together) tracked best of all measurements at 0.98,
+   so a plausible mitigation is to never emit a pure in-place turn — resolve `turn` into a
+   forward-and-turn arc. Whether that is acceptable is a product decision, not a sim one.
+   ⚠ Whatever drives this must publish velocity commands at **>= 50 Hz, and 100 Hz to match the
+   vendor** — see the self-clearing command slot under step 2. `isaac_loco_bridge.py` republishes
+   onto `rt/run_command/cmd` and needs checking against this; it was written before the
+   self-clearing behaviour was understood.
 5. Head-camera frames show gait-induced bob absent from the kinematic base — the observable
-   difference that motivates this task. Gated on step 2.
+   difference that motivates this task. **Unblocked 2026-08-28** — there is now a real gait at
+   1.7 Hz to see bob from, and the base height drops from 0.789 standing to ~0.75 while walking.
