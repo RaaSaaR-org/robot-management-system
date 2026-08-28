@@ -71,6 +71,70 @@ def _load_reward_module():
 # --------------------------------------------------------------------------
 
 
+def _resolve_matching_names(keys, list_of_strings, preserve_order=False):
+    """Behavioural port of `isaaclab.utils.string.resolve_matching_names`.
+
+    Ported rather than approximated because the *permissiveness* of the
+    previous stub (a plain `any(re.fullmatch(p, n) for p in patterns)`) is
+    exactly what let a broken default ship: the real function enforces a strict
+    one-to-one mapping between the patterns given and the bodies matched, and
+    raises where the naive version quietly succeeds -
+
+      * a body matched by two patterns  -> "Multiple matches for '<body>' ..."
+      * a pattern that matches nothing  -> "Not all regular expressions are
+        matched!"
+
+    So `[".*hand.*", ".*wrist.*", ".*palm.*"]` is rejected outright on any G1
+    whose palms are `left_hand_palm_link` / `right_hand_palm_link`. Scenario
+    (h) below is only a guard if this raises where Isaac Lab raises.
+    """
+    import re
+
+    if isinstance(keys, str):
+        keys = [keys]
+    index_list, names_list, key_idx_list = [], [], []
+    # book-keeping: each target string may match only one regular expression
+    target_strings_match_found = [None for _ in range(len(list_of_strings))]
+    keys_match_found = [[] for _ in range(len(keys))]
+    for target_index, potential_match_string in enumerate(list_of_strings):
+        for key_index, re_key in enumerate(keys):
+            if re.fullmatch(re_key, potential_match_string):
+                if target_strings_match_found[target_index]:
+                    raise ValueError(
+                        f"Multiple matches for '{potential_match_string}':"
+                        f" '{target_strings_match_found[target_index]}' and '{re_key}'!"
+                    )
+                target_strings_match_found[target_index] = re_key
+                index_list.append(target_index)
+                names_list.append(potential_match_string)
+                key_idx_list.append(key_index)
+                keys_match_found[key_index].append(potential_match_string)
+    if preserve_order:
+        reordered_index_list = [None] * len(index_list)
+        global_index = 0
+        for key_index in range(len(keys)):
+            for key_idx_position, key_idx_entry in enumerate(key_idx_list):
+                if key_idx_entry == key_index:
+                    reordered_index_list[key_idx_position] = global_index
+                    global_index += 1
+        index_list_reorder = [None] * len(index_list)
+        names_list_reorder = [None] * len(index_list)
+        for idx, reorder_idx in enumerate(reordered_index_list):
+            index_list_reorder[reorder_idx] = index_list[idx]
+            names_list_reorder[reorder_idx] = names_list[idx]
+        index_list, names_list = index_list_reorder, names_list_reorder
+    if not all(keys_match_found):
+        msg = "\n"
+        for key, value in zip(keys, keys_match_found):
+            msg += f"\t{key}: {value}\n"
+        msg += f"Available strings: {list_of_strings}\n"
+        raise ValueError(
+            "Not all regular expressions are matched! Please check that the "
+            f"regular expressions are correct: {msg}"
+        )
+    return index_list, names_list
+
+
 class _Data:
     pass
 
@@ -95,14 +159,8 @@ class _Robot(_Asset):
         self.data.body_pos_w[:, :, :] = 10.0  # everything far away by default
 
     def find_bodies(self, patterns, preserve_order=False):
-        import re
-
-        ids, names = [], []
-        for i, n in enumerate(self.data.body_names):
-            if any(re.fullmatch(p, n) for p in patterns):
-                ids.append(i)
-                names.append(n)
-        return ids, names
+        # This delegation is all Isaac Lab's Articulation.find_bodies does.
+        return _resolve_matching_names(patterns, self.data.body_names, preserve_order)
 
 
 class _Scene(dict):
@@ -244,11 +302,23 @@ def main() -> int:
     r = _run(mod, "off-axis", cfg, traj)
     check(max(r) < 1.0, "off-axis wander (ratio 0.75 > 0.4) does not fire")
 
-    print("\n(h) hand-body regex actually matches something")
+    print("\n(h) hand-body regex matches, under Isaac Lab's own one-to-one rule")
     env = _Env()
     ids, names = env.robot.find_bodies(mod._DEFAULTS["hand_body_patterns"])
     print(f"    matched: {names}")
     check(len(ids) == 6, "default hand_body_patterns match the 6 hand/wrist links")
+    # And that the rule above is really being enforced: a list of separate
+    # patterns double-matches `left_hand_palm_link` ('.*hand.*' and '.*palm.*')
+    # and is rejected by the real resolve_matching_names before find_bodies
+    # returns anything. A stub that accepted it would make this whole scenario
+    # unfailable, which is how the three-pattern default shipped.
+    try:
+        env.robot.find_bodies([".*hand.*", ".*wrist.*", ".*palm.*"])
+        rejected = False
+    except ValueError as e:
+        rejected = "Multiple matches" in str(e)
+        print(f"    3-pattern list correctly rejected: {str(e).splitlines()[0]}")
+    check(rejected, "a pattern list that double-matches a body is rejected, as Isaac Lab rejects it")
 
     print()
     if failures:

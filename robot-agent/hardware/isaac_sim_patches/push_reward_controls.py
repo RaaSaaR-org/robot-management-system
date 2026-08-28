@@ -10,7 +10,7 @@ Everything here talks to a *running* `sim_main.py --reward_mode push` over DDS
 domain 1 (the sim domain; 0 is the real robot, 9 is mock). It drives no joints:
 the checkout has no scripted arm driver — `create_action_provider` only
 implements `dds`, `dds_wholebody` and `replay`, and a Wholebody task is forced
-to `dds_wholebody` (sim_main.py:422-425) — so the arm motion in each control
+to `dds_wholebody` (sim_main.py:409-412) — so the arm motion in each control
 below comes from teleop or a policy. See README.md for the full procedure.
 
 Topics used (verified against the checkout at e30c25b):

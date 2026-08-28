@@ -129,6 +129,16 @@ disqualified (latched), `-2.0` the reward itself threw — deliberately not
 `0.0`, because a scoring term that reports "nothing happened" when it is broken
 is precisely how the bad proxy below survived a whole ablation.
 
+One failure is excluded from `-2.0` and **crashes the run instead**: a
+`HandBodyResolutionError`, i.e. `hand_body_patterns` not resolving against this
+USD. Gate 4 cannot run without hand bodies, so the session could only publish
+noise; the exception carries the offending patterns and the robot's full
+`body_names`, which is what you need to write a working pattern. Note that
+`robot.find_bodies` enforces a strict one-to-one pattern↔body mapping — it
+raises both when two patterns match one body and when a pattern matches none —
+so keep `hand_body_patterns` a **single alternation**
+(`[".*(hand|wrist|palm).*"]`), never a list of independent patterns.
+
 Four gates, all of which must hold:
 
 | Gate | Rule | Default |
@@ -227,7 +237,7 @@ The object is a cylinder of **radius 0.018 m and height 0.35 m**, mass 0.4 kg
 (`tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py:56-77`) — a
 pencil-shaped rod standing on end, ~10:1 aspect. Its static friction is 1.5 and
 the combine mode is `max` against the env's 1.0
-(`…_wholebody.py:69-75`, `move_cylinder_g1_29dof_dex3_hw_env_cfg.py:162-164`),
+(`…_wholebody.py:69-75`, `move_cylinder_g1_29dof_dex3_hw_env_cfg.py:156-159`),
 so µ ≈ 1.5.
 
 Quasi-statically, a horizontal force applied at height `h` slides such an object
@@ -275,7 +285,16 @@ asserts that the lift-and-place trajectory — the one the TASK-185 proxy
 accepted — is disqualified. It pins the **scoring logic only**: it cannot tell
 you whether the hand-link regex matches the real USD, whether the rod is
 physically pushable, or whether DDS carries the value. Those need the in-sim
-controls below. 13/13 checks pass as of this commit.
+controls below. 14/14 checks pass as of this commit.
+
+Its `find_bodies` stub is a behavioural port of Isaac Lab's
+`isaaclab.utils.string.resolve_matching_names`, **including both of its
+`ValueError`s** — one body matched by two patterns, and a pattern that matches
+nothing. That is deliberate: the stub's first version accepted pattern lists
+the real API rejects outright, which made the hand-body scenario unfailable and
+let a default of `[".*hand.*", ".*wrist.*", ".*palm.*"]` — which raises on any
+G1 with `left_hand_palm_link` — pass 13/13. Keep the stub strict; if it ever
+disagrees with Isaac Lab, the stub is what is wrong.
 
 ### In-sim controls — NOT YET RUN
 
@@ -311,8 +330,11 @@ On startup it must print, before anything else is judged:
 [push_reward] baseline (...): direction=left world_dir=[0.0, 1.0] origin=[-2.585..., -2.789..., 0.84...]
 ```
 
-If the `hand bodies` list is empty or names something that is not a hand, stop:
-the regex needs fixing for this USD and every result below is meaningless.
+If the `hand bodies` line names something that is not a hand, stop: the regex
+needs fixing for this USD and every result below is meaningless. If it is
+missing entirely, look for a `HandBodyResolutionError` — the patterns did not
+resolve, the exception prints them next to the robot's full `body_names`, and
+the run stops there rather than publishing `-2.0` forever.
 
 **Terminal 2 — the reward, for the whole session.**
 
@@ -341,7 +363,7 @@ The arm motion in (a)–(c) is the **only** part that is not scripted. The
 checkout has no scripted arm driver: `create_action_provider` implements
 `dds`, `dds_wholebody` and `replay` only (`action_provider/create_action_provider.py:10-26`),
 and a Wholebody task is forced onto `dds_wholebody`
-(`sim_main.py:422-425`), so joints come from `rt/lowcmd` (`dds/g1_robot_dds.py:63`)
+(`sim_main.py:409-412`), so joints come from `rt/lowcmd` (`dds/g1_robot_dds.py:63`)
 and `rt/dex3/{left,right}/cmd` (`dds/dex3_dds.py:76-82`) — i.e. from teleop or a
 policy. Producing (a)–(c) from a canned joint trajectory would mean writing that
 driver, which is not part of this task.

@@ -19,7 +19,7 @@ due_date: ''
 created: 2026-07-17
 updated: 2026-08-28
 status_note: 'Reward written and carried as 0003-neodem-push-slide-reward.patch; gate logic
-  verified offline (13/13) with verify_push_reward_gates.py. NOT yet run inside Isaac — the
+  verified offline (14/14) with verify_push_reward_gates.py. NOT yet run inside Isaac — the
   four in-sim controls are written down but unexecuted. Two findings that change the shape of
   the work: (1) the scene object is a 0.018 x 0.35 m rod, which analytically tips rather than
   slides for any contact above ~1.2 cm, so the push may be physically unachievable in this
@@ -80,7 +80,7 @@ Gates 2 and 4 make trajectory alone insufficient by construction:
   displacement read as "left".
 
 `verify_push_reward_gates.py` asserts this executably: the lift-and-place trajectory is
-disqualified **and** the old proxy is shown accepting the same trajectory. 13/13 checks pass.
+disqualified **and** the old proxy is shown accepting the same trajectory. 14/14 checks pass.
 
 ### Thresholds taken from this task's original proposal, and one that was changed
 
@@ -105,7 +105,7 @@ means what gate 4 needs.
 `tasks/common_scene/base_scene_pickplace_cylindercfg_wholebody.py:56-77` — the object is a
 cylinder of radius **0.018 m** and height **0.35 m**, mass 0.4 kg: a pencil-shaped rod standing
 on end, ~10:1 aspect. Static friction 1.5 with `friction_combine_mode="max"` against the env's
-1.0 (`…_wholebody.py:69-75`, `move_cylinder_g1_29dof_dex3_hw_env_cfg.py:162-164`), so µ ≈ 1.5.
+1.0 (`…_wholebody.py:69-75`, `move_cylinder_g1_29dof_dex3_hw_env_cfg.py:156-159`), so µ ≈ 1.5.
 
 Quasi-statically, a horizontal force at height `h` slides such an object rather than tipping it
 only while `µ·m·g·h < m·g·r`, i.e. `h < r/µ = 0.018/1.5 ≈ 0.012 m`. Any contact more than ~1.2 cm
@@ -137,8 +137,13 @@ Nothing here has been inside Isaac. In descending order of risk:
 2. **`hand_body_patterns` may not match the real Dex3 USD.** The link names live in a
    crate-compressed USD token table (`assets/robots/g1-29dof_wholebody_dex3/…usd`) and are not
    readable without Isaac. The reward resolves them by regex, prints the resolved list once at
-   startup, and raises with the full `body_names` list if nothing matches. **Check that line
-   first.** If it is empty, fix the patterns — do not widen `contact_radius_m`.
+   startup, and raises `HandBodyResolutionError` with the full `body_names` list if they do not
+   resolve — that exception is re-raised out of `compute_reward` rather than folded into the
+   `-2.0` path, so it reaches the log. **Check that line first.** If it is empty, fix the
+   patterns — do not widen `contact_radius_m`. Keep them a **single alternation**:
+   `robot.find_bodies` → `resolve_matching_names` demands a one-to-one pattern↔body mapping and
+   rejects `[".*hand.*", ".*wrist.*", ".*palm.*"]` outright, because `left_hand_palm_link`
+   matches two of them.
 3. **`contact_radius_m = 0.12` is a guess** about where the hand link origins sit relative to a
    real contact.
 4. **Whether the rod is physically pushable** (finding 1).
@@ -149,7 +154,7 @@ Nothing here has been inside Isaac. In descending order of risk:
 
 Two tiers. Tier A is done; tier B is not.
 
-**A — offline, already run (13/13 pass, ~1 s, no GPU):**
+**A — offline, already run (14/14 pass, ~1 s, no GPU):**
 
 ```bash
 UNITREE_SIM_ROOT=$UNITREE_ROOT/unitree_sim_isaaclab \
@@ -158,7 +163,10 @@ UNITREE_SIM_ROOT=$UNITREE_ROOT/unitree_sim_isaaclab \
 ```
 
 Covers slide / lift-and-place / knock / idle / launch / wrong-direction / off-axis, and asserts
-that the trajectory the TASK-185 proxy accepted is disqualified here.
+that the trajectory the TASK-185 proxy accepted is disqualified here. Its `find_bodies` stub
+reproduces `resolve_matching_names`' strict one-to-one rule, including both of its `ValueError`
+paths, so the hand-body scenario can actually fail — a permissive stub is what let a
+three-pattern default that Isaac Lab rejects pass an earlier run of this same check.
 
 **B — in sim, NOT yet run.** The four scripted controls (slide → fires; lift-and-place → must
 not fire; knock over → must not fire; do nothing → must not fire), with the exact launch,
@@ -168,7 +176,7 @@ watch and reset commands and the expected output for each, are written verbatim 
 The arm motion in the first three controls is the only unscripted part: the checkout has no
 scripted arm driver (`action_provider/create_action_provider.py:10-26` implements `dds`,
 `dds_wholebody` and `replay` only, and a Wholebody task is forced onto `dds_wholebody` at
-`sim_main.py:422-425`), so joints come from teleop or a policy. Writing such a driver is a
+`sim_main.py:409-412`), so joints come from teleop or a policy. Writing such a driver is a
 separate task.
 
 **C — the ablation cell** (re-run TASK-185's cell and confirm the `place`-instructed control no

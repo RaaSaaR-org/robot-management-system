@@ -102,7 +102,7 @@ diff --git a/tasks/common_rewards/base_reward_push_cylindercfg.py b/tasks/common
 new file mode 100644
 --- /dev/null
 +++ b/tasks/common_rewards/base_reward_push_cylindercfg.py
-@@ -0,0 +1,459 @@
+@@ -0,0 +1,496 @@
 +# Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 +# License: Apache License, Version 2.0
 +#
@@ -158,6 +158,10 @@ new file mode 100644
 +#         It is deliberately NOT 0.0: a scoring term that silently reports
 +#         "nothing happened" when it is broken is how the previous proxy went
 +#         unnoticed for a whole ablation.
++#         One failure is excluded and propagates out of `compute_reward`
++#         instead of becoming -2.0: `hand_body_patterns` failing to resolve
++#         (`HandBodyResolutionError`). Gate 4 cannot run without hand bodies,
++#         so the session can only produce noise - stop it, do not score it.
 +#
 +# Episode boundaries: this task is reset externally by `reset_object_self`
 +# (sim_main.py), which teleports the object without calling `env.reset()`, so
@@ -253,7 +257,15 @@ new file mode 100644
 +    "max_free_travel_m": 0.05,    # sticky veto on uncredited path length
 +    "object_radius_m": 0.018,
 +    "object_half_height_m": 0.175,
-+    "hand_body_patterns": [".*hand.*", ".*wrist.*", ".*palm.*"],
++    # ONE alternation, not three patterns. `robot.find_bodies` delegates to
++    # isaaclab.utils.string.resolve_matching_names, which enforces a strict
++    # one-to-one mapping between the patterns given and the bodies matched: it
++    # raises ValueError if one body matches two patterns ("Multiple matches for
++    # 'left_hand_palm_link': '.*hand.*' and '.*palm.*'!") and raises again if
++    # any pattern matches nothing ("Not all regular expressions are matched!").
++    # A single alternation cannot collide with itself, and still raises
++    # usefully when it matches no body at all.
++    "hand_body_patterns": [".*(hand|wrist|palm).*"],
 +    "reset_jump_m": 0.25,         # single-sample jump treated as a teleport
 +    "verbose": True,
 +}
@@ -374,6 +386,16 @@ new file mode 100644
 +    return data.body_link_pos_w
 +
 +
++class HandBodyResolutionError(RuntimeError):
++    """`hand_body_patterns` did not resolve to a usable set of bodies.
++
++    Its own type so `compute_reward` can let it out instead of turning it into
++    the -2.0 "the reward threw" value: without hand bodies gate 4 can never
++    run, so the session cannot produce a meaningful number, and -2.0 on every
++    sample scrolls the one message that says how to fix it off the log.
++    """
++
++
 +def _hand_body_ids(env, robot, cfg):
 +    """Resolve, once, the body indices that count as "a hand".
 +
@@ -388,9 +410,19 @@ new file mode 100644
 +        return cached
 +
 +    patterns = list(cfg["hand_body_patterns"])
-+    ids, names = robot.find_bodies(patterns, preserve_order=False)
++    try:
++        ids, names = robot.find_bodies(patterns, preserve_order=False)
++    except Exception as e:
++        # resolve_matching_names raises *inside* find_bodies - before the empty
++        # check below ever runs - when the patterns are not one-to-one with the
++        # bodies. Re-raised with the body list, because that list is the only
++        # way to write a working pattern for an unfamiliar USD.
++        raise HandBodyResolutionError(
++            f"[push_reward] hand_body_patterns={patterns} did not resolve: {e} "
++            f"Available bodies: {list(robot.data.body_names)}"
++        ) from e
 +    if not ids:
-+        raise RuntimeError(
++        raise HandBodyResolutionError(
 +            "[push_reward] no robot body matched hand_body_patterns="
 +            f"{patterns}. Available bodies: {list(robot.data.body_names)}"
 +        )
@@ -449,6 +481,11 @@ new file mode 100644
 +
 +    try:
 +        reward = _compute_push_reward(env)
++    except HandBodyResolutionError:
++        # The one failure that must NOT become -2.0: it is a configuration
++        # error the operator has to fix before any number here means anything,
++        # and README.md tells them to read this exception. Let it out.
++        raise
 +    except Exception:
 +        traceback.print_exc()
 +        print("[push_reward] FAILED to evaluate - publishing -2.0 (not 0.0) so this is visible")
