@@ -42,7 +42,7 @@ As of 2026-08-28, `git -C "$UNITREE_ROOT/unitree_sim_isaaclab" status --porcelai
 Isaac Lab 3.0 migration (`sim.physx` -> `sim.physics`, `ProxyArray.torch` on the
 `common_observations/*_state.py` reads, the `InitialStateCfg.rot` quaternion reorder in
 `tasks/common_config/robot_configs.py`), written up in
-`/home/humanoid/Dokumente/Unitree/g1_quest_teleop/docs/STATUS.md` under R19.
+`$UNITREE_ROOT/g1_quest_teleop/docs/STATUS.md` under R19.
 
 **A fresh checkout brought to `e30c25b` + `0001` + `0002` will therefore NOT run**, and any result
 reproduced from TASK-204 / TASK-223 was obtained against the working tree, not against this

@@ -1,7 +1,7 @@
 NeoDEM TASK-223 -- the G1 wholebody sim had no floor.
 
 Applies on top of 0001-neodem-g1-wholebody-sim.patch and the Isaac Lab 3.0 port already
-present in the checkout working tree. Verified by two sim boots on 2026-08-28.
+present in the checkout working tree. Verified by three sim boots on 2026-08-28.
 
 THE FINDING. The G1 was not failing to balance: it was free-falling. The wholebody scene
 shipped a "# Ground plane" heading with nothing under it, so there was no collidable floor
