@@ -156,6 +156,8 @@ class PauseDoorDriver:
         self.failures: int = 0             # CONSECUTIVE failures; any success clears it
         self.failed: bool = False          # latched only after _MAX_CONSECUTIVE_FAILURES
         self.resets: int = 0               # scene resets this driver has re-synced to
+        self.calls: int = 0                # every step() that got this far
+        self._logged_openness: float | None = None   # last MEASURED openness we reported
 
     # -- resolution ----------------------------------------------------------------------
     def _resolve(self, door) -> None:
@@ -353,6 +355,38 @@ def pause_door_state(env, inspect: bool = False) -> torch.Tensor:
         print(f"[NeoDEM] pause-room door driver recovered after {drv.failures} "
               f"failed call(s)", flush=True)
         drv.failures = 0
+
+    # MAKE THE DOOR OBSERVABLE FROM OUTSIDE THE SIM.
+    #
+    # Until this existed, "the door is actually driven every control step" was an inference
+    # -- from the driver being an observation term and the vendor calling
+    # observation_manager.compute() unconditionally -- with no way to check it against a
+    # running sim. The `door` observation group goes nowhere: it is not on the DDS wire and
+    # no camera can see the leaves from behind the robot, so a door that never moved and a
+    # door that opened perfectly produced identical evidence. The first live run had to
+    # settle it by eye, from a chase-camera frame that happened to catch the doorway.
+    #
+    # Logged ON CHANGE rather than periodically: a rate-limited sample of a value that is
+    # constant 95 % of the time is nearly all noise and still misses the transition, which
+    # is the only part anyone wants. One line when the driver comes up, then one whenever
+    # the MEASURED openness moves by 5 % of full travel -- so an open-close cycle is about
+    # forty lines and a door that never moves is exactly one.
+    drv.calls += 1
+    if drv._logged_openness is None:
+        print(f"[NeoDEM] pause-room door driver live: joints {drv.joint_names}, "
+              f"opens within {FPR.DOOR_AUTOMATION['open_radius']} m, "
+              f"shuts beyond {FPR.DOOR_AUTOMATION['shut_radius']} m, "
+              f"leaf speed {FPR.DOOR_AUTOMATION['leaf_speed']} m/s", flush=True)
+        drv._logged_openness = -1.0
+    row = state[0]
+    measured_now = float(row[0])
+    if abs(measured_now - drv._logged_openness) >= 0.05:
+        drv._logged_openness = measured_now
+        print(f"[NeoDEM] door call={drv.calls:6d} robot_d={float(row[4]):5.2f}m "
+              f"commanded={float(row[5]):.2f} measured={measured_now:.2f} "
+              f"leaves=({float(row[1]):+.3f},{float(row[2]):+.3f})m "
+              f"clear_width={float(row[3]):.2f}m", flush=True)
+
     return state
 
 

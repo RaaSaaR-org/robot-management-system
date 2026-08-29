@@ -81,6 +81,19 @@ CAM_NAME="${CAM_NAME:-head_camera}"
 # snapshot request would 503 as stale even with the stream perfectly healthy, and `look` would
 # report the scene as unobservable for a reason that has nothing to do with the scene.
 CAM_MAX_AGE="${CAM_MAX_AGE:-1.5}"
+# AND THE OTHER HALF OF THAT, WHICH THE SEED MAKES NECESSARY.
+#
+# Seeding a placeholder frame so the publisher binds turns a LOUD failure into a quiet one:
+# if Isaac's renderer never writes -- scene fails to load, cameras disabled -- the placeholder
+# is republished at 30 Hz forever and every health field reads OK. Before the seed, that case
+# was total silence, which at least could not be mistaken for success.
+#
+# --max-content-age is the guard: it rejects a frame whose PICTURE has not changed, as opposed
+# to one that is merely old. The seeded placeholder is a single static image, so its content
+# age grows without bound and the facade starts 503ing within seconds. A real render always
+# changes -- even a motionless robot has shadow and sensor noise. The facade's default is 0,
+# which disables the check entirely.
+CAM_MAX_CONTENT_AGE="${CAM_MAX_CONTENT_AGE:-5.0}"
 CONTAINER="${CONTAINER:-neodem-factory}"
 # 1 = kill leftovers without asking, 0 = never kill, unset = ask. There is no
 # default of "yes" here on purpose: see step 2.
@@ -305,6 +318,25 @@ else
   say "5. manipulation bridge SKIPPED (ENABLE_MANIP=0)"
 fi
 
+say "5b. pre-seed the camera shared memory (the image server loses a race without it)"
+# The vendor image server binds its ZMQ publishers lazily, inside publish(), which it only
+# reaches once a frame exists. Its per-camera thread reads the ring buffer ONCE at startup
+# and, finding it empty, sets a SHARED stop event and breaks -- killing all three cameras for
+# the life of the process while :60000 keeps answering config queries perfectly. Measured on
+# this box: that read happened 1.74 s before Isaac's own writer created the shared memory.
+#
+# Seeding a valid placeholder frame first makes that read succeed. Isaac overwrites the same
+# segments seconds later, so the placeholder is never what anything sees.
+#
+# It must run HERE: after the stale sweep has removed any old container (leftover segments are
+# root-owned and this user cannot unlink them) and before the sim starts writing.
+if [ "${SKIP_CAMERA_SEED:-0}" = "1" ]; then
+  echo "SKIPPED (SKIP_CAMERA_SEED=1) -- expect no camera frames"
+else
+  "$HW/seed_camera_shm.py" || die "could not seed the camera shared memory -- Agent Mode would
+     be blind for the whole run. Re-run with SKIP_CAMERA_SEED=1 to proceed deliberately blind."
+fi
+
 say "6. Isaac, in docker (Vulkan needs a seat; the host user does not have one)"
 setsid nohup docker run --rm --name "$CONTAINER" --user 0 --runtime=nvidia --gpus all \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -414,6 +446,7 @@ watch_pid "$SIDECAR_PID" "the sidecar" "$LOGDIR/sidecar.log"
 say "8. camera facade :8779 (serves /cameras/*, proxies the rest to 8777)"
 setsid nohup "$PY" -u isaac_camera_facade.py --serve 8779 \
   --sidecar-url http://localhost:8777 --scene "$TASK_ID" --max-age "$CAM_MAX_AGE" \
+  --max-content-age "$CAM_MAX_CONTENT_AGE" \
   >"$LOGDIR/camera_facade.log" 2>&1 </dev/null &
 FACADE_PID=$!
 disown "$FACADE_PID" 2>/dev/null || true
