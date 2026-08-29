@@ -7,13 +7,15 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  blockKindGlyph,
   blockKindLabel,
   demoMode,
   formatBlockParams,
   formatDuration,
   presentProgress,
+  vlaSkillOutcome,
 } from '../blockFormat';
-import type { AgentBlock } from '../../types/agentmode.types';
+import { AgentBlockKinds, type AgentBlock } from '../../types/agentmode.types';
 
 const block = (kind: AgentBlock['kind'], params: Record<string, unknown> = {}): AgentBlock => ({
   id: 'b1',
@@ -123,6 +125,48 @@ describe('formatBlockParams', () => {
     // the one mistake this block kind exists to prevent.
     expect(demoMode(block('demo', {}))).toBeNull();
     expect(formatBlockParams(block('demo', { skillId: 'sk-1' }))).toBe('describes “sk-1” (not executed)');
+  });
+
+  it('summarises `vla_skill` (TASK-226) and never renders an unchecked rollout as success', () => {
+    expect(blockKindLabel('vla_skill')).toBe('Skill');
+    expect(blockKindGlyph('vla_skill')).toBe('🦾');
+
+    expect(
+      formatBlockParams(
+        block('vla_skill', { skill: 'g1_apple_pnp', label: 'apple pick and place', outcome: 'succeeded' })
+      )
+    ).toBe('“apple pick and place” · succeeded');
+    expect(formatBlockParams(block('vla_skill', { label: 'apple pick and place', outcome: 'failed' }))).toBe(
+      '“apple pick and place” · failed'
+    );
+    // "Ran to maxSteps without throwing" is `unknown`, and the chip says so in
+    // words: a `done` status pill on its own reads as "the robot did it".
+    expect(formatBlockParams(block('vla_skill', { label: 'apple pick and place', outcome: 'unknown' }))).toBe(
+      '“apple pick and place” · outcome unknown'
+    );
+    // Not run yet: the chip names the skill and claims nothing.
+    expect(formatBlockParams(block('vla_skill', { skill: 'g1_apple_pnp' }))).toBe('“g1_apple_pnp”');
+
+    expect(vlaSkillOutcome(block('vla_skill', { outcome: 'succeeded' }))).toBe('succeeded');
+    expect(vlaSkillOutcome(block('vla_skill', { outcome: 'unknown' }))).toBe('unknown');
+    // A missing or malformed verdict must NOT read as success — the whole point
+    // of the three-way outcome is that success has to be positively established.
+    expect(vlaSkillOutcome(block('vla_skill', {}))).toBeNull();
+    expect(vlaSkillOutcome(block('vla_skill', { outcome: 'done' }))).toBeNull();
+    expect(vlaSkillOutcome(block('demo', { outcome: 'succeeded' }))).toBeNull();
+  });
+});
+
+describe('block-kind coverage (TASK-226)', () => {
+  it('every block kind has a real label and a real glyph', () => {
+    // The two `Record<AgentBlockKind, …>` maps ARE compiler-checked, so this is
+    // a belt-and-braces sweep that also catches a PLACEHOLDER: a kind whose
+    // label is its own id, or whose glyph is the `•` fallback, has been added to
+    // the type and forgotten here.
+    for (const kind of AgentBlockKinds) {
+      expect(blockKindLabel(kind), kind).not.toBe(kind);
+      expect(blockKindGlyph(kind), kind).not.toBe('•');
+    }
   });
 });
 

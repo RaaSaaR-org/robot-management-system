@@ -43,6 +43,13 @@ import type { JournalRecord, TrustLevel } from './workspace.js';
  * `walk`/`turn`/`goto`/`posture`/`wave` are all absent on purpose: v1 does not
  * move the robot on its own, and the gate for that is this constant plus
  * {@link filterHeartbeatBlocks}, not a sentence in a prompt.
+ *
+ * `vla_skill` (TASK-226) is absent for a stronger reason than the rest: a
+ * heartbeat is the robot acting with nobody watching, and a learned
+ * manipulation policy cannot be interrupted between action chunks and cannot
+ * report its own failure. It is also in `SELF_FORBIDDEN_KINDS`, so a heartbeat
+ * would be refused twice over. Asserted as a value in `heartbeat.test.ts`
+ * rather than left to the absence of a line.
  */
 export const HEARTBEAT_ALLOWED_KINDS: ReadonlySet<AgentBlockKind> = new Set<AgentBlockKind>([
   'look',

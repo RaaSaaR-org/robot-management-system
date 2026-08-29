@@ -25,6 +25,44 @@ export interface OwnerChange {
   next: ControlOwner;
   /** True when `next` took the lock from a non-idle `previous` by force. */
   preempted: boolean;
+  /**
+   * True for the two edges of a {@link ControlOwnerLock.lend} — `previous`
+   * handed the lock to `next` for one nested operation and will take it back,
+   * or is taking it back now.
+   *
+   * A subscriber that reacts to "somebody ELSE is driving now" must skip these:
+   * nothing changed about who is in charge, only about which of that owner's
+   * own subsystems is holding the wheel. See the scene-memory wipe in
+   * `agent-mode-controller.ts`, which must not fire when Agent Mode lends the
+   * lock to its own VLA rollout (TASK-226).
+   */
+  handover: boolean;
+}
+
+/**
+ * A lock lent to a nested owner by {@link ControlOwnerLock.lend}.
+ *
+ * `end()` is the ONLY way back and is safe to call from a `finally` on every
+ * path — success, throw, timeout and abort — which is the whole reason this
+ * exists rather than a release/claim pair at the call site.
+ */
+export interface LendResult {
+  ok: boolean;
+  /** Honest reason when refused. */
+  reason?: string;
+  /** True while the borrower still owns the lock. */
+  held(): boolean;
+  /**
+   * Give the lock back to whoever lent it. Idempotent, and a NO-OP once
+   * something else has taken the lock: a teleop preemption during the nested
+   * operation must not be undone by that operation finishing.
+   */
+  end(): void;
+}
+
+/** A refused lend — nothing was taken, so `end()` has nothing to give back. */
+function lendRefused(reason: string): LendResult {
+  return { ok: false, reason, held: () => false, end: () => {} };
 }
 
 const HUMAN_LABELS: Record<ControlOwner, string> = {
@@ -102,6 +140,64 @@ export class ControlOwnerLock {
   }
 
   /**
+   * Lend the lock to `next` for ONE nested operation, then take it back.
+   *
+   * The refcounted {@link claim} cannot express this. Agent Mode holds `agent`
+   * for the whole life of a plan, so `claim('vla')` from inside a `vla_skill`
+   * block is refused ("Control is held by Agent Mode"), and releasing `agent`
+   * first would open a window in which a third party could take control out
+   * from under a running plan. So the lender's holders are PARKED and restored
+   * by `end()`, and the lock never passes through `idle`.
+   *
+   * Refused for exactly the same reasons {@link claim} is: a lend to anything
+   * but `teleop` needs the lock to be idle or already held by somebody, and a
+   * borrower cannot take it from an owner that outranks the rule. In practice
+   * the only refusal is "somebody else is already borrowing".
+   *
+   * Ending a lend is idempotent and gives up quietly when the lock has moved
+   * on — see {@link LendResult.end}.
+   */
+  lend(next: ActiveControlOwner): LendResult {
+    const lender = this.owner;
+
+    // Nothing to park: this is a plain claim with a `finally`-safe release.
+    if (lender === 'idle' || lender === next) {
+      const claim = this.claim(next);
+      if (!claim.ok) return lendRefused(claim.reason ?? 'control is busy.');
+      let done = false;
+      return {
+        ok: true,
+        held: () => !done && this.owner === next,
+        end: () => {
+          if (done) return;
+          done = true;
+          this.release(next);
+        },
+      };
+    }
+
+    const parkedHolders = this.holders;
+    this.holders = 1;
+    this.set(next, false, true);
+
+    let done = false;
+    return {
+      ok: true,
+      held: () => !done && this.owner === next,
+      end: () => {
+        if (done) return;
+        done = true;
+        // Somebody preempted the borrower (teleop), or an E-Stop `reset()` came
+        // through. The lender no longer owns anything to be given back, and
+        // forcing it back here would hand a plan the lock a human just took.
+        if (this.owner !== next) return;
+        this.holders = parkedHolders;
+        this.set(lender, false, true);
+      },
+    };
+  }
+
+  /**
    * Drop one holder of `who`. A no-op unless `who` currently owns the lock; the
    * owner only goes back to `idle` once its last holder has released.
    */
@@ -124,11 +220,11 @@ export class ControlOwnerLock {
     return () => this.listeners.delete(cb);
   }
 
-  private set(next: ControlOwner, preempted: boolean): void {
+  private set(next: ControlOwner, preempted: boolean, handover = false): void {
     const previous = this.owner;
     if (previous === next) return;
     this.owner = next;
-    const change: OwnerChange = { previous, next, preempted };
+    const change: OwnerChange = { previous, next, preempted, handover };
     for (const cb of this.listeners) {
       try {
         cb(change);

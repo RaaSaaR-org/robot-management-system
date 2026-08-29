@@ -193,9 +193,9 @@ describe('ControlOwnerLock', () => {
     lock.release('teleop');
 
     expect(changes).toEqual([
-      { previous: 'idle', next: 'agent', preempted: false },
-      { previous: 'agent', next: 'teleop', preempted: true },
-      { previous: 'teleop', next: 'idle', preempted: false },
+      { previous: 'idle', next: 'agent', preempted: false, handover: false },
+      { previous: 'agent', next: 'teleop', preempted: true, handover: false },
+      { previous: 'teleop', next: 'idle', preempted: false, handover: false },
     ]);
   });
 
@@ -230,8 +230,8 @@ describe('ControlOwnerLock', () => {
     lock.release('teleop');
 
     expect(changes).toEqual([
-      { previous: 'idle', next: 'teleop', preempted: false },
-      { previous: 'teleop', next: 'idle', preempted: false },
+      { previous: 'idle', next: 'teleop', preempted: false, handover: false },
+      { previous: 'teleop', next: 'idle', preempted: false, handover: false },
     ]);
   });
 
@@ -473,5 +473,107 @@ describe('the periodic pose feed into scene memory (TASK-221)', () => {
 
     expect(scene.hasMovedSinceObservation()).toBe(false);
     expect(scene.get('table')?.distanceEstM).toBe(0.55);
+  });
+});
+
+describe('ControlOwnerLock.lend (TASK-226)', () => {
+  it('hands the lock over and gives it back, without ever passing through idle', () => {
+    const lock = new ControlOwnerLock();
+    const changes: OwnerChange[] = [];
+    lock.claim('agent');
+    lock.subscribe((c) => changes.push(c));
+
+    const lent = lock.lend('vla');
+
+    expect(lent.ok).toBe(true);
+    expect(lent.held()).toBe(true);
+    expect(lock.get()).toBe('vla');
+
+    lent.end();
+
+    expect(lock.get()).toBe('agent');
+    expect(lent.held()).toBe(false);
+    // Both edges are flagged `handover`, which is what lets a subscriber tell
+    // "somebody else is driving" from "the same owner's other subsystem".
+    expect(changes).toEqual([
+      { previous: 'agent', next: 'vla', preempted: false, handover: true },
+      { previous: 'vla', next: 'agent', preempted: false, handover: true },
+    ]);
+  });
+
+  it('restores the lender’s HOLDER COUNT, not just its name', () => {
+    const lock = new ControlOwnerLock();
+    // Two independent teleop sockets, the real case the refcount exists for.
+    lock.claim('teleop');
+    lock.claim('teleop');
+    expect(lock.holderCount()).toBe(2);
+
+    const lent = lock.lend('vla');
+    expect(lock.holderCount()).toBe(1);
+    lent.end();
+
+    // Both sockets are still holding. Restoring 1 would have let the first
+    // socket to close hand control away while a human still had the sticks.
+    expect(lock.holderCount()).toBe(2);
+    expect(lock.get()).toBe('teleop');
+  });
+
+  it('is idempotent — a second end() is a no-op', () => {
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+    lent.end();
+    lent.end();
+    expect(lock.get()).toBe('agent');
+    expect(lock.holderCount()).toBe(1);
+  });
+
+  it('does NOT take the lock back from a teleop preemption', () => {
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+
+    // A human takes over mid-rollout. `teleop` always wins.
+    expect(lock.claim('teleop').preempted).toBe('vla');
+    expect(lent.held()).toBe(false);
+
+    // The rollout's `finally` still runs. It must not hand the lock back to a
+    // plan the operator has just taken over.
+    lent.end();
+    expect(lock.get()).toBe('teleop');
+  });
+
+  it('does not resurrect the lender after an E-Stop reset()', () => {
+    const lock = new ControlOwnerLock();
+    lock.claim('agent');
+    const lent = lock.lend('vla');
+    lock.reset();
+
+    lent.end();
+    expect(lock.get()).toBe('idle');
+  });
+
+  it('from idle is a plain claim with a finally-safe release', () => {
+    const lock = new ControlOwnerLock();
+    const lent = lock.lend('vla');
+    expect(lent.ok).toBe(true);
+    expect(lock.get()).toBe('vla');
+    lent.end();
+    expect(lock.get()).toBe('idle');
+  });
+
+  it('to the CURRENT owner is one more holder, not an ownership change', () => {
+    const lock = new ControlOwnerLock();
+    const changes: OwnerChange[] = [];
+    lock.claim('vla');
+    lock.subscribe((c) => changes.push(c));
+
+    const lent = lock.lend('vla');
+    expect(lock.holderCount()).toBe(2);
+    lent.end();
+
+    expect(lock.get()).toBe('vla');
+    expect(lock.holderCount()).toBe(1);
+    expect(changes).toEqual([]);
   });
 });

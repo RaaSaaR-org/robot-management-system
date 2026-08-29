@@ -20,6 +20,7 @@ import {
   type GenerateResponse,
 } from './llm.js';
 import { buildPlannerPrompt } from './prompts.js';
+import { resolveVlaSkill, skillTimeoutMs, VLA_SKILL_IDS } from './vla-skills.js';
 import { REMEMBER_MAX_CHARS } from './workspace.js';
 import {
   normalizeDeg,
@@ -58,6 +59,17 @@ const PlannedBlockSchema = z.object({
   seconds: z.number().optional(),
   // `remember` only. Kept flat like every other param — see the schema note.
   scope: z.enum(['place', 'global']).optional(),
+  /**
+   * `vla_skill` only (TASK-226): which catalogued skill to run.
+   *
+   * A free-form `z.string()` and not `z.enum(VLA_SKILL_IDS)`, because the
+   * catalogue is data that changes with the checkpoints on the robot while the
+   * schema is compiled in — and because `coerceParams` has to be able to answer
+   * an unknown name with the list of known ones, which an enum rejection cannot
+   * say. There is deliberately NO `instruction` field: the prompt the policy
+   * gets comes from the catalogue, never from the model.
+   */
+  skill: z.string().optional(),
 });
 
 export const PlanSchema = z.object({
@@ -124,6 +136,20 @@ export interface PlannerInput {
    * only from these, or say you do not know.
    */
   visitorFacts?: readonly string[];
+  /**
+   * The block that failed the LAST plan, and what it said (TASK-226).
+   *
+   * `runPlan` stops a plan at its first failed block, and until now the reason
+   * never left the timeline: the next command was planned as if nothing had
+   * gone wrong, so a model that had just watched `vla_skill` fail happily
+   * emitted the same block again. This is the minimum that makes a re-plan
+   * possible — the planner is told what did not work and can route around it.
+   *
+   * Optional, and consumed ONCE by the caller (see
+   * `AgentModeController.takeLastFailure`): a failure from ten minutes ago
+   * steering an unrelated command is worse than no context at all.
+   */
+  lastFailure?: { kind: string; message: string };
 }
 
 export interface PlannerResult {
@@ -253,6 +279,30 @@ export function coerceParams(block: PlannedBlockRaw): Record<string, unknown> {
         );
       }
       return { text, scope };
+    }
+    case 'vla_skill': {
+      const name = block.skill?.trim();
+      if (!name) throw new PlanValidationError('block "vla_skill" is missing "skill"');
+      const profile = resolveVlaSkill(name);
+      // A near-miss resolves to NOTHING. Falling through to some other policy
+      // would run the wrong arms-length rollout just as happily as the right
+      // one, and the operator would read the name they asked for on the card.
+      if (!profile) {
+        throw new PlanValidationError(
+          `block "vla_skill" names an unknown skill ${JSON.stringify(name)} — ` +
+            `this robot has ${VLA_SKILL_IDS.map((id) => `"${id}"`).join(', ')}`,
+        );
+      }
+      // `instruction` is NOT read off the model's answer. It is the string the
+      // checkpoint was trained on, copied out of the catalogue — see
+      // `vla-skills.ts` for why that is the whole point of the block.
+      return {
+        skill: profile.id,
+        label: profile.label,
+        instruction: profile.task,
+        maxSteps: profile.maxSteps,
+        timeoutMs: skillTimeoutMs(profile),
+      };
     }
   }
 }
@@ -422,7 +472,11 @@ const WALK_MATCH_M = 0.5;
  * later does not quietly re-open the hole.
  */
 const MOVES_BASE: ReadonlySet<string> = new Set([
-  'walk', 'turn', 'goto', 'scan_room', 'patrol', 'tour', 'demo',
+  // `vla_skill` and `demo` do not command the base, but a policy in control of
+  // a 43-DOF humanoid's arms shifts its own centre of mass and the G1 steps to
+  // keep its balance. Listed for the same reason as the runner-owned kinds: an
+  // extra entry costs one fold that would have been an open-loop dash anyway.
+  'walk', 'turn', 'goto', 'scan_room', 'patrol', 'tour', 'demo', 'vla_skill',
 ]);
 
 /** One `turn` + `walk` pair rewritten as a `goto`, so the caller can say so. */
@@ -769,6 +823,7 @@ export class Planner {
         ...(remainingPlan && remainingPlan.length > 0 ? { remainingPlan } : {}),
         ...(input.language ? { language: input.language } : {}),
         ...(input.visitorFacts && input.visitorFacts.length > 0 ? { visitorFacts: input.visitorFacts } : {}),
+        ...(input.lastFailure ? { lastFailure: input.lastFailure } : {}),
         ...(attempt > 0 ? { repairHint: lastError } : {}),
       });
 

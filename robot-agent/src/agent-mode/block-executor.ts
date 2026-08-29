@@ -19,6 +19,8 @@ import { RangeSensor } from './range.js';
 import { gateByHash, type ChecklistAnswers } from './inspector.js';
 import type { PatrolCaptureHost } from './patrol.js';
 import { demoNarration } from './host.js';
+import { runVlaSkillBlock } from './vla-skill-block.js';
+import type { SkillRunReport, SkillRunRequest } from './vla-skills.js';
 import { speakThroughVoiceService } from './voice-narrator.js';
 import {
   getWorkspace,
@@ -362,12 +364,7 @@ export interface BlockExecutorDeps {
    * deliberately NOT an HTTP call back into our own REST API, which would make
    * a demo depend on the agent being reachable from itself.
    */
-  runSkill?: (input: {
-    skillId: string;
-    skillName: string;
-    taskPrompt?: string;
-    timeoutMs?: number;
-  }) => Promise<{ ok: boolean; steps?: number; durationMs?: number; message: string }>;
+  runSkill?: (input: SkillRunRequest) => Promise<SkillRunReport>;
   /** Grab a base64 JPEG from a named camera. Default: the sidecar. */
   snapshot?: (cameraName: string) => Promise<string>;
   /** Camera used by `capture` (default `AGENT_CAMERA_NAME`). */
@@ -539,6 +536,8 @@ export class BlockExecutor {
           return await this.present(block);
         case 'demo':
           return await this.demo(block);
+        case 'vla_skill':
+          return await runVlaSkillBlock(block, this.deps);
         case 'tour':
           return {
             ok: false,

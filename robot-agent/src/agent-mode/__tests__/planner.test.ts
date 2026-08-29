@@ -377,6 +377,50 @@ describe('Planner — prompt contents', () => {
     expect(prompt).toMatch(/A QUESTION about what you remember or know .* is answered with ONE `speak` block/s);
   });
 
+  it('advertises `vla_skill` and the skills this robot actually has (TASK-226)', async () => {
+    const { planner, calls } = makePlanner([
+      { text: JSON.stringify({ blocks: [{ kind: 'vla_skill', skill: 'g1_apple_pnp' }] }) },
+    ]);
+    const result = await planner.plan({ command: 'pick up the apple', sceneSummary: '' });
+
+    expect(result.blocks[0].kind).toBe('vla_skill');
+    // The instruction is filled from the catalogue, not from the model.
+    expect(result.blocks[0].params.instruction).toBe('move the apple to the plate');
+
+    const prompt = promptText(calls[0]!);
+    // The kind list is rendered from `PlannerBlockKinds`, so this is the check
+    // that `vla_skill` really did become planner-emittable.
+    expect(prompt).toContain('vla_skill');
+    // The skill ids are rendered from the catalogue for the same reason: the
+    // prompt cannot advertise a policy that is not installed.
+    expect(prompt).toContain('"g1_apple_pnp"');
+    expect(prompt).toMatch(/AFTER a `goto` that puts the robot at the object/);
+  });
+
+  it('tells the model what the LAST plan died on, so it can re-plan (TASK-226)', async () => {
+    const { planner, calls } = makePlanner([
+      { text: JSON.stringify({ blocks: [{ kind: 'speak', text: 'I cannot reach it' }] }) },
+    ]);
+    await planner.plan({
+      command: 'try again',
+      sceneSummary: '',
+      lastFailure: { kind: 'vla_skill', message: '"apple pick and place" did not finish: vla-server unreachable' },
+    });
+
+    const prompt = promptText(calls[0]!);
+    expect(prompt).toContain('`vla_skill` block failed');
+    expect(prompt).toContain('vla-server unreachable');
+    expect(prompt).toMatch(/Repeating the block that just failed, unchanged, is/);
+  });
+
+  it('says nothing about a failure when there was none', async () => {
+    const { planner, calls } = makePlanner([
+      { text: JSON.stringify({ blocks: [{ kind: 'look' }] }) },
+    ]);
+    await planner.plan({ command: 'look', sceneSummary: '' });
+    expect(promptText(calls[0]!)).not.toContain('The last plan stopped');
+  });
+
   it('passes the scene summary and, when re-planning, the remaining blocks', async () => {
     const { planner, calls } = makePlanner([
       { text: JSON.stringify({ blocks: [{ kind: 'look' }] }) },
