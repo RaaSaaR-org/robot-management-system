@@ -1,3 +1,20 @@
+---
+id: TASK-077
+aliases:
+- TASK-077
+title: VLA Native Integration in RMS
+slug: vla-native-integration-rms
+status: done
+priority: 2
+owner: ''
+projects: []
+customers: []
+tags:
+- extended
+- vla
+updated: 2026-08-29
+---
+
 # TASK-077 — VLA Native Integration in RMS
 
 ## Status: done

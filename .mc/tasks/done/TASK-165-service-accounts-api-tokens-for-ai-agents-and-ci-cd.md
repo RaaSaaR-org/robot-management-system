@@ -4,7 +4,7 @@ aliases:
 - TASK-165
 title: Service accounts + API tokens for AI agents and CI/CD
 slug: service-accounts-api-tokens-for-ai-agents-and-ci-cd
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -16,7 +16,7 @@ sprint: ''
 depends_on: []
 due_date: ''
 created: 2026-04-12
-updated: 2026-04-12
+updated: 2026-08-29
 ---
 
 

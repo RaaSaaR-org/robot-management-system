@@ -4,7 +4,7 @@ aliases:
 - TASK-163
 title: Team management page + direct add-user flow (no email)
 slug: team-management-page-direct-add-user-flow-no-email
-status: backlog
+status: done
 priority: 2
 owner: ''
 projects: []
@@ -16,7 +16,7 @@ depends_on:
 - TASK-162
 due_date: ''
 created: 2026-04-12
-updated: 2026-04-12
+updated: 2026-08-29
 ---
 
 

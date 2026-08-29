@@ -4,7 +4,7 @@ aliases:
 - TASK-203
 title: Run Agent Mode against Isaac Sim so the G1 walks instead of glides
 slug: run-agent-mode-against-isaac-sim-so-the-g1-walks
-status: todo
+status: in-progress
 priority: 2
 owner: ''
 projects: []
@@ -17,7 +17,7 @@ tags:
 depends_on: []
 due_date: ''
 created: 2026-08-08
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 
@@ -36,6 +36,29 @@ container running as root. Isaac's RTX renderer is Vulkan, Vulkan needs
 seat0, which an SSH session does not. CUDA working is not evidence Vulkan will.
 The working invocation is in `robot-agent/hardware/isaac_sim_patches/README.md`.
 
+
+## Where this stands (2026-08-29)
+
+Steps 1, 2, 3 and 5 are done and merged. **Step 4 is the only one open**, and what
+remains of it is narrow: the DDS layer underneath Agent Mode is proven, but the
+`walk` / `turn` / `goto` blocks have not been driven end to end.
+
+| Landed in | What |
+|---|---|
+| #270 | The G1 walks. Our probe had been under-publishing the command 5x. |
+| #272 | Step 5 measured; step 4 diagnosed. `isaac_yaw_sweep.py`, `isaac_bob_report.py`, patch `0006`. |
+
+**Two product decisions are open, and step 4 cannot be finished without them:**
+
+1. In-place left turns are dead in this checkpoint (ratio 0.01). Left turns *in an
+   arc* work (0.55-0.60 with `vx=0.3`). Is a left turn that requires forward
+   clearance acceptable? If yes, `goto` is satisfiable in both directions today.
+2. Should Agent Mode **refuse** an in-place left turn rather than accept it and
+   silently not perform it? Today it would accept and do nothing.
+
+The cause is settled and is not ours to fix: the `+1.0` yaw command reaches
+`policy.onnx` intact in all ten history frames, identical in form to `-1.0`, and the
+policy ignores it. That is trained asymmetry in the checkpoint. See step 4 below.
 
 ## Description
 
