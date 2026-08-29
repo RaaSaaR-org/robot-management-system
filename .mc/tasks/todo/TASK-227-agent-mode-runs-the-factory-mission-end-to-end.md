@@ -185,6 +185,72 @@ Still open, and each needs the live run:
 - [ ] One run produces `summary.json` + `results.json` + a video
 - [ ] The run is repeatable from the frozen protocol script
 
+## First live run — 2026-08-29, and what it actually showed
+
+The stack was brought up against the factory scene for the first time. **The scene loads,
+the door articulation is real, and the G1 walks.** Four things stopped it before that, none
+of which any offline check could have caught, because each is a property of the LIVE rig:
+
+| # | What was wrong | How it presented | Fixed by |
+|---|---|---|---|
+| 1 | The scene in the vendor checkout was a pre-door snapshot: `mdp/pause_door.py` and `pause_room_door.usda` **absent**, three more files stale | every offline verifier green against the repo, while Isaac would have loaded the previous day's scene | new `isaac_scenes/install_into_checkout.sh` (+`--check`), gated at bringup step 0 |
+| 2 | Bridges pinned `--iface lo`; the sim calls `ChannelFactoryInitialize(1)` bare and autodetermines `enp130s0` | sim healthy at 16 Hz, DDS banners fine, `cmd=[0,0,0,0.80]` — which is the vendor's own DEFAULT, not anything we sent | `IFACE` now defaults empty so the bridges autodetermine too |
+| 3 | The bridge's idle stand height (0.75, the real G1's nominal) is an active crouch command against a sim holding 0.80 | robot slid **0.455 m and rotated −59.2°** while commanded to stand still — 35x the entire grasp margin | `isaac_loco_bridge.py --stand-height`, default 0.80 |
+| 4 | A leftover dev `robot-agent` on the sidecar's default port saw `/state` returning `joints: []` and issued `StopMove` | every move countermanded a few seconds in by an `api_id=7105 velocity=[0,0,0]` nobody sent | stop stray agents before driving; see the note below |
+
+### The walk, measured
+
+`vx=0.30` produces **no gait at all** in this scene: the command demonstrably reaches the
+policy (the sim's own `cmd=` log shows it) and the legs stay frozen to three decimals while
+the raw action saturates. `vx=0.50` walks. First measurement in the factory hall:
+
+| | |
+|---|---|
+| distance | **4.381 m in 28.1 s = 0.156 m/s** (31 % of commanded) |
+| heading drift | **−0.90 °/s**, −25.4° over the walk, with `wz` commanded at exactly 0 |
+| gait | a foot airborne in 16/19 samples, feet alternating |
+| command rate | 100.0 Hz on the wire (required: the sim's slot self-clears every policy step) |
+
+At 0.156 m/s the 8.4 m crossing is ~54 s, and at −0.90 °/s that is ~−48° of uncorrected
+heading. This is the arrival gap below, now with numbers from this scene rather than the
+warehouse.
+
+**`walk` must therefore command ≥ 0.5 m/s here**, and the 0.3 default in `config.ts` would
+have produced a mission that stands still and reports success.
+
+### Still blind, and now we know exactly why
+
+The factory scene DOES publish camera frames — `/dev/shm/isaac_{head,left,right}_image_shm`
+are written at ~1.75 Hz — but nothing ever appears on ZMQ 55555/6/7. The vendor's image
+server binds its publisher lazily inside `publish()`, which is only reached when a frame
+exists; its per-camera thread reads the ring buffer once at startup, finds it empty, sets a
+**shared** stop event and breaks (`image_server.py:1368-1370`), killing all three cameras for
+the life of the process. Measured miss: **1.74 s**. Port 60000 keeps answering config queries
+perfectly throughout, so every other signal still looks healthy.
+
+`"[Image Server] <cam> is ready."` is not evidence — `IsaacSimCamera.__init__` sets the ready
+flag unconditionally (`image_server.py:1141-1143`), so `wait_until_ready` is a no-op.
+
+Two fixes, either sufficient: pre-seed the three shm segments before the container starts, or
+`--camera_write_interval 1`, which makes the first `env.reset()` compute write the shm before
+the image server is created. The second is config-only but costs ~39 ms of a 55 ms control
+step (16 Hz → ~10 Hz), and this rig's walking is already rate-sensitive, so the seed is
+preferred.
+
+The bringup now treats `returned no frame` as fatal and waits for **55555 to be bound**
+rather than for the banner, which is printed 2 s *before* the failure.
+
+### Open, and unchanged by this run
+
+* No VLA server is running and the bringup starts none — nothing on :8000. The grasp step
+  has no policy behind it yet.
+* `door` is declared after `policy` in the env cfg, and the camera reads in `policy` are
+  unguarded, so a camera exception would abort `compute()` before the door driver runs.
+  Harmless while `--camera_write_interval 10` shields it 9 steps in 10; becomes real if the
+  interval is ever set to 1. One-line fix: declare `door` first.
+* The sidecar's `/state` reports no joints in this rig — its read-only state source is a TCP
+  socket to the real robot's IP. Anything gating on telemetry will safety-stop.
+
 ## The arrival gap — found while fixing the reach, not yet solved
 
 The standing spot now has roughly **0.013 m of reach margin** at the worst corner

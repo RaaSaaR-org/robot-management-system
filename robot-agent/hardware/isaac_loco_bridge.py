@@ -113,7 +113,11 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_  # noqa: E402
 
 import isaac_odom  # noqa: E402
 from sim_g1_dds.loco_service import LocoSimService  # noqa: E402
-from sim_g1_dds.loco_state import LocoState  # noqa: E402
+from sim_g1_dds.loco_state import (  # noqa: E402
+    STAND_HEIGHT_DEFAULT,
+    STAND_HEIGHT_HIGH,
+    LocoState,
+)
 
 RUN_COMMAND_TOPIC = "rt/run_command/cmd"
 
@@ -334,9 +338,31 @@ class IsaacLocoBridge:
     def __init__(self, domain: int, rate_hz: float, verbose: bool,
                  iface: str | None = None, publish_odom: bool = True,
                  odom_rate_hz: float = 20.0,
-                 quat_order: str = isaac_odom.DEFAULT_QUAT_ORDER) -> None:
+                 quat_order: str = isaac_odom.DEFAULT_QUAT_ORDER,
+                 stand_height: float = STAND_HEIGHT_HIGH) -> None:
         self._lock = threading.Lock()
         self._state = LocoState()
+        # THE IDLE HEIGHT IS NOT COSMETIC -- IT DECIDES WHETHER THE ROBOT STAYS PUT.
+        #
+        # Every command this bridge publishes carries an absolute stand height, including
+        # the zero-velocity ones it sends while nothing is driving. LocoState's default is
+        # 0.75 m, which is the REAL G1's nominal; the Isaac sim's own fallback is 0.80
+        # (action_provider_wh_dds.py:345). Publishing 0.75 therefore does not mean "leave
+        # it alone" -- it is an active command to crouch 5 cm below where the sim's
+        # locomotion policy is holding it.
+        #
+        # MEASURED, standing still, commanding nothing but that height: the G1 unloaded one
+        # foot, dropped its head 7 cm, and slid 0.455 m across the floor while rotating
+        # -59.2 deg, over about 100 s. Nothing was asking it to move. The scene's grasp
+        # margin at the table is 0.013 m, so the idle command alone was 35x the entire
+        # error budget of the mission. At 0.80 the same robot re-planted both feet and its
+        # position went constant to four decimal places.
+        #
+        # This is almost certainly the sim's render-bound step rate (~16 Hz against a policy
+        # that wants 100 Hz) leaving too little authority for the crouch transient, so it is
+        # a property of THIS RIG rather than of the G1. Hence a flag with a rig-appropriate
+        # default, rather than changing STAND_HEIGHT_DEFAULT, which the MuJoCo path shares.
+        self._state.stand_height = float(stand_height)
         self._t0 = time.monotonic()
         self._rate = rate_hz
         self._verbose = verbose
@@ -557,6 +583,14 @@ def main() -> int:
                          "--rate and of the command thread; 20 Hz matches "
                          "isaac_capture.py and is well inside the sidecar's 2 s "
                          "staleness window.")
+    ap.add_argument("--stand-height", type=float, default=STAND_HEIGHT_HIGH,
+                    help=f"absolute stand height in metres published with every command, "
+                         f"including the idle ones (default {STAND_HEIGHT_HIGH}). This is a "
+                         f"COMMAND, not a description: the Isaac sim holds {STAND_HEIGHT_HIGH} "
+                         f"of its own accord, so the LocoState default of {STAND_HEIGHT_DEFAULT} "
+                         f"asks it to crouch, and at this rig's ~16 Hz that measured 0.455 m of "
+                         f"drift and 59 deg of yaw while standing still. Use "
+                         f"{STAND_HEIGHT_DEFAULT} for a real G1.")
     ap.add_argument("--quat-order", choices=sorted(isaac_odom.QUAT_ORDERS),
                     default=isaac_odom.DEFAULT_QUAT_ORDER,
                     help="component order of rt/lowstate's imu_state.quaternion. "
@@ -600,7 +634,8 @@ def main() -> int:
     try:
         bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet,
                                  iface=args.iface, publish_odom=args.publish_odom,
-                                 odom_rate_hz=args.odom_rate, quat_order=args.quat_order)
+                                 odom_rate_hz=args.odom_rate, quat_order=args.quat_order,
+                                 stand_height=args.stand_height)
     except ValueError as exc:
         # An argument mistake (domain 0) is an operator message, not a traceback.
         # Exit 2 so a script can tell it apart from a bridge that started and then

@@ -42,7 +42,31 @@ PY="$CONDA_ENV/bin/python"
 NODE_BIN="${NODE_BIN:-$HOME/.nvm/versions/node/v22.23.2/bin}"
 
 DOMAIN="${DOMAIN:-1}"
-IFACE="${IFACE:-lo}"
+# EMPTY IS DELIBERATE, AND IT IS THE WHOLE REASON THIS STACK TALKS AT ALL.
+#
+# The sim calls ChannelFactoryInitialize(1) with NO interface argument
+# (dds_master.py:60, a hardcoded literal -- no flag, no env var). That takes
+# unitree_sdk2py's ChannelConfigAutoDetermine branch, and CycloneDDS then ranks the
+# host's interfaces by quality: lo scores 1, every real NIC scores 9. So the sim binds
+# enp130s0 (192.168.123.222), never loopback.
+#
+# This script used to pin the three host processes to `lo`. Both sides then sat in the
+# SAME network namespace -- --network host, verified identical net/ipc inode -- and never
+# exchanged a single packet, because Cyclone only ever transmits and receives on the one
+# interface it selected. The bridges' `lo` had auto-added unicast peers (multicast is
+# unavailable there); the sim on a multicast-capable NIC had none. The two discovery
+# mechanisms do not overlap.
+#
+# The symptom was thoroughly misleading: the sim ran, stepped at 16 Hz, printed healthy
+# DDS banners, and logged cmd=[0,0,0,0.80] -- which is action_provider_wh_dds.py:345's
+# DEFAULT, not anything we sent. Nothing anywhere said "interface mismatch".
+#
+# Empty makes the bridges take the SAME autodetermine branch as the sim, so they follow
+# whatever Cyclone picks instead of hardcoding a guess that can drift. All three consumers
+# already handle it -- isaac_loco_bridge.py:367, isaac_manip_bridge.py:174 and
+# g1_sidecar.py:980 each read `if iface:` and fall back to ChannelFactoryInitialize(domain).
+# IFACE=lo still works for a host-side sim (the MuJoCo sim_node.py needs it).
+IFACE="${IFACE-}"
 TASK_ID="${TASK_ID:-Isaac-Factory-PauseRoom-G129-Dex3-Wholebody}"
 SECONDS_CAP="${SECONDS_CAP:-1200}"
 MODEL="${MODEL:-qwen3-vl:8b}"
@@ -51,6 +75,12 @@ GPU_INDEX="${GPU_INDEX:-0}"
 LOGDIR="${LOGDIR:-$HOME/factory-mission-logs/$(date +%Y%m%d-%H%M%S)}"
 ENABLE_MANIP="${ENABLE_MANIP:-1}"
 CAM_NAME="${CAM_NAME:-head_camera}"
+# The facade's default staleness window is 0.5 s, chosen against the cameras' NOMINAL 30 fps.
+# What this rig actually delivers is one write per --camera_write_interval control steps at a
+# render-bound ~16 Hz, measured at 1.75 Hz / ~620 ms between frames. At 0.5 s essentially every
+# snapshot request would 503 as stale even with the stream perfectly healthy, and `look` would
+# report the scene as unobservable for a reason that has nothing to do with the scene.
+CAM_MAX_AGE="${CAM_MAX_AGE:-1.5}"
 CONTAINER="${CONTAINER:-neodem-factory}"
 # 1 = kill leftovers without asking, 0 = never kill, unset = ask. There is no
 # default of "yes" here on purpose: see step 2.
@@ -143,8 +173,24 @@ fi
 say "0. preconditions"
 [ -x "$PY" ]        || die "no sim python at $PY"
 [ -d "$SIM_DIR" ]   || die "no unitree_sim_isaaclab at $SIM_DIR"
-[ -d "$SIM_DIR/tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody" ] \
-  || die "the factory task is not installed into the checkout -- run install first"
+# The scene is AUTHORED in this repo and COPIED into the checkout, and Isaac loads the
+# copy. So "the verifiers pass" says nothing about what is about to be simulated: the two
+# have already drifted once, leaving the checkout holding a pre-door snapshot while every
+# offline check went green against the source. install_into_checkout.sh --check compares
+# them file by file and is the only thing standing between that and a wasted run.
+#
+# It CHECKS rather than installs, for the same reason step 2 asks before killing: writing
+# into somebody else's checkout is not a thing a bring-the-stack-up script should do behind
+# the operator's back. INSTALL_SCENE=1 is how an operator says otherwise.
+SCENE_INSTALLER="$HW/isaac_scenes/install_into_checkout.sh"
+[ -x "$SCENE_INSTALLER" ] || die "no scene installer at $SCENE_INSTALLER"
+if [ "${INSTALL_SCENE:-0}" = "1" ]; then
+  "$SCENE_INSTALLER" || die "installing the scene into the checkout failed"
+else
+  "$SCENE_INSTALLER" --check \
+    || die "the scene in the checkout is not the scene in this repo (see above). Install it
+     with the command printed above, or re-run this script with INSTALL_SCENE=1."
+fi
 command -v docker >/dev/null     || die "docker missing"
 command -v nvidia-smi >/dev/null || die "nvidia-smi missing -- step 1 cannot tell whose GPU this is"
 command -v curl >/dev/null       || die "curl missing"
@@ -285,6 +331,19 @@ watch_pid "$ISAAC_PID" "the Isaac container" "$LOGDIR/isaac.log"
 # and always appear in the vendor's own wording, anchored where they occur.
 ISAAC_FATAL='^Traceback \(most recent call last\):|^Fatal Python error|Error executing job with overrides|torch\.(cuda\.)?OutOfMemoryError|CUDA error: out of memory'
 
+# A FIFTH FATAL, AND THE ONLY ONE THAT IS NOT AN EXCEPTION.
+#
+# The vendor image server binds its ZMQ publisher lazily, inside publish(), which is only
+# reached once a frame exists (image_server.py:1366). Its per-camera thread reads the ring
+# buffer once at startup and, if it is empty, logs this line, sets a SHARED stop event and
+# breaks (image_server.py:1368-1370) -- killing the frame threads for all three cameras. The
+# ports then never bind for the life of the process.
+#
+# Measured here: the read happened 1.74 s before Isaac's own writer created the shared memory.
+# One line, once, and the cameras are dead for the whole run -- while port 60000 keeps
+# answering config queries perfectly, so every other signal still looks healthy.
+ISAAC_CAMERA_RACE='Image Server\].*returned no frame'
+
 echo "waiting for Isaac to build the scene (this takes a while on a cold shader cache)"
 ISAAC_UP=0
 for i in $(seq 1 180); do
@@ -294,6 +353,14 @@ for i in $(seq 1 180); do
   if grep -qE "$ISAAC_FATAL" "$LOGDIR/isaac.log" 2>/dev/null; then
     tail -30 "$LOGDIR/isaac.log"
     die "Isaac failed to start -- see $LOGDIR/isaac.log"
+  fi
+  if grep -qE "$ISAAC_CAMERA_RACE" "$LOGDIR/isaac.log" 2>/dev/null; then
+    die "the image server lost its startup race -- it read an empty frame buffer before
+     Isaac had written one, and has shut down every camera thread. Ports 55555/6/7 will
+     never bind and Agent Mode would be blind for this whole run. seed_camera_shm.py
+     exists to prevent exactly this; check that it ran and that /dev/shm holds three
+     921728-byte isaac_*_image_shm segments BEFORE the container starts.
+     See $LOGDIR/isaac.log"
   fi
   # The container dying is not always a traceback: an OOM kill or a missing
   # image leaves the docker client exiting with nothing useful in the log.
@@ -311,6 +378,28 @@ done
   die "Isaac did not announce its image server within 15 minutes -- see $LOGDIR/isaac.log"
 }
 
+# THE BANNER IS NOT THE GATE. "Image server has started, waiting for client connections"
+# is printed BEFORE the per-camera threads read a frame -- 2 s before the race above was
+# lost, in the run that found this. Waiting for it therefore proves only that the server
+# object was constructed. What actually matters is whether the PUBLISHER BOUND, and that is
+# observable: publish() is what calls bind(), so a listening 55555 means a frame was
+# genuinely published at least once.
+echo "waiting for the head camera's ZMQ publisher to bind (the banner does not prove this)"
+ZMQ_BOUND=0
+for i in $(seq 1 30); do
+  if ss -ltn 2>/dev/null | grep -qE ':55555\b'; then ZMQ_BOUND=1; break; fi
+  if grep -qE "$ISAAC_CAMERA_RACE" "$LOGDIR/isaac.log" 2>/dev/null; then break; fi
+  sleep 2
+done
+if [ "$ZMQ_BOUND" = "1" ]; then
+  echo "ok   55555 is bound -- at least one real frame has been published"
+else
+  echo "WARNING: nothing is listening on 55555 after 60 s. The image server binds that port"
+  echo "         only when it publishes its first frame, so this means no frame has ever been"
+  echo "         published. The run can continue -- locomotion does not need cameras -- but"
+  echo "         look and scan_room will 503 and Agent Mode will be blind."
+fi
+
 say "7. sidecar (DDS speaker) :8777"
 cd "$HW"
 G1_SIDECAR_PORT=8777 G1_READ_ONLY=1 G1_LOCO_ENABLED=1 \
@@ -324,7 +413,7 @@ watch_pid "$SIDECAR_PID" "the sidecar" "$LOGDIR/sidecar.log"
 
 say "8. camera facade :8779 (serves /cameras/*, proxies the rest to 8777)"
 setsid nohup "$PY" -u isaac_camera_facade.py --serve 8779 \
-  --sidecar-url http://localhost:8777 --scene "$TASK_ID" \
+  --sidecar-url http://localhost:8777 --scene "$TASK_ID" --max-age "$CAM_MAX_AGE" \
   >"$LOGDIR/camera_facade.log" 2>&1 </dev/null &
 FACADE_PID=$!
 disown "$FACADE_PID" 2>/dev/null || true
