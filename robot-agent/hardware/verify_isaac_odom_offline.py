@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""Offline check for the Isaac bridge's odometry path (NeoDEM, TASK-203).
+
+@file verify_isaac_odom_offline.py
+@description Exercises `isaac_odom.py` -- the maths behind `isaac_loco_bridge.py`'s
+    `rt/odommodestate` publisher -- with no sim, no DDS traffic, no GPU and no
+    `unitree_sdk2py`. Runs in well under a second on `python3`.
+@feature hardware
+
+Why this exists as a standalone script rather than as an in-sim assertion: the GPU on
+this box is serialised, an Isaac boot costs minutes, and every bug this catches is a
+CPU bug. The one defect it is built around is the quaternion ORDER. This sim reports
+`imu_state.quaternion` as `(x, y, z, w)` -- Isaac Lab 3.0 is XYZW throughout and the
+vendor's 2.x-era plumbing does not convert -- so reading it as a real G1's `(w,x,y,z)`
+produces a heading that swings with ROLL while the true yaw sits still. That failure
+mode is indistinguishable, on a video or a plot, from a robot drifting off course. It
+must not be able to regress quietly, so check (2) below asserts the two orderings
+DISAGREE, not merely that the right one is right.
+
+What this cannot check: that the sim's quaternion really is XYZW (only a live turn
+settles that -- `isaac_yaw_sweep.py` did), that DDS delivers anything, that the odom
+thread stays off the command thread under load, or that the dead-reckoned position
+resembles where the robot physically is. It never will; that is the point of check (4)
+being labelled dead reckoning.
+
+Run:
+    python3 robot-agent/hardware/verify_isaac_odom_offline.py
+"""
+import math
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import isaac_odom  # noqa: E402
+
+FAILURES = []
+
+
+def check(ok, label, detail=""):
+    print(f"    {'PASS' if ok else 'FAIL'}  {label}" + (f"  [{detail}]" if detail else ""))
+    if not ok:
+        FAILURES.append(label)
+
+
+def quat_wxyz(roll=0.0, pitch=0.0, yaw=0.0):
+    """(w, x, y, z) for an intrinsic ZYX rotation -- the canonical ordering."""
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    return (cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy)
+
+
+def on_the_wire(roll=0.0, pitch=0.0, yaw=0.0):
+    """The 4-float buffer THIS SIM publishes, i.e. the wxyz quaternion re-laid as xyzw."""
+    w, x, y, z = quat_wxyz(roll, pitch, yaw)
+    return [x, y, z, w]
+
+
+class FakeIMU:
+    def __init__(self):
+        self.rpy = None
+
+
+class FakeStamp:
+    def __init__(self):
+        self.sec = None
+        self.nanosec = None
+
+
+class FakeSportModeState:
+    """Stand-in for `unitree_go.msg.dds_.SportModeState_` that records what was set.
+
+    Only the attributes the real IDL has; anything `fill_odom_msg` invents would
+    raise here rather than being silently accepted, which is the point.
+    """
+
+    __slots__ = ("stamp", "error_code", "imu_state", "position", "velocity",
+                 "yaw_speed")
+
+    def __init__(self):
+        self.stamp = FakeStamp()
+        self.imu_state = FakeIMU()
+        self.error_code = None
+        self.position = None
+        self.velocity = None
+        self.yaw_speed = None
+
+
+print(__doc__.splitlines()[0])
+print()
+
+# --------------------------------------------------------------------------------
+print("(1) yaw comes out right under xyzw, and DIFFERENT under wxyz")
+for true_yaw in (0.0, math.pi / 2, -math.pi / 6, 2.5):
+    buf = on_the_wire(yaw=true_yaw)
+    got = isaac_odom.yaw_from_quaternion(buf, "xyzw")
+    check(abs(got - true_yaw) < 1e-9,
+          f"xyzw recovers yaw={math.degrees(true_yaw):+.1f} deg",
+          f"{math.degrees(got):+.3f} deg")
+buf = on_the_wire(yaw=math.pi / 2)
+wrong = isaac_odom.yaw_from_quaternion(buf, "wxyz")
+check(abs(wrong - math.pi / 2) > 1.0,
+      "wxyz misreads the same buffer by more than a radian",
+      f"{math.degrees(wrong):+.1f} deg instead of +90.0")
+check(isaac_odom.DEFAULT_QUAT_ORDER == "xyzw",
+      "xyzw is the default (isaac_yaw_sweep.py verified it against a real turn)",
+      isaac_odom.DEFAULT_QUAT_ORDER)
+
+# --------------------------------------------------------------------------------
+print("\n(2) the wrong ordering fabricates heading change out of ROLL")
+# A G1 walking rocks side to side. Hold the true yaw at 0 and roll +/- 10 deg: the
+# correct reading is a flat line, the wrong one sweeps ~20 deg. This is the exact
+# symptom the bug produces in the field -- a robot that "drifts" while walking
+# straight -- so it is asserted, not just described.
+rolls = [math.radians(d) for d in (-10, -5, 0, 5, 10)]
+right = [isaac_odom.yaw_from_quaternion(on_the_wire(roll=r), "xyzw") for r in rolls]
+wrongs = [isaac_odom.yaw_from_quaternion(on_the_wire(roll=r), "wxyz") for r in rolls]
+check(max(right) - min(right) < 1e-9,
+      "xyzw: heading is constant while the torso rolls",
+      f"spread {math.degrees(max(right) - min(right)):.2e} deg")
+check(math.degrees(max(wrongs) - min(wrongs)) > 15.0,
+      "wxyz: heading swings with roll (the silent-regression symptom)",
+      f"spread {math.degrees(max(wrongs) - min(wrongs)):.1f} deg")
+
+# --------------------------------------------------------------------------------
+print("\n(3) yaw unwrapping survives the +/-pi seam")
+seam = [3.00, 3.10, -3.10, -3.00, -2.90]
+expected = [3.00, 3.10, -3.10 + 2 * math.pi, -3.00 + 2 * math.pi, -2.90 + 2 * math.pi]
+got = isaac_odom.unwrap(seam)
+check(all(abs(a - b) < 1e-9 for a, b in zip(got, expected)),
+      "unwrap() lifts the samples past +pi instead of jumping back",
+      f"{[round(v, 3) for v in got]}")
+
+tracker = isaac_odom.YawTracker()
+streamed = [tracker.update(v) for v in seam]
+check(all(abs(a - b) < 1e-9 for a, b in zip(streamed, got)),
+      "YawTracker (streaming) agrees with unwrap() (batch) sample for sample")
+
+# ... and that this is what keeps yaw_speed finite.
+dt = 0.02
+naive = (seam[2] - seam[1]) / dt
+fixed = (streamed[2] - streamed[1]) / dt
+check(abs(fixed) < 5.0, "yaw_speed across the seam stays plausible",
+      f"{fixed:+.2f} rad/s")
+check(abs(naive) > 250.0,
+      "the same step read WRAPPED would report a physically impossible rate",
+      f"{naive:+.1f} rad/s")
+
+# The other seam, and a full turn, so the fix is not one-directional.
+tracker2 = isaac_odom.YawTracker()
+back = [tracker2.update(v) for v in (-3.00, -3.10, 3.10, 3.00)]
+check(back[-1] < back[0] and abs(back[-1] - (3.00 - 2 * math.pi)) < 1e-9,
+      "a turn the other way unwraps downwards", f"{back[-1]:+.4f} rad")
+tracker3 = isaac_odom.YawTracker()
+turn = [tracker3.update(isaac_odom.yaw_from_quaternion(on_the_wire(yaw=a), "xyzw"))
+        for a in [i * math.pi / 8 for i in range(17)]]
+check(abs(turn[-1] - 2 * math.pi) < 1e-9,
+      "a full 360 deg turn accumulates to 2*pi, not back to 0",
+      f"{math.degrees(turn[-1]):.2f} deg")
+
+# --------------------------------------------------------------------------------
+print("\n(4) dead-reckoned x/y for a known command sequence")
+# NOT a measurement (see isaac_odom's docstring) -- this only asserts that the
+# integrator does what it claims for commands whose answer can be worked out by hand.
+dr = isaac_odom.DeadReckoner()
+dr.step(1.0, 0.0, 1.0, 0.0, 0.0)                       # 1 m/s forward, facing +x
+check(abs(dr.x - 1.0) < 1e-12 and abs(dr.y) < 1e-12,
+      "1 s at vx=1 facing +x lands at (1, 0)", f"({dr.x:.3f}, {dr.y:.3f})")
+dr.step(1.0, 0.0, 1.0, math.pi / 2, math.pi / 2)       # same speed, now facing +y
+check(abs(dr.x - 1.0) < 1e-12 and abs(dr.y - 1.0) < 1e-12,
+      "another 1 s facing +y lands at (1, 1)", f"({dr.x:.3f}, {dr.y:.3f})")
+dr.step(0.0, 0.5, 1.0, math.pi / 2, math.pi / 2)       # strafe LEFT while facing +y
+check(abs(dr.x - 0.5) < 1e-12 and abs(dr.y - 1.0) < 1e-12,
+      "a left strafe while facing +y moves along -x (vy is body frame)",
+      f"({dr.x:.3f}, {dr.y:.3f})")
+check(abs(dr.distance - 2.5) < 1e-12, "path length is the sum of the three legs",
+      f"{dr.distance:.3f} m")
+
+mid = isaac_odom.DeadReckoner()
+mid.step(1.0, 0.0, 1.0, math.pi / 2, 0.0)              # heading swept 0 -> 90 deg
+check(abs(mid.x - math.cos(math.pi / 4)) < 1e-12 and abs(mid.y - math.sin(math.pi / 4)) < 1e-12,
+      "a turning leg is integrated about the MID-POINT heading, not the endpoint",
+      f"({mid.x:.4f}, {mid.y:.4f})")
+
+zero = isaac_odom.DeadReckoner(2.0, -1.0)
+zero.step(5.0, 5.0, 0.0, 0.0)
+zero.step(5.0, 5.0, -0.1, 0.0)
+check(zero.x == 2.0 and zero.y == -1.0 and zero.distance == 0.0,
+      "a zero or negative dt moves nothing (a stalled loop must not teleport)",
+      f"({zero.x:.3f}, {zero.y:.3f})")
+
+# The whole pipeline, quaternions in and a pose out, as the bridge runs it.
+print("\n(4b) quaternion stream -> pose, the way the bridge threads it together")
+walk = isaac_odom.DeadReckoner()
+track = isaac_odom.YawTracker()
+prev = None
+steps, dt = 100, 0.02                                  # 2 s at 50 Hz, 0.5 m/s forward
+for i in range(steps + 1):
+    yaw_true = -math.pi + 0.4 * i * dt                 # starts ON the seam and turns
+    yaw_true = math.atan2(math.sin(yaw_true), math.cos(yaw_true))
+    cont = track.update(isaac_odom.yaw_from_quaternion(
+        on_the_wire(roll=0.08 * math.sin(i), yaw=yaw_true), "xyzw"))
+    if prev is not None:
+        walk.step(0.5, 0.0, dt, cont, prev)
+    prev = cont
+check(abs(walk.distance - 0.5 * steps * dt) < 1e-9,
+      "2 s at 0.5 m/s dead-reckons 1.0 m of path regardless of the turn",
+      f"{walk.distance:.4f} m")
+check(abs(track.continuous - (-math.pi + 0.4 * steps * dt)) < 1e-9,
+      "the heading unwraps continuously through the seam it started on",
+      f"{track.continuous:+.4f} rad")
+
+# --------------------------------------------------------------------------------
+print("\n(5) the published message carries the fields g1_sidecar.py reads")
+msg = FakeSportModeState()
+isaac_odom.fill_odom_msg(msg, x=1.25, y=-0.5, yaw=0.75, stamp_s=1234.5,
+                         vx_world=0.4, vy_world=-0.1, yaw_speed=0.2)
+check(msg.position == [1.25, -0.5, 0.0], "position = [x, y, 0]", str(msg.position))
+check(msg.imu_state.rpy == [0.0, 0.0, 0.75],
+      "imu_state.rpy = [0, 0, yaw] -- the sidecar reads rpy[2]", str(msg.imu_state.rpy))
+check(msg.velocity == [0.4, -0.1, 0.0], "velocity = the commanded world velocity",
+      str(msg.velocity))
+check(msg.yaw_speed == 0.2, "yaw_speed set", str(msg.yaw_speed))
+check(msg.stamp.sec == 1234 and abs(msg.stamp.nanosec - 5e8) < 1e6,
+      "stamp split into sec/nanosec",
+      f"{msg.stamp.sec}.{msg.stamp.nanosec:09d}")
+check(msg.error_code == isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED,
+      "error_code stamped with the dead-reckoned provenance marker, NOT 0",
+      hex(msg.error_code))
+
+# Those names are only right because the sidecar reads them. Assert that against the
+# sidecar's own source, so a change there fails HERE rather than silently on the robot.
+print("\n(5b) those field names still match g1_sidecar.py's reader")
+sidecar = os.path.join(_HERE, "g1_sidecar.py")
+src = open(sidecar, encoding="utf-8").read()
+check('TOPIC_ODOM = os.environ.get("G1_ODOM_TOPIC", "rt/odommodestate")' in src,
+      "the sidecar still subscribes to rt/odommodestate by default")
+check("from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_" in src,
+      "the sidecar still expects a unitree_go SportModeState_ on that topic")
+check('getattr(msg, "position", None)' in src and '"imu_state"' in src and '"rpy"' in src,
+      "the sidecar still reads position + imu_state.rpy (SIDECAR_ODOM_FIELDS)")
+check(isaac_odom.SIDECAR_ODOM_FIELDS == ("position", "imu_state.rpy"),
+      "SIDECAR_ODOM_FIELDS documents exactly that pair",
+      str(isaac_odom.SIDECAR_ODOM_FIELDS))
+# `_pose_from` refuses a message without BOTH, so an unset one is a 503, not a 0.
+check('if pos is None:' in src and 'if ang is None:' in src,
+      "and refuses (503) rather than defaulting a missing field to 0")
+
+# --------------------------------------------------------------------------------
+print("\n(6) OdomIntegrator: the failure paths, driven on a fake clock")
+# This is the whole of `OdomPublisher._run`'s decision-making, with `now`, the yaw
+# sample and the command slot supplied as arguments. Every case below is one the
+# bridge only reaches when something is already going wrong in the sim.
+STALE, CMD_STALE, PUB = 1.0, 0.5, 0.05          # the bridge's constants at 20 Hz
+integ = isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE)
+check(integ.starved, "starts starved — nothing is published before the first sample")
+check(integ.tick(0.0, None, (1.0, 0.0, 0.0)) is None,
+      "no yaw sample at all -> no frame (the sidecar 503s instead of seeing a lie)")
+
+t, frames = 0.0, []
+for i in range(1, 26):                          # 0.5 s at 50 Hz, 1 m/s forward
+    t = i * 0.02
+    f = integ.tick(t, (0.0, t), (1.0, 0.0, t))
+    if f is not None:
+        frames.append((t, f))
+check(not integ.starved, "a fresh sample clears the starved flag")
+# 9, not 10: the first tick publishes immediately, so the 0.5 s window holds one
+# fewer 50 ms gap than it does frames. Asserted exactly, because a silent drop to
+# (say) 5 Hz would still look "roughly right" against a tolerance.
+check(len(frames) == 9, "50 Hz ticks are rate-limited to the 20 Hz publish period",
+      str(len(frames)))
+# 0.48, not 0.50: the first sample only ANCHORS the integration (there is no earlier
+# heading to average with), so 25 ticks contribute 24 intervals.
+check(abs(frames[-1][1].x - 0.48) < 1e-9 and abs(frames[-1][1].y) < 1e-9,
+      "0.5 s at vx=1 dead-reckons 24 x 20 ms = 0.48 m",
+      f"({frames[-1][1].x:.4f}, {frames[-1][1].y:.4f})")
+
+# The sim stalls for 10 s, then comes back. The position must NOT jump.
+x_before = integ.reckoner.x
+check(integ.tick(t + 2.0, (0.0, t), (1.0, 0.0, t + 2.0)) is None,
+      "a yaw sample older than the staleness window is refused")
+check(integ.starved, "and the integrator reports itself starved")
+resumed = integ.tick(t + 10.0, (0.0, t + 10.0), (1.0, 0.0, t + 10.0))
+check(resumed is not None, "publishing resumes with the first fresh sample")
+check(abs(resumed.x - x_before) < 1e-9,
+      "that first frame RE-ANCHORS: it does not integrate the 10 s outage",
+      f"{resumed.x:.4f} vs {x_before:.4f} before the outage")
+integ.tick(t + 10.02, (0.0, t + 10.02), (1.0, 0.0, t + 10.02))
+check(abs(integ.reckoner.x - (x_before + 0.02)) < 1e-9,
+      "and the tick after it advances by one tick, not by the gap",
+      f"{integ.reckoner.x:.4f}")
+
+# A dead command publisher must stop the dead reckoner, not coast it.
+integ2 = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE)
+integ2.tick(0.0, (0.0, 0.0), (1.0, 0.0, 0.0))
+integ2.tick(0.1, (0.0, 0.1), (1.0, 0.0, 0.1))
+moving = integ2.reckoner.x
+integ2.tick(0.2, (0.0, 0.2), (1.0, 0.0, 0.1))   # command slot now 0.1 s old: still fresh
+integ2.tick(0.9, (0.0, 0.9), (1.0, 0.0, 0.1))   # ...now 0.8 s old: stale
+check(moving > 0.0, "a fresh command moves the dead reckoner", f"{moving:.4f} m")
+check(abs(integ2.reckoner.x - (moving + 0.1)) < 1e-9,
+      "a command slot older than 0.5 s integrates as ZERO, not as the last velocity",
+      f"{integ2.reckoner.x:.4f} m")
+
+# And the frame's velocity is the commanded one rotated into the world frame.
+integ3 = isaac_odom.OdomIntegrator(0.0, STALE, CMD_STALE)
+integ3.tick(0.0, (math.pi / 2, 0.0), (0.7, 0.0, 0.0))
+f3 = integ3.tick(0.02, (math.pi / 2, 0.02), (0.7, 0.0, 0.02))
+check(abs(f3.vx_world) < 1e-9 and abs(f3.vy_world - 0.7) < 1e-9,
+      "facing +y, a forward command reports world velocity (0, 0.7)",
+      f"({f3.vx_world:.4f}, {f3.vy_world:.4f})")
+check(abs(f3.yaw - math.pi / 2) < 1e-12 and abs(f3.yaw_continuous - math.pi / 2) < 1e-12,
+      "the frame carries the WRAPPED yaw for the wire and the continuous one alongside")
+
+print("\n(7) against the real IDL, if this interpreter has one")
+try:
+    from unitree_sdk2py.idl.default import (  # type: ignore
+        unitree_go_msg_dds__SportModeState_ as real_ctor)
+except Exception as exc:  # noqa: BLE001
+    print(f"    SKIP  unitree_sdk2py not importable here ({type(exc).__name__}); "
+          f"the fake message above still covers the field names")
+else:
+    real = isaac_odom.fill_odom_msg(real_ctor(), x=3.0, y=4.0, yaw=-1.0,
+                                    stamp_s=10.25, vx_world=0.2, vy_world=0.0,
+                                    yaw_speed=-0.05)
+    check(list(real.position)[:2] == [3.0, 4.0], "real SportModeState_.position accepts x/y",
+          str(list(real.position)))
+    check(abs(list(real.imu_state.rpy)[2] - (-1.0)) < 1e-6,
+          "real SportModeState_.imu_state.rpy[2] carries yaw",
+          str(list(real.imu_state.rpy)))
+    check(real.error_code == isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED,
+          "error_code survives on the real IDL (uint32)", hex(real.error_code))
+
+print()
+if FAILURES:
+    print(f"FAILED: {len(FAILURES)} check(s): {FAILURES}")
+    sys.exit(1)
+print("all isaac_odom offline checks passed")

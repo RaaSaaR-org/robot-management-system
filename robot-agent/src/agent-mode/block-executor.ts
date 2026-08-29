@@ -8,7 +8,7 @@
  * @status live
  */
 
-import { config } from '../config/config.js';
+import { config, type LeftTurnStrategy } from '../config/config.js';
 import { hardwareClient, type LocoActionName, type LocoResult } from '../hardware/HardwareClient.js';
 // The two clamp constants live in navigator.ts because that is where they are
 // justified (the 0.45 m comment is the reason the number exists). Importing
@@ -128,6 +128,81 @@ const SHORTFALL_TOLERANCE = 0.1;
 const ZERO_MOTION_M = 0.02;
 const ZERO_MOTION_DEG = 2;
 
+/**
+ * How close to the commanded heading a closed-loop turn has to land before it
+ * stops correcting. 5° is a little over twice {@link ZERO_MOTION_DEG}: chasing
+ * anything smaller would spend a whole extra velocity command on a correction
+ * the odometry can barely distinguish from noise, and MIN_DURATION_S means the
+ * shortest command available already rotates further than that at any sane
+ * turn rate.
+ */
+const TURN_TOLERANCE_DEG = 5;
+
+/**
+ * Iteration cap for one closed-loop turn.
+ *
+ * Sized from the worst tracking actually measured, not the best. Against the
+ * live Isaac sim `isaac_yaw_sweep.py` reports a yaw-rate ratio of 0.09–0.15, and
+ * a single command is capped at {@link MAX_TURN_STEP_DEG}, so a compensated
+ * correction recovers at most ~15° of heading. A half turn therefore needs of
+ * the order of ten corrections, and anything smaller silently returns a large
+ * shortfall instead of a turn. {@link TURN_BUDGET_MS} is the real guard; this
+ * only stops the loop spinning on a base that reports motion but never
+ * converges.
+ */
+const MAX_TURN_ITERATIONS = 12;
+
+/**
+ * Smallest yaw-rate tracking ratio {@link BlockExecutor} will compensate for.
+ *
+ * Measured, not guessed: `isaac_yaw_sweep.py` against the live Isaac sim reports
+ * 0.09–0.15 of the commanded rate in BOTH directions, in place. At a ratio that
+ * low a purely proportional loop is hopeless — the remainder decays as 0.9ⁿ, so
+ * reaching {@link TURN_TOLERANCE_DEG} from 90° would need ~27 corrections. The
+ * loop therefore divides the remaining angle by the tracking ratio it has just
+ * measured, and this floor stops a base that reports a near-zero ratio (or one
+ * dead sample) from turning that into a division by ~0.
+ */
+const MIN_TURN_GAIN = 0.05;
+
+/**
+ * Weight of the newest tracking observation in the running estimate.
+ *
+ * Deliberately heavy. The estimate starts at 1.0 (assume the base does what it
+ * is told), which makes the FIRST command of every turn byte-for-byte the one
+ * the open-loop code would have sent — so a base that tracks perfectly is never
+ * over-commanded, and a plant this loop has never met is not slandered on the
+ * strength of zero evidence. But when the truth is 0.10, a slow filter spends
+ * the whole iteration budget walking the estimate down. Half-and-half converges
+ * in three or four corrections while still averaging out a single odd sample.
+ */
+const TURN_GAIN_ALPHA = 0.5;
+
+/**
+ * Wall-clock ceiling on one closed-loop turn, checked BETWEEN iterations (a
+ * command in flight is never cut short — the same rule as the abort flag).
+ *
+ * This, not {@link MAX_TURN_ITERATIONS}, is the binding limit on a base that
+ * rotates very little per command, and it is what stops `turn` becoming an
+ * open-ended block. Raised with the iteration cap so a poorly-tracking base can
+ * actually finish a half turn: ~12 corrections of {@link MAX_TURN_STEP_DEG} at
+ * 45°/s is ~40 s of commands.
+ */
+const TURN_BUDGET_MS = 45_000;
+
+/**
+ * Longest rotation any SINGLE velocity command may ask for.
+ *
+ * This is a measurement constraint, not a motion one. A rotation is recovered
+ * from two yaw samples, and two samples cannot tell +190° from −170°: they end
+ * on the same heading. Keeping every command under half a turn — with room for
+ * a base that overshoots by up to ~20% — keeps that ambiguity out of the loop
+ * entirely, so each delta unwraps with `normalizeDeg` and nothing has to guess.
+ * The mirror strategy's 270° therefore goes out as 150° + 120°, which is the
+ * same rotation and a measurable one.
+ */
+const MAX_TURN_STEP_DEG = 150;
+
 /** Why a motion command can be accepted and still move nothing. */
 const NO_MOTION_HINT =
   'the command was accepted but nothing moved — the base is most likely in a ' +
@@ -172,13 +247,36 @@ export function walkToCommand(
  * angle (deg, + = left/CCW) → (omega, duration) at AGENT_TURN_SPEED_DPS. omega
  * is rad/s because that is LocoClient's unit; its SIGN carries the direction and
  * the duration carries the magnitude.
+ *
+ * The angle is NORMALIZED first, so this always takes the shorter way round —
+ * 270° left is issued as 90° right. That is the right rule for an operator's
+ * `turn` block and the wrong one for the mirror strategy, which exists to take
+ * the LONG way deliberately; see {@link turnToCommandExact}.
  */
 export function turnToCommand(
   angleDeg: number,
   turnSpeedDps: number = config.agentMode.turnSpeedDps
 ): WalkCommand {
+  return turnToCommandExact(normalizeDeg(angleDeg), turnSpeedDps);
+}
+
+/**
+ * The same conversion as {@link turnToCommand}, for an angle that is ALREADY
+ * the exact rotation to perform — no shortest-path normalization.
+ *
+ * The mirror strategy (see {@link BlockExecutor}) turns left 90° by commanding
+ * right 270°, and normalizing would fold that straight back into the +90° that
+ * this locomotion policy ignores. Magnitudes beyond a full turn are clamped to
+ * 360°, because more than one revolution is never a rotation anybody asked for.
+ */
+export function turnToCommandExact(
+  angleDeg: number,
+  turnSpeedDps: number = config.agentMode.turnSpeedDps
+): WalkCommand {
   const rate = Math.abs(turnSpeedDps) > 1e-6 ? Math.abs(turnSpeedDps) : 45;
-  const angle = normalizeDeg(angleDeg);
+  const angle = Number.isFinite(angleDeg)
+    ? Math.max(-360, Math.min(360, angleDeg))
+    : 0;
   const durationS = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, Math.abs(angle) / rate));
   const omega = Math.sign(angle) * rate * DEG_TO_RAD;
   return { vx: 0, vy: 0, omega, durationS };
@@ -236,6 +334,13 @@ export interface BlockExecutorDeps {
   snapshot?: (cameraName: string) => Promise<string>;
   /** Camera used by `capture` (default `AGENT_CAMERA_NAME`). */
   cameraName?: string;
+  /**
+   * How an in-place LEFT rotation is executed (default
+   * `AGENT_LEFT_TURN_STRATEGY`). Injectable so a test can pin one strategy
+   * without reaching into `process.env`, and so a second embodiment could be
+   * given its own without a global.
+   */
+  leftTurnStrategy?: LeftTurnStrategy;
   loco?: {
     move(vx: number, vy: number, omega: number, durationS: number): Promise<LocoResult>;
     action(name: LocoActionName, args?: Record<string, unknown>): Promise<LocoResult>;
@@ -311,6 +416,24 @@ export class BlockExecutor {
   private readonly onDurableWrite: (ok: boolean, error: string | null) => void;
   private readonly snapshot: (cameraName: string) => Promise<string>;
   private readonly cameraName: string;
+  private readonly leftTurnStrategy: LeftTurnStrategy;
+  /**
+   * `auto` has DECIDED that this base cannot turn left in place, from a measured
+   * dead iteration. One executor is built per process (`AgentModeController`),
+   * so this is the process-wide latch the strategy describes; keeping it on the
+   * instance is what lets a test observe it without a global reset hook.
+   */
+  private mirrorLeftTurns = false;
+  /**
+   * Running estimate of the fraction of a commanded rotation this base actually
+   * performs, in (0, 1]. Starts at 1 — "it does what it is told" — so the first
+   * command of the first turn is identical to the open-loop one, and only
+   * measurement moves it. Latched on the instance, like {@link mirrorLeftTurns}
+   * and for the same reason: poor yaw tracking is a property of the checkpoint,
+   * not of one block, so later turns start from what earlier ones learned
+   * instead of re-paying the discovery every time.
+   */
+  private turnGain = 1;
 
   constructor(deps: BlockExecutorDeps) {
     this.deps = deps;
@@ -327,6 +450,7 @@ export class BlockExecutor {
     this.onDurableWrite = deps.onDurableWrite ?? ((): void => {});
     this.snapshot = deps.snapshot ?? ((name) => hardwareClient.snapshot(name));
     this.cameraName = deps.cameraName ?? config.agentMode.cameraName;
+    this.leftTurnStrategy = deps.leftTurnStrategy ?? config.agentMode.leftTurnStrategy;
   }
 
   /**
@@ -541,10 +665,20 @@ export class BlockExecutor {
     const angleDeg = Number(block.params.angleDeg);
     if (!Number.isFinite(angleDeg)) return { ok: false, message: 'turn: angleDeg is not a number' };
 
-    const { result, turnedDeg } = await this.turnMeasured(angleDeg);
+    const { result, turnedDeg, mirrored } = await this.turnMeasured(angleDeg);
     if (!result.ok) return { ok: false, message: `turn failed: ${locoError(result)}` };
 
-    const side = angleDeg >= 0 ? 'left' : 'right';
+    const requestedSide = angleDeg >= 0 ? 'left' : 'right';
+    // The side the base ACTUALLY rotated to, which is not always the one asked
+    // for: `mirror` satisfies a left turn by going right the long way round, and
+    // reporting that as "left" would be the same kind of lie as reporting the
+    // commanded angle instead of the measured one.
+    const side =
+      turnedDeg === null || Math.abs(turnedDeg) < ZERO_MOTION_DEG
+        ? requestedSide
+        : turnedDeg > 0
+          ? 'left'
+          : 'right';
     if (turnedDeg === null) {
       return {
         ok: true,
@@ -567,21 +701,40 @@ export class BlockExecutor {
       };
     }
 
-    const shortfall = Math.abs(angleDeg) > 0 ? 1 - Math.abs(turnedDeg) / Math.abs(angleDeg) : 0;
+    // Measured as the HEADING STILL TO GO, not as a fraction of the rotation
+    // performed. For an ordinary turn the two are the same number — 30° of a
+    // commanded 90° is 67% either way — but a mirrored turn rotates 270° for a
+    // 90° request, and `1 − 270/90` would report a turn that stopped 11° short
+    // as a 200% overshoot. What the planner needs to know is where the robot is
+    // pointing, and that is the residual.
+    //
+    // Against the NORMALIZED angle, too, which is the rotation that was actually
+    // asked for: `turnToCommand` takes the shorter way round, so a commanded
+    // 270° is a −90° turn and measuring 90° of it is not a 67% shortfall.
+    const target = normalizeDeg(angleDeg);
+    const residualDeg = normalizeDeg(target - turnedDeg);
+    const shortfall = Math.abs(target) > 0 ? Math.abs(residualDeg) / Math.abs(target) : 0;
     const note =
       shortfall > SHORTFALL_TOLERANCE
-        ? ` — ${(shortfall * 100).toFixed(0)}% short of the commanded ${normalizeDeg(angleDeg).toFixed(0)}°`
+        ? ` — ${(shortfall * 100).toFixed(0)}% short of the commanded ${target.toFixed(0)}°`
         : '';
+    // A mirrored turn ends on the requested heading by the long way round, so it
+    // is a success — but the operator asked for 90° left and the robot spun 270°
+    // right, and a message that did not say so would be a surprise, not a report.
+    const mirrorNote = mirrored
+      ? ` (a ${target.toFixed(0)}° ${requestedSide} turn taken the long way round — this base does not rotate ${requestedSide} in place)`
+      : '';
     return {
       ok: true,
-      message: `Turned ${turnedDeg.toFixed(0)}° (${side}); heading now ${Math.round(this.deps.scene.getYawDeg())}°${note}.`,
+      message: `Turned ${turnedDeg.toFixed(0)}° (${side})${mirrorNote}; heading now ${Math.round(this.deps.scene.getYawDeg())}°${note}.`,
       measured: { angleDeg: turnedDeg },
     };
   }
 
   /**
-   * One measured rotation: issue it, keep the heading estimate current, and
-   * report how far the base ACTUALLY turned.
+   * One measured rotation: issue it, CORRECT it against odometry until it
+   * lands, keep the heading estimate current, and report how far the base
+   * actually turned in total.
    *
    * EVERY rotation in Agent Mode goes through here, so the zero-motion rule has
    * exactly one place to live. It used to live inside `turn()` alone while
@@ -592,24 +745,172 @@ export class BlockExecutor {
    * identical frames of one heading were presented to the operator as a 360°
    * sweep, and the objects in front of the robot as the contents of the room.
    *
-   * `turnedDeg` is null when the rotation cannot be measured — see
-   * {@link didNotTurn} for why that must not be read as "did not move".
+   * ## Why this is a loop and not one command (TASK-203)
+   *
+   * `turnToCommand` is open-loop on TIME: it holds a constant omega for
+   * `|angle| / rate` seconds and calls it done. That is only a turn if the base
+   * actually achieves the commanded yaw rate, and the G1 checkpoint measurably
+   * does not — turning in place it reaches 0.26–0.53 of what it is told (right)
+   * and 0.01 (left). Every Agent Mode turn was therefore under-rotating by two
+   * to four times, in BOTH directions, while the shortfall report below said so
+   * and nothing acted on it. The correction loop is what acts on it.
+   *
+   * The loop is skipped entirely when there is no odometry: a robot that cannot
+   * measure its heading has nothing to correct against, and inventing an
+   * iteration count would be dead reckoning dressed up as feedback. That path is
+   * byte-for-byte the old one — a single open-loop command — and `turnedDeg` is
+   * `null`, which is NOT "did not move" (see {@link didNotTurn}).
+   *
+   * `turnedDeg` is the TOTAL rotation over every iteration, accumulated as a sum
+   * of per-iteration deltas and deliberately NOT normalized: a mirrored left 90°
+   * really is −270° of rotation, and folding that to +90° would report a number
+   * the base never turned.
    */
   private async turnMeasured(
-    angleDeg: number
-  ): Promise<{ result: LocoResult; turnedDeg: number | null }> {
+    angleDeg: number,
+    options: { allowMirror?: boolean } = {}
+  ): Promise<{ result: LocoResult; turnedDeg: number | null; mirrored: boolean }> {
+    const target = normalizeDeg(angleDeg);
     const before = await this.loco.odometry();
-    const result = await this.driveFor(turnToCommand(angleDeg));
-    if (!result.ok) return { result, turnedDeg: null };
 
-    // Keep the heading estimate current even without odometry; refreshYaw()
-    // replaces it with a measured value whenever the sidecar has one.
-    this.deps.scene.advanceYawDeg(normalizeDeg(angleDeg));
+    // ── no odometry: exactly the old open-loop behaviour ──────────────────
+    if (!before) {
+      const result = await this.driveFor(turnToCommand(target));
+      if (!result.ok) return { result, turnedDeg: null, mirrored: false };
+      this.deps.scene.advanceYawDeg(target);
+      await this.refreshYaw();
+      return { result, turnedDeg: null, mirrored: false };
+    }
+
+    // ── closed loop ───────────────────────────────────────────────────────
+    const allowMirror = options.allowMirror !== false;
+    const deadline = this.now() + TURN_BUDGET_MS;
+    let previousYawDeg = before.yaw * RAD_TO_DEG;
+    let turnedDeg = 0;
+    let mirroring =
+      allowMirror &&
+      (this.leftTurnStrategy === 'mirror' ||
+        (this.leftTurnStrategy === 'auto' && this.mirrorLeftTurns));
+    /** Whether this turn is being taken the long way round. */
+    let mirrored = false;
+    /**
+     * Rotation still to perform, SIGNED, in the direction this turn committed
+     * to. Tracked as its own running number rather than recomputed as
+     * `normalizeDeg(target - turnedDeg)` each iteration, because a mirrored turn
+     * deliberately goes the long way: half way through a −270° plan the shortest
+     * path back to the target points the other way, and a loop steering by that
+     * would turn around in the middle of the rotation it is performing.
+     */
+    let remainingDeg = target;
+    if (mirroring && remainingDeg > 0) {
+      remainingDeg -= 360;
+      mirrored = true;
+    }
+    /** The direction of the plan. Every command and every stop rule follows it. */
+    let planSign = Math.sign(remainingDeg) || 1;
+    let result: LocoResult = { ok: true };
+
+    for (let iteration = 0; iteration < MAX_TURN_ITERATIONS; iteration++) {
+      // Every one of these stopping rules is for CORRECTIONS only — the first
+      // command always goes out, so a rotation smaller than the tolerance is
+      // still a rotation the robot performs, exactly as before this loop existed.
+      if (iteration > 0) {
+        if (Math.abs(remainingDeg) <= TURN_TOLERANCE_DEG) break;
+        // The target has been reached or passed. Correcting BACKWARDS from an
+        // overshoot would oscillate rather than converge: MIN_DURATION_S floors
+        // every command at ~9° of rotation, so a 6° correction overshoots by 3°
+        // in the other direction, forever. Stop, and report the overshoot.
+        if (Math.sign(remainingDeg) !== planSign) break;
+        if (this.now() >= deadline) break;
+      }
+
+      // Ask for the rotation the base will actually PERFORM, not the one that is
+      // left. A plant that delivers a fraction `turnGain` of what it is told
+      // needs the remainder divided by that fraction; `turnGain` starts at 1, so
+      // the first command of a turn is exactly the open-loop one and a base that
+      // tracks perfectly never sees a compensated command at all.
+      const commandDeg = Math.max(
+        -MAX_TURN_STEP_DEG,
+        Math.min(MAX_TURN_STEP_DEG, remainingDeg / this.turnGain)
+      );
+      result = await this.driveFor(turnToCommandExact(commandDeg));
+      if (!result.ok) break;
+
+      const after = await this.loco.odometry();
+      // Odometry that goes away mid-turn is not a measurement of zero: stop
+      // correcting and report what was measured up to the last good fix.
+      if (!after) {
+        if (iteration === 0) {
+          this.deps.scene.advanceYawDeg(target);
+          await this.refreshYaw();
+          return { result, turnedDeg: null, mirrored };
+        }
+        break;
+      }
+
+      const afterYawDeg = after.yaw * RAD_TO_DEG;
+      // Per-iteration delta, SUMMED. Differencing only the first and last sample
+      // would report a 270° turn as −90°; per-iteration it is unambiguous,
+      // because no single command exceeds {@link MAX_TURN_STEP_DEG}.
+      const deltaDeg = normalizeDeg(afterYawDeg - previousYawDeg);
+      previousYawDeg = afterYawDeg;
+      turnedDeg += deltaDeg;
+      remainingDeg -= deltaDeg;
+
+      // Update the tracking estimate from what this command actually bought.
+      // Two things are deliberately NOT evidence of a tracking ratio:
+      //   * a delta with the wrong sign — drift or a stumble, and folding it in
+      //     would drive the estimate down and the next command to its cap;
+      //   * a delta below ZERO_MOTION_DEG — that is a direction this base does
+      //     not turn AT ALL, which the mirror strategy below exists to handle.
+      //     Reading the dead left probe as "tracks at 0.01" would poison the
+      //     estimate for the mirrored RIGHT commands that follow it, and they
+      //     would then over-command and sail past the target.
+      if (
+        Math.sign(deltaDeg) === Math.sign(commandDeg) &&
+        Math.abs(deltaDeg) >= ZERO_MOTION_DEG
+      ) {
+        const observed = Math.abs(deltaDeg) / Math.abs(commandDeg);
+        this.turnGain = Math.min(
+          1,
+          Math.max(
+            MIN_TURN_GAIN,
+            (1 - TURN_GAIN_ALPHA) * this.turnGain + TURN_GAIN_ALPHA * observed
+          )
+        );
+      }
+
+      if (Math.abs(deltaDeg) >= ZERO_MOTION_DEG) continue; // it moved — correct it again
+
+      // It did not. Re-issuing the identical command would only burn the
+      // budget, so either change strategy or stop and let the caller report a
+      // rotation that measurably did not happen.
+      if (allowMirror && !mirroring && this.leftTurnStrategy === 'auto' && commandDeg > 0) {
+        mirroring = true;
+        mirrored = true;
+        // Process-wide, deliberately: the asymmetry is a property of the
+        // checkpoint, not of this block, so every later left turn skips the
+        // dead command instead of paying for the same discovery again.
+        this.mirrorLeftTurns = true;
+        // What is LEFT of the turn now goes the other way round the circle.
+        remainingDeg -= 360;
+        planSign = -1;
+        console.warn(
+          `[AgentMode] left turn of ${commandDeg.toFixed(0)}° measured ${deltaDeg.toFixed(1)}° — ` +
+            `this base does not rotate CCW in place. Switching to the mirror strategy ` +
+            `(left θ executed as right θ−360) for this turn and every later one. ` +
+            `Set AGENT_LEFT_TURN_STRATEGY=direct to keep commanding it anyway.`
+        );
+        continue;
+      }
+      break;
+    }
+
+    // The scene heading advances by the INTENDED angle (dead reckoning), then
+    // `refreshYaw` replaces it with the measured one whenever there is a fix.
+    this.deps.scene.advanceYawDeg(target);
     await this.refreshYaw();
-    const after = await this.loco.odometry();
-    if (!before || !after) return { result, turnedDeg: null };
-
-    return { result, turnedDeg: normalizeDeg((after.yaw - before.yaw) * RAD_TO_DEG) };
+    return { result, turnedDeg, mirrored };
   }
 
   /**
@@ -670,7 +971,23 @@ export class BlockExecutor {
   private async scanRoom(block: AgentBlock): Promise<BlockOutcome> {
     const stepsRaw = Number(block.params.steps);
     const steps = Number.isFinite(stepsRaw) ? Math.round(Math.min(12, Math.max(4, stepsRaw))) : 8;
-    const stepDeg = 360 / steps;
+    /**
+     * NEGATIVE: the sweep runs CLOCKWISE (TASK-203).
+     *
+     * A 360° sweep covers the same room whichever way it is walked round, so the
+     * direction is free — and it is not free on the robot. The G1 locomotion
+     * checkpoint achieves 0.01 of a commanded in-place LEFT yaw rate and
+     * 0.26–0.53 of a RIGHT one, so a CCW sweep is `steps` dead turns: eight
+     * copies of one frame presented as the contents of the room. Spending the
+     * free choice on the direction that works costs nothing and fixes the block.
+     *
+     * The mirror strategy is deliberately NOT used here (`allowMirror: false`):
+     * a left sweep mirrored is eight turns of 315°, which is nearly seven full
+     * revolutions to look at one room.
+     */
+    const stepDeg = -360 / steps;
+    /** The magnitude, for the operator-facing text — nobody reads "-45°". */
+    const stepMagnitudeDeg = Math.round(Math.abs(stepDeg));
 
     const found = new Set<string>();
     // Look first, then turn — otherwise the starting heading is never observed.
@@ -682,7 +999,7 @@ export class BlockExecutor {
       if (this.deps.isAborted()) {
         return { ok: false, message: `scan_room aborted after ${i + 1} of ${steps} steps` };
       }
-      const { result, turnedDeg } = await this.turnMeasured(stepDeg);
+      const { result, turnedDeg } = await this.turnMeasured(stepDeg, { allowMirror: false });
       if (!result.ok) {
         return { ok: false, message: `scan_room failed while turning: ${locoError(result)}` };
       }
@@ -695,7 +1012,7 @@ export class BlockExecutor {
           ok: false,
           message:
             `scan_room: the robot did not turn (${turnedDeg.toFixed(0)}° measured for a ` +
-            `commanded ${Math.round(stepDeg)}°) after ${i + 1} of ${steps} looks — only the ` +
+            `commanded ${stepMagnitudeDeg}° clockwise) after ${i + 1} of ${steps} looks — only the ` +
             `starting heading was observed, so this is not a 360° scan. ${NO_MOTION_HINT}`,
           measured: { angleDeg: turnedDeg },
         };
@@ -706,23 +1023,24 @@ export class BlockExecutor {
     // not observed twice, which leaves the robot one step (360/steps) short of
     // where it began — measured: 90° in, 44.9° out on an 8-step scan. A block
     // the operator reads as "look around" must not quietly leave the robot
-    // facing somewhere else; every later `walk` would inherit the offset.
+    // facing somewhere else; every later `walk` would inherit the offset. The
+    // closing turn continues clockwise for the same reason the sweep does.
     let headingNote = '';
     if (!this.deps.isAborted()) {
-      const { result: closing, turnedDeg } = await this.turnMeasured(stepDeg);
+      const { result: closing, turnedDeg } = await this.turnMeasured(stepDeg, { allowMirror: false });
       if (!closing.ok) {
         // The scan itself succeeded — say what did not, rather than failing it.
-        headingNote = ` Could not turn back to the starting heading (${locoError(closing)}), so the robot is ${Math.round(stepDeg)}° short of it.`;
+        headingNote = ` Could not turn back to the starting heading (${locoError(closing)}), so the robot is ${stepMagnitudeDeg}° short of it.`;
       } else if (turnedDeg !== null && didNotTurn(stepDeg, turnedDeg)) {
         // Accepted and ignored: same shape as above, but the sidecar said yes.
-        headingNote = ` The closing turn measured ${turnedDeg.toFixed(0)}° for a commanded ${Math.round(stepDeg)}°, so the robot is ${Math.round(stepDeg)}° short of the starting heading.`;
+        headingNote = ` The closing turn measured ${turnedDeg.toFixed(0)}° for a commanded ${stepMagnitudeDeg}° clockwise, so the robot is ${stepMagnitudeDeg}° short of the starting heading.`;
       }
     }
 
     const summary =
       found.size > 0
-        ? `Scanned the room in ${steps} steps; found: ${[...found].join(', ')}.`
-        : `Scanned the room in ${steps} steps; nothing recognisable found.`;
+        ? `Scanned the room in ${steps} steps (clockwise); found: ${[...found].join(', ')}.`
+        : `Scanned the room in ${steps} steps (clockwise); nothing recognisable found.`;
     return { ok: true, message: summary + headingNote };
   }
 

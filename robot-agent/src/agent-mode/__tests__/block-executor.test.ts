@@ -609,8 +609,14 @@ describe('BlockExecutor — dispatch', () => {
     // live before this: 90° in, 44.9° out on an 8-step scan.
     expect(observe).toHaveBeenCalledTimes(4);
     expect(moves).toHaveLength(4);
-    // Every sweep step turns the same way (left), 360/4 = 90° each.
-    for (const move of moves) expect(move.omega).toBeGreaterThan(0);
+    // Every sweep step turns the same way, 360/4 = 90° each — and that way is
+    // CLOCKWISE (negative omega). A 360° sweep covers the same room in either
+    // direction, so the direction is free to spend on the one the G1 locomotion
+    // checkpoint can actually execute: it achieves 0.01 of a commanded in-place
+    // left yaw rate and 0.26-0.53 of a right one (TASK-203), which made every
+    // step of a CCW scan a dead turn.
+    for (const move of moves) expect(move.omega).toBeLessThan(0);
+    // Four clockwise quarter-turns still land exactly back on the start.
     expect(scene.getYawDeg()).toBe(0);
     expect(outcome.message).toContain('table');
   });
@@ -648,8 +654,9 @@ describe('BlockExecutor — dispatch', () => {
     expect(outcome.ok).toBe(true);
     expect(outcome.message).toContain('table');
     expect(outcome.message).toMatch(/90° short of it/);
-    // And the heading it reports is the one it is actually at.
-    expect(scene.getYawDeg()).toBe(-90);
+    // And the heading it reports is the one it is actually at: three clockwise
+    // quarter-turns from 0° is +90°, one 90° step short of the full circle.
+    expect(scene.getYawDeg()).toBe(90);
   });
 
   /**
@@ -1128,5 +1135,240 @@ describe('BlockExecutor — the map checks every forward walk (TASK-208)', () =>
     expect(h.moves[0].durationS).toBeCloseTo(2.0 / WALK_SPEED, 3);
     await h.executor.execute(block('walk', { distanceM: 1.0, direction: 'left' }));
     expect(calls).toBe(1);
+  });
+});
+
+/**
+ * TASK-203. Two measured facts about the G1 locomotion checkpoint drive every
+ * test below, and neither is hypothetical:
+ *
+ *   - Turning IN PLACE, a commanded yaw of −0.3 … −1.0 rad/s (right) achieves a
+ *     ratio of 0.26–0.53. `turnToCommand` is open-loop on TIME, so every Agent
+ *     Mode turn was landing two to four times short — in both directions.
+ *   - The same command with a POSITIVE sign (left) achieves 0.01. A left turn
+ *     does not fall short; it does not happen, and the robot does not step.
+ *
+ * The turn is therefore closed against odometry, and a left turn can be taken
+ * the long way round to the right. Both behaviours are conditional on the
+ * measurement: a base with symmetric, accurate yaw is driven exactly as before.
+ */
+describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
+  /**
+   * A base whose yaw tracking is a fixed FRACTION of what it is commanded, set
+   * independently per direction. `gainLeft: 0.01` is the measured G1 dead left
+   * turn; `1` is a perfect base.
+   *
+   * Deliberately integrates `omega * durationS * gain` and nothing else: the
+   * point of every assertion here is what comes back out of odometry, so the
+   * only way a turn can appear to have happened is if this integrates it.
+   */
+  function makeTurningBase(opts: {
+    gainLeft: number;
+    gainRight: number;
+    leftTurnStrategy?: 'direct' | 'mirror' | 'auto';
+  }) {
+    const moves: MoveCall[] = [];
+    const pose = { yawRad: 0 };
+    const scene = new SceneMemoryStore('robot-1');
+    const executor = new BlockExecutor({
+      scene,
+      vision: {
+        observe: async () => ({
+          currentView: 'a table',
+          entities: [{ label: 'table', bearingDeg: 0, distanceEstM: 2, confidence: 0.9 }],
+          personVisible: false,
+          raw: '{}',
+          degraded: false,
+        }),
+      } as unknown as VisionClient,
+      range: noRange(),
+      isAborted: () => false,
+      ...(opts.leftTurnStrategy ? { leftTurnStrategy: opts.leftTurnStrategy } : {}),
+      loco: {
+        move: async (vx, vy, omega, durationS) => {
+          moves.push({ vx, vy, omega, durationS });
+          pose.yawRad += omega * durationS * (omega > 0 ? opts.gainLeft : opts.gainRight);
+          return { ok: true };
+        },
+        action: async () => ({ ok: true }),
+        fsm: async () => ({ ok: true }),
+        standHeight: async () => ({ ok: true }),
+        odometry: async () => ({ x: 0, y: 0, yaw: pose.yawRad, source: 'test' }),
+      },
+      sleep: async () => {},
+      now: () => 1e12,
+    });
+    return { executor, moves, scene, yawDeg: () => (pose.yawRad * 180) / Math.PI };
+  }
+
+  it('corrects a turn that tracks at half rate until it lands, instead of stopping short', async () => {
+    // 0.53 is the top of the measured right-turn band. One open-loop command
+    // gets 47.7° of a commanded 90° — which is exactly what shipped.
+    const h = makeTurningBase({ gainLeft: 0.53, gainRight: 0.53 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -90 }));
+
+    expect(outcome.ok).toBe(true);
+    // The first command is the whole of the old behaviour, still issued as-is…
+    expect(h.moves[0].durationS).toBe(2);
+    expect(h.moves[0].omega).toBeCloseTo(-TURN_SPEED * DEG_TO_RAD, 10);
+    // …and would have left the robot 42° short of the commanded 90°.
+    expect(h.moves[0].durationS * TURN_SPEED * 0.53).toBeCloseTo(47.7, 1);
+    // Four commands land it inside the 5° tolerance instead.
+    // Three commands land it inside the 5° tolerance instead.
+    expect(h.moves).toHaveLength(3);
+    // The second is the gain compensation visible on the wire: 42.3° of heading
+    // was left, and it asks for ~55° — MORE than the remainder — because the
+    // first command measured this base delivering about half of what it is told.
+    // An uncompensated loop asks for 42.3° here, gets 22°, and needs two more.
+    expect(h.moves[1].durationS * TURN_SPEED).toBeGreaterThan(42.3);
+    expect(h.moves[1].durationS * TURN_SPEED).toBeCloseTo(55.3, 0);
+    expect(h.yawDeg()).toBeGreaterThan(-90);
+    expect(h.yawDeg()).toBeLessThan(-85);
+    expect(outcome.measured?.angleDeg).toBeCloseTo(h.yawDeg(), 6);
+    // Every correction goes the same way as the turn — a closed loop that
+    // oscillated would show a positive omega here.
+    for (const move of h.moves) expect(move.omega).toBeLessThan(0);
+    expect(outcome.message).not.toMatch(/short of/);
+  });
+
+  it('gives up after the iteration budget rather than turning forever', async () => {
+    // 0.03 is below MIN_TURN_GAIN, so compensation is floored and each capped
+    // 150° command buys only 4.5° of heading — 20 corrections' worth for a
+    // quarter turn, against a cap of 12. Deliberately NOT 0.1: that is the rate
+    // `isaac_yaw_sweep.py` measures on the real sim, and gain compensation
+    // carries it to -89° in seven commands (the test above this one is the
+    // half-rate case; this one is the base that genuinely cannot get there).
+    const h = makeTurningBase({ gainLeft: 0.03, gainRight: 0.03 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -90 }));
+
+    expect(h.moves).toHaveLength(12);
+    // It moved — this is the give-up path, not the dead-base path.
+    expect(h.yawDeg()).toBeLessThan(-40);
+    expect(h.yawDeg()).toBeGreaterThan(-90);
+    // And it says so rather than claiming the heading it did not reach.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/short of the commanded -90°/);
+    expect(outcome.measured?.angleDeg).toBeCloseTo(h.yawDeg(), 6);
+  });
+
+  it('issues ONE open-loop command, unchanged, when there is no odometry', async () => {
+    // The rule this pins: a robot that cannot measure its heading has nothing to
+    // close the loop against, and iterating on a dead-reckoned estimate would be
+    // guesswork presented as feedback. The old contract survives exactly.
+    const { executor, moves } = makeExecutor();
+
+    const outcome = await executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(moves).toEqual([turnToCommand(90, TURN_SPEED)]);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.measured).toBeUndefined();
+    expect(outcome.message).toMatch(/no odometry/);
+  });
+
+  it('mirror: executes a left 90° as a right 270° and ends on the same heading', async () => {
+    const h = makeTurningBase({ gainLeft: 0, gainRight: 1, leftTurnStrategy: 'mirror' });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(outcome.ok).toBe(true);
+    // 270° of clockwise rotation — not the +90° this base cannot do — issued as
+    // 150° + 120°, because no single command may exceed half a turn: two yaw
+    // samples cannot tell +190° from −170°, so a command that could rotate more
+    // than 180° would produce a rotation nothing can measure.
+    expect(h.moves).toHaveLength(2);
+    for (const move of h.moves) expect(move.omega).toBeCloseTo(-TURN_SPEED * DEG_TO_RAD, 10);
+    expect(h.moves[0].durationS).toBeCloseTo(150 / TURN_SPEED, 6);
+    expect(h.moves[1].durationS).toBeCloseTo(120 / TURN_SPEED, 6);
+    // The heading is the one that was asked for…
+    expect(h.scene.getYawDeg()).toBeCloseTo(90, 6);
+    // …and the reported rotation is the one that happened. −270 must NOT be
+    // folded into +90: the base turned three quarters of a circle to the right.
+    expect(outcome.measured?.angleDeg).toBeCloseTo(-270, 6);
+    expect(outcome.message).toMatch(/Turned -270° \(right\)/);
+    expect(outcome.message).toMatch(/long way round/);
+    expect(outcome.message).not.toMatch(/short of/);
+  });
+
+  it('auto: detects a dead left turn, switches to mirror, and remembers it', async () => {
+    // The measured checkpoint: 0.01 left, 1.0 right.
+    const h = makeTurningBase({ gainLeft: 0.01, gainRight: 1, leftTurnStrategy: 'auto' });
+
+    const first = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(first.ok).toBe(true);
+    // It TRIED the left turn first — `auto` never assumes the asymmetry.
+    expect(h.moves[0].omega).toBeGreaterThan(0);
+    expect(h.moves[0].durationS).toBe(2);
+    // 0.9° measured for a commanded 90° is the switch. What is LEFT of the turn
+    // (89.1°) then goes the other way round: −270.9°, split into 150° + 120.9°.
+    expect(h.moves).toHaveLength(3);
+    expect(h.moves[1].omega).toBeLessThan(0);
+    expect(h.moves[1].durationS).toBeCloseTo(150 / TURN_SPEED, 6);
+    expect(h.moves[2].omega).toBeLessThan(0);
+    expect(h.moves[2].durationS).toBeCloseTo(120.9 / TURN_SPEED, 3);
+    // 0.9° left then 270.9° right lands exactly on the requested heading: the
+    // mirror is computed from what is LEFT of the turn, not from the request,
+    // so the dead probe's 0.9° is not lost.
+    expect(h.yawDeg()).toBeCloseTo(-270, 3);
+    expect(h.scene.getYawDeg()).toBeCloseTo(90, 3);
+    expect(first.measured?.angleDeg).toBeCloseTo(-270, 3);
+
+    // And the discovery is kept: the next left turn does not pay for it again —
+    // no dead +90° probe, straight to the two clockwise commands.
+    const second = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(second.ok).toBe(true);
+    expect(h.moves).toHaveLength(5);
+    expect(h.moves[3].omega).toBeLessThan(0);
+    expect(h.moves[4].omega).toBeLessThan(0);
+    expect(h.yawDeg()).toBeCloseTo(-540, 3);
+    expect(h.scene.getYawDeg()).toBeCloseTo(180, 3);
+    expect(second.measured?.angleDeg).toBeCloseTo(-270, 6);
+  });
+
+  it('auto: leaves a base that CAN turn left alone', async () => {
+    // The asymmetry is a property of one checkpoint, not of robots. `auto` must
+    // be indistinguishable from `direct` on anything that tracks its command.
+    const h = makeTurningBase({ gainLeft: 1, gainRight: 1, leftTurnStrategy: 'auto' });
+
+    const first = await h.executor.execute(block('turn', { angleDeg: 90 }));
+    const second = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(h.moves).toHaveLength(2);
+    for (const move of h.moves) expect(move.omega).toBeGreaterThan(0);
+    expect(h.scene.getYawDeg()).toBeCloseTo(180, 6);
+    expect(first.measured?.angleDeg).toBeCloseTo(90, 6);
+  });
+
+  it('direct: fails a dead left turn honestly instead of re-sending it', async () => {
+    const h = makeTurningBase({ gainLeft: 0.01, gainRight: 1, leftTurnStrategy: 'direct' });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/did not turn/);
+    // The loop must not keep issuing a command that measurably does nothing.
+    expect(h.moves).toHaveLength(1);
+  });
+
+  it('sweeps scan_room clockwise, correcting each step', async () => {
+    const h = makeTurningBase({ gainLeft: 0.01, gainRight: 0.53, leftTurnStrategy: 'auto' });
+
+    const outcome = await h.executor.execute(block('scan_room', { steps: 4 }));
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toContain('clockwise');
+    // Not one left command anywhere: `scan_room` spends its free choice of
+    // direction on the one that works, and is deliberately NOT routed through
+    // the mirror strategy — 4 steps of +315° would be nearly four revolutions.
+    for (const move of h.moves) expect(move.omega).toBeLessThan(0);
+    // Four 90° steps, each needing corrections at 0.53 tracking.
+    expect(h.moves.length).toBeGreaterThan(4);
+    // And it comes back to where it started, within the per-step tolerance.
+    expect(Math.abs(h.scene.getYawDeg())).toBeLessThan(4 * 5);
   });
 });
