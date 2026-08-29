@@ -233,7 +233,7 @@ Vulkan device node is ACL'd to whoever holds `seat0`, which over SSH is nobody; 
 `../isaac_sim_patches/README.md`. Running the same command line directly on a local seat
 also works.
 
-Two flags worth knowing about:
+Three flags worth knowing about:
 
 * `--device cuda` is what the brief asks for. Every recorded NeoDEM run of the sibling
   wholebody task in `isaac_sim_patches/README.md` used `--device cpu`; `cuda` is untested
@@ -246,6 +246,21 @@ Two flags worth knowing about:
 * `NEODEM_FILM_DIR=/some/dir` turns on the trailing film camera
   (`action_provider_wh_dds.py:551-568`). It works here because `film_camera` is kept
   byte-for-byte from the `move_cylinder` task.
+* `NEODEM_ROBOT_SPAWN=table_front` starts the robot **at the packing table** instead of at
+  the authored factory-floor pose 8.4 m and one powered door away. That is for testing the
+  manipulation without first solving the walk (TASK-228: the robot jams on the door frame);
+  it is not the mission. Unset, the spawn is byte-for-byte the authored `ROBOT` pose.
+
+  It accepts only a place in `PLACES` that also declares a heading in `PLACE_HEADINGS` —
+  today `table_front` and `pause_room_door` — and **raises on anything else rather than
+  falling back**, because a typo that quietly reverted to the default would present as a
+  manipulation failure 8 m from where you meant, not as a spawn failure. See `robot_spawn`
+  in `factory_pauseroom_layout.py`.
+
+  `pause_room_door` is selectable because it declares a heading, but it is a **waypoint,
+  not a spawn**: it sits 0.100 m from a shut door leaf, against the 0.40 m pad the verifier
+  charges a spawn, so starting there puts the robot inside a 25 kg leaf on a stiff position
+  drive at t = 0. Section 8 of the offline verifier prints that number on every run.
 
 **Only one `sim_main.py` at a time on this box** — its exit handler `SIGKILL`s every other
 one.

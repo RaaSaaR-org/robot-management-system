@@ -21,7 +21,7 @@ How it reads the scene
 Two different mechanisms, for two different reasons:
 
 * `common_scene/factory_pauseroom_layout.py` is IMPORTED for real (importlib, by path). It
-  imports nothing but `math`, which is the entire reason it was split out of the cfg: the
+  imports nothing but `math` and `os`, which is the entire reason it was split out of the cfg: the
   numbers the simulator will use are the numbers this file does arithmetic on. No parsing,
   no drift.
 * `common_scene/base_scene_factory_pauseroom.py` and the env cfg CANNOT be imported -- they
@@ -815,6 +815,125 @@ def check_robot(rep: Report, L) -> None:
               f"{SPAWN_MARGIN:.2f} m, because a spawn pose is placed rather than walked "
               "to) clear of every box"
               if inside is None else f"only {inside[1]:.3f} m from {inside[0]}")
+
+    check_selectable_spawns(rep, L, spawn_pad)
+
+
+def check_selectable_spawns(rep: Report, L, spawn_pad: float) -> None:
+    """Everything above measures ONE pose. `NEODEM_ROBOT_SPAWN` means there are several.
+
+    The scene can now be launched with the robot standing at a named place instead of at
+    the authored start -- that is how a manipulation test skips a walk that does not work
+    yet (TASK-228: the robot jams on the door frame). The spawn that ships is therefore no
+    longer necessarily the spawn that was checked, which is the same shape of gap as
+    section 12's: a guarantee that holds only for the default is not a guarantee about the
+    scene. So every selectable spawn gets the checks the default one gets.
+
+    `pause_table` is excluded from the clearance test for the same reason section 12
+    excludes it: `table_front` is DERIVED to stand TABLE_STANDOFF = 0.16 m off the table's
+    near face, which is inside any body radius worth charging. What must not foul the table
+    is the FEET, and section 11 asserts that directly against FOOT_FRONT_REACH.
+    """
+    print()
+    default = L.robot_spawn("")
+    rep.check(default["pos"] is L.ROBOT["pos"]
+              and default["yaw_deg"] == L.ROBOT["yaw_deg"]
+              and default["name"] is None,
+              f"an unset {L.ROBOT_SPAWN_ENV_VAR} reproduces the authored pose EXACTLY",
+              f"robot_spawn('') -> pos {default['pos']} yaw {default['yaw_deg']} "
+              f"vs ROBOT pos {L.ROBOT['pos']} yaw {L.ROBOT['yaw_deg']} -- identical "
+              "objects, not merely equal numbers, so the default launch path is the one "
+              "every check above measured")
+
+    names = L.selectable_spawns()
+    rep.check(bool(names) and all(n in L.PLACES and n in L.PLACE_HEADINGS for n in names),
+              "a spawn is selectable only where a place declares BOTH a point and a heading",
+              f"selectable: {', '.join(names)}; PLACES without a heading are refused "
+              f"({', '.join(sorted(set(L.PLACES) - set(L.PLACE_HEADINGS)))}) because a "
+              "point is not a pose")
+
+    # The two ways to get it wrong must both raise. A resolver that silently fell back to
+    # the authored pose on a typo would put the robot 8 m from where the operator meant and
+    # nothing downstream would say so -- the failure would surface as a manipulation that
+    # missed, which is the most expensive place to discover a spawn bug.
+    for bad, why in (("not_a_place", "a name that is in neither dict"),
+                     (sorted(set(L.PLACES) - set(L.PLACE_HEADINGS))[0],
+                      "a place with coordinates but no heading")):
+        try:
+            L.robot_spawn(bad)
+        except ValueError as exc:
+            msg = str(exc)
+            rep.check(L.ROBOT_SPAWN_ENV_VAR in msg and bad in msg
+                      and all(n in msg for n in names),
+                      f"{L.ROBOT_SPAWN_ENV_VAR}={bad!r} is REFUSED, not silently defaulted",
+                      f"{why}; the message names the variable, the value and all "
+                      f"{len(names)} selectable spawns")
+        else:
+            rep.bad(f"{L.ROBOT_SPAWN_ENV_VAR}={bad!r} is REFUSED, not silently defaulted",
+                    f"{why} -- but robot_spawn() returned a pose instead of raising")
+
+    for name in names:
+        spawn = L.robot_spawn(name)
+        x, y, z = spawn["pos"]
+        rep.check((x, y) == L.PLACES[name]
+                  and spawn["yaw_deg"] == L.PLACE_HEADINGS[name]
+                  and z == L.ROBOT["pos"][2],
+                  f"spawn '{name}' is the authored place, at the authored spawn HEIGHT",
+                  f"({x:.3f}, {y:.3f}) from PLACES, yaw {spawn['yaw_deg']:.0f} deg from "
+                  f"PLACE_HEADINGS, z = {z:.2f} from ROBOT -- a place carries no height "
+                  "and must not invent one")
+
+        worst = None
+        for bname, rect in walking_rects(L, exclude=("pause_table",)):
+            d = point_rect_distance((x, y), rect)
+            if worst is None or d < worst[1]:
+                worst = (bname, d)
+        rep.check(worst[1] >= spawn_pad,
+                  f"spawn '{name}' does not place the robot inside geometry",
+                  f"nearest is {worst[0]} at {worst[1]:.3f} m, against a {spawn_pad:.2f} m "
+                  f"pad ({G1_BODY_RADIUS:.2f} m body radius + {SPAWN_MARGIN:.2f} m, "
+                  "because a spawn pose is placed rather than walked to); the table is "
+                  "excluded -- standing 0.16 m off it is the design, and section 11 checks "
+                  "the feet against it")
+
+        rep.check(L.HALL["x_min"] < x < L.HALL["x_max"]
+                  and L.HALL["y_min"] < y < L.HALL["y_max"],
+                  f"spawn '{name}' is inside the building", f"({x:.2f}, {y:.2f})")
+
+    # ---- the SHUT door, which a spawn does not get to assume away ----------------------
+    #
+    # `walking_rects` models the door leaves at FULL OPEN, and for a ROUTE that is right:
+    # by the time the robot walks up to the doorway the presence sensor has had the leaves
+    # open for many seconds. A spawn is placed at t = 0, when the leaves are shut and the
+    # driver's openness is still 0.0 (`PauseDoorDriver.__init__`), and the stroke then
+    # takes 1.17 s. So the shut leaves are real geometry for a spawn and only for a spawn.
+    #
+    # This is not a hypothetical: `pause_room_door` is selectable -- it is in PLACES and it
+    # declares a heading -- and it sits 0.100 m from a shut leaf, well inside the 0.40 m
+    # pad. Its heading exists so a route can pass THROUGH the doorway facing the table, not
+    # so anything can stand there. Spawning at it would start the robot interpenetrating a
+    # 25 kg leaf on a stiff position drive.
+    #
+    # The assertion is therefore about the SET, not about one name: exactly one selectable
+    # spawn fouls the shut door, and it is the doorway itself. That fires if a new place
+    # acquires a heading somewhere in the door's swept box, and it fires again if
+    # `pause_room_door` is ever made standable or dropped -- either way the comment above
+    # would be stale, and a stale comment about the spawn is what this section exists for.
+    shut_rects = [(n, (L.box_extent(b)[0], L.box_extent(b)[1]))
+                  for n, b in L.door_leaf_boxes(0.0).items()]
+    clearances = {}
+    for name in names:
+        x, y, _ = L.robot_spawn(name)["pos"]
+        clearances[name] = min(point_rect_distance((x, y), r) for _, r in shut_rects)
+    fouls = tuple(n for n in names if clearances[n] < spawn_pad)
+    rep.check(fouls == ("pause_room_door",),
+              "the only selectable spawn that starts inside the SHUT door is the doorway itself",
+              "shut-leaf clearance: "
+              + "; ".join(f"{n} {clearances[n]:.3f} m" for n in names)
+              + f" against the same {spawn_pad:.2f} m pad. 'pause_room_door' declares a "
+              "heading so a route can walk THROUGH it, not so anything can stand in it -- "
+              "it is a waypoint, not a manipulation spawn. 'table_front' is the spawn this "
+              "feature exists for and it clears the shut leaves outright.")
 
 
 def check_quaternions(rep: Report, L) -> None:
@@ -1690,10 +1809,29 @@ def print_coordinates(L) -> None:
     for name, pos, note in rows:
         print(f"  {name.ljust(w)}  {pos:<26}  {note}")
     print("\n  named places:")
+    selectable = set(L.selectable_spawns())
     for name, (x, y) in sorted(L.PLACES.items()):
         head = L.PLACE_HEADINGS.get(name)
         tag = f"   arrive facing {head:.0f} deg" if head is not None else ""
+        tag += "   [selectable spawn]" if name in selectable else ""
         print(f"    {name.ljust(20)} ({x:6.2f}, {y:6.2f}){tag}")
+
+    # What THIS process would spawn, which is not necessarily the authored pose: the
+    # verifier reads the same environment variable the scene does, so a run with
+    # NEODEM_ROBOT_SPAWN set says so here rather than leaving the reader to assume.
+    set_to = os.environ.get(L.ROBOT_SPAWN_ENV_VAR, "") or "<unset>"
+    try:
+        live = L.robot_spawn()
+    except ValueError as exc:
+        # Reported rather than raised: a bad spawn name says nothing about the geometry,
+        # and losing the RESULT line of a 200-check run to a traceback would hide every
+        # answer this file just computed behind one shell-level typo.
+        print(f"\n  {L.ROBOT_SPAWN_ENV_VAR}={set_to} -> REFUSED: {exc}")
+    else:
+        where = "the authored ROBOT pose" if live["name"] is None else f"'{live['name']}'"
+        print(f"\n  {L.ROBOT_SPAWN_ENV_VAR}={set_to}"
+              f" -> spawn at {where}: ({live['pos'][0]:.2f}, {live['pos'][1]:.2f}, "
+              f"{live['pos'][2]:.2f}) yaw {live['yaw_deg']:.0f} deg")
 
     print("\n  reach from 'table_front' (shoulder to target, over the observed base-height band):")
     stand = L.PLACES["table_front"]

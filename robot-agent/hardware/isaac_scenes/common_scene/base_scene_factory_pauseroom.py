@@ -24,7 +24,7 @@ a nucleus URL. See `factory_pauseroom_layout.py` for the full argument.
 
 WHERE THE NUMBERS LIVE
 ----------------------
-In `factory_pauseroom_layout.py`, which imports nothing but `math` and is therefore
+In `factory_pauseroom_layout.py`, which imports nothing but `math` and `os` and is therefore
 readable by `verify_factory_scene_offline.py` on a machine with no GPU and no Isaac. This
 module is the (thin) translation of those numbers into Isaac Lab cfgs. If you want to move
 a wall, move it there.

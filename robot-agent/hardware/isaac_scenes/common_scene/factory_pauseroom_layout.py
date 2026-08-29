@@ -8,7 +8,10 @@ cannot be imported without a GPU and a Kit app. That would leave the geometry --
 that is actually easy to get wrong, and expensive to discover wrong 2 minutes into a
 launch -- unverifiable except by launching the simulator.
 
-So the geometry lives HERE, in a module that imports nothing but `math`. The scene cfg
+So the geometry lives HERE, in a module that imports nothing but `math` and `os` --
+`os` only to read the one environment variable that selects the spawn pose, see
+`robot_spawn` below; there is nothing here that touches a GPU, a network or a USD. The
+scene cfg
 reads it, and `verify_factory_scene_offline.py` reads the same constants and checks them
 with real arithmetic on a machine with no GPU. The two cannot drift, because there is one
 copy of each number.
@@ -44,6 +47,7 @@ everything else in this scene is XYZW. Both helpers below are named for their or
 from __future__ import annotations
 
 import math
+import os
 
 # ---------------------------------------------------------------------------------------
 # Quaternion helpers. Every caller must say which order it wants in the function name.
@@ -722,6 +726,87 @@ PLACE_HEADINGS: dict[str, float] = {
 Only the two places where the heading is load-bearing are listed: standing at
 `table_front` facing anywhere but the table makes the reach numbers meaningless.
 """
+
+# ---------------------------------------------------------------------------------------
+# WHICH of those places the robot is actually spawned at.
+#
+# `ROBOT` above is the authored start: on the factory floor, 8.4 m and one powered door
+# from the table. Getting from there to the table is a separate unsolved problem -- the
+# robot jams on the door frame (TASK-228) -- and a manipulation test does not need the
+# walk, it needs the robot at the table. So the spawn is SELECTABLE at launch time.
+#
+# It is an environment variable rather than a cfg argument because the thing that has to
+# set it is the `sim_main.py` command line, which this scene does not own and cannot add
+# flags to. `ROBOT` itself stays exactly as authored: editing it to move the spawn is how
+# a temporary test pose becomes the permanent one nobody remembers changing.
+#
+# THE RESOLVER REFUSES RATHER THAN FALLS BACK. That is the whole of the design and it is
+# not defensive programming for its own sake: a value that is nearly right, accepted
+# quietly, is the exact failure this scene has already had once. `table_front` was
+# hand-typed at (10.00, 5.35) -- plausible, unchecked, and 0.99 m from an apple the arm
+# reaches 0.55 m to (see the REACH section above). A typo'd NEODEM_ROBOT_SPAWN that fell
+# back to the authored pose would present the same way: a run that looks correct until a
+# manipulation the robot was never within 8 m of fails for no visible reason.
+# ---------------------------------------------------------------------------------------
+ROBOT_SPAWN_ENV_VAR = "NEODEM_ROBOT_SPAWN"
+
+
+def selectable_spawns() -> tuple[str, ...]:
+    """The names `NEODEM_ROBOT_SPAWN` accepts, sorted.
+
+    A place is selectable only if it declares a HEADING as well as coordinates, because
+    coordinates alone are not a pose. Standing at `table_front` facing the door puts the
+    apple behind the robot, and every reach number in this module is computed at
+    `TABLE_APPROACH_YAW_DEG`; a spawn that ignores the heading would make all of them
+    describe a configuration the scene never actually starts in.
+    """
+    return tuple(sorted(name for name in PLACES if name in PLACE_HEADINGS))
+
+
+def robot_spawn(value: str | None = None) -> dict:
+    """The pose to spawn the robot at: the authored `ROBOT` by default, a named place on ask.
+
+    Returns `{"pos": (x, y, z), "yaw_deg": float, "name": str | None}`. `name` is None when
+    nothing was selected and the authored pose is being used, and the place name otherwise,
+    so a caller can log which spawn it actually got rather than which one it assumed.
+
+    `value` is read from `NEODEM_ROBOT_SPAWN` when it is not passed. The parameter exists
+    so the offline verifier can exercise every branch -- including the unset one -- without
+    mutating `os.environ` out from under the process it is running in.
+
+    The height is ALWAYS `ROBOT["pos"][2]`. A named place is two coordinates and has no
+    business inventing a third: 0.80 m is the spawn height the working move_cylinder scene
+    uses above a floor whose top is z = 0, section 8 of the offline verifier asserts it,
+    and dropping it to 0.75 destabilises the base controller at t=0 rather than saving
+    50 mm of settle.
+
+    Raises ValueError, never falls back -- see the comment above.
+    """
+    raw = os.environ.get(ROBOT_SPAWN_ENV_VAR, "") if value is None else value
+    name = raw.strip()
+    if not name:
+        return {"pos": ROBOT["pos"], "yaw_deg": ROBOT["yaw_deg"], "name": None}
+
+    options = ", ".join(selectable_spawns())
+    if name not in PLACES:
+        raise ValueError(
+            f"{ROBOT_SPAWN_ENV_VAR}={raw!r} is not a place in this scene. "
+            f"Selectable spawns: {options}. Unset {ROBOT_SPAWN_ENV_VAR} for the authored "
+            f"start pose at ({ROBOT['pos'][0]:.2f}, {ROBOT['pos'][1]:.2f}), yaw "
+            f"{ROBOT['yaw_deg']:.0f} deg. This refuses instead of falling back on purpose: "
+            "a spawn that quietly reverts to the default puts the robot 8 m and one door "
+            "away from wherever you meant, and nothing downstream says so.")
+    if name not in PLACE_HEADINGS:
+        raise ValueError(
+            f"{ROBOT_SPAWN_ENV_VAR}={raw!r} names a place that has coordinates but no "
+            f"entry in PLACE_HEADINGS, so it is a point and not a pose. Spawning there "
+            "would need a heading chosen by this resolver, and a heading nobody authored "
+            "is a heading nobody checked -- arriving at a table facing away from it is "
+            f"not a usable pose. Selectable spawns: {options}.")
+
+    x, y = PLACES[name]
+    return {"pos": (x, y, ROBOT["pos"][2]), "yaw_deg": PLACE_HEADINGS[name], "name": name}
+
 
 # ---------------------------------------------------------------------------------------
 # Cameras. Both live outside /World/envs (same rule as the floor).
