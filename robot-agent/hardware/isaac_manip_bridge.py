@@ -70,6 +70,47 @@ THE THREE WAYS THIS GOES WRONG IN SILENCE
 * RAW GRIP CODE -> see `isaac_manip.py` note 1. `set_action31()` takes mandatory
   `left_hand_units=` / `right_hand_units=` and there is no overload that guesses.
 
+THE COMMAND INLET (--serve)
+---------------------------
+    POST /action   {"<joint name>": radians, ...}   -> set_targets()
+    POST /estop    {}                               -> ramp to the rest pose
+    GET  /health                                    -> domain, iface, DDS, rate, last action
+
+`--serve 8778` is what makes this bridge reachable by a VLA rollout. Without it
+the only producers are in-process (`set_targets`, `set_action31`) and `--probe`,
+so the process printed "holding the rest pose" and idled while the agent POSTed
+joint dicts at an endpoint that could never serve them: the camera facade (:8779)
+proxies everything non-camera to `g1_sidecar.py` (:8777), whose `/action` is a
+REAL-ROBOT path -- it needs `lerobot`, which is not installed in the rig's
+interpreter; it hardcodes DDS domain 0, which is the real G1's bus; and it has no
+Dex3 publisher at all. The simulated arms had no inlet. `G1_READ_ONLY=1` stays
+exactly as it is: flipping it buys nothing and aims a domain-0 publisher at the
+real robot.
+
+Three things about that surface are load-bearing:
+
+* THE VALUES ARE RADIANS, INCLUDING THE HANDS, AND NOTHING IS DECODED HERE.
+  `src/vla/action-contracts.ts` has already decoded the left-hand grip code
+  before it posts. A second decode reads an already-decoded CLOSE (~-0.7 rad) as
+  a negative grip, clamps it to zero and returns the OPEN pose -- the hand opens
+  at the moment the policy meant it to close, which is the same measured failure
+  as sending the code raw (0/15 vs 13/15 carries) reached from the other
+  direction and much harder to see, because both ends would be "decoding
+  properly". `/action` uses `HandUnits.RADIANS` and does not go through
+  `set_action31()`.
+
+* THE THREE WAIST JOINTS ARE DROPPED, AND THE REPLY SAYS SO. The provider parks
+  them every step; the caller sends them deliberately. `applied`, `ignored`,
+  `unknown`, `rejected` and `clamped` are all in the reply, and an unknown joint
+  name is a reported fact rather than a silent skip, because a caller has no
+  other way to discover its vocabulary has drifted.
+
+* /estop RAMPS TO REST, AND MUST. rt/lowcmd latches, so a stop that publishes
+  nothing leaves the arms frozen mid-reach.
+
+The server runs on its own threads and NEVER publishes -- it assigns `_slot`,
+which is the lock-free producer path this class was built for.
+
 SAFETY
 ------
 Domain 0 is the real robot and is REFUSED here, not warned about. rt/lowcmd is a
@@ -81,12 +122,15 @@ only positions, and a zero-gain lowcmd is inert on real hardware.
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
 import signal
 import sys
 import threading
 import time
 import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -110,6 +154,168 @@ DEFAULT_RATE_HZ = 50.0
 # sim is a position target with no trajectory generator, so a step change flings
 # the arm -- and in a scene with objects on a table, flings the objects too.
 RAMP_S = 1.0
+
+
+# --------------------------------------------------------------------------- HTTP inlet
+#
+# Everything from here to `class ManipPublisher` is the vocabulary of `POST /action`.
+# It is pure and importable, so the verifier exercises the whole split without an
+# HTTP server, a DDS participant or a sim.
+
+#: Default port for `--serve`. 8777 is `g1_sidecar.py` and 8779 is
+#: `isaac_camera_facade.py`; 8778 is the free slot between the two ports an
+#: operator of this rig already has memorised.
+DEFAULT_SERVE_PORT = 8778
+
+# NAME -> slot, for every joint this bridge can actually drive. Built from this
+# module's own tables, which are built from `sim_g1_dds/joints.py`, so nothing on
+# this path is a second transcription of a joint order.
+#
+# BY NAME, IN BOTH DIRECTIONS, NEVER BY POSITION. The two Dex3 hands do not share
+# a slot order -- the left is wired thumb -> MIDDLE -> index, the right
+# thumb -> INDEX -> middle -- so splitting a name-keyed dict positionally against a
+# single hand table labels the left hand's index finger as its middle one and vice
+# versa. That is not hypothetical: `g1_sidecar.py::_get_state_readonly` indexes one
+# thumb->index->middle table positionally for BOTH sides and mislabels the left
+# hand's state to this day, silently, in the four numbers that only carry anything
+# during a grasp. The dicts below make that impossible here, and the only other
+# reordering on this path -- `M.remap_right_hand()` -- derives its permutation by
+# name too.
+ARM_INDEX: dict[str, int] = {n: i for i, n in enumerate(M.ARM_JOINTS)}
+LEFT_HAND_INDEX: dict[str, int] = {n: i for i, n in enumerate(M.NEODEM_LEFT_HAND)}
+RIGHT_HAND_INDEX: dict[str, int] = {n: i for i, n in enumerate(M.NEODEM_RIGHT_HAND)}
+
+#: The three joints `/action` accepts and then DROPS, reporting that it did.
+#: `action_provider_wh_dds.get_action()` overwrites positions[12:15] with
+#: `default_joint_pos` on every step, AFTER copying the arm block out of
+#: rt/lowcmd, so a waist target is accepted by DDS and discarded by the sim.
+#:
+#: They are REPORTED rather than quietly skipped because the caller sends them on
+#: purpose: `src/vla/action-contracts.ts` commands the waist deliberately (it
+#: carries a constant ~-0.12 rad operator lean, worth ~52 mm of hand-path offset
+#: at a 0.45 m lever) and is entitled to learn that three of its 31 numbers went
+#: nowhere. Silence here would be the same class of defect this whole inlet exists
+#: to remove.
+WAIST_SET: frozenset[str] = frozenset(M.WAIST_JOINTS)
+
+#: The wire text for that, as one constant, so the reply cannot drift from the
+#: explanation above it.
+WAIST_IGNORED_REASON = (
+    "parked by the wholebody provider: action_provider_wh_dds.get_action() "
+    "overwrites positions[12:15] with default_joint_pos after the arm copy, every "
+    "step, so a waist target is accepted by DDS and discarded by the sim")
+
+#: (lo, hi) per joint NAME, from `isaac_manip`'s tables -- which are lifted from
+#: `sim_evaluator/mjcf/g1_dex3/g1_43dof_fixedbase_realism.xml`, NeoDEM's own model
+#: of this hardware.
+#:
+#: DELIBERATELY NOT `g1_sidecar.py::POS_LIMITS`, which is hand-written and has
+#: `left_hand_index_1_joint` and `left_hand_middle_1_joint` as (0.0, +1.7453)
+#: where the MJCF says (-1.74533, 0.0). The sign is flipped, so a correctly
+#: decoded CLOSING grip clamps straight back to open -- on exactly the two fingers
+#: doing the grasping, and on the hand the grip decoder exists to serve. Borrowing
+#: that table here would have re-introduced at the clamp the very failure the
+#: decode prevents, and it would have looked like a decoder bug.
+LIMITS_BY_NAME: dict[str, tuple[float, float]] = {
+    **dict(zip(M.ARM_JOINTS, M.ARM_LIMITS)),
+    **dict(zip(M.NEODEM_LEFT_HAND, M.HAND_LIMITS["left"])),
+    **dict(zip(M.NEODEM_RIGHT_HAND, M.HAND_LIMITS["right"])),
+}
+
+#: Every joint name `/action` will act on: 14 arm + 7 + 7.
+COMMANDABLE: frozenset[str] = frozenset(LIMITS_BY_NAME)
+
+# Both tables are derived, so both of these hold by construction today. They are
+# asserted because a future edit to a joint table is exactly what would break them,
+# and the symptom -- one finger silently taking another's target -- is unreadable.
+assert len(LIMITS_BY_NAME) == M.N_ARM + 2 * M.N_HAND, (
+    "a joint name appears in more than one of the arm/left-hand/right-hand tables, "
+    "so one limb's target would overwrite another's")
+assert not (COMMANDABLE & WAIST_SET), "a waist joint is also listed as commandable"
+
+
+def split_joint_dict(joints: dict, base: ManipTargets) -> tuple[ManipTargets, dict]:
+    """Turn a name-keyed joint dict into `ManipTargets`, plus a report of what it did NOT do.
+
+    `joints` is the shape `g1_sidecar.py`'s `/action` takes and the shape
+    `HardwareClient.sendJointTargets()` posts: `{"<joint name>": radians}`. It may be
+    partial -- anything absent keeps its value from `base`, normally the frame
+    currently in the command slot -- so a caller driving only the arm need not
+    restate fourteen fingers on every frame.
+
+    THE VALUES ARE RADIANS. All of them, hands included. There is deliberately no
+    grip-code path through this function; see the note at the `/action` call site.
+
+    Every key the caller sent lands in exactly one of four lists, so "I sent 31
+    joints and 28 were applied" is answerable from the reply alone:
+
+        applied   written into the returned targets
+        ignored   the three waist joints -- accepted by DDS, discarded by the sim
+        unknown   not a joint this bridge can drive, under that name
+        rejected  a value that is not a finite number
+
+    `clamped` is advisory and overlaps `applied`: the target was accepted and WILL
+    be clamped into range by the shaper on the publish thread. It is reported
+    because a clamp is otherwise invisible from outside, and an invisible clamp on
+    a finger is how a closing grasp arrives open.
+    """
+    arm = list(base.arm)
+    left = list(base.left_hand)
+    right = list(base.right_hand)
+    applied: list[str] = []
+    ignored: list[str] = []
+    unknown: list[str] = []
+    rejected: list[str] = []
+    clamped: list[str] = []
+
+    for name, raw in joints.items():
+        if not isinstance(name, str):
+            rejected.append(f"{name!r}: joint names must be strings")
+            continue
+        if name in WAIST_SET:
+            ignored.append(name)
+            continue
+        if name in ARM_INDEX:
+            vec, slot = arm, ARM_INDEX[name]
+        elif name in LEFT_HAND_INDEX:
+            vec, slot = left, LEFT_HAND_INDEX[name]
+        elif name in RIGHT_HAND_INDEX:
+            vec, slot = right, RIGHT_HAND_INDEX[name]
+        else:
+            unknown.append(name)
+            continue
+        # A JSON number, and nothing else. `float("0.5")` and `float(True)` both
+        # succeed, and a caller sending strings or booleans is a caller whose
+        # serialisation is broken in a way that will bite somewhere worse later.
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            rejected.append(f"{name}: value must be a number, got {type(raw).__name__}")
+            continue
+        value = float(raw)
+        if not math.isfinite(value):
+            # NaN would reach the locomotion policy's observation buffer through the
+            # arm block. `ManipTargets.make()` would refuse it a few lines further
+            # down anyway; catching it here names the JOINT rather than the slot.
+            rejected.append(f"{name}: value is not finite ({raw!r})")
+            continue
+        vec[slot] = value
+        applied.append(name)
+        lo, hi = LIMITS_BY_NAME[name]
+        if value < lo or value > hi:
+            clamped.append(name)
+
+    report = {
+        "applied": len(applied),
+        "applied_joints": applied,
+        "ignored": ignored,
+        "unknown": unknown,
+        "rejected": rejected,
+        "clamped": clamped,
+    }
+    if ignored:
+        report["reason"] = WAIST_IGNORED_REASON
+    # `.make()` is the same 14+7+7 / all-finite validation the rest of the module
+    # uses, and it normalises to tuples so the command slot stays immutable.
+    return ManipTargets.make(arm, left, right), report
 
 
 class ManipPublisher:
@@ -142,6 +348,16 @@ class ManipPublisher:
                 "and a real G1 would obey. Use the sim domain (1) or the mock (9).")
         if rate_hz <= 0:
             raise ValueError("rate_hz must be > 0")
+
+        # Recorded so `/health` can answer the three questions an operator asks
+        # first -- which domain, which interface, and whether THIS process opened
+        # the DDS participant or an embedder did (`init_dds=False`).
+        self.domain = int(domain)
+        self.iface = iface
+        self.dds_initialised = bool(init_dds)
+        self.arm_rate_limit = float(arm_rate_limit)
+        self.hand_rate_limit = float(hand_rate_limit)
+        self._loop_running = False
 
         self._rate = float(rate_hz)
         self._verbose = verbose
@@ -210,6 +426,46 @@ class ManipPublisher:
     def targets(self) -> ManipTargets:
         """The frame currently being published (post-shaping is not reflected here)."""
         return self._slot[0]
+
+    @property
+    def seq(self) -> int:
+        """How many frames have been HANDED IN, as opposed to sent. Read with the
+        slot, so it always belongs to the frame `targets` just returned."""
+        return self._slot[1]
+
+    @property
+    def last_sent(self) -> ManipTargets | None:
+        """The last frame actually put on the wire, or None before the first."""
+        return self._last_sent
+
+    @property
+    def rate_hz(self) -> float:
+        return self._rate
+
+    @property
+    def alive(self) -> bool:
+        """True while the publish loop is running and has not recorded an error.
+
+        The inlet refuses `/action` when this is false. Answering "ok" for a frame
+        that provably cannot reach the wire is the one thing a command inlet must
+        never do -- and it is worse here than elsewhere, because rt/lowcmd latches:
+        the arms are still holding whatever went out last.
+        """
+        return self._loop_running and not self._stop.is_set() and self.error is None
+
+    def snapshot(self) -> dict:
+        """Everything `/health` reports about the publisher. No HTTP in here."""
+        return {
+            "domain": self.domain,
+            "iface": self.iface,
+            "dds_initialised": self.dds_initialised,
+            "publishing": self.alive,
+            "rate_hz": self._rate,
+            "frames_sent": self._sent,
+            "arm_rate_limit": self.arm_rate_limit,
+            "hand_rate_limit": self.hand_rate_limit,
+            "error": None if self.error is None else repr(self.error),
+        }
 
     def set_targets(self, targets: ManipTargets) -> None:
         """Hand the publisher a new frame. Safe from any thread; never blocks.
@@ -290,6 +546,11 @@ class ManipPublisher:
 
     def run(self) -> None:
         """The publish loop. One thread, forever, until `_stop`."""
+        # Set BEFORE the try, cleared in the finally: `alive` gates the HTTP
+        # inlet, and a window in which the loop is dead but still reports itself
+        # alive is a window in which /action answers 200 for frames that reach
+        # nothing.
+        self._loop_running = True
         try:
             period = 1.0 / self._rate
             next_t = time.monotonic()
@@ -326,6 +587,8 @@ class ManipPublisher:
             except Exception as stop_exc:  # noqa: BLE001
                 print(f"[manip] rest-pose stop failed: {stop_exc!r}",
                       file=sys.stderr, flush=True)
+        finally:
+            self._loop_running = False
 
     def shutdown(self, ramp_s: float = RAMP_S) -> None:
         """Ramp to the rest pose and stop. Idempotent; publishes, so join first.
@@ -390,6 +653,339 @@ class ManipPublisher:
             print(f"[manip] COULD NOT PUBLISH THE REST POSE: {exc!r}. rt/lowcmd latches, "
                   f"so the sim is still holding the last arm pose -- stop the scene.",
                   file=sys.stderr, flush=True)
+
+
+# --------------------------------------------------------------------------- the inlet
+#
+# WHY THIS FILE GREW AN HTTP SERVER AT ALL
+# ----------------------------------------
+# Because nothing else in the rig can move the simulated arms, and until now
+# nothing outside this process could reach it. `set_targets()` is an in-process
+# API; with no `--probe` the bridge printed "holding the rest pose" and idled
+# forever while a VLA rollout POSTed name-keyed joint dicts at
+# `isaac_camera_facade.py` (:8779), which proxied them to `g1_sidecar.py` (:8777),
+# whose `/action` is a REAL-ROBOT path that cannot serve this rig even with
+# `G1_READ_ONLY=0`: `lerobot` is not installed in the rig's interpreter, the
+# driver hardcodes DDS domain 0 -- the real G1's bus -- and it has no hand
+# publisher at all. So the policy's actions reached an endpoint that could only
+# ever refuse them, and the simulated arms had no command inlet whatsoever.
+#
+# G1_READ_ONLY=1 therefore STAYS AS IT IS. Flipping it buys nothing here and
+# points a domain-0 publisher at the real robot's bus.
+#
+# THREADING. The HTTP server runs on its own threads and NEVER publishes. It
+# assigns `_slot` through `set_targets()`, which is the lock-free producer path
+# this class was designed around: a whole-tuple assignment, atomic under the GIL,
+# so the publish thread sees the previous frame in full or the new one in full and
+# is never blocked behind a request. The one lock added below is held only by HTTP
+# threads and never by the publisher.
+
+BOOT_ID = f"{int(time.time())}-{os.getpid()}"
+
+#: The `/action` reply always states this. It costs twenty bytes and it is the
+#: single fact that, when it was wrong, was worth 0/15 versus 13/15 carries.
+UNITS = "radians"
+
+
+def make_handler(pub: "ManipPublisher", *, port: int):
+    """The HTTP surface of the manipulation bridge: /action, /estop, /health.
+
+    A closure rather than a class attribute so a test can stand up two of these
+    against two publishers without either one's counters leaking into the other.
+    """
+    # Held ONLY by HTTP threads, and only across "read the slot -> build the new
+    # frame -> set_targets()". Two concurrent POSTs both read the same base frame
+    # otherwise, and the loser's joints vanish -- an arm-only request and a
+    # hand-only request arriving together would apply just one of them. The
+    # publish thread never touches this lock, so the producer/publisher path stays
+    # exactly as lock-free as it was.
+    apply_lock = threading.Lock()
+
+    # Written by HTTP threads under `apply_lock`, read by /health without it: each
+    # is replaced by whole assignment, so a reader sees one version or the other.
+    stats: dict = {"last_action": None, "last_estop": None, "unknown_seen": ()}
+
+    def note_unknown(names) -> None:
+        """Remember every joint name this bridge was asked for and does not have.
+
+        A per-request `unknown` list only helps a caller that reads bodies.
+        /health accumulates them so an operator who polls one URL can see that a
+        rollout has been addressing joints that do not exist -- which otherwise
+        looks exactly like a policy that has decided to hold still.
+        """
+        fresh = [n for n in names if n not in stats["unknown_seen"]]
+        if not fresh:
+            return
+        stats["unknown_seen"] = tuple(stats["unknown_seen"]) + tuple(fresh)
+        print(f"[manip] /action asked for joint(s) this bridge cannot drive: "
+              f"{', '.join(fresh)}", file=sys.stderr, flush=True)
+
+    def rest_eta_s() -> float:
+        """How long the publish thread needs to walk from where it is to REST.
+
+        Reported by /estop so the caller knows the stop is a RAMP and roughly how
+        long it takes, rather than being told "ok" and left to guess.
+        """
+        start = pub.last_sent or pub.targets
+        arm_d = max((abs(a - b) for a, b in zip(start.arm, M.REST.arm)), default=0.0)
+        hand_d = max(
+            (abs(a - b) for a, b in
+             list(zip(start.left_hand, M.REST.left_hand))
+             + list(zip(start.right_hand, M.REST.right_hand))),
+            default=0.0)
+        arm_rate = pub.arm_rate_limit or float("inf")
+        hand_rate = pub.hand_rate_limit or float("inf")
+        frames = max(arm_d / arm_rate, hand_d / hand_rate)
+        return round(frames / pub.rate_hz, 3)
+
+    def health() -> tuple[int, dict]:
+        state = pub.snapshot()
+        last = stats["last_action"]
+        estop = stats["last_estop"]
+        now = time.time()
+        payload = {
+            "ok": state["publishing"],
+            # "starting" only before the first frame goes out. The publish loop
+            # runs whether or not Isaac is listening -- there is no way to tell
+            # from here whether anything RECEIVES these frames, and this file will
+            # not pretend otherwise.
+            "status": ("dead" if not state["publishing"]
+                       else "ok" if state["frames_sent"] > 0 else "starting"),
+            "role": "isaac-manip-inlet",
+            "boot_id": BOOT_ID,
+            "port": port,
+            "domain": state["domain"],
+            "iface": state["iface"],
+            "dds_initialised": state["dds_initialised"],
+            "publishing": state["publishing"],
+            "rate_hz": state["rate_hz"],
+            "frames_sent": state["frames_sent"],
+            "error": state["error"],
+            "units": UNITS,
+            "commandable_joints": len(COMMANDABLE),
+            "ignored_joints": sorted(WAIST_SET),
+            "ignored_reason": WAIST_IGNORED_REASON,
+            "unknown_joints_seen": list(stats["unknown_seen"]),
+            "arm_rate_limit_rad_per_frame": state["arm_rate_limit"],
+            "hand_rate_limit_rad_per_frame": state["hand_rate_limit"],
+            "last_action": None if last is None else {
+                "age_s": round(now - last["unix"], 3),
+                "unix": round(last["unix"], 3),
+                "applied": last["applied"],
+                "seq": last["seq"],
+            },
+            "last_estop": None if estop is None else {
+                "age_s": round(now - estop["unix"], 3),
+                "unix": round(estop["unix"], 3),
+            },
+        }
+        # 503, not a 200 with a sad field: the bringup script's readiness probe is
+        # `curl -sf`, and a bridge whose publish loop has died is not ready by any
+        # reading. rt/lowcmd latches, so it is also still holding whatever pose it
+        # last sent -- which is exactly when an operator most needs to be told.
+        return (200 if state["publishing"] else 503), payload
+
+    def action(body: dict) -> tuple[int, dict]:
+        if not pub.alive:
+            # Never "ok" for a frame that cannot reach the wire. `sendAction()`
+            # raises HardwareActionError on this, which ends the rollout with the
+            # reason attached -- the correct outcome for a closed loop whose
+            # commands are going nowhere.
+            return 503, {"ok": False, "units": UNITS,
+                         "error": f"the publish thread is not running ({pub.error!r}); "
+                                  f"nothing this route accepts would reach the sim"}
+        if not isinstance(body, dict):
+            return 400, {"ok": False, "units": UNITS,
+                         "error": f'body must be a JSON object of {{"joint": radians}}, '
+                                  f"got {type(body).__name__}"}
+        with apply_lock:
+            base = pub.targets
+            try:
+                # RADIANS IN, RADIANS OUT -- AND NOTHING IS DECODED HERE.
+                #
+                # `src/vla/action-contracts.ts` has ALREADY decoded the left-hand
+                # grip code before it POSTs (`decodeLeftHandGrip`, applied in place
+                # over action[14:21]). Decoding a second time here would run the
+                # decoder over values that are already joint angles: a decoded
+                # CLOSE lands near -0.7 rad, which the decoder reads as a NEGATIVE
+                # grip, clamps to 0.0, and turns back into the OPEN pose. The hand
+                # would open at exactly the moment the policy meant it to close --
+                # the same failure as sending the code raw (0/15 vs 13/15 carries
+                # through the replay gate), arrived at from the opposite direction
+                # and twice as hard to see, because both ends of the wire would be
+                # "doing the decode properly".
+                #
+                # So: HandUnits.RADIANS, never APPLE_PNP_GRIP_CODE, and this route
+                # deliberately does not go through `set_action31()` -- whose whole
+                # purpose is to make a caller name its units, a question that is
+                # already answered by the time a name-keyed dict exists.
+                targets, report = split_joint_dict(body, base)
+            except ValueError as exc:
+                # `ManipTargets.make()` refusing the assembled frame. The producer
+                # hears it here, on its own request, and the slot keeps the last
+                # good frame.
+                return 400, {"ok": False, "units": UNITS, "error": str(exc)}
+            note_unknown(report["unknown"])
+            if report["applied"] == 0:
+                # Nothing was commanded. Refuse LOUDLY rather than answering "ok, 0
+                # applied": a dict of thirty-one joint names none of which this
+                # bridge recognises is a caller whose vocabulary has drifted, and
+                # that reads as a policy holding still if it is answered with a 200.
+                # Which of the two it is matters. "No commandable joint" points the
+                # operator at the joint NAMES; if the names were fine and every VALUE
+                # was malformed, that message sends them to the wrong place entirely.
+                if report["rejected"]:
+                    why = ("every joint in the request was rejected: "
+                           + "; ".join(report["rejected"]))
+                else:
+                    why = ("no commandable joint in the request — this bridge drives "
+                           f"{len(COMMANDABLE)} joints (14 arm + 7 + 7 Dex3, "
+                           f"sim_g1_dds/joints.py names)")
+                return 400, {
+                    "ok": False, "units": UNITS, "error": why,
+                    "applied": 0, "ignored": report["ignored"],
+                    "unknown": report["unknown"], "rejected": report["rejected"],
+                    **({"reason": report["reason"]} if "reason" in report else {}),
+                }
+            pub.set_targets(targets)
+            seq = pub.seq
+            stats["last_action"] = {"unix": time.time(),
+                                    "applied": report["applied"], "seq": seq}
+        out = {"ok": True, "units": UNITS, "seq": seq,
+               "applied": report["applied"],
+               "ignored": report["ignored"],
+               "unknown": report["unknown"],
+               "rejected": report["rejected"],
+               "clamped": report["clamped"]}
+        if "reason" in report:
+            out["reason"] = report["reason"]
+        return 200, out
+
+    def estop() -> tuple[int, dict]:
+        """Ramp the arms and hands to the rest pose. THE STOP THAT ACTUALLY STOPS.
+
+        `HardwareClient.releaseAction()` POSTs `/estop`, and on this rig that call
+        has to land here rather than on the sidecar. rt/lowcmd LATCHES in the Isaac
+        Wholebody task -- `g1_robot_dds.py` writes into shared memory that
+        `get_action()` reads and never clears -- so a "stop" that publishes nothing
+        leaves the sim holding the last commanded pose indefinitely: the arms freeze
+        mid-reach, which this file's own comments call worse than a stop. The
+        sidecar's `/estop` clears a ramp-state dict that is empty under
+        `G1_READ_ONLY=1` and touches no joint of this simulator.
+
+        REST is `arm = 0`, hands open -- not an arbitrary safe pose but the one the
+        Wholebody task holds when nothing publishes rt/lowcmd (`full_action.zero_()`),
+        i.e. exactly where the arms go a moment after this process exits. Ramping
+        there makes the handover continuous instead of a lurch that throws whatever
+        the robot is holding.
+
+        THIS ROUTE DOES NOT PUBLISH. It moves the command slot to REST and lets the
+        publish thread walk there under the shaper's rate limiter. That is not
+        squeamishness: `_publish` mutates one shared LowCmd_ message that CycloneDDS
+        serialises in C, and a second thread inside it corrupts a message
+        mid-serialisation. `shutdown()`'s ramp is safe only because `main()` joins
+        the publish thread first, which an HTTP handler cannot do.
+
+        AND IT DOES NOT LATCH. An E-Stop that the next 20 ms policy frame overwrites
+        would not be a stop, so a latch is the obvious thing to add -- and it would
+        wedge this rig. `releaseAction()` has two callers: a category-0 safety stop,
+        and `stopTeleopForwarding()`, the ROUTINE handback at the end of every teleop
+        session. Nothing ever posts a reset. A latch here would therefore leave the
+        arms unusable after the first ordinary session, with no route to clear it.
+        The latch that must exist already exists upstream, in
+        `RobotStateManager.forwardTeleopToHardware()`, which refuses to send
+        `/action` at all while an E-Stop is latched.
+        """
+        if not pub.alive:
+            return 503, {"ok": False,
+                         "error": f"the publish thread is not running ({pub.error!r}); "
+                                  f"this route cannot move the arms. rt/lowcmd latches, "
+                                  f"so the sim is still holding the last pose sent — "
+                                  f"stop the scene"}
+        with apply_lock:
+            pub.set_targets(M.REST)
+            seq = pub.seq
+            stats["last_estop"] = {"unix": time.time()}
+        eta = rest_eta_s()
+        print(f"[manip] /estop — ramping to the rest pose (~{eta:g} s)", flush=True)
+        return 200, {
+            "ok": True, "action": "ramp-to-rest", "seq": seq, "units": UNITS,
+            "rest": {"arm": "zero (the pose the Wholebody task holds unpublished)",
+                     "hands": "open"},
+            "eta_s": eta,
+            "arm_rate_limit_rad_per_frame": pub.arm_rate_limit,
+            "hand_rate_limit_rad_per_frame": pub.hand_rate_limit,
+            "note": "rt/lowcmd LATCHES in this sim, so a stop that publishes nothing "
+                    "leaves the arms frozen mid-reach. The publish thread ramps to the "
+                    "rest pose; the bridge keeps running and accepts /action again.",
+        }
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        # Every reply sets Content-Length, so keep-alive is safe -- and a keep-alive
+        # connection has to be able to die on its own, or a robot-agent that vanished
+        # without closing its sockets strands a thread in rfile.readline() forever.
+        # Same reasoning and same number as isaac_camera_facade.py.
+        timeout = 30
+
+        def _send(self, code: int, payload: dict) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:  # the [manip] lines are the useful log
+            pass
+
+        def do_GET(self) -> None:
+            path, _, _q = self.path.partition("?")
+            if path == "/health":
+                self._send(*health())
+                return
+            self._send(404, {"ok": False, "error": f"not found: {path} — this inlet "
+                                                   f"serves GET /health, POST /action, "
+                                                   f"POST /estop"})
+
+        def do_POST(self) -> None:
+            path, _, _q = self.path.partition("?")
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b""
+            if path == "/estop":
+                # Read the body first (above) and ignore it: `releaseAction()` posts
+                # "{}", and leaving an unread body on a keep-alive connection makes
+                # the NEXT request read it as a request line.
+                self._send(*estop())
+                return
+            if path == "/action":
+                try:
+                    body = json.loads(raw or b"{}")
+                except json.JSONDecodeError as exc:
+                    self._send(400, {"ok": False, "units": UNITS,
+                                     "error": f"body is not JSON: {exc}"})
+                    return
+                self._send(*action(body))
+                return
+            self._send(404, {"ok": False, "error": f"not found: {path} — this inlet "
+                                                   f"serves GET /health, POST /action, "
+                                                   f"POST /estop"})
+
+    return Handler
+
+
+def serve(pub: "ManipPublisher", bind: str, port: int) -> ThreadingHTTPServer:
+    """Start the inlet on its own daemon thread and return the server.
+
+    Caller shuts it down BEFORE stopping the publisher, so no request can arrive
+    while `shutdown()` is ramping to rest -- an /action landing in the middle of
+    that ramp would move the command slot back out of the rest pose and the
+    process would exit leaving a latched non-rest arm command in the sim.
+    """
+    httpd = ThreadingHTTPServer((bind, port), make_handler(pub, port=port))
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True, name="manip-http").start()
+    return httpd
 
 
 def probe(pub: ManipPublisher) -> None:
@@ -461,8 +1057,19 @@ def main() -> int:
                     help="max radians a single arm joint target may move per frame")
     ap.add_argument("--iface", default=None,
                     help="network interface for DDS (e.g. lo); omit for the SDK default")
+    ap.add_argument("--serve", type=int, default=0,
+                    help=f"serve the HTTP command inlet (POST /action, POST /estop, "
+                         f"GET /health) on this port; 0 = off. {DEFAULT_SERVE_PORT} is the "
+                         f"rig's convention, between the sidecar's 8777 and the camera "
+                         f"facade's 8779.")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="bind address for --serve. Loopback by DEFAULT and deliberately: "
+                         "this port moves a robot's arms, and nothing off this box has any "
+                         "business reaching it. Widen it on purpose or not at all.")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+    if args.serve and not (0 < args.serve < 65536):
+        ap.error("--serve must be a port in 1..65535 (0 disables the inlet)")
 
     try:
         pub = ManipPublisher(args.domain, args.rate, verbose=not args.quiet,
@@ -489,15 +1096,61 @@ def main() -> int:
 
     worker = threading.Thread(target=pub.run, daemon=True)
     worker.start()
+
+    # AFTER the publish thread, never before: `/action` is refused while
+    # `pub.alive` is false, and starting the inlet first would open a window in
+    # which every request is correctly but pointlessly rejected.
+    httpd = None
+    if args.serve:
+        try:
+            httpd = serve(pub, args.bind, args.serve)
+        except OSError as exc:
+            # Almost always "address already in use" — a second copy of this
+            # bridge. Two of them would fight over every arm joint, which is the
+            # one overlap the split-process design does not tolerate, so refuse
+            # rather than run as a publisher nobody can reach.
+            pub._stop.set()
+            worker.join(timeout=2.0)
+            print(f"[manip] refused: cannot serve on {args.bind}:{args.serve} ({exc}). "
+                  f"Another manipulation bridge is probably already running — two of "
+                  f"them publish conflicting rt/lowcmd frames.", file=sys.stderr,
+                  flush=True)
+            return 2
+        print(f"[manip] inlet on http://{args.bind}:{args.serve} — "
+              f"POST /action (name-keyed joint dict, RADIANS), POST /estop "
+              f"(ramp to rest), GET /health", flush=True)
+
     try:
         if args.probe:
+            if args.serve:
+                # Both drive the same single command slot, and the slot is
+                # last-writer-wins. Said out loud because a probe leg silently
+                # overwriting a policy frame looks like a policy that stalled.
+                print("[manip] NOTE: --probe and --serve share one command slot; the "
+                      "last writer wins for as long as the probe runs", flush=True)
             probe(pub)
+            if args.serve:
+                print("[manip] probe finished; the inlet stays up. Ctrl-C to stop",
+                      flush=True)
+                while not stopping.is_set() and worker.is_alive():
+                    time.sleep(0.2)
+        elif args.serve:
+            print("[manip] holding the rest pose until something POSTs /action. "
+                  "Ctrl-C to stop", flush=True)
+            while not stopping.is_set() and worker.is_alive():
+                time.sleep(0.2)
         else:
             print("[manip] holding the rest pose — set_targets() from a policy, "
-                  "or --probe. Ctrl-C to stop", flush=True)
+                  "--serve for the HTTP inlet, or --probe. Ctrl-C to stop", flush=True)
             while not stopping.is_set() and worker.is_alive():
                 time.sleep(0.2)
     finally:
+        # The inlet goes down FIRST. An /action arriving during the ramp below
+        # would move the command slot back out of the rest pose, and the process
+        # would then exit leaving the sim latched at a mid-reach arm command.
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
         # Join before the ramp goes out: `_publish` mutates one shared message
         # object that CycloneDDS serialises in C, so two threads must never be
         # inside it at once. The loop's sleep is a `_stop.wait()`, so setting

@@ -11,7 +11,7 @@
 #     |  ZMQ 55555/6/7 JPEG   +   REQ/REP 60000 config
 #     |
 #   isaac_loco_bridge.py    answers the sport RPC, publishes run_command + odom
-#   isaac_manip_bridge.py   publishes the arm and hand commands
+#   isaac_manip_bridge.py   publishes the arm and hand commands; :8778 takes them in
 #   g1_sidecar.py   :8777   HTTP /loco/* and /state  ->  sport RPC over DDS
 #   isaac_camera_facade.py :8779   HTTP /cameras/*, and proxies the rest to 8777
 #   robot-agent            HARDWARE_SIDECAR_URL -> :8779
@@ -74,6 +74,11 @@ MIN_FREE_MB="${MIN_FREE_MB:-11000}"
 GPU_INDEX="${GPU_INDEX:-0}"
 LOGDIR="${LOGDIR:-$HOME/factory-mission-logs/$(date +%Y%m%d-%H%M%S)}"
 ENABLE_MANIP="${ENABLE_MANIP:-1}"
+# The manipulation bridge's HTTP command inlet. 8777 is the sidecar and 8779 the camera
+# facade, so 8778 is the free slot between them. Declared once and used twice -- on the
+# bridge's --serve and on the facade's --manip-url -- because those two have to agree or
+# every /action a VLA rollout sends lands on a closed port.
+MANIP_PORT="${MANIP_PORT:-8778}"
 CAM_NAME="${CAM_NAME:-head_camera}"
 # The facade's default staleness window is 0.5 s, chosen against the cameras' NOMINAL 30 fps.
 # What this rig actually delivers is one write per --camera_write_interval control steps at a
@@ -306,16 +311,49 @@ disown "$LOCO_PID" 2>/dev/null || true
 sleep 2
 watch_pid "$LOCO_PID" "the locomotion bridge" "$LOGDIR/loco_bridge.log"
 
+MANIP_ARGS=()
 if [ "$ENABLE_MANIP" = "1" ]; then
-  say "5. manipulation bridge (arms + hands)"
+  say "5. manipulation bridge (arms + hands) + command inlet :$MANIP_PORT"
+  # --serve is what makes this process reachable by a VLA rollout. Without it the only
+  # producers are in-process, so the bridge sits holding the rest pose while the agent
+  # POSTs joint dicts at the sidecar's /action -- a real-robot path that cannot serve
+  # this rig at all. Loopback only, which is the bridge's own default: this port moves
+  # a robot's arms.
   setsid nohup "$PY" -u isaac_manip_bridge.py --domain "$DOMAIN" --iface "$IFACE" \
+    --serve "$MANIP_PORT" \
     >"$LOGDIR/manip_bridge.log" 2>&1 </dev/null &
   MANIP_PID=$!
   disown "$MANIP_PID" 2>/dev/null || true
   sleep 2
   watch_pid "$MANIP_PID" "the manipulation bridge" "$LOGDIR/manip_bridge.log"
+
+  # A LIVE PID IS NOT A REACHABLE INLET. watch_pid above proves the process did not
+  # refuse its arguments; it says nothing about whether the HTTP server bound. If it
+  # did not, the facade proxies every /action into a closed port and the rollout fails
+  # at frame 1 -- after Isaac has taken ten minutes to boot. This runs BEFORE that, so
+  # a verdict here is cheap and a verdict later is not.
+  #
+  # /health answers 503 when the publish thread is dead, so `curl -sf` is the whole
+  # check: 2xx means bound AND publishing.
+  MANIP_UP=0
+  for i in $(seq 1 20); do
+    if curl -sf -m 2 -o /dev/null "http://localhost:$MANIP_PORT/health"; then
+      MANIP_UP=1; break
+    fi
+    sleep 1
+  done
+  if [ "$MANIP_UP" = "1" ]; then
+    echo "ok   the manipulation inlet answers /health on :$MANIP_PORT"
+    MANIP_ARGS=(--manip-url "http://localhost:$MANIP_PORT")
+  else
+    tail -30 "$LOGDIR/manip_bridge.log" >&2 2>/dev/null || true
+    die "the manipulation bridge is running but nothing answers http://localhost:$MANIP_PORT/health after 20 s -- a VLA rollout would have no way to move the arms. See $LOGDIR/manip_bridge.log."
+  fi
 else
   say "5. manipulation bridge SKIPPED (ENABLE_MANIP=0)"
+  # No --manip-url either. With no bridge to route to, POST /action falls through to
+  # the sidecar and gets its honest 403 (G1_READ_ONLY), which is a far better answer
+  # than a 503 from a port nothing is listening on.
 fi
 
 say "5b. pre-seed the camera shared memory (the image server loses a race without it)"
@@ -453,8 +491,11 @@ sleep 3
 watch_pid "$SIDECAR_PID" "the sidecar" "$LOGDIR/sidecar.log"
 
 say "8. camera facade :8779 (serves /cameras/*, proxies the rest to 8777)"
+# ${MANIP_ARGS[@]+...} is the empty-array-under-`set -u` idiom used everywhere else in
+# this script: with ENABLE_MANIP=0 the array is empty and the flag is simply absent.
 setsid nohup "$PY" -u isaac_camera_facade.py --serve 8779 \
-  --sidecar-url http://localhost:8777 --scene "$TASK_ID" --max-age "$CAM_MAX_AGE" \
+  --sidecar-url http://localhost:8777 ${MANIP_ARGS[@]+"${MANIP_ARGS[@]}"} \
+  --scene "$TASK_ID" --max-age "$CAM_MAX_AGE" \
   --max-content-age "$CAM_MAX_CONTENT_AGE" \
   >"$LOGDIR/camera_facade.log" 2>&1 </dev/null &
 FACADE_PID=$!
