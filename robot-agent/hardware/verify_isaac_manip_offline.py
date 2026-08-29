@@ -1048,10 +1048,15 @@ try:
           "because its other caller is the routine end-of-teleop handback", str(code))
 
     print("\n  (14h) unknown routes, and the refusal that matters most")
-    code, body = get_json(f"{BASE}/state")
+    # NOT /state any more: that route now exists (section 16). A route the sidecar
+    # owns and this inlet does not is the honest test of the fall-through.
+    code, body = get_json(f"{BASE}/pointcloud/latest")
     check(code == 404 and "/action" in body.get("error", ""),
           "an unowned route is a 404 that names what this inlet does serve",
           body.get("error", "")[:60])
+    check("/state/fast" in body.get("error", ""),
+          "…including the read path, so a caller that guessed the wrong path is told "
+          "the right one")
 finally:
     httpd.shutdown()
     httpd.server_close()
@@ -1110,12 +1115,21 @@ fsrc = open(FACADE, encoding="utf-8").read()
 check('ap.add_argument("--manip-url"' in fsrc,
       "the camera facade takes --manip-url")
 check('MANIP_ROUTES: frozenset[str] = frozenset({"/action", "/estop"})' in fsrc,
-      "…and diverts exactly /action and /estop to it — /state, /state/fast and "
-      "/loco/* must keep going to the sidecar or Agent Mode loses the robot")
+      "…and diverts exactly /action and /estop of the POSTs — /loco/*, /record/* and "
+      "/pointcloud/* must keep going to the sidecar or Agent Mode loses the robot")
 check("if manip_url and path in MANIP_ROUTES:" in fsrc
       and fsrc.index("if manip_url and path in MANIP_ROUTES:")
       < fsrc.index("            if sidecar_url:\n                self._send(*proxy(\"POST\""),
       "…and the manip test comes BEFORE the sidecar fall-through in do_POST")
+check('MANIP_GET_ROUTES: frozenset[str] = frozenset({"/state", "/state/fast"})' in fsrc,
+      "the two GET routes divert as well: the sidecar's state source is a TCP link to "
+      "a real G1 that is not on this box")
+check("if manip_url and path in MANIP_GET_ROUTES:" in fsrc
+      and fsrc.index("if manip_url and path in MANIP_GET_ROUTES:")
+      < fsrc.index('            if sidecar_url:\n                self._send(*proxy("GET"'),
+      "…and that test comes before the sidecar fall-through in do_GET too")
+check(fsrc.index('if path == "/health"') < fsrc.index("if manip_url and path in MANIP_GET_ROUTES:"),
+      "…but AFTER /health and the camera routes, which this facade owns")
 check("HARDWARE_SIDECAR_URL" in fsrc and "one base URL" in fsrc.replace("ONE base URL", "one base URL"),
       "…with the reason stated: the agent keeps ONE base URL, and repointing it at "
       "the bridge would take the cameras and /loco/* down with it")
@@ -1249,6 +1263,413 @@ else:
           "domain-0 publisher at the real robot")
     check("--- domain guard" in bsrc and "domain 0 is the REAL ROBOT" in bsrc,
           "…and the domain-0 refusal is still in place (executed in (12) above)")
+
+# --------------------------------------------------------------------------------
+print("\n(16) THE READ PATH — a rollout must get measured joints, or none at all")
+# WHY THIS SECTION EXISTS. `HardwareClient.getStateNow()` builds the policy's
+# 43-dim observation by mapping the sidecar's `/state/fast` joints by NAME into
+# STATE_JOINT_NAMES order and defaulting every name it cannot find to 0.0. On this
+# rig the sidecar's read path is a TCP socket to the REAL G1's IP, which does not
+# exist on this box: `/state/fast` answers `{"joints": []}` with HTTP 200, so the
+# policy is handed 43 zeros and NOTHING reports an error. Every check below is
+# about that one failure and its inverse — a partial vector silently padded with
+# fabricated zeros.
+
+print("\n  (16a) the 43 names come from the contract's own source, not a fifth copy")
+_ENV = os.path.join(_HERE, "sim_evaluator", "envs", "g1_apple_env.py")
+
+
+def _py_list(src, name):
+    """The value of a module-level `name = [...]` or `name = A + B + ...`, by AST.
+
+    The same trick `action-contracts.test.ts` uses to pin the TypeScript tables to
+    this Python file. Reading it rather than importing it keeps numpy, gymnasium
+    and the rest of the evaluator's dependencies out of this verifier.
+    """
+    tree = ast.parse(src)
+    consts = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        try:
+            consts[target.id] = _py_eval(node.value, consts)
+        except (ValueError, TypeError):
+            continue
+    return consts.get(name)
+
+
+def _py_eval(node, consts):
+    if isinstance(node, ast.List) or isinstance(node, ast.Tuple):
+        return [_py_eval(e, consts) for e in node.elts]
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return consts[node.id]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _py_eval(node.left, consts) + _py_eval(node.right, consts)
+    raise ValueError("not a literal list expression")
+
+
+if not os.path.exists(_ENV):
+    check(False, "sim_evaluator/envs/g1_apple_env.py is present to pin the order to")
+else:
+    _contract = _py_list(open(_ENV, encoding="utf-8").read(), "STATE_JOINT_NAMES")
+    check(_contract is not None and len(_contract) == 43,
+          "g1_apple_env.py still declares a 43-name STATE_JOINT_NAMES",
+          str(len(_contract or [])))
+    check(list(M.STATE_JOINT_NAMES) == _contract,
+          "…and isaac_manip.STATE_JOINT_NAMES is that exact list, in that exact order "
+          "— composed from BODY + LHAND + RHAND, not transcribed",
+          "43/43 identical" if list(M.STATE_JOINT_NAMES) == _contract else
+          f"differs at {[i for i, (a, b) in enumerate(zip(M.STATE_JOINT_NAMES, _contract)) if a != b]}")
+check(M.STATE_JOINT_NAMES[:M.N_BODY] == tuple(BODY),
+      "the first 29 are the rt/lowstate motor order (BODY), so no reindexing is "
+      "needed on the body block at all")
+check(M.STATE_JOINT_NAMES[29:36] == tuple(LHAND)
+      and M.STATE_JOINT_NAMES[36:43] == tuple(RHAND),
+      "…and the last 14 are LHAND then RHAND from sim_g1_dds/joints.py")
+check(len(set(M.STATE_JOINT_NAMES)) == 43,
+      "no name appears twice — one source's value would otherwise overwrite another's")
+
+print("\n  (16b) THE LEFT/RIGHT ASYMMETRY, ASSERTED, IN THE DIRECTION IT IS READ")
+# Found four times before in this repo (the agent's joint config, the action
+# mapping, g1_sidecar's _get_state_readonly, and its POS_LIMITS). This is the fifth
+# place it could be made, and it points the OTHER way: on rt/dex3/right/state the
+# SIM sends middle before index, while a real G1 sends index before middle.
+check(M.ISAAC_HAND_STATE_ORDER["left"] == tuple(LHAND),
+      "the LEFT hand's published order is joints.py LHAND — thumb, MIDDLE, index",
+      str(M.ISAAC_HAND_STATE_ORDER["left"][3]))
+check(M.ISAAC_HAND_STATE_ORDER["right"][3] == "right_hand_middle_0_joint"
+      and M.ISAAC_HAND_STATE_ORDER["right"][5] == "right_hand_index_0_joint",
+      "the RIGHT hand's published order in THIS SIM is middle-first — slots 3,4 are "
+      "middle_0/1 and 5,6 are index_0/1",
+      f"{M.ISAAC_HAND_STATE_ORDER['right'][3]} @3")
+check(tuple(RHAND)[3] == "right_hand_index_0_joint",
+      "…while the REAL robot sends index_0 in slot 3. Same topic name, two "
+      "conventions — this is why g1_sidecar.py's RIGHT_HAND_WIRE is right THERE "
+      "and would be wrong here")
+check(M.ISAAC_HAND_STATE_ORDER["right"] != tuple(RHAND)
+      and sorted(M.ISAAC_HAND_STATE_ORDER["right"]) == sorted(RHAND),
+      "…and the two are permutations of the same seven joints, so a positional read "
+      "produces plausible numbers on the wrong fingers, never an exception")
+# The vendor source this was read off, verbatim, so a checkout update that changes
+# it fails here rather than in a grasp.
+_VDEX3 = os.path.expanduser(
+    "~/Dokumente/Unitree/g1_quest_teleop/third_party/checkouts/unitree_sim_isaaclab/"
+    "tasks/common_observations/dex3_state.py")
+if not os.path.exists(_VDEX3):
+    print("    SKIP  the vendor checkout is not on this box "
+          "(tasks/common_observations/dex3_state.py)")
+else:
+    _vsrc = open(_VDEX3, encoding="utf-8").read()
+    check(squash('"right_hand_thumb_2_joint",\n        "right_hand_middle_0_joint"')
+          in squash(_vsrc),
+          "the vendor still publishes right MIDDLE_0 immediately after thumb_2 "
+          "(dex3_state.py::get_robot_girl_joint_names) — the fact the table above "
+          "encodes")
+    check(squash('"left_hand_thumb_2_joint",\n        "left_hand_middle_0_joint"')
+          in squash(_vsrc),
+          "…and the left hand the same way, which is why only the right is remapped")
+    check("left_pos = pos[:7]" in _vsrc and "right_pos = pos[7:]" in _vsrc,
+          "…and it splits its 14 gathered values 7/7 into the two topics, so slot i "
+          "of each message is name i of that side's list")
+
+print("\n  (16c) an ABSENT source contributes NO joints — never a zero")
+# The defect this whole section is built around, stated as a test: a fabricated 0.0
+# and a measured 0.0 are the same number by the time a policy sees them.
+_body = [0.0] * M.N_BODY          # a REAL all-zero posture, which is legal
+_lh = [0.11] * M.N_HAND
+_rh = [0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27]
+_all, _dropped = M.label_state(body=_body, left_hand=_lh, right_hand=_rh,
+                               right_hand_order="isaac")
+check(len(_all) == 43 and not _dropped,
+      "three fresh sources label all 43 joints", f"{len(_all)} joints")
+_partial, _ = M.label_state(body=_body, left_hand=None, right_hand=_rh,
+                            right_hand_order="isaac")
+check(len(_partial) == 36 and not any(n.startswith("left_hand_") for n in _partial),
+      "a missing left hand leaves its 7 joints OUT of the dict, so getStateNow's "
+      "name lookup misses them", f"{len(_partial)} joints")
+check(all(_partial.get(n) is None for n in LHAND),
+      "…and not one of them is present as 0.0 — which is the whole point, because "
+      "the real body block above IS all zeros and is served")
+_none, _ = M.label_state(body=None, left_hand=None, right_hand=None,
+                         right_hand_order="isaac")
+check(_none == {}, "with nothing heard at all the dict is empty, not 43 zeros")
+_short, _ = M.label_state(body=[0.5] * 7, left_hand=None, right_hand=None,
+                          right_hand_order="isaac")
+check(len(_short) == 7 and _short["left_hip_pitch_joint"] == 0.5
+      and "left_knee_joint" in _short and "left_elbow_joint" not in _short,
+      "a truncated sample labels what it has and stops — data loss is not a reason "
+      "to invent the rest", f"{len(_short)} joints")
+_nan, _nan_dropped = M.label_state(
+    body=[float("nan")] + [0.3] * 28, left_hand=None, right_hand=None,
+    right_hand_order="isaac")
+check(_nan_dropped == ["left_hip_pitch_joint"] and "left_hip_pitch_joint" not in _nan,
+      "a NaN on the wire is DROPPED and named — it would reach the policy's "
+      "observation and it would also make the JSON unparseable to JSON.parse",
+      str(_nan_dropped))
+check(raises(ValueError, M.label_state, body=None, left_hand=None,
+             right_hand=_rh, right_hand_order="whatever"),
+      "and label_state refuses a right hand whose convention it was not told")
+_neodem, _ = M.label_state(body=None, left_hand=None, right_hand=_rh,
+                           right_hand_order="neodem")
+check(_neodem["right_hand_middle_0_joint"] == 0.26
+      and _partial["right_hand_middle_0_joint"] == 0.24,
+      "…because the two conventions put DIFFERENT values on the same finger: wire "
+      "slot 3 is middle_0 in this sim and index_0 on the real robot",
+      "the four numbers that only carry anything during a grasp")
+
+print("\n  (16d) the reader: staleness is absence, and a bad sample cannot kill it")
+
+
+class _StateMotor:
+    def __init__(self, q):
+        self.q = q
+
+
+class _StateMsg:
+    def __init__(self, qs):
+        self.motor_state = [_StateMotor(q) for q in qs]
+
+
+# subscribe=False: no SDK, no participant, no domain. `feed()` and `_take()` are the
+# two ways a sample gets in, and both are exercised.
+rd = B.StateReader(max_age_s=5.0, subscribe=False, verbose=False)
+snap = rd.read()
+check(snap["joints"] == [] and snap["missing"] == list(B.STATE_SOURCES)
+      and snap["complete"] is False,
+      "before anything is heard: no joints, all three sources missing, not complete")
+check(all(snap["sources"][s]["state"] == "never" for s in B.STATE_SOURCES),
+      "…and each source says 'never', not 'stale' — a publisher that never came up "
+      "is a different fault from one that stopped")
+rd._take("body", _StateMsg([0.4] * 35), M.N_BODY)
+check(rd.samples["body"] == 1 and len(rd.read()["joints"]) == 29,
+      "_take reads motor_state[i].q and stops at 29, ignoring the 35-slot message's "
+      "tail", f"{len(rd.read()['joints'])} joints")
+rd._take("body", object(), M.N_BODY)
+check(rd.bad["body"] == 1 and len(rd.read()["joints"]) == 29,
+      "a malformed sample is counted and dropped — the SDK reader thread survives "
+      "and the last good sample is kept")
+rd.feed("left_hand", [0.1] * M.N_HAND)
+rd.feed("right_hand", [0.0, 0.0, 0.0, 0.31, 0.32, 0.51, 0.52])
+full_snap = rd.read()
+check(full_snap["complete"] is True and len(full_snap["joints"]) == 43,
+      "all three sources fresh -> a complete 43-joint observation",
+      f"{len(full_snap['joints'])} joints")
+check([j["name"] for j in full_snap["joints"]] == list(M.STATE_JOINT_NAMES),
+      "…in STATE_JOINT_NAMES order, which is the order the policy is fed")
+_by = {j["name"]: j["position"] for j in full_snap["joints"]}
+check(_by["right_hand_middle_0_joint"] == 0.31 and _by["right_hand_index_0_joint"] == 0.51,
+      "…and the right hand is relabelled out of the sim's order: wire slot 3 is "
+      "MIDDLE_0 and slot 5 is INDEX_0",
+      "0.31 -> middle_0, 0.51 -> index_0")
+check(raises(ValueError, B.StateReader, max_age_s=0.0, subscribe=False),
+      "a zero max age is refused — every sample would be stale, i.e. every joint absent")
+check(raises(ValueError, rd.feed, "torso", [0.0]),
+      "and feed() refuses a source name it does not have")
+
+stale_rd = B.StateReader(max_age_s=0.05, subscribe=False, verbose=False)
+stale_rd.feed("body", [0.4] * M.N_BODY)
+check(len(stale_rd.read()["joints"]) == 29, "a just-fed sample is fresh")
+time.sleep(0.12)
+stale_snap = stale_rd.read()
+check(stale_snap["joints"] == [] and "body" in stale_snap["missing"],
+      "…and 120 ms later, past a 50 ms max age, its 29 joints are GONE from the "
+      "list rather than frozen at their last value",
+      stale_snap["sources"]["body"]["state"])
+check(stale_snap["sources"]["body"]["state"] == "stale"
+      and stale_snap["sources"]["body"]["age_s"] >= 0.1
+      and stale_snap["sources"]["body"]["samples"] == 1,
+      "…and the report says stale, with the age and the sample count",
+      f"{stale_snap['sources']['body']['age_s']}s")
+
+print("\n  (16e) GET /state/fast over HTTP — the shape getStateNow() parses")
+state_pub = B.ManipPublisher(1, rate_hz=50.0, verbose=False, init_dds=False)
+state_pub._shaper.reset(M.REST)
+state_worker = threading.Thread(target=state_pub.run, daemon=True)
+state_worker.start()
+state_rd = B.StateReader(max_age_s=5.0, subscribe=False, verbose=False)
+state_httpd = B.serve(state_pub, "127.0.0.1", 0, reader=state_rd)
+SBASE = f"http://127.0.0.1:{state_httpd.server_address[1]}"
+try:
+    code, body = get_json(f"{SBASE}/state/fast")
+    check(code == 503 and body.get("ok") is False,
+          "with no rt/lowstate at all, /state/fast REFUSES — a 200 with an empty "
+          "list is what the sidecar does, and getStateNow turns that into 43 zeros "
+          "with no error anywhere", str(code))
+    check("getStateNow" in body.get("error", "") and "0.0" in body.get("error", ""),
+          "…and the refusal explains the failure it is preventing",
+          body.get("error", "")[:70])
+    check(body.get("missing") == list(B.STATE_SOURCES)
+          and body["sources"]["body"]["topic"] == "rt/lowstate",
+          "…naming every missing source and the topic each one comes from")
+
+    state_rd.feed("body", [0.0] * M.N_BODY)
+    state_rd.feed("left_hand", [-0.7] * M.N_HAND)
+    state_rd.feed("right_hand", [0.0, 0.0, 0.0, 0.31, 0.32, 0.51, 0.52])
+    code, body = get_json(f"{SBASE}/state/fast")
+    check(code == 200 and body.get("ok") is True and body.get("complete") is True,
+          "with all three fresh: 200, complete", f"{code}")
+    check(len(body["joints"]) == 43 and body["count"] == 43 and body["expected"] == 43,
+          "…43 joints", str(body.get("count")))
+    check(all(set(j) == {"name", "position"} and isinstance(j["position"], float)
+              for j in body["joints"]),
+          "…each one {name, position} with a float — exactly what getStateNow parses")
+    check(body.get("units") == "radians",
+          "…and it states its units, like every other reply from this bridge")
+    _order = [j["name"] for j in body["joints"]]
+    check(_order == list(M.STATE_JOINT_NAMES),
+          "…in the policy's own 43-dim order")
+    _pos = {j["name"]: j["position"] for j in body["joints"]}
+    check(_pos["right_hand_middle_0_joint"] == 0.31
+          and _pos["right_hand_index_0_joint"] == 0.51,
+          "…with the right hand relabelled out of the SIM's slot order, by name")
+
+    # The zero-fill this route exists to prevent, demonstrated end to end.
+    state_rd._slot["left_hand"] = None
+    code, body = get_json(f"{SBASE}/state/fast")
+    check(code == 200 and body.get("complete") is False
+          and body.get("missing") == ["left_hand"],
+          "a missing HAND is served as a partial vector, flagged incomplete — 7 of 43, "
+          "and only during a grasp", f"{code}, {body.get('count')} joints")
+    check(len(body["joints"]) == 36
+          and not any(j["name"].startswith("left_hand_") for j in body["joints"]),
+          "…with those seven ABSENT from the list, so nothing fabricates them as 0.0")
+    state_rd._slot["body"] = None
+    code, body = get_json(f"{SBASE}/state/fast")
+    check(code == 503 and "body" in body.get("missing", []),
+          "a missing BODY is a 503: 29 of 43 fabricated is not an observation with "
+          "gaps, it is a different robot", str(code))
+
+    print("\n  (16f) GET /state — the 2 s poll, which is a different consumer")
+    code, body = get_json(f"{SBASE}/state")
+    check(code == 200 and body.get("connected") is False,
+          "…is ALWAYS 200, because startPolling() reads `connected` and never the "
+          "status code; refusing would only flip the agent to disconnected", str(code))
+    state_rd.feed("body", [0.25] * M.N_BODY)
+    code, body = get_json(f"{SBASE}/state")
+    check(body.get("connected") is True and len(body["joints"]) == 36,
+          "…and `connected` follows the BODY topic: no rt/lowstate is no posture",
+          f"{len(body['joints'])} joints")
+    check("imu" not in body and "battery" not in body and "touch" not in body,
+          "…and it sends no imu/battery/touch group: the sim never fills "
+          "imu_state.rpy (g1_robot_dds.py writes quaternion, accel and gyro only), "
+          "and an absent group is parsed as null, which is the truth")
+
+    print("\n  (16g) /health shows all three sources, so one URL answers 'which is gone'")
+    code, h = get_json(f"{SBASE}/health")
+    check(code == 200 and h["state"]["enabled"] is True,
+          "the read path is reported on the same /health as the write path", str(code))
+    check(h["state"]["complete"] is False and h["state"]["missing"] == ["left_hand"],
+          "…including which source is missing right now", str(h["state"]["missing"]))
+    check(h["state"]["joints"] == 36 and h["state"]["expected"] == 43,
+          "…and how many of the 43 that costs", f"{h['state']['joints']}/43")
+    check(all(h["state"]["sources"][s]["topic"] for s in B.STATE_SOURCES)
+          and h["state"]["sources"]["body"]["age_s"] is not None,
+          "…with the topic name and age of each")
+    check(h.get("ok") is True and h.get("status") == "ok",
+          "…while `ok` stays a verdict on PUBLISHING: the bringup probe is `curl -sf` "
+          "on this route and runs before Isaac has booted, and a bridge that can "
+          "still move the arms is not dead")
+finally:
+    state_httpd.shutdown()
+    state_httpd.server_close()
+    state_pub._stop.set()
+    state_worker.join(timeout=2.0)
+
+print("\n  (16h) --state-require all, for a caller that would rather stop than grasp blind")
+strict_pub = B.ManipPublisher(1, rate_hz=50.0, verbose=False, init_dds=False)
+strict_pub._shaper.reset(M.REST)
+strict_worker = threading.Thread(target=strict_pub.run, daemon=True)
+strict_worker.start()
+strict_rd = B.StateReader(max_age_s=5.0, subscribe=False, verbose=False)
+strict_rd.feed("body", [0.1] * M.N_BODY)
+strict_rd.feed("right_hand", [0.0] * M.N_HAND)
+strict_httpd = B.serve(strict_pub, "127.0.0.1", 0, reader=strict_rd,
+                       state_require="all")
+try:
+    code, body = get_json(f"http://127.0.0.1:{strict_httpd.server_address[1]}/state/fast")
+    check(code == 503 and body.get("missing") == ["left_hand"],
+          "under --state-require all a missing hand is a 503 too", str(code))
+finally:
+    strict_httpd.shutdown()
+    strict_httpd.server_close()
+    strict_pub._stop.set()
+    strict_worker.join(timeout=2.0)
+check(raises(ValueError, B.make_handler, strict_pub, port=1, state_require="most"),
+      "and an unknown --state-require is refused at construction, not at request time")
+
+no_state_pub = B.ManipPublisher(1, rate_hz=50.0, verbose=False, init_dds=False)
+no_state_worker = threading.Thread(target=no_state_pub.run, daemon=True)
+no_state_worker.start()
+no_state_httpd = B.serve(no_state_pub, "127.0.0.1", 0, reader=None)
+try:
+    NB = f"http://127.0.0.1:{no_state_httpd.server_address[1]}"
+    code, body = get_json(f"{NB}/state/fast")
+    check(code == 503 and "--no-state" in body.get("error", ""),
+          "with --no-state the route is a 503 that says so — not a 404, which would "
+          "claim the route does not exist when an operator turned it off", str(code))
+    code, h = get_json(f"{NB}/health")
+    check(h["state"]["enabled"] is False,
+          "…and /health says the read path is off")
+finally:
+    no_state_httpd.shutdown()
+    no_state_httpd.server_close()
+    no_state_pub._stop.set()
+    no_state_worker.join(timeout=2.0)
+
+print("\n  (16i) …and the whole path an observation takes, through the facade's port")
+# The counterpart of (15a), in the other direction: the agent knows ONE base URL,
+# and the 43 numbers a rollout conditions on have to come back through it.
+obs_pub = B.ManipPublisher(1, rate_hz=50.0, verbose=False, init_dds=False)
+obs_pub._shaper.reset(M.REST)
+obs_worker = threading.Thread(target=obs_pub.run, daemon=True)
+obs_worker.start()
+obs_rd = B.StateReader(max_age_s=5.0, subscribe=False, verbose=False)
+obs_rd.feed("body", [0.05 * i for i in range(M.N_BODY)])
+obs_rd.feed("left_hand", [-0.7] * M.N_HAND)
+obs_rd.feed("right_hand", [0.0, 0.0, 0.0, 0.31, 0.32, 0.51, 0.52])
+obs_inlet = B.serve(obs_pub, "127.0.0.1", 0, reader=obs_rd)
+obs_facade = ThreadingHTTPServer(("127.0.0.1", 0), F.make_handler(
+    _slots, max_age_s=0.5, wait_s=0.01, max_content_age_s=0.0, scene="offline-test",
+    sidecar_url="http://127.0.0.1:1",
+    manip_url=f"http://127.0.0.1:{obs_inlet.server_address[1]}"))
+obs_facade.daemon_threads = True
+threading.Thread(target=obs_facade.serve_forever, daemon=True).start()
+try:
+    AGENT = f"http://127.0.0.1:{obs_facade.server_address[1]}"   # HARDWARE_SIDECAR_URL
+    code, body = get_json(f"{AGENT}/state/fast")
+    check(code == 200 and len(body.get("joints", [])) == 43,
+          "GET /state/fast at the FACADE's port returns the bridge's 43 joints — the "
+          "sidecar on 127.0.0.1:1 is a closed port and would have 503'd",
+          f"{code}, {len(body.get('joints', []))} joints")
+    # The mapping getStateNow() performs, done here, so the assertion is about the
+    # vector the policy actually receives rather than about the JSON.
+    _lookup = {j["name"]: j["position"] for j in body["joints"]}
+    _vector = [_lookup.get(n, 0.0) for n in M.STATE_JOINT_NAMES]
+    check(len(_vector) == 43 and _vector != [0.0] * 43,
+          "…and getStateNow's own name mapping over that reply is NOT 43 zeros, "
+          "which is what it produced against this rig an hour ago",
+          f"{sum(1 for v in _vector if v != 0.0)} non-zero of 43")
+    check(_vector[M.STATE_JOINT_NAMES.index("right_hand_index_0_joint")] == 0.51
+          and _vector[M.STATE_JOINT_NAMES.index("right_hand_middle_0_joint")] == 0.31,
+          "…with the right hand's index and middle fingers where the policy expects "
+          "them — the transposition, checked at the far end of the whole path")
+    code, body = get_json(f"{AGENT}/state")
+    check(code == 200 and body.get("connected") is True,
+          "…and GET /state comes from the bridge too, so the 2 s poll stops "
+          "reporting a robot that is not connected", str(code))
+    code, body = get_json(f"{AGENT}/loco/odom")
+    check(code == 503 and "sidecar" in body.get("error", ""),
+          "…while /loco/odom still goes to the SIDECAR: the sim's only pose source "
+          "is not on this bridge", body.get("error", "")[:50])
+finally:
+    obs_facade.shutdown(); obs_facade.server_close()
+    obs_inlet.shutdown(); obs_inlet.server_close()
+    obs_pub._stop.set(); obs_worker.join(timeout=2.0)
 
 print()
 if FAILURES:

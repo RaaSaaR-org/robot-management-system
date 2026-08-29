@@ -573,9 +573,36 @@ class CameraSubscriber(threading.Thread):
 # --------------------------------------------------------------------------------------
 
 #: The two POST routes `--manip-url` diverts to `isaac_manip_bridge.py`. Everything
-#: else — `/state`, `/state/fast`, `/loco/*`, `/record/*`, `/pointcloud/*` — keeps
-#: going to the sidecar, which is the only thing that serves them.
+#: else — `/loco/*`, `/record/*`, `/pointcloud/*` — keeps going to the sidecar,
+#: which is the only thing that serves them.
 MANIP_ROUTES: frozenset[str] = frozenset({"/action", "/estop"})
+
+#: The two GET routes `--manip-url` diverts as well, added when the manipulation
+#: bridge grew a read path.
+#:
+#: WHY THE SIDECAR LOSES THESE. Its state source under `G1_READ_ONLY=1` is a TCP
+#: socket to the REAL G1's IP, which does not exist on this box: `GET /state/fast`
+#: there answers `{"joints": []}` with HTTP 200 — measured on this rig — and
+#: `HardwareClient.getStateNow()` turns a missing name into 0.0, so a VLA rollout
+#: is fed 43 zeros and nothing reports an error. The manipulation bridge is on the
+#: sim's DDS domain and reads rt/lowstate and rt/dex3/*/state, so it is the only
+#: process here that can answer with measured joints.
+#:
+#: `/state` GOES TOO, NOT JUST `/state/fast`, and that is the coherent split
+#: rather than a bolder one:
+#:   * `/state` is the 2 s poll (`HardwareClient.startPolling`). On this rig the
+#:     sidecar answers it with the same empty joint list and `connected: false`,
+#:     so nothing is lost and the joints are gained.
+#:   * its `odometry` group is not lost either: that group only ever exists behind
+#:     the real robot's ZMQ bridge, and against the simulator the pose comes from
+#:     `GET /loco/odom` — which is NOT diverted and still reaches the sidecar.
+#:     `HardwareClient.refreshBasePose()` documents exactly that fallback.
+#:   * `/health` is NOT diverted. The facade owns it, merges the sidecar's verdict
+#:     into it, and `_tryConnect` gates `sidecarAvailable` on it; routing it here
+#:     would let a manipulation bridge that is down switch off locomotion and the
+#:     cameras, which do not depend on it.
+#: With no `--manip-url` this file behaves exactly as it did before.
+MANIP_GET_ROUTES: frozenset[str] = frozenset({"/state", "/state/fast"})
 
 
 def qs_one(query: dict[str, list[str]], key: str) -> str | None:
@@ -592,18 +619,21 @@ def make_handler(slots: dict[str, FrameSlot], *, max_age_s: float, wait_s: float
     forwarded to `sidecar_url` when one was given (so Agent Mode can keep ONE base URL for
     perception and locomotion) and 404s when it was not.
 
-    `manip_url` splits TWO of those forwarded routes off to `isaac_manip_bridge.py`:
-    `POST /action` and `POST /estop`. THE CALLER STILL SEES ONE BASE URL — that is the
-    whole point, and it is why this is a routing table here rather than a second
-    `HARDWARE_SIDECAR_URL` for somebody to configure. Repointing the agent at the manip
-    bridge instead would take `/state`, `/state/fast`, `/loco/*` and every camera down
-    with it.
+    `manip_url` splits FOUR of those forwarded routes off to `isaac_manip_bridge.py`:
+    `POST /action`, `POST /estop`, `GET /state/fast` and `GET /state`. THE CALLER STILL
+    SEES ONE BASE URL — that is the whole point, and it is why this is a routing table
+    here rather than a second `HARDWARE_SIDECAR_URL` for somebody to configure.
+    Repointing the agent at the manip bridge instead would take `/loco/*`, `/record/*`,
+    `/pointcloud/*` and every camera down with it.
 
-    Why those two and nothing else: on the Isaac rig the sidecar's `/action` is a
+    Why those four and nothing else: on the Isaac rig the sidecar's `/action` is a
     real-robot path that cannot work (no `lerobot` in the rig's interpreter, DDS domain 0
-    hardcoded, no Dex3 publisher), and its `/estop` clears a ramp-state dict that is empty
-    under `G1_READ_ONLY=1`. The manipulation bridge is the only process in the rig that
-    publishes rt/lowcmd and rt/dex3/*/cmd, so it is the only one that can move — or stop —
+    hardcoded, no Dex3 publisher), its `/estop` clears a ramp-state dict that is empty
+    under `G1_READ_ONLY=1`, and its state routes read a TCP socket to a real G1 that does
+    not exist here — they answer `{"joints": []}` with a 200, which `getStateNow()` turns
+    into 43 zeros without an error anywhere. The manipulation bridge is the only process
+    in the rig that publishes rt/lowcmd and rt/dex3/*/cmd, and the only one subscribed to
+    rt/lowstate and rt/dex3/*/state, so it is the only one that can move, stop or READ
     the simulated arms. With no `--manip-url` this file behaves exactly as it did before.
     """
 
@@ -705,6 +735,16 @@ def make_handler(slots: dict[str, FrameSlot], *, max_age_s: float, wait_s: float
                 self._snapshot(urllib.parse.unquote(
                     path[len("/cameras/"):-len("/snapshot")]), query)
                 return
+            if manip_url and path in MANIP_GET_ROUTES:
+                # 2 s, not the generic 30, for the same reason the POST diversion
+                # uses it: `getStateNow()` aborts at 1500 ms and the 2 s `/state`
+                # poll at 500 ms, so a longer wait on a dead inlet only strands a
+                # thread per abandoned request and tells the caller nothing its own
+                # timeout did not. The 503 body from `/state/fast` is what a
+                # rollout needs to see, and it needs to see it in time.
+                self._send(*proxy("GET", self.path, None, base=manip_url,
+                                  label="manip bridge", timeout=2.0))
+                return
             if sidecar_url:
                 self._send(*proxy("GET", self.path, None))
                 return
@@ -765,7 +805,10 @@ def make_handler(slots: dict[str, FrameSlot], *, max_age_s: float, wait_s: float
                 # `GET {url}/health` is the liveness answer; the bringup script waits
                 # on exactly that.
                 payload["manip"] = {
-                    "url": manip_url, "routes": sorted(MANIP_ROUTES), "probed": False,
+                    "url": manip_url,
+                    "routes": ([f"POST {r}" for r in sorted(MANIP_ROUTES)]
+                               + [f"GET {r}" for r in sorted(MANIP_GET_ROUTES)]),
+                    "probed": False,
                     "note": "routing only — GET <url>/health for whether it is alive",
                 }
             payload.setdefault("sim", True)
@@ -867,11 +910,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="forward every non-camera route to this sidecar (e.g. "
                          "http://localhost:8767) so Agent Mode needs one base URL")
     ap.add_argument("--manip-url", default="",
-                    help="send POST /action and POST /estop to this manipulation bridge "
-                         "(e.g. http://localhost:8778) instead of the sidecar. The one "
-                         "process that can move the simulated arms and hands; the "
-                         "sidecar's /action is a real-robot path that cannot serve this "
-                         "rig. Callers keep ONE base URL either way.")
+                    help="send POST /action, POST /estop, GET /state/fast and GET "
+                         "/state to this manipulation bridge (e.g. "
+                         "http://localhost:8778) instead of the sidecar. The one "
+                         "process that can move the simulated arms and hands, and the "
+                         "one subscribed to rt/lowstate; the sidecar's /action and its "
+                         "state source are real-robot paths that cannot serve this rig. "
+                         "Callers keep ONE base URL either way.")
     ap.add_argument("--scene", default="Isaac-Factory-PauseRoom-G129-Dex3-Wholebody",
                     help="scene label reported by /health")
     ap.add_argument("--log-every", type=float, default=10.0,
@@ -944,9 +989,13 @@ def main() -> int:
     routes = f"proxied to {args.sidecar_url}" if args.sidecar_url else "404 (camera-only)"
     print(f"[cam] non-camera routes: {routes}", flush=True)
     if args.manip_url:
-        print(f"[cam]   except POST {', '.join(sorted(MANIP_ROUTES))} -> "
-              f"{args.manip_url} (the manipulation bridge: the only process that can "
-              f"move or stop the simulated arms)", flush=True)
+        print(f"[cam]   except POST {', '.join(sorted(MANIP_ROUTES))} and GET "
+              f"{', '.join(sorted(MANIP_GET_ROUTES))} -> {args.manip_url} (the "
+              f"manipulation bridge: the only process here that can move or stop the "
+              f"simulated arms, and the only one that can READ their joints — the "
+              f"sidecar's state source is a TCP link to a real G1 that is not on this "
+              f"box, and it answers /state/fast with an empty joint list and a 200)",
+              flush=True)
     print("[cam] nothing is decoded or re-encoded here — the sim's JPEG bytes are passed "
           "through unchanged.", flush=True)
 

@@ -70,11 +70,52 @@ THE THREE WAYS THIS GOES WRONG IN SILENCE
 * RAW GRIP CODE -> see `isaac_manip.py` note 1. `set_action31()` takes mandatory
   `left_hand_units=` / `right_hand_units=` and there is no overload that guesses.
 
+WHAT COMES BACK
+---------------
+    rt/lowstate            unitree_hg LowState_
+                           motor_state[0:29].q = the 29 body joints, BODY order
+    rt/dex3/left/state     unitree_hg HandState_, motor_state[0:7].q, NeoDEM left order
+    rt/dex3/right/state    unitree_hg HandState_, motor_state[0:7].q, ISAAC right order
+                           (remapped to NeoDEM order on the way out, by NAME)
+
 THE COMMAND INLET (--serve)
 ---------------------------
-    POST /action   {"<joint name>": radians, ...}   -> set_targets()
-    POST /estop    {}                               -> ramp to the rest pose
-    GET  /health                                    -> domain, iface, DDS, rate, last action
+    POST /action     {"<joint name>": radians, ...}   -> set_targets()
+    POST /estop      {}                               -> ramp to the rest pose
+    GET  /state/fast                                  -> the 43-joint observation
+    GET  /state                                       -> the same, for the 2 s poll
+    GET  /health                                      -> domain, iface, DDS, rate,
+                                                         last action, state sources
+
+THE READ PATH, AND WHY IT IS IN THIS FILE
+-----------------------------------------
+Because the sidecar's read path points at a robot that is not there.
+`g1_sidecar.py` under `G1_READ_ONLY=1` sources its joints from
+`g1_state_bridge_readonly.py`, which opens a TCP socket to the REAL G1's IP. On
+this box nothing answers: `/health` says `"connected": false` and
+`GET /state/fast` returns `{"joints": []}` with HTTP 200 — measured against the
+running rig, through the facade on :8779, minutes before this was written.
+
+The 200 is what makes it dangerous. `HardwareClient.getStateNow()` maps the
+returned joints by name into the 43-dim `STATE_JOINT_NAMES` order and DEFAULTS
+EVERY NAME IT CANNOT FIND TO 0.0, so an empty list raises nothing anywhere: the
+policy is handed 43 zeros and the rollout looks like it ran. A GR00T rollout fed
+a zeroed proprioceptive state is not a rollout.
+
+The data was on the wire the whole time — `isaac_loco_bridge.py` already
+subscribes to rt/lowstate for its heading — and this process is already on the
+sim's DDS domain with the factory initialised. So the read path lives here, next
+to the write path, and follows the same two rules the rest of the file follows:
+
+* ABSENT, NEVER ZERO. A source that has not been heard, or whose last sample is
+  older than `--state-max-age`, contributes NO joints. A fabricated 0.0 is
+  indistinguishable from a measured one by the time it reaches the policy, and
+  0.0 is a plausible angle for most of these joints.
+* AND THE RIGHT HAND IS REORDERED ON THE WAY OUT. rt/dex3/right/state carries
+  middle_0, middle_1 in slots 3-4 in THIS sim and index_0, index_1 on a real G1
+  (`tasks/common_observations/dex3_state.py:30-49`). `g1_sidecar.py` reads the
+  same topic with the other table and is right to, because it reads real
+  hardware. Both mappings are by NAME; see `isaac_manip.ISAAC_HAND_STATE_ORDER`.
 
 `--serve 8778` is what makes this bridge reachable by a VLA rollout. Without it
 the only producers are in-process (`set_targets`, `set_action31`) and `--probe`,
@@ -142,6 +183,25 @@ from isaac_manip import HandUnits, ManipTargets  # noqa: E402
 TOPIC_LOWCMD = "rt/lowcmd"
 TOPIC_HAND_CMD = "rt/dex3/{}/cmd"
 
+# The READ side. Three topics, three independent publishers in the sim, three
+# independent ways to go silent -- so they are tracked separately and reported
+# separately. See `StateReader`.
+TOPIC_LOWSTATE = "rt/lowstate"
+TOPIC_HAND_STATE = "rt/dex3/{}/state"
+
+#: The three state sources, in the order `/state/fast` emits their joints.
+STATE_SOURCES: tuple[str, ...] = ("body", "left_hand", "right_hand")
+
+#: A sample older than this is treated as ABSENT, not as data.
+#:
+#: 1.0 s is seven sim steps at the ~7 Hz this scene actually reaches on this box
+#: (measured; the GPU is shared and Isaac does not run real-time here), and the
+#: dex3 observation term rate-limits itself to 50 Hz on top of that. So a fresh
+#: rig sits three orders of magnitude inside this window and a stalled one falls
+#: out of it within a second. It is deliberately NOT the camera facade's 0.5 s:
+#: at 30 fps that was fifteen frames, and at 7 Hz it would be three.
+DEFAULT_STATE_MAX_AGE_S = 1.0
+
 # 50 Hz. UNLIKE rt/run_command/cmd this does NOT need over-publishing: the sim's
 # robot-command and hand-command shared-memory slots are written by the DDS
 # subscriber and read by `get_action()`, which never clears them, so the last
@@ -175,12 +235,13 @@ DEFAULT_SERVE_PORT = 8778
 # a slot order -- the left is wired thumb -> MIDDLE -> index, the right
 # thumb -> INDEX -> middle -- so splitting a name-keyed dict positionally against a
 # single hand table labels the left hand's index finger as its middle one and vice
-# versa. That is not hypothetical: `g1_sidecar.py::_get_state_readonly` indexes one
-# thumb->index->middle table positionally for BOTH sides and mislabels the left
-# hand's state to this day, silently, in the four numbers that only carry anything
-# during a grasp. The dicts below make that impossible here, and the only other
-# reordering on this path -- `M.remap_right_hand()` -- derives its permutation by
-# name too.
+# versa. That is not hypothetical: `g1_sidecar.py::_get_state_readonly` used to
+# index one thumb->index->middle table positionally for BOTH sides, mislabelling
+# the left hand's state in the four numbers that only carry anything during a
+# grasp; it now keeps `LEFT_HAND_WIRE` and `RIGHT_HAND_WIRE` apart, which is the
+# same fix as the dicts below. The dicts make it impossible here, and the two
+# other reorderings on this path -- `M.remap_right_hand()` on the way out and
+# `M.ISAAC_HAND_STATE_ORDER` on the way back in -- are both by name too.
 ARM_INDEX: dict[str, int] = {n: i for i, n in enumerate(M.ARM_JOINTS)}
 LEFT_HAND_INDEX: dict[str, int] = {n: i for i, n in enumerate(M.NEODEM_LEFT_HAND)}
 RIGHT_HAND_INDEX: dict[str, int] = {n: i for i, n in enumerate(M.NEODEM_RIGHT_HAND)}
@@ -655,6 +716,188 @@ class ManipPublisher:
                   file=sys.stderr, flush=True)
 
 
+class StateReader:
+    """Keep the newest rt/lowstate and rt/dex3/{left,right}/state. Nothing else.
+
+    WHY THIS IS HERE AND NOT IN THE SIDECAR, WHICH OWNS /state. Because the
+    sidecar's read path points at a robot that is not there. `g1_sidecar.py` under
+    `G1_READ_ONLY=1` gets its joints from `g1_state_bridge_readonly.py`, which
+    opens a TCP socket to the REAL G1's IP; on this box nothing answers, `/health`
+    says `"connected": false`, and `GET /state/fast` returns `{"joints": []}` with
+    HTTP 200. Measured through the facade minutes before this class was written.
+    That 200 is what makes it dangerous: `HardwareClient.getStateNow()` treats a
+    missing name as 0.0, so the policy gets 43 zeros and nothing anywhere reports
+    an error. This process is already on the sim's DDS domain with the factory
+    initialised, so it is the cheapest place in the rig that can answer honestly.
+
+    THREADING. One SDK reader thread per topic (`Init(handler, queueLen=1)`) calls
+    `_take`, which does ~29 attribute reads, builds one tuple and stores it. The
+    publish loop is not involved at any point -- `rt/lowcmd` at 50 Hz is this
+    bridge's real job and nothing here may make it stutter. Each slot is replaced
+    by a single dict item assignment, atomic under the GIL, so an HTTP thread sees
+    either the previous sample in full or the new one in full; that is the same
+    lock-free hand-off `ManipPublisher._slot` uses and for the same reason.
+
+    `queueLen=1` and not the locomotion bridge's 10: this class only ever wants
+    the NEWEST sample, and `BQueue.Put` drops on overflow rather than replacing,
+    so a deeper queue can only put older samples in front of the one we want.
+
+    STALENESS IS ABSENCE, NEVER A ZERO. A source that has not been heard, or whose
+    last sample is older than `max_age_s`, contributes NO joints. See
+    `isaac_manip.label_state()` for why a fabricated zero is worse here than
+    anywhere else: 0.0 is a plausible angle for most of these joints, and the
+    consumer cannot tell the two apart.
+    """
+
+    def __init__(self, *, max_age_s: float = DEFAULT_STATE_MAX_AGE_S,
+                 subscribe: bool = True, verbose: bool = True,
+                 queue_len: int = 1) -> None:
+        if max_age_s <= 0:
+            raise ValueError("state max_age_s must be > 0 (a zero window makes every "
+                             "sample stale, i.e. every joint absent)")
+        self.max_age_s = float(max_age_s)
+        self.subscribed = bool(subscribe)
+        self._verbose = verbose
+        # source -> (values, monotonic recv) or None. Replaced whole; never mutated.
+        self._slot: dict[str, tuple[tuple[float, ...], float] | None] = {
+            s: None for s in STATE_SOURCES}
+        self.samples: dict[str, int] = {s: 0 for s in STATE_SOURCES}
+        self.bad: dict[str, int] = {s: 0 for s in STATE_SOURCES}
+        self.topics: dict[str, str] = {
+            "body": TOPIC_LOWSTATE,
+            "left_hand": TOPIC_HAND_STATE.format("left"),
+            "right_hand": TOPIC_HAND_STATE.format("right"),
+        }
+        self._subs: list = []
+        if not subscribe:
+            # For the offline verifier and for an embedder that feeds this object
+            # itself. No SDK import at all on this path, so the whole read contract
+            # can be exercised on an interpreter that has no `unitree_sdk2py`.
+            return
+
+        from unitree_sdk2py.core.channel import ChannelSubscriber  # noqa: PLC0415
+        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (  # noqa: PLC0415
+            HandState_, LowState_)
+
+        # NO ChannelFactoryInitialize HERE. `ManipPublisher.__init__` has already
+        # opened the participant this process uses; initialising the factory a
+        # second time tears down the endpoints the publishers are bound to, which
+        # would trade a state read for the arms. Construct this AFTER the
+        # publisher, always.
+        for source, msg_type, handler in (
+                ("body", LowState_, self._on_body),
+                ("left_hand", HandState_, self._on_hand("left_hand")),
+                ("right_hand", HandState_, self._on_hand("right_hand"))):
+            sub = ChannelSubscriber(self.topics[source], msg_type)
+            sub.Init(handler, queue_len)
+            self._subs.append(sub)
+
+    # ------------------------------------------------------- SDK reader threads
+    def _on_body(self, msg) -> None:
+        self._take("body", msg, M.N_BODY)
+
+    def _on_hand(self, source: str):
+        return lambda msg: self._take(source, msg, M.N_HAND)
+
+    def _take(self, source: str, msg, count: int) -> None:
+        """Store one sample. Runs on an SDK reader thread; must not raise.
+
+        A malformed sample must not kill the thread that feeds it -- the failure
+        would be a source that silently stops updating while `/health` keeps
+        reporting the age of the last good sample, i.e. the exact silence this
+        whole file exists to remove. Count it, say so once, keep the old sample
+        (which will go stale on its own and then be reported as absent).
+        """
+        try:
+            motors = msg.motor_state
+            values = tuple(float(motors[i].q) for i in range(min(count, len(motors))))
+        except Exception as exc:  # noqa: BLE001
+            self.bad[source] += 1
+            if self.bad[source] == 1:
+                print(f"[state] cannot read motor_state from {self.topics[source]} "
+                      f"({exc!r}); those joints will be reported ABSENT, not zero",
+                      file=sys.stderr, flush=True)
+            return
+        self._slot[source] = (values, time.monotonic())
+        self.samples[source] += 1
+        if self.samples[source] == 1 and self._verbose:
+            print(f"[state] {self.topics[source]} acquired — {len(values)} joints",
+                  flush=True)
+
+    # ------------------------------------------------------------ reader side
+    def feed(self, source: str, values) -> None:
+        """Inject one sample without DDS. For `subscribe=False` embedders and tests."""
+        if source not in STATE_SOURCES:
+            raise ValueError(f"unknown state source {source!r}; expected one of "
+                             f"{', '.join(STATE_SOURCES)}")
+        self._slot[source] = (tuple(float(v) for v in values), time.monotonic())
+        self.samples[source] += 1
+
+    def _source_report(self, source: str, now: float) -> tuple[dict, tuple | None]:
+        """`({report}, values-or-None)` for one source, from ONE read of its slot."""
+        slot = self._slot[source]
+        report = {
+            "topic": self.topics[source],
+            "samples": self.samples[source],
+            "bad_samples": self.bad[source],
+        }
+        if slot is None:
+            report["state"] = "never"
+            report["age_s"] = None
+            report["joints"] = 0
+            return report, None
+        values, at = slot
+        age = now - at
+        report["age_s"] = round(age, 3)
+        # "never" and "stale" are different failures and are named differently:
+        # the first means that publisher never came up (wrong DDS domain, scene
+        # without hands, sim not started); the second means it stopped.
+        report["state"] = "ok" if age <= self.max_age_s else "stale"
+        report["joints"] = len(values) if age <= self.max_age_s else 0
+        return report, (values if age <= self.max_age_s else None)
+
+    def read(self) -> dict:
+        """The whole read contract, from one pass over the three slots.
+
+        Every age in the reply is measured against ONE `now`, so the three cannot
+        disagree about when they were taken.
+        """
+        now = time.monotonic()
+        reports: dict[str, dict] = {}
+        values: dict[str, tuple | None] = {}
+        for source in STATE_SOURCES:
+            reports[source], values[source] = self._source_report(source, now)
+        by_name, dropped = M.label_state(
+            body=values["body"],
+            left_hand=values["left_hand"],
+            # THE SIM'S ORDER, NOT THE REAL ROBOT'S. rt/dex3/right/state carries
+            # middle_0, middle_1 in slots 3-4 here and index_0, index_1 on a real
+            # G1; `g1_sidecar.py` reads the same topic with the other table
+            # because it reads real hardware. Stated at the call site because the
+            # two files disagreeing is correct and looks like a bug.
+            right_hand=values["right_hand"],
+            right_hand_order="isaac")
+        missing = [s for s in STATE_SOURCES if values[s] is None]
+        return {
+            "joints": M.state_joint_list(by_name),
+            "sources": reports,
+            "missing": missing,
+            "dropped_joints": dropped,
+            "complete": not missing and not dropped
+            and len(by_name) == M.N_STATE,
+            "body_present": values["body"] is not None,
+            "max_age_s": self.max_age_s,
+        }
+
+    def close(self) -> None:
+        for sub in self._subs:
+            try:
+                sub.Close()
+            except Exception:  # noqa: BLE001 -- shutting down; nothing to pass on
+                pass
+        self._subs = []
+
+
 # --------------------------------------------------------------------------- the inlet
 #
 # WHY THIS FILE GREW AN HTTP SERVER AT ALL
@@ -687,12 +930,29 @@ BOOT_ID = f"{int(time.time())}-{os.getpid()}"
 UNITS = "radians"
 
 
-def make_handler(pub: "ManipPublisher", *, port: int):
-    """The HTTP surface of the manipulation bridge: /action, /estop, /health.
+#: What `/state/fast` REFUSES to answer a partial vector for. See `state_fast()`.
+STATE_REQUIRE_CHOICES = ("body", "all")
+
+
+def make_handler(pub: "ManipPublisher", *, port: int,
+                 reader: "StateReader | None" = None,
+                 state_require: str = "body"):
+    """The HTTP surface of the manipulation bridge: /action, /estop, /state*, /health.
 
     A closure rather than a class attribute so a test can stand up two of these
     against two publishers without either one's counters leaking into the other.
+
+    `reader` is optional and its absence is not an error: a bridge started with
+    `--no-state` still commands the arms. The state routes then answer 503 with
+    the reason rather than 404, because the facade routes `/state*` here on
+    configuration alone and a 404 would tell the caller the route does not exist
+    when what is true is that this operator turned it off.
     """
+    if state_require not in STATE_REQUIRE_CHOICES:
+        raise ValueError(f"state_require must be one of "
+                         f"{', '.join(STATE_REQUIRE_CHOICES)}, got {state_require!r}")
+    #: Sources whose absence makes `/state/fast` a 503 instead of a short list.
+    required = frozenset(STATE_SOURCES) if state_require == "all" else frozenset({"body"})
     # Held ONLY by HTTP threads, and only across "read the slot -> build the new
     # frame -> set_targets()". Two concurrent POSTs both read the same base frame
     # otherwise, and the loser's joints vanish -- an arm-only request and a
@@ -779,6 +1039,35 @@ def make_handler(pub: "ManipPublisher", *, port: int):
                 "unix": round(estop["unix"], 3),
             },
         }
+        # THE READ PATH, ALWAYS REPORTED, WHETHER OR NOT IT IS WORKING. An operator
+        # looking at one URL has to be able to see which of the three sources is
+        # missing -- because the failure mode this bridge was given a read path to
+        # remove is precisely the one that shows no symptom anywhere else: 43 zeros
+        # served with a 200 and a policy that behaves oddly for no visible reason.
+        if reader is None:
+            payload["state"] = {"enabled": False,
+                                "note": "--no-state: not subscribed to rt/lowstate or "
+                                        "rt/dex3/*/state; /state/fast answers 503"}
+        else:
+            snap = reader.read()
+            payload["state"] = {
+                "enabled": True,
+                "subscribed": reader.subscribed,
+                "complete": snap["complete"],
+                "joints": len(snap["joints"]),
+                "expected": M.N_STATE,
+                "missing": snap["missing"],
+                "require": state_require,
+                "max_age_s": snap["max_age_s"],
+                "sources": snap["sources"],
+            }
+            if snap["dropped_joints"]:
+                payload["state"]["dropped_joints"] = snap["dropped_joints"]
+        # `ok` and the status code stay a verdict on PUBLISHING, deliberately. The
+        # bringup script's readiness probe is `curl -sf` on this route and it runs
+        # before Isaac has finished booting, so a state source that has not
+        # appeared yet must not fail it -- and a bridge that can still move the
+        # arms is not dead. `state.complete` is where the read path's verdict is.
         # 503, not a 200 with a sad field: the bringup script's readiness probe is
         # `curl -sf`, and a bridge whose publish loop has died is not ready by any
         # reading. rt/lowcmd latches, so it is also still holding whatever pose it
@@ -920,6 +1209,136 @@ def make_handler(pub: "ManipPublisher", *, port: int):
                     "rest pose; the bridge keeps running and accepts /action again.",
         }
 
+    # ------------------------------------------------------------------ the read path
+    def state_disabled() -> tuple[int, dict]:
+        return 503, {
+            "ok": False, "joints": [], "connected": False,
+            "error": "this bridge was started with --no-state, so it is not "
+                     "subscribed to rt/lowstate or rt/dex3/*/state. Nothing else in "
+                     "this rig reads the robot's joints — the sidecar's state source "
+                     "is a TCP link to a real G1 that does not exist here — so a VLA "
+                     "rollout would be fed 43 zeros. Restart without --no-state.",
+        }
+
+    def state_payload(snap: dict) -> dict:
+        """The fields both state routes share. One snapshot in, one reply out."""
+        payload = {
+            "joints": snap["joints"],
+            "count": len(snap["joints"]),
+            "expected": M.N_STATE,
+            # The three questions an operator has when the vector is short: is it
+            # short, which source is gone, and how long has it been gone.
+            "complete": snap["complete"],
+            "missing": snap["missing"],
+            "sources": snap["sources"],
+            "max_age_s": snap["max_age_s"],
+            "units": UNITS,
+            "source": "isaac-dds",
+            # `connected` drives HardwareClient.setConnected() on the 2 s /state
+            # poll. It is the BODY topic and nothing else: no rt/lowstate means no
+            # legs, no waist and no arms, which is not a connection by any reading.
+            "connected": snap["body_present"],
+            "simulated": True,
+            "timestamp": round(time.time(), 3),
+            "boot_id": BOOT_ID,
+        }
+        if snap["dropped_joints"]:
+            # Non-finite values on the wire. Named, because they are dropped: a NaN
+            # in the reply would also make the JSON unparseable to JSON.parse, which
+            # turns a bad sample into an unexplained client-side crash.
+            payload["dropped_joints"] = snap["dropped_joints"]
+        return payload
+
+    def state_fast() -> tuple[int, dict]:
+        """`GET /state/fast` — the policy's 43-dim observation, or an honest refusal.
+
+        WHY THIS REFUSES INSTEAD OF ANSWERING A PARTIAL VECTOR.
+
+        Its only consumer is `HardwareClient.getStateNow()`, which maps the reply
+        by name onto a FIXED 43-slot vector and writes 0.0 into every slot it
+        cannot fill. So a partial reply is not received as partial: it is received
+        as a complete observation in which some joints happen to read zero, and
+        0.0 is a plausible angle for most of these joints. There is no field this
+        route could add that would change that, because the caller does not look
+        at any other field. The only signal that survives the mapping is the HTTP
+        status, and `getStateNow()` throws on a non-200 — which ends the rollout
+        with the reason attached, the correct outcome for a closed loop whose
+        observation is missing.
+
+        SO THE LINE IS DRAWN AT THE BODY TOPIC, and by default only there. Without
+        rt/lowstate, 29 of 43 numbers would be fabricated — every leg, the waist
+        and both arms, i.e. the robot's whole posture. That is not an observation
+        with gaps, it is a different robot. A missing HAND costs 7 of 43 and only
+        matters during a grasp, and it is the more likely of the two to hiccup
+        (the vendor rate-limits that observation term separately), so by default
+        those joints are simply absent and the absence is reported in `missing`,
+        in `complete`, and in `/health`. `--state-require all` moves the line to
+        all three for a caller that would rather stop than grasp on a zeroed hand.
+
+        No waiting for a fresh sample, unlike `isaac_camera_facade`: the sources
+        publish on the scene's own step, so a request can be at most one step
+        behind and the max age is seven of them. Waiting would only add latency to
+        a rollout's inner loop.
+        """
+        if reader is None:
+            return state_disabled()
+        snap = reader.read()
+        payload = state_payload(snap)
+        blocked = sorted(s for s in snap["missing"] if s in required)
+        if blocked:
+            detail = "; ".join(
+                f"{s} ({snap['sources'][s]['topic']}: {snap['sources'][s]['state']}"
+                + (f", {snap['sources'][s]['age_s']}s old" if snap["sources"][s]["age_s"]
+                   is not None else "")
+                + ")" for s in blocked)
+            payload["ok"] = False
+            payload["error"] = (
+                f"refusing to answer a partial state: {detail}. getStateNow() fills "
+                f"every joint it does not receive with 0.0, so serving this would "
+                f"hand the policy fabricated angles it cannot tell from measured "
+                f"ones. Check that the Isaac scene is stepping and that this bridge "
+                f"is on its DDS domain.")
+            return 503, payload
+        payload["ok"] = True
+        return 200, payload
+
+    def state_poll() -> tuple[int, dict]:
+        """`GET /state` — the same joints, for the robot agent's 2 s status poll.
+
+        ALWAYS 200, unlike `/state/fast`, and the difference is the consumer.
+        `HardwareClient.startPolling()` does not check the status code; it reads
+        `connected` and carries the joints it was given through to telemetry and
+        the 3D viewer, by name, with no fixed-width vector anywhere. A short list
+        there is genuinely partial information and is handled as such, so refusing
+        would throw away the joints that ARE known and flip the agent to
+        disconnected for a hand-topic hiccup.
+
+        The groups this route does NOT send are as deliberate as the ones it does:
+
+          * `imu` — the sim never fills `imu_state.rpy` (`dds/g1_robot_dds.py:97`
+            writes only quaternion, accelerometer and gyroscope), and it writes
+            the quaternion as [x,y,z,w] into a field the SDK documents w-first.
+            Emitting rpy from here would publish a (0,0,0) orientation for a robot
+            that is not level — and this is the one group where a fabricated zero
+            is worse than a missing one: `getImuNow()` returns null when the group
+            is absent and `SafetyMonitor` treats null as "no reliable IMU", but a
+            perfectly level reading it can parse ARMS the absolute-tilt stop with
+            a value that can never trip it, masking a fall. Heading has an owner
+            already: `isaac_loco_bridge.py`, which converts that quaternion under
+            `--quat-order` and publishes rt/odommodestate, reaching the agent
+            through the sidecar's /loco/odom.
+          * `touch` — `dds/dex3_dds.py` publishes q, dq and tau_est only; there
+            are no press sensors in this scene.
+          * `battery`, `odometry` — nothing in this process reads them. An absent
+            group is parsed as null by the client, which is the truth.
+        """
+        if reader is None:
+            _code, payload = state_disabled()
+            return 200, payload      # the poll reads `connected`, not the status
+        payload = state_payload(reader.read())
+        payload["ok"] = payload["connected"]
+        return 200, payload
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         # Every reply sets Content-Length, so keep-alive is safe -- and a keep-alive
@@ -944,8 +1363,15 @@ def make_handler(pub: "ManipPublisher", *, port: int):
             if path == "/health":
                 self._send(*health())
                 return
+            if path == "/state/fast":
+                self._send(*state_fast())
+                return
+            if path == "/state":
+                self._send(*state_poll())
+                return
             self._send(404, {"ok": False, "error": f"not found: {path} — this inlet "
-                                                   f"serves GET /health, POST /action, "
+                                                   f"serves GET /health, GET /state, "
+                                                   f"GET /state/fast, POST /action, "
                                                    f"POST /estop"})
 
         def do_POST(self) -> None:
@@ -968,13 +1394,16 @@ def make_handler(pub: "ManipPublisher", *, port: int):
                 self._send(*action(body))
                 return
             self._send(404, {"ok": False, "error": f"not found: {path} — this inlet "
-                                                   f"serves GET /health, POST /action, "
+                                                   f"serves GET /health, GET /state, "
+                                                   f"GET /state/fast, POST /action, "
                                                    f"POST /estop"})
 
     return Handler
 
 
-def serve(pub: "ManipPublisher", bind: str, port: int) -> ThreadingHTTPServer:
+def serve(pub: "ManipPublisher", bind: str, port: int,
+          reader: "StateReader | None" = None,
+          state_require: str = "body") -> ThreadingHTTPServer:
     """Start the inlet on its own daemon thread and return the server.
 
     Caller shuts it down BEFORE stopping the publisher, so no request can arrive
@@ -982,7 +1411,9 @@ def serve(pub: "ManipPublisher", bind: str, port: int) -> ThreadingHTTPServer:
     that ramp would move the command slot back out of the rest pose and the
     process would exit leaving a latched non-rest arm command in the sim.
     """
-    httpd = ThreadingHTTPServer((bind, port), make_handler(pub, port=port))
+    httpd = ThreadingHTTPServer(
+        (bind, port),
+        make_handler(pub, port=port, reader=reader, state_require=state_require))
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True, name="manip-http").start()
     return httpd
@@ -1066,10 +1497,27 @@ def main() -> int:
                     help="bind address for --serve. Loopback by DEFAULT and deliberately: "
                          "this port moves a robot's arms, and nothing off this box has any "
                          "business reaching it. Widen it on purpose or not at all.")
+    ap.add_argument("--no-state", action="store_true",
+                    help="do NOT subscribe to rt/lowstate or rt/dex3/*/state, and "
+                         "answer GET /state/fast with a 503. The read path is on by "
+                         "default because nothing else in this rig has one: the "
+                         "sidecar's state source is a TCP link to a real G1 that does "
+                         "not exist here, so a VLA rollout is otherwise fed 43 zeros.")
+    ap.add_argument("--state-max-age", type=float, default=DEFAULT_STATE_MAX_AGE_S,
+                    help="a state sample older than this counts as ABSENT — its joints "
+                         "are left out of /state/fast rather than reported as 0.0")
+    ap.add_argument("--state-require", default="body", choices=STATE_REQUIRE_CHOICES,
+                    help="which sources must be fresh for GET /state/fast to answer at "
+                         "all. 'body' (rt/lowstate: legs, waist, arms) refuses only "
+                         "when the posture is unknown and lets a missing hand show up "
+                         "as absent joints; 'all' also refuses on a missing hand.")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     if args.serve and not (0 < args.serve < 65536):
         ap.error("--serve must be a port in 1..65535 (0 disables the inlet)")
+    if args.state_max_age <= 0:
+        ap.error("--state-max-age must be > 0 (a zero window makes every sample stale, "
+                 "i.e. every joint absent from /state/fast)")
 
     try:
         pub = ManipPublisher(args.domain, args.rate, verbose=not args.quiet,
@@ -1084,6 +1532,32 @@ def main() -> int:
     # rt/lowcmd the arms sit at zero, so the first commanded frame is rate-limited
     # away from that pose rather than jumping to it.
     pub._shaper.reset(M.REST)
+
+    # AFTER the publisher, never before: `ManipPublisher.__init__` owns the one
+    # ChannelFactoryInitialize this process may make, and the subscribers below
+    # bind to the participant it opened.
+    reader = None
+    if not args.no_state:
+        try:
+            reader = StateReader(max_age_s=args.state_max_age,
+                                 verbose=not args.quiet)
+        except Exception as exc:  # noqa: BLE001
+            # Not fatal. Losing the read path costs a VLA rollout its observation,
+            # which is why this bridge grew one -- but it must not cost the rig its
+            # only way to move or STOP the arms. Say so at full volume instead.
+            print(f"[state] could not subscribe to {TOPIC_LOWSTATE} / "
+                  f"{TOPIC_HAND_STATE.format('{left,right}')}: {exc!r}. The command "
+                  f"path is unaffected; /state/fast will 503 and a VLA rollout has no "
+                  f"observation.", file=sys.stderr, flush=True)
+        else:
+            print(f"[state] subscribed to {TOPIC_LOWSTATE} (29) + "
+                  f"{TOPIC_HAND_STATE.format('{left,right}')} (7+7) on domain "
+                  f"{args.domain}; "
+                  + ("GET /state/fast serves" if args.serve else
+                     "no --serve, so nothing is served — StateReader.read() only")
+                  + " the 43-joint observation, absent-not-zero, refusing when "
+                  f"{'any source' if args.state_require == 'all' else 'the body topic'} "
+                  f"is missing or older than {args.state_max_age:g}s", flush=True)
 
     stopping = threading.Event()
 
@@ -1103,7 +1577,8 @@ def main() -> int:
     httpd = None
     if args.serve:
         try:
-            httpd = serve(pub, args.bind, args.serve)
+            httpd = serve(pub, args.bind, args.serve, reader=reader,
+                          state_require=args.state_require)
         except OSError as exc:
             # Almost always "address already in use" — a second copy of this
             # bridge. Two of them would fight over every arm joint, which is the
@@ -1118,7 +1593,9 @@ def main() -> int:
             return 2
         print(f"[manip] inlet on http://{args.bind}:{args.serve} — "
               f"POST /action (name-keyed joint dict, RADIANS), POST /estop "
-              f"(ramp to rest), GET /health", flush=True)
+              f"(ramp to rest), GET /health"
+              + ("" if reader is None else ", GET /state/fast + GET /state "
+                                           "(43 joints, RADIANS)"), flush=True)
 
     try:
         if args.probe:
@@ -1169,6 +1646,13 @@ def main() -> int:
                   "scene.", file=sys.stderr, flush=True)
         else:
             pub.shutdown()
+        # Last, and after the arms are at rest: a reader that is still holding
+        # subscriptions cannot stop anything, and closing it earlier would only
+        # blind the operator during the ramp.
+        if reader is not None:
+            heard = ", ".join(f"{s}={reader.samples[s]}" for s in STATE_SOURCES)
+            print(f"[state] samples received — {heard}", flush=True)
+            reader.close()
 
     if pub.error is not None:
         print(f"[manip] publisher thread died: {pub.error!r}", file=sys.stderr, flush=True)

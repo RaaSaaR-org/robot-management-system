@@ -209,6 +209,26 @@ else
     || die "the scene in the checkout is not the scene in this repo (see above). Install it
      with the command printed above, or re-run this script with INSTALL_SCENE=1."
 fi
+# The spawn pose is chosen on the HOST and consumed INSIDE the container, and the
+# only thing carrying it across is the -e below. A var that is set but not
+# forwarded is silent: the sim starts happily at the authored pose, 8.4 m from
+# where the operator asked for, and the first symptom is a camera looking at an
+# empty hall. So resolve it here, on the host, with the same resolver the scene
+# uses, and print the pose that will actually be spawned.
+if [ -n "${NEODEM_ROBOT_SPAWN:-}" ]; then
+  SPAWN_DESC="$(NEODEM_ROBOT_SPAWN="$NEODEM_ROBOT_SPAWN" "$PY" - <<'PYEOF' 2>&1
+import sys
+sys.path.insert(0, "isaac_scenes")
+from common_scene.factory_pauseroom_layout import robot_spawn
+s = robot_spawn()
+print(f"{s['name']} at ({s['pos'][0]:.2f}, {s['pos'][1]:.2f}, {s['pos'][2]:.2f}) yaw {s['yaw_deg']:.0f}")
+PYEOF
+  )" || die "NEODEM_ROBOT_SPAWN='$NEODEM_ROBOT_SPAWN' was refused by the scene:
+     $SPAWN_DESC"
+  echo "ok    spawn override: $SPAWN_DESC"
+else
+  echo "ok    spawn: the authored pose (NEODEM_ROBOT_SPAWN unset)"
+fi
 command -v docker >/dev/null     || die "docker missing"
 command -v nvidia-smi >/dev/null || die "nvidia-smi missing -- step 1 cannot tell whose GPU this is"
 command -v curl >/dev/null       || die "curl missing"
@@ -293,8 +313,13 @@ else
 fi
 
 say "3. pin the planner model BEFORE Isaac takes its memory"
+# `num_predict: 1` because the point is to RESIDENT the weights, not to hear back.
+# Without it this call generates until the model stops on its own, and a reasoning
+# model does not stop quickly: on the CPU-pinned planner variant that is minutes of
+# chain-of-thought at ~9 tok/s, spent before Isaac has even been asked to start,
+# and it looks exactly like a hang.
 curl -sf localhost:11434/api/generate \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"ready\",\"stream\":false,\"keep_alive\":-1}" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"ready\",\"stream\":false,\"keep_alive\":-1,\"options\":{\"num_predict\":1}}" \
   >/dev/null || die "ollama did not answer -- is it running, and is $MODEL pulled?"
 MODEL_PINNED=1
 echo "pinned $MODEL resident"
@@ -390,6 +415,7 @@ setsid nohup docker run --rm --name "$CONTAINER" --user 0 --runtime=nvidia --gpu
   -e CYCLONEDDS_HOME="$CHECKOUTS/cyclonedds/install" \
   ${NEODEM_FILM_DIR:+-e NEODEM_FILM_DIR="$NEODEM_FILM_DIR"} \
   ${NEODEM_LOG_EVERY:+-e NEODEM_LOG_EVERY="$NEODEM_LOG_EVERY"} \
+  ${NEODEM_ROBOT_SPAWN:+-e NEODEM_ROBOT_SPAWN="$NEODEM_ROBOT_SPAWN"} \
   --device /dev/dri --ipc=host --network host \
   -v /home/humanoid:/home/humanoid -w "$SIM_DIR" \
   neodem-isaac-host:latest \
@@ -540,6 +566,42 @@ if [ "$FRAME_OK" != "1" ]; then
 else
   echo
   echo "camera OK: $CAM_NAME answered /cameras/$CAM_NAME/snapshot with a frame."
+fi
+
+# --- the OTHER half of a rollout: does it get an observation? ---------------------
+#
+# Non-fatal, and reported here rather than at step 5 because rt/lowstate only starts
+# flowing once Isaac is stepping, which is minutes after the bridge starts.
+#
+# This asks the facade, not the bridge, so it proves the whole path the agent takes:
+# HARDWARE_SIDECAR_URL -> :8779 -> :$MANIP_PORT -> rt/lowstate + rt/dex3/*/state. A
+# 200 here means getStateNow() gets measured joints. Anything else means it gets 43
+# zeros, silently -- the sidecar's own /state/fast answers `{"joints": []}` with a
+# 200 because its state source is a TCP link to a real G1 that is not on this box,
+# and getStateNow() fills every joint it does not receive with 0.0.
+if [ "$ENABLE_MANIP" = "1" ]; then
+  STATE_JSON="$(curl -s -m 5 "http://localhost:8779/state/fast" 2>/dev/null || true)"
+  STATE_CODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+    "http://localhost:8779/state/fast" 2>/dev/null || echo 000)"
+  if [ "$STATE_CODE" = "200" ]; then
+    STATE_COUNT="$(printf '%s' "$STATE_JSON" | grep -o '"count": *[0-9]*' | head -1)"
+    echo "joint state OK: /state/fast answered 200 -- ${STATE_COUNT:-count ?} of 43"
+    if ! printf '%s' "$STATE_JSON" | grep -q '"complete": *true'; then
+      echo "     WARNING: incomplete -- $(printf '%s' "$STATE_JSON" \
+             | grep -o '"missing": *\[[^]]*\]')"
+      echo "     Those joints are ABSENT from the reply (never fabricated as 0.0), but"
+      echo "     getStateNow() fills every joint it does not receive with 0.0, so the"
+      echo "     policy sees zeros there. http://localhost:$MANIP_PORT/health has the"
+      echo "     per-source ages."
+    fi
+  else
+    echo
+    echo "NO JOINT STATE (HTTP $STATE_CODE from /state/fast). A VLA rollout would run"
+    echo "on a 43-zero observation, which is not a rollout. Check that Isaac is"
+    echo "stepping and that the manipulation bridge is on DDS domain $DOMAIN:"
+    echo "  curl -s http://localhost:$MANIP_PORT/health | python3 -m json.tool"
+    echo "and look at the 'state.sources' block -- it names each topic and its age."
+  fi
 fi
 
 cat <<TXT
