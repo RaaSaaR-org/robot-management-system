@@ -144,15 +144,43 @@ reimplementing Wilson CI or McNemar.
 
 ## Acceptance Criteria
 
-- [ ] Agent Mode can see in the factory scene (`look` returns a real, fresh frame)
-- [ ] An 8.4 m walk across the hall arrives, with measured heading error reported
-- [ ] The powered door opens on approach and the robot passes through
-- [ ] The robot stands within reach of the apple, measured
-- [ ] A `vla_skill` block is planner-emittable, safe (abort reaches it), and reports
-      `succeeded` / `failed` / `unknown` honestly
-- [ ] One run produces `summary.json` + `results.json` in the shared schema
-- [ ] One run produces a NeoDEM-branded 1280×720 video that invents no numbers
-- [ ] The run is repeatable from a single frozen protocol script
+Built and verified OFFLINE (PR #277) — none of these is confirmed live yet:
+
+- [x] A camera facade adapts the scene's ZMQ streams to the sidecar contract (~115 checks)
+- [x] `walk` segments and holds its heading (2170 tests, no assertion changed)
+- [x] A powered sliding door exists and is driven per control step (142 checks)
+- [x] The standing spot is derived and within reach — 0.476 m against a 0.550 m budget
+- [x] `vla_skill` is planner-emittable, `abortAll()` reaches it, outcomes are three-way
+- [x] Arms and hands are drivable over DDS without disturbing the 100 Hz loco loop (97 checks)
+- [x] `analyse_map_take.py --json` emits the shared schema, provably additively (31 tests)
+- [x] A NeoDEM-branded 1280×720 compositor that invents no numbers
+
+Still open, and each needs the live run:
+
+- [ ] The factory scene actually publishes camera frames (nobody has seen its banner)
+- [ ] An 8.4 m crossing arrives, with measured heading error reported
+- [ ] The robot ends up close enough to the apple to grasp — see the arrival gap below
+- [ ] One run produces `summary.json` + `results.json` + a video
+- [ ] The run is repeatable from the frozen protocol script
+
+## The arrival gap — found while fixing the reach, not yet solved
+
+The standing spot now has roughly **0.013 m of reach margin** at the worst corner
+of the apple's jitter box. Measured locomotion is ~0.11 m/s with ~2°/s of yaw
+drift over an 8.4 m crossing. Arrival error is therefore near-certainly an order
+of magnitude larger than the margin: **the scene assumes something else puts the
+robot on the spot, and nothing does.**
+
+The heading fix narrows this but cannot close it — it corrects heading, not
+position, and there is no position feedback at all (`isaac_odom.py` measures yaw;
+x and y are dead-reckoned).
+
+Three ways out, in preference order — see [[TASK-228]]:
+1. A final visually-servoed approach that closes on the table, not on odometry.
+2. Widen the margin: move the apple toward the near edge, or raise the reach
+   budget if the arm genuinely supports it.
+3. Place the robot on the spot for the manipulation phase and film the walk and
+   the grasp as two measured segments. Honest, and the least interesting.
 
 ## What to expect
 
