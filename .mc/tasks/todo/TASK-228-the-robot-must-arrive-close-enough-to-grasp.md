@@ -113,6 +113,53 @@ remains the least interesting outcome, but it is no longer a stand-in for an
 unmeasured thing: the residual after a walked approach is what needs measuring,
 and the band above is the target it has to hit.
 
+## The first end-to-end Agent Mode run — 2026-08-30
+
+Command: *"walk to the table front, then put the apple on the plate"*. The planner
+produced the right plan unaided -- `goto {place: "Table Front"}` -> `look` ->
+`vla_skill {skill: g1_apple_pnp}` -- and the navigator executed 7 stages before
+giving up:
+
+    goto place "Table Front": stopped after 7 stages and 6.91 m, still 3.60 m
+    from its centre and outside it - the last 3 stages got no closer, so the way
+    in is blocked or not on the map.
+
+**The arc turns, but only 4 degrees, whatever is asked.** Every stage:
+
+| stage | commanded | achieved | arc translation |
+| --- | --- | --- | --- |
+| 1 | 34 deg | 4 deg | 0.68 m of 0.70 |
+| 3 | 50 deg | 4 deg | 0.70 m of 0.70 |
+| 5 | 85 deg | 4 deg | 0.69 m of 0.70 |
+| 7 | 126 deg | 4 deg | 0.69 m of 0.70 |
+
+So the arc primitive fixed the SIGN problem -- a left turn is no longer 0 deg --
+but its achieved rate is ~6% of commanded, and each arc is capped at 1.4 s by the
+0.70 m budget (0.70 / 0.5 m/s), which buys about 4 deg. The commanded angle grows
+34 -> 126 deg because the robot walks past the goal laterally without ever facing
+it. Straight walks in between were fine: 0.30 m per 0.6 s command, heading held to
+1-2 deg.
+
+**Three things to try, cheapest first:**
+
+1. `AGENT_LEFT_TURN_STRATEGY=mirror`. In-place RIGHT turns work; a 126 deg left is
+   a 234 deg right. Slow, but it needs no new measurement.
+2. A much larger arc budget. 4 deg per 1.4 s implies ~35 s of arcing for 90 deg,
+   which is ~17 m of travel at 0.5 m/s -- so an arc cannot deliver a large turn at
+   all, and the budget is not the real knob. Worth measuring the achieved rate
+   against arc duration before spending more on this.
+3. Turn less. Route via waypoints whose headings differ by a few degrees, so no
+   stage ever needs more than the ~4 deg an arc can buy. The place graph already
+   has the doorway centreline waypoint this would build on.
+
+**The occupancy map stayed empty**, so the grid planner never engaged and the
+navigator fell back to staged straight lines (`nav.reason: "no map yet - nothing
+has been integrated"`). The reason is the head camera: at the table it frames the
+tabletop perfectly, but walking down the hall it sees floor and the robot's own
+hands, and every `look` returned some variant of *"a white room with walls and
+floor"*. The camera is aimed for manipulation, not navigation, and both are true
+at once. Without a map the 1.40 m doorway cannot reach the planner at all.
+
 ## Test Strategy
 
 Offline: extend `verify_factory_scene_offline.py` with a check that states the
