@@ -36,6 +36,29 @@ function makeFakeFetch(impl: (url: string, init?: RequestInit) => Response | Pro
   }) as unknown as typeof fetch;
 }
 
+/**
+ * Pin the embodiment the hardware tests below are actually written for.
+ *
+ * `config.robotType` defaults to `'h1'` (config.ts:623) and every hardware test
+ * in this file drives a SIX-value action against a six-value state — an SO-101,
+ * not a 19-DOF humanoid whose first ten joints are its legs. They used to pass
+ * on the default because the positional map silently took the overlap, which is
+ * the same silence TASK-229 exists to remove: `requiresActionContract` now
+ * refuses to index-map any action onto an embodiment that has legs, so a test
+ * about the delta clip has to say which robot it is clipping.
+ *
+ * Call inside a `describe`, before its own `beforeEach`.
+ */
+function useSo101Embodiment(): void {
+  const original = config.robotType;
+  beforeEach(() => {
+    config.robotType = 'so101';
+  });
+  afterEach(() => {
+    config.robotType = original;
+  });
+}
+
 function makeStateManager(
   joints: number[] = [0, 0, 0, 0, 0, 0],
   overrides: Record<string, unknown> = {},
@@ -222,6 +245,8 @@ describe('SkillExecutor — sim mode', () => {
 // ─── Hardware mode tests ────────────────────────────────────────────────
 
 describe('SkillExecutor — hardware mode', () => {
+  useSo101Embodiment();
+
   beforeEach(() => {
     process.env.VLA_SERVER_URL = 'http://localhost:8000';
     vi.spyOn(hardwareClient, 'isAvailable').mockReturnValue(true);
@@ -1353,6 +1378,8 @@ describe('SkillExecutor — RTC crossfade reach', () => {
 });
 
 describe('SkillExecutor — RTC aligns to the observation, not to the decision', () => {
+  useSo101Embodiment();
+
   beforeEach(() => {
     process.env.VLA_SERVER_URL = 'http://localhost:8000';
     vi.spyOn(hardwareClient, 'isAvailable').mockReturnValue(true);
@@ -1520,6 +1547,8 @@ function makeSidecarRecorder(o: {
  * three tests are what says so.
  */
 describe('SkillExecutor — RTC never gives the sidecar a second caller', () => {
+  useSo101Embodiment();
+
   beforeEach(() => {
     process.env.VLA_SERVER_URL = 'http://localhost:8000';
   });
@@ -1731,6 +1760,8 @@ function makeBoundaryJumpServer(o: { delayMs?: number; steps?: () => number }) {
  * bounds it, and the last test says so by taking the clip away.
  */
 describe('SkillExecutor — a chunk boundary never commands more than MAX_DELTA_DEGREES', () => {
+  useSo101Embodiment();
+
   const SEED = [0, 0, 0, 0, 0, 0];
 
   beforeEach(() => {
@@ -1932,4 +1963,155 @@ describe('SkillExecutor — the rollout loop period', () => {
         `67ms: ${fast.durationMs}ms wall`,
     );
   }, 30_000);
+});
+
+// ─── The action contract (TASK-229) ─────────────────────────────────────
+
+describe('SkillExecutor — what a 43-DOF humanoid is allowed to be commanded with', () => {
+  const originalRobotType = config.robotType;
+
+  beforeEach(() => {
+    process.env.VLA_SERVER_URL = 'http://localhost:8000';
+    vi.spyOn(hardwareClient, 'isAvailable').mockReturnValue(true);
+    vi.spyOn(hardwareClient, 'getCameras').mockResolvedValue(['front']);
+    vi.spyOn(hardwareClient, 'snapshot').mockResolvedValue('fake-jpeg-b64');
+    config.robotType = 'g1_edu';
+  });
+
+  afterEach(() => {
+    config.robotType = originalRobotType;
+    vi.restoreAllMocks();
+  });
+
+  function serverWith(configBody: Record<string, unknown>, action: number[]): typeof fetch {
+    return makeFakeFetch(async (url) => {
+      if (url.endsWith('/config')) return new Response(JSON.stringify(configBody), { status: 200 });
+      if (url.endsWith('/reset')) return new Response('{}', { status: 200 });
+      if (url.endsWith('/predict')) {
+        return new Response(JSON.stringify({ actions: [action, action] }), { status: 200 });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+  }
+
+  it('sends joint targets by NAME, with the left-hand grip decoded', async () => {
+    vi.spyOn(hardwareClient, 'getStateNow').mockResolvedValue(new Array(43).fill(0));
+    const byName = vi.spyOn(hardwareClient, 'sendJointTargets').mockResolvedValue();
+    const byIndex = vi.spyOn(hardwareClient, 'sendActionVector').mockResolvedValue();
+
+    const action = new Array(31).fill(0);
+    const exec = new SkillExecutor(
+      makeStateManager(),
+      serverWith({ cameras: ['front'], state_dim: 43, action_dim: 31, chunk_size: 2 }, action),
+    );
+    const result = await exec.run({
+      skillId: 'apple-1',
+      taskPrompt: 'move the apple to the plate',
+      maxSteps: 1,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(byIndex).not.toHaveBeenCalled();
+    expect(byName).toHaveBeenCalledTimes(1);
+
+    const joints = byName.mock.calls[0]![0] as Record<string, number>;
+    // The regression, at the level the robot actually sees it: no leg.
+    expect(Object.keys(joints).filter((n) => /hip|knee|ankle/.test(n))).toEqual([]);
+    expect(joints['left_shoulder_pitch_joint']).toBe(0);
+    // An all-zero action is the OPEN hand, not a zero pose — the decoder ran.
+    expect(joints['left_hand_middle_0_joint']).toBeCloseTo(-0.07636, 9);
+    expect(joints['left_hand_thumb_1_joint']).toBeCloseTo(0.06824, 9);
+  });
+
+  it('seeds the delta clip from the ARM, not from whatever joint shares its index', async () => {
+    // The clip's step-0 seed is the 43-dim observation (STATE order, legs
+    // first) and the vector it clips is the 31-dim action (arms first), so
+    // zipping them by index rate-limited `left_shoulder_pitch` against
+    // `left_hip_pitch`. That was inert only because MAX_DELTA_DEGREES = 5 is
+    // compared against RADIANS here — and only just: the two joints' ranges
+    // are 5.20 rad apart at their extremes, which is over the bound. This is
+    // that pair, at those extremes.
+    const state = new Array(43).fill(0);
+    state[0] = -2.53; // left_hip_pitch, pitched back
+    const action = new Array(31).fill(0);
+    action[0] = 2.67; // left_shoulder_pitch, arm up
+
+    vi.spyOn(hardwareClient, 'getStateNow').mockResolvedValue(state);
+    const byName = vi.spyOn(hardwareClient, 'sendJointTargets').mockResolvedValue();
+
+    const exec = new SkillExecutor(
+      makeStateManager(),
+      serverWith({ cameras: ['front'], state_dim: 43, action_dim: 31, chunk_size: 2 }, action),
+    );
+    const result = await exec.run({
+      skillId: 'clip-seed',
+      taskPrompt: 'move the apple to the plate',
+      maxSteps: 1,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.status).toBe('completed');
+    const joints = byName.mock.calls[0]![0] as Record<string, number>;
+    // Seeded by name from left_shoulder_pitch (state index 15, = 0), so the
+    // 2.67 delta is inside the bound and the commanded pose is the policy's.
+    expect(joints['left_shoulder_pitch_joint']).toBeCloseTo(2.67, 9);
+    // Seeded by index it would have been -2.53 + 5 = 2.47: a shoulder target
+    // computed from a hip angle.
+    expect(joints['left_shoulder_pitch_joint']).not.toBeCloseTo(2.47, 6);
+  });
+
+  it('ends the run, commanding nothing, when no contract matches the width', async () => {
+    vi.spyOn(hardwareClient, 'getStateNow').mockResolvedValue(new Array(43).fill(0));
+    const byName = vi.spyOn(hardwareClient, 'sendJointTargets').mockResolvedValue();
+    const byIndex = vi.spyOn(hardwareClient, 'sendActionVector').mockResolvedValue();
+
+    const exec = new SkillExecutor(
+      makeStateManager(),
+      serverWith(
+        { cameras: ['front'], state_dim: 43, action_dim: 6, chunk_size: 2 },
+        [0, 0, 0, 0, 0, 0],
+      ),
+    );
+    const result = await exec.run({
+      skillId: 'wrong-checkpoint',
+      taskPrompt: 'move the apple to the plate',
+      maxSteps: 4,
+      timeoutMs: 10_000,
+    });
+
+    // The old behaviour was to map the overlap onto the first six joints of
+    // the body order — five leg joints and a hip — and carry on.
+    expect(result.status).toBe('failed');
+    expect(result.steps).toBe(0);
+    expect(result.error).toMatch(/action length 6/);
+    expect(result.error).toMatch(/known: 31/);
+    expect(byName).not.toHaveBeenCalled();
+    expect(byIndex).not.toHaveBeenCalled();
+  });
+
+  it('refuses just as hard when /config never said how wide the actions are', async () => {
+    // `action_dim` lets the mismatch be caught before the first `/predict`;
+    // without it the first chunk is the first evidence. Either way nothing is
+    // written — the check precedes the send, not the other way round.
+    vi.spyOn(hardwareClient, 'getStateNow').mockResolvedValue(new Array(43).fill(0));
+    const byName = vi.spyOn(hardwareClient, 'sendJointTargets').mockResolvedValue();
+    const byIndex = vi.spyOn(hardwareClient, 'sendActionVector').mockResolvedValue();
+
+    const exec = new SkillExecutor(
+      makeStateManager(),
+      serverWith({ cameras: ['front'], state_dim: 43, chunk_size: 2 }, new Array(28).fill(0.1)),
+    );
+    const result = await exec.run({
+      skillId: 'silent-config',
+      taskPrompt: 'move the apple to the plate',
+      maxSteps: 4,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/action length 28/);
+    expect(byName).not.toHaveBeenCalled();
+    expect(byIndex).not.toHaveBeenCalled();
+  });
 });

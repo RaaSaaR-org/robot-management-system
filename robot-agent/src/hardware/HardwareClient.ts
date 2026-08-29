@@ -12,6 +12,12 @@
  *              silently dropping its non-arm joints. Also exposes getImuNow() so
  *              the SafetyMonitor can read humanoid orientation for fall detection.
  *
+ *              TASK-229 moves the VLA write path off that index mapping
+ *              entirely (sendJointTargets, fed by src/vla/action-contracts.ts)
+ *              and takes getStateNow's order for a 43-DOF G1 EDU from the
+ *              policy's state contract instead of the joint config — the two
+ *              differ in four left-hand slots, and did so in both directions.
+ *
  *              TASK-184 extends the 2s /state poll to the full contract §2
  *              response: per-joint velocity/effort/temperature plus the
  *              imu/touch/battery/odometry field groups (getImu/getTouch/
@@ -39,6 +45,7 @@ import { config } from '../config/config.js';
 // is how a deg/rad seam becomes two deg/rad seams. `agent-mode/types.ts` has no
 // imports of its own, so this cannot cycle.
 import { RAD_TO_DEG } from '../agent-mode/types.js';
+import { resolveStateJointOrder } from '../vla/action-contracts.js';
 
 /**
  * A single IMU reading from the robot's base, as carried in the sidecar's
@@ -1075,6 +1082,15 @@ export class HardwareClient {
    * Returns a vector in the active embodiment's joint order (see
    * {@link getJointOrder}): SO-101 → 6 elements, G1 → 29, G1 EDU → 43.
    * Missing joints read as 0; an empty order (generic) yields [].
+   *
+   * EXCEPT on a 43-DOF G1 EDU, where the order comes from
+   * `resolveStateJointOrder` instead — the policy's 43-dim state contract
+   * (TASK-229). Same 43 names, same length, and identical at 39 of 43 indices;
+   * the four that differ are 32..35, the left hand's index/middle pair, which
+   * the Dex3-1 SDK enumerates middle-first on that hand only while
+   * `dex3HandJoints()` builds both hands index-first. Reordering by the joint
+   * config there handed the policy the left index finger's angle labelled as
+   * the middle finger's, throughout every grasp.
    */
   async getStateNow(): Promise<number[]> {
     const res = await fetch(`${getSidecarUrl()}/state/fast`, {
@@ -1086,15 +1102,43 @@ export class HardwareClient {
     const data = (await res.json()) as {
       joints: Array<{ name: string; position: number }>;
     };
-    const order = this.getJointOrder();
+    const order = resolveStateJointOrder(config.robotType) ?? this.getJointOrder();
     const byName = new Map(data.joints.map((j) => [j.name, j.position]));
     return order.map((n) => byName.get(n) ?? 0);
+  }
+
+  /**
+   * Send joint targets that are ALREADY keyed by name, straight to the
+   * sidecar's `/action`. No joint order is consulted and no index arithmetic
+   * happens on this path.
+   *
+   * This is the path a VLA rollout on a 43-DOF G1 EDU takes (TASK-229). Its
+   * policy's action vector is 31-dim in the order
+   * `[L-arm 7 | R-arm 7 | L-hand 7 | R-hand 7 | waist 3]`, which is unrelated
+   * to the body order {@link sendActionVector} maps against — position 0 there
+   * is `left_hip_pitch_joint`, so a positional send commanded arm trajectories
+   * onto the legs of a standing humanoid and never wrote a finger.
+   * `src/vla/action-contracts.ts` builds the dict; this method only posts it.
+   *
+   * Inherits {@link sendAction}'s throw on a refused pose, and the sidecar is
+   * name-keyed all the way down — it skips any key not in its `JOINT_NAMES`,
+   * clamps to `POS_LIMITS` and ramps — so a wrong name is dropped, never
+   * misapplied to a neighbouring joint.
+   */
+  async sendJointTargets(joints: Record<string, number>): Promise<void> {
+    await this.sendAction(joints);
   }
 
   /**
    * Send an action vector in the active embodiment's joint order (see
    * {@link getStateNow}). Maps `action[i]` to the i-th joint name and POSTs a
    * name-keyed dict (the shape both sidecars' `send_action` expect).
+   *
+   * Valid ONLY where the policy was trained against this embodiment's own
+   * joint order — SO-101 and the other pre-TASK-229 embodiments. A 43-DOF G1
+   * EDU must go through {@link sendJointTargets} with a dict built from
+   * `resolveActionContract`; `SkillExecutor` refuses the run rather than
+   * reaching this method for one.
    *
    * Length mismatches are logged and the overlap is mapped — never silently
    * truncated (the old SO-101 hardcoding dropped a G1's joints 7..N silently).
