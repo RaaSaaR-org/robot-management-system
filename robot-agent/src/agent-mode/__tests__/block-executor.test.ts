@@ -1166,9 +1166,28 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
     gainLeft: number;
     gainRight: number;
     leftTurnStrategy?: 'direct' | 'mirror' | 'auto';
+    /**
+     * Intercepts one odometry read. `call` is 1-based over EVERY read the
+     * executor makes (the fix before the turn, one after each command, and
+     * `refreshYaw`'s at the end); returning `undefined` means "answer normally",
+     * `null` is the sidecar 503ing, and a pose is a stale or frozen fix. This is
+     * what lets the odometry-loss and stale-fix paths be driven exactly, which
+     * is where the heading bookkeeping is decided.
+     */
+    odometry?: (
+      call: number,
+      yawRad: number
+    ) => { x: number; y: number; yaw: number; source: string } | null | undefined;
   }) {
     const moves: MoveCall[] = [];
     const pose = { yawRad: 0 };
+    /**
+     * Mutable, so a test can change the plant UNDER the executor — a checkpoint
+     * whose tracking recovers between two blocks is the case a latched gain gets
+     * catastrophically wrong.
+     */
+    const gains = { left: opts.gainLeft, right: opts.gainRight };
+    let odomCalls = 0;
     const scene = new SceneMemoryStore('robot-1');
     const executor = new BlockExecutor({
       scene,
@@ -1187,18 +1206,23 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
       loco: {
         move: async (vx, vy, omega, durationS) => {
           moves.push({ vx, vy, omega, durationS });
-          pose.yawRad += omega * durationS * (omega > 0 ? opts.gainLeft : opts.gainRight);
+          pose.yawRad += omega * durationS * (omega > 0 ? gains.left : gains.right);
           return { ok: true };
         },
         action: async () => ({ ok: true }),
         fsm: async () => ({ ok: true }),
         standHeight: async () => ({ ok: true }),
-        odometry: async () => ({ x: 0, y: 0, yaw: pose.yawRad, source: 'test' }),
+        odometry: async () => {
+          odomCalls += 1;
+          const scripted = opts.odometry?.(odomCalls, pose.yawRad);
+          if (scripted !== undefined) return scripted;
+          return { x: 0, y: 0, yaw: pose.yawRad, source: 'test' };
+        },
       },
       sleep: async () => {},
       now: () => 1e12,
     });
-    return { executor, moves, scene, yawDeg: () => (pose.yawRad * 180) / Math.PI };
+    return { executor, moves, scene, gains, yawDeg: () => (pose.yawRad * 180) / Math.PI };
   }
 
   it('corrects a turn that tracks at half rate until it lands, instead of stopping short', async () => {
@@ -1291,7 +1315,7 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
     expect(outcome.message).not.toMatch(/short of/);
   });
 
-  it('auto: detects a dead left turn, switches to mirror, and remembers it', async () => {
+  it('auto: detects a dead left turn, switches to mirror, and remembers it once CONFIRMED', async () => {
     // The measured checkpoint: 0.01 left, 1.0 right.
     const h = makeTurningBase({ gainLeft: 0.01, gainRight: 1, leftTurnStrategy: 'auto' });
 
@@ -1301,31 +1325,58 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
     // It TRIED the left turn first — `auto` never assumes the asymmetry.
     expect(h.moves[0].omega).toBeGreaterThan(0);
     expect(h.moves[0].durationS).toBe(2);
-    // 0.9° measured for a commanded 90° is the switch. What is LEFT of the turn
-    // (89.1°) then goes the other way round: −270.9°, split into 150° + 120.9°.
-    expect(h.moves).toHaveLength(3);
-    expect(h.moves[1].omega).toBeLessThan(0);
-    expect(h.moves[1].durationS).toBeCloseTo(150 / TURN_SPEED, 6);
+    // TWO dead left commands, not one, are what switches the strategy. This test
+    // asserted a single probe until the stale-fix hazard was closed: the bridge
+    // republishes a frozen yaw for up to a second and the sidecar serves it as
+    // current for two more, so ONE dead sample is also exactly what a healthy
+    // left-turning base looks like during an odometry hiccup — and it used to
+    // latch, process-wide, converting every later left turn into a ~355° spin.
+    // The second probe costs ~2 s on a genuinely dead base and is the whole
+    // evidence base for a decision that outlives the block. See DEAD_LEFT_PROBES.
+    expect(h.moves[1].omega).toBeGreaterThan(0);
+    expect(h.moves[1].durationS).toBeCloseTo(89.1 / TURN_SPEED, 3);
+    // Only then the mirror. What is LEFT of the turn (88.2°) goes the other way
+    // round: −271.8°, split into 150° + 121.8° — no single command may exceed
+    // half a turn.
+    expect(h.moves).toHaveLength(4);
     expect(h.moves[2].omega).toBeLessThan(0);
-    expect(h.moves[2].durationS).toBeCloseTo(120.9 / TURN_SPEED, 3);
-    // 0.9° left then 270.9° right lands exactly on the requested heading: the
+    expect(h.moves[2].durationS).toBeCloseTo(150 / TURN_SPEED, 6);
+    expect(h.moves[3].omega).toBeLessThan(0);
+    expect(h.moves[3].durationS).toBeCloseTo(121.791 / TURN_SPEED, 3);
+    // 1.79° left then 271.79° right lands exactly on the requested heading: the
     // mirror is computed from what is LEFT of the turn, not from the request,
-    // so the dead probe's 0.9° is not lost.
+    // so the dead probes' 1.79° is not lost.
     expect(h.yawDeg()).toBeCloseTo(-270, 3);
     expect(h.scene.getYawDeg()).toBeCloseTo(90, 3);
     expect(first.measured?.angleDeg).toBeCloseTo(-270, 3);
 
-    // And the discovery is kept: the next left turn does not pay for it again —
-    // no dead +90° probe, straight to the two clockwise commands.
+    // The SECOND turn still probes: one turn's worth of dead commands does not
+    // latch a process-wide behaviour change either (DEAD_LEFT_TURNS_TO_LATCH).
     const second = await h.executor.execute(block('turn', { angleDeg: 90 }));
 
     expect(second.ok).toBe(true);
-    expect(h.moves).toHaveLength(5);
-    expect(h.moves[3].omega).toBeLessThan(0);
-    expect(h.moves[4].omega).toBeLessThan(0);
+    expect(h.moves).toHaveLength(8);
+    expect(h.moves[4].omega).toBeGreaterThan(0);
+    expect(h.moves[5].omega).toBeGreaterThan(0);
+    expect(h.moves[6].omega).toBeLessThan(0);
+    expect(h.moves[7].omega).toBeLessThan(0);
     expect(h.yawDeg()).toBeCloseTo(-540, 3);
     expect(h.scene.getYawDeg()).toBeCloseTo(180, 3);
-    expect(second.measured?.angleDeg).toBeCloseTo(-270, 6);
+    expect(second.measured?.angleDeg).toBeCloseTo(-270, 3);
+
+    // And NOW the discovery is kept: two turns have each measured two dead left
+    // commands, so the third pays nothing — straight to the two clockwise ones.
+    const third = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(third.ok).toBe(true);
+    expect(h.moves).toHaveLength(10);
+    expect(h.moves[8].omega).toBeLessThan(0);
+    expect(h.moves[8].durationS).toBeCloseTo(150 / TURN_SPEED, 6);
+    expect(h.moves[9].omega).toBeLessThan(0);
+    expect(h.moves[9].durationS).toBeCloseTo(120 / TURN_SPEED, 6);
+    expect(h.yawDeg()).toBeCloseTo(-810, 3);
+    expect(h.scene.getYawDeg()).toBeCloseTo(-90, 3);
+    expect(third.measured?.angleDeg).toBeCloseTo(-270, 6);
   });
 
   it('auto: leaves a base that CAN turn left alone', async () => {
@@ -1370,6 +1421,218 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
     expect(h.moves.length).toBeGreaterThan(4);
     // And it comes back to where it started, within the per-step tolerance.
     expect(Math.abs(h.scene.getYawDeg())).toBeLessThan(4 * 5);
+  });
+
+  /**
+   * FOUND BY REVIEW (TASK-203 follow-up), and the worst of the set: the gain
+   * estimate is instance state on a process-wide executor, so it survives the
+   * block that measured it. Latched at its 0.05 floor by one poorly-tracking
+   * turn, it turned EVERY later remainder of 7.5° or more into the full 150°
+   * command cap — a 30° request executed as a 150° spin on a plant whose
+   * tracking had since recovered, reported ok:true, and unrecoverable because
+   * the loop then stopped at the sign flip.
+   */
+  it('never sizes the FIRST command of a turn from a gain an earlier turn latched', async () => {
+    // A checkpoint that tracks at 0.1 — the rate isaac_yaw_sweep.py measures.
+    const h = makeTurningBase({ gainLeft: 0.1, gainRight: 0.1 });
+
+    await h.executor.execute(block('turn', { angleDeg: -90 }));
+    const learned = h.moves.length;
+
+    // …and now the plant does what it is told: a re-stand, a different surface,
+    // the policy warmed up. Nothing tells the executor; only the next command's
+    // measurement can, and that is exactly why the first one must not gamble.
+    h.gains.left = 1;
+    h.gains.right = 1;
+    const yawBefore = h.yawDeg();
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -30 }));
+
+    // The first command of the new turn asks for the 30° that remain, not for
+    // 30 / 0.05 clamped to the 150° cap.
+    expect(h.moves[learned].durationS * TURN_SPEED).toBeCloseTo(30, 6);
+    expect(h.yawDeg() - yawBefore).toBeCloseTo(-30, 6);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).not.toMatch(/PAST|short of/);
+  });
+
+  /**
+   * The same hazard through the door this feature was built for. `leftTurnStrategy`
+   * exists because left and right tracking differ by up to 50x on this
+   * checkpoint, yet the gain was ONE number: a left turn's 0.107 sized the next
+   * RIGHT command, which is a 45° block issued as −420°, clamped to −150°, and
+   * executed as a 150° rotation. Per-direction estimates make that structural.
+   */
+  it('never sizes a RIGHT command from what a LEFT turn measured', async () => {
+    // 0.107 left, 1.0 right: the asymmetry, with a left turn that still works.
+    const h = makeTurningBase({ gainLeft: 0.107, gainRight: 1, leftTurnStrategy: 'direct' });
+
+    await h.executor.execute(block('turn', { angleDeg: 90 }));
+    const afterLeft = h.moves.length;
+    const yawBefore = h.yawDeg();
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -45 }));
+
+    // Not one command of the right turn exceeds the 45° that were asked for.
+    for (const move of h.moves.slice(afterLeft)) {
+      expect(move.durationS * TURN_SPEED).toBeLessThanOrEqual(45 + 1e-9);
+    }
+    expect(h.yawDeg() - yawBefore).toBeCloseTo(-45, 6);
+    expect(outcome.measured?.angleDeg).toBeCloseTo(-45, 6);
+    expect(outcome.message).not.toMatch(/PAST|short of/);
+  });
+
+  it('turns BACK from an overshoot instead of leaving the robot pointing past the target', async () => {
+    // A base that rotates twice what it is told to the right. The first command
+    // is open-loop by design, so this overshoot is not preventable — it has to
+    // be correctable, and stopping at the sign flip made it permanent.
+    const h = makeTurningBase({ gainLeft: 1, gainRight: 2 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -30 }));
+
+    expect(h.moves).toHaveLength(2);
+    expect(h.moves[0].omega).toBeLessThan(0);
+    // The correction goes the OTHER way — the one thing the old loop refused.
+    expect(h.moves[1].omega).toBeGreaterThan(0);
+    expect(h.moves[1].durationS * TURN_SPEED).toBeCloseTo(30, 6);
+    expect(h.yawDeg()).toBeCloseTo(-30, 6);
+    expect(outcome.measured?.angleDeg).toBeCloseTo(-30, 6);
+    expect(outcome.message).not.toMatch(/PAST|short of/);
+  });
+
+  it('reports an overshoot it cannot correct AS an overshoot, not as a shortfall', async () => {
+    // 7.5° past a 30° turn: smaller than the shortest command that exists
+    // (MIN_DURATION_S x 45°/s = 9°), so correcting it could only bounce, and the
+    // loop rightly stops. What it must not do is call it "25% short", which is
+    // what the planner was told for a robot that went too FAR.
+    const h = makeTurningBase({ gainLeft: 1, gainRight: 1.25 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -30 }));
+
+    expect(h.moves).toHaveLength(1);
+    expect(h.yawDeg()).toBeCloseTo(-37.5, 6);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/7° PAST the commanded -30°/);
+    // The word "short" survives only inside "not a shortfall", which is the point.
+    expect(outcome.message).not.toMatch(/% short of/);
+  });
+
+  it('does not call the shortest command this robot HAS a 50% shortfall', async () => {
+    // MIN_DURATION_S floors every command at 0.2 s, i.e. ~9° at 45°/s. A perfect
+    // base asked for 6° therefore rotates 9°, and reporting "50% short of the
+    // commanded 6°" describes a quantisation floor as a failure to move.
+    const h = makeTurningBase({ gainLeft: 1, gainRight: 1 });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 6 }));
+
+    expect(h.moves).toHaveLength(1);
+    expect(h.moves[0].durationS).toBe(0.2);
+    expect(h.yawDeg()).toBeCloseTo(9, 6);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).not.toMatch(/short|PAST/);
+  });
+
+  it('advances the map by the rotation COMMANDED when odometry dies on the first command', async () => {
+    // The worst case of the old rule, which advanced the heading by `target` on
+    // every path: a mirrored left 90° plans −270°, issues the clamped −150°, and
+    // the map moved +90°. 240° of heading error, reported ok:true.
+    const h = makeTurningBase({
+      gainLeft: 0,
+      gainRight: 1,
+      leftTurnStrategy: 'mirror',
+      // One fix before the turn, then the sidecar 503s for good.
+      odometry: (call) => (call === 1 ? undefined : null),
+    });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(h.moves).toHaveLength(1);
+    expect(h.moves[0].durationS * TURN_SPEED).toBeCloseTo(150, 6);
+    // The map follows the robot, not the request.
+    expect(h.scene.getYawDeg()).toBeCloseTo(-150, 6);
+    expect(h.scene.getYawDeg()).toBeCloseTo(h.yawDeg(), 6);
+    expect(outcome.ok).toBe(true);
+    // No measurement came back, so none is claimed — this is the dead-reckoning
+    // path, not a turn that measurably did not happen.
+    expect(outcome.measured).toBeUndefined();
+    expect(outcome.message).toMatch(/no odometry/);
+  });
+
+  it('advances the map by what it MEASURED plus what it just commanded when odometry dies mid-turn', async () => {
+    // Odometry disappears with the third command already executed. Two rotations
+    // are measured, the third is estimated at the tracking ratio this turn
+    // measured (0.1) — which is the truth here — so the map lands on the robot.
+    // The old rule advanced by the full −90° while reporting "Turned -24°",
+    // a message that contradicted the heading printed in the same sentence.
+    const h = makeTurningBase({
+      gainLeft: 1,
+      gainRight: 0.1,
+      odometry: (call) => (call >= 4 ? null : undefined),
+    });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: -90 }));
+
+    expect(h.moves).toHaveLength(3);
+    expect(h.yawDeg()).toBeCloseTo(-38.727, 3);
+    expect(h.scene.getYawDeg()).toBeCloseTo(h.yawDeg(), 6);
+    // `measured` stays what odometry actually saw — it feeds the zero-motion
+    // rule and the compliance record, and a dead-reckoned estimate is not a
+    // measurement however good it is.
+    expect(outcome.measured?.angleDeg).toBeCloseTo(-23.727, 3);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.message).toMatch(/Turned -24° \(right\); heading now -39°/);
+  });
+
+  it('does not latch the mirror strategy off ONE stale odometry fix', async () => {
+    // The hiccup this guards: isaac_loco_bridge.py republishes a frozen yaw for
+    // up to 1 s and g1_sidecar.py serves the last fix as current for 2 s more,
+    // so one command of a perfectly good left turn measures ~0°. That single
+    // sample used to switch this base to the mirror strategy for the life of the
+    // process, and every later `turn +3` became a 357° revolution.
+    const h = makeTurningBase({
+      gainLeft: 1,
+      gainRight: 1,
+      leftTurnStrategy: 'auto',
+      // Read 2 is the frozen one: the robot has turned, the fix has not.
+      odometry: (call) => (call === 2 ? { x: 0, y: 0, yaw: 0, source: 'stale' } : undefined),
+    });
+
+    const first = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(first.ok).toBe(true);
+    // Re-probe (still left), then the fix comes back and shows 180° of rotation,
+    // which the reversal rule corrects back to the 90° that was asked for.
+    expect(h.moves).toHaveLength(3);
+    expect(h.moves[0].omega).toBeGreaterThan(0);
+    expect(h.moves[1].omega).toBeGreaterThan(0);
+    expect(h.moves[2].omega).toBeLessThan(0);
+    expect(h.yawDeg()).toBeCloseTo(90, 6);
+
+    // And nothing was latched: the next left turn is one plain left command.
+    const second = await h.executor.execute(block('turn', { angleDeg: 90 }));
+
+    expect(second.ok).toBe(true);
+    expect(h.moves).toHaveLength(4);
+    expect(h.moves[3].omega).toBeGreaterThan(0);
+    expect(h.yawDeg()).toBeCloseTo(180, 6);
+    expect(h.scene.getYawDeg()).toBeCloseTo(180, 6);
+  });
+
+  it('never takes a SMALL left turn the long way round', async () => {
+    // `capture` re-aligns to a checkpoint heading whenever it is more than 5°
+    // off, so this is a routine patrol turn. Mirroring it costs 354° of rotation
+    // to correct 6°, which drifts the dead-reckoned position further than the
+    // error it fixes. The honest "the robot did not turn" is the smaller error.
+    const h = makeTurningBase({ gainLeft: 0, gainRight: 1, leftTurnStrategy: 'mirror' });
+
+    const outcome = await h.executor.execute(block('turn', { angleDeg: 6 }));
+
+    expect(h.moves).toHaveLength(1);
+    expect(h.moves[0].omega).toBeGreaterThan(0);
+    expect(h.moves[0].durationS).toBe(0.2);
+    expect(Math.abs(h.yawDeg())).toBeLessThan(1e-9);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/did not turn/);
   });
 });
 

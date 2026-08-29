@@ -26,6 +26,7 @@ being labelled dead reckoning.
 Run:
     python3 robot-agent/hardware/verify_isaac_odom_offline.py
 """
+import ast
 import math
 import os
 import sys
@@ -37,6 +38,40 @@ if _HERE not in sys.path:
 import isaac_odom  # noqa: E402
 
 FAILURES = []
+
+BRIDGE_PATH = os.path.join(_HERE, "isaac_loco_bridge.py")
+
+
+def bridge_pure_defs(*names):
+    """Lift named module-level constants and functions out of `isaac_loco_bridge.py`.
+
+    The bridge imports `unitree_sdk2py` at module scope, so it cannot be imported
+    on a plain `python3` -- which is the whole reason this file exists. Its odom
+    RATE arithmetic is pure, though, and it is what decides both what the startup
+    banner claims and what the publisher actually delivers, so it is executed here
+    rather than re-implemented. A re-implementation would pass while the bridge
+    was wrong, which is precisely the failure this section is about.
+    """
+    src = open(BRIDGE_PATH, encoding="utf-8").read()
+    tree = ast.parse(src)
+    kept = [node for node in tree.body
+            if (isinstance(node, ast.FunctionDef) and node.name in names)
+            or (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) in names for t in node.targets))]
+    namespace = {"math": math}
+    exec(compile(ast.Module(body=kept, type_ignores=[]), BRIDGE_PATH, "exec"), namespace)
+    missing = [n for n in names if n not in namespace]
+    if missing:
+        # Fatal on the spot rather than a traceback ten checks later: every rate
+        # assertion below is computed FROM these, so there is nothing left to check.
+        print(f"    FAIL  isaac_loco_bridge.py defines no {', '.join(missing)}")
+        print(f"FAILED: isaac_loco_bridge.py is missing {', '.join(missing)} — the odom "
+              f"rate arithmetic this file verifies has been removed or renamed.")
+        sys.exit(1)
+    return namespace
+
+
+BRIDGE = bridge_pure_defs("ODOM_TICK_HZ", "achievable_odom_rate_hz", "odom_publish_period_s")
 
 
 def check(ok, label, detail=""):
@@ -257,29 +292,67 @@ print("\n(6) OdomIntegrator: the failure paths, driven on a fake clock")
 # This is the whole of `OdomPublisher._run`'s decision-making, with `now`, the yaw
 # sample and the command slot supplied as arguments. Every case below is one the
 # bridge only reaches when something is already going wrong in the sim.
-STALE, CMD_STALE, PUB = 1.0, 0.5, 0.05          # the bridge's constants at 20 Hz
+STALE, CMD_STALE = 1.0, 0.5                     # the bridge's constants
+# The publish period is the bridge's own, for the default 20 Hz against its
+# 100 Hz tick -- NOT 1/20 written out by hand. Hand-writing it is how this file
+# came to assert the behaviour of a 50 Hz tick loop that had not existed since
+# ODOM_TICK_HZ was raised: 9 frames in 0.5 s is 60 ms apart, i.e. 16.7 Hz, and
+# the check called it "the 20 Hz publish period". See BRIDGE below.
+PUB = BRIDGE["odom_publish_period_s"](20.0)
 integ = isaac_odom.OdomIntegrator(PUB, STALE, CMD_STALE)
 check(integ.starved, "starts starved — nothing is published before the first sample")
 check(integ.tick(0.0, None, (1.0, 0.0, 0.0)) is None,
       "no yaw sample at all -> no frame (the sidecar 503s instead of seeing a lie)")
 
 t, frames = 0.0, []
-for i in range(1, 26):                          # 0.5 s at 50 Hz, 1 m/s forward
-    t = i * 0.02
+for i in range(1, 51):                          # 0.5 s at ODOM_TICK_HZ, 1 m/s forward
+    t = i * 0.01
     f = integ.tick(t, (0.0, t), (1.0, 0.0, t))
     if f is not None:
         frames.append((t, f))
 check(not integ.starved, "a fresh sample clears the starved flag")
-# 9, not 10: the first tick publishes immediately, so the 0.5 s window holds one
+# 10, not 11: the first tick publishes immediately, so the 0.5 s window holds one
 # fewer 50 ms gap than it does frames. Asserted exactly, because a silent drop to
-# (say) 5 Hz would still look "roughly right" against a tolerance.
-check(len(frames) == 9, "50 Hz ticks are rate-limited to the 20 Hz publish period",
+# (say) 16.7 Hz would still look "roughly right" against a tolerance -- and 16.7 Hz
+# is exactly what this used to be, unnoticed, for the whole time the tick ran at
+# 50 Hz and the publish period sat on the tick boundary.
+gaps = {round(frames[i + 1][0] - frames[i][0], 6) for i in range(len(frames) - 1)}
+check(len(frames) == 10, "100 Hz ticks are rate-limited to the 20 Hz publish period",
       str(len(frames)))
-# 0.48, not 0.50: the first sample only ANCHORS the integration (there is no earlier
-# heading to average with), so 25 ticks contribute 24 intervals.
-check(abs(frames[-1][1].x - 0.48) < 1e-9 and abs(frames[-1][1].y) < 1e-9,
-      "0.5 s at vx=1 dead-reckons 24 x 20 ms = 0.48 m",
+check(gaps == {0.05}, "and every gap is 50 ms -- no tick lands on the boundary and "
+                      "gets decided by floating point", str(sorted(gaps)))
+# 0.45, not 0.46: the first sample only ANCHORS the integration (there is no earlier
+# heading to average with), so the 46 ticks up to the last frame contribute 45
+# intervals; the full 50-tick window leaves the reckoner at 0.49.
+check(abs(frames[-1][1].x - 0.45) < 1e-9 and abs(frames[-1][1].y) < 1e-9,
+      "0.46 s at vx=1 dead-reckons 45 x 10 ms = 0.45 m",
       f"({frames[-1][1].x:.4f}, {frames[-1][1].y:.4f})")
+check(abs(integ.reckoner.x - 0.49) < 1e-9,
+      "and the ticks after the last frame keep integrating: 49 x 10 ms = 0.49 m",
+      f"{integ.reckoner.x:.4f}")
+
+# The negative case, which is the whole point of the arithmetic above: a rate that
+# is NOT a divisor of the tick cannot be delivered, and the bridge must not claim
+# it. Measured on the live sim before this: --odom-rate 30 published at 25 Hz, 15
+# at 14.5, 60 at 50, while the banner repeated the request back verbatim.
+integ30 = isaac_odom.OdomIntegrator(BRIDGE["odom_publish_period_s"](30.0), STALE, CMD_STALE)
+frames30 = []
+for i in range(1, 51):
+    t30 = i * 0.01
+    if integ30.tick(t30, (0.0, t30), (1.0, 0.0, t30)) is not None:
+        frames30.append(round(t30, 6))
+gaps30 = {round(frames30[i + 1] - frames30[i], 6) for i in range(len(frames30) - 1)}
+check(gaps30 == {0.04},
+      "a requested 30 Hz is DELIVERED at 25 Hz (40 ms), because a frame can only "
+      "leave on a tick boundary", str(sorted(gaps30)))
+check(abs(BRIDGE["achievable_odom_rate_hz"](30.0) - 25.0) < 1e-9,
+      "and the bridge computes that 25 Hz rather than promising 30", 
+      f"{BRIDGE['achievable_odom_rate_hz'](30.0):g}")
+for requested, delivered in ((20.0, 20.0), (15.0, 100.0 / 7), (60.0, 50.0),
+                             (100.0, 100.0), (200.0, 100.0), (25.0, 25.0)):
+    got = BRIDGE["achievable_odom_rate_hz"](requested)
+    check(abs(got - delivered) < 1e-9,
+          f"--odom-rate {requested:g} is delivered at {delivered:.4g} Hz", f"{got:.4g}")
 
 # The sim stalls for 10 s, then comes back. The position must NOT jump.
 x_before = integ.reckoner.x
@@ -317,6 +390,24 @@ check(abs(f3.vx_world) < 1e-9 and abs(f3.vy_world - 0.7) < 1e-9,
       f"({f3.vx_world:.4f}, {f3.vy_world:.4f})")
 check(abs(f3.yaw - math.pi / 2) < 1e-12 and abs(f3.yaw_continuous - math.pi / 2) < 1e-12,
       "the frame carries the WRAPPED yaw for the wire and the continuous one alongside")
+
+print("\n(6b) isaac_loco_bridge.py's own guards, read from its source")
+# Neither of these is reachable without DDS, and both are the kind of rule that
+# is only ever exercised in anger. Asserted against the source for the same
+# reason as (5b): a change there must fail HERE, not on a robot.
+bridge_src = open(BRIDGE_PATH, encoding="utf-8").read()
+check("if domain == 0:" in bridge_src
+      and "domain 0 is the REAL ROBOT and is refused" in bridge_src,
+      "the bridge refuses DDS domain 0 (the real robot) outright")
+check("[bridge] refused:" in bridge_src and "return 2" in bridge_src,
+      "and main() turns that into an operator message and exit 2, not a traceback")
+check("{self._odom.rate:g} Hz" in bridge_src,
+      "the startup banner quotes the ACHIEVABLE odom rate, not the requested one")
+check("publish_period=odom_publish_period_s(rate_hz)" in bridge_src,
+      "and the publisher is built with the period that rate implies")
+check(abs(BRIDGE["ODOM_TICK_HZ"] - 100.0) < 1e-9,
+      "ODOM_TICK_HZ is still 100 Hz -- the number every gap above is computed from",
+      f"{BRIDGE['ODOM_TICK_HZ']:g}")
 
 print("\n(7) against the real IDL, if this interpreter has one")
 try:

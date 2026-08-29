@@ -181,6 +181,64 @@ const MIN_TURN_GAIN = 0.05;
 const TURN_GAIN_ALPHA = 0.5;
 
 /**
+ * How many DIRECTION REVERSALS one turn may spend correcting an overshoot.
+ *
+ * The loop used to stop dead at the first sign flip, on the reasoning that
+ * MIN_DURATION_S floors every command at ~9° so a small correction oscillates
+ * forever. That reasoning is right for a small overshoot and wrong for a large
+ * one, and it made every overshoot PERMANENT: the block returned ok:true with
+ * the robot pointing somewhere nobody asked for, and the map followed. A
+ * reversal is now allowed while the error is bigger than the smallest command
+ * that can be issued (see {@link smallestCommandableDeg}) — which is exactly the
+ * condition under which a correction can land instead of bouncing — and capped
+ * here so a plant that overshoots in BOTH directions still terminates.
+ */
+const MAX_TURN_REVERSALS = 2;
+
+/**
+ * How many consecutive dead LEFT commands confirm that this base cannot rotate
+ * CCW in place, within one turn.
+ *
+ * One is not evidence. `isaac_loco_bridge.py` republishes a frozen yaw for up to
+ * ODOM_LOWSTATE_STALE_S (1 s) and `g1_sidecar.py` serves the last fix as current
+ * for 2 s more, so a single odometry hiccup on a base that turns left perfectly
+ * well produces a delta of ~0 and looks exactly like the dead checkpoint. The
+ * cost of re-probing is one repeated command (~2 s); the cost of believing the
+ * first sample is a ~270° spin, and — before this — a process-wide latch that
+ * turned every later left turn into one too.
+ */
+const DEAD_LEFT_PROBES = 2;
+
+/**
+ * How many separate TURNS must confirm a dead left before `auto` latches the
+ * mirror strategy for the rest of the process.
+ *
+ * The latch outlives the block, the plan and the robot's next reboot, so it asks
+ * for more than the within-turn confirmation above: two independent turns, each
+ * of which measured {@link DEAD_LEFT_PROBES} dead left commands. An outage long
+ * enough to fake that has already taken Agent Mode's heading away entirely.
+ * The latch is also RELEASED (not merely not-taken) the moment a left command is
+ * measured to rotate the base — see {@link BlockExecutor.turnMeasured} — because
+ * "this checkpoint cannot turn left" must stop being believed as soon as the
+ * robot demonstrates otherwise, without waiting for a restart.
+ */
+const DEAD_LEFT_TURNS_TO_LATCH = 2;
+
+/**
+ * Smallest left turn worth taking the LONG way round.
+ *
+ * Mirroring θ costs 360 − θ of extra rotation: 270° to satisfy a 90° request is
+ * a trade worth making on a base that cannot turn left at all, and 354° to
+ * satisfy a 6° one is not — a patrol's routine heading alignment (`capture`
+ * re-aligns whenever it is more than 5° off) would become a full revolution,
+ * which takes ~8 s, drifts the dead-reckoned position by more than the 6° it was
+ * correcting, and looks to anyone watching like a malfunction. Below this the
+ * left command is issued directly and an honest "the robot did not turn" is the
+ * outcome, which is the smaller error of the two.
+ */
+const MIN_MIRROR_DEG = 30;
+
+/**
  * Wall-clock ceiling on one closed-loop turn, checked BETWEEN iterations (a
  * command in flight is never cut short — the same rule as the abort flag).
  *
@@ -322,6 +380,22 @@ export function turnToCommandExact(
   return { vx: 0, vy: 0, omega, durationS };
 }
 
+/**
+ * The smallest rotation a single command can ASK FOR, in degrees.
+ *
+ * {@link MIN_DURATION_S} floors every command's duration, so a request for 1° and
+ * a request for 9° go out as the same 0.2 s of omega — a base that tracks its
+ * command perfectly rotates ~9° for both. Two rules depend on knowing that
+ * number rather than assuming it: a correction smaller than this cannot land (it
+ * can only replace one overshoot with another, which is why a reversal is
+ * refused below it), and a "shortfall" smaller than this is quantisation, not a
+ * robot that fell short.
+ */
+function smallestCommandableDeg(turnSpeedDps: number = config.agentMode.turnSpeedDps): number {
+  const rate = Math.abs(turnSpeedDps) > 1e-6 ? Math.abs(turnSpeedDps) : 45;
+  return MIN_DURATION_S * rate;
+}
+
 /** Everything a block handler may touch. Injectable end-to-end for tests. */
 export interface BlockExecutorDeps {
   scene: SceneMemoryStore;
@@ -460,15 +534,29 @@ export class BlockExecutor {
    */
   private mirrorLeftTurns = false;
   /**
-   * Running estimate of the fraction of a commanded rotation this base actually
-   * performs, in (0, 1]. Starts at 1 — "it does what it is told" — so the first
-   * command of the first turn is identical to the open-loop one, and only
-   * measurement moves it. Latched on the instance, like {@link mirrorLeftTurns}
-   * and for the same reason: poor yaw tracking is a property of the checkpoint,
-   * not of one block, so later turns start from what earlier ones learned
-   * instead of re-paying the discovery every time.
+   * How many separate turns have CONFIRMED a dead left (see
+   * {@link DEAD_LEFT_TURNS_TO_LATCH}). Reset to zero by any left command that is
+   * measured to rotate the base.
    */
-  private turnGain = 1;
+  private deadLeftTurns = 0;
+  /**
+   * Running estimate of the fraction of a commanded rotation this base actually
+   * performs, in (0, 1] — kept PER DIRECTION, because on this checkpoint the two
+   * are not the same number and are not within an order of magnitude of each
+   * other: `isaac_yaw_sweep.py` measures 0.26–0.53 turning right in place and
+   * 0.01 turning left. One scalar updated from whichever direction turned last
+   * meant a left turn's estimate sized the next RIGHT command — 45° right
+   * divided by a left-derived 0.107 is a 420° request, clamped to
+   * {@link MAX_TURN_STEP_DEG} and executed as a 150° spin for a 45° block.
+   *
+   * Both start at 1 — "it does what it is told" — and only measurement moves
+   * them. Latched on the instance, like {@link mirrorLeftTurns} and for the same
+   * reason: poor yaw tracking is a property of the checkpoint, not of one block,
+   * so later turns start from what earlier ones learned instead of re-paying the
+   * discovery every time. What a latched estimate may NOT do is size the first
+   * command of a later turn — see {@link turnMeasured}.
+   */
+  private turnGain: { left: number; right: number } = { left: 1, right: 1 };
 
   constructor(deps: BlockExecutorDeps) {
     this.deps = deps;
@@ -976,11 +1064,26 @@ export class BlockExecutor {
     // 270° is a −90° turn and measuring 90° of it is not a 67% shortfall.
     const target = normalizeDeg(angleDeg);
     const residualDeg = normalizeDeg(target - turnedDeg);
+    // An OVERSHOOT is not a shortfall, and printing it as one was a lie the
+    // planner acted on: a base that rotated 150° for a commanded 30° reported
+    // "400% short of the commanded -30°", which reads as "it barely moved" and
+    // invites the planner to command the same turn again. The residual is the
+    // heading still to go; when its sign is opposite the target's, the robot went
+    // PAST the target and the number is how far past.
+    //
+    // Nothing inside {@link TURN_TOLERANCE_DEG} is reported either way. That is
+    // the loop's own definition of "landed" — it stops correcting there — and
+    // {@link smallestCommandableDeg} is larger still, so a `turn +6` that
+    // quantises to 9° of rotation is the shortest command this robot HAS, not a
+    // "50% short" turn, and a `turn +1` is not "800% short".
+    const overshot = Math.abs(residualDeg) > TURN_TOLERANCE_DEG && Math.sign(residualDeg) !== Math.sign(target);
     const shortfall = Math.abs(target) > 0 ? Math.abs(residualDeg) / Math.abs(target) : 0;
-    const note =
-      shortfall > SHORTFALL_TOLERANCE
-        ? ` — ${(shortfall * 100).toFixed(0)}% short of the commanded ${target.toFixed(0)}°`
-        : '';
+    let note = '';
+    if (overshot) {
+      note = ` — ${Math.abs(residualDeg).toFixed(0)}° PAST the commanded ${target.toFixed(0)}° (an overshoot, not a shortfall)`;
+    } else if (Math.abs(residualDeg) > TURN_TOLERANCE_DEG && shortfall > SHORTFALL_TOLERANCE) {
+      note = ` — ${(shortfall * 100).toFixed(0)}% short of the commanded ${target.toFixed(0)}°`;
+    }
     // A mirrored turn ends on the requested heading by the long way round, so it
     // is a success — but the operator asked for 90° left and the robot spun 270°
     // right, and a message that did not say so would be a surprise, not a report.
@@ -1027,7 +1130,25 @@ export class BlockExecutor {
    * `turnedDeg` is the TOTAL rotation over every iteration, accumulated as a sum
    * of per-iteration deltas and deliberately NOT normalized: a mirrored left 90°
    * really is −270° of rotation, and folding that to +90° would report a number
-   * the base never turned.
+   * the base never turned. It is what was MEASURED and nothing else — a command
+   * whose outcome odometry never reported is dead-reckoned into the scene
+   * heading (below) but never into this number, which `didNotTurn` and the
+   * compliance record both read as measurement.
+   *
+   * ## Why the first command of every turn is open-loop (TASK-203 follow-up)
+   *
+   * Gain compensation multiplies whatever is left by 1/gain, and a gain that is
+   * stale by even one block is then a multiplier on a rotation the robot
+   * performs for real. Latched at its {@link MIN_TURN_GAIN} floor of 0.05 it
+   * turned ANY remainder of 7.5° or more into the full {@link MAX_TURN_STEP_DEG}
+   * — a 30° request executed as a 150° spin on a plant whose tracking had since
+   * recovered. So the first command in each direction of each turn is issued at
+   * gain 1, exactly the rotation that remains, and compensation applies only
+   * from the SECOND command in that direction, where the ratio it divides by was
+   * measured in this very turn. A latched estimate still earns its keep — it is
+   * the filter's memory, so the second command of a poorly-tracking base is
+   * already compensated properly instead of rediscovering 0.1 from scratch — it
+   * simply may not size a command on its own authority.
    */
   private async turnMeasured(
     angleDeg: number,
@@ -1040,6 +1161,9 @@ export class BlockExecutor {
     if (!before) {
       const result = await this.driveFor(turnToCommand(target));
       if (!result.ok) return { result, turnedDeg: null, mirrored: false };
+      // `target` is what was COMMANDED here, not merely what was wanted: the one
+      // command that went out asked for exactly it. Dead reckoning it is the
+      // best this path can do and it is honest about being dead reckoning.
       this.deps.scene.advanceYawDeg(target);
       await this.refreshYaw();
       return { result, turnedDeg: null, mirrored: false };
@@ -1050,6 +1174,13 @@ export class BlockExecutor {
     const deadline = this.now() + TURN_BUDGET_MS;
     let previousYawDeg = before.yaw * RAD_TO_DEG;
     let turnedDeg = 0;
+    /**
+     * Rotation this turn ISSUED and never got a measurement back for, estimated
+     * at the tracking ratio measured in this turn. Non-zero only when odometry
+     * disappeared with a command already executed; see the dead-reckoning note
+     * where the scene heading is advanced.
+     */
+    let unmeasuredDeg = 0;
     let mirroring =
       allowMirror &&
       (this.leftTurnStrategy === 'mirror' ||
@@ -1066,12 +1197,33 @@ export class BlockExecutor {
      */
     let remainingDeg = target;
     if (mirroring && remainingDeg > 0) {
-      remainingDeg -= 360;
-      mirrored = true;
+      if (remainingDeg >= MIN_MIRROR_DEG) {
+        remainingDeg -= 360;
+        mirrored = true;
+      } else {
+        // Too small to be worth 360 − θ of extra rotation; see MIN_MIRROR_DEG.
+        // The left command goes out directly, and if this base really cannot
+        // turn left the block says "the robot did not turn" — which is a 6°
+        // heading error rather than a 354° spin.
+        mirroring = false;
+      }
     }
     /** The direction of the plan. Every command and every stop rule follows it. */
     let planSign = Math.sign(remainingDeg) || 1;
     let result: LocoResult = { ok: true };
+    /**
+     * The tracking ratio measured IN THIS TURN, per direction, or null where
+     * this turn has not commanded that direction yet. Two different jobs:
+     * `turnGain` (safety-biased, see the update below) sizes the next command,
+     * and this decides whether there is any in-turn measurement to size it from
+     * at all — while the raw ratio itself is the honest estimator for a command
+     * odometry never came back to confirm.
+     */
+    const observedHere: { left: number | null; right: number | null } = { left: null, right: null };
+    /** Direction reversals spent correcting an overshoot; see MAX_TURN_REVERSALS. */
+    let reversals = 0;
+    /** Consecutive dead LEFT commands in this turn; see DEAD_LEFT_PROBES. */
+    let deadLeftProbes = 0;
 
     for (let iteration = 0; iteration < MAX_TURN_ITERATIONS; iteration++) {
       // Every one of these stopping rules is for CORRECTIONS only — the first
@@ -1079,32 +1231,52 @@ export class BlockExecutor {
       // still a rotation the robot performs, exactly as before this loop existed.
       if (iteration > 0) {
         if (Math.abs(remainingDeg) <= TURN_TOLERANCE_DEG) break;
-        // The target has been reached or passed. Correcting BACKWARDS from an
-        // overshoot would oscillate rather than converge: MIN_DURATION_S floors
-        // every command at ~9° of rotation, so a 6° correction overshoots by 3°
-        // in the other direction, forever. Stop, and report the overshoot.
-        if (Math.sign(remainingDeg) !== planSign) break;
+        // The target has been reached or PASSED. An overshoot used to end the
+        // turn here, which made it permanent — the block then reported ok:true
+        // with the robot pointing somewhere nobody asked for. Turn back instead,
+        // while two conditions hold: the error is bigger than the smallest
+        // command that exists (below that a correction can only bounce, which is
+        // the oscillation this break was written to avoid), and the turn has not
+        // already reversed {@link MAX_TURN_REVERSALS} times.
+        if (Math.sign(remainingDeg) !== planSign) {
+          if (
+            reversals >= MAX_TURN_REVERSALS ||
+            Math.abs(remainingDeg) <= smallestCommandableDeg()
+          ) {
+            break;
+          }
+          reversals += 1;
+          planSign = Math.sign(remainingDeg);
+        }
         if (this.now() >= deadline) break;
       }
 
+      const side: 'left' | 'right' = planSign > 0 ? 'left' : 'right';
       // Ask for the rotation the base will actually PERFORM, not the one that is
-      // left. A plant that delivers a fraction `turnGain` of what it is told
-      // needs the remainder divided by that fraction; `turnGain` starts at 1, so
-      // the first command of a turn is exactly the open-loop one and a base that
-      // tracks perfectly never sees a compensated command at all.
+      // left — but only once THIS turn has measured what this base does in this
+      // direction. Until then the gain is 1 and the command is exactly the
+      // remainder, which is the open-loop command and cannot overshoot a plant
+      // that tracks at 1.0 or less. See the method docstring for why a latched
+      // estimate is not allowed to size a command on its own.
+      const gain = observedHere[side] === null ? 1 : this.turnGain[side];
       const commandDeg = Math.max(
         -MAX_TURN_STEP_DEG,
-        Math.min(MAX_TURN_STEP_DEG, remainingDeg / this.turnGain)
+        Math.min(MAX_TURN_STEP_DEG, remainingDeg / gain)
       );
       result = await this.driveFor(turnToCommandExact(commandDeg));
       if (!result.ok) break;
 
       const after = await this.loco.odometry();
       // Odometry that goes away mid-turn is not a measurement of zero: stop
-      // correcting and report what was measured up to the last good fix.
+      // correcting and report what was measured up to the last good fix. The
+      // command that has just been executed is the one thing no fix will ever
+      // cover, so estimate it — at the ratio this turn measured in this
+      // direction, or at the command itself when it measured none (which is the
+      // case at iteration 0, where the command IS the rotation asked for).
       if (!after) {
+        unmeasuredDeg = commandDeg * (observedHere[side] ?? 1);
         if (iteration === 0) {
-          this.deps.scene.advanceYawDeg(target);
+          this.deps.scene.advanceYawDeg(unmeasuredDeg);
           await this.refreshYaw();
           return { result, turnedDeg: null, mirrored };
         }
@@ -1134,13 +1306,25 @@ export class BlockExecutor {
         Math.abs(deltaDeg) >= ZERO_MOTION_DEG
       ) {
         const observed = Math.abs(deltaDeg) / Math.abs(commandDeg);
-        this.turnGain = Math.min(
-          1,
-          Math.max(
-            MIN_TURN_GAIN,
-            (1 - TURN_GAIN_ALPHA) * this.turnGain + TURN_GAIN_ALPHA * observed
-          )
-        );
+        // Asymmetric on purpose: the filter is for a plant that got WORSE, and
+        // an estimate that lags there merely costs an extra correction. A plant
+        // that got BETTER is the dangerous direction — the estimate is then a
+        // multiplier on a rotation that really happens — so good news is
+        // believed in full, immediately, and one honest command is enough to
+        // undo an estimate the last block left too low.
+        const filtered =
+          (1 - TURN_GAIN_ALPHA) * this.turnGain[side] + TURN_GAIN_ALPHA * observed;
+        this.turnGain[side] = Math.min(1, Math.max(MIN_TURN_GAIN, Math.max(observed, filtered)));
+        observedHere[side] = observed;
+        if (side === 'left') {
+          // A left command that measurably rotated the base is proof the
+          // asymmetry this latch encodes is not (or is no longer) true here.
+          // Released immediately, and the confirmations start again from zero:
+          // the latch exists to skip a dead command, never to keep a working
+          // direction switched off until the process restarts.
+          this.deadLeftTurns = 0;
+          this.mirrorLeftTurns = false;
+        }
       }
 
       if (Math.abs(deltaDeg) >= ZERO_MOTION_DEG) continue; // it moved — correct it again
@@ -1148,20 +1332,61 @@ export class BlockExecutor {
       // It did not. Re-issuing the identical command would only burn the
       // budget, so either change strategy or stop and let the caller report a
       // rotation that measurably did not happen.
-      if (allowMirror && !mirroring && this.leftTurnStrategy === 'auto' && commandDeg > 0) {
+      //
+      // `reversals === 0` keeps this out of the correction phase: a dead left
+      // command while turning BACK from an overshoot is a 5° tidy-up going
+      // missing, and answering it with three quarters of a revolution would be
+      // a far larger error than the one being corrected.
+      if (
+        allowMirror &&
+        !mirroring &&
+        this.leftTurnStrategy === 'auto' &&
+        commandDeg > 0 &&
+        reversals === 0
+      ) {
+        deadLeftProbes += 1;
+        if (deadLeftProbes < DEAD_LEFT_PROBES) {
+          // One dead sample is not a dead direction — it is also exactly what a
+          // one-second odometry hiccup looks like. Send the same command again
+          // and let the second measurement decide; see DEAD_LEFT_PROBES.
+          console.warn(
+            `[AgentMode] left turn of ${commandDeg.toFixed(0)}° measured ${deltaDeg.toFixed(1)}° — ` +
+              `re-issuing it once before believing this base cannot rotate CCW ` +
+              `(a stale odometry fix looks identical to a dead turn).`
+          );
+          continue;
+        }
+        if (Math.abs(remainingDeg) < MIN_MIRROR_DEG) {
+          // Confirmed dead, and still not worth the long way round: see
+          // MIN_MIRROR_DEG. The caller reports a turn that did not happen.
+          console.warn(
+            `[AgentMode] left turn of ${commandDeg.toFixed(0)}° measured ${deltaDeg.toFixed(1)}° ` +
+              `twice, but ${Math.abs(remainingDeg).toFixed(0)}° is too small to be worth ` +
+              `${(360 - Math.abs(remainingDeg)).toFixed(0)}° the other way round. Reporting the ` +
+              `turn as not performed instead of spinning the robot most of a circle.`
+          );
+          break;
+        }
         mirroring = true;
         mirrored = true;
-        // Process-wide, deliberately: the asymmetry is a property of the
-        // checkpoint, not of this block, so every later left turn skips the
-        // dead command instead of paying for the same discovery again.
-        this.mirrorLeftTurns = true;
+        this.deadLeftTurns += 1;
+        if (this.deadLeftTurns >= DEAD_LEFT_TURNS_TO_LATCH) {
+          // Process-wide, deliberately: the asymmetry is a property of the
+          // checkpoint, not of this block, so every later left turn skips the
+          // dead command instead of paying for the same discovery again. Only
+          // after DEAD_LEFT_TURNS_TO_LATCH separate turns have confirmed it,
+          // though — a latch this long-lived is not something one bad second of
+          // odometry gets to set.
+          this.mirrorLeftTurns = true;
+        }
         // What is LEFT of the turn now goes the other way round the circle.
         remainingDeg -= 360;
         planSign = -1;
         console.warn(
-          `[AgentMode] left turn of ${commandDeg.toFixed(0)}° measured ${deltaDeg.toFixed(1)}° — ` +
-            `this base does not rotate CCW in place. Switching to the mirror strategy ` +
-            `(left θ executed as right θ−360) for this turn and every later one. ` +
+          `[AgentMode] left turn of ${commandDeg.toFixed(0)}° measured ${deltaDeg.toFixed(1)}° on ` +
+            `${DEAD_LEFT_PROBES} consecutive commands — this base does not rotate CCW in place. ` +
+            `Switching to the mirror strategy (left θ executed as right θ−360) for this turn` +
+            `${this.mirrorLeftTurns ? ' and every later one' : ''}. ` +
             `Set AGENT_LEFT_TURN_STRATEGY=direct to keep commanding it anyway.`
         );
         continue;
@@ -1169,9 +1394,14 @@ export class BlockExecutor {
       break;
     }
 
-    // The scene heading advances by the INTENDED angle (dead reckoning), then
-    // `refreshYaw` replaces it with the measured one whenever there is a fix.
-    this.deps.scene.advanceYawDeg(target);
+    // The scene heading advances by what the base is believed to have ROTATED —
+    // never by what it was asked for. `refreshYaw` overwrites this with the
+    // measured heading whenever there is still a fix, so it only decides
+    // anything on the path where odometry is the thing that went away, and that
+    // is precisely where advancing by `target` was worst: a mirrored turn plans
+    // −270°, issues a clamped −150°, and used to advance the map by +90° — a
+    // heading error of up to 240° reported as ok:true.
+    this.deps.scene.advanceYawDeg(turnedDeg + unmeasuredDeg);
     await this.refreshYaw();
     return { result, turnedDeg, mirrored };
   }
