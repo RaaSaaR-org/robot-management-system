@@ -35,6 +35,7 @@ settles those.
 Run:
     python3 robot-agent/hardware/verify_isaac_manip_offline.py
 """
+import ast
 import contextlib
 import io
 import math
@@ -434,8 +435,30 @@ check(B.DEFAULT_RATE_HZ >= 50.0,
       f"{B.DEFAULT_RATE_HZ:g} Hz")
 # The non-negotiable one: nothing here may touch the locomotion bridge.
 loco = open(os.path.join(_HERE, "isaac_loco_bridge.py"), encoding="utf-8").read()
-check("isaac_manip" not in loco,
-      "isaac_loco_bridge.py does not import this at all — its 100 Hz loop is untouched")
+# Asked as "does it IMPORT this", via the parse tree, not "does the word appear".
+# A substring test also fires on a comment that merely names the sibling bridge --
+# and the domain-0 refusal added in TASK-203 does exactly that, deliberately, to
+# say the two bridges share a contract. Naming it is not depending on it. The AST
+# also catches the spellings a substring test would miss on the other side:
+# `importlib.import_module("isaac_manip")` and `__import__("isaac_manip")`.
+_loco_imports = set()
+for _n in ast.walk(ast.parse(loco)):
+    if isinstance(_n, ast.Import):
+        _loco_imports.update(a.name for a in _n.names)
+    elif isinstance(_n, ast.ImportFrom) and _n.module:
+        _loco_imports.add(_n.module)
+    elif isinstance(_n, ast.Call):
+        _f = _n.func
+        _name = getattr(_f, "attr", None) or getattr(_f, "id", None)
+        if _name in ("import_module", "__import__") and _n.args:
+            _a = _n.args[0]
+            if isinstance(_a, ast.Constant) and isinstance(_a.value, str):
+                _loco_imports.add(_a.value)
+_loco_offenders = sorted(m for m in _loco_imports if m.split(".")[0] == "isaac_manip")
+check(not _loco_offenders,
+      "isaac_loco_bridge.py does not import this at all — its 100 Hz loop is untouched",
+      f"{len(_loco_imports)} modules imported, none of them this one"
+      if not _loco_offenders else f"IMPORTS {', '.join(_loco_offenders)}")
 check('ap.add_argument("--rate", type=float, default=100.0' in loco,
       "and it still publishes rt/run_command/cmd at 100 Hz")
 
