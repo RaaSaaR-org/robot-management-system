@@ -14,6 +14,12 @@ import { DEFAULT_PLACE_DRIFT_BUDGET_M } from '../agent-mode/place-resolver.js';
 
 export type RobotClass = 'lightweight' | 'heavy-duty' | 'standard';
 
+/**
+ * How Agent Mode executes an in-place LEFT (CCW) rotation. See
+ * {@link Config.agentMode.leftTurnStrategy} for the measurement behind it.
+ */
+export type LeftTurnStrategy = 'direct' | 'mirror' | 'auto';
+
 export interface Config {
   port: number;
   robotId: string;
@@ -188,6 +194,27 @@ export interface Config {
     walkSpeedMps: number;
     /** Turn rate used to convert `turn.angleDeg` → duration (`AGENT_TURN_SPEED_DPS`). */
     turnSpeedDps: number;
+    /**
+     * How an in-place LEFT (CCW) rotation is executed (`AGENT_LEFT_TURN_STRATEGY`).
+     *
+     * Exists because a locomotion policy can be asymmetric. Measured on the G1
+     * checkpoint this platform drives (TASK-203): turning in place, a commanded
+     * yaw of +0.3 … +1.0 rad/s (left) achieves a ratio of **0.01** — the robot
+     * does not even step — while −0.3 … −1.0 rad/s (right) achieves 0.26–0.53.
+     * A left turn is not slow there; it does not happen.
+     *
+     * - `direct` — command positive omega and take what comes. Correct for any
+     *   base whose gait is symmetric, and the only honest choice when the
+     *   asymmetry is unknown to be present.
+     * - `mirror` — execute a left turn of θ as a right turn of θ − 360 (left 90°
+     *   becomes right 270°). Same final heading, no translation, and it uses the
+     *   direction that works.
+     * - `auto` (default) — start `direct`; if the first closed-loop iteration of
+     *   a left turn measures no rotation, switch that turn to `mirror` and
+     *   remember it. A base that CAN turn left never trips the switch and so
+     *   behaves exactly as `direct` — the asymmetry is detected, never assumed.
+     */
+    leftTurnStrategy: LeftTurnStrategy;
     /** Lower-cased words that bypass the planner and trigger an E-Stop (`AGENT_STOP_WORDS`). */
     stopWords: string[];
     /** Camera used by `look` / `scan_room` (`AGENT_CAMERA_NAME`). */
@@ -565,6 +592,18 @@ function mapEnabledFromEnv(): boolean {
     : process.env.AGENT_MAP_ENABLED === 'true';
 }
 
+/**
+ * `AGENT_LEFT_TURN_STRATEGY`: `direct` | `mirror` | `auto`. Anything else —
+ * including a typo — falls back to `auto`, which is `direct` until a left turn
+ * is MEASURED to do nothing. Failing open to `direct` would be the same choice
+ * on a symmetric base and a worse one on the asymmetric checkpoint.
+ */
+function leftTurnStrategyFromEnv(): LeftTurnStrategy {
+  const raw = (process.env.AGENT_LEFT_TURN_STRATEGY || '').trim().toLowerCase();
+  if (raw === 'direct' || raw === 'mirror' || raw === 'auto') return raw;
+  return 'auto';
+}
+
 function navPlannerFromEnv(): 'grid' | 'staged' {
   const raw = (process.env.AGENT_NAV_PLANNER || '').trim().toLowerCase();
   if (raw === 'grid' || raw === 'staged') return raw;
@@ -666,6 +705,7 @@ export const config: Config = {
     maxNavStages: parseInt(process.env.AGENT_MAX_NAV_STAGES || '12', 10),
     walkSpeedMps: parseFloat(process.env.AGENT_WALK_SPEED_MPS || '0.4'),
     turnSpeedDps: parseFloat(process.env.AGENT_TURN_SPEED_DPS || '45'),
+    leftTurnStrategy: leftTurnStrategyFromEnv(),
     stopWords: (process.env.AGENT_STOP_WORDS || 'stopp,stop,halt')
       .split(',')
       .map((w) => w.trim().toLowerCase())
@@ -890,7 +930,8 @@ export function validateConfig(): void {
     }`
   );
   console.log(
-    `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s`
+    `    - Walk/Turn Speed: ${config.agentMode.walkSpeedMps} m/s, ${config.agentMode.turnSpeedDps} deg/s` +
+      ` (left turns: ${config.agentMode.leftTurnStrategy})`
   );
   console.log(`    - Max Nav Stages: ${config.agentMode.maxNavStages}`);
   console.log(
