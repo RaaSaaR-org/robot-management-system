@@ -139,22 +139,56 @@ const ZERO_MOTION_DEG = 2;
 const TURN_TOLERANCE_DEG = 5;
 
 /**
- * Iteration cap for one closed-loop turn. Sized from the measurement this loop
- * exists for: the G1 checkpoint achieves 0.26–0.53 of the commanded yaw rate
- * turning right (TASK-203), so a geometric series of remainders needs three to
- * four corrections to land inside {@link TURN_TOLERANCE_DEG} in the worst case.
- * Five leaves one spare and still bounds a `scan_room`'s eight turns.
+ * Iteration cap for one closed-loop turn.
+ *
+ * Sized from the worst tracking actually measured, not the best. Against the
+ * live Isaac sim `isaac_yaw_sweep.py` reports a yaw-rate ratio of 0.09–0.15, and
+ * a single command is capped at {@link MAX_TURN_STEP_DEG}, so a compensated
+ * correction recovers at most ~15° of heading. A half turn therefore needs of
+ * the order of ten corrections, and anything smaller silently returns a large
+ * shortfall instead of a turn. {@link TURN_BUDGET_MS} is the real guard; this
+ * only stops the loop spinning on a base that reports motion but never
+ * converges.
  */
-const MAX_TURN_ITERATIONS = 5;
+const MAX_TURN_ITERATIONS = 12;
+
+/**
+ * Smallest yaw-rate tracking ratio {@link BlockExecutor} will compensate for.
+ *
+ * Measured, not guessed: `isaac_yaw_sweep.py` against the live Isaac sim reports
+ * 0.09–0.15 of the commanded rate in BOTH directions, in place. At a ratio that
+ * low a purely proportional loop is hopeless — the remainder decays as 0.9ⁿ, so
+ * reaching {@link TURN_TOLERANCE_DEG} from 90° would need ~27 corrections. The
+ * loop therefore divides the remaining angle by the tracking ratio it has just
+ * measured, and this floor stops a base that reports a near-zero ratio (or one
+ * dead sample) from turning that into a division by ~0.
+ */
+const MIN_TURN_GAIN = 0.05;
+
+/**
+ * Weight of the newest tracking observation in the running estimate.
+ *
+ * Deliberately heavy. The estimate starts at 1.0 (assume the base does what it
+ * is told), which makes the FIRST command of every turn byte-for-byte the one
+ * the open-loop code would have sent — so a base that tracks perfectly is never
+ * over-commanded, and a plant this loop has never met is not slandered on the
+ * strength of zero evidence. But when the truth is 0.10, a slow filter spends
+ * the whole iteration budget walking the estimate down. Half-and-half converges
+ * in three or four corrections while still averaging out a single odd sample.
+ */
+const TURN_GAIN_ALPHA = 0.5;
 
 /**
  * Wall-clock ceiling on one closed-loop turn, checked BETWEEN iterations (a
  * command in flight is never cut short — the same rule as the abort flag).
- * Five full-magnitude corrections at 45°/s are ~40 s of commands, so this is
- * the binding limit on a base that rotates very little per command, and it is
- * what stops `turn` from becoming an open-ended block.
+ *
+ * This, not {@link MAX_TURN_ITERATIONS}, is the binding limit on a base that
+ * rotates very little per command, and it is what stops `turn` becoming an
+ * open-ended block. Raised with the iteration cap so a poorly-tracking base can
+ * actually finish a half turn: ~12 corrections of {@link MAX_TURN_STEP_DEG} at
+ * 45°/s is ~40 s of commands.
  */
-const TURN_BUDGET_MS = 30_000;
+const TURN_BUDGET_MS = 45_000;
 
 /**
  * Longest rotation any SINGLE velocity command may ask for.
@@ -390,6 +424,16 @@ export class BlockExecutor {
    * instance is what lets a test observe it without a global reset hook.
    */
   private mirrorLeftTurns = false;
+  /**
+   * Running estimate of the fraction of a commanded rotation this base actually
+   * performs, in (0, 1]. Starts at 1 — "it does what it is told" — so the first
+   * command of the first turn is identical to the open-loop one, and only
+   * measurement moves it. Latched on the instance, like {@link mirrorLeftTurns}
+   * and for the same reason: poor yaw tracking is a property of the checkpoint,
+   * not of one block, so later turns start from what earlier ones learned
+   * instead of re-paying the discovery every time.
+   */
+  private turnGain = 1;
 
   constructor(deps: BlockExecutorDeps) {
     this.deps = deps;
@@ -780,9 +824,14 @@ export class BlockExecutor {
         if (this.now() >= deadline) break;
       }
 
+      // Ask for the rotation the base will actually PERFORM, not the one that is
+      // left. A plant that delivers a fraction `turnGain` of what it is told
+      // needs the remainder divided by that fraction; `turnGain` starts at 1, so
+      // the first command of a turn is exactly the open-loop one and a base that
+      // tracks perfectly never sees a compensated command at all.
       const commandDeg = Math.max(
         -MAX_TURN_STEP_DEG,
-        Math.min(MAX_TURN_STEP_DEG, remainingDeg)
+        Math.min(MAX_TURN_STEP_DEG, remainingDeg / this.turnGain)
       );
       result = await this.driveFor(turnToCommandExact(commandDeg));
       if (!result.ok) break;
@@ -807,6 +856,29 @@ export class BlockExecutor {
       previousYawDeg = afterYawDeg;
       turnedDeg += deltaDeg;
       remainingDeg -= deltaDeg;
+
+      // Update the tracking estimate from what this command actually bought.
+      // Two things are deliberately NOT evidence of a tracking ratio:
+      //   * a delta with the wrong sign — drift or a stumble, and folding it in
+      //     would drive the estimate down and the next command to its cap;
+      //   * a delta below ZERO_MOTION_DEG — that is a direction this base does
+      //     not turn AT ALL, which the mirror strategy below exists to handle.
+      //     Reading the dead left probe as "tracks at 0.01" would poison the
+      //     estimate for the mirrored RIGHT commands that follow it, and they
+      //     would then over-command and sail past the target.
+      if (
+        Math.sign(deltaDeg) === Math.sign(commandDeg) &&
+        Math.abs(deltaDeg) >= ZERO_MOTION_DEG
+      ) {
+        const observed = Math.abs(deltaDeg) / Math.abs(commandDeg);
+        this.turnGain = Math.min(
+          1,
+          Math.max(
+            MIN_TURN_GAIN,
+            (1 - TURN_GAIN_ALPHA) * this.turnGain + TURN_GAIN_ALPHA * observed
+          )
+        );
+      }
 
       if (Math.abs(deltaDeg) >= ZERO_MOTION_DEG) continue; // it moved — correct it again
 

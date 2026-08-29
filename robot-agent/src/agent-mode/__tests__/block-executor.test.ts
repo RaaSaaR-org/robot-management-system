@@ -1215,7 +1215,14 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
     // …and would have left the robot 42° short of the commanded 90°.
     expect(h.moves[0].durationS * TURN_SPEED * 0.53).toBeCloseTo(47.7, 1);
     // Four commands land it inside the 5° tolerance instead.
-    expect(h.moves).toHaveLength(4);
+    // Three commands land it inside the 5° tolerance instead.
+    expect(h.moves).toHaveLength(3);
+    // The second is the gain compensation visible on the wire: 42.3° of heading
+    // was left, and it asks for ~55° — MORE than the remainder — because the
+    // first command measured this base delivering about half of what it is told.
+    // An uncompensated loop asks for 42.3° here, gets 22°, and needs two more.
+    expect(h.moves[1].durationS * TURN_SPEED).toBeGreaterThan(42.3);
+    expect(h.moves[1].durationS * TURN_SPEED).toBeCloseTo(55.3, 0);
     expect(h.yawDeg()).toBeGreaterThan(-90);
     expect(h.yawDeg()).toBeLessThan(-85);
     expect(outcome.measured?.angleDeg).toBeCloseTo(h.yawDeg(), 6);
@@ -1226,12 +1233,20 @@ describe('BlockExecutor — closed-loop turns (TASK-203)', () => {
   });
 
   it('gives up after the iteration budget rather than turning forever', async () => {
-    // 0.1 is below anything measured; it cannot converge in five commands.
-    const h = makeTurningBase({ gainLeft: 0.1, gainRight: 0.1 });
+    // 0.03 is below MIN_TURN_GAIN, so compensation is floored and each capped
+    // 150° command buys only 4.5° of heading — 20 corrections' worth for a
+    // quarter turn, against a cap of 12. Deliberately NOT 0.1: that is the rate
+    // `isaac_yaw_sweep.py` measures on the real sim, and gain compensation
+    // carries it to -89° in seven commands (the test above this one is the
+    // half-rate case; this one is the base that genuinely cannot get there).
+    const h = makeTurningBase({ gainLeft: 0.03, gainRight: 0.03 });
 
     const outcome = await h.executor.execute(block('turn', { angleDeg: -90 }));
 
-    expect(h.moves).toHaveLength(5);
+    expect(h.moves).toHaveLength(12);
+    // It moved — this is the give-up path, not the dead-base path.
+    expect(h.yawDeg()).toBeLessThan(-40);
+    expect(h.yawDeg()).toBeGreaterThan(-90);
     // And it says so rather than claiming the heading it did not reach.
     expect(outcome.ok).toBe(true);
     expect(outcome.message).toMatch(/short of the commanded -90°/);
