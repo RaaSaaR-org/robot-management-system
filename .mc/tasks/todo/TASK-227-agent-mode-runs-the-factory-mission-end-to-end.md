@@ -251,6 +251,64 @@ rather than for the banner, which is printed 2 s *before* the failure.
 * The sidecar's `/state` reports no joints in this rig — its read-only state source is a TCP
   socket to the real robot's IP. Anything gating on telemetry will safety-stop.
 
+### Second live run — the door, measured, and where the mission actually stops
+
+`mdp/pause_door.py` now logs on change, so the door is no longer a claim. Complete record of
+one approach:
+
+```
+door call=    1 robot_d= 8.41m commanded=0.00 measured=0.00 leaves=(-0.000,+0.000)m clear_width=0.00m
+door call= 1307 robot_d= 2.36m commanded=0.24 measured=0.06 leaves=(-0.042,+0.042)m clear_width=0.08m
+door call= 1352 robot_d= 2.00m commanded=1.00 measured=0.88 leaves=(-0.618,+0.618)m clear_width=1.24m
+door call= 1360 robot_d= 1.93m commanded=1.00 measured=1.00 leaves=(-0.698,+0.698)m clear_width=1.40m
+```
+
+* Shut at 8.41 m, first movement at **2.36 m** against the authored 2.5 m sensor radius.
+* Leaves ramp symmetrically to ±0.698 m; clear width reaches exactly the authored **1.40 m**.
+* MEASURED lags COMMANDED at every sample, which is what proves these are joint readbacks
+  rather than the command echoed back.
+* `call=1360` by then — the term really is evaluated every control step.
+
+**The mission stops at the doorway, not at the grasp.** Driving on to `table_front`, the robot
+reached (10.607, 3.442) and stopped dead — jammed on the door frame. The doorway spans
+x ∈ [9.30, 10.70]; the robot was at x = 10.607 with its shoulder past the edge. It had to make
+a ~45° LEFT turn to line up on the room, arced wide, and ran out of lateral room. Once against
+the wall it could not recover: escaping needs a left turn, and in-place left turns achieve a
+ratio of 0.01 on this checkpoint. Lateral strafe does work but weakly — `vy = 0.35` moved it
+0.10 m in 14 s (0.007 m/s) with no gait at all — and a combined `vx + vy` command froze the
+policy outright (position constant to four decimals).
+
+So the gap is not only *arrival precision at the table*. There is an earlier, harder
+constraint: **passing a 1.40 m doorway needs lateral position control, and the stack has
+none.** Heading correction cannot fix cross-track error. This should be folded into
+[[TASK-228]] — and it argues for option 1 (a visually-servoed approach) or a doorway-centreline
+waypoint chain, not for widening the reach margin.
+
+### Perception is healthy and still not usable for navigation
+
+All three cameras serve real Isaac renders. But `front_camera` sits on `d435_link` and is
+aimed **down** for tabletop manipulation: standing 1.84 m from a fully open door, the head
+frame shows the floor and the robot's own hands, and nothing else. `look` and `scan_room` will
+return that. Retargeting it is a one-line `rot_offset` change in our env cfg — but it is also
+the VLA's input view, and rendering transfer is already the dominant grasp failure mode, so it
+should not be moved before the VLA has ever been run against this scene. Flagged, not changed.
+
+### Artifacts from these runs
+
+`video-studio/series/measured/footage/` — 1280×720, NeoDEM brand, every number on screen read
+per-frame from the simulator's own ground truth (frame *i* is written by the same gated block
+that prints the *i*-th `[TASK-203]` line, so the mapping is exact, not interpolated):
+
+| file | what it shows |
+|---|---|
+| `factory_mission_full_run3.mp4` | the whole attempt, 26.7 s |
+| `step3_hall_crossing.mp4` | the 8.4 m crossing |
+| `step4_powered_door.mp4` | the door opening on approach |
+| `step5_doorway_jam.mp4` | the robot jamming on the frame |
+
+Not yet a *scored* run: `render_mission_video.py` wants `summary.json` + `results.json` in the
+`vla-training/eval` schema, and nothing emits them for this mission yet.
+
 ## The arrival gap — found while fixing the reach, not yet solved
 
 The standing spot now has roughly **0.013 m of reach margin** at the worst corner

@@ -337,12 +337,21 @@ else
      be blind for the whole run. Re-run with SKIP_CAMERA_SEED=1 to proceed deliberately blind."
 fi
 
+# NEODEM_LOG_EVERY has to be forwarded EXPLICITLY, like NEODEM_FILM_DIR above. The sim runs
+# inside the container, so a shell variable set in front of this script reaches this script and
+# not the process that reads it -- and the failure is silent, because the default of 25 is a
+# perfectly working value. It sets BOTH the [TASK-203]/[TASK-223] log interval and, since the
+# film camera writes inside the same gate, the film's frame rate: frames per second of
+# simulated time = sim rate / NEODEM_LOG_EVERY. At the default and this rig's ~13-16 Hz that is
+# under 1 fps, which is a slideshow rather than footage. 3 is a reasonable filming value; 5 is
+# what TASK-203 asks for when measuring gait, because 25 ALIASES the ~1.7 Hz step cadence.
 say "6. Isaac, in docker (Vulkan needs a seat; the host user does not have one)"
 setsid nohup docker run --rm --name "$CONTAINER" --user 0 --runtime=nvidia --gpus all \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e HOME=/home/humanoid -e PYTHONPATH= \
   -e CYCLONEDDS_HOME="$CHECKOUTS/cyclonedds/install" \
   ${NEODEM_FILM_DIR:+-e NEODEM_FILM_DIR="$NEODEM_FILM_DIR"} \
+  ${NEODEM_LOG_EVERY:+-e NEODEM_LOG_EVERY="$NEODEM_LOG_EVERY"} \
   --device /dev/dri --ipc=host --network host \
   -v /home/humanoid:/home/humanoid -w "$SIM_DIR" \
   neodem-isaac-host:latest \
