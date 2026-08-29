@@ -38,6 +38,34 @@ keyboard script" would make the robot strafe and turn the wrong way.
 Confirm that empirically before trusting it: `--probe` walks a short square (forward, turn
 left, forward) with no Agent Mode in the loop.
 
+Odometry -- yaw is measured, x and y are NOT
+--------------------------------------------
+Agent Mode reads the robot's heading from `GET /loco/odom` on `g1_sidecar.py`, which
+subscribes to `rt/odommodestate`. Unitree's Isaac sim does not publish that topic, so
+without this every turn against Isaac was dead-reckoned open loop. This process fills
+the gap (`--no-odom` to turn it off):
+
+    rt/lowstate.imu_state.quaternion -> yaw   (MEASURED)
+    rt/run_command/cmd we published  -> x, y  (DEAD RECKONED -- see below)
+                                     -> rt/odommodestate (SportModeState_)
+
+⚠ **x and y drift and must not be trusted as an absolute position.** The sim
+publishes no ground-truth base position on DDS at all, so x/y are integrated from the
+velocities THIS BRIDGE COMMANDED. Every difference between the command and what the
+locomotion policy actually did -- slip, the left/right turn asymmetry TASK-203 chased,
+a saturating policy -- accumulates and never self-corrects. Short relative
+displacements are the most they can support. Only the heading is real, and it is
+rotated into the integration so at least heading error does not compound into
+position error. `SportModeState_.error_code` is stamped with
+`isaac_odom.ODOM_ERROR_CODE_DEAD_RECKONED` to say so on the wire.
+
+The quaternion order is `xyzw`, NOT a real G1's `wxyz` (`--quat-order` to override):
+Isaac Lab 3.0 is XYZW throughout and the vendor's 2.x-era plumbing does not convert.
+Read as `wxyz` the heading swings with ROLL while the true yaw sits still, which
+looks exactly like a robot drifting off course.
+
+None of this runs on the command-publish thread; see `OdomPublisher`'s docstring.
+
 Clock caveat
 ------------
 `LocoState` expires a velocity command against the clock it is handed. `sim_g1_dds` hands it
@@ -73,13 +101,45 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher  # noqa: E402
+from unitree_sdk2py.core.channel import (  # noqa: E402
+    ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber,
+)
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_  # noqa: E402
 from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_  # noqa: E402
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_  # noqa: E402
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_  # noqa: E402
 
+import isaac_odom  # noqa: E402
 from sim_g1_dds.loco_service import LocoSimService  # noqa: E402
 from sim_g1_dds.loco_state import LocoState  # noqa: E402
 
 RUN_COMMAND_TOPIC = "rt/run_command/cmd"
+
+# Odometry side (see "Odometry" in the module docstring).
+LOWSTATE_TOPIC = "rt/lowstate"       # where the MEASURED base orientation comes from
+ODOM_TOPIC = "rt/odommodestate"      # what g1_sidecar.py's /loco/odom subscribes to
+
+# The odom loop ticks faster than it publishes: integration error is a function of
+# the SAMPLING interval, not the publish interval, so a 50 Hz tick keeps the dead
+# reckoning honest while /loco/odom is fed at the 20 Hz isaac_capture.py settled on.
+ODOM_TICK_HZ = 50.0
+
+# No lowstate this recently means the heading is unknown, and this stops publishing
+# entirely. Deliberate: g1_sidecar.py 503s when rt/odommodestate goes quiet, and
+# Agent Mode degrades to open-loop dead reckoning, which is recoverable. A FROZEN
+# pose is not -- block-executor.ts reads it as "the robot did not move" and reports
+# an outright failure. Silence beats a lie.
+ODOM_LOWSTATE_STALE_S = 1.0
+
+# ...and if NOTHING has ever arrived after this long, say so once on stderr. The
+# usual cause is the wrong --domain, which otherwise looks identical to a healthy
+# bridge right up until Agent Mode reports every heading as unknown.
+ODOM_NO_LOWSTATE_WARN_S = 5.0
+
+# If the command publisher has not refreshed the slot this recently it is dead or
+# wedged, so integrate zero rather than the last velocity it managed to publish --
+# the same reasoning as isaac_capture.py's COMMAND_STALE_S.
+ODOM_COMMAND_STALE_S = 0.5
 
 # `action_provider_wh_dds.py` parses the payload with `ast.literal_eval` and reads four
 # floats: [x_vel, y_vel, yaw_vel, height]. Its own fallback when nothing has been published
@@ -88,9 +148,141 @@ RUN_COMMAND_TOPIC = "rt/run_command/cmd"
 COMMAND_FIELDS = 4
 
 
+class OdomPublisher:
+    """Derive yaw from `rt/lowstate` and publish `rt/odommodestate` for the sidecar.
+
+    Runs entirely off the command-publish thread. Three threads touch this object and
+    each does as little as possible:
+
+      * the CycloneDDS listener thread calls `_on_lowstate`, which does one atan2 and
+        one tuple store under a lock held for a few instructions -- no integration, no
+        publishing, no allocation of note;
+      * the command thread never enters this class at all. It stores a
+        `(vx, vy, monotonic)` tuple into a plain attribute on the bridge
+        (`_cmd_slot`), which this class reads. One attribute store per command frame
+        is the whole cost to the 100 Hz path, and it takes no lock, so odometry can
+        never stall the thing that keeps the robot walking;
+      * this class's own thread does the unwrapping, the dead reckoning and the DDS
+        write, at ODOM_TICK_HZ.
+
+    If this thread dies, the bridge keeps driving. That asymmetry is intentional:
+    losing odometry costs Agent Mode its closed-loop heading (it falls back to
+    open-loop, which is what it does against Isaac today anyway), whereas killing the
+    command path leaves a robot mid-stride with nothing publishing to it.
+    """
+
+    def __init__(self, command_source, quat_order: str, rate_hz: float) -> None:
+        self._command_source = command_source
+        self._order = quat_order
+        self._rate = rate_hz
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.error: Exception | None = None
+        self.published = 0
+        self.samples = 0
+        self.bad_samples = 0
+
+        self._yaw_lock = threading.Lock()
+        self._yaw: tuple[float, float] | None = None   # (wrapped yaw, monotonic recv)
+        # All of the actual bookkeeping -- unwrapping, dead reckoning, starvation,
+        # rate limiting -- lives in this pure object so the offline verifier can drive
+        # the failure paths without DDS. This class is threads and wire, nothing else.
+        self._integ = isaac_odom.OdomIntegrator(
+            publish_period=1.0 / rate_hz,
+            stale_after=ODOM_LOWSTATE_STALE_S,
+            command_stale_after=ODOM_COMMAND_STALE_S)
+
+        self._sub = ChannelSubscriber(LOWSTATE_TOPIC, LowState_)
+        self._sub.Init(self._on_lowstate, 10)
+        self._pub = ChannelPublisher(ODOM_TOPIC, SportModeState_)
+        self._pub.Init()
+        # One message reused: only this class's thread ever writes it, and cyclonedds
+        # serialises inside Write(). Same pattern as sim_g1_dds/sim_node.py.
+        self._msg = unitree_go_msg_dds__SportModeState_()
+
+    # ---- DDS listener thread -------------------------------------------------
+    def _on_lowstate(self, msg) -> None:
+        try:
+            yaw = isaac_odom.yaw_from_quaternion(msg.imu_state.quaternion, self._order)
+        except Exception as exc:  # noqa: BLE001
+            # A malformed sample must not kill the SDK's listener thread (which also
+            # feeds anything else subscribed in this process). Count them and say so
+            # once -- a silent zero here would look like a robot that never turns.
+            self.bad_samples += 1
+            if self.bad_samples == 1:
+                print(f"[odom] cannot read imu_state.quaternion ({exc!r}); "
+                      f"heading will not be published", file=sys.stderr, flush=True)
+            return
+        with self._yaw_lock:
+            self._yaw = (yaw, time.monotonic())
+        self.samples += 1
+
+    # ---- own thread ----------------------------------------------------------
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="odom", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            tick = 1.0 / ODOM_TICK_HZ
+            next_t = t_start = time.monotonic()
+            warned_silent = False
+            while not self._stop.is_set():
+                now = time.monotonic()
+                with self._yaw_lock:
+                    sample = self._yaw
+                was_starved = self._integ.starved
+                frame = self._integ.tick(now, sample, self._command_source())
+                if self._integ.starved != was_starved:
+                    if self._integ.starved:
+                        print(f"[odom] no {LOWSTATE_TOPIC} for {ODOM_LOWSTATE_STALE_S:g}s "
+                              f"— NOT publishing {ODOM_TOPIC}. /loco/odom will 503 and "
+                              f"Agent Mode falls back to open loop.", flush=True)
+                    else:
+                        print(f"[odom] {LOWSTATE_TOPIC} acquired — publishing "
+                              f"{ODOM_TOPIC} at {self._rate:g} Hz", flush=True)
+                if (self.samples == 0 and not warned_silent
+                        and now - t_start > ODOM_NO_LOWSTATE_WARN_S):
+                    # Never say nothing. "Odometry ON" in the banner plus silence here
+                    # reads as working; it usually means the bridge is on the wrong DDS
+                    # domain, or the sim is not up yet.
+                    warned_silent = True
+                    print(f"[odom] WARNING: no {LOWSTATE_TOPIC} at all after "
+                          f"{ODOM_NO_LOWSTATE_WARN_S:g}s — is the sim running on this "
+                          f"domain? Nothing is being published to {ODOM_TOPIC}.",
+                          file=sys.stderr, flush=True)
+                if frame is not None:
+                    isaac_odom.fill_odom_msg(
+                        self._msg, frame.x, frame.y, frame.yaw, time.time(),
+                        vx_world=frame.vx_world, vy_world=frame.vy_world,
+                        yaw_speed=frame.yaw_speed)
+                    self._pub.Write(self._msg)
+                    self.published += 1
+                next_t += tick
+                time.sleep(max(0.0, next_t - time.monotonic()))
+        except Exception as exc:  # noqa: BLE001
+            # Loud, and fatal to THIS thread only. The bridge's `_stop` is not set:
+            # see the class docstring for why odometry is allowed to fail alone.
+            self.error = exc
+            print(f"[odom] publisher thread died: {exc!r} — no more {ODOM_TOPIC}. "
+                  f"Motion is unaffected; /loco/odom will 503.",
+                  file=sys.stderr, flush=True)
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+
+    def shutdown(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        print(f"[odom] {self.published} odometry messages from {self.samples} lowstate "
+              f"samples; dead-reckoned path length "
+              f"{self._integ.reckoner.distance:.2f} m (x/y NOT measured)", flush=True)
+
+
 class IsaacLocoBridge:
     def __init__(self, domain: int, rate_hz: float, verbose: bool,
-                 iface: str | None = None) -> None:
+                 iface: str | None = None, publish_odom: bool = True,
+                 odom_rate_hz: float = 20.0,
+                 quat_order: str = isaac_odom.DEFAULT_QUAT_ORDER) -> None:
         self._lock = threading.Lock()
         self._state = LocoState()
         self._t0 = time.monotonic()
@@ -112,11 +304,31 @@ class IsaacLocoBridge:
             ChannelFactoryInitialize(domain)
         self._pub = ChannelPublisher(RUN_COMMAND_TOPIC, String_)
         self._pub.Init()
+
+        # Latest (vx, vy, monotonic) handed to the odometry thread. A plain attribute
+        # holding an immutable tuple, replaced wholesale: the reader can never observe
+        # a half-updated value, so the 100 Hz command loop needs no lock to publish it.
+        self._cmd_slot: tuple[float, float, float] = (0.0, 0.0, time.monotonic())
+        self._odom: OdomPublisher | None = None
+        if publish_odom:
+            self._odom = OdomPublisher(lambda: self._cmd_slot, quat_order,
+                                       odom_rate_hz)
+
         # Built last: ServerBase._Start() begins answering RPCs immediately, and a
         # SetVelocity answered before the publisher exists would be accepted and dropped.
         self._svc = LocoSimService(self._state, self._lock, self._clock, verbose=verbose)
         print(f"[bridge] sport service up on domain {domain}, publishing {RUN_COMMAND_TOPIC} "
               f"at {rate_hz:g} Hz", flush=True)
+        if self._odom is not None:
+            print(f"[bridge] odometry ON — subscribing {LOWSTATE_TOPIC}, publishing "
+                  f"{ODOM_TOPIC} at {odom_rate_hz:g} Hz, quaternion order "
+                  f"'{quat_order}'. yaw is MEASURED; x/y are DEAD RECKONED from the "
+                  f"commanded velocity and WILL drift — do not trust them as an "
+                  f"absolute position.", flush=True)
+        else:
+            print(f"[bridge] odometry OFF (--no-odom) — nothing publishes {ODOM_TOPIC}, "
+                  f"so /loco/odom will 503 and Agent Mode has no measured heading.",
+                  flush=True)
 
     def _clock(self) -> float:
         return time.monotonic() - self._t0
@@ -126,12 +338,21 @@ class IsaacLocoBridge:
                round(float(omega), 4), round(float(height), 4)]
         assert len(cmd) == COMMAND_FIELDS
         self._pub.Write(String_(data=str(cmd)))
+        # One tuple store, no lock, no odometry work on this thread — see
+        # OdomPublisher's docstring. Set here rather than in run() so the explicit
+        # zeros from shutdown() also reach the dead reckoner.
+        self._cmd_slot = (cmd[0], cmd[1], time.monotonic())
         self._sent += 1
         if self._verbose:
             key = tuple(cmd)
             if key != self._last_sent:
                 print(f"[bridge] -> {cmd}", flush=True)
                 self._last_sent = key
+
+    def start_odom(self) -> None:
+        """Start the odometry thread, if odometry is enabled. Separate from run()."""
+        if self._odom is not None:
+            self._odom.start()
 
     def run(self) -> None:
         try:
@@ -188,6 +409,9 @@ class IsaacLocoBridge:
         for _ in range(5):          # a few times: DDS is best-effort, not a handshake
             self.publish(0.0, 0.0, 0.0, height)
             time.sleep(0.02)
+        # After the zeros, so the last thing the dead reckoner integrated is a stop.
+        if self._odom is not None:
+            self._odom.shutdown()
         print(f"[bridge] stopped after {self._sent} commands, "
               f"{self._svc.call_count} RPCs answered", flush=True)
 
@@ -247,7 +471,28 @@ def main() -> int:
                     help="walk a short square directly, without Agent Mode, to check signs")
     ap.add_argument("--iface", default=None,
                     help="network interface for DDS (e.g. lo); omit to use the SDK default")
-    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--quiet", action="store_true",
+                    help="only log commands when they change, not every frame")
+    odom = ap.add_mutually_exclusive_group()
+    odom.add_argument("--publish-odom", dest="publish_odom", action="store_true",
+                      default=True,
+                      help="publish rt/odommodestate from rt/lowstate (the default). "
+                           "yaw is measured; x/y are dead reckoned and drift.")
+    odom.add_argument("--no-odom", dest="publish_odom", action="store_false",
+                      help="do not publish odometry. /loco/odom then 503s and Agent "
+                           "Mode has no measured heading — use only when something "
+                           "else on this domain publishes rt/odommodestate.")
+    ap.add_argument("--odom-rate", type=float, default=20.0,
+                    help="publish rate in Hz for rt/odommodestate. Independent of "
+                         "--rate and of the command thread; 20 Hz matches "
+                         "isaac_capture.py and is well inside the sidecar's 2 s "
+                         "staleness window.")
+    ap.add_argument("--quat-order", choices=sorted(isaac_odom.QUAT_ORDERS),
+                    default=isaac_odom.DEFAULT_QUAT_ORDER,
+                    help="component order of rt/lowstate's imu_state.quaternion. "
+                         "'xyzw' is correct for this sim (Isaac Lab 3.0 is XYZW and "
+                         "the vendor plumbing does not convert); a real G1 is 'wxyz'. "
+                         "Getting it wrong makes the heading swing with roll.")
     args = ap.parse_args()
 
     # A non-positive rate is a divide-by-zero (or a negative period that busy-spins) inside
@@ -265,7 +510,19 @@ def main() -> int:
               f"a chopped command where it was trained on a held one, and the robot will "
               f"lean instead of walking. Use >= 50, ideally 100.", flush=True)
 
-    bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet, iface=args.iface)
+    if args.publish_odom and args.odom_rate <= 0:
+        ap.error("--odom-rate must be > 0 (use --no-odom to turn odometry off)")
+    if args.publish_odom and args.odom_rate > ODOM_TICK_HZ:
+        # Not an error, just arithmetic: the loop samples at ODOM_TICK_HZ, so it
+        # cannot emit faster than that however high this is set. Say so rather than
+        # letting an operator believe they asked for something they did not get.
+        print(f"[bridge] NOTE: --odom-rate {args.odom_rate:g} Hz exceeds the "
+              f"{ODOM_TICK_HZ:g} Hz odometry tick; frames will go out at "
+              f"{ODOM_TICK_HZ:g} Hz.", flush=True)
+
+    bridge = IsaacLocoBridge(args.domain, args.rate, verbose=not args.quiet,
+                             iface=args.iface, publish_odom=args.publish_odom,
+                             odom_rate_hz=args.odom_rate, quat_order=args.quat_order)
 
     stopping = threading.Event()
 
@@ -278,6 +535,9 @@ def main() -> int:
 
     worker = threading.Thread(target=bridge.run, daemon=True)
     worker.start()
+    # After the command thread: the dead reckoner should never integrate a stale
+    # command slot at startup, and the first frames must already be going out.
+    bridge.start_odom()
 
     # No `except KeyboardInterrupt` — the SIGINT handler above replaces the default one, so
     # Ctrl-C sets `stopping` instead of raising. Shutdown happens in the finally either way.
