@@ -120,9 +120,23 @@ LOWSTATE_TOPIC = "rt/lowstate"       # where the MEASURED base orientation comes
 ODOM_TOPIC = "rt/odommodestate"      # what g1_sidecar.py's /loco/odom subscribes to
 
 # The odom loop ticks faster than it publishes: integration error is a function of
-# the SAMPLING interval, not the publish interval, so a 50 Hz tick keeps the dead
+# the SAMPLING interval, not the publish interval, so a fast tick keeps the dead
 # reckoning honest while /loco/odom is fed at the 20 Hz isaac_capture.py settled on.
-ODOM_TICK_HZ = 50.0
+#
+# It must also be an integer MULTIPLE of the publish rate, because a frame can
+# only go out on a tick boundary. At 50 Hz a 20 Hz request (50 ms) lands on the
+# third tick, not the second-and-a-half — 60 ms, i.e. 16.7 Hz — and the startup
+# banner then advertises a rate the bridge does not deliver. Measured on the live
+# sim before this was 100: `rt/odommodestate` arrived at 16.7 Hz against a
+# promised 20. 100 Hz makes the default divide exactly, and still divides 25 and
+# 50.
+#
+# The rate is a ceiling, not a guarantee: this is a Python sleep loop, and on a
+# box also running Isaac the same measurement gives ~18 Hz for a requested 20.
+# That is deliberately not engineered away — `g1_sidecar.py` treats a fix as
+# stale after 2 s, so a 10% shortfall is three orders of magnitude of headroom,
+# and the alternative is a busy-wait competing with the sim for CPU.
+ODOM_TICK_HZ = 100.0
 
 # No lowstate this recently means the heading is unknown, and this stops publishing
 # entirely. Deliberate: g1_sidecar.py 503s when rt/odommodestate goes quiet, and
