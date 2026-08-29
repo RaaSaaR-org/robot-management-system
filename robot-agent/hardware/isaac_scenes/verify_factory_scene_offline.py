@@ -30,6 +30,20 @@ Two different mechanisms, for two different reasons:
   remote URL or nucleus symbol appears in executable code. `ast` also drops comments for
   free, so the long explanations in those files about why nucleus paths are avoided do not
   themselves trip the "no remote URL" check; docstrings are excluded explicitly.
+* `common_scene/pause_room_door.usda` -- the door's geometry -- is checked by RE-GENERATING
+  it. `make_pause_room_door_usda.py` imports the same layout module and emits the file; if
+  the checked-in copy differs by one byte, section 14 fails. That is what stops the door
+  from quietly ceasing to fit its own doorway when a wall moves.
+
+The two defects this file is a direct response to
+-------------------------------------------------
+1. `table_front` was hand-typed at (10.00, 5.35) -- 0.926 m from the apple horizontally,
+   0.992 m shoulder-to-apple, against roughly 0.53 m of usable G1 arm. The robot could not
+   touch its own target from its own authored good spot.
+2. Nothing here checked. Every manipulation check asked about the apple, the plate and the
+   table, and none of them ever mentioned the robot. Section 12 is the check that was
+   missing; section 11's old "leaves standing room in front of the table" test actively
+   rewarded standing FURTHER away, which is the wrong direction.
 
 Usage
 -----
@@ -263,8 +277,14 @@ def check_files(rep: Report) -> bool:
     ok = True
     for path in (LAYOUT_PY, SCENE_PY, ENVCFG_PY, TASKINIT_PY):
         ok &= rep.check(os.path.isfile(path), f"exists: {os.path.relpath(path, HERE)}")
-    for name in ("__init__.py", "observations.py", "rewards.py", "terminations.py"):
+    for name in ("__init__.py", "observations.py", "pause_door.py", "rewards.py",
+                 "terminations.py"):
         p = os.path.join(TASK_DIR, "mdp", name)
+        ok &= rep.check(os.path.isfile(p), f"exists: {os.path.relpath(p, HERE)}")
+    # The door's geometry and its generator. Both are install-map entries; section 14
+    # checks their contents, this only proves they are here at all.
+    for name in ("pause_room_door.usda", "make_pause_room_door_usda.py"):
+        p = os.path.join(HERE, "common_scene", name)
         ok &= rep.check(os.path.isfile(p), f"exists: {os.path.relpath(p, HERE)}")
     return ok
 
@@ -548,8 +568,375 @@ def check_places(rep: Report, L) -> None:
                   f"({x}, {y}) -> {'pause room' if in_room else 'factory floor'}")
     (tx0, tx1), (ty0, ty1), _ = L.box_extent(L.TABLE)
     fx, fy = L.PLACES["table_front"]
-    rep.check(ty0 - fy > 0.4, "'table_front' leaves standing room in front of the table",
-              f"{ty0 - fy:.2f} m from the table's front edge")
+    # NOTE: the check that used to live here asked for MORE than 0.4 m of standing room in
+    # front of the table, and passed on the old (10.00, 5.35) with 0.65 m. It was the wrong
+    # question in the wrong direction: standing further back is not safer, it is what put
+    # the apple out of reach. The clearance is now asserted to EQUAL the declared standoff,
+    # and section 12 asks whether the robot can actually reach anything from here.
+    rep.check(abs((ty0 - fy) - L.TABLE_STANDOFF) < 1e-9,
+              "'table_front' stands exactly the declared standoff from the table",
+              f"{ty0 - fy:.3f} m from the table's near face, declared "
+              f"TABLE_STANDOFF = {L.TABLE_STANDOFF:.3f} m")
+    rep.check(L.TABLE_STANDOFF >= L.FOOT_FRONT_REACH,
+              "...and that standoff clears the robot's own feet",
+              f"standoff {L.TABLE_STANDOFF:.3f} m vs feet reaching "
+              f"{L.FOOT_FRONT_REACH:.3f} m ahead of the pelvis "
+              f"-> {L.TABLE_STANDOFF - L.FOOT_FRONT_REACH:.3f} m to spare")
+    rep.check(abs(fx - (L.APPLE["pos"][0] + L.GRASP_LATERAL_OFFSET)) < 1e-9,
+              "'table_front' is derived from the apple, not hand-typed",
+              f"apple x {L.APPLE['pos'][0]:.3f} + lateral offset "
+              f"{L.GRASP_LATERAL_OFFSET:.3f} = {fx:.3f}")
+
+
+def check_reach(rep: Report, L) -> None:
+    """THE CHECK THAT WAS MISSING.
+
+    The scene's first version declared `table_front` at (10.00, 5.35) and nothing anywhere
+    compared it to where the apple is. It was 0.926 m from the pelvis and 0.992 m from the
+    shoulder -- roughly twice a G1's usable arm -- and every other check passed, because
+    every other check asked about the apple and the table without ever mentioning the
+    robot. This section is the one that closes that: it measures shoulder-to-target
+    distances against an explicit, documented budget.
+    """
+    section("12. the robot can actually reach the apple from where it is told to stand")
+    stand = L.PLACES["table_front"]
+    yaw = L.TABLE_APPROACH_YAW_DEG
+    apple = tuple(L.APPLE["pos"])
+    plate = (L.PLATE["pos"][0], L.PLATE["pos"][1],
+             L.PLATE["pos"][2] + L.PLATE["height"] / 2)   # the rim: where a place lands
+    lo_z, hi_z = L.BASE_HEIGHT_BAND
+
+    rep.check(L.GRASP_REACH_BUDGET <= L.ARM_REACH_TO_FINGERTIP,
+              "the reach budget is inside the arm's geometric limit",
+              f"budget {L.GRASP_REACH_BUDGET:.3f} m vs "
+              f"{L.ARM_REACH_TO_FINGERTIP:.3f} m shoulder-to-fingertip with the arm "
+              f"straight (summed from g1_43dof_fixedbase.xml); grasp centre "
+              f"(the knuckle) is at {L.ARM_REACH_TO_KNUCKLE:.3f} m")
+
+    # The two configurations in which a G1 + Dex3 is KNOWN to pick an object off a table.
+    # Recomputed here, from this module's own shoulder constants, rather than quoted -- if
+    # SHOULDER_ABOVE_PELVIS is ever edited, these move too and the budget is re-justified.
+    for label, pelvis, obj, src in (
+        ("vendor pick_place_cylinder_g1_29dof_dex3", (-0.15, 0.0, 0.76), (-0.35, 0.40, 0.84),
+         "base_scene_pickplace_cylindercfg.py:95 + robot_configs.py:274"),
+        ("MJCF twin g1_apple_pnp_scene.xml", (-0.15, 0.0, 0.76), (-0.22, 0.46, 0.789),
+         "sim_evaluator/mjcf/g1_apple_pnp_scene.xml:128"),
+    ):
+        d = L.grasp_reach((pelvis[0], pelvis[1]), pelvis[2], 90.0, obj)
+        rep.check(d <= L.GRASP_REACH_BUDGET,
+                  f"the budget covers a WORKING reference: {label}",
+                  f"shoulder->object {d:.3f} m <= budget {L.GRASP_REACH_BUDGET:.3f} m  ({src})")
+
+    # The scene itself, at both ends of the observed base-height band.
+    worst_apple = 0.0
+    for base_z in (lo_z, hi_z):
+        d = L.grasp_reach(stand, base_z, yaw, apple)
+        worst_apple = max(worst_apple, d)
+        rep.check(d <= L.GRASP_REACH_BUDGET,
+                  f"the apple is in reach at base_z = {base_z:.3f} m",
+                  f"shoulder->apple {d:.3f} m vs budget {L.GRASP_REACH_BUDGET:.3f} m")
+    for base_z in (lo_z, hi_z):
+        d = L.grasp_reach(stand, base_z, yaw, plate)
+        rep.check(d <= L.GRASP_REACH_BUDGET,
+                  f"the plate is in reach at base_z = {base_z:.3f} m",
+                  f"shoulder->plate rim {d:.3f} m vs budget {L.GRASP_REACH_BUDGET:.3f} m "
+                  "(the apple has to be PUT somewhere too)")
+
+    # ...and at every corner of the box the reset event re-samples the apple over. The
+    # standing spot is fixed before the apple is jittered, so the nominal spawn being
+    # reachable proves nothing about the episode that actually runs.
+    jx, jy = L.APPLE_RESET_JITTER["x"], L.APPLE_RESET_JITTER["y"]
+    worst, worst_at = 0.0, None
+    for sx in (-jx, jx):
+        for sy in (-jy, jy):
+            for base_z in (lo_z, hi_z):
+                d = L.grasp_reach(stand, base_z, yaw,
+                                  (apple[0] + sx, apple[1] + sy, apple[2]))
+                if d > worst:
+                    worst, worst_at = d, (sx, sy, base_z)
+    rep.check(worst <= L.GRASP_REACH_BUDGET,
+              "the apple stays in reach at every corner of the reset-jitter box",
+              f"worst {worst:.3f} m at dx={worst_at[0]:+.2f} dy={worst_at[1]:+.2f} "
+              f"base_z={worst_at[2]:.3f} vs budget {L.GRASP_REACH_BUDGET:.3f} m")
+
+    # A blunt horizontal number, because that is the one a human eyeballs on the map.
+    horiz = math.hypot(stand[0] - apple[0], stand[1] - apple[1])
+    rep.check(horiz < 0.60, "horizontal pelvis->apple distance is arm-sized",
+              f"{horiz:.3f} m  (the hand-typed (10.00, 5.35) this replaced: 0.926 m)")
+
+    # The waypoint must NOT be mistaken for a manipulation pose.
+    cx, cy = L.PLACES["pause_room_centre"]
+    d_centre = L.grasp_reach((cx, cy), hi_z, yaw, apple)
+    rep.check(d_centre > L.GRASP_REACH_BUDGET,
+              "'pause_room_centre' is a waypoint, NOT a place to reach from",
+              f"shoulder->apple {d_centre:.3f} m from there -- documented as out of reach "
+              "on purpose, so nobody re-uses it as a standing spot")
+
+    # Standing at the table must not put the robot inside the table.
+    (tx0, tx1), (ty0, ty1), (_tz0, tz1) = L.box_extent(L.TABLE)
+    rep.check(stand[1] + L.FOOT_FRONT_REACH <= ty0 + EPS,
+              "the robot's feet do not foul the table box",
+              f"toes reach y = {stand[1] + L.FOOT_FRONT_REACH:.3f}, table near face "
+              f"y = {ty0:.2f}")
+    rep.check(tx0 <= stand[0] <= tx1,
+              "the robot stands square to the table, not off its end",
+              f"stand x {stand[0]:.2f} within table x[{tx0:.2f},{tx1:.2f}]")
+
+    # And it must be able to get there: inside the room, clear of the walls and the door.
+    rep.check(L.PAUSE_ROOM["x_min"] < stand[0] < L.PAUSE_ROOM["x_max"]
+              and L.PAUSE_ROOM["y_min"] < stand[1] < L.PAUSE_ROOM["y_max"],
+              "'table_front' is inside the pause room", f"({stand[0]:.2f}, {stand[1]:.2f})")
+    leaves = L.door_leaf_boxes(1.0)
+    clear = min(abs(stand[1] - L.box_extent(b)[1][1]) for b in leaves.values())
+    rep.check(clear > 0.5, "'table_front' is clear of the open door leaves",
+              f"{clear:.2f} m from the leaves' plane at y = "
+              f"{L.box_extent(next(iter(leaves.values())))[1][1]:.2f}")
+
+
+def check_door(rep: Report, L) -> None:
+    section("13. the pause-room door is a real, powered, articulated door")
+    dx = L.DOOR["centre"][0]
+    jamb_lo = dx - L.DOOR["width"] / 2
+    jamb_hi = dx + L.DOOR["width"] / 2
+
+    # -- the geometry actually closes the hole -------------------------------------------
+    shut = L.door_leaf_boxes(0.0)
+    spans = sorted(L.box_extent(b)[0] for b in shut.values())
+    covered_lo = min(s[0] for s in spans)
+    covered_hi = max(s[1] for s in spans)
+    # two leaves, sorted; they must meet or overlap in the middle, with no gap between them
+    gap = spans[1][0] - spans[0][1]
+    rep.check(covered_lo <= jamb_lo + EPS and covered_hi >= jamb_hi - EPS and gap <= EPS,
+              "SHUT, the leaves cover the whole declared opening",
+              f"leaves cover x[{covered_lo:.3f},{covered_hi:.3f}] over an opening of "
+              f"x[{jamb_lo:.2f},{jamb_hi:.2f}]; leaf-to-leaf gap {gap * 1000:.1f} mm")
+    rep.check(abs(L.door_clear_width(0.0)) < EPS,
+              "SHUT, the doorway offers zero clear width",
+              "a robot walking into it hits 2 x 25 kg of box collider, not a hole")
+
+    # -- and gets out of the way completely ----------------------------------------------
+    openb = L.door_leaf_boxes(1.0)
+    ospans = sorted(L.box_extent(b)[0] for b in openb.values())
+    rep.check(ospans[0][1] <= jamb_lo + EPS and ospans[1][0] >= jamb_hi - EPS,
+              "OPEN, neither leaf intrudes on the opening",
+              f"leaf edges at x = {ospans[0][1]:.3f} and {ospans[1][0]:.3f}, "
+              f"jambs at {jamb_lo:.2f} and {jamb_hi:.2f}")
+    rep.check(abs(L.door_clear_width(1.0) - L.DOOR["width"]) < 1e-9,
+              "OPEN, the full declared clear width is restored",
+              f"{L.door_clear_width(1.0):.3f} m == DOOR['width'] {L.DOOR['width']:.2f} m")
+    # an open leaf must be parked over its own partition, not sticking into the room
+    for name, seg, wall in ((L.DOOR_JOINTS[0], ospans[0], "pause_wall_south_left"),
+                            (L.DOOR_JOINTS[1], ospans[1], "pause_wall_south_right")):
+        (wx0, wx1), _, _ = L.box_extent(L.WALLS[wall])
+        rep.check(wx0 - EPS <= seg[0] and seg[1] <= wx1 + EPS,
+                  f"OPEN, {name}'s leaf parks over {wall}",
+                  f"leaf x[{seg[0]:.2f},{seg[1]:.2f}] within wall x[{wx0:.2f},{wx1:.2f}] "
+                  "-- a leaf hanging past the partition would be a new obstacle")
+
+    # -- it blocks the height a robot walks through --------------------------------------
+    (_, _, (lz0, lz1)) = L.box_extent(shut[L.DOOR_JOINTS[0]])
+    rep.check(lz0 <= 0.05 and lz1 >= L.WALK_CLEARANCE_Z,
+              "the leaves span the whole walking envelope",
+              f"leaf z[{lz0:.3f},{lz1:.3f}] vs WALK_CLEARANCE_Z {L.WALK_CLEARANCE_Z:.2f} m; "
+              f"{lz0 * 1000:.0f} mm floor gap so it does not scrape")
+    rep.check(lz1 <= L.DOOR["clear_height"] + EPS,
+              "the leaves fit under the lintel",
+              f"leaf top z = {lz1:.3f}, lintel underside z = {L.DOOR['clear_height']:.2f}")
+
+    # -- the leaves slide along the wall, not through it ---------------------------------
+    (_, (ly0, ly1), _) = L.box_extent(shut[L.DOOR_JOINTS[0]])
+    (_, (wy0, wy1), _) = L.box_extent(L.WALLS["pause_wall_south_left"])
+    rep.check(ly0 >= wy1 - EPS, "the leaves hang clear of the partition they slide along",
+              f"leaf y[{ly0:.3f},{ly1:.3f}] against a partition ending at y = {wy1:.2f}")
+    rail = L.door_rail_box()
+    (rx0, rx1), (ry0, ry1), (rz0, rz1) = L.box_extent(rail)
+    rep.check(rx0 <= ospans[0][0] + EPS and rx1 >= ospans[1][1] - EPS,
+              "the header rail spans both leaves at full travel",
+              f"rail x[{rx0:.2f},{rx1:.2f}] covers open leaves "
+              f"x[{ospans[0][0]:.2f},{ospans[1][1]:.2f}]")
+    rep.check(rz0 >= L.DOOR["clear_height"] - EPS,
+              "the header rail is above the declared clear height",
+              f"rail underside z = {rz0:.2f} vs clear height "
+              f"{L.DOOR['clear_height']:.2f} -- it never narrows the doorway")
+
+    # -- the joints ----------------------------------------------------------------------
+    limits = L.door_joint_limits()
+    rep.check(set(limits) == set(L.DOOR_JOINTS), "both leaf joints are declared",
+              f"{sorted(limits)}")
+    for name, (lo, hi) in sorted(limits.items()):
+        rep.check(abs((hi - lo) - L.DOOR_LEAF_TRAVEL) < 1e-9 and lo <= 0.0 <= hi,
+                  f"{name}: travel is one half-opening and 0 is SHUT",
+                  f"limits [{lo:+.3f}, {hi:+.3f}] m, travel {L.DOOR_LEAF_TRAVEL:.3f} m")
+    shut_t = L.door_joint_targets(0.0)
+    open_t = L.door_joint_targets(1.0)
+    rep.check(all(abs(v) < EPS for v in shut_t.values()),
+              "openness 0 maps to joint coordinate 0 on both leaves", f"{shut_t}")
+    rep.check(all(abs(abs(v) - L.DOOR_LEAF_TRAVEL) < 1e-9 for v in open_t.values())
+              and open_t[L.DOOR_JOINTS[0]] * open_t[L.DOOR_JOINTS[1]] < 0,
+              "openness 1 drives the two leaves in OPPOSITE directions",
+              f"{ {k: round(v, 3) for k, v in open_t.items()} } -- same-sign targets would "
+              "slide both leaves the same way and leave the doorway half shut")
+    for u in (-0.5, 0.0, 0.37, 1.0, 1.5):
+        t = L.door_joint_targets(u)
+        ok = all(min(limits[n]) - EPS <= t[n] <= max(limits[n]) + EPS for n in t)
+        rep.check(ok, f"openness {u:+.2f} stays inside the joint limits",
+                  f"{ {k: round(v, 3) for k, v in t.items()} } (out-of-range openness is clamped)")
+
+    # -- the presence sensor -------------------------------------------------------------
+    a = L.DOOR_AUTOMATION
+    rep.check(a["shut_radius"] > a["open_radius"],
+              "the presence sensor has hysteresis",
+              f"opens within {a['open_radius']:.2f} m, shuts beyond {a['shut_radius']:.2f} m "
+              f"-> {a['shut_radius'] - a['open_radius']:.2f} m band; without it a robot "
+              "standing on the threshold makes the leaves chatter")
+    rep.check(L.door_should_open(L.DOOR["centre"], False),
+              "standing in the doorway opens the door")
+    rep.check(not L.door_should_open(L.PLACES["robot_start"], False),
+              "the door is shut when the robot is across the hall",
+              f"robot_start is {math.dist(L.PLACES['robot_start'], L.DOOR['centre']):.2f} m away")
+    rep.check(L.door_should_open(L.PLACES["table_front"], False),
+              "the door is open while the robot is at the table -- it can get out again",
+              f"table_front is {math.dist(L.PLACES['table_front'], L.DOOR['centre']):.2f} m "
+              "from the doorway")
+    # hysteresis in both directions, at a distance between the two radii
+    mid = (a["open_radius"] + a["shut_radius"]) / 2
+    probe = (L.DOOR["centre"][0], L.DOOR["centre"][1] - mid)
+    rep.check(L.door_should_open(probe, True) and not L.door_should_open(probe, False),
+              "between the radii the door holds whatever state it is in",
+              f"probed at {mid:.2f} m")
+
+    # -- the door opens BEFORE the robot gets there --------------------------------------
+    stroke_s = L.DOOR_LEAF_TRAVEL / a["leaf_speed"]
+    # measured walk speed in this scene, from the README's live-sim section
+    walk_speed = 0.11
+    arrive_s = (a["open_radius"] - L.DOOR["width"] / 2) / walk_speed
+    rep.check(stroke_s < arrive_s,
+              "the leaves finish opening before the robot arrives",
+              f"full stroke {stroke_s:.2f} s vs {arrive_s:.1f} s to cover the "
+              f"{a['open_radius'] - L.DOOR['width'] / 2:.2f} m from the trigger radius at "
+              f"the measured {walk_speed:.2f} m/s -- the robot never has to stop, and never "
+              "has to push")
+    # and the rate limiter must actually converge
+    u, dt, n = 0.0, 0.02, 0
+    while u < 1.0 - 1e-9 and n < 10000:
+        u = L.door_advance_openness(u, True, dt)
+        n += 1
+    rep.check(u >= 1.0 - 1e-9 and abs(n * dt - stroke_s) < 2 * dt,
+              "the leaf rate limiter reaches fully open in the time it claims",
+              f"{n} steps of {dt} s = {n * dt:.2f} s vs {stroke_s:.2f} s predicted")
+    u, n = 1.0, 0
+    while u > 1e-9 and n < 10000:
+        u = L.door_advance_openness(u, False, dt)
+        n += 1
+    rep.check(u <= 1e-9, "...and shuts again", f"{n * dt:.2f} s")
+
+    # -- the shut door really is the room's fourth wall ----------------------------------
+    #
+    # Section 6's `perimeter_openings` sweep cannot see this: it probes the wall plane at
+    # y = PAUSE_ROOM.y_min - 0.02, and the leaves hang on the room side at y >= 4.00, so
+    # they are simply not on the line it samples. That is correct -- the leaves are not
+    # part of the wall -- but it means "is the room sealed when the door is shut?" has to
+    # be asked separately, which is what this does: union the x-intervals that block the
+    # room's whole south side at walking height and check for holes.
+    def _south_blockers(leaf_openness: float):
+        out = []
+        for name, box in L.WALLS.items():
+            (x0, x1), (y0, y1), (z0, z1) = L.box_extent(box)
+            # only the segments that sit ON the south boundary, below head height
+            if y0 <= L.DOOR["centre"][1] <= y1 and z0 < L.WALK_CLEARANCE_Z - EPS:
+                out.append((x0, x1))
+        for box in L.door_leaf_boxes(leaf_openness).values():
+            (x0, x1), _, (z0, z1) = L.box_extent(box)
+            if z0 < L.WALK_CLEARANCE_Z - EPS and z1 > EPS:
+                out.append((x0, x1))
+        return out
+
+    def _holes(intervals, lo, hi):
+        gaps, cursor = [], lo
+        for x0, x1 in sorted(intervals):
+            if x0 > cursor + EPS:
+                gaps.append((cursor, min(x0, hi)))
+            cursor = max(cursor, x1)
+            if cursor >= hi:
+                break
+        if cursor < hi - EPS:
+            gaps.append((cursor, hi))
+        return [g for g in gaps if g[1] - g[0] > 0.005]
+
+    px0, px1 = L.PAUSE_ROOM["x_min"], L.PAUSE_ROOM["x_max"]
+    shut_holes = _holes(_south_blockers(0.0), px0, px1)
+    rep.check(not shut_holes,
+              "SHUT, the door completes the pause room's south wall with no gap",
+              f"walls + leaves block the whole of x[{px0:.1f},{px1:.1f}] below "
+              f"{L.WALK_CLEARANCE_Z:.1f} m"
+              if not shut_holes else f"holes at {[(round(a, 3), round(b, 3)) for a, b in shut_holes]}")
+    open_holes = _holes(_south_blockers(1.0), px0, px1)
+    rep.check(len(open_holes) == 1
+              and abs((open_holes[0][1] - open_holes[0][0]) - L.DOOR["width"]) < 0.01,
+              "OPEN, exactly one gap re-appears, and it is the doorway",
+              f"{[(round(a, 3), round(b, 3)) for a, b in open_holes]} -> "
+              f"{sum(b - a for a, b in open_holes):.3f} m, declared "
+              f"{L.DOOR['width']:.2f} m")
+
+
+def check_door_usd(rep: Report, L) -> None:
+    section("14. the generated door USD matches the layout, and reaches nothing remote")
+    usda = os.path.join(HERE, "common_scene", L.DOOR_USD_FILENAME)
+    gen_py = os.path.join(HERE, "common_scene", "make_pause_room_door_usda.py")
+    if not rep.check(os.path.isfile(usda), f"exists: common_scene/{L.DOOR_USD_FILENAME}"):
+        return
+    if not rep.check(os.path.isfile(gen_py), "exists: common_scene/make_pause_room_door_usda.py"):
+        return
+
+    with open(usda, encoding="utf-8") as fh:
+        text = fh.read()
+
+    # THE anti-drift check: regenerate from the layout module and compare. If someone edits
+    # DOOR["width"] and forgets to regenerate, the door stops matching its own doorway --
+    # and this is the only thing that would notice, because the USD is opaque to every
+    # other check here.
+    spec = importlib.util.spec_from_file_location("make_pause_room_door_usda", gen_py)
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    expected = gen.build_usda(L)
+    rep.check(expected == text,
+              "the checked-in USD is exactly what the layout module generates",
+              f"{len(text)} bytes; regenerate with "
+              "`python3 common_scene/make_pause_room_door_usda.py`")
+
+    hits = [f for f in FORBIDDEN_STRINGS if f in text]
+    rep.check(not hits, f"no URL in {L.DOOR_USD_FILENAME}", f"found {hits}" if hits else "")
+    rep.check("references" not in text and "payload" not in text,
+              "the door USD has no external references or payloads",
+              "it is self-contained: three Cubes, two prismatic joints, one fixed joint")
+    rep.check("metersPerUnit = 1" in text,
+              "the door USD is authored in METRES",
+              "cabinet_collider.usd is metersPerUnit = 0.01; a scale mismatch would make "
+              "the door 100x wrong and is invisible until it renders")
+
+    for token in ("PhysicsArticulationRootAPI", "PhysicsFixedJoint",
+                  "PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsDriveAPI:linear"):
+        rep.check(token in text, f"the door USD declares {token}",
+                  "" if token != "PhysicsDriveAPI:linear"
+                  else "without a drive API the joints import as unactuated DOFs and "
+                       "ImplicitActuatorCfg has nothing to configure")
+    for name in L.DOOR_JOINTS:
+        rep.check(f'def PhysicsPrismaticJoint "{name}"' in text,
+                  f"the door USD declares the prismatic joint {name}",
+                  "the name must match DOOR_JOINTS, the actuator cfg and the runtime driver")
+    rep.check(text.count("PhysicsCollisionAPI") >= 3,
+              "every door part is a collider, not a visual-only prop",
+              f"{text.count('PhysicsCollisionAPI')} colliders: two leaves and the rail")
+
+    # The scene cfg must reach it without PROJECT_ROOT and without a nucleus path.
+    tree = parse(SCENE_PY)
+    names = code_names(tree)
+    rep.check("DOOR_USD_FILENAME" in names and "ArticulationCfg" in names,
+              "the scene cfg spawns the door as an ArticulationCfg from that file",
+              "an AssetBaseCfg would give a door-shaped prop with no joints")
+    rep.check("ImplicitActuatorCfg" in names,
+              "...with an actuator on the leaves",
+              "an articulation with no actuator cannot be commanded, only shoved")
 
 
 def print_coordinates(L) -> None:
@@ -567,13 +954,42 @@ def print_coordinates(L) -> None:
          f"r = {L.PLATE['radius']:.3f}, h = {L.PLATE['height']:.2f}, static"),
         ("apple spawn", f"({L.APPLE['pos'][0]:.3f}, {L.APPLE['pos'][1]:.3f}, {L.APPLE['pos'][2]:.3f})",
          f"r = {L.APPLE['radius']:.2f}, m = {L.APPLE['mass']:.2f} kg, dynamic"),
+        ("door articulation", f"({L.DOOR_ORIGIN[0]:.2f}, {L.DOOR_ORIGIN[1]:.2f}, {L.DOOR_ORIGIN[2]:.2f})",
+         f"2 sliding leaves {L.DOOR_LEAF_WIDTH:.2f} x {L.DOOR_LEAF['thickness']:.2f} x "
+         f"{L.DOOR_LEAF_HEIGHT:.2f}, travel {L.DOOR_LEAF_TRAVEL:.2f} m each"),
+        ("table_front (stand)", f"({L.PLACES['table_front'][0]:.2f}, {L.PLACES['table_front'][1]:.2f})",
+         f"yaw {L.TABLE_APPROACH_YAW_DEG:.0f} deg, {L.TABLE_STANDOFF:.2f} m off the table"),
     ]
     w = max(len(r[0]) for r in rows)
     for name, pos, note in rows:
         print(f"  {name.ljust(w)}  {pos:<26}  {note}")
     print("\n  named places:")
     for name, (x, y) in sorted(L.PLACES.items()):
-        print(f"    {name.ljust(20)} ({x:6.2f}, {y:6.2f})")
+        head = L.PLACE_HEADINGS.get(name)
+        tag = f"   arrive facing {head:.0f} deg" if head is not None else ""
+        print(f"    {name.ljust(20)} ({x:6.2f}, {y:6.2f}){tag}")
+
+    print("\n  reach from 'table_front' (shoulder to target, over the observed base-height band):")
+    stand = L.PLACES["table_front"]
+    apple = tuple(L.APPLE["pos"])
+    for base_z in L.BASE_HEIGHT_BAND:
+        print(f"    base_z {base_z:.3f} m -> apple "
+              f"{L.grasp_reach(stand, base_z, L.TABLE_APPROACH_YAW_DEG, apple):.3f} m")
+    print(f"    budget {L.GRASP_REACH_BUDGET:.3f} m; arm is {L.ARM_REACH_TO_KNUCKLE:.3f} m "
+          f"to the knuckle, {L.ARM_REACH_TO_FINGERTIP:.3f} m to the fingertip")
+
+    print("\n  automatic door:")
+    a = L.DOOR_AUTOMATION
+    print(f"    opens within {a['open_radius']:.2f} m of ({L.DOOR['centre'][0]:.2f}, "
+          f"{L.DOOR['centre'][1]:.2f}), shuts beyond {a['shut_radius']:.2f} m")
+    print(f"    leaf speed {a['leaf_speed']:.2f} m/s -> full stroke in "
+          f"{L.DOOR_LEAF_TRAVEL / a['leaf_speed']:.2f} s")
+    for u in (0.0, 1.0):
+        boxes = L.door_leaf_boxes(u)
+        spans = sorted(L.box_extent(b)[0] for b in boxes.values())
+        print(f"    openness {u:.0f}: leaves x[{spans[0][0]:.2f},{spans[0][1]:.2f}] and "
+              f"x[{spans[1][0]:.2f},{spans[1][1]:.2f}] -> clear width "
+              f"{L.door_clear_width(u):.2f} m")
 
 
 def main() -> int:
@@ -613,6 +1029,9 @@ def main() -> int:
     check_quaternions(rep, L)
     check_camera_sightlines(rep, L)
     check_places(rep, L)
+    check_reach(rep, L)
+    check_door(rep, L)
+    check_door_usd(rep, L)
 
     print_coordinates(L)
 

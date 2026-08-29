@@ -23,6 +23,7 @@ is the source of truth, the checkout gets a copy. See [Install map](#install-map
 | Dressing | 6 plywood crates (primitives) + 5 USD props from the checkout's own `assets/objects/` |
 | Pause room | 4 × 4 m, in the hall's north-east corner, 3 m partitions, one doorway |
 | Doorway | 1.40 m clear width, 2.20 m clear height, centred on x = 10.0 |
+| **Door** | a **powered automatic two-leaf sliding door** in that doorway — a real articulation with prismatic joints and box colliders, which opens when the robot comes within 2.5 m |
 | Pause room contents | 1.22 × 1.20 × 0.75 m table, static white plate, dynamic red apple |
 | Robot | G1 29-DoF + Dex3, standing on the factory floor 8.41 m from the door, facing it |
 | Cameras | the 4 robot cameras + `film_camera` (unchanged from `move_cylinder`), plus a hall overview and a pause-room camera |
@@ -37,8 +38,8 @@ walls, so only two new partitions were needed.
   +8  +--------------------------------------------------+
       |  [pt_b]              [pt_c]      |  PAUSE ROOM    |
       |                                  |    [table]     |
-  +4  |   |col   |col   |col   |col      +====  ==========+   <- 3 m partitions
-      |                                     ^  door 1.4 m
+  +4  |   |col   |col   |col   |col      +==[><]==========+   <- 3 m partitions
+      |                                     ^  sliding door, 1.4 m
       |   [crates]                          |  centre (10.0, 3.9)
    0  |                              [G1 start (4,-2), yaw 45 deg]
       |   |col   |col   |col   |col        /
@@ -57,6 +58,7 @@ origin and env-local == world).
 |---|---|---|
 | **robot start** | `(4.00, -2.00, 0.80)` | yaw **45°**; true bearing to the door is 44.52°, so it faces the door within 0.5°. Walk distance 8.41 m. |
 | **pause-room door centre** | `(10.00, 3.90, 0.00)` | clear opening `x ∈ [9.30, 10.70]`, i.e. **1.40 m**; lintel underside at z = 2.20 |
+| **door articulation origin** | `(10.00, 4.03, 0.00)` | the sliding door, hung on the pause-room face of the partition. Leaves 0.72 × 0.06 × 2.16 m, `z ∈ [0.02, 2.18]`, travel 0.70 m each. |
 | **table centre** | `(10.00, 6.60, 0.375)` | 1.22 × 1.20 × 0.75 → **top face z = 0.75**, footprint `x ∈ [9.39, 10.61]`, `y ∈ [6.00, 7.20]` |
 | **plate centre** | `(10.340, 6.165, 0.760)` | r = 0.095, full height 0.02 → sits on the table, rim at z = 0.77. Static. |
 | **apple spawn** | `(10.170, 6.260, 0.795)` | r = 0.04, 0.18 kg, dynamic. Underside 5 mm above the table top. 0.195 m from the plate centre. |
@@ -69,9 +71,79 @@ Named places, for the place graph (`PLACES` in the layout module):
 | `robot_start` | (4.00, -2.00) | factory floor |
 | `factory_centre` | (0.00, 0.00) | factory floor |
 | `west_aisle` | (-8.00, 0.00) | factory floor |
-| `pause_room_door` | (10.00, 3.90) | in the doorway |
-| `pause_room_centre` | (10.00, 5.20) | pause room |
-| `table_front` | (10.00, 5.35) | pause room, 0.65 m clear of the table edge |
+| `pause_room_door` | (10.00, 3.90) | in the doorway; arrive facing 90° |
+| `pause_room_centre` | (10.00, 5.20) | pause room — **a waypoint, not a standing spot**: the apple is 1.07 m away from here |
+| `table_front` | **(10.24, 5.84)** | pause room, 0.16 m off the table's near face, facing 90°. **Derived, not typed** — see below. |
+
+`PLACE_HEADINGS` gives the heading a place expects to be arrived at with, for the two
+places where it is load-bearing (`pause_room_door` and `table_front`, both 90°). Standing
+at `table_front` facing anywhere but the table makes every reach number below meaningless.
+
+### Where `table_front` comes from, and why it moved
+
+**`table_front` used to be `(10.00, 5.35)`, and the robot could not reach the apple from
+it.** The apple is at `(10.17, 6.26, 0.795)`; from the old spot that is **0.926 m**
+horizontally from the pelvis and **0.992 m** from the shoulder, against a G1 arm that is
+0.533 m from shoulder to knuckle and 0.627 m to the fingertip with the arm dead straight.
+It was short by roughly 0.4 m — not a tuning problem, a "cannot physically touch it"
+problem. `pause_room_centre` (10.00, 5.20) was worse at 1.131 m. Nothing caught it,
+because every manipulation check asked about the apple, the plate and the table, and none
+of them ever mentioned the robot.
+
+The spot is now computed in `standing_spot_for_grasp()` from two constraints, one each way:
+
+| | | value |
+|---|---|---|
+| forward | table's near face (y = 6.00) less `TABLE_STANDOFF` | **y = 5.84** |
+| lateral | apple x plus `GRASP_LATERAL_OFFSET`, so the apple falls on the robot's **left** | **x = 10.24** |
+
+`TABLE_STANDOFF = 0.16 m`. The binding constraint is the **feet**, not the belly: the
+pelvis rides at 0.725–0.79 m and the table top is at 0.75, so the pelvis may overhang the
+edge, but the feet may not foul the table's box (this table is solid to the floor). Foot
+reach ahead of the pelvis, measured off `g1_43dof_fixedbase.xml`, is 0.072 m — the ankle
+sits 0.053 m *behind* the pelvis and the forward contact spheres are 0.12 m ahead of the
+ankle. `FOOT_FRONT_REACH` rounds that up to 0.13 m for the real foot mesh and a
+leaned-forward stance, leaving 0.03 m of margin at a 0.16 m standoff.
+
+`GRASP_LATERAL_OFFSET = 0.07 m` comes from the MJCF twin, where the apple sits 0.07 m to
+the robot's left. That sign is not incidental: every episode in the source dataset is a
+**left-hand** grasp with the plate to the apple's right, and keeping it keeps this scene's
+composition the same as the frames the policy was trained on.
+
+**The resulting reach**, shoulder to target, over the whole *measured* base-height band:
+
+| | base_z 0.725 m (settled crouch) | base_z 0.790 m (standing) |
+|---|---|---|
+| shoulder → apple | **0.476 m** | **0.509 m** |
+| shoulder → plate rim | 0.455 m | 0.493 m |
+| worst corner of the apple's reset-jitter box | — | **0.537 m** |
+
+against `GRASP_REACH_BUDGET = 0.55 m`. Horizontal pelvis→apple is **0.426 m**, down from
+0.926 m.
+
+Both heights are real measurements, not nominals: 0.790 is where the policy holds the base
+while standing, and 0.725 is the one-legged crouch it settles into after a walk command
+stops — both from the live run logged further down. The crouch *lowers* the shoulder, which
+is why the check runs over a band rather than at one convenient height.
+
+**The reach budget is calibrated, not invented.** There is no datasheet number for "can a
+G1 pick this up", so 0.55 m is pinned to the only two configurations in which a G1 + Dex3
+demonstrably does pick something off a table, with the shoulder located the same way in
+both:
+
+| working reference | pelvis | object | shoulder → object |
+|---|---|---|---|
+| the checkout's `pick_place_cylinder_g1_29dof_dex3` | (-0.15, 0, 0.76) | (-0.35, 0.40, 0.84) | **0.463 m** |
+| the MuJoCo twin `g1_apple_pnp_scene.xml` | (-0.15, 0, 0.76) | (-0.22, 0.46, 0.789) | **0.531 m** |
+
+The verifier recomputes both from its own constants rather than quoting them, so editing
+`SHOULDER_ABOVE_PELVIS` re-justifies the budget instead of silently invalidating it.
+
+Worth knowing: the MJCF twin sits at 0.531 m against a 0.533 m straight-arm knuckle
+distance, i.e. **the reference scene reaches its apple with the arm essentially fully
+extended**. The 0.017 m of budget above it is spent on the fact that a free-standing G1 can
+pitch its waist and bend its knees toward the table, which neither fixed-base reference
+can.
 
 ---
 
@@ -81,11 +153,19 @@ Named places, for the place graph (`PLACES` in the layout module):
 |---|---|
 | `common_scene/factory_pauseroom_layout.py` | `tasks/common_scene/factory_pauseroom_layout.py` |
 | `common_scene/base_scene_factory_pauseroom.py` | `tasks/common_scene/base_scene_factory_pauseroom.py` |
+| **`common_scene/pause_room_door.usda`** | **`tasks/common_scene/pause_room_door.usda`** — **REQUIRED.** The scene resolves it from `base_scene_factory_pauseroom.py`'s own directory, so it must land beside that module. |
+| `common_scene/make_pause_room_door_usda.py` | `tasks/common_scene/make_pause_room_door_usda.py` — optional; only needed to regenerate the USD in place |
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/__init__.py` | `tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/__init__.py` |
 | `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/factory_pause_room_g1_29dof_dex3_hw_env_cfg.py` | same, under `tasks/g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/` |
-| `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/mdp/{__init__,observations,rewards,terminations}.py` | same, under `.../mdp/` |
+| `g1_tasks/factory_pause_room_g1_29dof_dex3_wholebody/mdp/{__init__,observations,pause_door,rewards,terminations}.py` | same, under `.../mdp/` |
 | `g1_tasks/__init__.py` | `tasks/g1_tasks/__init__.py` — **OPTIONAL, and it is a full-file replacement** |
 | `README.md`, `verify_factory_scene_offline.py` | not installed; they stay in this repo |
+
+**The door USD is the one non-`.py` install.** It is deliberately resolved relative to
+`base_scene_factory_pauseroom.py`'s own `__file__`, not via `PROJECT_ROOT` and not from
+`assets/objects/`, so installing the scene modules installs the door with them and there is
+no second path to get wrong. Forgetting it gives a `FileNotFoundError` naming
+`pause_room_door.usda` at scene build.
 
 **Why `g1_tasks/__init__.py` is optional.** `tasks/__init__.py` ends in
 `import_packages(__name__, _BLACKLIST_PKGS)`, which walks and imports every sub-package
@@ -167,21 +247,136 @@ reset-jitter box**; the robot starts outside the pause room, inside the hall, at
 facing the door, with a clear route and not inside any geometry; the quaternion helpers
 produce the orders they claim; both fixed cameras actually have line of sight.
 
-Current result: **76 passed, 0 failed, 0 skipped**.
+Sections 12–14 are the newer half:
 
-It caught two real defects while being written, both of which would have been invisible
-until a launch (or worse, until a scoring run):
+* **12 — reach.** Shoulder-to-apple and shoulder-to-plate distances from `table_front`, at
+  *both* ends of the measured base-height band and at *every* corner of the apple's
+  reset-jitter box, against `GRASP_REACH_BUDGET`; that the budget itself covers the two
+  working reference scenes and stays inside the arm's geometric limit; that the feet clear
+  the table box; that `table_front` is derived from the apple rather than typed; and that
+  `pause_room_centre` is still *out* of reach, so nobody re-uses the waypoint as a
+  standing spot.
+* **13 — the door.** That the shut leaves cover the whole declared opening with no
+  leaf-to-leaf gap and zero clear width; that the open leaves clear it completely, restore
+  the full 1.40 m, and park over their own partitions rather than sticking out as new
+  obstacles; that the leaves span the walking envelope and fit under the lintel; that the
+  joint limits are one half-opening each with 0 = shut and that openness 1 drives them in
+  *opposite* directions; that out-of-range openness clamps; that the presence sensor has
+  hysteresis and holds state between its radii; that the leaves finish opening before the
+  robot arrives at the measured walk speed; that the rate limiter converges in the time it
+  claims; and — by interval arithmetic over the room's whole south side, which section 6's
+  sampled sweep structurally cannot see — that the shut door seals the room and the open
+  door re-opens exactly one 1.40 m gap.
+* **14 — the door USD.** That the checked-in `pause_room_door.usda` is byte-for-byte what
+  `make_pause_room_door_usda.py` generates from the layout module (the anti-drift check:
+  the USD is opaque to every other test here, so this is the only thing that would notice a
+  door that stopped fitting its doorway), that it is authored in metres, has no URL,
+  reference or payload, and declares the articulation root, the fixed root joint, both
+  named prismatic joints, a drive API and a collider on every part.
+
+Current result: **142 passed, 0 failed, 0 skipped** (76 before sections 12–14 were added).
+
+It has caught four real defects, all of which would have been invisible until a launch —
+or worse, until a scoring run:
 
 1. the `±0.05 / ±0.04` reset-jitter box copied from the `move_cylinder` task put the apple's
    worst corner **0.132 m** from the plate centre, against **0.135 m** of touching — so the
    apple would occasionally spawn already on its goal. `APPLE_RESET_JITTER` is now `±0.03`,
    worst corner 0.154 m;
 2. a prim-path audit that only looked at string literals missed `/World/GroundPlane`,
-   because it is passed as a named constant.
+   because it is passed as a named constant;
+3. **`table_front` was 0.4 m out of the robot's reach** (see above). This is the defect
+   section 12 exists for, and it is worth being blunt about *how* it survived: section 11
+   did have a check on `table_front`, and that check asked for **more** than 0.4 m of
+   standing room in front of the table. It passed on 0.65 m. It was measuring the right
+   quantity in the wrong direction — standing further back is not safer, it is the bug.
+   That check is now an equality against the declared standoff, plus section 12;
+4. the door's first `PhysicsJointStateAPI:linear` did not survive a round-trip through USD
+   25.11 (the prim came back with only `PhysicsDriveAPI:linear` applied), which would have
+   shipped an unrecognised schema in a generated file. Dropped — the shut state is already
+   set by the leaf transforms and `init_state.joint_pos`.
 
 ---
 
 ## Design decisions that are not obvious
+
+### The door is powered, sliding, and generated
+
+The doorway used to be a 1.40 m hole between two wall boxes. There is now a door in it.
+
+**Powered and automatic, not a handle.** Making a humanoid operate a door handle is a
+contact-rich bimanual manipulation problem in its own right, and nothing in this stack has
+a policy for it — requiring it would have sunk the demo on a research problem nobody asked
+for. A real factory pause room solves this with a presence sensor, precisely so that people
+carrying things do not have to stop. So does this one: the door opens when the robot comes
+within 2.5 m of the doorway and shuts again beyond 3.2 m. **The robot never touches it.**
+
+**Sliding, not hinged.** A hinged leaf sweeps an arc through the space directly in front of
+the doorway — exactly where a 1.32 m humanoid is standing when the door decides to open.
+Sliding leaves retract along the wall and never occupy any space the robot walks through.
+The verifier checks that an open leaf parks entirely over its own partition, so it never
+becomes a new obstacle either.
+
+**It is real, and it really collides.** Two rigid bodies, 0.72 × 0.06 × 2.16 m, 25 kg each,
+with box colliders, on prismatic joints, spanning `z ∈ [0.02, 2.18]`. Shut, they cover
+`x ∈ [9.28, 10.72]` — 20 mm past each jamb, and butting exactly at x = 10.00, so there is no
+seam gap. A robot that walks into a shut door hits it. Nothing is hidden, scaled away or
+teleported. Open, each leaf has slid 0.70 m and the full 1.40 m clear width is back.
+
+**Why the geometry is a generated USD.** Isaac Lab cannot build an articulation out of
+primitive spawn cfgs — a door with joints has to come from a file. There is no door USD
+anywhere on this machine (the checkout ships a cabinet, a drawer and two warehouses;
+`{ISAAC_NUCLEUS_DIR}/…` is an HTTPS fetch), so this repo authors its own. But a hand-written
+USD would be the one place in this directory where geometry is *typed* rather than derived,
+and therefore the one place where changing `DOOR["width"]` silently stops matching the hole
+in the wall. So `make_pause_room_door_usda.py` **generates** `pause_room_door.usda` from the
+same constants that cut the hole, and the verifier re-runs the generator and compares
+byte-for-byte. It is USDA (text, ~6.8 kB) rather than USDC so it diffs and reviews, and it
+is three `UsdGeom.Cube` prims — writing it needs neither `pxr` nor Isaac.
+
+To regenerate after moving a wall:
+
+```bash
+python3 common_scene/make_pause_room_door_usda.py           # rewrite it
+python3 common_scene/make_pause_room_door_usda.py --check   # exit 1 if stale
+```
+
+Its structure copies `assets/objects/drawers/cabinet_collider.usd` — articulation root on
+the parent Xform, a `rootJoint` fixed joint pinning the base link, each moving part hanging
+off a joint declared under its parent link — because that is the one articulated prop this
+checkout is known to import successfully. The joint names `door_left_joint` /
+`door_right_joint` are the same names it uses, so
+`base_scene_pick_redblock_into_drawer.py:87-125`, the only prior art here for driving a
+door, reads across unchanged. It is authored `metersPerUnit = 1`; the cabinet is `0.01`, and
+a scale mismatch is invisible until it renders.
+
+**Why the driver is an observation term.** A `*Wholebody*` task never calls `env.step()`
+(`sim_main.py:476-479` forces `use_rl_action_mode = True`, and
+`robot_control_system.py:120-127` then skips the step) — which is the same reason this
+task's reward manager is dead code. So a reward term, a termination term or an
+`EventTermCfg` would never fire and the door would never move. What *does* run every control
+step is `env.observation_manager.compute()`, called unconditionally by the wholebody DDS
+provider at `action_provider_wh_dds.py:728`. That is the only per-step hook reachable from
+inside this task package without patching the vendor's action provider, so the door driver
+lives in `mdp/pause_door.py` as an observation term in its **own** group, `door` — never
+appended to `policy`, which is the DDS contract the rest of the stack reads.
+
+Two consequences: the target written each step is picked up by the *next* step's
+`scene.write_data_to_sim()`, so the door lags the sensor by ~20 ms (against a 1.17 s stroke,
+nothing); and the term both drives the door and **returns its state** — openness, both leaf
+coordinates, clear width, robot-to-doorway distance — so a scoring run can ask "did the
+robot get through a door that was actually open?" rather than just "did the robot get
+through". The door also appears in the `env.scene.get_state()` payload that `sim_main.py`
+publishes over DDS every loop, for free.
+
+`open_pause_door` / `close_pause_door` / `auto_pause_door` are registered on the
+`SimpleEventManager` as manual overrides, for an evaluation that wants to pin the door —
+e.g. to test the robot arriving at a shut one. Nothing triggers them today.
+
+Deliberately **not** done: making the leaves `kinematic_enabled=True` rigid bodies driven by
+root-pose writes. That would move and render identically and be simpler, but a kinematic
+body ignores contact — it would push the robot through a wall rather than stop it — and the
+open/close state would not be a joint coordinate anything could observe or score.
 
 ### Every asset is local — including the floor
 
@@ -322,6 +517,14 @@ to do — but together they say the scene is ready before the locomotion is.
 is still open. Drive the base into a partition before trusting the geometry to
 contain anything.
 
+> ⚠ **That run predates the door and the new standing spot.** It was launched against
+> `table_front = (10.00, 5.35)` and a doorway with nothing in it. The two measurements it
+> produced that this scene now depends on — `base_z` 0.790 standing and 0.725 in the
+> settled crouch, which are what `BASE_HEIGHT_BAND` and therefore the whole reach check are
+> pinned to — are still valid, because neither the door nor the standing spot changes how
+> the policy holds the base. Everything else about the door and the new spot is unverified;
+> see the list below.
+
 ## Stills
 
 `capture_factory_stills.py` renders every camera the scene registers, plus any
@@ -383,33 +586,76 @@ observed — this agent never launched Isaac.
 5. **That the robot fits through the door in practice.** 1.40 m of clear width against a
    ~0.45 m shoulder span is generous, but the G1 sways, and the wholebody controller's
    lateral tracking error under a commanded turn has not been measured in this scene.
-6. **That the table is reachable from a standing G1.** The MJCF geometry was tuned around a
-   robot whose base was *fixed* at 0.76 m. A free-standing G1 that has just walked in will
-   stop wherever it stops; `table_front` at `(10.00, 5.35)` is a guess at a good standing
-   spot (0.65 m from the table edge), not a measured one.
-7. **The USD props' real footprints.** They are placed by their origins, and their bounding
+6. **That the apple is reachable from `table_front` IN PRACTICE.** ~~`table_front` at
+   `(10.00, 5.35)` is a guess~~ — that guess was wrong by 0.4 m and is now fixed: the spot
+   is derived, and the shoulder-to-apple distance is 0.476–0.537 m against a budget of
+   0.55 m, inside both working reference scenes' envelopes. **What is still unverified is
+   everything the arithmetic cannot see:**
+   * whether the Dex3 can actually close on the apple from that pose, which is an IK and
+     policy question, not a distance question. The geometry says the apple is inside the
+     arm's envelope; it does not say there is a collision-free arm configuration that gets
+     a hand around it with the table 0.16 m away;
+   * whether a G1 that *walked* here stops within a useful tolerance of `(10.24, 5.84)`.
+     The measured walk is ~0.11 m/s with ~2°/s of unbidden yaw drift over 8.4 m (below), so
+     the arrival error is likely larger than the 0.014 m of reach margin at the worst
+     jitter corner. **This scene assumes something else puts the robot on the spot.**
+   * whether 0.16 m of standoff is enough in the real stance. `FOOT_FRONT_REACH = 0.13 m`
+     is derived from four 5 mm contact spheres in the MJCF, not from the Isaac G1's actual
+     foot collider, which is a mesh and is longer. If the toes clip the table box, raise
+     `TABLE_STANDOFF` — and expect the worst jitter corner to go over budget when you do
+     (0.20 m puts it at 0.571 m), which means moving the apple, not the robot.
+7. **Everything about the door except its geometry.** The leaf positions, travel, limits,
+   clear widths, sensor radii and timings are all checked offline and all pass. None of the
+   following is:
+   * **that the articulation imports at all.** `pause_room_door.usda` was written by hand
+     (well — generated), opened and structurally validated with `pxr` 25.11 on CPU
+     (articulation root, fixed root joint, two prismatic joints with the right axes, limits,
+     bodies and drive APIs, correct world AABBs), but `pxr` opening a stage is not Isaac Lab
+     importing an articulation. A rejected schema, a joint PhysX declines to build, or an
+     articulation root Isaac Lab does not find would all survive that;
+   * **that a second articulation survives `replicate_physics=True`.** `num_envs = 1` makes
+     the cloning trivial, but the robot was previously the only articulation in the scene;
+   * **that the `ImplicitActuatorCfg` gains hold a leaf.** 800 N/m and 120 N·s/m against a
+     25 kg leaf with a 200 N force cap are guesses shaped like reasonable numbers. Too soft
+     and a nudge parks the door half open; too stiff and a contact explodes;
+   * **that the driver runs.** `mdp/pause_door.py` was exercised against a stub `env` on
+     CPU — sensor, hysteresis, rate limiter, joint resolution *by name* against deliberately
+     reversed joint ordering, target tensor shape, manual override, and the fail-safe path —
+     all pass. What is unverified is the premise: that
+     `env.observation_manager.compute()` really is called every control step in a wholebody
+     run. That is read out of `action_provider_wh_dds.py:728`, not observed. **If it turns
+     out not to run, the door never opens and the robot walks into it** — which is at least
+     an obvious failure rather than a silent one, since the door is authored shut;
+   * **that a second observation group is harmless.** The `door` group is additive and
+     nothing reads it, but no wholebody run has been made with more than one group;
+   * **that the leaves do not fight the floor or the lintel.** There is a 20 mm gap at each
+     end, which is a design choice, not a measurement;
+   * **whether the door looks right.** `capture_factory_stills.py` never calls
+     `observation_manager.compute()`, so the door renders **shut** in every still — that is
+     the correct authored state, and it is also the only state anyone has seen.
+8. **The USD props' real footprints.** They are placed by their origins, and their bounding
    boxes are not readable offline, so the verifier charges each a generous 1.0 m half-extent
    for the route check. If `yellowbox_table_b` at `(5.00, -6.50)` turns out to be huge, it
    is the one nearest anything that matters.
-8. **Lighting.** A dome at 3000 plus a distant light at 1200 into a roofless hall is a
+9. **Lighting.** A dome at 3000 plus a distant light at 1200 into a roofless hall is a
    guess. The scene lost the warehouse USD's eight ceiling RectLights along with the
    warehouse; the hall may render darker than the `move_cylinder` scene does.
-9. **Both fixed cameras' framing.** The sight-lines are proven clear of walls, and the
+10. **Both fixed cameras' framing.** The sight-lines are proven clear of walls, and the
    look-at orientations are proven correct, but focal length 12 mm / aperture 27 (hall) and
    14 mm / 24 (pause room) are unframed guesses.
-10. **`--device cuda`.** Every recorded run of the sibling task used `--device cpu`.
-11. **The reward is unreachable in this task, as in every `*Wholebody*` task.**
+11. **`--device cuda`.** Every recorded run of the sibling task used `--device cpu`.
+12. **The reward is unreachable in this task, as in every `*Wholebody*` task.**
     `sim_main.py:476-479` forces `use_rl_action_mode = True` for any id containing
     "Wholebody", and `robot_control_system.py:120-127` then never calls `env.step()`, which
     is what runs the reward manager. `mdp/rewards.py` exists for structural parity and to be
     live the moment that is fixed; it is not scoring anything today. See
     `../isaac_sim_patches/README.md:445-478`.
-12. **Ray-casting sensors will not see the walls.** These are `CuboidCfg`, i.e.
+13. **Ray-casting sensors will not see the walls.** These are `CuboidCfg`, i.e.
     `UsdGeom.Cube` prims. A mesh-based ray cast such as `isaac_capture.py`'s
     `WarehouseRaycaster` collects `prim.IsA(UsdGeom.Mesh)` and would report the hall as
     empty — the robot walks through a wall the camera can see. `sim_main.py` does not
     ray-cast, so this is fine as shipped; the fix, if a raycasting sensor is ever pointed at
     this scene, is to swap `CuboidCfg` → `MeshCuboidCfg` in `_static_box`.
-13. **`num_envs = 1` only.** With more envs the `/World/envs` content is cloned and offset
+14. **`num_envs = 1` only.** With more envs the `/World/envs` content is cloned and offset
     while the floor, lights and fixed cameras are not, so env 1 would get walls standing on
     nothing. The DDS bridge is single-robot anyway.
